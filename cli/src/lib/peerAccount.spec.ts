@@ -61,7 +61,7 @@ describe('who is at the other end of a loopback connection', () => {
       const yes = answering('yes\r\n')
       expect(await peerIsThisAccount(socket(), 'win32', yes.run)).toBe(true)
       // The client's end, as Windows lists it: its own port local, the daemon's remote.
-      expect(yes.asked).toEqual([{ HARNESS_PEER_PORT: '50001', HARNESS_OWN_PORT: '18473' }])
+      expect(yes.asked).toEqual([{ HARNESS_PEER_PORT: '50001', HARNESS_OWN_PORT: '18473', HARNESS_DAEMON_PID: String(process.pid) }])
     })
 
     it('says no for another account, any other answer, a failure, or a lookup that never answered', async () => {
@@ -86,9 +86,9 @@ describe('who is at the other end of a loopback connection', () => {
     })
 
     it('asks Windows by the connection\'s ports, given as inputs, and compares the owner by SID', () => {
-      const query = windowsPeerQuery(50_001, 18473)
-      expect(query.inputs).toEqual({ HARNESS_PEER_PORT: '50001', HARNESS_OWN_PORT: '18473' })
-      expect(query.script).not.toMatch(/50001|18473/)
+      const query = windowsPeerQuery(50_001, 18473, 42_424)
+      expect(query.inputs).toEqual({ HARNESS_PEER_PORT: '50001', HARNESS_OWN_PORT: '18473', HARNESS_DAEMON_PID: '42424' })
+      expect(query.script).not.toMatch(/50001|18473|42424/)
       expect(query.script).toContain('Get-NetTCPConnection')
       expect(query.script).toContain('GetOwnerSid')
       expect(query.script).toContain('[Security.Principal.WindowsIdentity]::GetCurrent().User.Value')
@@ -137,6 +137,19 @@ describe('who is at the other end of a loopback connection', () => {
       expect(slow.asked()).toBe(WINDOWS_PEER_LOOKUPS + WINDOWS_PEER_QUEUE)
     })
 
+    // A lookup that waited its turn is not run for a connection that has gone meanwhile (Remy's review of #2605).
+    it('does not run a queued lookup for a connection that closed while it waited', async () => {
+      const slow = held()
+      const pending = Array.from({ length: WINDOWS_PEER_LOOKUPS }, (_, i) => peerIsThisAccount(socket({ remotePort: 53_000 + i }), 'win32', slow.run))
+      const gone = socket({ remotePort: 53_100 })
+      const answer = peerIsThisAccount(gone, 'win32', slow.run)
+      Object.assign(gone, { destroyed: true })
+      await drain(slow.finish)
+      await Promise.all(pending)
+      expect(await answer).toBe(false)
+      expect(slow.asked()).toBe(WINDOWS_PEER_LOOKUPS)
+    })
+
     // A keep-alive client (an MCP client on the bridge) asks again on the same connection: a no for being busy must not
     // stick to it, and is not "another account" (Luna's review of #2605).
     it('keeps no busy refusal on the connection: the same socket is asked again once a slot frees', async () => {
@@ -164,11 +177,29 @@ describe('who is at the other end of a loopback connection', () => {
     it('takes the owning process only when it started before the connection was made: never a recycled process id', () => {
       const { script } = windowsPeerQuery(50_001, 18473)
       // Windows gives the connection's time to the second, the process's finer: the Windows run on #2605 read a process
-      // started at 13:32:35 as after its connection of 13:32:35. Two seconds of slack, which a recycled id must also beat.
-      expect(script).toMatch(/\$process\.CreationDate -gt \$rows\[0\]\.CreationTime\.AddSeconds\(2\)/)
+      // started at 13:32:35 as after its connection of 13:32:35. So the process's time is cut to the second and compared
+      // with no slack: slack let the lookup's own PowerShell, started just after, take a freed id and pass (Remy's review).
+      expect(script).toContain('$started = $process.CreationDate.AddTicks(-($process.CreationDate.Ticks % [TimeSpan]::TicksPerSecond))')
+      expect(script).toMatch(/\$started -gt \$rows\[0\]\.CreationTime\)/)
+      expect(script).not.toMatch(/AddSeconds/)
+      // The lookup's own process is never the caller.
+      expect(script).toMatch(/\$rows\[0\]\.OwningProcess -eq \$PID/)
       const creation = script.indexOf('CreationDate'), owner = script.indexOf('GetOwnerSid')
       expect(creation).toBeGreaterThan(-1)
       expect(creation).toBeLessThan(owner)
+    })
+
+    // Up to four lookups run at once: a sibling's PowerShell or its console host, started by the daemon in the
+    // connection's second, could take an id the caller freed (Remy's review of #2605). Nothing of that kind the daemon
+    // starts calls its port with a secret, so one whose parent or grandparent is the daemon is no.
+    it('never takes a PowerShell or console host the daemon started, a sibling lookup', () => {
+      const { script } = windowsPeerQuery(50_001, 18473, 42_424)
+      expect(script).toContain('$daemon = [int]$env:HARNESS_DAEMON_PID')
+      expect(script).toMatch(/\$process\.Name -match '\^\(powershell\|conhost\)\\\.exe\$'/)
+      expect(script).toMatch(/\$process\.ParentProcessId -eq \$daemon/)
+      expect(script).toMatch(/\$parent\.ParentProcessId -eq \$daemon/)
+      const sibling = script.indexOf('$daemon'), owner = script.indexOf('GetOwnerSid')
+      expect(sibling).toBeLessThan(owner)
     })
   })
 

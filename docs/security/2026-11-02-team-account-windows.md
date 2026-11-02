@@ -64,7 +64,10 @@ make the daemon refuse the credential over TCP from another account. Windows can
 - The daemon asks Windows who owns the calling end of a TCP connection that showed a valid secret (`lib/peerAccount.ts`
   `windowsPeerQuery`: `Get-NetTCPConnection`, then the process's owner SID against this account's). Anything but a clear yes is
   no. This alone makes a credential heard on the port useless to another account, from an old client or plugin too.
-  It takes only a process that started before the connection was made, so a recycled process id never counts. At most four
+  It takes only a process that started before the connection was made, compared in whole seconds (the connection's time comes
+  only to the second), never the lookup's own process, and never a PowerShell or console host the daemon started (another
+  lookup running at once). A process id taken within the connection's own second by some other process of the owner's is
+  still open until the native lookup. At most four
   lookups run at once and up to 32 wait their turn; one past those is no for now, and is asked again on its next request. A
   lookup that times out (45 s: about a second on x64, 20 to 25 s on the Windows ARM runner) stays no for that connection; a
   native lookup in harness-pty is its own task.
