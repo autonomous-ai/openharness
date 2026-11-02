@@ -225,13 +225,21 @@ describe('who is at the other end of a loopback connection', () => {
       expect(script).toMatch(/Get-NetTCPConnection -State Listen -LocalPort \(\[int\]\$env:HARNESS_LISTEN_PORT\)/)
       expect(script).toMatch(/GetOwnerSid/)
       expect(script).toMatch(/WindowsIdentity\]::GetCurrent\(\)\.User\.Value/)
-      expect(script).toMatch(/CreationDate -gt \$row\.CreationTime/)
+      expect(script).toMatch(/\$started -gt \$row\.CreationTime/)
     })
 
     // The Windows run on #2605: Windows gives a socket's time to the second and a process's finer, so a process that opened its
     // listener within the second it started read as started after it. Here that would move the bridge off its own port.
-    it('allows two seconds for Windows\' whole-second listener time, as the peer check does', () => {
-      expect(windowsListenerQuery(51793).script).toMatch(/\$process\.CreationDate -gt \$row\.CreationTime\.AddSeconds\(2\)/)
+    it('compares the listener\'s whole-second time with the process\'s cut to the second, with no slack, as the peer check does', () => {
+      const { script } = windowsListenerQuery(51793)
+      expect(script).toMatch(/\$started = \$process\.CreationDate\.AddTicks\(-\(\$process\.CreationDate\.Ticks % \[TimeSpan\]::TicksPerSecond\)\)/)
+      expect(script).toMatch(/\$started -gt \$row\.CreationTime/)
+      expect(script).not.toMatch(/AddSeconds/)
+    })
+
+    // Remy's review of #2605: the lookup's own PowerShell can take a freed id, and is never the holder.
+    it('never counts the lookup\'s own process as the holder', () => {
+      expect(windowsListenerQuery(51793).script).toMatch(/\$row\.OwningProcess -eq \$PID\) \{ continue \}/)
     })
 
     // Quinn 2's review of #2608: a listener of this account's on another address (::1, 127.0.0.2) answered yes, so the bridge
