@@ -12,7 +12,9 @@ import '../core/local_key_value_store.dart';
 /// - `super_tab.personal.<account>`: the Swarm last chosen in the switcher;
 /// - `super_tab.scope.<account>.<swarm>`: whether the roster lists the whole Swarm or the open project;
 /// - `super_tab.repos.<account>`: the projects made for their repos in their
-///   Personal Swarm (personal_projects.dart).
+///   Personal Swarm (personal_projects.dart);
+/// - `super_tab.machines.<account>`: the machines seen in their Personal Swarm
+///   (personal_machines.dart).
 /// The saved views' own keys (`super_tab.view…`, `super_tab.saved_by`) are
 /// [SuperTabSavedViews]', which forgets them itself.
 String? swarmKeyAccount(String key) {
@@ -21,7 +23,7 @@ String? swarmKeyAccount(String key) {
   return switch (parts) {
     ['launch', final account, _, ...] => account,
     ['scope', final account, _] => account,
-    ['hidden' || 'personal' || 'repos', final account] => account,
+    ['hidden' || 'personal' || 'repos' || 'machines', final account] => account,
     ['view' || 'views' || 'saved_by' || 'signed_out', ...] => null,
     [final account, _] => account,
     _ => null,

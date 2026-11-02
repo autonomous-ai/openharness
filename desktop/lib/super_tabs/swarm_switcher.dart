@@ -11,6 +11,7 @@ import '../widgets/desktop_chrome.dart';
 import 'buddy_rows.dart' show SuperTabCountBadge;
 import 'controller.dart';
 import 'machines.dart' show contributeComputer;
+import 'personal_machines.dart';
 import 'section_heading.dart' show SuperTabSectionHeading;
 import 'swarm_delete.dart';
 
@@ -229,6 +230,10 @@ class PersonalSwarm extends ChangeNotifier {
     if (_account != account || _tabShowing(swarmId) != shown) return;
     app.showSuperTabIn(swarmId, personal, kPersonalSwarmName);
     await _addThisComputer(account, swarmId, personal);
+    // Then the person's other machines, whatever became of this one.
+    if (app.superTabs.peek(personal) case final opened?) {
+      unawaited(PersonalMachines.of(app).sync(opened));
+    }
   }
 
   String? _tabShowing(String swarmId) =>
