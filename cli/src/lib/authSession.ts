@@ -212,6 +212,20 @@ export function updateAuthSession(change: (latest: AuthSession) => AuthSession |
   })
 }
 
+/**
+ * A machine id the backend named for the sign-in [startedUnder] (its `signInEpoch` when the lookup began), merged into the
+ * newest session only if that is still the same sign-in. A lookup can outlive a sign-out and a new sign-in, and its answer is
+ * the old account's machine: dropped, as a later lookup finds the new one. A refresh keeps the epoch, so it keeps the answer. A
+ * session from before epochs may only have been given one meanwhile (adopted): still that sign-in. The newest session; null
+ * when there is none, or it is marked signed out.
+ */
+export function recordMachineId(machineId: string, startedUnder: string | undefined): Promise<AuthSession | null> {
+  return updateAuthSession((latest) => {
+    const same = latest.signInEpoch === startedUnder || (startedUnder === undefined && signInOf(latest.signInEpoch)?.adopted === true)
+    return !same || latest.machineId === machineId ? null : { ...latest, machineId, updatedAt: Date.now() }
+  })
+}
+
 /** The first wait before a refused refresh is tried again, and the longest. The app asks `auth status` often,
  *  and each ask must not be a refresh request. */
 const RETRY_FIRST_MS = 60_000
@@ -453,7 +467,7 @@ export class AuthSessionManager {
     })
   }
 
-  async updateMachineId(machineId: string): Promise<void> {
-    await updateAuthSession((current) => current.machineId === machineId ? null : { ...current, machineId, updatedAt: Date.now() })
+  async updateMachineId(machineId: string, startedUnder: string | undefined): Promise<void> {
+    await recordMachineId(machineId, startedUnder)
   }
 }
