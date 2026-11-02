@@ -14,7 +14,7 @@ Agent, Computer, and Repo selectors sit above the message. The local computer is
 **This Mac** on macOS and **This Computer** on Linux; remote computers retain their
 names. Model, Approvals, applicable Account, Worktree, and Branch remain visible
 below the message. Worktree and Branch stay on one line, without explanatory text
-underneath. **From main** identifies the base of a new worktree branch; a tooltip
+underneath. **From \<branch\>**, usually **From main**, identifies the base of a new worktree branch; a tooltip
 explains the operation. Existing branches and worktrees retain their branch name.
 
 The model control retains the provider/subscription picker and shared models.
@@ -182,10 +182,11 @@ person browses or types stays itself: the harness works in it on its current
 branch, and Worktree is off and unavailable ("Already a worktree"). Worktrees
 Start made are never offered as recent projects.
 
-**Branch** starts on `main` for a fresh desktop form. With Worktree on, local
-`main` or `origin/main` can supply the base. With Worktree off, it must be a local
-branch; a remote-only `main` requires an explicit local branch choice. Missing `main` requires
-an explicit branch choice; a failed worktree creation never silently turns
+**Branch** starts on the project's default branch (`origin/HEAD`) for a fresh desktop
+form; then `main`, for a project that names none; then the branch it is on. With
+Worktree on, a local or remote default can supply the base. With Worktree off, it must
+be a local branch; a remote-only default requires an explicit local branch choice. None
+of these requires an explicit branch choice; a failed worktree creation never silently turns
 Worktree off. Branch does not follow the pane New Harness was opened from:
 New Harness is new work, and another agent's branch is one pick away. The start
 action reads **New Harness**, whatever the rows say.
@@ -300,7 +301,11 @@ included, filters the recent projects as before.
   repository is a disabled **Not a repository link**. On this computer, an
   alias whose `ssh -G` host is not github.com is a disabled **\<alias\> isn't a
   GitHub host**. Another computer's daemon checks its own aliases at launch.
-- While it clones the line reads **Cloning owner/repo…**. A clone refused
+- A terminal takes no project, so it clones nothing: a link shows a disabled **A terminal
+  can't clone**, and changing to Terminal with a clone chosen asks for a folder or an agent.
+- While it clones the line reads **Cloning owner/repo…**. A checkout of that
+  repository already in the projects folder is used, not cloned, and the line
+  stays **Starting harness…**, as it does when the computer cannot say. A clone refused
   access tries the other transport, then up to three `~/.ssh/config` aliases
   leading to github.com. It moves on only after a refusal, never after a network
   failure or a timeout. Through an alias, the workspace says **Cloned via

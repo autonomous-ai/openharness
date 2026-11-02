@@ -14938,6 +14938,10 @@ class AppNotifier extends ChangeNotifier {
         },
         timeout: const Duration(seconds: 10),
       );
+    } on WsRequestFailure catch (failure) {
+      // The machine answered. NOT_FOUND says a folder is not there, which a
+      // machine that could not be reached does not know.
+      return {'error': failure.code};
     } catch (error) {
       return {'error': 'UNREACHABLE'};
     }

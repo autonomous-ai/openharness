@@ -55,7 +55,7 @@ stopping at the first that works:
 3. up to three SSH host aliases from the computer's SSH configuration whose host name is github.com.
 
 It moves to the next only when GitHub **refused access**. A network failure or a timeout stops at once.
-While it runs, the composer shows the static line **Cloning org/repo…**. When an alias was used, the person
+While it runs, the composer shows the static line **Cloning org/repo…**. A checkout that is reused is no clone, so the line stays **Starting harness…**. When an alias was used, the person
 sees one short line, **Cloned via gh-<account>**. The new checkout's `origin` is the address that worked, so
 later pushes go through the same account. When every way is refused, the composer shows one line, **No
 access to org/repo on this Mac** (the computer's name for another computer), keeps the task and every

@@ -162,14 +162,25 @@ String? currentBranchRef(GitProjectInfo info) =>
 /// Git projects keep Worktree on; an empty repository asks for a choice.
 bool worktreeByDefault(GitProjectInfo info) => info.isGit;
 
-/// New work starts from main. If it is absent, require an explicit choice.
+/// New work starts from the branch the project calls its default
+/// (`origin/HEAD`), preferring the local copy; then main, for a project that
+/// names none; then the branch it is on. octocat/Hello-World is on master, and
+/// reading only main refused it until a branch was chosen by hand. Null asks.
 /// With Worktree off, show the branch the folder is actually on.
 String? defaultBranchRef(GitProjectInfo info, {required bool worktree}) {
   if (!worktree) return currentBranchRef(info);
-  for (final ref in ['refs/heads/main', 'refs/remotes/origin/main']) {
+  final remote = info.defaultRef;
+  for (final ref in [
+    if (remote != null) ...[
+      'refs/heads/${remote.split('/').skip(3).join('/')}',
+      remote,
+    ],
+    'refs/heads/main',
+    'refs/remotes/origin/main',
+  ]) {
     if (info.branches.any((branch) => branch.ref == ref)) return ref;
   }
-  return null;
+  return currentBranchRef(info);
 }
 
 /// The branch a worktree started from [base] is on, unless [name] was typed:
@@ -887,17 +898,17 @@ class NewHarnessController extends ChangeNotifier {
       : _recoveredWorktreePreference ??
             (isGitProject && !inWorktree ? worktree : null);
 
-  /// Fresh desktop work starts on main, with or without a worktree. A retry
+  /// Fresh desktop work starts on the default branch, with or without a worktree. A retry
   /// must instead keep the branch of the folder its first attempt prepared.
-  bool get _defaultsToMain =>
+  bool get _startsOnDefault =>
       _desktopChoices && _attempt?.preparedFolder == null && !inWorktree;
   String? get branchRef {
     if (_branchRef != null) return _branchRef;
-    if (_defaultsToMain) {
-      final main = defaultBranchRef(_gitProject, worktree: true);
-      return !worktree && main?.startsWith('refs/remotes/') == true
+    if (_startsOnDefault) {
+      final start = defaultBranchRef(_gitProject, worktree: true);
+      return !worktree && start?.startsWith('refs/remotes/') == true
           ? null
-          : main;
+          : start;
     }
     return defaultBranchRef(_gitProject, worktree: worktree);
   }
@@ -905,7 +916,9 @@ class NewHarnessController extends ChangeNotifier {
   String? get gitError => _gitProject.error;
   String get branchLabel =>
       _refName(branchRef) ??
-      (worktree || _defaultsToMain ? 'main · unavailable' : 'Detached HEAD');
+      (worktree || _startsOnDefault
+          ? 'default · unavailable'
+          : 'Detached HEAD');
   String? _refName(String? ref) =>
       _gitProject.branches
           .where((branch) => branch.ref == ref)
@@ -1115,7 +1128,7 @@ class NewHarnessController extends ChangeNotifier {
     // One the person picked stays itself ([inWorktree]).
     if (info.mainFolder case final main?
         when _project.folder == key.$2 && !_project.exact) {
-      if (!_defaultsToMain &&
+      if (!_startsOnDefault &&
           _worktree == false &&
           _branchRef == null &&
           info.branch != null) {
@@ -1889,6 +1902,14 @@ class NewHarnessController extends ChangeNotifier {
     if (needsProject) {
       return (field: NewHarnessField.projectMenu, message: 'Choose a project.');
     }
+    // A terminal sends no project ([projectFolderRequest]): it would open at
+    // home under a chip that still names the repository.
+    if (isTerminal && _project.repository != null) {
+      return (
+        field: NewHarnessField.projectMenu,
+        message: "A terminal can't clone. Choose a folder or an agent.",
+      );
+    }
     final machine = _machine;
     if (machine == null || machine.isOffline || machine.needsLink) {
       return (
@@ -1942,7 +1963,7 @@ class NewHarnessController extends ChangeNotifier {
     }
     if (!checkingGit &&
         isGitProject &&
-        (worktree || _defaultsToMain && _gitProject.branches.isNotEmpty) &&
+        (worktree || _startsOnDefault && _gitProject.branches.isNotEmpty) &&
         branchRef == null) {
       return (
         field: _gitProject.branches.isEmpty
@@ -1950,7 +1971,7 @@ class NewHarnessController extends ChangeNotifier {
             : NewHarnessField.branch,
         message: _gitProject.branches.isEmpty
             ? 'This project has no commits. Choose a project or make an initial commit.'
-            : 'This project has no main branch. Choose a branch.',
+            : 'This project has no default branch. Choose a branch.',
       );
     }
     if (usesProfile &&
@@ -3888,6 +3909,16 @@ class NewHarnessController extends ChangeNotifier {
   /// goes through: an SSH alias, or the other computer's own GitHub access.
   /// Another computer's aliases are its daemon's to check, at launch.
   NewHarnessOption _cloneRow(GitHubRepository repository) {
+    if (isTerminal) {
+      return NewHarnessOption(
+        id: pasteInvalidId,
+        synthetic: true,
+        title: "A terminal can't clone",
+        detail: 'Choose an agent to clone ${repository.slug}',
+        enabled: false,
+        why: 'Choose an agent to clone ${repository.slug}.',
+      );
+    }
     final alias = repository.alias;
     final local = _machine?.isLocalMachine == true;
     if (local && alias != null) {
@@ -4035,6 +4066,57 @@ class NewHarnessController extends ChangeNotifier {
         return null;
       }
     });
+  }
+
+  static const _startingLine = 'Starting harness…';
+
+  /// A repository whose checkout is already there is used, not cloned, and the
+  /// line said Cloning for that moment anyway. Only the preparation decides,
+  /// and on another computer it says nothing until it is done, so look at the
+  /// same place first and leave the creation itself waiting on nothing.
+  Future<void> _sayWhenCloning(
+    GitHubRepository repository,
+    AgentCreationAttempt attempt,
+  ) async {
+    final free = await _cloneDestinationIsFree(repository);
+    if (!free ||
+        _disposed ||
+        !busy ||
+        !identical(attempt, _attempt) ||
+        status != _startingLine) {
+      return;
+    }
+    status = 'Cloning ${repository.slug}…';
+    notifyListeners();
+  }
+
+  /// Whether nothing is at `~/harnesses/<name>` where the harness will run.
+  /// Saying nothing about a clone is less wrong than announcing one that is not
+  /// happening, so false also covers a computer that cannot say.
+  Future<bool> _cloneDestinationIsFree(GitHubRepository repository) async {
+    final id = _machineId;
+    final home = await _ensureHome(id);
+    if (home == null) return false;
+    final root = _pathsFor(id, home).join(home, 'harnesses');
+    if (app.stateOf(id)?.isLocalMachine == true) {
+      final kind = await FileSystemEntity.type(
+        p.join(root, repository.name),
+        followLinks: false,
+      );
+      return kind == FileSystemEntityType.notFound;
+    }
+    // fs_list_dir (cli fsBrowse.ts) leaves hidden folders out: `.github` would
+    // look free whether it is there or not.
+    if (repository.name.startsWith('.')) return false;
+    final answer = await app.listRemoteFolder(id, root);
+    // The first clone on that computer: ~/harnesses is made for it.
+    if (answer['error'] == 'NOT_FOUND') return true;
+    final entries = answer['entries'];
+    if (answer['error'] != null || entries is! List) return false;
+    final listed = entries.any(
+      (entry) => entry is Map && entry['name'] == repository.name,
+    );
+    return !listed && answer['truncated'] != true;
   }
 
   /// Ask for [folder]'s listing. A local folder is read at once, off this
@@ -4445,12 +4527,14 @@ class NewHarnessController extends ChangeNotifier {
     busy = true;
     if (!(quiet && recheck)) {
       error = null;
-      status = recheck
-          ? 'Checking on the harness…'
-          : _project.repository != null
-          ? 'Cloning ${_project.repository?.slug}…'
-          : 'Starting harness…';
+      status = recheck ? 'Checking on the harness…' : _startingLine;
       notifyListeners();
+    }
+    if (!recheck && !asGuest) {
+      // What is sent, not what is shown: a terminal takes no project.
+      if (projectFolderRequest?.repository case final repository?) {
+        unawaited(_sayWhenCloning(repository, attempt));
+      }
     }
     if (model != null && !recheck) {
       await refreshModels();

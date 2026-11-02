@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/ssh_hosts.dart';
@@ -26,6 +27,10 @@ class _Connection extends WsConn {
   final creates = <Map<String, dynamic>>[];
   Completer<Map<String, dynamic>>? createReply;
 
+  /// What this computer answers for `~/harnesses`, when it is asked.
+  Map<String, dynamic> harnesses = const {'error': 'NOT_FOUND'};
+  Completer<void>? harnessesHeld;
+
   @override
   Future<Map<String, dynamic>> request(
     String type, {
@@ -41,6 +46,17 @@ class _Connection extends WsConn {
         };
       case 'fs_list_dir':
         final path = payload['path'] as String? ?? '/home/test';
+        if (path == '/home/test/harnesses') {
+          await harnessesHeld?.future;
+          // A refusal arrives as WsConn throws it, never as a value.
+          if (harnesses['error'] case final String code) {
+            throw WsRequestFailure(
+              responseType: 'fs_list_dir_result',
+              code: code,
+            );
+          }
+          return harnesses;
+        }
         return {
           'path': path,
           'entries': [
@@ -255,6 +271,189 @@ void main() {
     unawaited(box.create());
     await Future<void>.delayed(Duration.zero);
     expect(box.status, 'Cloning org/repo…');
+  });
+
+  group('a terminal opens in a folder and clones nothing', () {
+    NewHarnessController terminal(String typed) {
+      final box = NewHarnessController(
+        app,
+        machineId: 'm',
+        engine: 'terminal',
+        folder: '/work/repo',
+      )..useDesktopChoices(true);
+      box.sshHosts = _Hosts(const {});
+      addTearDown(box.dispose);
+      box.focusField(NewHarnessField.projectMenu);
+      box.setQuery(typed);
+      return box;
+    }
+
+    test('a pasted link is refused, and says why', () {
+      final box = terminal('https://github.com/org/repo');
+      final row = box.options.first;
+      expect(row.id, NewHarnessController.pasteInvalidId);
+      expect(row.enabled, isFalse);
+      expect(row.title, "A terminal can't clone");
+      expect(row.detail, 'Choose an agent to clone org/repo');
+      box.accept();
+      expect(box.error, 'Choose an agent to clone org/repo.');
+      expect(box.requiredChoice, isNull);
+    });
+
+    test('a pasted path still opens', () async {
+      final box = terminal('/work');
+      await listed();
+      expect(box.options.first.id, isNot(NewHarnessController.pasteInvalidId));
+      expect(box.options.first.enabled, isTrue);
+    });
+
+    test('changing to Terminal after choosing a clone asks again', () async {
+      final box = search('https://github.com/org/repo');
+      box.accept();
+      expect(box.requiredChoice, isNull);
+      box.focusField(NewHarnessField.harness);
+      box.setQuery('Terminal');
+      box.accept();
+      expect(box.isTerminal, isTrue);
+      expect(box.requiredChoice?.field, NewHarnessField.projectMenu);
+      expect(
+        box.requiredChoice?.message,
+        "A terminal can't clone. Choose a folder or an agent.",
+      );
+      expect(await box.create(), NewHarnessOutcome.failed);
+      expect(connection.creates, isEmpty);
+    });
+  });
+
+  group('the line only says Cloning when a clone will run', () {
+    Future<List<String?>> linesWhileCreating(NewHarnessController box) async {
+      final lines = <String?>[];
+      box.addListener(() => lines.add(box.status));
+      box.accept();
+      unawaited(box.create());
+      await Future<void>.delayed(Duration.zero);
+      return lines;
+    }
+
+    test(
+      'a checkout already there is used, so it never says Cloning',
+      () async {
+        connection.harnesses = {
+          'path': '/home/test/harnesses',
+          'entries': [
+            {'name': 'repo', 'isDir': true},
+          ],
+        };
+        final box = search('https://github.com/org/repo');
+        final lines = await linesWhileCreating(box);
+        expect(box.status, 'Starting harness…');
+        expect(lines, isNot(contains('Cloning org/repo…')));
+      },
+    );
+
+    test('another folder in ~/harnesses does not stop it saying so', () async {
+      connection.harnesses = {
+        'path': '/home/test/harnesses',
+        'entries': [
+          {'name': 'other', 'isDir': true},
+        ],
+      };
+      final box = search('https://github.com/org/repo');
+      await linesWhileCreating(box);
+      expect(box.status, 'Cloning org/repo…');
+    });
+
+    test('a first clone on a computer with no ~/harnesses says so', () async {
+      final box = search('https://github.com/org/repo');
+      await linesWhileCreating(box);
+      expect(box.status, 'Cloning org/repo…');
+    });
+
+    test('a computer that cannot say is not told a clone is running', () async {
+      connection.harnesses = {'error': 'UNAVAILABLE'};
+      final box = search('https://github.com/org/repo');
+      final lines = await linesWhileCreating(box);
+      expect(box.status, 'Starting harness…');
+      expect(lines, isNot(contains('Cloning org/repo…')));
+    });
+
+    test(
+      'a listing cut short that does not show the name cannot say',
+      () async {
+        connection.harnesses = {
+          'path': '/home/test/harnesses',
+          'entries': const <Object>[],
+          'truncated': true,
+        };
+        final box = search('https://github.com/org/repo');
+        await linesWhileCreating(box);
+        expect(box.status, 'Starting harness…');
+      },
+    );
+
+    test('a hidden folder is never listed, so its name cannot say', () async {
+      connection.harnesses = {
+        'path': '/home/test/harnesses',
+        'entries': const <Object>[],
+      };
+      final box = search('https://github.com/org/.github');
+      await linesWhileCreating(box);
+      expect(box.status, 'Starting harness…');
+    });
+
+    test('this computer looks at its own folder', () async {
+      final home = Directory.systemTemp.createTempSync('harness-clone-line');
+      addTearDown(() => home.deleteSync(recursive: true));
+      Directory('${home.path}/harnesses/repo').createSync(recursive: true);
+      final held = Completer<String>();
+      final local = createApp(
+        connectionForTest: (_) => connection,
+        connected: true,
+        // Never a real clone into this developer's own home.
+        prepareFolder: (_) => held.future,
+      );
+      addTearDown(local.dispose);
+      local.machineStates['m']!
+        ..agents = []
+        ..localOnly = true;
+      NewHarnessController boxFor(String link) {
+        final box = NewHarnessController(
+          local,
+          machineId: 'm',
+          engine: 'codex',
+          folder: home.path,
+          home: home.path,
+        )..useDesktopChoices(true);
+        box.sshHosts = _Hosts(const {});
+        addTearDown(box.dispose);
+        box.focusField(NewHarnessField.projectMenu);
+        box.setQuery(link);
+        box.accept();
+        unawaited(box.create());
+        return box;
+      }
+
+      final reused = boxFor('https://github.com/org/repo');
+      final cloned = boxFor('https://github.com/org/fresh');
+      await pumpEventQueue();
+      expect(reused.status, 'Starting harness…');
+      expect(cloned.status, 'Cloning org/fresh…');
+    });
+
+    test('an answer after the creation failed changes nothing', () async {
+      connection.harnessesHeld = Completer();
+      final box = search('https://github.com/org/repo');
+      box.accept();
+      final outcome = box.create();
+      await Future<void>.delayed(Duration.zero);
+      expect(box.status, 'Starting harness…');
+      connection.createReply!.complete({'error': 'INVALID_CWD'});
+      await outcome;
+      final settled = box.status;
+      connection.harnessesHeld!.complete();
+      await Future<void>.delayed(Duration.zero);
+      expect(box.status, settled);
+    });
   });
 }
 
