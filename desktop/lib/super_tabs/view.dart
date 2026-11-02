@@ -2323,7 +2323,11 @@ class _SuperTabViewState extends State<SuperTabView>
     setState(() => _showPullRequests = true);
   }
 
-  void _toggleRoster() => setState(() => _rosterOpen = !_rosterOpen);
+  /// Members takes the right side from an open thread, as in Slack.
+  void _toggleRoster() {
+    if (!_rosterOpen) c.closeThread();
+    setState(() => _rosterOpen = !_rosterOpen);
+  }
 
   /// On a phone, the view ⋮ opened in place of the chat, which the bar has no
   /// icon to mark as selected; null while the chat is the view.
@@ -2369,7 +2373,7 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  Widget _header(SuperTabConversation? group, bool narrow, bool showRoster) =>
+  Widget _header(SuperTabConversation? group, bool narrow) =>
       Container(
         constraints: const BoxConstraints(minHeight: 52),
         // A phone's rows line up (Huy, 2026-11-02): the sidebar icon starts at
@@ -2488,16 +2492,18 @@ class _SuperTabViewState extends State<SuperTabView>
                 _options(group, views: _menuNamesViews),
               ),
             ],
-            if (!showRoster)
-              fingerTarget(
-                enabled: _phone,
-                AppIconButton(
-                  icon: AppIcons.users,
-                  tooltip: 'Members and machines',
-                  selected: _rosterOpen,
-                  onPressed: _toggleRoster,
-                ),
+            // The right column opens only from here (Quiet Swarm, Dee,
+            // 2026-11-02): closed at rest, at every width.
+            fingerTarget(
+              enabled: _phone,
+              AppIconButton(
+                key: const ValueKey('super-members-button'),
+                icon: AppIcons.users,
+                tooltip: 'Members',
+                selected: _rosterOpen,
+                onPressed: _toggleRoster,
               ),
+            ),
           ],
         ),
       );
@@ -4104,14 +4110,16 @@ class _SuperTabViewState extends State<SuperTabView>
       final terminal = widget.terminal;
       final narrow =
           constraints.maxWidth < MediaQuery.textScalerOf(context).scale(720);
-      final showRoster =
+      // Wide enough for a right column beside the chat; it shows only an
+      // open thread or Members, closed at rest (Quiet Swarm, 2026-11-02).
+      final wide =
           constraints.maxWidth >= MediaQuery.textScalerOf(context).scale(1080);
       final thread = _threadPanel();
-      final threadDrawer = thread != null && !showRoster;
+      // A thread opened since Members takes its side and closes it.
+      if (thread != null) _rosterOpen = false;
+      final threadDrawer = thread != null && !wide;
       final chatCovered =
-          (narrow && _sidebarOpen) ||
-          (!showRoster && _rosterOpen) ||
-          threadDrawer;
+          (narrow && _sidebarOpen) || (!wide && _rosterOpen) || threadDrawer;
       if (_chatCovered && !chatCovered) {
         // Both dismissing a drawer and widening the window reveal the cached
         // transcript without loading another message.
@@ -4144,6 +4152,7 @@ class _SuperTabViewState extends State<SuperTabView>
           });
           unawaited(c.select(id));
         },
+        onClose: _closeRoster,
       );
       return Focus(
         canRequestFocus: false,
@@ -4158,13 +4167,13 @@ class _SuperTabViewState extends State<SuperTabView>
                 onLeave: _leaveResize,
                 left: narrow ? null : _sidebar(),
                 // An open thread takes the roster's side, as in Slack.
-                right: !showRoster ? null : thread ?? roster,
+                right: !wide ? null : thread ?? (_rosterOpen ? roster : null),
                 rightDefault: thread == null
                     ? SuperTabPaneLayout.rightWidth
                     : SuperTabPaneLayout.threadWidth,
                 center: Column(
                   children: [
-                    _header(c.selected, narrow, showRoster),
+                    _header(c.selected, narrow),
                     Expanded(
                       child: SuperTabPages(
                         index: _devicesVisible
@@ -4238,7 +4247,7 @@ class _SuperTabViewState extends State<SuperTabView>
                   ),
                 ),
               ),
-            if (!showRoster && _rosterOpen && !threadDrawer)
+            if (!wide && _rosterOpen && !threadDrawer)
               Positioned.fill(
                 child: BlockSemantics(
                   child: FocusScope(

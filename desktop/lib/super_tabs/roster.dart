@@ -7,7 +7,9 @@ import '../core/local_key_value_store.dart';
 import '../core/relative_time.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/theme/app_icons.dart';
 import '../shared/theme/appearance_prefs_store.dart';
+import '../shared/widgets/app_icon_button.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_select_field.dart';
 import '../state/app_state.dart';
@@ -48,6 +50,7 @@ class SuperTabRoster extends StatefulWidget {
     required this.onOpenAgent,
     required this.onAddAgent,
     required this.onAnswer,
+    this.onClose,
     this.app,
     this.board,
     this.storage,
@@ -62,6 +65,10 @@ class SuperTabRoster extends StatefulWidget {
   /// Opens a conversation: one where an agent waits on a person, or an agent
   /// row's task.
   final ValueChanged<String> onAnswer;
+
+  /// Closes the column: it opens only from Members (Quiet Swarm, Dee,
+  /// 2026-11-02). No close when null.
+  final VoidCallback? onClose;
 
   /// The open project's week board, shared with the sidebar's Models; the
   /// roster reads its own when not given.
@@ -683,6 +690,7 @@ class _SuperTabRosterState extends State<SuperTabRoster>
       ),
     };
     return [
+      _heading(),
       // Humans and Agents: the two roles in one team (Dee, 2026-10-29).
       SuperTabSectionHeading(
         'Humans',
@@ -763,6 +771,28 @@ class _SuperTabRosterState extends State<SuperTabRoster>
       for (final agent in listed) _agent(agent, states[agent.id]!, now),
     ];
   }
+
+  /// The column's heading, with its close at the right as a thread's has.
+  Widget _heading() => Padding(
+    padding: const EdgeInsets.fromLTRB(
+      DesktopChrome.groupGap,
+      0,
+      DesktopChrome.controlGap,
+      DesktopChrome.controlGap,
+    ),
+    child: Row(
+      children: [
+        const Spacer(),
+        if (widget.onClose case final close?)
+          AppIconButton(
+            key: const ValueKey('super-members-close'),
+            icon: AppIcons.close,
+            tooltip: 'Close members',
+            onPressed: close,
+          ),
+      ],
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
