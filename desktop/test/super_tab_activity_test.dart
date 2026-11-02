@@ -772,32 +772,41 @@ void main() {
       ]);
       await visit(tester, activity);
       expect(server.activityReadPosts, hasLength(1));
-      expect(server.activityReadPosts.single['through'],
-        '2026-10-31T05:00:00.000Z');
+      expect(
+        server.activityReadPosts.single['through'],
+        '2026-10-31T05:00:00.000Z',
+      );
       expect(activity.items.every((i) => i.read), isTrue);
       await close(tester, c);
     });
 
-    testWidgets('a kind shown on the way counts: Replies, then Decisions', (
-      tester,
-    ) async {
-      final (server, c, activity) = await unread(tester, [
-        at(reply('r1'), '05:00'),
-      ]);
-      await visit(
-        tester,
-        activity,
-        filters: [
-          SuperTabActivityFilter.replies,
-          SuperTabActivityFilter.decisions,
-        ],
-      );
-      expect(server.activityReadPosts.single['through'],
-        '2026-10-31T05:00:00.000Z');
-      await close(tester, c);
-    });
+    testWidgets(
+      'only the list showing when it is left counts: Replies, then Reactions',
+      (tester) async {
+        final (server, c, activity) = await unread(tester, [
+          at(reaction('x1'), '05:00'),
+          at(reply('r1'), '06:00'),
+        ]);
+        await visit(
+          tester,
+          activity,
+          filters: [
+            SuperTabActivityFilter.replies,
+            SuperTabActivityFilter.reactions,
+          ],
+        );
+        expect(
+          server.activityReadPosts.single['through'],
+          '2026-10-31T05:00:00.000Z',
+        );
+        expect(
+          {for (final i in activity.items) i.id: i.read},
+          {'x1': true, 'r1': false},
+        );
+        await close(tester, c);
+      },
+    );
 
-    // The server's mark is by time, whatever the kind (backend activity.ts markActivityRead).
     testWidgets(
       'a Replies visit stops before an unread reaction it did not show: '
       'the mark is by time',
@@ -809,8 +818,10 @@ void main() {
         ]);
         activity.setFilter(SuperTabActivityFilter.replies);
         await visit(tester, activity);
-        expect(server.activityReadPosts.single['through'],
-        '2026-10-31T04:00:00.000Z');
+        expect(
+          server.activityReadPosts.single['through'],
+          '2026-10-31T04:00:00.000Z',
+        );
         final read = {for (final i in activity.items) i.id: i.read};
         expect(read, {'new': false, 'x1': false, 'old': true});
         await close(tester, c);
@@ -827,6 +838,32 @@ void main() {
         activity.setFilter(SuperTabActivityFilter.replies);
         await visit(tester, activity);
         expect(server.activityReadPosts, isEmpty);
+        await close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'a row that arrives while Replies shows is listed, and is read on leaving',
+      (tester) async {
+        final (server, c, activity) = await unread(tester, [
+          at(reply('r1'), '05:00'),
+        ]);
+        await visit(
+          tester,
+          activity,
+          filters: [SuperTabActivityFilter.replies],
+          during: () async {
+            server.activity = {
+              'items': [at(reply('r2'), '06:00'), at(reply('r1'), '05:00')],
+              'more': false,
+            };
+            await tester.runAsync(() => activity.load());
+          },
+        );
+        expect(
+          server.activityReadPosts.single['through'],
+          '2026-10-31T06:00:00.000Z',
+        );
         await close(tester, c);
       },
     );
