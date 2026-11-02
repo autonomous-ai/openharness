@@ -435,7 +435,7 @@ describe('what the elevated removal deletes of the Team account\'s', () => {
 
   it('deletes them once the account is gone, its own daemon\'s task apart', () => {
     const text = script()
-    expect(text).toContain('Unregister-ScheduledTask -TaskPath $own.TaskPath -TaskName $own.TaskName -Confirm:$false')
+    expect(text).toContain('Delete-Task $own')
     expect(text.indexOf('foreach ($own in @($script:seenTasks')).toBeGreaterThan(text.indexOf('# 4. The account.'))
   })
 
@@ -467,7 +467,15 @@ describe('what the elevated removal deletes of the Team account\'s', () => {
   it('unregisters the tasks it found while the account was there, as the name may not match once it has gone', () => {
     const text = script()
     expect(text).toContain('foreach ($own in @($script:seenTasks + @(Team-Tasks)))')
-    expect(text).toContain('Get-ScheduledTask -TaskPath $own.TaskPath -TaskName $own.TaskName')
+    expect(text).toContain('Task-There $_')
+  })
+
+  // These take wildcards: a Team task named [G]oogleUpdate could match the real GoogleUpdate (security review 2 of #2579).
+  it('never passes a task name the Team account chose to a command that reads wildcards', () => {
+    const text = script()
+    expect(text).not.toContain('-TaskName $own.TaskName')
+    expect(text).toContain('.DeleteTask($own.TaskName, 0)')
+    expect(text).toContain('.GetTask($own.TaskName)')
   })
 
   it('cleans what the Team account named before printing it', () => {

@@ -842,6 +842,15 @@ export const windowsRemoveHelperLines = (): string[] => [
   '}',
   // A removal that stopped partway left its renamed folders: only this script makes those names, in folders others cannot write.
   "function Remove-Renamed([string]$parent) { if (Item-At $parent) { foreach ($old in @(Get-ChildItem -LiteralPath $parent -Force -Filter '.harness-removing-*')) { Remove-Held $old.FullName } } }",
+  // By the Task Scheduler service and the exact name, as setup deletes its own: the ScheduledTasks commands read -TaskName as a
+  // wildcard, so a Team task named [G]oogleUpdate could match the real GoogleUpdate (security review 2 of #2579).
+  'function Task-Folder($own) {',
+  '  if (-not $script:taskService) { $script:taskService = New-Object -ComObject Schedule.Service; $script:taskService.Connect() }',
+  "  $folder = ([string]$own.TaskPath).TrimEnd('\\')",
+  "  $script:taskService.GetFolder($(if ($folder) { $folder } else { '\\' }))",
+  '}',
+  'function Delete-Task($own) { try { (Task-Folder $own).DeleteTask($own.TaskName, 0) } catch { } }',
+  'function Task-There($own) { try { [void](Task-Folder $own).GetTask($own.TaskName); $true } catch { $false } }',
   // Tasks the account registered for itself: any of them could start it again while it goes. By name or SID, as Windows shows either.
   'function Team-Tasks {',
   '  @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {',
@@ -966,8 +975,8 @@ export function buildWindowsRemoveScript(input: RemoveScriptInput): string {
     '#    made and the sentinel.',
     'if ($task) { Unregister-ScheduledTask -TaskPath $TASK_PATH -TaskName $TASK_NAME -Confirm:$false }',
     // The ones found while the account was there too: its name may not match once it has gone.
-    'foreach ($own in @($script:seenTasks + @(Team-Tasks))) { Unregister-ScheduledTask -TaskPath $own.TaskPath -TaskName $own.TaskName -Confirm:$false -ErrorAction SilentlyContinue }',
-    '$stayed = @(@($script:seenTasks) + @(Team-Tasks) | Where-Object { $own = $_; Get-ScheduledTask -TaskPath $own.TaskPath -TaskName $own.TaskName -ErrorAction SilentlyContinue })',
+    'foreach ($own in @($script:seenTasks + @(Team-Tasks))) { Delete-Task $own }',
+    '$stayed = @(@($script:seenTasks) + @(Team-Tasks) | Where-Object { Task-There $_ })',
     'if ($stayed.Count -gt 0) { say "could not remove $($stayed.Count) task(s) the team account registered: $(($stayed | ForEach-Object { Clean-Line $_.TaskName }) -join \', \')" }',
     `if ($teamSid) { [void](New-Stage ${SDDL.private}); Set-BatchLogon $teamSid $false }`,
     "try { $scheduler = New-Object -ComObject Schedule.Service; $scheduler.Connect(); $scheduler.GetFolder('\\').DeleteFolder($TASK_PATH.Trim('\\'), 0) } catch { }",

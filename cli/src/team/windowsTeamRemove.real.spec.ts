@@ -105,6 +105,22 @@ describe.runIf(process.platform === 'win32')('the Team account\'s removal on Win
     expect(said.trim()).toBe('1 0')
   })
 
+  it('acts on a task named like a wildcard alone, and leaves the task it would match', () => {
+    const plain = `HarnessW5Abc${process.pid}`, bracket = `[H]arnessW5Abc${process.pid}`
+    const said = powershell(`
+      $action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c exit 0'
+      [void](Register-ScheduledTask -TaskName '${plain}' -Action $action -Force)
+      $team = Register-ScheduledTask -TaskName '${bracket}' -Action $action -Force
+      try {
+        Disable-ScheduledTask -InputObject $team -ErrorAction SilentlyContinue | Out-Null
+        $state = (Get-ScheduledTask | Where-Object { $_.TaskName -ceq '${plain}' }).State
+        $there = Task-There $team
+        Delete-Task $team
+        "$state $there $(Task-There $team) $(@(Get-ScheduledTask | Where-Object { $_.TaskName -ceq '${plain}' }).Count)"
+      } finally { (New-Object -ComObject Schedule.Service | ForEach-Object { $_.Connect(); $_.GetFolder('\\').DeleteTask('${plain}', 0) }) }`)
+    expect(said.trim()).toBe('Ready True False 1')
+  })
+
   it('removes escape codes, bells and format characters from a line (W7)', () => {
     const said = powershell(`Clean-Line ([string][char]27 + '[31mred' + [char]7 + [char]0x202e + ' text')`)
     expect(said.trim()).toBe('[31mred text')
