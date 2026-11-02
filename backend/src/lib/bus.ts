@@ -1167,6 +1167,8 @@ export async function getAgentClientTotals(machineId: string): Promise<{ ui: num
 export async function getAgentClientState(machineId: string): Promise<{
   totals: { ui: number; commander: number; commanderActive: number }
   commanderJoinGeneration: number | undefined
+  /** The counts could not be read: the zeros stand for "unknown", never for "nobody". */
+  failed?: true
 }> {
   try {
     const res = await pub.pipeline().hgetall(clientsKey(machineId)).get(commanderJoinGenerationKey(machineId)).exec()
@@ -1181,7 +1183,7 @@ export async function getAgentClientState(machineId: string): Promise<{
     }
   } catch (err) {
     logger.error('[bus] getAgentClientState failed', err, { machineId })
-    return { totals: { ui: 0, commander: 0, commanderActive: 0 }, commanderJoinGeneration: undefined }
+    return { totals: { ui: 0, commander: 0, commanderActive: 0 }, commanderJoinGeneration: undefined, failed: true }
   }
 }
 
