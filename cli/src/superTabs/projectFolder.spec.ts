@@ -35,6 +35,16 @@ describe('per-project checkouts on a contributed swarm machine', () => {
     await f.run()
     expect(f.prepare).not.toHaveBeenCalled()
   })
+  it('finds a project session of a person\'s one Buddy chat by the project it names, as that chat is in no project\'s list', async () => {
+    const f = fixture()
+    Object.assign(f.start.request, { conversationId: 'swarm-buddy-chat', buddySession: { thread: 'root', projectId: 'project-a' } })
+    await f.run()
+    expect(f.prepare).toHaveBeenCalledOnce()
+    // Its project alone: a session naming a project this machine was not told of prepares nothing, whatever its chat.
+    Object.assign(f.start.request, { conversationId: 'work', buddySession: { thread: 'root', projectId: 'project-b' } })
+    await expect(f.run()).rejects.toThrow('no authorized project')
+    expect(f.prepare).toHaveBeenCalledOnce()
+  })
   it('does not widen a legacy contribution or substitute a different filesystem path', async () => {
     const f = fixture()
     f.row.machine.scope = ''

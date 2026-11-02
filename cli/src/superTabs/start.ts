@@ -110,6 +110,11 @@ export function buddySessionThread(request: Json): string | null {
   return typeof thread === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(thread) ? thread : null
 }
 
+/** Whether a start's folder is made in Harness's worktrees folder, whose disk then admits it (disk.ts). A person's one Buddy's
+ *  `cwd` only admits its start at the backend and is never made here: measured as it stands, a folder that is not there
+ *  refused every such start (2026-11-02). */
+const madeInWorktrees = (request: Json) => request.worktree === true || request.buddyScope === 'swarm'
+
 export async function inspectCapacity(target: Daemon, request: Json) {
   const wanted = object(request.requirements)
   const requirements: Requirements = {
@@ -119,7 +124,7 @@ export async function inspectCapacity(target: Daemon, request: Json) {
     quotaRequired: wanted.quotaRequired === true,
   }
   const [capability, engines, usage] = await Promise.allSettled([
-    target.request('super_tabs', { action: 'capacity', cwd: request.cwd, worktree: request.worktree === true, tools: requirements.tools, devices: requirements.devices }, 20_000),
+    target.request('super_tabs', { action: 'capacity', cwd: request.cwd, worktree: madeInWorktrees(request), tools: requirements.tools, devices: requirements.devices }, 20_000),
     target.request('engines_probe', { engines: [request.engine] }, 20_000),
     target.request('usage_read', {}, 20_000),
   ])
@@ -342,7 +347,7 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       }
       if (!resources.allowed) return { error: 'CAPACITY_UNAVAILABLE', startId, ...resources }
       const reservation = await target.request('super_tabs', { action: 'reserveCapacity', creationId,
-        cwd: request.cwd, worktree: request.worktree === true, requirements: request.requirements }, 20_000).catch(() => null)
+        cwd: request.cwd, worktree: madeInWorktrees(request), requirements: request.requirements }, 20_000).catch(() => null)
       if (!reservation || (reservation.ok === true && reservation.reservationId !== creationId)) {
         return { error: 'START_UNCERTAIN', startId, creationId,
           detail: 'The machine did not confirm its capacity reservation. Keep this start ID and resume it; nothing was dispatched.' }
