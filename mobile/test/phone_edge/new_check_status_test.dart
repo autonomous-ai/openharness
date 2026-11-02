@@ -272,7 +272,9 @@ void main() {
       find.textContaining('Installing Kilo. The harness starts once'),
       findsOneWidget,
     );
-    expect(find.text('Check status'), findsOneWidget);
+    // A bar in place of the button: it checks by itself, without flipping to Checking….
+    expect(find.byKey(const ValueKey('new-agent-held-bar')), findsOneWidget);
+    expect(find.text('Check status'), findsNothing);
     expect(find.text('Cancel request'), findsOneWidget);
 
     await press(tester, 'Cancel request');
