@@ -148,7 +148,7 @@ class SuperTabAgent {
         {'personId': final String person} => person,
         _ => null,
       },
-      // Read as the desktop does; the phone draws no thread sessions yet.
+      // Read as the desktop does.
       buddySession = SuperTabBuddySessionOf.fromJson(row['buddySession']),
       limitedUntil = DateTime.tryParse(row['limitedUntil'] as String? ?? ''),
       alerting = List.unmodifiable(
@@ -240,9 +240,13 @@ class SuperTabAgent {
 
 /// A thread session's thread and starting sequence (desktop model.dart).
 class SuperTabBuddySessionOf {
-  const SuperTabBuddySessionOf(this.thread, this.from);
+  const SuperTabBuddySessionOf(this.thread, this.from, [this.projectId]);
   final String thread;
   final int from;
+
+  /// The project a session of a person's one Buddy chat works in; null for a
+  /// plain session and every older project chat's.
+  final String? projectId;
 
   static SuperTabBuddySessionOf? fromJson(Object? value) {
     if (value is! Map) return null;
@@ -250,7 +254,12 @@ class SuperTabBuddySessionOf {
     final thread = json['thread'];
     if (thread is! String || thread.isEmpty) return null;
     final from = json['from'];
-    return SuperTabBuddySessionOf(thread, from is num ? from.toInt() : 0);
+    final project = json['projectId'];
+    return SuperTabBuddySessionOf(
+      thread,
+      from is num ? from.toInt() : 0,
+      project is String && project.isNotEmpty ? project : null,
+    );
   }
 }
 
@@ -368,6 +377,10 @@ class SuperTabConversation {
 
   /// A Buddy chat's live or starting thread sessions (desktop model.dart).
   final List<SuperTabBuddySession> buddySessions;
+
+  /// The live or starting session answering [thread], if any.
+  SuperTabBuddySession? sessionFor(String thread) =>
+      buddySessions.where((s) => s.thread == thread).firstOrNull;
   final SuperTabTask? task;
   final int? number;
   String get label => number == null ? title : '#$number $title';
@@ -1197,7 +1210,19 @@ class SuperTabMessage {
 
   /// A reply in a Buddy thread session's thread (desktop model.dart).
   final bool buddySession;
+
+  /// The line the server writes in a thread when its session ends.
+  bool get sessionEnded => source['kind'] == 'buddy-session-ended';
+
+  /// Why its session ended, for [sessionEnded] rows: `ended`, `idle`,
+  /// `stopped` or `failed`.
+  String? get sessionEndReason =>
+      sessionEnded ? source['reason'] as String? : null;
   bool get threadReply => thread != null && thread != id;
+
+  /// A Buddy chat message that started its own thread's session from the
+  /// main chat: its thread's root, in the session's thread.
+  bool get sessionRoot => buddySession && !threadReply;
 
   /// Whether the main stream lists it: a thread reply only when also sent.
   bool get inMainStream => !threadReply || alsoInChat;
