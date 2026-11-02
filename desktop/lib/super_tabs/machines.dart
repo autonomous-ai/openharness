@@ -2393,7 +2393,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         // A row's mark starts under Manage's heading, its words end at the
         // page's edge (Swarm's and Models' 24).
         padding: const EdgeInsets.fromLTRB(
-          12,
+          grid.AppDesktop.controlGap + grid.AppDesktop.menuInset / 2,
           grid.AppDesktop.controlGap,
           grid.AppDesktop.groupGap,
           grid.AppDesktop.controlGap,

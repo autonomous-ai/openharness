@@ -177,8 +177,9 @@ void main() {
     Future<SuperTabController> inView(
       WidgetTester tester,
       List<String> opened,
-      ValueNotifier<bool> terminals,
-    ) async {
+      ValueNotifier<bool> terminals, {
+      bool membersOpen = false,
+    }) async {
       final server = membersSwarm();
       final c = server.controller();
       await c.refresh();
@@ -203,6 +204,8 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      // Members opens from a chat (Quiet Swarm) and stays open over Manage.
+      if (membersOpen) await openSuperTabMembers(tester);
       await tester.tap(find.byKey(const ValueKey('super-manage')));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('super-manage-tab-machines')), findsOne);
@@ -234,8 +237,7 @@ void main() {
     ) async {
       final opened = <String>[];
       final terminals = ValueNotifier(false);
-      final c = await inView(tester, opened, terminals);
-      await openSuperTabMembers(tester);
+      final c = await inView(tester, opened, terminals, membersOpen: true);
       final agent = c.snapshot!.agents.first;
       await tester.tap(find.byKey(ValueKey('super-member-${agent.id}')));
       await tester.pumpAndSettle();

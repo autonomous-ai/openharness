@@ -237,6 +237,25 @@ ConversationServer _seed() {
       _score('phamngochuy.1989', 48, 6, 9, 4, 36),
     ],
     'waiting': {'total': 0, 'people': <Object>[]},
+    'byModel': [
+      for (final (i, model, points) in [
+        (1, 'claude-opus-5-5', 62),
+        (2, 'claude-sonnet-5-5', 21),
+        (3, 'gpt-6.1-sol', 11),
+        (4, 'deepseek-v4.1', 6),
+      ])
+        {
+          'engine': i == 3 ? 'codex' : 'claude',
+          'model': model,
+          'effort': 'high',
+          'points': points,
+          'rank': i,
+          'attempts': points,
+          'shipped': {'count': points},
+          'firstReview': {'reviewed': points, 'passed': points},
+          'reviews': points,
+        },
+    ],
   };
   var sequence = 1;
   void say(String author, String text, Duration ago, {bool agent = false}) =>

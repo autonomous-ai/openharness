@@ -2,6 +2,7 @@ import 'package:clock/clock.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/activity_view.dart';
@@ -124,7 +125,7 @@ void main() {
       expect(find.text('Windows credential fix'), findsOneWidget);
       expect(find.text('3 new'), findsOneWidget);
       expect(find.text('Closed agents leave the list'), findsOneWidget);
-      expect(find.text('08:08'), findsOneWidget);
+      expect(find.text('8:08 AM'), findsOneWidget);
     });
   });
 
@@ -205,10 +206,10 @@ void main() {
       expect(titles, hasLength(1), reason: 'title columns: $titles');
       // The mark column starts where the headings do.
       final marks = {
-        left(find.text('◐').first),
+        left(find.byIcon(AppIcons.circleDot).first),
         left(find.text('@')),
-        left(find.text('↳')),
-        left(find.text('✓').first),
+        left(find.byIcon(AppIcons.reply)),
+        left(find.byIcon(AppIcons.check).first),
       };
       expect(marks, hasLength(1), reason: 'mark columns: $marks');
       for (final heading in ['Needs you', 'New replies', 'Done today']) {
