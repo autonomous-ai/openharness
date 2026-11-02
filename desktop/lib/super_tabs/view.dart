@@ -2199,7 +2199,10 @@ class _SuperTabViewState extends State<SuperTabView>
     if (snapshot.isProjectLead(group.id)) {
       return 'Message #${snapshot.projectFor(group.id)!.name}';
     }
-    if (_buddyName(group) case final buddy?) return 'Message $buddy';
+    if (_buddyName(group) case final buddy?) {
+      // A Buddy's name is its person's and long: a phone's one line says Buddy.
+      return _phone ? 'Message Buddy' : 'Message $buddy';
+    }
     return 'Message ${group.title}';
   }
 
@@ -2207,6 +2210,59 @@ class _SuperTabViewState extends State<SuperTabView>
   /// ⋮ names the rest (terminals, pull requests, people) instead of five bare
   /// icons. Desktop, which sets no [WorkspaceChrome.compactBelow], never.
   bool get _phone => workspaceIsCompact(context);
+
+  /// Keeps the field mounted when a phone turns past the compact width: a
+  /// remounted field keeps focus but loses its text input connection.
+  final _composerFieldKey = GlobalKey();
+
+  /// The composer's field and its controls: a row on a wide window. A phone
+  /// gives the field the width and the controls a row below (Huy, 2026-11-02:
+  /// the field had about 40% of the row): [options] and [attach] at the left,
+  /// wrapping if they must, and [send] at the right.
+  Widget _composerLayout({
+    required Widget field,
+    required List<Widget> options,
+    required Widget attach,
+    required Widget send,
+  }) {
+    if (_phone) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 4, right: 8, bottom: 4),
+            child: field,
+          ),
+          Row(
+            key: const ValueKey('super-message-composer-actions'),
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [...options, attach],
+                ),
+              ),
+              send,
+            ],
+          ),
+        ],
+      );
+    }
+    return ConstrainedBox(
+      constraints: BoxConstraints(minHeight: grid.AppControl.heightFieldScaled),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(child: field),
+          ...options,
+          attach,
+          send,
+        ],
+      ),
+    );
+  }
 
   /// Whether ⋮ carries the views a wider header draws as icons.
   bool get _menuNamesViews =>
@@ -3716,13 +3772,42 @@ class _SuperTabViewState extends State<SuperTabView>
             key: const ValueKey('super-message-composer-row'),
             listenable: _composer,
             builder: (context, field) => Padding(
-              padding: EdgeInsets.fromLTRB(
-                24,
-                12,
-                24,
-                pastedFolders().isEmpty ? 16 : 6,
-              ),
-              child: field,
+              // On a phone the box sits against the keyboard, with the width.
+              padding: _phone
+                  ? const EdgeInsets.fromLTRB(12, 8, 12, 8)
+                  : EdgeInsets.fromLTRB(
+                      24,
+                      12,
+                      24,
+                      pastedFolders().isEmpty ? 16 : 6,
+                    ),
+              child: _phone
+                  ? Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (c.offersChatSessions &&
+                            _chatSessions.contains(chatId) &&
+                            c.threadSessionBlocked == null)
+                          Padding(
+                            padding: const EdgeInsets.only(
+                              bottom: grid.AppDesktop.controlGap,
+                            ),
+                            child: Text(
+                              'Your message starts its own thread and Buddy session',
+                              key: const ValueKey('super-chat-session-note'),
+                              style: DesktopChrome.metadata(
+                                color: DesktopChrome.muted,
+                              ),
+                            ),
+                          ),
+                        KeyedSubtree(
+                          key: const ValueKey('super-message-composer-box'),
+                          child: field!,
+                        ),
+                      ],
+                    )
+                  : field,
             ),
             child: Focus(
               onKeyEvent: (node, event) {
@@ -3789,117 +3874,105 @@ class _SuperTabViewState extends State<SuperTabView>
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           SuperTabComposerChips(controller: c, files: _files),
-                          ConstrainedBox(
-                            constraints: BoxConstraints(
-                              minHeight: grid.AppControl.heightFieldScaled,
+                          _composerLayout(
+                            field: NewHarnessPasteTarget(
+                              key: _composerFieldKey,
+                              attachments: _files,
+                              enabled: writable && !busy,
+                              focusNode: _focus,
+                              child: TextField(
+                                key: const ValueKey('super-message-composer'),
+                                controller: _composer,
+                                focusNode: _focus,
+                                autofocus: !_terminalsVisible,
+                                enabled: writable,
+                                minLines: 1,
+                                // A phone's keyboard takes the height, so
+                                // its height says nothing about the room
+                                // a draft should have (Huy, 2026-11-02).
+                                maxLines: _phone
+                                    ? 5
+                                    : MediaQuery.sizeOf(context).height < 600
+                                    ? 3
+                                    : 8,
+                                maxLength: kComposerMaxLength,
+                                inputFormatters: [_tagBackspace],
+                                keyboardType: TextInputType.multiline,
+                                textAlignVertical: TextAlignVertical.center,
+                                style: DesktopChrome.text(),
+                                decoration: InputDecoration(
+                                  // The row centers the line. Inheriting a decorated
+                                  // field's minimum height leaves slack below its text.
+                                  isCollapsed: true,
+                                  constraints: const BoxConstraints(),
+                                  visualDensity: VisualDensity.standard,
+                                  hintStyle: DesktopChrome.text(
+                                    color: DesktopChrome.muted,
+                                  ),
+                                  contentPadding: EdgeInsets.zero,
+                                  hintMaxLines: _phone ? 1 : null,
+                                  hintText: _readsFirst && c.snapshot == null
+                                      ? null
+                                      : group == null
+                                      ? 'Loading conversation…'
+                                      : c.canWrite
+                                      ? _messageHint(group)
+                                      : 'Read-only conversation',
+                                  border: InputBorder.none,
+                                  enabledBorder: InputBorder.none,
+                                  focusedBorder: InputBorder.none,
+                                  disabledBorder: InputBorder.none,
+                                  filled: false,
+                                  counterText: '',
+                                ),
+                                onChanged: _composerEdited,
+                              ),
                             ),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                Expanded(
-                                  child: NewHarnessPasteTarget(
-                                    attachments: _files,
-                                    enabled: writable && !busy,
-                                    focusNode: _focus,
-                                    child: TextField(
-                                      key: const ValueKey(
-                                        'super-message-composer',
-                                      ),
-                                      controller: _composer,
-                                      focusNode: _focus,
-                                      autofocus: !_terminalsVisible,
-                                      enabled: writable,
-                                      minLines: 1,
-                                      maxLines:
-                                          MediaQuery.sizeOf(context).height <
-                                              600
-                                          ? 3
-                                          : 8,
-                                      maxLength: kComposerMaxLength,
-                                      inputFormatters: [_tagBackspace],
-                                      keyboardType: TextInputType.multiline,
-                                      textAlignVertical:
-                                          TextAlignVertical.center,
-                                      style: DesktopChrome.text(),
-                                      decoration: InputDecoration(
-                                        // The row centers the line. Inheriting a decorated
-                                        // field's minimum height leaves slack below its text.
-                                        isCollapsed: true,
-                                        constraints: const BoxConstraints(),
-                                        visualDensity: VisualDensity.standard,
-                                        hintStyle: DesktopChrome.text(
-                                          color: DesktopChrome.muted,
-                                        ),
-                                        contentPadding: EdgeInsets.zero,
-                                        hintText:
-                                            _readsFirst && c.snapshot == null
-                                            ? null
-                                            : group == null
-                                            ? 'Loading conversation…'
-                                            : c.canWrite
-                                            ? _messageHint(group)
-                                            : 'Read-only conversation',
-                                        border: InputBorder.none,
-                                        enabledBorder: InputBorder.none,
-                                        focusedBorder: InputBorder.none,
-                                        disabledBorder: InputBorder.none,
-                                        filled: false,
-                                        counterText: '',
-                                      ),
-                                      onChanged: _composerEdited,
-                                    ),
+                            options: [
+                              if (c.offersChatSessions)
+                                Padding(
+                                  padding: const EdgeInsets.only(
+                                    left: grid.AppDesktop.controlGap,
                                   ),
+                                  child: _chatSessionChoice(writable),
                                 ),
-                                if (c.offersChatSessions)
-                                  Padding(
-                                    padding: const EdgeInsets.only(
-                                      left: grid.AppDesktop.controlGap,
-                                    ),
-                                    child: _chatSessionChoice(writable),
+                              if (c.offersChatSessions &&
+                                  c.selected?.isSwarmBuddyChat == true &&
+                                  _chatSessions.contains(c.selectedId))
+                                Padding(
+                                  padding: const EdgeInsets.only(
+                                    left: grid.AppDesktop.controlGap,
                                   ),
-                                if (c.offersChatSessions &&
-                                    c.selected?.isSwarmBuddyChat == true &&
-                                    _chatSessions.contains(c.selectedId))
-                                  Padding(
-                                    padding: const EdgeInsets.only(
-                                      left: grid.AppDesktop.controlGap,
-                                    ),
-                                    child: _chatSessionProject(writable),
-                                  ),
-                                fingerTarget(
-                                  enabled: _phone,
-                                  NewHarnessAttachButton(
-                                    attachments: _files,
-                                    enabled: writable && !busy,
-                                  ),
+                                  child: _chatSessionProject(writable),
                                 ),
-                                ListenableBuilder(
-                                  listenable: Listenable.merge([
-                                    _composer,
-                                    _files,
-                                  ]),
-                                  builder: (context, _) => fingerTarget(
-                                    enabled: _phone,
-                                    AppIconButton(
-                                      icon: AppIcons.arrowUp,
-                                      tooltip: 'Send message',
-                                      color: DesktopChrome.accent,
-                                      onPressed:
-                                          writable &&
-                                              !c.uploading &&
-                                              ((!busy && !c.hasPendingAction) ||
-                                                  (_files.isEmpty &&
-                                                      c.canQueueText)) &&
-                                              (_composer.text
-                                                      .trim()
-                                                      .isNotEmpty ||
-                                                  !_files.isEmpty)
-                                          ? () => unawaited(_send())
-                                          : null,
-                                    ),
-                                  ),
+                            ],
+                            attach: fingerTarget(
+                              enabled: _phone,
+                              NewHarnessAttachButton(
+                                attachments: _files,
+                                enabled: writable && !busy,
+                              ),
+                            ),
+                            send: ListenableBuilder(
+                              listenable: Listenable.merge([_composer, _files]),
+                              builder: (context, _) => fingerTarget(
+                                enabled: _phone,
+                                AppIconButton(
+                                  icon: AppIcons.arrowUp,
+                                  tooltip: 'Send message',
+                                  color: DesktopChrome.accent,
+                                  onPressed:
+                                      writable &&
+                                          !c.uploading &&
+                                          ((!busy && !c.hasPendingAction) ||
+                                              (_files.isEmpty &&
+                                                  c.canQueueText)) &&
+                                          (_composer.text.trim().isNotEmpty ||
+                                              !_files.isEmpty)
+                                      ? () => unawaited(_send())
+                                      : null,
                                 ),
-                              ],
+                              ),
                             ),
                           ),
                         ],
@@ -3911,8 +3984,9 @@ class _SuperTabViewState extends State<SuperTabView>
             ),
           ),
         // While New session can be chosen here, its line's place is kept, so
-        // the box never moves as the choice is toggled.
-        if (c.offersChatSessions)
+        // the box never moves as the choice is toggled. Not on a phone, where
+        // that line held the box off the keyboard: it shows above the box.
+        if (c.offersChatSessions && !_phone)
           Container(
             alignment: Alignment.centerLeft,
             padding: const EdgeInsets.only(

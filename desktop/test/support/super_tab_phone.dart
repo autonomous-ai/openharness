@@ -20,16 +20,24 @@ Future<(ConversationServer, SuperTabController)> mountPhoneSuperTab(
   bool terminalsVisible = false,
   bool desktop = false,
   void Function(ConversationServer server)? seed,
+  ConversationServer? server,
+  String? initial,
+  double textScale = 1,
 }) async {
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = size;
   addTearDown(tester.view.reset);
-  final server = ConversationServer()..append('Ship the phone header.');
-  final lead = (server.state['conversations'] as List).first as Map;
-  lead['agentIds'] = ['builder'];
-  seed?.call(server);
-  final controller = server.controller();
+  final given = server;
+  final server0 =
+      given ?? (ConversationServer()..append('Ship the phone header.'));
+  if (given == null) {
+    final lead = (server0.state['conversations'] as List).first as Map;
+    lead['agentIds'] = ['builder'];
+  }
+  seed?.call(server0);
+  final controller = server0.controller();
   await controller.refresh();
+  if (initial != null) await controller.select(initial);
   final view = Scaffold(
     body: SuperTabView(
       controller: controller,
@@ -43,13 +51,18 @@ Future<(ConversationServer, SuperTabController)> mountPhoneSuperTab(
   );
   await tester.pumpWidget(
     MaterialApp(
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context)
+            .copyWith(textScaler: TextScaler.linear(textScale)),
+        child: child!,
+      ),
       home: desktop
           ? view
           : WorkspaceChromeScope(chrome: _phoneChrome, child: view),
     ),
   );
   await tester.pumpAndSettle();
-  return (server, controller);
+  return (server0, controller);
 }
 
 Future<void> unmountPhoneSuperTab(
