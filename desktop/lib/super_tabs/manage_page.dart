@@ -179,7 +179,7 @@ class _FootAction extends StatelessWidget {
 }
 
 /// What a model's row keeps inside its own edges.
-const _modelRowInset = grid.AppDesktop.controlGap + grid.AppDesktop.menuInset;
+const _modelRowInset = 12.0;
 
 class _ManageModels extends StatelessWidget {
   const _ManageModels({

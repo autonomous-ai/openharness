@@ -79,6 +79,9 @@ int? _maxAgentSlots(MachineResources? resources) {
 int? _suggestedAgentSlots(MachineResources? resources) =>
     superTabSuggestedAgentSlots(resources);
 
+/// Where a machine's row starts in Manage, so its mark sits under the heading.
+const _manageRowStart = 12.0;
+
 class SuperTabMachines extends StatefulWidget {
   const SuperTabMachines({
     super.key,
@@ -906,7 +909,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     }
     _syncTick();
     _redrawMoved();
-    if (!c.away && _timer?.isActive != true && !_reading && widget.app?.foreground.value == true && (!kUnderTest || widget.readLocal != null)) {
+    if (!c.away &&
+        _timer?.isActive != true &&
+        !_reading &&
+        widget.app?.foreground.value == true &&
+        (!kUnderTest || widget.readLocal != null)) {
       unawaited(_refresh());
     }
   }
@@ -2393,7 +2400,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         // A row's mark starts under Manage's heading, its words end at the
         // page's edge (Swarm's and Models' 24).
         padding: const EdgeInsets.fromLTRB(
-          grid.AppDesktop.controlGap + grid.AppDesktop.menuInset / 2,
+          _manageRowStart,
           grid.AppDesktop.controlGap,
           grid.AppDesktop.groupGap,
           grid.AppDesktop.controlGap,
