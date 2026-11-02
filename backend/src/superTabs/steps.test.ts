@@ -9,6 +9,7 @@ import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import { extracted } from './parts/write.js'
 import { stepSleeps } from './steps.js'
 import { reportedAs } from './projectUpdates.js'
+import { idleNotices } from './tidy.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const config: AgentConfiguration = { engine: 'codex', model: 'test-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
@@ -316,5 +317,40 @@ describe('a linked task opened without a step name', () => {
   it('is named in reports by its title', () => {
     const { f, id } = linked()
     expect(reportedAs(f.state, f.group(id))).toBe(`#${f.group(id).number} (step Test: PR #2514 of #${f.group(f.task).number})`)
+  })
+})
+
+// Ken, 2026-11-02: in 20 minutes the PM got 23 messages; about half were agents' posts it had nothing to do with.
+describe('the PM is not told what a step\'s agent says to its task', () => {
+  it('a step agent that lost its step still reaches the owner, in the step', () => {
+    const f = stepsFixture()
+    const id = f.step('Review')
+    const rev = f.add('rev', id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
+    f.run({ type: 'work.status', conversationId: id, assignmentId: f.group(id).assignment!.id, status: 'done', result: 'Passed' } as Command, f.as(rev))
+    const posted = f.run({ type: 'message.send', conversationId: id, text: 'Re-read the new head: still passes.', replyTo: null, recipientIds: [] } as Command, f.as(rev)).messages
+    expect(posted.map(m => m.recipients)).toEqual([[f.dev]])
+  })
+  it('an agent whose step is done still reaches the owner, in the task', () => {
+    const f = stepsFixture()
+    const id = f.step('Review')
+    const rev = f.add('rev', id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
+    f.run({ type: 'work.status', conversationId: id, assignmentId: f.group(id).assignment!.id, status: 'done', result: 'Passed' } as Command, f.as(rev))
+    const posted = f.run({ type: 'message.send', conversationId: f.task, text: 'Both re-checks pass.', replyTo: null, recipientIds: [] } as Command, f.as(rev)).messages
+    expect(posted.map(m => m.recipients)).toEqual([[f.dev]])
+  })
+  it('the PM is not told a step-only agent is idle', () => {
+    const f = stepsFixture()
+    const id = f.step('Review')
+    const rev = f.add('rev', id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
+    f.run({ type: 'work.status', conversationId: id, assignmentId: f.group(id).assignment!.id, status: 'done', result: 'Passed' } as Command, f.as(rev))
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'done', result: 'Merged' } as Command, f.as(f.dev))
+    const project = f.state.projects![0]!.id
+    const notices = idleNotices(f.state, project, f.now + 60 * 60_000, new Set()).map(n => n.source?.agentId)
+    // The Engineer, idle with its task done, is still told: an idle Engineer is stopped.
+    expect(notices).toContain(f.dev)
+    expect(notices).not.toContain(rev)
   })
 })
