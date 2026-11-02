@@ -158,6 +158,9 @@ const RELEASE_KEEP_MS = 30 * 60_000
 const LANE_RETRY_MS = 1_000
 const LANE_RETRY_MAX_MS = 30_000
 
+/** How a pick of a machine ended: `code` is the daemon's, `message` is shown to a person (CableHost.selectMachine). */
+type MachinePick = { ok: true } | { ok: false; code: string; message: string }
+
 export class DaemonCableHost implements CableHost {
   /**
    * This host's own router: over the bare fleet it is given (its tests), or over none, for this computer
@@ -175,16 +178,13 @@ export class DaemonCableHost implements CableHost {
    */
   private selected = ''
   /**
-   * The remote machine a select is on its way to, until it settles. The announce on plug-in names it rather than
-   * `selected`: announcing the older machine would replace the newer choice at the lane (deviceLink.ts select).
+   * The newest pick still on its way to a remote machine, until it settles. Only it may move `selected`: a pick waiting on
+   * a slow machine lands up to 15 s later, by when the person may be elsewhere (Diego's Buddy, 11-02). Which pick it is, not
+   * just which machine: going away and back to one machine looks the same by name, and the first landing says nothing of
+   * the last. The announce on plug-in names it rather than `selected`: announcing the older machine would replace the newer
+   * choice at the lane (deviceLink.ts select).
    */
-  private selecting = ''
-  /**
-   * Counts the picks that could go through. Only the newest may move `selected`: a pick waiting on a slow machine lands up
-   * to 15 s later, and by then the person may be elsewhere (Diego's Buddy, 11-02). A count, not a compare with `selecting`:
-   * going away and back to one machine looks the same to that compare, and the first pick landing says nothing of the last.
-   */
-  private picks = 0
+  private pending: { machineId: string; done: Promise<MachinePick> } | null = null
 
   /** Counts plug-ins: a lane open that lands after an unplug or a replug belongs to an older one and does nothing. */
   private plugIn = 0
@@ -256,14 +256,13 @@ export class DaemonCableHost implements CableHost {
 
   /** The machine the newest pick is still on its way to, or '' when none is. */
   pendingPick(): string {
-    return this.selecting
+    return this.pending?.machineId ?? ''
   }
 
-  async selectMachine(machineId: string): Promise<{ ok: true } | { ok: false; code: string; message: string }> {
+  async selectMachine(machineId: string): Promise<MachinePick> {
     if (machineId === this.localId()) {
-      this.picks++
       this.selected = machineId
-      this.selecting = ''
+      this.pending = null
       // Let go of the REMOTE machine after a linger, keeping the socket — then announce where the dial
       // actually is. `activeMachineId` on the account is then true for this machine too, instead of
       // silently going stale on whatever was selected last.
@@ -274,17 +273,44 @@ export class DaemonCableHost implements CableHost {
     if (!this.viaFleet((r) => r.hasLane())) {
       return { ok: false, code: 'UNAVAILABLE', message: 'Sign in on this computer to reach other machines' }
     }
-    const pick = ++this.picks
-    this.selecting = machineId
+    // A second pick of the machine already on its way shares its one answer, as the lane's select does. Each caller may be
+    // the only one left to tell the dial: an app follow's answer is dropped once a newer focus arrives (reviews of #2504).
+    if (this.pending?.machineId === machineId) return this.pending.done
+    // Set before the select starts, so a fleet call that fails at once still finds it and clears it.
+    const entry = { machineId, done: null as unknown as Promise<MachinePick> }
+    this.pending = entry
+    entry.done = this.pickMachine(entry)
+    return entry.done
+  }
+
+  private async pickMachine(entry: { machineId: string; done: Promise<MachinePick> }): Promise<MachinePick> {
+    const { machineId } = entry
+    const plugIn = this.plugIn
     let selected: Awaited<ReturnType<FleetRouting['select']>>
+    let newest = false
     try {
       selected = await this.viaFleet((r) => r.select(machineId))
     } finally {
-      if (pick === this.picks) this.selecting = ''
+      newest = this.pending === entry
+      if (newest) this.pending = null
     }
-    // However it ended: a machine the person left failing late is no news to them.
-    if (pick !== this.picks) return { ok: false, code: 'SUPERSEDED', message: 'Another machine was chosen' }
-    if (!selected.ok) return selected
+    if (!newest) {
+      // Replaced, however it ended: a machine the person left failing late is no news to them. A newer pick of this same
+      // machine (away and back) speaks for this one too: the dial waits on that machine, and an error would end its wait.
+      if (this.pending?.machineId === machineId) return this.pending.done
+      if (this.selected === machineId) return { ok: true }
+      return { ok: false, code: 'SUPERSEDED', message: 'Another machine was chosen' }
+    }
+    if (!selected.ok) {
+      // The lane may still be where a replaced pick took it: the fleet refuses an unlinked machine before asking the lane,
+      // so the dial stayed here while the backend and any reconnect stayed on the machine the person left (reviews of
+      // #2504). Said again now, as picking this machine again would not: it is already selected. Not for a dial unplugged
+      // meanwhile, which would open the lane it just let go, and not when the lane has a newer select already.
+      if (plugIn === this.plugIn && selected.code !== 'SUPERSEDED') {
+        void this.announceSelection().catch((err) => this.wiring.log(`cable: could not announce (${(err as Error).message})`))
+      }
+      return selected
+    }
     this.selected = machineId
     return { ok: true }
   }
@@ -370,7 +396,7 @@ export class DaemonCableHost implements CableHost {
    */
   private async announceSelection(): Promise<void> {
     if (!this.viaFleet((r) => r.hasLane())) return
-    const machineId = this.selecting || this.selectedMachine()
+    const machineId = this.pendingPick() || this.selectedMachine()
     if (isPlaceholder(machineId)) return
     const selected = await this.viaFleet((r) => r.select(machineId))
     // Never fatal. The local machine in particular must stay usable with no backend at all — it is the

@@ -3243,10 +3243,6 @@ export class CableSession {
     if (!isCurrent()) return
     if (!result.ok) {
       this.log(`cable: machine.select ${machineId} refused (${result.code})`)
-      // A newer pick of this same machine answers for this one. The dial is waiting on this machine, and an error for it
-      // would be shown and end that wait. For any other machine the error stands: the dial ignores it if it has moved on,
-      // and if something else chose (the app) it is what ends the dial's wait before its "No response".
-      if (result.code === 'SUPERSEDED' && this.host.pendingPick?.() === machineId) return
       await this.send({ t: 'machine.error', machineId, code: result.code, message: result.message })
       return
     }
@@ -3597,6 +3593,9 @@ export class CableSession {
     if (!this.link?.isOpen || this.greetedMac === null) return
     if (!agentId) return
 
+    // Read now: the focus step below writes the record. Desktop re-sends the same focus whenever its visible panes change,
+    // and a dial's own turn comes back as an echo: neither is anyone choosing anything (review of #2504).
+    const moved = agentId !== this.desiredFocus || this.appFocusUnsent
     const generation = ++this.appFocusGeneration
     const task = this.appFocusTail.then(async () => {
       // A newer desktop selection made this queued one obsolete before it started.
@@ -3644,7 +3643,8 @@ export class CableSession {
       await focused
       const isCurrent = () => generation === this.appFocusGeneration
       if (!isCurrent() || !machineId) return
-      if (machineId === this.host.selectedMachine() && !this.host.pendingPick?.()) {
+      // Only a focus that really moved replaces a pick on its way elsewhere (see selectMachine).
+      if (machineId === this.host.selectedMachine() && !(moved && this.host.pendingPick?.())) {
         // An older attachment to this same machine may have finished without acknowledging it,
         // because a newer pane superseded that request. The wheel still needs its selection.
         await this.syncMachines()

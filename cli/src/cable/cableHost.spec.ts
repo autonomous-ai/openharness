@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { DaemonCableHost, cableEventFor, cableStepFor, type CableHostWiring } from './cableHost.js'
-import type { FleetMachine, MachineFleet } from './machineFleet.js'
+import { FleetError, type FleetMachine, type MachineFleet } from './machineFleet.js'
 import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
 import type { RegisteredSession } from '../lib/registry.js'
@@ -1156,7 +1156,8 @@ describe('announcing over the real lane', () => {
       localMachineId: () => 'mine', log: (line) => { lines.push(line) },
     })
     stops.push(() => link.stop())
-    const rows = [{ machineId: 'mine', name: 'MacbookPro.local', state: 'ready', authMode: 'remote', local: true }, CLOUD_ROW]
+    const rows = [{ machineId: 'mine', name: 'MacbookPro.local', state: 'ready', authMode: 'remote', local: true }, CLOUD_ROW,
+      { machineId: 'unlinked', name: 'not-linked', state: 'ready', authMode: 'remote', local: false }]
     const fleet = new DeviceFleet({ list: { list: () => ({ machines: rows, source: 'backend' as const }), find: (id: string) => rows.find((r) => r.machineId === id) } as never,
       link, hasPeerLink: () => false, log: (line) => { lines.push(line) } })
     // The lane is up from before (the dial was plugged in already): what overlaps is the announces.
@@ -1212,6 +1213,24 @@ describe('announcing over the real lane', () => {
     await soon('its answer', () => lines.includes('device: machine_selected mine'))
     welcome('cloud-1')
     expect(await late).toMatchObject({ ok: false, code: 'SUPERSEDED' })
+    expect(host.selectedMachine()).toBe('mine')
+    expect(announced()).toEqual([])
+  })
+
+  it('puts the lane back where the dial is when a refused pick replaced a slow one', async () => {
+    // Refused before the lane is asked, so the lane would stay on the machine the person left, and a reconnect return there.
+    const { host, selects, answerNewest, lines, seal, welcome, announced } = await plugged({ linked: 'cloud-1' })
+    const late = host.selectMachine('cloud-1')
+    await soon('the pick', () => selects.length === 1)
+    answerNewest()
+    await soon('its hello', () => seal.hello.mock.calls.length === 1)
+    expect(await host.selectMachine('unlinked')).toMatchObject({ ok: false, code: 'NEEDS_LINK' })
+    await soon('the lane told again', () => selects.length === 2)
+    answerNewest()
+    await soon('its answer', () => lines.includes('device: machine_selected mine'))
+    welcome('cloud-1')
+    expect(await late).toMatchObject({ ok: false, code: 'SUPERSEDED' })
+    expect(selects).toEqual(['cloud-1', 'mine'])
     expect(host.selectedMachine()).toBe('mine')
     expect(announced()).toEqual([])
   })
@@ -1293,18 +1312,86 @@ describe('a pick a newer pick replaced', () => {
     expect(host.pendingPick()).toBe('')
   })
 
-  it('waits for the third pick when a person goes away and back: the first one landing proves nothing', async () => {
+  it('answers a person going away and back with the last pick\'s outcome: the first one landing proves nothing', async () => {
     const { fleet, asked } = slow()
     const host = new DaemonCableHost(wiring({ machineId: () => '' }), fleet)
     const first = host.selectMachine('other')
     await host.selectMachine(host.localMachine().id)
     const third = host.selectMachine('other')
     asked[0]!.ok()
-    expect(await first).toEqual(SUPERSEDED)
+    await new Promise((resolve) => setImmediate(resolve))
     expect(host.selectedMachine()).toBe(host.localMachine().id)
+    expect(host.pendingPick()).toBe('other')
     asked[1]!.fail(new Error('the machine did not answer'))
     expect(await third).toMatchObject({ ok: false, code: 'UNREACHABLE' })
+    expect(await first).toMatchObject({ ok: false, code: 'UNREACHABLE' })
     expect(host.selectedMachine()).toBe(host.localMachine().id)
+  })
+
+  it('answers a first pick ok when the same machine\'s last pick landed before it', async () => {
+    const { fleet, asked } = slow()
+    const host = new DaemonCableHost(wiring({ machineId: () => '' }), fleet)
+    const first = host.selectMachine('other')
+    await host.selectMachine(host.localMachine().id)
+    const third = host.selectMachine('other')
+    asked[1]!.ok()
+    expect(await third).toEqual({ ok: true })
+    asked[0]!.ok()
+    expect(await first).toEqual({ ok: true })
+    expect(host.selectedMachine()).toBe('other')
+  })
+
+  it('asks once for two picks of one machine, and gives both its answer', async () => {
+    const { fleet, asked } = slow()
+    const host = new DaemonCableHost(wiring(), fleet)
+    const first = host.selectMachine('other')
+    const second = host.selectMachine('other')
+    expect(asked).toHaveLength(1)
+    asked[0]!.ok()
+    expect([await first, await second]).toEqual([{ ok: true }, { ok: true }])
+    expect(host.selectedMachine()).toBe('other')
+  })
+
+  it('says where the dial is after the newest pick fails, and only then', async () => {
+    const { fleet, asked } = slow()
+    const host = new DaemonCableHost(wiring(), fleet)
+    const older = host.selectMachine('other')
+    const newest = host.selectMachine('second')
+    asked[0]!.fail(new Error('the machine did not answer'))
+    await older
+    expect(asked.map((a) => a.machineId)).toEqual(['other', 'second'])   // a replaced pick failing says nothing
+    asked[1]!.fail(new Error('the machine did not answer'))
+    expect(await newest).toMatchObject({ ok: false, code: 'UNREACHABLE' })
+    expect(asked.map((a) => a.machineId)).toEqual(['other', 'second', 'mine'])
+    asked[2]!.ok()
+  })
+
+  it('opens nothing again when a pick fails because the dial was unplugged', async () => {
+    const { fleet, asked } = slow()
+    const host = new DaemonCableHost(wiring(), fleet)
+    const pick = host.selectMachine('other')
+    host.onDialGone()
+    asked[0]!.fail(new Error('released'))
+    await pick
+    expect(asked).toHaveLength(1)
+    expect(fleet.release).toHaveBeenCalledWith(true)
+  })
+
+  it('leaves the lane alone when it says a newer select replaced the pick', async () => {
+    const { fleet, asked } = slow()
+    const host = new DaemonCableHost(wiring(), fleet)
+    const pick = host.selectMachine('other')
+    asked[0]!.fail(new FleetError('SUPERSEDED', 'Another machine was chosen'))
+    expect(await pick).toMatchObject({ ok: false, code: 'SUPERSEDED' })
+    expect(asked).toHaveLength(1)
+  })
+
+  it('leaves nothing pending when the fleet call fails at once', async () => {
+    const { fleet } = slow()
+    fleet.select = vi.fn(() => { throw new Error('broken fleet') })
+    const host = new DaemonCableHost(wiring(), fleet)
+    expect(await host.selectMachine('other')).toMatchObject({ ok: false, code: 'UNREACHABLE' })
+    expect(host.pendingPick()).toBe('')
   })
 
   it('still reports the newest pick\'s own refusal', async () => {
