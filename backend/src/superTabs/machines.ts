@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { engineUnusable } from './engineHealth.js'
 import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
@@ -67,6 +68,14 @@ export const cleanupOverdue = (cleanup: MachineCleanup, now: number): boolean =>
 export type RemovalEnd = 'confirmed' | 'offline' | 'timedOut'
 /** Older contributions may name engines that Swarm no longer starts. Their fresh
  * observation lists the supported engines that are actually installed. */
+/** The default account's id for an engine on a machine: the CLI and Desktop compute the same 16 hex (sha256 of `machine:engine:default`). */
+export const defaultProfileId = (machineId: string, engine: string): string =>
+  createHash('sha256').update(`${machineId}:${engine}:default`).digest('hex').slice(0, 16)
+
+/** A profile id as the agent stores it: the default account (literal or hashed) is absent. */
+export const storedProfileId = (machineId: string, engine: string, profileId: string | undefined): string | undefined =>
+  profileId === undefined || profileId === 'default' || profileId === defaultProfileId(machineId, engine) ? undefined : profileId
+
 export function contributedEngines(pool: ContributedMachine, observation: MachineObservation | undefined = pool.observation): string[] {
   const supported = (engine: string) => engine === 'claude' || engine === 'codex'
   return pool.engines.some(engine => !supported(engine))

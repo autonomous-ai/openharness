@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createSuperTab, SuperTabError, type AgentStart, type AgentStartRequest, type SuperTabState } from './model.js'
-import { admitMachineStart, machineSlots, machineObservationSchema, preparableStart, readingOnly, servedLocalModels, storedObservation, type ContributedMachine,
+import { admitMachineStart, defaultProfileId, machineSlots, machineObservationSchema, preparableStart, readingOnly, servedLocalModels, storedObservation, type ContributedMachine,
   type MachineObservation } from './machines.js'
 
 const NOW = 1_000_000
@@ -287,4 +287,8 @@ describe('a machine\'s reading as a report stores it (DB 2.5)', () => {
     const team = storedObservation(pool(), reading({ harnessProgress: { a: 5 }, preparingStartIds: ['s1'] }), { team: true, now: NOW + 15_000, preparable: () => true })
     expect(readingOnly(before, team)).toBe(false)
   })
+})
+
+it('names the default account the same way the CLI and Desktop do', () => {
+  expect(defaultProfileId('m', 'claude')).toBe('71dc90339553114c')
 })

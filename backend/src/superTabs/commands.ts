@@ -1,4 +1,4 @@
-import { admitMachineStart, BUDDY_WINDOWS_REFUSAL, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
+import { admitMachineStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { keepUsernames, setUsername, swarmUsernames } from './usernames.js'
 import { z } from 'zod'
@@ -57,7 +57,10 @@ const SWITCH_CAPABILITY = 'leadSwitch'
 const SWITCH_LEASE_MS = 15 * 60_000
 /** The engines as people read them in a switch's line. */
 const ENGINE_NAMES: Record<string, string> = { claude: 'Claude', codex: 'Codex' }
-const moveToProfile = (target: Agent, profileId: string) => { if (profileId === 'default') delete target.profileId; else target.profileId = profileId }
+const moveToProfile = (target: Agent, engine: string, profileId: string | undefined) => {
+  const stored = storedProfileId(target.machineId, engine, profileId)
+  if (stored === undefined) delete target.profileId; else target.profileId = stored
+}
 const text = z.string().trim().min(1).max(32_000)
 const swarmEngine = z.string().min(1).max(80).refine((engine): boolean => engine === 'claude' || engine === 'codex', 'A Swarm agent runs only Claude Code or Codex.')
 const configuration = z.object({
@@ -1416,11 +1419,13 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (!pool.observation!.capabilities?.includes(SWITCH_CAPABILITY)) fail('HOST_OUTDATED', `Update Harness on ${pool.name} to move the ${name}.`, 409)
       if (pm.switchRequest) fail('LEAD_SWITCHING', `The ${name} is already being moved.`, 409)
       if (!contributedEngines(pool).includes(command.engine)) fail('ENGINE_NOT_OFFERED', `${ENGINE_NAMES[command.engine]} isn’t offered on ${pool.name}.`, 403)
-      if (command.profileId !== 'default' && !pool.observation!.profiles?.some(p => p.engine === command.engine && p.id === command.profileId)) {
+      // The default account has one id (a literal 'default' is the same account), and the request stores that id.
+      const profileId = command.profileId === 'default' ? defaultProfileId(pool.machineId, command.engine) : command.profileId
+      if (profileId !== defaultProfileId(pool.machineId, command.engine) && !pool.observation!.profiles?.some(p => p.engine === command.engine && p.id === profileId)) {
         fail('PROFILE_UNKNOWN', `That account isn’t on ${pool.name} any more.`, 409)
       }
       const { type: _type, projectId: _projectId, ...asked } = command
-      pm.switchRequest = { id: operationId, ...asked, requestedBy: actor.userId, at: new Date(context.now).toISOString() }
+      pm.switchRequest = { id: operationId, ...asked, profileId, requestedBy: actor.userId, at: new Date(context.now).toISOString() }
       break
     }
     case 'project.skills':
@@ -2329,12 +2334,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // The new account is not limited: only a switch that kept the engine and the account leaves the limit mark.
       // The account is what the host reports; without it, a new engine means its default and the same engine keeps the account.
       const engineChanged = command.configuration.engine !== target.configuration?.engine
-      const landed = command.profileId ?? (engineChanged ? 'default' : target.profileId ?? 'default')
-      if (engineChanged || landed !== (target.profileId ?? 'default')) {
+      // Compared as stored: the default account is absent whether it is reported as 'default' or by its id.
+      const engine = command.configuration.engine
+      const landed = storedProfileId(target.machineId, engine, command.profileId ?? (engineChanged ? undefined : target.profileId))
+      if (engineChanged || landed !== storedProfileId(target.machineId, target.configuration?.engine ?? engine, target.profileId)) {
         target.limitedUntil = null
         target.alerting = target.alerting?.filter(a => a !== 'limit')
       }
-      moveToProfile(target, landed)
+      moveToProfile(target, engine, landed)
       // Whatever request was pending is settled; its result, when it comes, is still the one line the chat gets.
       if (target.switchRequest) target.switchLanded = target.switchRequest.id
       delete target.switchRequest
@@ -2416,7 +2423,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         fail('STALE_SWITCH', 'Only the execution host can report the current switch.', 403)
       }
       const project = ledProject(state, target.id)
-      if (command.ok && target.switchRequest) moveToProfile(target, target.switchRequest.profileId)
+      if (command.ok && target.switchRequest) moveToProfile(target, target.switchRequest.engine, target.switchRequest.profileId)
       delete target.switchRequest
       delete target.switchLanded
       if (!project) break

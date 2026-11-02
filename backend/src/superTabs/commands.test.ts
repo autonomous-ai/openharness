@@ -4,7 +4,7 @@ import { applyCommand, commandSchema, LOOP_NOTICE_AT, PAIR_CHAIN_LIMIT, swarmGri
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
 import { sweepLiveness } from './liveness.js'
 import { SWITCH_UNCLAIMED_MS } from './tidy.js'
-import { hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
+import { defaultProfileId, hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
 import { activeWork, agentOnly, agentRole, createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
 import { startFinished } from './parts/write.js'
@@ -4695,6 +4695,42 @@ describe('lead.switch', () => {
     s.agent().profileId = WORK
     rebind({ configuration: { ...config, engine: 'claude' } }, 'pm-4', 'pm-5')
     expect(s.agent().profileId).toBe(WORK)
+  })
+
+  it('names the default account by one id: a rebind that keeps it never clears the limit', () => {
+    const s = setup()
+    const DEFAULT = defaultProfileId('host', 'codex')
+    s.agent().limitedUntil = new Date(5_000_000).toISOString()
+    s.agent().alerting = ['limit']
+    const rebind = (profileId: string, from: string, to: string) => s.f.run({ type: 'agent.rebind', agentId: s.pm, machineId: 'host', projectId: 'lead',
+      previousHarnessId: from, harnessId: to, configuration: config, profileId } as never, s.as)
+    rebind(DEFAULT, 'pm', 'pm-2')
+    expect(s.agent()).toMatchObject({ alerting: ['limit'], limitedUntil: new Date(5_000_000).toISOString() })
+    expect(s.agent().profileId).toBeUndefined()
+    rebind('default', 'pm-2', 'pm-3')
+    expect(s.agent().limitedUntil).toBe(new Date(5_000_000).toISOString())
+    // A legacy stored hex default counts as the default too.
+    s.agent().profileId = DEFAULT
+    rebind('default', 'pm-3', 'pm-4')
+    expect(s.agent().limitedUntil).toBe(new Date(5_000_000).toISOString())
+    expect(s.agent().profileId).toBeUndefined()
+    // The Claude default is not the Codex default.
+    rebind(defaultProfileId('host', 'claude'), 'pm-4', 'pm-5')
+    expect(s.agent()).toMatchObject({ limitedUntil: null, profileId: defaultProfileId('host', 'claude') })
+  })
+
+  it('stores a literal default switch as the default account\'s id, and reports it with no label', () => {
+    const s = setup()
+    s.f.run({ ...s.request, profileId: 'default' })
+    expect(s.agent().switchRequest!.profileId).toBe(defaultProfileId('host', 'codex'))
+    const done = s.f.run({ type: 'agent.switchResult', agentId: s.pm, switchId: s.sid(), ok: true }, s.as)
+    expect(done.messages[0]!.text).toBe('PM moved to Codex.')
+    expect(s.agent().profileId).toBeUndefined()
+    const hex = setup()
+    hex.f.run({ ...hex.request, profileId: defaultProfileId('host', 'codex') })
+    expect(hex.agent().switchRequest!.profileId).toBe(defaultProfileId('host', 'codex'))
+    const other = setup()
+    expect(code(() => other.f.run({ ...other.request, profileId: defaultProfileId('host', 'claude') }))).toBe('PROFILE_UNKNOWN')
   })
 
   it('writes one line per switch: a late or repeated result writes nothing', () => {

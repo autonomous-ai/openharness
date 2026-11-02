@@ -2004,4 +2004,21 @@ describe('the morning digest', () => {
     await f.leadInbox()
     expect(await digests()).toHaveLength(2)
   })
+
+  it('drops a PM switch nobody claimed on another machine\'s next report, with one line in the project chat', async () => {
+    const f = await swarm()
+    await f.observe('lead-host', [f.harness.lead], { capabilities: ['leadSwitch'] })
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    await f.execute({ type: 'lead.switch', projectId, engine: 'codex', profileId: 'default' })
+    const pending = async () => (await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === f.lead)!.switchRequest
+    expect(await pending()).toBeDefined()
+    const lines = async () => (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => (m.source as { kind?: string } | null)?.kind === 'switch')
+    f.clock.now += 2 * MINUTE + 1000
+    await f.observe('test-host', [f.harness.worker])
+    expect(await pending()).toBeUndefined()
+    expect((await lines()).map(m => m.text)).toEqual(["Couldn't switch the PM: its machine did not answer."])
+    f.clock.now += MINUTE
+    await f.observe('test-host', [f.harness.worker])
+    expect(await lines()).toHaveLength(1)
+  })
 })
