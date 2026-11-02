@@ -315,6 +315,7 @@ class SuperTabConversation {
       ),
       cards = SuperTabCards.fromJson(row['cards']),
       reviewOf = row['reviewOf'] as String?,
+      step = row['step'] as String?,
       brief = _text(row, 'brief'),
       task = row['task'] is Map
           ? SuperTabTask.fromJson(superTabMap(row['task']))
@@ -383,6 +384,11 @@ class SuperTabConversation {
 
   /// A review group's reviewed group; null for any other conversation.
   final String? reviewOf;
+
+  /// A step of the task [reviewOf] names, by the name its project's
+  /// instructions give it (task steps design); null for a task, and for a
+  /// linked task opened before steps.
+  final String? step;
   final int lastMessageSequence;
 
   /// Its newest message in the main stream: a reply only in its thread

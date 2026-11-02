@@ -69,7 +69,8 @@ export function extracted(kind: PartKind, data: unknown, stamp: number): Record<
         messageSeq: group.messageSeq ?? 0, reportSeq: group.reportSeq ?? 0,
         lastActivityAt: group.lastActivityAt ? new Date(group.lastActivityAt) : new Date(stamp), hostDigest: hostDigest(group),
         // A review with no active Reviewer is read by the archive pass too: it closes once its pull requests are (tidy.ts reviewClosable).
-        workFinished: ['done', 'cancelled'].includes(group.assignment?.status ?? '') || (!!group.reviewOf && !activeWork(group)) }
+        // A step is never: it archives with its task (task steps design; steps.ts closeSteps), not on its own clock.
+        workFinished: !(group.step && group.reviewOf) && (['done', 'cancelled'].includes(group.assignment?.status ?? '') || (!!group.reviewOf && !activeWork(group))) }
     }
     case 'agent': {
       const agent = data as Agent

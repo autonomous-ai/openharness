@@ -27,7 +27,7 @@ describe('the daemon\'s Swarm reads', () => {
   it('first loads a Swarm once as the agent, then reads only what changed', async () => {
     const { call, reads } = backendOf({ [FIRST]: [ok(readFixture('parts-lead'))], [CHANGES()]: [ok(readFixture('changes-lead'))] })
     const first = await reads.read(T, LEAD)
-    expect(first).toEqual({ state: readFixture<{ state: Json }>('legacy-tab-lead').state, lastChangedAt: 1793010101002, githubApp: true, teamAccounts: true,
+    expect(first).toEqual({ state: readFixture<{ state: Json }>('legacy-tab-lead').state, lastChangedAt: 1793010101002, githubApp: true, steps: false, teamAccounts: true,
       groupChangedAt: new Map([['c00000000000000000000001', 1793010000000], ['c00000000000000000000000', 1793009000000],
         ['c00000000000000000000002', 1793010101002], ['c00000000000000000000003', 1793009500000]]) })
     const next = await reads.read(T, LEAD)

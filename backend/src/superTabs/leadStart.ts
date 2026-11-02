@@ -4,7 +4,7 @@
  *  Mac itself, as its owner, whatever the Swarm's switch (machines.ts teamAccountRequired) says for workers. Its person always
  *  names the machine: only they know which one stays on (Ken, 10-29). Desktop's own-machine flow (project.create, a local
  *  start, agent.add) is unchanged. */
-import { admitMachineStart, contributedEngines, failTeamWork, machineContribution, projectFolder, projectsOnMachine, teamAccountPool, teamAccountSwarm, teamPoolOf,
+import { admitMachineStart, contributedEngines, failTeamWork, machineContribution, projectFolder, projectsOnMachine, teamAccountPool, teamPoolOf,
   slotCounter, teamWorkRefusal, type ContributedMachine } from './machines.js'
 import { actorKey, fail, person, SuperTabError, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 import { projectsOf, type SwarmProject } from './projects.js'
@@ -74,9 +74,8 @@ export function leadHost(state: SuperTabState, project: SwarmProject, machineId:
     engine: request.engine, ...(request.model ? { model: request.model } : {}), ...(request.effort ? { effort: request.effort } : {}), name: coordinatorNameOf(project),
     cwd: projectFolder(pool, project), worktree: true, ...(request.branchRef ? { branchRef: request.branchRef } : {}), requirements: LEAD_REQUIREMENTS, leadFor })
   const teamMachines = context.teamMachines ?? []
-  // With no GitHub App, or outside the Swarms Team accounts are tried in, a Team account takes no work (machines.ts
-  // teamMachineFor).
-  const teamsWork = !context.teamAccountsIdle && teamAccountSwarm(state)
+  // With no GitHub App a Team account takes no work (machines.ts teamMachineFor).
+  const teamsWork = !context.teamAccountsIdle
   const refusal = (pool: ContributedMachine) => teamWorkRefusal(pool, context.now, teamMachines.includes(pool.machineId), true,
     (context.otherWorkspaceMachines ?? []).includes(pool.machineId))
   let candidates: ContributedMachine[]

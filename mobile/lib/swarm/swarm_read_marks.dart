@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import '../core/local_key_value_store.dart';
 import 'model.dart';
+import 'swarm_chat_notify.dart';
 import 'swarm_reader.dart';
 
 /// Sends the reader's read marks to the server (backend `superTabs/readMarks.ts`, #2131), so a chat, or a thread
@@ -275,8 +276,9 @@ class SwarmReadMarks extends ChangeNotifier {
   }
 
   /// Mark all read (the desktop's `SuperTabController.markAllRead`): every
-  /// chat of this Swarm shown unread — not dormant, not muted — reads as read
-  /// on this phone at once, through its newest message in its main stream,
+  /// chat of this Swarm shown unread — not dormant, not muted, as the person
+  /// set it on this phone a moment ago too ([swarmMuted]) — reads as read on
+  /// this phone at once, through its newest message in its main stream,
   /// and nothing is sent. Returns those marks by chat, for [sendHeld] once
   /// the Undo window passes or [dropHeld] on Undo; empty with nothing unread,
   /// before the marks are back, and once access is lost.
@@ -285,9 +287,7 @@ class SwarmReadMarks extends ChangeNotifier {
     if (_disposed || reader.accessRevoked || snapshot == null) return const {};
     final through = <String, int>{};
     for (final group in snapshot.conversations) {
-      if (group.dormant ||
-          snapshot.chatSettings[group.id] == 'muted' ||
-          !unread(group)) {
+      if (group.dormant || swarmMuted(reader, group) || !unread(group)) {
         continue;
       }
       through[group.id] = _held[group.id] = group.mainSequence;

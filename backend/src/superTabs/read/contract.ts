@@ -94,8 +94,8 @@ export interface Derived {
    *  `readMarks`: a first load has every one of the conversations it holds (a chat with none is at `mentions`), a changes read
    *  those moved since its cursor. Absent when there are none, and from an older backend. Never another person's. */
   chatSettings?: Record<string, 'all' | 'mentions' | 'muted'>
-  /** Present, and false, only in a Swarm Harness Team accounts are not tried in yet (machines.ts teamAccountSwarm): this
-   *  Mac's daemon and Desktop then offer no team account for it. Absent is every older backend's "yes". */
+  /** Present, and false, only from a backend that held Harness Team accounts to listed owners' Swarms (2026-10-27 to 11-02):
+   *  this Mac's daemon and Desktop then offered no team account for it. No longer sent: every Swarm takes part. */
   teamAccounts?: false
   /** This server takes a thread reply's `newSession` (buddySessions.ts): Desktop offers New session only where it is
    *  true and the Buddy's machine reports it can run sessions. Absent from an older backend, whose strict schema refuses
@@ -128,6 +128,8 @@ interface ReadMeta {
 export interface FirstLoad extends ReadMeta {
   tabId: string
   githubApp?: true
+  /** This backend opens a task's steps (`conversation.create` with `step`, task steps design); absent on an older one. */
+  steps?: true
   head: LivePart<HeadView>
   members: LivePart<MemberView>[]
   agents: LivePart<AgentView>[]

@@ -17,7 +17,15 @@ import 'package:harness/super_tabs/workgroup_name.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 
 import 'super_tab_attention_test.dart'
-    show close, conversation, fromLead, inRow, openHere, projectServer, rowText;
+    show
+        close,
+        conversation,
+        fromLead,
+        inRow,
+        openHere,
+        projectServer,
+        rowText,
+        unreadThread;
 import 'support/buddy_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
@@ -241,7 +249,14 @@ void main() {
     test('a muted chat\'s thread tags never count on Threads either; '
         'unmuted, they count again', () async {
       final server = projectServer();
-      server.followedThreads = {'unread': [], 'read': [], 'more': false};
+      server.followedThreads = {
+        'unread': [
+          unreadThread('message-1', 2),
+          unreadThread('message-1', 2, conversationId: 'offline'),
+        ],
+        'read': [],
+        'more': false,
+      };
       fromLead(server, 'Root', conversationId: 'offline');
       server.tag(
         'message-1',
@@ -253,6 +268,7 @@ void main() {
       final c = await open(server);
       final attention = SuperTabAttention.of(c);
       await attention.mentions.load();
+      await attention.load();
       expect(attention.threadMentions, 2);
       await c.setNotify('offline', SuperTabNotify.muted);
       // Only the tag in the chat that is not muted.
@@ -730,19 +746,22 @@ void main() {
       c.dispose();
     });
 
-    testWidgets('the unread filter keeps it only while it has something '
-        'unread', (tester) async {
+    testWidgets('the unread filter keeps it shown, bold only while it has '
+        'something unread', (tester) async {
       final server = oneBuddySwarm();
       giveSwarmBuddy(server);
       final c = await show(tester, server);
       expect(buddyRow, findsOneWidget);
       c.toggleUnreadOnly();
       await tester.pumpAndSettle();
-      expect(buddyRow, findsNothing);
+      expect(c.unreadOnly, isTrue);
+      expect(buddyRow, findsOneWidget);
+      expect(buddyName(tester).style?.fontWeight, isNot(grid.AppFont.semibold));
       server.append('A word from Wren', conversationId: 'swarm-buddy-peer');
       await c.refresh();
       await tester.pumpAndSettle();
       expect(buddyRow, findsOneWidget);
+      expect(buddyName(tester).style?.fontWeight, grid.AppFont.semibold);
       await tester.pumpWidget(const SizedBox());
       await c.flush();
       c.dispose();

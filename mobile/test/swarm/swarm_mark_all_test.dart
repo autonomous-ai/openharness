@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:fake_async/fake_async.dart';
@@ -7,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/swarm/swarm_chat_notify.dart';
 import 'package:harness_mobile/swarm/swarm_home_prefs.dart';
 import 'package:harness_mobile/swarm/swarm_home_rows.dart';
 import 'package:harness_mobile/swarm/swarm_mark_all.dart';
@@ -278,6 +280,139 @@ void main() {
       },
     );
 
+    /// Holds the server's answer to [chat]'s notification setting until the
+    /// test gives it.
+    Completer<Object?> holdNotify(FakeSwarm fake, String chat) {
+      final answer = Completer<Object?>();
+      fake.routes['/api/super-tabs/$tab/conversations/$chat/notifications'] = (
+        _,
+      ) => answer.future;
+      return answer;
+    }
+
+    test('a chat muted on this phone a moment ago, before the server '
+        'answers, is left as it was', () {
+      fakeAsync((async) {
+        final r = rig(async);
+        final answer = holdNotify(r.fake, 'g1');
+        r.reader.setNotify('g1', SwarmNotify.muted);
+        async.flushMicrotasks();
+
+        final held = r.session.markAllRead([tab])!;
+        async.elapse(const Duration(seconds: 7));
+
+        expect(held.count, 1);
+        expect(unread(r.reader, 'g1'), isTrue);
+        expect(marksSent(r.fake), [('g2', 4)]);
+        answer.complete({'notify': 'muted'});
+        r.session.dispose();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('a mute the server kept, before a read carries it, is left as it '
+        'was', () {
+      fakeAsync((async) {
+        final r = rig(async);
+        holdNotify(r.fake, 'g1').complete({'notify': 'muted'});
+        r.reader.setNotify('g1', SwarmNotify.muted);
+        async.flushMicrotasks();
+        expect(r.reader.snapshot!.chatSettings['g1'], isNull);
+
+        r.session.markAllRead([tab]);
+        async.elapse(const Duration(seconds: 7));
+
+        expect(marksSent(r.fake), [('g2', 4)]);
+        r.session.dispose();
+      });
+    });
+
+    test('a chat unmuted on this phone a moment ago is marked with the '
+        'rest', () {
+      fakeAsync((async) {
+        final r = rig(async);
+        final answer = holdNotify(r.fake, 'g-muted');
+        r.reader.setNotify('g-muted', SwarmNotify.mentions);
+        async.flushMicrotasks();
+
+        final held = r.session.markAllRead([tab])!;
+        async.elapse(const Duration(seconds: 7));
+
+        expect(held.count, 3);
+        expect(unread(r.reader, 'g-muted'), isFalse);
+        expect(marksSent(r.fake), [('g1', 5), ('g2', 4), ('g-muted', 6)]);
+        answer.complete({'notify': 'mentions'});
+        r.session.dispose();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('with every unread chat muted on this phone a moment ago there is '
+        'nothing to mark', () {
+      fakeAsync((async) {
+        final r = rig(async);
+        holdNotify(r.fake, 'g1');
+        holdNotify(r.fake, 'g2');
+        expect(swarmAnyUnread([r.reader]), isTrue);
+        r.reader.setNotify('g1', SwarmNotify.muted);
+        r.reader.setNotify('g2', SwarmNotify.muted);
+        async.flushMicrotasks();
+
+        expect(swarmAnyUnread([r.reader]), isFalse);
+        expect(r.session.markAllRead([tab]), isNull);
+        r.session.dispose();
+      });
+    });
+
+    test('a mute the server refused, or one a newer choice replaced, does '
+        'not keep a chat out', () {
+      fakeAsync((async) {
+        final r = rig(async);
+        r.fake.routes['/api/super-tabs/$tab/conversations/g1/notifications'] = (
+          _,
+        ) => throw const SwarmRequestTestFailure();
+        r.reader.setNotify('g1', SwarmNotify.muted);
+        final older = holdNotify(r.fake, 'g2');
+        r.reader.setNotify('g2', SwarmNotify.muted);
+        final newer = holdNotify(r.fake, 'g2');
+        r.reader.setNotify('g2', SwarmNotify.all);
+        async.flushMicrotasks();
+        // The first choice's answer comes after the newer one was made.
+        older.complete({'notify': 'muted'});
+        async.flushMicrotasks();
+
+        final held = r.session.markAllRead([tab])!;
+        async.elapse(const Duration(seconds: 7));
+
+        expect(held.count, 2);
+        expect(marksSent(r.fake), [('g1', 5), ('g2', 4)]);
+        newer.complete({'notify': 'all'});
+        r.session.dispose();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('access lost while a mute is on its way: nothing is marked or '
+        'sent, and its late answer changes nothing', () {
+      fakeAsync((async) {
+        final r = rig(async);
+        final answer = holdNotify(r.fake, 'g1');
+        r.reader.setNotify('g1', SwarmNotify.muted);
+        async.flushMicrotasks();
+
+        r.reader.revoke();
+        expect(swarmAnyUnread([r.reader]), isFalse);
+        expect(r.session.markAllRead([tab]), isNull);
+        answer.complete({'notify': 'muted'});
+        async.elapse(const Duration(seconds: 7));
+
+        expect(r.reader.notifyOf('g1'), SwarmNotify.mentions);
+        expect(marksSent(r.fake), isEmpty);
+        r.session.dispose();
+        async.flushMicrotasks();
+      });
+    });
+
     test('before the Swarm is read there is nothing to mark; once a failed '
         'first read recovers, Mark all read works', () {
       fakeAsync((async) {
@@ -470,6 +605,44 @@ void main() {
       await tester.pumpAndSettle();
       expect(marksSent(fake), [('g1', 5), ('g2', 4)]);
       expect(button(tester, 'swarm-mark-all-read').onPressed, isNull);
+    });
+
+    testWidgets('a chat muted on this phone a moment ago is not marked: the '
+        'toast counts the rest, and with all muted the button greys', (
+      tester,
+    ) async {
+      final fake = backend();
+      final answers = <Completer<Object?>>[];
+      for (final chat in ['g1', 'g2']) {
+        fake.routes['/api/super-tabs/$tab/conversations/$chat/notifications'] =
+            (_) {
+              final answer = Completer<Object?>();
+              answers.add(answer);
+              return answer.future;
+            };
+      }
+      final host = await pump(tester, fake);
+      final reader = host.session!.inbox.reader(tab)!;
+
+      reader.setNotify('g1', SwarmNotify.muted);
+      await tester.pump();
+      await tester.tap(key('swarm-mark-all-read'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.text('Marked 1 chat read'), findsOneWidget);
+      await tester.tap(find.text('Undo'));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 7));
+      await tester.pumpAndSettle();
+
+      reader.setNotify('g2', SwarmNotify.muted);
+      await tester.pump();
+      expect(button(tester, 'swarm-mark-all-read').onPressed, isNull);
+      expect(marksSent(fake), isEmpty);
+      for (final answer in answers) {
+        answer.complete({'notify': 'muted'});
+      }
+      await tester.pumpAndSettle();
     });
 
     testWidgets('after the 6 s the marks are sent and the Undo toast closes '

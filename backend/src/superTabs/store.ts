@@ -47,6 +47,7 @@ import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './part
 import { memberSwarms } from './swarmRows.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts, ms } from './parts/light.js'
+import { endSteps } from './steps.js'
 import { guardedWrite, partId } from './parts/write.js'
 import { retryable } from './retry.js'
 import { touchesFor } from './parts/touches.js'
@@ -1497,8 +1498,12 @@ export class SuperTabStore {
         // A task cancelled with no assignment archives (commands.ts work.cancel).
         || command.type === 'work.cancel' && !original.conversations.find(c => c.id === command.conversationId)?.archived
           && !!effects.state.conversations.find(c => c.id === command.conversationId)?.archived
-      if (unreadable) {
-        await tx.superTabDelivery.updateMany({ where: { tabId, conversationId: command.conversationId, status: { in: ['queued', 'claimed', 'uncertain'] },
+      // A task's finished steps archive with it (steps.ts endSteps): their deliveries end too (final review, finding 2).
+      const archivedSteps = unreadable && command.type !== 'conversation.agent' ? effects.state.conversations.filter(c => c.reviewOf === command.conversationId
+        && c.step && c.archived && !original.conversations.find(o => o.id === c.id)?.archived).map(c => c.id) : []
+      // One plain match per conversation: an `in` on this hot collection is sent as $expr, which no index bounds (hotFilters).
+      for (const conversationId of unreadable ? [command.conversationId, ...archivedSteps] : []) {
+        await tx.superTabDelivery.updateMany({ where: { tabId, conversationId, status: { in: ['queued', 'claimed', 'uncertain'] },
           ...(command.type === 'conversation.agent' ? { agentId: command.agentId } : {}) },
           data: { status: 'cancelled', holdReason: null, holdSince: null } })
       }
@@ -1745,7 +1750,7 @@ export class SuperTabStore {
       const contributed = state.machines?.find(m => m.machineId === target.machineId)?.name
       const machineName = contributed ?? await tx.machine.findFirst({ where: { machineId: target.machineId, userId: target.machineOwnerId },
         select: { name: true, hostname: true } }).then(m => m?.name ?? m?.hostname ?? null)
-      return { tabId, projectId: project.id, approvalRequired: teamAccountRequired(state), agentId: target.id, assignmentId: group.assignment!.id,
+      return { tabId, projectId: project.id, approvalRequired: teamAccountRequired(), agentId: target.id, assignmentId: group.assignment!.id,
         repositoryUrl: project.repository?.repositoryUrl ?? null,
         requester: { name: requester.name?.trim() || null, email: requester.email },
         agentName: agentDisplayName(state.agents, target.id) ?? target.displayName ?? target.name, machineName: machineName?.trim() || null }
@@ -1775,7 +1780,7 @@ export class SuperTabStore {
       const project = startProject(state, start.request) ?? fail('NOT_FOUND', 'This start has no project folder to prepare.', 404)
       const owner = await tx.user.findUnique({ where: { id: project.ownerId }, select: { name: true, email: true } })
       const email = owner?.email ?? state.people.find(p => p.id === project.ownerId)?.email ?? ''
-      return { tabId, projectId: project.id, repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(state),
+      return { tabId, projectId: project.id, repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(),
         startId, own: project.ownerId === start.machineOwnerId,
         requester: { name: owner?.name?.trim() || null, email } }
     })
@@ -2069,7 +2074,7 @@ export class SuperTabStore {
       if (revision && stored?.revision !== revision) fail('INSTRUCTIONS_UNAVAILABLE', 'This project\'s instructions cannot be read now. Try again in a moment.', 503)
       const notes = buddy ? undefined : liveNotes(await readNotes(tx, tabId, projectId), this.now())
         .map(n => ({ id: n.id, text: n.text, askedBy: n.askedBy, at: new Date(n.at), expiresAt: n.expiresAt === null ? null : new Date(n.expiresAt) }))
-      return { projectId, revision, hash: stored?.hash ?? null, text: stored?.text ?? INSTRUCTIONS_TEMPLATE, template: !stored,
+      return { projectId, revision, hash: stored ? stored.hash : FIRST_INSTRUCTIONS.instructionsHash, text: stored?.text ?? INSTRUCTIONS_TEMPLATE, template: !stored,
         coordinatorName: coordinatorNameOf(project), notesRevision: project.notesRevision ?? 0, ...(notes ? { notes } : {}) }
     })
   }
@@ -2674,7 +2679,7 @@ export class SuperTabStore {
       const actor = await this.actor(tx, user, state)
       const projects = visibleState(state, actor, this.now()).projects ?? []
       const project = projects.find(p => p.id === projectId) ?? fail('NOT_FOUND', 'This project is unavailable.', 404)
-      return { repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(state), name: project.name,
+      return { repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(), name: project.name,
         others: projects.filter(p => p.id !== projectId).map(p => ({ id: p.id, name: p.name })) }
     })
   }
@@ -3404,6 +3409,9 @@ export class SuperTabStore {
       // Its work is over: a decision still waiting there waits no more (Dee, 10-31), as when the work ended by a command.
       await withdrawIn(tx, tabId, [groupId], now)
       group.archived = true
+      // Its steps archive with it (task steps design): its work is done or cancelled and its pull requests settled, so a
+      // step still open there has nothing left to check.
+      endSteps(state, group, `${group.title} was archived.`, true)
       const line = finished ? archiveLine(state, group, now) : reviewCloseLine(state, group, checked, now), rows = line ? [line] : []
       const sequences = numberMessages(state, rows, now)
       if (!dirtyGroups(state, groupProject(state, group)).includes(group)) group.dormant = true

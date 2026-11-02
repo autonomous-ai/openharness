@@ -26,8 +26,35 @@ String? superTabLinkedLine(
     final byNumber = order(a).compareTo(order(b));
     return byNumber != 0 ? byNumber : a.id.compareTo(b.id);
   });
-  return [for (final task in linked) '${task.label}: ${_state(task)}']
-      .join(' · ');
+  return [
+    for (final task in linked)
+      superTabIsStep(task)
+          ? '${_stepLabel(snapshot, task)}: ${_state(task)}'
+          : '${task.label}: ${_state(task)}',
+  ].join(' · ');
+}
+
+/// Whether [conversation] is a step of a task (task steps design): shown on
+/// its task's row and inside its task, never as a task of its own.
+bool superTabIsStep(SuperTabConversation conversation) =>
+    conversation.step != null && conversation.reviewOf != null;
+
+/// [groups] as the project's list shows them: without steps, which sit on
+/// their task's row (task steps design).
+List<SuperTabConversation> superTabListedWork(
+  Iterable<SuperTabConversation> groups,
+) => [
+  for (final g in groups)
+    if (!superTabIsStep(g)) g,
+];
+
+/// A step by its own name and its agent: "Copy (Atlas)".
+String _stepLabel(SuperTabSnapshot snapshot, SuperTabConversation step) {
+  final agentId = step.assignment?['agentId'];
+  final name = agentId is String && snapshot.agent(agentId) != null
+      ? snapshot.agentName(agentId)
+      : null;
+  return name == null ? step.step! : '${step.step} ($name)';
 }
 
 /// A linked task's state: its work's status while it has no checks; else a
