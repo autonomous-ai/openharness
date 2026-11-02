@@ -1,13 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
-import { existsSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { BUDDY_SESSION_ENGINE, HEAVY_NOT_RECORDED, HEAVY_REFUSED, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
+import { readCapacityDisk } from './disk.js'
 import { SuperTabHostError } from './wire.js'
 const teamDaemon = vi.hoisted(() => ({ value: false, relayed: true, offered: null as null | { slugs: string[]; listed: string[] } }))
 vi.mock('./teamDaemon.js', async (original) => ({ ...await original<object>(), isTeamDaemon: () => teamDaemon.value }))
 vi.mock('../team/relay.js', async (original) => ({ ...await original<object>(), teamRelayed: () => teamDaemon.relayed, offeredCodexModels: async () => teamDaemon.offered }))
+vi.mock('./buddyHome.js', async (original) => ({ ...await original<object>(), prepareBuddyHome: async () => ({ ready: [], missing: [] }), trustBuddyHome: async () => {} }))
 const where = { port: 14001, machineId: 'lead-machine', dataDir: '/fixture' }
 /** A queued start is watched before the Lead moves on (startAgent); these tests read the queued answer at once. */
 const noPause = async () => {}
@@ -323,6 +325,26 @@ it.each(['claude', 'codex'])('starts a %s Buddy with the built-in swarm-buddy sk
   expect(payload.prompt).toContain(`harness super-tab --tab tab messages ${f.start.request.conversationId}`)
   expect(payload.prompt).not.toContain('assign')
   expect(payload.prompt).not.toContain('swarm-dev')
+})
+
+it('admits a person\'s one Buddy by the disk its folder is made on, as the folder its start names is never made', async () => {
+  // The real disk reading, on a folder that is not there: measured as it stands it is refused, and the Buddy never starts (2026-11-02).
+  const root = mkdtempSync(join(tmpdir(), 'swarm-buddy-disk-'))
+  try {
+    const f = fixture(), answer = f.request.getMockImplementation()!
+    f.request.mockImplementation(async (type, payload = {}, ms) => {
+      if (type !== 'super_tabs' || !['capacity', 'reserveCapacity'].includes(String(payload.action))) return answer(type, payload, ms)
+      const disk = await readCapacityDisk(String(payload.cwd), payload.worktree === true, root).catch(() => null)
+      if (payload.action === 'reserveCapacity') return disk ? answer(type, payload, ms) : { error: 'CAPACITY_UNAVAILABLE', detail: 'The destination disk capacity could not be verified.' }
+      return { ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 100, projectDiskFreeBytes: disk?.freeBytes ?? null }, tools: { git: true }, devices: {} }
+    })
+    f.start.request = { ...f.start.request, cwd: join(root, 'swarm', '.buddy-peer'), worktree: false, buddyScope: 'swarm', buddyOf: { personId: 'peer', generation: 'g' } } as typeof f.start.request
+    const result = await startAgent({ action: 'start', tabId: 'tab', operationId: 'one-buddy', request: f.start.request }, f.scoped, where, f.open)
+    expect(result.error).not.toBe('CAPACITY_UNAVAILABLE')
+    const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+    expect(payload.cwd).toContain(join('worktrees', 'buddy-home'))
+    expect(payload.projectSource).toBeUndefined()
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
 it.each(['claude'])('starts a %s thread session as a Buddy in every way, told its thread and to answer only there, with no message text', async engine => {

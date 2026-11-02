@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { buddyProjectsOf, folderName, prepareBuddyHome, pruneBuddyHome, removeBuddyHome } from './buddyHome.js'
+import { buddyProjectsOf, folderName, prepareBuddyHome, pruneBuddyHome, removeBuddyHome, trustBuddyHome } from './buddyHome.js'
 
 // A person's one Buddy's folder (spec 2026-10-31-one-buddy-per-swarm, Folder): one worktree per project checkout on the
 // machine, each from its own checkout, and a lost project's out before the next turn. Real git, in a throwaway folder.
@@ -28,6 +28,24 @@ function root(): string {
 }
 
 describe('a person\'s one Buddy\'s folder', () => {
+  it('answers Claude Code\'s folder question for it, and leaves any other engine to ask', async () => {
+    const claude = root(), home = join(root(), 'home'), config = join(claude, '.claude.json')
+    mkdirSync(home)
+    writeFileSync(config, '{}')
+    const moved = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = claude
+    try {
+      await trustBuddyHome(home, 'codex')
+      expect(readFileSync(config, 'utf8')).toBe('{}')
+      await trustBuddyHome(home, 'claude')
+      const saved = Object.values(JSON.parse(readFileSync(config, 'utf8')).projects as Record<string, { hasTrustDialogAccepted: boolean }>)
+      expect(saved.map(p => p.hasTrustDialogAccepted)).toEqual([true])
+    } finally {
+      if (moved === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = moved
+    }
+  })
+
   it('holds a worktree of each project checkout on this machine, each its own project\'s, and names the ones not here', async () => {
     const r = root(), web = checkout(r, 'web-src'), app = checkout(r, 'app-src'), home = join(r, 'home')
     const result = await prepareBuddyHome(home, [{ id: 'web', name: 'Web', cwd: web }, { id: 'app', name: 'App', cwd: app },
