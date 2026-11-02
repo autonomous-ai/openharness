@@ -323,14 +323,19 @@ void main() {
     fakeAsync((async) {
       final backend = _Backend(), storage = MemoryStore();
       backend.servers['tab']!.append('For the owner only');
-      final first = _client(backend, storage: storage, reading: SuperTabReading.desktop)..bind('owner');
+      final first = _client(backend, storage: storage, reading: SuperTabReading.desktop)
+        ..bind('owner')
+        ..show('tab');
       first.open('tab');
-      async.elapse(const Duration(seconds: 30));
-      first.dispose();
+      async.elapse(const Duration(seconds: 1));
+      first.show(null);
       async.flushMicrotasks();
+      first.dispose();
       backend.servers['tab']!.holdReads = Completer<void>();
 
-      final same = _client(backend, storage: storage, reading: SuperTabReading.desktop)..bind('owner');
+      final same = _client(backend, storage: storage, reading: SuperTabReading.desktop)
+        ..bind('owner')
+        ..show('tab');
       SuperTabController? shown;
       same.open('tab').then((c) => shown = c);
       async.elapse(const Duration(seconds: 1));

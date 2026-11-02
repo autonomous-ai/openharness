@@ -2161,8 +2161,9 @@ class SuperTabController extends ChangeNotifier {
 
   /// Draws a [savedView] kept from an earlier visit while the first read is
   /// on its way, and holds its parts: the first read asks only for what
-  /// changed since, and replaces it. With [SuperTabReading.confirmsSaved] it
-  /// only holds them, for that read to draw. One for another Swarm, one too
+  /// changed since, and replaces it. With [SuperTabReading.confirmsSaved] and
+  /// not [SuperTabReading.drawsSavedAtOnce] it only holds them, for that read
+  /// to draw. One for another Swarm, one too
   /// old for its cursor, one that no longer parses, or one after a read has
   /// landed or been refused, draws nothing.
   void drawSaved(Map<String, dynamic> view) {
@@ -2188,7 +2189,7 @@ class SuperTabController extends ChangeNotifier {
       ];
       final messages = rows.map(SuperTabMessage.fromJson).toList();
       final changedAt = (view['lastChangedAt'] as num).toInt();
-      if (_policy.confirmsSaved) {
+      if (_policy.confirmsSaved && !_policy.drawsSavedAtOnce) {
         // Held for the first read to start from, drawn once it answers; the
         // conversation it showed is read beside it.
         _parts = parts;
@@ -2269,6 +2270,7 @@ class SuperTabController extends ChangeNotifier {
     _forgetAttention();
     error = message;
     snapshot = null;
+    _showingSaved = false;
     _parts = null;
     _messages.clear();
     _staleHeld.clear();
@@ -3662,6 +3664,7 @@ class SuperTabController extends ChangeNotifier {
       devicesSelected = false;
       _forgetAttention();
       snapshot = null;
+      _showingSaved = false;
       _parts = null;
       _messages.clear();
       _staleHeld.clear();
