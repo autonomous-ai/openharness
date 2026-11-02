@@ -1,6 +1,6 @@
 /**
- * Connected services (lib/connectors): the MCP bridge every local agent's connector entries point at
- * (127.0.0.1:51793), and `connectors`, the desktop app's Connectors screen. Agents' entries are written
+ * Connected services (lib/connectors): the MCP bridge every local agent's connector entries reach, through a stdio shim to
+ * its 0600 socket (and on 127.0.0.1:51793 for clients still running on that address), and `connectors`, the desktop app's Connectors screen. Agents' entries are written
  * again as it starts, so an agent installed since a service was connected gets it too.
  *
  * `connectors` takes `{action}`: `list`, `connect` {connector}, `flow` {flow}, `disconnect` {connector},
@@ -15,8 +15,8 @@
  */
 import type { Server } from 'node:http'
 import type { CoreApi, ServiceRequests } from '../core/api.js'
-import { bridgePort, sync } from '../lib/connectors/agents.js'
-import { createBridge } from '../lib/connectors/bridge.js'
+import { bridgePort, bridgeSocketPath, sync } from '../lib/connectors/agents.js'
+import { createBridge, serveBridgeSocket } from '../lib/connectors/bridge.js'
 import { services, type GatewayRow } from '../lib/connectors/catalog.js'
 import { addApiKey, addCustom, cards, disconnect, Flows, signInFor } from '../lib/connectors/connect.js'
 import * as gateway from '../lib/connectors/gateway.js'
@@ -47,6 +47,11 @@ function listen(bridge: Server, port: number, retryMs: number): void {
   bridge.listen(port, '127.0.0.1')
 }
 
+/** The MCP clients' way in (lib/connectors/mcpShim.ts). While a live socket is there (a core handing over), try again. */
+function listenSocket(vault: Store, path: string, retryMs: number): void {
+  serveBridgeSocket(vault, path).catch(() => { setTimeout(() => listenSocket(vault, path, retryMs), retryMs).unref() })
+}
+
 export function startConnectors(core: CoreApi, overrides: Partial<ConnectorsDeps> = {}): ServiceRequests {
   const env = overrides.env ?? process.env
   const deps: ConnectorsDeps = {
@@ -60,6 +65,8 @@ export function startConnectors(core: CoreApi, overrides: Partial<ConnectorsDeps
   const bridge = createBridge(vault, { key: () => String(vault.file('bridge.json').key ?? ''), harnessKey: () => String(vault.file('harness-key.json').key ?? '') })
   bridge.unref()
   listen(bridge, deps.port, deps.retryMs)
+  const socket = bridgeSocketPath(vault)
+  if (socket) listenSocket(vault, socket, deps.retryMs)
   try { sync(vault, env) } catch { /* A config that cannot be written now is written at the next connect. */ }
 
   // Connections the same on every computer of the account: read now, at each `connectors_changed`, and

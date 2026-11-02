@@ -1,7 +1,8 @@
 /**
- * Connected services, given to each agent as an MCP server on the local bridge. Agent configs hold only a
- * 127.0.0.1 address with this user's capability in it; the bridge adds the credential to each request
- * (Grid's design). A renewed token needs no config change, and an agent already running keeps working.
+ * Connected services, given to each agent as an MCP server on the local bridge. Agent configs hold only the command of a stdio
+ * shim to the bridge's 0600 socket (mcpShim.ts), or where no socket can be (Windows, a folder too long for one) a 127.0.0.1
+ * address with this user's capability in it; the bridge adds the credential to each request (Grid's design). A renewed token
+ * needs no config change, and an agent already running keeps working.
  *
  * Only entries Harness made are changed or removed: their names are recorded in projections.json, so a
  * server the person added by hand keeps its name and contents. A config that is not plain JSON (comments)
@@ -51,6 +52,25 @@ export function bridgeUrl(key: string, code: string, port = bridgePort()): strin
   return `http://127.0.0.1:${port}/${key}/${code}/mcp`
 }
 
+/** sockaddr_un has 104 bytes on macOS and the socket is staged under a name no longer (lib/localSocket.ts). */
+const MAX_SOCKET_PATH_BYTES = 96
+
+/** The bridge's 0600 socket for MCP clients, in the vault's private folder, or null where there is none. */
+export function bridgeSocketPath(vault: Store, platform: NodeJS.Platform = process.platform): string | null {
+  if (platform === 'win32') return null
+  const path = join(vault.root, 'bridge.sock')
+  return Buffer.byteLength(path) <= MAX_SOCKET_PATH_BYTES ? path : null
+}
+
+/** How an MCP client reaches one connection. */
+export type McpEntry = { url: string } | { command: string; args: string[] }
+
+/** The shim, by this very Harness's node and script: an agent started outside Harness may not have `harness` on its PATH. An
+ *  update that moves them restarts the daemon, which writes the entries again. */
+function shimEntry(code: string, socket: string): McpEntry {
+  return { command: process.execPath, args: [process.argv[1], 'connections', 'mcp', code, '--socket', socket] }
+}
+
 function home(env: NodeJS.ProcessEnv): string { return env.HOME || homedir() }
 
 function onPath(binary: string, env: NodeJS.ProcessEnv): boolean {
@@ -71,17 +91,17 @@ function replace(file: string, text: string): void {
 export interface Agent {
   name: string
   installed(): boolean
-  /** Make `wanted` (name → bridge address) the Harness entries; returns the names now Harness's. */
-  apply(wanted: Record<string, string>, owned: string[]): string[]
+  /** Make `wanted` (name → how to reach it) the Harness entries; returns the names now Harness's. */
+  apply(wanted: Record<string, McpEntry>, owned: string[]): string[]
 }
 
 class JsonAgent implements Agent {
   constructor(readonly name: string, private readonly binary: string, private readonly path: string,
-    private readonly env: NodeJS.ProcessEnv, private readonly key: string, private readonly entry: (url: string) => Record<string, unknown>) {}
+    private readonly env: NodeJS.ProcessEnv, private readonly key: string, private readonly entry: (reach: McpEntry) => Record<string, unknown>) {}
 
   installed(): boolean { return existsSync(this.path) || onPath(this.binary, this.env) }
 
-  apply(wanted: Record<string, string>, owned: string[]): string[] {
+  apply(wanted: Record<string, McpEntry>, owned: string[]): string[] {
     let data: Record<string, unknown> = {}
     if (existsSync(this.path)) {
       try { data = JSON.parse(readFileSync(this.path, 'utf8')) } catch { return owned }
@@ -92,9 +112,9 @@ class JsonAgent implements Agent {
     const servers = { ...(current as Record<string, unknown> | undefined) }
     for (const name of owned) if (!(name in wanted)) delete servers[name]
     const result: string[] = []
-    for (const [name, url] of Object.entries(wanted)) {
+    for (const [name, reach] of Object.entries(wanted)) {
       if (name in servers && !owned.includes(name)) continue // The person's own server with this name.
-      servers[name] = this.entry(url)
+      servers[name] = this.entry(reach)
       result.push(name)
     }
     if (Object.keys(servers).length) data[this.key] = servers
@@ -116,7 +136,7 @@ class CodexAgent implements Agent {
     return new RegExp(`^\\s*\\[\\s*mcp_servers\\s*\\.\\s*(?:${escaped}|"${escaped}")\\s*(?:\\.[^\\]]*)?\\]\\s*$`)
   }
 
-  apply(wanted: Record<string, string>, owned: string[]): string[] {
+  apply(wanted: Record<string, McpEntry>, owned: string[]): string[] {
     let lines: string[] = []
     if (existsSync(this.path)) {
       try { lines = readFileSync(this.path, 'utf8').split('\n') } catch { return owned }
@@ -130,9 +150,11 @@ class CodexAgent implements Agent {
     }
     while (kept.length && !kept.at(-1)!.trim()) kept.pop()
     const result: string[] = []
-    for (const [name, url] of Object.entries(wanted).sort(([a], [b]) => a.localeCompare(b))) {
+    for (const [name, reach] of Object.entries(wanted).sort(([a], [b]) => a.localeCompare(b))) {
       if (kept.some(line => CodexAgent.header(name).test(line))) continue // The person's own server.
-      kept.push('', `[mcp_servers.${name}]`, `url = ${JSON.stringify(url)}`)
+      // JSON's strings and arrays of them are TOML's too.
+      kept.push('', `[mcp_servers.${name}]`, ...'url' in reach ? [`url = ${JSON.stringify(reach.url)}`]
+        : [`command = ${JSON.stringify(reach.command)}`, `args = ${JSON.stringify(reach.args)}`])
       result.push(name)
     }
     while (kept.length && !kept[0].trim()) kept.shift()
@@ -145,18 +167,19 @@ export function agents(env: NodeJS.ProcessEnv = process.env): Agent[] {
   const config = env.XDG_CONFIG_HOME || join(home(env), '.config')
   return [
     new JsonAgent('claude', 'claude', join(env.CLAUDE_CONFIG_DIR || home(env), '.claude.json'), env, 'mcpServers',
-      url => ({ type: 'http', url })),
+      reach => 'url' in reach ? { type: 'http', url: reach.url } : { type: 'stdio', command: reach.command, args: reach.args }),
     new CodexAgent(join(env.CODEX_HOME || join(home(env), '.codex'), 'config.toml'), env),
     new JsonAgent('opencode', 'opencode', join(config, 'opencode', 'opencode.json'), env, 'mcp',
-      url => ({ type: 'remote', url, enabled: true })),
+      reach => 'url' in reach ? { type: 'remote', url: reach.url, enabled: true } : { type: 'local', command: [reach.command, ...reach.args], enabled: true }),
   ]
 }
 
 /** Give every installed agent exactly the connections that have MCP tools (their own, or REST served as MCP). */
 export function sync(vault: Store, env: NodeJS.ProcessEnv = process.env, list: Agent[] = agents(env)): Record<string, string[]> {
   const codes = Object.entries(vault.tokens()).filter(([code, token]) => transport(token) !== 'none' && CODE.test(code)).map(([code]) => code)
-  const key = codes.length ? bridgeKey(vault) : ''
-  const wanted = Object.fromEntries(codes.map(code => [code, bridgeUrl(key, code, bridgePort(env))]))
+  const socket = bridgeSocketPath(vault)
+  const key = codes.length && !socket ? bridgeKey(vault) : ''
+  const wanted = Object.fromEntries(codes.map((code): [string, McpEntry] => [code, socket ? shimEntry(code, socket) : { url: bridgeUrl(key, code, bridgePort(env)) }]))
   return locked(vault.root, () => {
     const record = vault.file('projections.json') as Record<string, unknown>
     const changed: Record<string, string[]> = {}

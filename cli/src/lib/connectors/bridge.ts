@@ -4,14 +4,21 @@
  * the answer back (event streams included). A service reached by REST (no MCP server the grant can use) is
  * answered here instead, its REST tools served as MCP (rest.ts). Runs in the daemon (services/connectors.ts).
  *
+ * MCP clients come through a stdio shim (mcpShim.ts) to a second listener on a 0600 socket (serveBridgeSocket), so no tool call
+ * goes to a port another account can hold. The port stays for clients still running on it, Windows, and a folder too long for
+ * a socket.
+ *
  * Two more addresses serve Harness's own cloud agents (services/cloud.ts), which hold no credential either:
  * - `/<key>/connections`: what is connected, by address and with no secret, so the service finds the
  *   connection that signs in Fo or Devin by where it points rather than by what the person named it;
  * - `/<key>/<code>/api/<path>`: one request to a key-only connection's own API (`api_entry`), with its key.
  */
 import { timingSafeEqual } from 'node:crypto'
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { mkdirSync } from 'node:fs'
+import { createServer, type IncomingMessage, type RequestListener, type Server, type ServerResponse } from 'node:http'
+import { dirname } from 'node:path'
 import { Readable } from 'node:stream'
+import { listenLocalSocket, type LocalSocketServer } from '../localSocket.js'
 import { label } from './catalog.js'
 import { bearer, needsRefresh, refreshable, type Store, type Token } from './store.js'
 import { refresh } from './renew.js'
@@ -50,11 +57,28 @@ export interface BridgeOptions {
   /** Harness's own capability (agents.ts harnessKey), never in an agent's configuration: only it lists the
    *  connections or calls a key-only connection's API. Absent, those two addresses answer nothing. */
   harnessKey?: () => string
+  /** Served on the 0600 socket, whose peers have no address: the filesystem has already said who they are. */
+  socket?: boolean
 }
 
 type Target = { kind: 'mcp'; code: string } | { kind: 'api'; code: string; path: string } | { kind: 'list' }
 
+/** What stands for the capability on the socket, where reaching it is the credential: the filesystem lets only this account. */
+export const SOCKET_KEY = 'local'
+
 export function createBridge(vault: Store, options: BridgeOptions): Server {
+  return createServer(bridgeHandler(vault, options))
+}
+
+/** The bridge for MCP clients on its 0600 socket: their MCP servers only, as an agent's key reaches (no Harness key here). */
+export async function serveBridgeSocket(vault: Store, path: string): Promise<LocalSocketServer> {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  const listening = await listenLocalSocket(bridgeHandler(vault, { key: () => SOCKET_KEY, socket: true }), path)
+  listening.server.unref()
+  return listening
+}
+
+function bridgeHandler(vault: Store, options: BridgeOptions): RequestListener {
   const target = (url: string): Target | null => {
     const parts = new URL(url, 'http://127.0.0.1').pathname.replace(/^\/|\/$/g, '').split('/')
     const given = Buffer.from(parts[0])
@@ -146,7 +170,7 @@ export function createBridge(vault: Store, options: BridgeOptions): Server {
 
   const relay = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     // Only a process on this computer that knows this user's key gets through; never a web page.
-    if (request.headers.origin || !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket.remoteAddress ?? '')) {
+    if (request.headers.origin || (!options.socket && !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket.remoteAddress ?? ''))) {
       fail(response, 403, 'Forbidden.'); return
     }
     const address = target(request.url ?? '/')
@@ -193,7 +217,7 @@ export function createBridge(vault: Store, options: BridgeOptions): Server {
     Readable.fromWeb(answer.body as import('node:stream/web').ReadableStream).on('error', () => response.destroy()).pipe(response)
   }
 
-  return createServer((request, response) => {
+  return (request, response) => {
     relay(request, response).catch(() => { if (!response.headersSent) fail(response, 500, 'The bridge failed.'); else response.destroy() })
-  })
+  }
 }
