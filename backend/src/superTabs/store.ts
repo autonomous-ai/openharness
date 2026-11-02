@@ -7,6 +7,7 @@ import { isDeepStrictEqual } from 'node:util'
 import type { Machine, Prisma, PrismaClient, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { machineAlive } from '../lib/prisma.js'
+import type { PushOrigin } from '../github/pushOrigin.js'
 import { isTeamSession, teamMachine, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
@@ -61,6 +62,7 @@ import { WORKSPACE_LABEL, type WorkspaceRole } from './workspaces.js'
 import {
   activeWork, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
   SuperTabError, isLeads, knownKind, parkLaterConversations, type Actor, type Agent, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type Person, type SuperTabState,
+  pullRequestLinks,
 } from './model.js'
 import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
@@ -296,6 +298,8 @@ export interface SuperTabStoreHooks {
   /** Tasks newly in progress, or in progress again under the same id (resumed after a usage limit): GitHub tokens forget
    *  that such a task ended (github/tokens.ts resume). */
   workStarted?: (tabId: string, started: WorkHold[]) => void
+  /** Who pushed these pull requests of a project's repository (github/pushOrigin.ts): the worst of their answers. Absent with no GitHub App. */
+  pushOrigin?: (repositoryUrl: string | null, pullRequestUrls: string[]) => Promise<PushOrigin>
   /** No Harness GitHub App on this server: a Mac's Harness Team account joins no Swarm and takes no teammates' work, since
    *  it has no git login to fetch or push with (commands.ts `teamAccountsIdle`). */
   teamAccountsIdle?: boolean
@@ -1204,9 +1208,35 @@ export class SuperTabStore {
     }
   }
 
+  /**
+   * Who pushed the pull requests of the task a work.assign or a Ready for review is about (github/pushOrigin.ts, audit H2).
+   * Read outside the command's transaction, as GitHub may take seconds, so it can only ever add a mark. Undefined when there is
+   * nothing to read, or this reader cannot read that task: the command then refuses as it would.
+   */
+  private async pushOriginFor(user: AuthUser, tabId: string, command: unknown): Promise<PushOrigin | undefined> {
+    const hook = this.hooks.pushOrigin
+    const asked = command as { type?: unknown; conversationId?: unknown; status?: unknown; result?: unknown } | null
+    if (!hook || !asked || typeof asked.conversationId !== 'string' || !(asked.type === 'work.assign' || (asked.type === 'work.status' && asked.status === 'review'))) return undefined
+    try {
+      const facts = await transaction(this.db, async tx => {
+        const { state } = await this.load(tx, user, tabId, namedFor(command as Command))
+        const group = state.conversations.find(c => c.id === asked.conversationId)
+        if (!group) return null
+        const task = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
+        return { repositoryUrl: groupProject(state, group).repository?.repositoryUrl ?? null,
+          urls: [...new Set([...group.pullRequestUrls ?? [], ...task?.pullRequestUrls ?? [], ...typeof asked.result === 'string' ? pullRequestLinks(asked.result) : []])] }
+      })
+      return facts?.urls.length ? await hook(facts.repositoryUrl, facts.urls) : undefined
+    } catch (error) {
+      if (error instanceof SuperTabError) return undefined
+      return 'unknown'
+    }
+  }
+
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
     workspaceLeave = false) {
     const { operationId, command } = operationSchema.parse(input)
+    const pushOrigin = await this.pushOriginFor(user, tabId, command)
     let ended: WorkHold[] = [], started: WorkHold[] = []
     const done = await transaction(this.db, async tx => {
       // A retried attempt starts again: only the attempt that commits says which tasks ended or started.
@@ -1437,6 +1467,7 @@ export class SuperTabStore {
         context.otherWorkspaceMachines = await this.otherWorkspaceMachines(tx, original)
         if (this.hooks.teamAccountsIdle) context.teamAccountsIdle = true
       }
+      if (pushOrigin) context.pushOrigin = pushOrigin
       if (command.type === 'agent.screen' || command.type === 'agent.input') {
         // A machine that is gone or no longer shared refuses at once instead of leaving the request to time out.
         await this.agentGrant(tx, original, agent(original, command.agentId))

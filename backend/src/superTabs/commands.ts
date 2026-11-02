@@ -1,4 +1,5 @@
-import { markTeamWritten, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, teamWrittenTask } from './teamWritten.js'
+import { applyPushOrigin, failPushUnknown, markTeamWritten, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
+import type { PushOrigin } from '../github/pushOrigin.js'
 import { admitMachineStart, BUDDY_WINDOWS_REFUSAL, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { keepUsernames, setUsername, swarmUsernames } from './usernames.js'
@@ -434,6 +435,8 @@ export interface CommandContext {
   teamMachines?: string[]
   /** Each contributed machine's CLI version as its daemon last connected (store.ts machineFacts), read with [teamMachines]. */
   machineVersions?: Record<string, string>
+  /** Who pushed the pull requests of a work.assign's or a Ready for review's task, read before the command (store.ts pushOriginFor). */
+  pushOrigin?: PushOrigin
   /** The person's role in the Swarm's Workspace, read by the store for invitations (workspaces.ts); absent outside a Workspace. */
   workspaceRole?: WorkspaceRole
   /** Machines of this Swarm also contributed to a Swarm of another Workspace (store.ts otherWorkspaceMachines). */
@@ -2758,6 +2761,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // A teammate's agent on a personal machine keeps what it has; it takes no new task for another person's project.
       requireTeamWork(state, worker.machineId, worker.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines)
       // Team-written code runs only in a Team account, and a Team agent's work marks the task (teamWritten.ts, audit H2).
+      applyPushOrigin(state, group, context.pushOrigin)
+      if (context.pushOrigin === 'unknown' && !onTeamAccount(state, worker)) failPushUnknown()
       requireTeamWrittenAccount(state, group, worker)
       markTeamWritten(state, group, worker)
       if (worker.workDecision === 'stop') fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
@@ -2830,6 +2835,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           asked = context.repeatedDecision ?? drafts[0]!.id
         }
         else effects.result.notAsked = `Not asked ${person(state, personId).email}: ${context.openDecisions} decisions you asked them are still open, and at most ${MAX_OPEN_DECISIONS} can be. Wait for answers before asking more.`
+      }
+      // A Team agent's push can land on any branch: its Ready reads who pushed. An agent in the main account already on a step
+      // of this task is told to stop, as nothing else reaches a session that fetched the branch (teamWritten.ts, audit H2).
+      if (command.status === 'review' && context.pushOrigin === 'team' && !teamWrittenTask(state, group)) {
+        applyPushOrigin(state, group, 'team')
+        const stepsAgents = state.conversations.filter(c => c.reviewOf === (group.reviewOf ?? group.id) && activeWork(c)).map(c => c.assignment!.agentId)
+          .filter(id => { const a = state.agents.find(x => x.id === id); return !!a && !onTeamAccount(state, a) })
+        if (stepsAgents.length) effects.messages.push({ id: stableId(operationId, 'team-written-stop'), conversationId: group.id, author: sender, text: TEAM_WRITTEN_STOP, replyTo: null, recipients: stepsAgents, source: SYSTEM_ROW })
       }
       const changed = assignment.status !== command.status || assignment.result !== command.result || !!command.ask, previous = assignment.status
       const waited = waitingForReview(assignment)

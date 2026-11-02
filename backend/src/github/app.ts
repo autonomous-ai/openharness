@@ -7,6 +7,7 @@
  * crypto signs the app's JWT. Nothing here logs a token or the private key.
  */
 import { createPrivateKey, hkdfSync, sign, type KeyObject } from 'node:crypto'
+import { readPushOrigin, type GitHubRead, type PushOrigin } from './pushOrigin.js'
 import { githubRepository, type GitHubRepository } from './repository.js'
 
 /** What a Swarm agent's token may do, and nothing more: push to and read the repository, open and update pull requests,
@@ -18,6 +19,9 @@ export const PREPARE_PERMISSIONS = { contents: 'read', metadata: 'read' } as con
 export const PULL_READ_PERMISSIONS = { pull_requests: 'read', metadata: 'read' } as const
 /** What the route's read of running CI jobs may do: read workflow runs and their jobs, nothing more. */
 export const ACTIONS_READ_PERMISSIONS = { actions: 'read', metadata: 'read' } as const
+/** What reading who pushed a pull request's commits may do (pushOrigin.ts): read the pull request and the repository's activity log. */
+export const PUSH_ORIGIN_PERMISSIONS = { contents: 'read', pull_requests: 'read', metadata: 'read' } as const
+const PUSH_ORIGINS_KEPT = 1000
 export type TokenPermissions = Readonly<Record<string, 'read' | 'write'>>
 /** Jobs running and waiting on a repository's GitHub Actions, in all and on macOS runners: counts only. */
 export interface CiLoad { running: number; queued: number; macosRunning: number; macosQueued: number }
@@ -123,6 +127,7 @@ export class GitHubApp {
   private readonly shownNames = new Map<string, { name: string; until: number }>()
   /** Each repository's CI load while fresh, or being read ([ciLoad]), by its name in lower case; per server process. */
   private readonly ciLoads = new Map<string, { value: Promise<CiLoad | null>; until: number }>()
+  private readonly pushOrigins = new Map<string, PushOrigin>()
   /** Each repository's CI reads in the last hour, and its last load read, for [CI_READS_PER_HOUR]. */
   private readonly ciReads = new Map<string, { at: number[]; last: { load: CiLoad | null; at: number } | null }>()
   /** When each repository's "not installed" was last forgotten on request ([forget]). */
@@ -188,7 +193,7 @@ export class GitHubApp {
     return jwt
   }
 
-  private async call(method: string, path: string, auth: string | null, body?: unknown): Promise<{ status: number; body: Record<string, unknown> | unknown[] }> {
+  private async call(method: string, path: string, auth: string | null, body?: unknown): Promise<{ link?: string | null; status: number; body: Record<string, unknown> | unknown[] }> {
     let response: Response
     try {
       response = await this.fetch(`${this.apiUrl}${path}`, {
@@ -203,7 +208,8 @@ export class GitHubApp {
     const text = await response.text().catch(() => '')
     let parsed: unknown = {}
     try { parsed = text ? JSON.parse(text) : {} } catch { parsed = {} }
-    return { status: response.status, body: parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {} }
+    return { status: response.status, body: parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {},
+      link: response.headers.get('link') }
   }
 
   private misconfigured(): GitHubAppError {
@@ -372,6 +378,37 @@ export class GitHubApp {
     // A failed read leaves the cache only if it is still this read's: one that fails late never drops a newer read's entry.
     value.then(load => { reads.last = { load, at: now } }, () => { if (this.ciLoads.get(key)?.value === value) this.ciLoads.delete(key) })
     return value
+  }
+
+  /**
+   * Who pushed the pull request [number]'s commits (pushOrigin.ts), remembered by its head alone. Only `clean` and `team` are
+   * remembered: an `unknown` is read again, and a failure never reads as clean. Null when this app is not on the repository.
+   */
+  async pushOrigin(repository: GitHubRepository, number: number): Promise<PushOrigin> {
+    try {
+      const resolved = await this.resolve(repository)
+      if (!resolved) return 'unknown'
+      const { token } = await this.createToken(resolved.installation, resolved.repository, PUSH_ORIGIN_PERMISSIONS)
+      const auth = `Bearer ${token}`, name = `${resolved.repository.owner}/${resolved.repository.name}`
+      const read: GitHubRead = async path => {
+        const answer = await this.call('GET', path, auth)
+        const next = /<https:\/\/[^/>]+(\/[^>]+)>;\s*rel="next"/.exec(answer.link ?? '')?.[1]
+        return { status: answer.status, body: answer.body, ...(next ? { next } : {}) }
+      }
+      const head = await read(`/repos/${name}/pulls/${number}`)
+      const sha = (head.body as { head?: { sha?: unknown } }).head?.sha
+      const key = typeof sha === 'string' ? `${name.toLowerCase()}@${sha}` : null
+      const known = key ? this.pushOrigins.get(key) : undefined
+      if (known) return known
+      const origin = await readPushOrigin(read, name, number)
+      if (key && origin !== 'unknown') {
+        if (this.pushOrigins.size >= PUSH_ORIGINS_KEPT) this.pushOrigins.delete(this.pushOrigins.keys().next().value!)
+        this.pushOrigins.set(key, origin)
+      }
+      return origin
+    } catch {
+      return 'unknown'
+    }
   }
 
   private async readCiLoad(repository: GitHubRepository): Promise<CiLoad | null> {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine } from './machines.js'
 import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
-import { TEAM_WRITTEN_WORK, teamWrittenTask } from './teamWritten.js'
+import { TEAM_WRITTEN_STOP, TEAM_WRITTEN_WORK, teamWrittenTask } from './teamWritten.js'
 
 // Audit H2: a branch a Team agent wrote runs only in a Team account, whoever's project it is, so nothing the branch
 // carries runs with the main account's rights (docs/plans/2026-11-02-team-written-branch-plan.md).
@@ -111,6 +111,37 @@ describe('a task a Team agent worked on', () => {
     const started = f.state.starts!.at(-1)!.request
     expect(started.machineId).toBe('mac')
     expect(started.projectSettings).toBeUndefined()
+  })
+
+  it('takes GitHub\'s record of a bot\'s push: a clean task is marked for good and refuses the main account', () => {
+    const f = swarm(), task = f.group(), step = f.group({ reviewOf: task, step: 'Review' }), main = f.member('main-reviewer', 'mac')
+    expect(refusal(() => f.run({ type: 'work.assign', conversationId: step, agentId: main }, owner, { pushOrigin: 'team' }))).toBe(TEAM_WRITTEN_WORK)
+    // Refused, so nothing it did stays: the next reading decides again, and a clean reading never clears a mark.
+    f.state.conversations.find(c => c.id === task)!.teamWritten = true
+    expect(refusal(() => f.run({ type: 'work.assign', conversationId: step, agentId: main }, owner, { pushOrigin: 'clean' }))).toBe(TEAM_WRITTEN_WORK)
+  })
+
+  it('refuses the main account while GitHub cannot say who pushed, without marking the task, and takes it once GitHub answers', () => {
+    const f = swarm(), task = f.group(), step = f.group({ reviewOf: task, step: 'Review' }), main = f.member('main-reviewer', 'mac')
+    expect(refusal(() => f.run({ type: 'work.assign', conversationId: step, agentId: main }, owner, { pushOrigin: 'unknown' }))).toBe(TEAM_WRITTEN_WORK)
+    expect(f.state.conversations.find(c => c.id === task)!.teamWritten).toBeUndefined()
+    expect(refusal(() => f.run({ type: 'work.assign', conversationId: step, agentId: main }, owner, { pushOrigin: 'clean' }))).toBeNull()
+  })
+
+  it('still gives a Team agent the work while GitHub cannot say who pushed', () => {
+    const f = swarm(), step = f.group({ reviewOf: f.group(), step: 'Review' })
+    expect(refusal(() => f.run({ type: 'work.assign', conversationId: step, agentId: f.member('team-reviewer', 'mac-team') }, owner, { pushOrigin: 'unknown' }))).toBeNull()
+  })
+
+  it('tells a main-account agent on a step to stop when a Ready shows a bot\'s push on the owner\'s branch', () => {
+    const f = swarm(), task = f.group(), builder = f.member('main-builder', 'mac'), reviewer = f.member('main-reviewer', 'mac')
+    f.run({ type: 'work.assign', conversationId: task, agentId: builder })
+    const assignmentId = f.state.conversations.find(c => c.id === task)!.assignment!.id
+    f.run({ type: 'work.assign', conversationId: f.group({ reviewOf: task, step: 'Review' }), agentId: reviewer })
+    const effects = f.run({ type: 'work.status', conversationId: task, assignmentId, status: 'review', result: 'https://github.com/acme/app/pull/7' },
+      { kind: 'agent', agentId: builder, machineOwnerId: 'owner' }, { pushOrigin: 'team' })
+    expect(f.state.conversations.find(c => c.id === task)!.teamWritten).toBe(true)
+    expect(effects.messages.find(m => m.text === TEAM_WRITTEN_STOP)?.recipients).toEqual([reviewer])
   })
 
   it('reads a mark set before its assignee existed in the Swarm\'s record, on an open task, by its current assignee', () => {

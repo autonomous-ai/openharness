@@ -7,6 +7,7 @@
  * clears, and it is never read from a commit's author, which anyone can write. A step reads its task's mark. A Team agent
  * given only a step does not mark the task: it reads or tests, and a push of its own shows in GitHub's record.
  */
+import type { PushOrigin } from '../github/pushOrigin.js'
 import { fail, type Agent, type Conversation, type SuperTabState } from './model.js'
 import { groupProject, ledProject, onTeamAccount, teamAccountPool } from './projects.js'
 
@@ -15,6 +16,9 @@ export const TEAM_WRITTEN_REASON = 'A Harness Team agent wrote this task\'s code
 
 const coordinates = (state: SuperTabState, group: Conversation, worker: Agent): boolean =>
   ledProject(state, worker.id)?.id === groupProject(state, group).id
+
+/** Told to an agent in the main account when a task it works on turns out to be Team-written. */
+export const TEAM_WRITTEN_STOP = 'Stop: GitHub shows a Harness Team agent pushed to this task\'s branch. Do not install, build, test or run it in the main account. Set this step blocked and hand it to an agent in a Team account.'
 
 /** The task a group's code belongs to: its own, or for a step, the task the step belongs to. */
 const taskOf = (state: SuperTabState, group: Conversation): Conversation | undefined =>
@@ -47,4 +51,16 @@ export function requireTeamWrittenMachine(state: SuperTabState, group: Conversat
 
 export function failTeamWritten(): never {
   return fail(TEAM_WRITTEN_WORK, TEAM_WRITTEN_REASON, 403)
+}
+
+/** GitHub's record of who pushed: a bot among [group]'s pushes marks its task for good. A clean reading clears nothing. */
+export function applyPushOrigin(state: SuperTabState, group: Conversation, origin: PushOrigin | undefined): void {
+  if (origin !== 'team') return
+  const task = taskOf(state, group)
+  if (task) task.teamWritten = true
+  group.teamWritten = true
+}
+
+export function failPushUnknown(): never {
+  return fail(TEAM_WRITTEN_WORK, 'GitHub could not show who pushed this task\'s code, so it runs only in a Team account for now. Choose an agent in a Team account, or try again in a minute.', 403)
 }
