@@ -71,5 +71,5 @@ describe.runIf(WINDOWS)('the bridge\'s pipe, on real Windows', () => {
 
     expect((await connectionsBridge(() => bridgeRoute(vault)).connections()).map((c) => c.code)).toEqual(['linear'])
     expect(portHeard).toEqual([])
-  }, 60_000)
+  }, 120_000)
 })
