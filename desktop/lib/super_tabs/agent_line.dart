@@ -57,6 +57,8 @@ SuperTabAgentGlance superTabAgentGlance(
   final label = switch (null) {
     _ when agent.switchRequest != null => 'Switching…',
     _ when work == 'lost' => 'Lost',
+    _ when agent.keptClosed && activity != HarnessActivity.offline =>
+      'Kept (closed)',
     _
         when agent.downSince != null ||
             activity == HarnessActivity.offline ||

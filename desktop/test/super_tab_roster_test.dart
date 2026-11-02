@@ -245,6 +245,23 @@ void main() {
     },
   );
 
+  testWidgets(
+    'a kept agent closed on its machine reads "Kept (closed)" in the hover, never Idle (Huy, 2026-11-02)',
+    (tester) async {
+      final f = await fixture(tester);
+      final agents = f.server.state['agents'] as List;
+      agents[3]['workDecision'] = 'keep';
+      agents[3]['downSince'] = DateTime.now().toUtc().toIso8601String();
+      await f.controller.refresh();
+      await f.show(tester);
+      final tip = rowTooltip(tester, f, 3);
+      expect(tip, contains('Kept (closed)'));
+      expect(tip, isNot(contains('Idle')));
+      expect(tip, isNot(contains('Status unavailable')));
+      await f.close(tester);
+    },
+  );
+
   testWidgets('agent tooltip combines known model, machine, task and activity', (
     tester,
   ) async {

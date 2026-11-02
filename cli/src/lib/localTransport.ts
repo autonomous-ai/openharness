@@ -15,7 +15,7 @@ import { Readable } from 'node:stream'
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import { readDaemonRecord } from './daemonRecord.js'
 import { localCredentialHeaders } from './localCredential.js'
-import { localSocketName, unixSocketPath } from './localSocket.js'
+import { unixSocketPath } from './localSocket.js'
 
 const LOCAL_WS_PATH = '/api/local-ws'
 
@@ -26,14 +26,18 @@ const LOCAL_WS_PATH = '/api/local-ws'
  */
 export function localSocketRoute(dataDir: string, port: number, platform: NodeJS.Platform = process.platform): string | null {
   const expected = unixSocketPath(dataDir, port, platform)
-  if (!expected || existsSync(expected)) return expected
+  // A data folder's own mode covers its socket; a short folder's lies elsewhere, so it is checked, and one that isn't private is refused as
+  // a daemon that is down is: connecting to this name fails.
+  const checked = (socket: string): string => !socket.startsWith(dataDir) && !socketIsPrivate(socket) ? `${socket}.not-private` : socket
+  if (!expected) return expected
+  if (existsSync(expected)) return checked(expected)
   let names: string[] = []
   try { names = readdirSync(dataDir) } catch { return expected }
   for (const name of names) {
     const configured = /^daemon-(\d+)\.json$/.exec(name)?.[1]
     if (!configured || readDaemonRecord(dataDir, Number(configured), platform)?.port !== port) continue
-    const socket = join(dataDir, localSocketName(Number(configured)))
-    if (existsSync(socket)) return socket
+    const socket = unixSocketPath(dataDir, Number(configured), platform)
+    if (socket && existsSync(socket)) return checked(socket)
   }
   return expected
 }

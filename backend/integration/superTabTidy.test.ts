@@ -451,6 +451,47 @@ describe('a review nobody reviews', () => {
     expect((await f.reviews()).filter(row => !row.archived)).toHaveLength(1)
   })
 
+  /** The task's check recorded by its Reviewer, and the task set done by its Builder, its step as it stands. */
+  const finishTask = async (f: Awaited<ReturnType<typeof waiting>>) => {
+    const row = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.reviewed } })
+    for (const check of (row.data as unknown as { checks: Array<{ id: string }> }).checks) {
+      await f.execute({ type: 'work.check', conversationId: f.reviewed, assignmentId: f.work, checkId: check.id, passed: true, evidence: 'Read it' }, host, f.reviewer)
+    }
+    await f.execute({ type: 'work.status', conversationId: f.reviewed, assignmentId: f.work, status: 'done', result: `Done ${PR}` }, host, f.builder)
+  }
+
+  // Diego, 2026-11-02: an Engineer set its task done before its Tester's verdict, the pull request merged, and 30 minutes later
+  // the pass cancelled the Tester's step without a word; its verdict was then refused, and lost.
+  it('the archive pass tells a working step agent its task was archived', async () => {
+    const f = await waiting(true)
+    await finishTask(f)
+    await db.superTabDelivery.updateMany({ where: { tabId: f.tab, conversationId: f.review.key, status: 'queued' }, data: { status: 'delivered' } })
+    f.clock.now += 40 * MINUTE
+    expect(await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged' }), f.clock.now)).toBeGreaterThan(0)
+    expect((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.reviewed } })).archived).toBe(true)
+    const rows = (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: f.review.key } }))
+      .filter(row => row.recipientIds.includes(f.reviewer) && row.text === 'Parser v2 was archived.')
+    expect(rows).toHaveLength(1)
+    // It can still reach its agent: the step stays open to deliver it, cancelled.
+    expect((await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: rows[0]!.id, agentId: f.reviewer } })).map(d => d.status)).toEqual(['queued'])
+    expect(await f.isArchived()).toBe(false)
+    expect((await db.swarmGroup.findUniqueOrThrow({ where: { id: f.review.id } })).data).toMatchObject({ assignment: { status: 'cancelled', result: 'Parser v2 was archived.' } })
+  })
+
+  it('the archive pass ends the deliveries of a step it archives, and tells a finished step\'s agent nothing', async () => {
+    const f = await waiting(true)
+    await verdict(f)
+    await f.execute({ type: 'message.send', conversationId: f.review.key, text: 'One more thing', replyTo: null, recipientIds: [f.reviewer] }, host, f.lead)
+    const left = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, conversationId: f.review.key, text: 'One more thing' } })
+    expect((await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: left.id } })).map(d => d.status)).toEqual(['queued'])
+    await finishTask(f)
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged' }), f.clock.now)
+    expect(await f.isArchived()).toBe(true)
+    expect((await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: left.id } })).map(d => d.status)).toEqual(['cancelled'])
+    expect((await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: f.review.key } })).filter(row => row.text.includes('was archived'))).toEqual([])
+  })
+
   it('archives with its task once the task ends and its pull requests are merged, the task\'s pass closing it in the same write', async () => {
     const f = await waiting()
     await f.execute({ type: 'work.cancel', conversationId: f.reviewed, assignmentId: f.work, reason: 'Landed outside the Swarm' }, host, f.lead)

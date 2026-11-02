@@ -925,7 +925,8 @@ describe('since when a worker is down', () => {
     await f.timed.stopped(host, f.tab, f.assignmentId, 'fixture-native-stop')
     expect(await f.downSince(f.worker)).toBe(iso(stopped))
     f.clock.now += 1_000
-    await f.observe([f.leadHarness], [f.workerHarness])
+    // Its session is still not listed (a stopped list would remove the agent, superTabLiveness.test.ts).
+    await f.observe([f.leadHarness])
     expect(await f.downSince(f.worker)).toBe(iso(stopped))
     await f.observe([f.leadHarness, f.workerHarness])
     expect(await f.downSince(f.worker)).toBeUndefined()

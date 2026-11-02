@@ -3,7 +3,8 @@
  * task) with a name the project's instructions give: it keeps its own assignment, lease, attempts and costs, and readers
  * show it inside its task. Nothing here reads a step's name: which steps a task has is the instructions' to say.
  */
-import { activeWork, finishWorker, type Conversation, type SuperTabState } from './model.js'
+import { agentDisplayName } from './agentNames.js'
+import { activeWork, finishWorker, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 
 /** Whether [group] is a step of a task: any linked group, named or not. Ken, 2026-11-02: a PM that opened "Test: PR #2514"
  *  the old way, a minute after saving the steps workflow, still heard every Tester post; what reaches the PM must not rest on
@@ -38,6 +39,19 @@ export function endSteps(state: SuperTabState, task: Conversation, reason: strin
     } else if (archive) step.archived = true
   }
   return cancelled
+}
+
+/** The row each step endSteps cancelled keeps, in that step, for the agent whose work ended: [reason], as [author], or as that
+ *  agent where none is given (a project with no Lead). One whose agent or its contributor has left the Swarm reaches nobody: a delivery to it would
+ *  throw, and the archive pass that wrote it could then never archive its task. With no author either, there is no row. */
+export function stepEndedRows(state: SuperTabState, cancelled: Conversation[], reason: string, author: Author | null, id: (step: Conversation) => string): MessageDraft[] {
+  return cancelled.flatMap(step => {
+    // agent()'s own rule, without its throw: its contributor still here, at the generation it was shared under.
+    const found = state.agents.find(a => a.id === step.assignment!.agentId)
+    const agent = found && state.people.find(p => p.id === found.contributorId)?.generation === found.membershipGeneration ? found : undefined
+    const by: Author | null = author ?? (agent ? { kind: 'agent', id: agent.id, name: agent.name, displayName: agentDisplayName(state.agents, agent.id), membershipGeneration: agent.membershipGeneration } : null)
+    return by ? [{ id: id(step), conversationId: step.id, author: by, text: reason, replyTo: null, recipients: agent ? [agent.id] : [], source: { kind: 'system' } }] : []
+  })
 }
 
 /** Whether a step may sleep, given its task's row as the sweep read it (null: gone). A step sleeps once its task is

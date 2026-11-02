@@ -28,7 +28,7 @@ export const TEAM_REFRESH_RETRY_MS = 24 * 60 * 60_000
 
 export interface TeamRefreshDeps {
   config(): TeamConfig | null
-  status(path: string): TeamStatus | null
+  status(path: string): TeamStatus | null | Promise<TeamStatus | null>
   /** When this daemon last published the owner's relay (team/relay.ts), or null before it has. */
   publishedAt(): number | null
   /** The account's machines, from `GET /api/machines`: the team account of this Mac is among them. */
@@ -72,7 +72,7 @@ export function teamUpdateArgv(config: Pick<TeamConfig, 'node' | 'cli' | 'home'>
 export async function refreshTeamAccount(deps: TeamRefreshDeps): Promise<void> {
   try {
     const config = deps.config()
-    if (!config || !teamBuildStale(deps.status(config.statusFile), deps.publishedAt())) return
+    if (!config || !teamBuildStale(await deps.status(config.statusFile), deps.publishedAt())) return
     const last = deps.lastTry()
     if (last !== null && deps.now() - last < TEAM_REFRESH_RETRY_MS && deps.now() >= last) return
     const here = deps.machineId()

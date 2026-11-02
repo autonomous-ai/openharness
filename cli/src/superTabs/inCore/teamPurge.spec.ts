@@ -1,11 +1,11 @@
 import { buddyTmpFolder, buddyTmpParent } from '../../lib/agentTmp.js'
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, win32 } from 'node:path'
 import { PM_HOMES } from '../teamDaemon.js'
 import { describe, expect, it, vi } from 'vitest'
 import { createSwarmAgents } from './agents.js'
-import { OWN_LEFT, SHARED_LEFT, SWEEP_LEFT, UNREADABLE_DETAIL, createConfidentialPurge, ownHomeFolder, purgeRecord, recordsOtherFolder, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
+import { OWN_LEFT, SHARED_LEFT, SWEEP_LEFT, UNREADABLE_DETAIL, createConfidentialPurge, isPmCodexHome, ownHomeFolder, purgeRecord, recordsOtherFolder, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
 
 /** A folder that goes between the sweep's listing of its parent and its own read: removed just before that read. */
 const vanish = vi.hoisted(() => ({ path: '' }))
@@ -526,6 +526,31 @@ describe('the purge of a confidential session the Swarm ended', () => {
     expect(ownHomeFolder('/Users/team/.harness-pm-homes', null)).toBeNull()
   })
 
+  // Windows drops a name's trailing spaces and dots: `.. ` is `..`, and this path's folder is then the whole Team home, which
+  // purge deletes. The rule pmEngineHome names a home by (teamDaemon.ts PM_START_ID), as isPmCodexHome holds it to (#2568).
+  it('takes only a start id pmEngineHome could have made: never `.. `, nor a name Windows would cut, nor a separator inside it', () => {
+    const win = 'C:\\Users\\team\\.harness-pm-homes', posix = '/Users/team/.harness-pm-homes'
+    for (const id of ['.. ', '. ', '.', '..', 'super-start.', 'super-start ', 'a b', 'a.b', '..\u00a0', 'caf\u00e9', 'x'.repeat(161)]) {
+      expect(ownHomeFolder(win, `${win}\\${id}\\codex`), `win ${id}`).toBeNull()
+      expect(ownHomeFolder(posix, `${posix}/${id}/codex`), `posix ${id}`).toBeNull()
+    }
+    for (const path of [`${win}\\a\\b\\codex`, `${win}/.. /codex`, `${win}\\.. /codex`, `${win}/..\\codex`]) expect(ownHomeFolder(win, path), path).toBeNull()
+    expect(ownHomeFolder(posix, `${posix}/a\\b/codex`)).toBeNull()
+    expect(ownHomeFolder(win, `${win}\\super-start_1\\codex`)).toBe(`${win}\\super-start_1`)
+    expect(ownHomeFolder(win, `${win}/super-start_1/codex`)).toBe(`${win}/super-start_1`)
+    expect(ownHomeFolder(posix, `${posix}/${'x'.repeat(160)}/codex`)).toBe(`${posix}/${'x'.repeat(160)}`)
+  })
+
+  it('a session\'s `.. ` home is left alone, the Team home with it, confidential or not', async () => {
+    const { home } = teamHome()
+    const s = service(home)
+    writeFileSync(join(home, 'keep.txt'), 'kept')
+    const purge = createConfidentialPurge({ confidential: () => false, home, record: purgeRecord(join(dir(), 'purges.json')), purge: s.purge,
+      session: () => ({ agentId: 'r', sessionId: 's', registeredAt: 1, engine: 'codex', cwd: CWD, codexHome: join(home, PM_HOMES, '.. ', 'codex') }) })
+    expect(await purge('r')).toEqual({ skipped: true })
+    expect(readFileSync(join(home, 'keep.txt'), 'utf8')).toBe('kept')
+  })
+
   it('removes Team-written work\'s own Codex home when the agent ends, confidential or not, and nothing else (audit H2)', async () => {
     const { home } = teamHome()
     const s = service(home), own = join(home, PM_HOMES, 'super-start', 'codex'), other = join(home, 'elsewhere', 'codex')
@@ -624,6 +649,16 @@ describe('the purge of a confidential session the Swarm ended', () => {
     const ended = createConfidentialPurge({ confidential: () => true, home, session: s.session, purge: s.purge, record: s.record })
     expect(await ended('pm')).toEqual({ ok: true })
     expect(existsSync(join(home, '.harness-pm-homes', 'super-start-1'))).toBe(false)
+  })
+
+  it('of a Codex session whose home is not one of pmEngineHome\'s, leaves every Product Manager\'s home', async () => {
+    // One level under the PM homes folder, its parent is that folder: a purge of it took every other PM's home with it.
+    const home = dir(), other = join(home, '.harness-pm-homes', 'super-start-2', 'codex')
+    mkdirSync(other, { recursive: true })
+    const s = service(home, join(home, '.harness-pm-homes', 'codex'))
+    const ended = createConfidentialPurge({ confidential: () => true, home, session: s.session, purge: s.purge, record: s.record })
+    expect(await ended('pm')).toEqual({ ok: true })
+    expect(existsSync(other)).toBe(true)
   })
 
   it('leaves any other session alone; a refused review or delete stops it, the session kept in its record', async () => {
@@ -745,5 +780,152 @@ describe('the record of purges still to finish', () => {
     expect(warn.mock.calls.map(([line]) => String(line))).toEqual([said(aside), said(aside), said(`${aside}, ${aside}.1`),
       said([aside, ...Array.from({ length: 10 }, (_, i) => `${aside}.${i + 1}`)].join(', '))])
     warn.mockRestore()
+  })
+})
+
+// Windows audit (task #2022): the check looked for `${homes}/`, and Windows' paths have `\`, so a purged Codex Product
+// Manager's own home stayed in the Team account for its next agent to read.
+describe('isPmCodexHome', () => {
+  it('is the home pmEngineHome makes, by Windows\' separators as well as this platform\'s', () => {
+    expect(isPmCodexHome('C:\\Users\\harnessteam', 'C:\\Users\\harnessteam\\.harness-pm-homes\\super-start-1\\codex', win32)).toBe(true)
+    expect(isPmCodexHome('/Users/harnessteam', '/Users/harnessteam/.harness-pm-homes/super-start-1/codex')).toBe(true)
+  })
+
+  it('is nothing else: not the PM homes folder or one level under it, a sibling folder, a way out, or another home', () => {
+    const home = 'C:\\Users\\harnessteam', homes = `${home}\\.harness-pm-homes`
+    for (const codexHome of [homes, `${homes}\\codex`, `${homes}\\super-start-1`, `${homes}\\super-start-1\\codex\\sessions`,
+      `${homes}\\super-start-1\\other`, `${home}\\.harness-pm-homes-old\\super-start-1\\codex`, `${homes}\\..\\x\\codex`,
+      // Windows drops a name's trailing spaces and dots: `.. ` is `..`, and purge deletes the parent, the whole Team home.
+      `${homes}\\.. \\codex`, `${homes}\\. \\codex`, `${homes}\\super-start-1.\\codex`, `${homes}\\a b\\codex`,
+      'C:\\Users\\owner\\.harness-pm-homes\\super-start-1\\codex', 'D:\\.harness-pm-homes\\super-start-1\\codex', '']) {
+      expect(isPmCodexHome(home, codexHome, win32), codexHome).toBe(false)
+    }
+  })
+})
+
+// Windows audit W3 (task #2096): `folderOf` wanted a leading '/', so a Windows worktree had no folder, and the sweep then held the
+// account at every retry, with its memory unread. The folder's forms are what Claude Code 2.1.316 writes on Windows: `C:/...` as a
+// config key (its `U3`), `C:\\...` elsewhere, and `C--...` as the project folder's name.
+describe('on Windows', () => {
+  const WIN = 'C:\\Users\\team\\swarm\\app\\.worktrees\\pm', KEY = WIN.replaceAll('\\', '/')
+  const WSLUG = WIN.replace(/[^A-Za-z0-9]/g, '-')
+  /** A folder sharing its name in `projects` ('.' and '\\' both become '-'), and folders that only start like it. */
+  const SHARES = 'C:\\Users\\team\\swarm\\app\\-worktrees\\pm', EVIL = `${WIN}-evil`, TWO = `${WIN}2`
+  const pm = (over: Partial<PurgeTarget> = {}): PurgeTarget => ({ agentId: 'pm', sessionId: 'pm-session', cwd: WIN, engine: 'claude', codexHome: null, ...over })
+  const row = (cwd: string) => `${JSON.stringify({ type: 'user', cwd })}\n`
+  function windowsHome() {
+    const parent = dir(), home = join(parent, 'home'), claude = join(home, '.claude')
+    for (const sub of [`projects/${WSLUG}/memory`, 'projects/C--other', 'backups', 'paste-cache']) mkdirSync(join(claude, sub), { recursive: true })
+    mkdirSync(join(home, '.codex'), { recursive: true })
+    writeFileSync(join(claude, 'history.jsonl'), [
+      JSON.stringify({ display: 'secret', pastedContents: { 1: { contentHash: 'abc123' } }, project: WIN, sessionId: 'pm-session' }),
+      JSON.stringify({ display: 'evil work', pastedContents: {}, project: EVIL, sessionId: 'evil' }),
+      JSON.stringify({ display: 'two work', pastedContents: {}, project: TWO, sessionId: 'two' }), ''].join('\n'))
+    writeFileSync(join(claude, 'paste-cache', 'abc123.txt'), 'pasted')
+    writeFileSync(join(claude, 'projects', WSLUG, 'pm-session.jsonl'), row(WIN) + row(`${WIN}\\sub`))
+    writeFileSync(join(claude, 'projects', WSLUG, 'memory', 'MEMORY.md'), 'remembered')
+    writeFileSync(join(claude, 'projects', 'C--other', 'other.jsonl'), row(EVIL))
+    const config = { projects: { [KEY]: { history: ['secret'] }, [WIN]: { history: ['old'] }, [EVIL.replaceAll('\\', '/')]: { keep: 1 }, [TWO]: { keep: 2 } },
+      githubRepoPaths: { 'example/app': [WIN, EVIL], 'example/pm': [KEY] } }
+    writeFileSync(join(home, '.claude.json'), JSON.stringify(config, null, 2))
+    writeFileSync(join(claude, 'backups', '.claude.json.backup.1'), JSON.stringify(config))
+    return { parent, home, claude }
+  }
+  const scrub = (home: string, target: PurgeTarget, told?: (what: string) => void) => scrubClaudeSession(home, target, [], undefined, told, win32)
+  const sweep = (home: string, target: PurgeTarget) => sweepForSession(home, target, [], win32)
+
+  it('scrubs the PM and only the PM, its memory too, and the sweep then finds nothing', async () => {
+    const { home, claude } = windowsHome()
+    await scrub(home, pm())
+    expect(existsSync(join(claude, 'projects', WSLUG))).toBe(false)
+    expect(existsSync(join(claude, 'paste-cache', 'abc123.txt'))).toBe(false)
+    const history = readFileSync(join(claude, 'history.jsonl'), 'utf8')
+    expect(history).not.toContain('pm-session')
+    expect(history).toContain('evil work')
+    expect(history).toContain('two work')
+    for (const file of [join(home, '.claude.json'), join(claude, 'backups', '.claude.json.backup.1')]) {
+      const config = JSON.parse(readFileSync(file, 'utf8')) as { projects: Record<string, unknown>; githubRepoPaths: Record<string, string[]> }
+      expect(Object.keys(config.projects)).toEqual([EVIL.replaceAll('\\', '/'), TWO])
+      expect(config.githubRepoPaths).toEqual({ 'example/app': [EVIL] })
+    }
+    expect(existsSync(join(claude, 'projects', 'C--other', 'other.jsonl'))).toBe(true)
+    expect(await sweep(home, pm())).toBeNull()
+  })
+
+  it.each([['forward slashes', KEY], ['both separators', 'C:\\Users\\team/swarm\\app/.worktrees\\pm'], ['a lower-case drive', `c${WIN.slice(1)}`],
+    ['a trailing separator', `${WIN}\\`]])('finds the same folder written with %s', async (_, cwd) => {
+    const { home, claude } = windowsHome()
+    await scrub(home, pm({ cwd }))
+    expect(readFileSync(join(claude, 'history.jsonl'), 'utf8')).not.toContain('pm-session')
+    expect(Object.keys((JSON.parse(readFileSync(join(home, '.claude.json'), 'utf8')) as { projects: object }).projects)).toEqual([EVIL.replaceAll('\\', '/'), TWO])
+    expect(existsSync(join(claude, 'projects', WSLUG))).toBe(false)
+    expect(await sweep(home, pm({ cwd }))).toBeNull()
+  })
+
+  it.each(['C:\\', 'C:/', 'C:', '\\', '/', 'C:foo', 'foo\\bar', '\\\\server', '\\\\server\\', '\\\\server\\share', '\\\\server\\share\\', 'C:\\a\\..', '/Users/team/pm', '\\Users\\team', ''])(
+    'takes no folder from %j: with no session either, nothing is touched', async (cwd) => {
+      const { home, claude } = windowsHome()
+      // A line that does name it, to show it stays: a form with no drive could be any drive's folder.
+      appendFileSync(join(claude, 'history.jsonl'), `${JSON.stringify({ display: 'named', pastedContents: {}, project: cwd, sessionId: 'named' })}\n`)
+      const before = readFileSync(join(claude, 'history.jsonl'), 'utf8'), config = readFileSync(join(home, '.claude.json'), 'utf8')
+      expect(await scrub(home, pm({ cwd, sessionId: null }))).toEqual([])
+      expect(readFileSync(join(claude, 'history.jsonl'), 'utf8')).toBe(before)
+      expect(readFileSync(join(home, '.claude.json'), 'utf8')).toBe(config)
+      expect(existsSync(join(claude, 'projects', WSLUG))).toBe(true)
+      expect(await sweep(home, pm({ cwd, sessionId: null }))).toBeNull()
+    })
+
+  it('reads a transcript in a folder only as inside it past a separator, in any case', async () => {
+    const { home } = windowsHome()
+    const file = join(home, 't.jsonl')
+    for (const [cwd, other] of [[WIN, false], [`${WIN}\\sub`, false], [`${KEY}/sub`, false], [WIN.toUpperCase(), false], [EVIL, true], [TWO, true], [SHARES, true]] as const) {
+      writeFileSync(file, row(cwd))
+      expect(await recordsOtherFolder(file, WIN, win32)).toBe(other)
+    }
+  })
+
+  it('the sweep sees a folder as JSON holds it, by either separator, and not one that only starts like it', async () => {
+    for (const [text, left] of [[`{"project":${JSON.stringify(WIN)},"sessionId":"x"}\n`, SWEEP_LEFT.claudeHistory], [`{"project":${JSON.stringify(KEY)}}\n`, SWEEP_LEFT.claudeHistory],
+      [`{"project":${JSON.stringify(`${WIN}\\sub`)}}\n`, SWEEP_LEFT.claudeHistory], [`{"project":${JSON.stringify(EVIL)}}\n`, null], [`{"project":${JSON.stringify(TWO)}}\n`, null]] as const) {
+      const home = dir()
+      mkdirSync(join(home, '.claude'), { recursive: true })
+      writeFileSync(join(home, '.claude', 'history.jsonl'), text)
+      expect(await sweep(home, pm({ sessionId: null }))).toBe(left)
+    }
+    for (const key of [KEY, WIN]) {
+      const home = dir()
+      mkdirSync(join(home, '.claude'), { recursive: true })
+      writeFileSync(join(home, '.claude.json'), JSON.stringify({ projects: { [key]: {} } }, null, 2))
+      expect(await sweep(home, pm({ sessionId: null }))).toBe(SWEEP_LEFT.config)
+    }
+  })
+
+  it('keeps another folder\'s transcript that shares the name, says so, and the memory left holds the account', async () => {
+    const { home, claude } = windowsHome()
+    writeFileSync(join(claude, 'projects', WSLUG, 'shared.jsonl'), row(SHARES))
+    const told: string[] = []
+    await scrub(home, pm(), what => told.push(what))
+    expect(told).toEqual(['shared'])
+    expect(existsSync(join(claude, 'projects', WSLUG, 'shared.jsonl'))).toBe(true)
+    expect(existsSync(join(claude, 'projects', WSLUG, 'pm-session.jsonl'))).toBe(false)
+    expect(await sweep(home, pm())).toBe(SHARED_LEFT.memory)
+    rmSync(join(claude, 'projects', WSLUG, 'memory'), { recursive: true })
+    expect(await sweep(home, pm())).toBeNull()
+  })
+
+  it('finishes the whole purge, and frees the account, touching nothing outside the home', async () => {
+    const { parent, home, claude } = windowsHome()
+    const outside = join(parent, '.claude', 'projects', WSLUG, 'pm-session.jsonl')
+    mkdirSync(join(parent, '.claude', 'projects', WSLUG), { recursive: true })
+    writeFileSync(outside, 'someone else\'s')
+    writeFileSync(join(parent, '.claude.json'), JSON.stringify({ projects: { [KEY]: {} } }))
+    const record = purgeRecord(join(parent, 'purges.json'))
+    const purge = createConfidentialPurge({ confidential: () => true, home, record, paths: win32,
+      session: () => ({ agentId: 'pm', sessionId: 'pm-session', registeredAt: 1, engine: 'claude', cwd: WIN }),
+      purge: async request => request.mode === 'inspect' ? { reviewId: 'review' } : { ok: true } })
+    expect(await purge('pm')).toEqual({ ok: true })
+    expect(existsSync(join(claude, 'projects', WSLUG))).toBe(false)
+    expect(readFileSync(outside, 'utf8')).toBe('someone else\'s')
+    expect(readFileSync(join(parent, '.claude.json'), 'utf8')).toContain(KEY)
   })
 })

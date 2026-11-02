@@ -231,6 +231,6 @@ so in the agents' role text, and bind test services to a socket in a private fol
   setup's mode means mode 000: they show only that 000 refuses. What guards the home there is the test that no line of the script
   leaves a group or other bit, or changes the home a second time. As a real second account (`nobody`) they run only on CI's Linux,
   where the spec fails if that account is missing. ACLs are not modeled.
-- **Windows was skimmed only:** `windowsTeam.ts` and `windowsScript.ts` were not audited. Its setup and rules differ.
+- **Windows was skimmed only:** `windowsTeam.ts` and `windowsScript.ts` were not audited here. Task #2022 did: [2026-11-02-team-account-windows.md](2026-11-02-team-account-windows.md).
 - Linux's scripts were read and their modes tested; setup was not run on a Linux machine.
 - The integration suite was not run: this change touches no backend code.
