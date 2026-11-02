@@ -50,6 +50,6 @@ docs/security/2026-11-02-team-account-boundary.md (PR #2538).
 - An MCP client still sends its key and tool calls to whoever holds 51793. The key opens nothing for them, but
   they can read those calls and answer them falsely. Closing that needs a stdio shim: its own task.
 - A plugin's session-start body and `hook-token` reach a holder of 18473, as does any hook in a data folder too
-  long for a socket. They can forge hook events only.
+  long for a socket. The holder hears them, but the daemon refuses the token from another account.
 - Store agents, companions and Desktop's fallback still send the credential over TCP. It opens nothing for another
   account, but they should move to the socket: follow-up task.

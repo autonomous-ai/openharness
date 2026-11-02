@@ -62,12 +62,20 @@ async function ask(socket: Socket, platform: NodeJS.Platform): Promise<boolean> 
   return lsof(peerPort, ownPort, uid)
 }
 
-/** Linux: the owner of the listener on loopback [port] in /proc/net/tcp, or null when none is listening. */
+/**
+ * The addresses of a listener that keeps 127.0.0.1's port from being bound: 127.0.0.1 and any address, and for IPv6 the
+ * same mapped, `::` and `::1`. Node's plain `listen(port)` is on `::`, dual-stack, and shows only in /proc/net/tcp6.
+ */
+const LISTENER_ADDRESSES = ['0100007F', '00000000', '00000000000000000000000000000000', '00000000000000000000000001000000',
+  '0000000000000000FFFF00000100007F', '0000000000000000FFFF000000000000']
+
+/** Linux: the owner of the listener on loopback [port] in /proc/net/tcp and tcp6's text, or null when none is listening. */
 export function procNetListener(table: string, port: number): number | null {
   const hex = port.toString(16).toUpperCase().padStart(4, '0')
-  for (const line of table.split('\n').slice(1)) {
+  const holds = new Set(LISTENER_ADDRESSES.map(address => `${address}:${hex}`))
+  for (const line of table.split('\n')) {
     const fields = line.trim().split(/\s+/)
-    if (fields[3] === '0A' && (fields[1] === `0100007F:${hex}` || fields[1] === `00000000:${hex}`)) {
+    if (fields[3] === '0A' && holds.has(fields[1] ?? '')) {
       const uid = Number(fields[7])
       return Number.isInteger(uid) ? uid : null
     }
@@ -84,10 +92,10 @@ export async function portHolderIsThisAccount(port: number, platform: NodeJS.Pla
   const uid = process.getuid?.()
   if (platform === 'win32' || uid === undefined) return null
   if (platform === 'linux') {
-    try {
-      const owner = procNetListener(await readFile('/proc/net/tcp', 'utf8'), port)
-      return owner === null ? null : owner === uid
-    } catch { return null }
+    // A kernel with no IPv6 has no tcp6, and /proc/net/tcp alone says who holds the port then.
+    const tables = await Promise.all(['/proc/net/tcp', '/proc/net/tcp6'].map(file => readFile(file, 'utf8').catch(() => '')))
+    const owner = procNetListener(tables.join('\n'), port)
+    return owner === null ? null : owner === uid
   }
   return new Promise((resolve) => {
     execFile('/usr/sbin/lsof', ['-nP', '-a', '-u', String(uid), `-iTCP:${port}`, '-sTCP:LISTEN', '-Fn'], { timeout: LSOF_MS }, (error, stdout) => {

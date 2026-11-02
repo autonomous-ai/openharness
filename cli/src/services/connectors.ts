@@ -61,6 +61,9 @@ interface Moving {
 function listen(bridge: Server, port: number, retryMs: number, moving?: Moving): void {
   let tries = 0
   let leaving = false
+  // macOS reads a listener that has just gone as another account's, so one answer may be a handover ending: it takes two
+  // in a row, with a try of the port between them.
+  let notMine = 0
   bridge.on('listening', () => {
     if (leaving) moving!.moved((bridge.address() as AddressInfo).port, port)
     leaving = false
@@ -71,7 +74,11 @@ function listen(bridge: Server, port: number, retryMs: number, moving?: Moving):
     tries++
     if (tries === 1) console.warn(`[connections] bridge port ${port} is not available (${error.message}); trying again every ${retryMs} ms`)
     if (!moving || tries < TRIES_BEFORE_ASKING || leaving) { again(); return }
-    void moving.holderIsMine(port).then((mine) => { leaving = mine === false; again() })
+    void moving.holderIsMine(port).then((mine) => {
+      notMine = mine === false ? notMine + 1 : 0
+      leaving = notMine >= 2
+      again()
+    })
   })
   bridge.listen(port, '127.0.0.1')
 }

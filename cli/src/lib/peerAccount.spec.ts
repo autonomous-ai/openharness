@@ -75,6 +75,13 @@ describe('who is at the other end of a loopback connection', () => {
     ].join('\n')
     expect(procNetListener(table, 0xC94F)).toBe(1002)
     expect(procNetListener(table, 0xC950)).toBeNull()
+    // Node's plain listen(port) is on `::`, dual-stack: it blocks 127.0.0.1 and shows only in /proc/net/tcp6.
+    const row = (address: string) => `   0: ${address}:C94F 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1003        0 3`
+    for (const address of ['00000000000000000000000000000000', '00000000000000000000000001000000', '0000000000000000FFFF00000100007F', '0000000000000000FFFF000000000000']) {
+      expect(procNetListener(`header\n${row(address)}`, 0xC94F), address).toBe(1003)
+    }
+    // Another address's listener does not hold 127.0.0.1's port.
+    expect(procNetListener(`header\n${row('0000000000000000FFFF00000200007F')}`, 0xC94F)).toBeNull()
   })
 
   it('counts only the client end in lsof output: the server end shows the same ports reversed', () => {

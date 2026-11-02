@@ -196,6 +196,28 @@ describe('the connectors service', () => {
     }
   })
 
+  it('does not move on one answer: a handover ending just then reads as another account, so it tries the port again first', async () => {
+    const holder = createServer()
+    await new Promise<void>(resolve => holder.listen(0, '127.0.0.1', resolve))
+    const taken = (holder.address() as { port: number }).port
+    const { HARNESS_CONNECTIONS_PORT: _named, ...free } = env
+    const vault = new Store(join(home, 'store'), free)
+    saveBridgePort(vault, taken)
+    const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let asked = 0
+    try {
+      // Another account's by one answer, then this account's every time after, as a port another listener took over.
+      startConnectors(fakeCore(), { vault, env: free, offered: async () => ({}), retryMs: 5, holderIsMine: async () => { asked++; return asked % 2 === 0 } })
+      for (let n = 0; n < 200 && asked < 6; n++) await new Promise(resolve => setTimeout(resolve, 10))
+      expect(asked).toBeGreaterThanOrEqual(6)
+      expect(bridgePort(free, new Store(join(home, 'store'), free))).toBe(taken)
+      expect(said.mock.calls.flat().join(' ')).not.toContain('moved')
+    } finally {
+      said.mockRestore()
+      await new Promise<void>(resolve => holder.close(() => resolve()))
+    }
+  })
+
   it('says so when the port it moved to cannot be saved', async () => {
     const holder = createServer()
     await new Promise<void>(resolve => holder.listen(0, '127.0.0.1', resolve))
