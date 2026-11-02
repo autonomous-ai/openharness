@@ -56,6 +56,7 @@ Web links and `#42` render as phone link text and open their destination when ta
 
 **Files:**
 - Create: `mobile/lib/swarm/swarm_message_text.dart`
+- Create: `mobile/lib/swarm/swarm_message_style.dart` (the chat text and surface tokens shared by the row and renderer)
 - Modify: `mobile/lib/swarm/swarm_message_row.dart`
 - Test: `mobile/test/swarm/swarm_message_markdown_test.dart`
 - Modify: `mobile/pubspec.yaml`, `mobile/pubspec.lock` (only if the renderer is not already a mobile dependency)
@@ -64,11 +65,11 @@ Web links and `#42` render as phone link text and open their destination when ta
 - Consumes: `SwarmTextPart` from `swarm_code_block.dart`, `SwarmMentions`, `swarmChatText`, `AppPalette`, and the existing code-block row.
 - Produces: `SwarmMessageText({required String text, required SwarmMentions mentions, Iterable<String> tagged = const [], Map<String, String> addresses = const {}})`, which renders Markdown prose; `SwarmMessageRow` continues to own code blocks and message actions.
 
-- [ ] **Step 1: Write failing widget tests** named `headings render as headings`, `strong and emphasis render with Markdown styles`, `ordered and unordered lists render their items`, `inline code is styled as code`, `quotes render as blockquotes`, `GFM tables render rows and cells`, `prose tap still opens reply`, and `a long report list remains scrollable`.
-- [ ] **Step 2: Run the focused widget test on the unchanged implementation** and record the expected failures where Markdown is still literal.
-- [ ] **Step 3: Implement `SwarmMessageText`** with `MarkdownBody`, the GitHub Flavored Markdown extension set, and phone design tokens; preserve the existing message prose tap and mention styling.
-- [ ] **Step 4: Run the focused widget test** and confirm each element renders and long content has no layout exception.
-- [ ] **Step 5: Commit the failing tests, then commit the passing implementation.**
+- [x] **Step 1: Write failing widget tests** named `headings render as headings`, `strong and emphasis render with Markdown styles`, `ordered and unordered lists render their items`, `inline code is styled as code`, `quotes render as blockquotes`, `GFM tables render rows and cells`, `prose tap still opens reply`, and `a long report list remains scrollable`.
+- [x] **Step 2: Run the focused widget test on the unchanged implementation** and record the expected failures where Markdown is still literal.
+- [x] **Step 3: Implement `SwarmMessageText`** with `MarkdownBody`, the GitHub Flavored Markdown extension set, and phone design tokens; preserve the existing message prose tap and mention styling.
+- [x] **Step 4: Run the focused widget test** and confirm each element renders and long content has no layout exception.
+- [x] **Step 5: Commit the failing tests, then commit the passing implementation.**
 
 ### Task 2: Open web links and numbered conversations
 

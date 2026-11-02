@@ -12,36 +12,18 @@ import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 export 'swarm_file_links.dart' show swarmAttachmentHost, swarmAttachmentLink;
+export 'swarm_message_style.dart'
+    show swarmChatCard, swarmChatHair, swarmChatText;
 
 import 'model.dart';
 import 'swarm_attachment.dart';
 import 'swarm_code_block.dart';
 import 'swarm_file_links.dart';
+import 'swarm_message_text.dart';
+import 'swarm_message_style.dart';
 import 'swarm_face.dart';
 import 'swarm_ship_row.dart';
 import 'swarm_task_line.dart';
-
-/// The chat's prose in the app's own face, as prototype v2 draws it: the
-/// messages, quotes, names and the field. Times, roles and day dividers stay
-/// in the terminal's.
-TextStyle swarmChatText(
-  double size, {
-  Color? color,
-  FontWeight weight = FontWeight.w400,
-  double height = 1.35,
-}) => TextStyle(
-  fontSize: size,
-  height: height,
-  color: color ?? AppPalette.textPrimary,
-  fontWeight: weight,
-);
-
-/// The hairline around the chat's cards, picker and field.
-Color swarmChatHair(Tty tty) => tty.text.withValues(alpha: 0.12);
-
-/// The ground of a card in the chat: a decision, the picker, a file.
-Color swarmChatCard(Tty tty) =>
-    Color.alphaBlend(tty.text.withValues(alpha: 0.05), tty.ground);
 
 /// `@name` or `@name@domain`, as people tag in chat. Never right after a
 /// letter, digit, `@` or `/` (an address, a path, a link), and a name never
@@ -434,28 +416,14 @@ class SwarmMessageRow extends StatelessWidget {
           if (part.code)
             SwarmCodeBlock(code: part.text, name: part.name, onTap: onTap)
           else
-            Semantics(
-              button: true,
-              hint: 'Reply to this message',
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
+            Padding(
+              padding: const EdgeInsets.only(top: SwarmMessageFrame.bodyGap),
+              child: SwarmMessageText(
+                text: part.text,
+                mentionNames: mentions.names,
+                tagged: tagged,
+                addresses: taggedAddresses,
                 onTap: onTap,
-                child: Padding(
-                  padding: const EdgeInsets.only(
-                    top: SwarmMessageFrame.bodyGap,
-                  ),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: Text.rich(
-                      mentions.span(
-                        part.text,
-                        swarmChatText(16, height: 1.42),
-                        tagged: tagged,
-                        addresses: taggedAddresses,
-                      ),
-                    ),
-                  ),
-                ),
               ),
             ),
         for (final file in message.attachments) _attachment(context, file),
