@@ -1351,7 +1351,10 @@ describe('a sign-in refresh that fails while the lane dials', () => {
     expect(link.status()).toBe('idle')
     // 1 s for the first try, 2 s for the next: well inside 5 s.
     await until('the second socket', () => server.sockets.length === 2 && link.status() === 'ready', 5_000)
-    expect(server.received.filter((frame) => frame.type === 'machines_watch')).toHaveLength(2)
+    // Ready does not mean the server has the frame yet: count once it holds the second one.
+    const watches = () => server.received.filter((frame) => frame.type === 'machines_watch')
+    await until('the second watch frame', () => watches().length >= 2)
+    expect(watches()).toHaveLength(2)
   }, 12_000)
 
   it('stops trying once the dial is unplugged during the wait', async () => {
