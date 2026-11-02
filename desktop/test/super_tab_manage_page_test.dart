@@ -4,7 +4,9 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/manage_page.dart';
+import 'package:harness/super_tabs/view.dart';
 
+import 'support/humans_fixture.dart';
 import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show createApp;
 
@@ -167,6 +169,82 @@ void main() {
       );
       expect(find.text('Leave Swarm…'), findsOneWidget);
       expect(find.text('Delete Swarm…'), findsNothing);
+    });
+  });
+
+  group('while Manage shows', () {
+    Future<SuperTabController> inView(
+      WidgetTester tester,
+      List<String> opened,
+      ValueNotifier<bool> terminals,
+    ) async {
+      final server = humansSwarm();
+      final c = server.controller();
+      await c.refresh();
+      await tester.binding.setSurfaceSize(const Size(1300, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: ValueListenableBuilder(
+              valueListenable: terminals,
+              builder: (context, shown, _) => SuperTabView(
+                controller: c,
+                onInvite: () {},
+                onAddAgent: (_) {},
+                onOpenTerminal: (agent) => opened.add(agent.id),
+                machineName: (_) => 'Mac Studio',
+                terminalsVisible: shown,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-manage')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('super-manage-tab-machines')), findsOne);
+      return c;
+    }
+
+    Future<void> close(WidgetTester tester, SuperTabController c) async {
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    }
+
+    testWidgets('a terminal that opens takes the place of the Manage page', (
+      tester,
+    ) async {
+      final terminals = ValueNotifier(false);
+      final c = await inView(tester, [], terminals);
+      terminals.value = true;
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('super-manage-tab-machines')),
+        findsNothing,
+      );
+      await close(tester, c);
+    });
+
+    testWidgets('an agent clicked in the right column leaves it', (
+      tester,
+    ) async {
+      final opened = <String>[];
+      final terminals = ValueNotifier(false);
+      final c = await inView(tester, opened, terminals);
+      final agent = c.snapshot!.agents.first;
+      await tester.longPress(find.byKey(ValueKey('super-member-${agent.id}')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Open terminal'));
+      await tester.pumpAndSettle();
+      expect(opened, [agent.id]);
+      expect(
+        find.byKey(const ValueKey('super-manage-tab-machines')),
+        findsNothing,
+      );
+      await close(tester, c);
     });
   });
 }
