@@ -550,9 +550,28 @@ printf '%s\\n' "$*" >> "$TMUX_BACKEND_CALLS"
       'new-session', '-d', '-P', '-F', '#{pane_id}', '-c', '/tmp/work', '-s', 'harness-test',
       '-e', 'ANTHROPIC_BASE_URL=https://relay.example/relay', '-e', 'ANTHROPIC_AUTH_TOKEN=gridkey-abc123',
       '/bin/zsh', '-lic', 'exec "$@"', 'harness-engine', 'claude',
-      ';', 'set-option', '-p', 'remain-on-exit', 'on', ';', 'set-option', 'destroy-unattached', 'off',
-      ';', 'set-option', '-p', 'window-style', 'bg=#181818,fg=#f5f5f5', ';', 'set-option', '-p', '@harness_daemon', 'daemon-a',
+      // Each option names the new session: from `source-file`, an untargeted one went to another session's pane.
+      ';', 'set-option', '-p', '-t', '=harness-test:', 'remain-on-exit', 'on', ';', 'set-option', '-t', '=harness-test:', 'destroy-unattached', 'off',
+      ';', 'set-option', '-p', '-t', '=harness-test:', 'window-style', 'bg=#181818,fg=#f5f5f5',
+      ';', 'set-option', '-p', '-t', '=harness-test:', '@harness_daemon', 'daemon-a',
     ]))
+  })
+
+  it.each([
+    ['no name', undefined],
+    ['a name tmux would read as a window', 'harness:test'],
+    ['a name tmux would read as a pane', 'harness.test'],
+  ])('refuses a create with variables and %s, asking tmux nothing, rather than set options on a pane it cannot name', async (_, label) => {
+    const tmux = scriptTmux()
+    const created = await new TmuxBackend().create({ label, env: { K: 'v' }, command: ['claude'] })
+    expect(created).toMatchObject({ state: 'failed', dispatch: 'not_started' })
+    expect(tmux.calls()).toEqual([])
+  })
+
+  it('takes the pane id from the first line, before the ~/.tmux.conf errors a server it started prints on stdin', async () => {
+    scriptTmux(`printf '%%7\\n/home/someone/.tmux.conf:1: invalid option: bogus\\n'`)
+    expect(await new TmuxBackend().create({ label: 'harness-test', env: { K: 'v' }, command: ['claude'] }))
+      .toEqual({ state: 'succeeded', dispatch: 'executed', runtime: { backend: 'tmux', paneId: '%7' } })
   })
 
   it('keeps a create with no variables on the command line it always had', async () => {
@@ -1035,6 +1054,33 @@ describe.skipIf(!resolveBinaryOnPath('tmux'))('session variables on a real tmux 
     expect(await written(out)).toBe(`${token}|${tricky}`)
     expect(await tmux.run('show-environment', '-t', 'harness-m2-create', 'M2_TOKEN')).toBe(`M2_TOKEN=${token}`)
     expect(await showing(token)).toEqual([])
+  })
+
+  it('gives its options to the new session, never to another already on the server', async () => {
+    // A person's own session, or another daemon's, with its own pane options.
+    await tmux.run('new-session', '-d', '-s', 'theirs', '/bin/sleep', '300')
+    await tmux.run('set-option', '-p', '-t', '=theirs:', '@harness_daemon', 'someone-else')
+    const created = await new TmuxBackend(undefined, () => 'daemon-a', () => {}).create({
+      label: 'harness-m2-second', env: { M2_TOKEN: token }, command: ['/bin/sleep', '300'],
+    })
+    if (created.state !== 'succeeded') throw new Error(created.reason)
+    const option = (target: string, name: string, scope = '-p') => tmux.run('show-options', '-v', scope, '-t', target, name)
+    expect(await option('=theirs:', '@harness_daemon')).toBe('someone-else')
+    expect(await option('=theirs:', 'remain-on-exit')).not.toBe('on')
+    expect(await option(created.runtime.paneId, '@harness_daemon')).toBe('daemon-a')
+    expect(await option(created.runtime.paneId, 'remain-on-exit')).toBe('on')
+    expect(await option('=harness-m2-second:', 'destroy-unattached', '-q')).toBe('off')
+    expect(await showing(token)).toEqual([])
+  })
+
+  it('starts a server whose ~/.tmux.conf has an error and ends unattached sessions, and the agent stays', async () => {
+    writeFileSync(join(tmux.root, '.tmux.conf'), 'set -g fixture-no-such-option on\nset -g destroy-unattached on\n')
+    const created = await new TmuxBackend(undefined, () => 'daemon-a', () => {}).create({
+      label: 'harness-m2-conf', env: { M2_TOKEN: token }, command: ['/bin/sleep', '300'],
+    })
+    expect(created).toMatchObject({ state: 'succeeded' })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(await tmux.run('list-sessions', '-F', '#{session_name}')).toBe('harness-m2-conf')
   })
 
   it('respawns a pane, and a waiting one, with no value on any command line', async () => {

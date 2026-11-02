@@ -125,6 +125,15 @@ export function tmuxScript(args: readonly string[]): string {
 }
 
 /**
+ * The target that names the session called [label] exactly, and its active pane (its only one when it has just
+ * been made), or null when there is no such target: a session with no name, or one whose name tmux would read
+ * as a window or pane separator.
+ */
+export function scriptTarget(label: string | undefined): string | null {
+  return label && !/[:.]/.test(label) ? `=${label}:` : null
+}
+
+/**
  * The command line that runs a script given on stdin. `source-file` alone does not start a server ("no server
  * running"), so `start-server` comes first; a server it starts takes this as its title, with no value in it.
  */
@@ -238,6 +247,14 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     // variables on one is refused here, saying why, rather than handed to tmux to answer with its
     // usage text — and never moved into the argv, where a secret would show.
     if (variables.length && !features.sessionEnv) return terminalActionNotStarted(tmuxTooOldForEnv(TMUX_FEATURE_MIN.sessionEnv, 'a new session'))
+    // On a command line, tmux gives the options chained after `new-session` to the session it just made.
+    // From `source-file` it does not: they went to the session tmux takes as current, another one's pane
+    // when the server had one, which took this daemon's tag and left the new pane with none, nor
+    // `remain-on-exit`, nor `destroy-unattached off` (found in review of #2542, tmux 3.7 and 3.8). There each
+    // option names the new session exactly (`=NAME:`), so the session needs a name that target can hold.
+    const target = variables.length ? scriptTarget(request.label) : undefined
+    if (target === null) return terminalActionNotStarted('a session with its own variables needs a name without ":" or "."')
+    const option = target ? ['-t', target] : []
     const owner = this.owner()
     const args = ['new-session', '-d', '-P', '-F', '#{pane_id}']
     if (request.cwd) args.push('-c', request.cwd)
@@ -255,20 +272,20 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     // millisecond, and a second `set-option` call loses that race — measured, the session was
     // already gone before the follow-up command could reach the server.
     // Whoever created the pane owns turning this back off; see `clearPaneRemainOnExit`.
-    args.push(';', 'set-option', scope, 'remain-on-exit', 'on')
+    args.push(';', 'set-option', scope, ...option, 'remain-on-exit', 'on')
     // An agent's session never has a client attached, so a person's `set -g destroy-unattached on`
     // (in their ~/.tmux.conf, which this server loads) ended every agent the moment it was made, and
     // Harness could not run at all on their machine (found end to end, e2e/tmuxconf.e2e.ts). Turned
     // off for this session only, in this same invocation, before the server can act on it.
-    args.push(';', 'set-option', 'destroy-unattached', 'off')
+    args.push(';', 'set-option', ...option, 'destroy-unattached', 'off')
     // Same invocation, same reason: an engine asks its terminal for its colours (OSC 10/11) in its
     // first milliseconds and never again, so the style has to be there before the engine is.
     const style = windowStyleOf(this.hostTheme())
-    args.push(';', ...paneStyleArgs(features, style))
+    args.push(';', ...paneStyleArgs(features, style, target))
     // Whose pane it is, from its first instant: another daemon on this tmux server scanning a moment
     // later must already see it is not its own. On the pane, which keeps it wherever the person moves
     // it (see HARNESS_OWNER_OPTION); before tmux 3.0, on the window, and in the start command.
-    args.push(';', 'set-option', scope, HARNESS_OWNER_OPTION, owner)
+    args.push(';', 'set-option', scope, ...option, HARNESS_OWNER_OPTION, owner)
     // `killed`/`signal` come from execFile's own error shape, which ErrnoException alone does not declare.
     type ExecError = NodeJS.ErrnoException & { killed?: boolean; signal?: NodeJS.Signals | null }
     // A new session is a notification to every control client: on a tmux before 3.7, not while one
@@ -293,7 +310,9 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
         || (result.error.killed ? 'tmux did not answer within 5s' : result.error.message.slice(0, 200))
       return terminalActionPossiblyExecuted(`tmux session creation did not complete: ${detail}`)
     }
-    const paneId = result.stdout.trim()
+    // The first line: on stdin, a tmux that `start-server` just started prints its ~/.tmux.conf's errors to the
+    // client after the pane id, where on a command line it shows them in the session instead.
+    const paneId = result.stdout.trim().split('\n')[0]?.trim() ?? ''
     if (!/^%\d+$/.test(paneId)) {
       return terminalActionPossiblyExecuted('tmux created a session without returning its root pane')
     }

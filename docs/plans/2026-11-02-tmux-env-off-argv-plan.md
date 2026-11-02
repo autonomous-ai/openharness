@@ -26,7 +26,12 @@ nor a server it starts shows one. Nothing is written to disk, so a crash leaves 
 - A create or respawn with no variables keeps today's command line exactly.
 - `source-file -` is tmux 3.1. `create` with variables already needs 3.2. A respawn with variables needed 3.0;
   it now needs 3.1 and is refused by name below it (`respawnRefusal`), never sent with the value in argv.
-- The `-P` pane id prints from inside `source-file`, so `create` reads it as before.
+- The `-P` pane id prints from inside `source-file`. A server that `start-server` just started prints its
+  `~/.tmux.conf` errors to the client after it, so `create` reads the first line only.
+- From `source-file`, tmux does not give the options chained after `new-session` to the new session, as it does
+  on a command line: they went to another session's pane (found in review). On this path each option names the
+  new session exactly (`-t =NAME:`), so a create with variables needs a name without `:` or `.`; every caller
+  gives one, and one without is refused.
 
 Not changed: the engine's own command line (the launch script carries what it needs), and `clearEnv`, which
 sends names only.
