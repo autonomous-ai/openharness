@@ -8,6 +8,7 @@ import 'package:harness_mobile/auth/sign_in_provider.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/swarm/swarm_home_cache.dart';
+import 'package:harness_mobile/swarm/swarm_kept.dart';
 
 import '../exit_app.dart';
 import '../tty.dart';
@@ -70,6 +71,7 @@ class PhoneWelcome extends StatefulWidget {
     this.signIn,
     this.scanCamera,
     this.swarmHome,
+    this.swarmKept,
   });
 
   final AppNotifier notifier;
@@ -84,6 +86,7 @@ class PhoneWelcome extends StatefulWidget {
 
   /// The Swarm Home kept on this phone ([SwarmHomeCache.device] when null).
   final SwarmHomeCache? swarmHome;
+  final SwarmKeptStore? swarmKept;
 
   @override
   State<PhoneWelcome> createState() => _PhoneWelcomeState();
@@ -124,6 +127,8 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
     // Signed out, so the last Swarm Home goes: a session that ended while the app was not running
     // never had a signed-in shell to clear it ([SwarmHost]).
     unawaited((widget.swarmHome ?? SwarmHomeCache.device()).clear());
+    // So do the drafts and unsent posts, whoever signs in next.
+    unawaited((widget.swarmKept ?? SealedSwarmKeptStore.device()).clear());
   }
 
   @override
@@ -172,7 +177,8 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
         // ⚠️ [AppNotifier.signInWithScan] does nothing while another sign-in is under way — an
         // account's page let go of on the way here — so that one is waited out first, or the scan
         // would be dropped without a word under a camera that reads one code only.
-        if (!await _signInFree()) throw StateError('Another sign-in is under way');
+        if (!await _signInFree())
+          throw StateError('Another sign-in is under way');
         if (!mounted || _step != _Step.scan) return;
         await notifier.signInWithScan(signIn);
         // In, or going in: the app swaps this screen for home. Still out and nothing under way is
