@@ -6889,7 +6889,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
           agentId = search.agentSelectionId;
       if (machineId == null || agentId == null) return;
       _closeSearch(restoreFocus: true);
-      final error = await app.changeAgent(machineId, agentId, engine);
+      final error = choice.destination.addsClaudeAccount
+          ? await app.addClaudeAccount(machineId, agentId)
+          : await app.changeAgent(
+              machineId,
+              agentId,
+              engine,
+              profile: choice.destination.agentProfile,
+            );
       if (mounted && error != null) _showPaneActionHint(error);
       return;
     }

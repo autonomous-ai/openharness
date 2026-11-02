@@ -9,9 +9,11 @@ import 'package:harness/core/config.dart';
 import 'package:harness/e2ee/envelope.dart';
 import 'package:harness/state/agent_handoff_file.dart';
 import 'package:harness/state/agent_switch_handoff.dart';
-import 'package:harness/ws/ws_conn.dart' show WsRequestFailure, WsRequestTimeout;
+import 'package:harness/ws/ws_conn.dart'
+    show WsRequestFailure, WsRequestTimeout;
 import 'package:harness/state/desk_sync.dart';
 import 'package:harness/core/dsh_catalog.dart';
+import 'package:harness/core/engine_availability.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/devices/devices_harness_controller.dart';
 import 'package:harness/state/app_state.dart';
@@ -28,6 +30,7 @@ class SwitchConnection extends MonitorConnection {
   late AppNotifier app;
   final events = <String>[];
   String? closeError;
+
   /// The machine's whole refusal, as a daemon sends it (a Swarm Buddy's, say).
   Map<String, dynamic>? closeRefusal;
   Completer<void>? holdClose;
@@ -59,7 +62,9 @@ class SwitchConnection extends MonitorConnection {
     if (type == 'agent_handoff_complete') {
       completedHandoffs.add(Map.of(payload));
       if (completionThrows case final error?) throw error;
-      return completionError == null ? {'ok': true} : {'error': completionError};
+      return completionError == null
+          ? {'ok': true}
+          : {'error': completionError};
     }
     if (type == 'agent_handoff_prepare') {
       handoffCalls.add(Map.of(payload));
@@ -118,6 +123,78 @@ class SwitchConnection extends MonitorConnection {
       };
     }
     return result;
+  }
+}
+
+/// A machine with two Claude accounts and two Codex ones, as the daemon would list them.
+class ProfileConnection extends SwitchConnection {
+  final links = <String>[];
+  final usageReads = <Map<String, dynamic>>[];
+  final claudeRows = <Map<String, dynamic>>[
+    {
+      'id': 'default',
+      'path': '/home/me',
+      'label': 'Default',
+      'reportLabel': 'Default',
+    },
+    {
+      'id': 'w1',
+      'path': '/home/me/.claude-work',
+      'label': 'Work',
+      'reportLabel': 'Work',
+    },
+  ];
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    switch (type) {
+      case 'claude_profiles_list':
+        return {'profiles': claudeRows};
+      case 'claude_profile_link':
+        links.add(payload['path'] as String);
+        return {'error': 'NOT_FOUND'};
+      case 'codex_profiles_list':
+        return {
+          'profiles': [
+            {'path': '/home/me/.codex-a', 'label': 'A'},
+            {'path': '/home/me/.codex-b', 'label': 'B'},
+          ],
+        };
+      case 'usage_read':
+        usageReads.add(Map.of(payload));
+        final id = (payload['profile'] as Map)['id'];
+        if (id == '/home/me/.codex-b') throw StateError('no reading');
+        return {
+          'providers': [
+            {
+              'provider': (payload['profile'] as Map)['engine'],
+              'outcome': 'answered',
+              'httpStatus': 200,
+              'body': (payload['profile'] as Map)['engine'] == 'claude'
+                  ? {
+                      'five_hour': {
+                        'utilization': 88,
+                        'resets_at': '2099-01-01T00:00:00Z',
+                      },
+                    }
+                  : {
+                      'rate_limit': {
+                        'primary_window': {
+                          'used_percent': 40,
+                          'limit_window_seconds': 18000,
+                          'reset_after_seconds': 100,
+                        },
+                      },
+                    },
+            },
+          ],
+        };
+    }
+    return super.request(type, payload: payload, timeout: timeout);
   }
 }
 
@@ -196,53 +273,62 @@ class SwitchDeskApi extends ApiClient {
 }
 
 void main() {
-  test('a wire UNSUPPORTED completion opens the replacement terminal', () async {
-    final connection = SwitchConnection()
-      ..completionThrows = const WsRequestFailure(
-        responseType: 'agent_handoff_complete_result',
-        code: 'UNSUPPORTED',
-      );
-    final app = fixture(connection);
-    addTearDown(app.dispose);
-    await app.addAgentToSwarm('m', 'a0');
-    final pane = app.panes.single;
-    expect(await app.changeAgent('m', 'a0', 'claude'), isNull);
-    expect(app.panes.single, same(pane));
-    expect(pane.agentId, 'local-session');
-    expect(connection.creations.single['engine'], 'claude');
-  });
+  test(
+    'a wire UNSUPPORTED completion opens the replacement terminal',
+    () async {
+      final connection = SwitchConnection()
+        ..completionThrows = const WsRequestFailure(
+          responseType: 'agent_handoff_complete_result',
+          code: 'UNSUPPORTED',
+        );
+      final app = fixture(connection);
+      addTearDown(app.dispose);
+      await app.addAgentToSwarm('m', 'a0');
+      final pane = app.panes.single;
+      expect(await app.changeAgent('m', 'a0', 'claude'), isNull);
+      expect(app.panes.single, same(pane));
+      expect(pane.agentId, 'local-session');
+      expect(connection.creations.single['engine'], 'claude');
+    },
+  );
 
-  test('a wire UNSUPPORTED preparation uses the older history protocol', () async {
-    final connection = SwitchConnection()
-      ..handoffThrows = const WsRequestFailure(
-        responseType: 'agent_handoff_prepare_result',
-        code: 'UNSUPPORTED',
-      );
-    final app = fixture(connection);
-    addTearDown(app.dispose);
-    await app.addAgentToSwarm('m', 'a0');
-    expect(await app.changeAgent('m', 'a0', 'claude'), isNull);
-    expect(connection.recentReads, 1);
-    expect(connection.creations, hasLength(1));
-  });
+  test(
+    'a wire UNSUPPORTED preparation uses the older history protocol',
+    () async {
+      final connection = SwitchConnection()
+        ..handoffThrows = const WsRequestFailure(
+          responseType: 'agent_handoff_prepare_result',
+          code: 'UNSUPPORTED',
+        );
+      final app = fixture(connection);
+      addTearDown(app.dispose);
+      await app.addAgentToSwarm('m', 'a0');
+      expect(await app.changeAgent('m', 'a0', 'claude'), isNull);
+      expect(connection.recentReads, 1);
+      expect(connection.creations, hasLength(1));
+    },
+  );
 
-  test('a wire identity hold retains its restart guidance without stopping', () async {
-    final connection = SwitchConnection()
-      ..handoffThrows = const WsRequestFailure(
-        responseType: 'agent_handoff_prepare_result',
-        code: 'IDENTITY_UNAVAILABLE',
-        payload: {'held': true, 'hold': 'PROGRAM_REPLACED'},
+  test(
+    'a wire identity hold retains its restart guidance without stopping',
+    () async {
+      final connection = SwitchConnection()
+        ..handoffThrows = const WsRequestFailure(
+          responseType: 'agent_handoff_prepare_result',
+          code: 'IDENTITY_UNAVAILABLE',
+          payload: {'held': true, 'hold': 'PROGRAM_REPLACED'},
+        );
+      final app = fixture(connection);
+      addTearDown(app.dispose);
+      await app.addAgentToSwarm('m', 'a0');
+      expect(
+        await app.changeAgent('m', 'a0', 'claude'),
+        contains('Use Restart Harness'),
       );
-    final app = fixture(connection);
-    addTearDown(app.dispose);
-    await app.addAgentToSwarm('m', 'a0');
-    expect(
-      await app.changeAgent('m', 'a0', 'claude'),
-      contains('Use Restart Harness'),
-    );
-    expect(connection.events, isEmpty);
-    expect(connection.recentReads, 0);
-  });
+      expect(connection.events, isEmpty);
+      expect(connection.recentReads, 0);
+    },
+  );
 
   test('a lost completion report retries the same replacement without another launch', () async {
     final connection = SwitchConnection()
@@ -253,14 +339,20 @@ void main() {
     final app = fixture(connection);
     addTearDown(app.dispose);
     await app.addAgentToSwarm('m', 'a0');
-    expect(await app.changeAgent('m', 'a0', 'claude'), contains('new agent started'));
+    expect(
+      await app.changeAgent('m', 'a0', 'claude'),
+      contains('new agent started'),
+    );
     expect(app.panes.single.agentId, 'a0');
     expect(connection.creations, hasLength(1));
     connection.completionThrows = null;
     expect(await app.changeAgent('m', 'a0', 'claude'), isNull);
     expect(connection.creations, hasLength(1));
     expect(connection.completedHandoffs, hasLength(2));
-    expect(connection.completedHandoffs.first, connection.completedHandoffs.last);
+    expect(
+      connection.completedHandoffs.first,
+      connection.completedHandoffs.last,
+    );
     expect(connection.events, ['save/stop', 'start']);
   });
 
@@ -1178,28 +1270,30 @@ void main() {
     expect(connection.creations.single['engine'], 'claude');
   });
 
-  test('a Buddy keeps its agent, and the refusal says how to use another', () async {
-    // The daemon's refusal speaks of Stop Harness, which is no help to someone changing the agent.
-    final connection = SwitchConnection()
-      ..closeRefusal = {
-        'error': 'BUDDY_PROTECTED',
-        'detail':
-            'This is a Swarm Buddy. Its person removes it from the Swarm, or Stop Harness stops it.',
-        'keptRunning': true,
-      };
-    final app = fixture(connection);
-    addTearDown(app.dispose);
-    await app.addAgentToSwarm('m', 'a0');
-    final pane = app.panes.single;
-    expect(
-      await app.changeAgent('m', 'a0', 'opencode'),
-      'A Swarm Buddy keeps its agent. To use another agent, its person removes the Buddy and adds a new one.',
-    );
-    expect(connection.creations, isEmpty);
-    expect(app.panes.single, same(pane));
-    expect(pane.agentId, 'a0');
-    expect(app.stateOf('m')!.agents.first.isStopped, isFalse);
-  });
+  test(
+    'a Buddy keeps its agent, and the refusal says how to use another',
+    () async {
+      // The daemon's refusal speaks of Stop Harness, which is no help to someone changing the agent.
+      final connection = SwitchConnection()
+        ..closeRefusal = {
+          'error': 'BUDDY_PROTECTED',
+          'detail': 'This is a Swarm Buddy. Its person removes it from the Swarm, or Stop Harness stops it.',
+          'keptRunning': true,
+        };
+      final app = fixture(connection);
+      addTearDown(app.dispose);
+      await app.addAgentToSwarm('m', 'a0');
+      final pane = app.panes.single;
+      expect(
+        await app.changeAgent('m', 'a0', 'opencode'),
+        'A Swarm Buddy keeps its agent. To use another agent, its person removes the Buddy and adds a new one.',
+      );
+      expect(connection.creations, isEmpty);
+      expect(app.panes.single, same(pane));
+      expect(pane.agentId, 'a0');
+      expect(app.stateOf('m')!.agents.first.isStopped, isFalse);
+    },
+  );
 
   // Dee, 11-01: a Swarm Product Manager's engine is switched from its pane,
   // as any pane's. Its machine lets the stop through only for the switch
@@ -1306,6 +1400,138 @@ void main() {
       expect(app.panes.single.agentId, 'local-session');
     },
   );
+
+  group('accounts', () {
+    test('the picker lists one row per account with % left', () async {
+      final connection = ProfileConnection();
+      final app = fixture(connection, sourceEngine: 'claude');
+      addTearDown(app.dispose);
+      final search = SwarmSearchController(app, []);
+      addTearDown(search.dispose);
+      search.setQuery('&');
+      search.setAgentSelection('m', 'a0');
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      final titles = [for (final r in search.rows) r.title];
+      expect(
+        titles,
+        containsAll([
+          'Claude · Default',
+          'Claude · Work',
+          'Codex · A',
+          'Codex · B',
+        ]),
+      );
+      expect(titles, isNot(contains('Claude Code')));
+      final work = search.rows.firstWhere((r) => r.title == 'Claude · Work');
+      expect(work.detail, '12% left');
+      expect(work.agentProfile, '/home/me/.claude-work');
+      expect(
+        search.rows.firstWhere((r) => r.title == 'Claude · Default').current,
+        isTrue,
+      );
+      expect(
+        search.rows.firstWhere((r) => r.title == 'Codex · A').detail,
+        '60% left',
+      );
+      // A reading that failed leaves the row without a percent.
+      expect(
+        search.rows.firstWhere((r) => r.title == 'Codex · B').detail,
+        isNot(contains('%')),
+      );
+      expect(search.rows.last.addsClaudeAccount, isTrue);
+      expect([
+        for (final r in connection.usageReads) (r['profile'] as Map)['id'],
+      ], contains('w1'));
+    });
+
+    test('a same-engine change to another account closes and creates with claudeHome', () async {
+      final connection = ProfileConnection();
+      final app = fixture(connection, sourceEngine: 'claude');
+      addTearDown(app.dispose);
+      await app.addAgentToSwarm('m', 'a0');
+      expect(
+        await app.changeAgent(
+          'm',
+          'a0',
+          'claude',
+          profile: '/home/me/.claude-work',
+        ),
+        isNull,
+      );
+      expect(connection.events, ['save/stop', 'start']);
+      expect(
+        connection.creations.single,
+        containsPair('claudeHome', '/home/me/.claude-work'),
+      );
+      expect(connection.creations.single, isNot(contains('codexHome')));
+    });
+
+    test('picking the current engine and account does nothing', () async {
+      final connection = ProfileConnection();
+      final app = fixture(connection, sourceEngine: 'claude');
+      addTearDown(app.dispose);
+      await app.addAgentToSwarm('m', 'a0');
+      expect(
+        await app.changeAgent('m', 'a0', 'claude', profile: 'default'),
+        isNull,
+      );
+      expect(connection.events, isEmpty);
+      expect(connection.creations, isEmpty);
+    });
+
+    test('the default account passes no claudeHome', () async {
+      final connection = ProfileConnection();
+      final app = fixture(connection, sourceEngine: 'codex');
+      addTearDown(app.dispose);
+      await app.addAgentToSwarm('m', 'a0');
+      expect(
+        await app.changeAgent('m', 'a0', 'claude', profile: 'default'),
+        isNull,
+      );
+      expect(connection.creations.single, isNot(contains('claudeHome')));
+    });
+
+    test('a Codex account passes codexHome', () async {
+      final connection = ProfileConnection();
+      final app = fixture(connection, sourceEngine: 'claude');
+      addTearDown(app.dispose);
+      app.stateOf('m')!.engines.replace(const [
+        EngineAvailability(
+          engine: 'codex',
+          installed: true,
+          supportsCodexHome: true,
+        ),
+      ]);
+      await app.addAgentToSwarm('m', 'a0');
+      expect(
+        await app.changeAgent('m', 'a0', 'codex', profile: '/home/me/.codex-b'),
+        isNull,
+      );
+      expect(
+        connection.creations.single,
+        containsPair('codexHome', '/home/me/.codex-b'),
+      );
+    });
+
+    test(
+      'Add Claude account… links the next free folder and opens Claude in it',
+      () async {
+        final connection = ProfileConnection();
+        final app = fixture(connection, sourceEngine: 'codex');
+        addTearDown(app.dispose);
+        String? notice;
+        app.agentChangeNotice = (m) => notice = m;
+        expect(await app.addClaudeAccount('m', 'a0'), isNull);
+        expect(connection.links, ['/home/me/.harness/claude-profiles/1']);
+        expect(connection.creations.single, containsPair('engine', 'claude'));
+        expect(
+          connection.creations.single,
+          containsPair('claudeHome', '/home/me/.harness/claude-profiles/1'),
+        );
+        expect(notice, 'Run /login, then pick it again');
+      },
+    );
+  });
 
   test('& searches all agents and only submits supported choices for its exact source', () {
     final connection = SwitchConnection();

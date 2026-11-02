@@ -1197,11 +1197,23 @@ class SwarmSearchController extends ChangeNotifier {
       ?.agents
       .where((a) => a.id == agentSelectionId)
       .firstOrNull;
+
+  /// The accounts of each engine on the selected agent's machine, read when it is selected.
+  final _agentProfiles = <String, List<AgentProfile>>{};
   void setAgentSelection(String machineId, String agentId) {
     agentSelectionMachineId = machineId;
     agentSelectionId = agentId;
+    _agentProfiles.clear();
     _filter();
     notifyListeners();
+    for (final engine in const ['claude', 'codex']) {
+      app.agentProfiles(machineId, engine).then((profiles) {
+        if (agentSelectionMachineId != machineId || profiles.isEmpty) return;
+        _agentProfiles[engine] = profiles;
+        _filter(keepOrder: true);
+        notifyListeners();
+      });
+    }
   }
 
   bool canSelectAgent(String engine) =>
@@ -1967,30 +1979,72 @@ class SwarmSearchController extends ChangeNotifier {
               ? 1
               : a.label.compareTo(b.label),
         );
+      final current = agentSelection;
+      final currentHome = current?.engine == 'claude'
+          ? current?.claudeHome
+          : current?.codexHome;
+      SwarmDestination row(
+        EngineIdentity engine, {
+        AgentProfile? profile,
+        bool several = false,
+      }) {
+        final isCurrent =
+            current?.engine == engine.id &&
+            (!several ||
+                (profile!.key == 'default'
+                    ? currentHome == null
+                    : currentHome == profile.path));
+        final base = engine.id == 'claude' ? 'Claude Code' : engine.label;
+        return SwarmDestination(
+          id: 'engine:${engine.id}${several ? ':${profile!.key}' : ''}',
+          agentEngine: engine.id,
+          agentProfile: several ? profile!.key : null,
+          engine: engine.id,
+          title: several
+              ? '${engine.id == 'claude' ? 'Claude' : engine.label} · ${profile!.label}'
+              : base,
+          detail: current == null
+              ? 'Focus a harness to change its agent'
+              : !canSelectAgent(engine.id)
+              ? 'Not supported by this harness'
+              : several && profile!.percentLeft != null
+              ? '${profile.percentLeft}% left'
+              : isCurrent
+              ? 'Current agent'
+              : engine.id == 'opencode'
+              ? 'Muse Spark 1.3 · continue with recent context'
+              : supportsAgentHandoff(engine.id)
+              ? 'Continue this project with recent context'
+              : 'New conversation in the same project',
+          swarmId: null,
+          current: isCurrent,
+        );
+      }
+
       rows = [
         for (final engine in engines)
           if ('${engine.label} ${engine.id}'.toLowerCase().contains(
             matchQuery.toLowerCase(),
           ))
-            SwarmDestination(
-              id: 'engine:${engine.id}',
-              agentEngine: engine.id,
-              engine: engine.id,
-              title: engine.id == 'claude' ? 'Claude Code' : engine.label,
-              detail: agentSelection == null
-                  ? 'Focus a harness to change its agent'
-                  : !canSelectAgent(engine.id)
-                  ? 'Not supported by this harness'
-                  : agentSelection?.engine == engine.id
-                  ? 'Current agent'
-                  : engine.id == 'opencode'
-                  ? 'Muse Spark 1.3 · continue with recent context'
-                  : supportsAgentHandoff(engine.id)
-                  ? 'Continue this project with recent context'
-                  : 'New conversation in the same project',
-              swarmId: null,
-              current: agentSelection?.engine == engine.id,
-            ),
+            if ((_agentProfiles[engine.id]?.length ?? 0) > 1)
+              for (final profile in _agentProfiles[engine.id]!)
+                row(engine, profile: profile, several: true)
+            else
+              row(engine),
+        // Only a machine that listed its Claude accounts can open another folder.
+        if (_agentProfiles['claude'] != null &&
+            'add claude account'.contains(matchQuery.toLowerCase()) &&
+            canSelectAgent('claude'))
+          SwarmDestination(
+            id: 'engine:claude:add',
+            agentEngine: 'claude',
+            addsClaudeAccount: true,
+            engine: 'claude',
+            title: 'Add Claude account…',
+            detail: 'Opens Claude to sign in. Run /login, then pick it again',
+            swarmId: null,
+            current: false,
+          ),
       ];
       total = engines.length;
       matchCount = rows.length;
