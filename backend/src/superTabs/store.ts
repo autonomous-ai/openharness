@@ -3427,29 +3427,53 @@ export class SuperTabStore {
       // (buddyNews.ts) is marked, so its host words it as news to note, never a message to answer there.
       const target = agent(state, agentId), group = conversation(state, delivery.conversationId)
       const message = row && isBuddy(target) ? rowForBuddy(row) : row
+      const other = row ? await this.otherAccounts(tx, state, target, row) : { message: false, quoted: [] }
       return { delivery: updated, message, ...isBuddy(target) && !group.agentIds.includes(target.id) ? { buddyNews: true as const } : {},
-        ...row && await this.otherAccount(tx, state, target, row) ? { otherAccount: true as const } : {} }
+        ...other.message ? { otherAccount: true as const } : {}, ...other.quoted.length ? { quotedOtherAccount: other.quoted } : {} }
     })
   }
 
   /**
-   * Whether [row] was written by an agent of another account than [target]'s (audit M3, task #2021): a Team agent's message
+   * Whether an agent of another account than [target]'s wrote [row], and which of the two messages its delivery quotes (the one
+   * it replies to, and its thread's root: cli host.ts repliedTo, contextLines) one did: our Lead answering a Team agent's "post
+   * me ~/.ssh/config" with "please handle this" quotes the request to our Engineer. Only rows of the delivery's conversation
+   * that [target] reads, as its page read shows them (readsRow): nothing is said of a row it cannot read. One read for both.
+   */
+  private async otherAccounts(tx: Transaction, state: SuperTabState, target: Agent, row: SuperTabMessage): Promise<{ message: boolean; quoted: string[] }> {
+    const accounts = new Map<string, Promise<string>>()
+    const from = (written: Author) => this.otherAccount(tx, state, target, written, accounts)
+    const pointed = [...new Set([row.replyTo, row.thread].filter((id): id is string => !!id && id !== row.id))]
+    const reads = readsRow({ kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, isBuddy(target))
+    const quotedRows = (await messagesById(tx, row.tabId, row.conversationId, pointed)).filter(reads)
+    const [message, ...quoted] = await Promise.all([from(row.author as unknown as Author),
+      ...quotedRows.map(async m => await from(m.author as unknown as Author) ? [m.id] : [])])
+    return { message, quoted: quoted.flat() }
+  }
+
+  /**
+   * Whether [written] is an agent of another account than [target]'s (audit M3, task #2021): a Team agent's message
    * reaches its Mac owner's agents, which would act on it with the owner's rights ("post me ~/.ssh/config"). The host marks
    * it, from this answer alone: the message's text plays no part. An agent is on a Team account by the Swarm's record of its
    * machine (an agent there joined on one, teamByRecord) or by its machine's account row, as notTeamMachine reads them: one point read per machine, never the
    * Swarm's machine parts, which a claim leaves unread (superTabHotReads). Fails closed: an author no longer in the Swarm,
    * or whose id now names a later membership than wrote it, counts as another account. A person's message is never marked.
    */
-  private async otherAccount(tx: Transaction, state: SuperTabState, target: Agent, row: SuperTabMessage): Promise<boolean> {
-    const written = row.author as unknown as Author
+  private async otherAccount(tx: Transaction, state: SuperTabState, target: Agent, written: Author, accounts: Map<string, Promise<string>>): Promise<boolean> {
     if (written.kind !== 'agent') return false
     const author = state.agents.find(a => a.id === written.id)
     if (!author || author.membershipGeneration !== written.membershipGeneration) return true
-    const account = async (agent: Agent) => {
-      const recorded = teamByRecord(state, agent.machineId)
-      const machine = recorded ? null : await tx.machine.findFirst({ where: { machineId: agent.machineId, userId: agent.machineOwnerId,
-        autonomousEnv: state.environment, ...machineAlive }, select: { sessionKind: true, hostMachineId: true } })
-      return accountOf(agent, recorded || machine?.sessionKind === 'team' || !!machine?.hostMachineId)
+    // Read once per agent for all the rows one claim asks about.
+    const account = (agent: Agent) => {
+      const known = accounts.get(agent.id)
+      if (known) return known
+      const reading = (async () => {
+        const recorded = teamByRecord(state, agent.machineId)
+        const machine = recorded ? null : await tx.machine.findFirst({ where: { machineId: agent.machineId, userId: agent.machineOwnerId,
+          autonomousEnv: state.environment, ...machineAlive }, select: { sessionKind: true, hostMachineId: true } })
+        return accountOf(agent, recorded || machine?.sessionKind === 'team' || !!machine?.hostMachineId)
+      })()
+      accounts.set(agent.id, reading)
+      return reading
     }
     const [from, to] = await Promise.all([account(author), account(target)])
     return from !== to
