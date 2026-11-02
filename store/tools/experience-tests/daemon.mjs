@@ -8,6 +8,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { experiences } from "../build-experiences.mjs";
 import { CREDENTIAL_REFUSED, localCredentialHeaders } from "../local-credential.mjs";
+import { DaemonWebSocket, daemonSocketPath } from "../local-daemon.mjs";
 
 const machineId = process.env.HARNESS_MACHINE_ID;
 if (!machineId)
@@ -24,7 +25,7 @@ const output = resolve(
 await mkdir(output, { recursive: true });
 const bridge = "ws://127.0.0.1:18473/api/local-ws";
 const headers = localCredentialHeaders();
-const socket = new WebSocket(bridge, { headers });
+const socket = new DaemonWebSocket(bridge, { headers });
 const pending = new Map(),
   frames = [],
   results = [];
@@ -72,8 +73,9 @@ await new Promise((resolve, reject) => {
   socket.addEventListener(
     "error",
     () =>
-      fetch(bridge.replace(/^ws:/, "http:"), { headers })
-        .then((answer) => answer.status === 401, () => false)
+      // Over the socket no credential is shown, and the port may be anyone's: there is nothing to ask it.
+      (daemonSocketPath(18473) ? Promise.resolve(false) : fetch(bridge.replace(/^ws:/, "http:"), { headers })
+        .then((answer) => answer.status === 401, () => false))
         .then((refused) =>
           reject(new Error(refused ? CREDENTIAL_REFUSED : "Could not open the local Harness bridge.")),
         ),

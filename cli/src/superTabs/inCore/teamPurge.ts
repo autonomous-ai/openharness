@@ -13,6 +13,7 @@
  * reviewed purge drops the session from the stopped catalog, so a retry after a failed sweep had nothing left to scrub from.
  * Everything here reads and writes asynchronously: a Team home holds gigabytes of transcripts, and this runs in the core.
  */
+import { buddyTmpFolder, realOfFolder } from '../../lib/agentTmp.js'
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync, type Dirent } from 'node:fs'
 import { readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import nodePath, { basename, dirname, join, type PlatformPath } from 'node:path'
@@ -354,6 +355,14 @@ export async function scrubClaudeSession(home: string, target: PurgeTarget, past
   })
   for (const hash of new Set([...pastes, ...found])) if (SESSION.test(hash)) await rm(join(claude, 'paste-cache', `${hash}.txt`), { force: true })
   if (folder) for (const name of await transcriptFolders(join(claude, 'projects'), folder, paths)) await removeTranscripts(join(claude, 'projects', name), folder, paths, told)
+  // Its private temporary folder beside a Team account: command output from its person's private work (lib/agentTmp.ts). A plain
+  // session shares its Buddy's folder, and this one's TMPDIR with it, so the whole folder goes only once that folder has; the
+  // sweep takes what a tool left meanwhile (review of #2563).
+  if (folder) {
+    const temp = buddyTmpFolder(folder)
+    if (!existsSync(folder)) await rm(temp, { recursive: true, force: true })
+    else if (sessionId) await rm(join(temp, `claude-${process.getuid?.() ?? 0}`, claudeSlug(realOfFolder(folder)), sessionId), { recursive: true, force: true })
+  }
   if (sessionId) {
     for (const sub of ['file-history', 'session-env']) await rm(join(claude, sub, sessionId), { recursive: true, force: true })
     await rm(join(claude, 'debug', `${sessionId}.txt`), { force: true })

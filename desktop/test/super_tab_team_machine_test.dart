@@ -131,7 +131,7 @@ void main() {
       await tester.pumpAndSettle();
       final count = find.byKey(const ValueKey('super-machine-agents-mac'));
       expect(
-        find.descendant(of: count, matching: find.text('2 agents')),
+        find.descendant(of: count, matching: find.text('2 agents · 0 working')),
         findsOneWidget,
       );
       await tester.tap(count);
@@ -177,7 +177,7 @@ void main() {
       await tester.pumpAndSettle();
       final count = find.byKey(const ValueKey('super-machine-agents-mac'));
       expect(
-        find.descendant(of: count, matching: find.text('2 agents')),
+        find.descendant(of: count, matching: find.text('2 agents · 0 working')),
         findsOneWidget,
       );
       await tester.tap(count);
