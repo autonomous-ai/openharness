@@ -61,16 +61,18 @@ make the daemon refuse the credential over TCP from another account. Windows can
 (`GetExtendedTcpTable` gives the owning process, whose token names its account).
 
 **Fixed (task #2095).** All three parts, each test first; the W1 tests above are turned around:
-- The daemon asks Windows who owns the calling end of a TCP connection that showed a valid secret (`lib/peerAccount.ts`
-  `windowsPeerQuery`: `Get-NetTCPConnection`, then the process's owner SID against this account's). Anything but a clear yes is
-  no. This alone makes a credential heard on the port useless to another account, from an old client or plugin too.
-  It takes only a process that started before the connection was made, compared in whole seconds (the connection's time comes
-  only to the second), never the lookup's own process, and never a PowerShell or console host the daemon started (another
-  lookup running at once). A process id taken within the connection's own second by some other process of the owner's is
-  still open until the native lookup. At most four
+- The daemon asks Windows who owns the calling end of a TCP connection that showed a valid secret: `harness-pty peer-account`
+  (`pty/src/peer.rs`, the TCP table, then the process's token), in milliseconds, or for a host too old to know that command,
+  `lib/peerAccount.ts` `windowsPeerQuery` (`Get-NetTCPConnection`, then the process's owner SID against this account's). The two
+  apply the same rules. Anything but a clear yes is no, and the helper's no is final. This alone makes a credential heard on the
+  port useless to another account, from an old client or plugin too.
+  It takes only a process that started before the connection was made, never the lookup's own process, and never a harness-pty,
+  PowerShell or console host the daemon started (another lookup running at once). PowerShell compares in whole seconds, as it gets
+  the connection's time only to the second, so a process id taken within that second by some other process of the owner's stays
+  open on an older host. The helper compares exactly when Windows gives the connection's time finer than a second. At most four
   lookups run at once and up to 32 wait their turn; one past those is no for now, and is asked again on its next request. A
-  lookup that times out (45 s: about a second on x64, 20 to 25 s on the Windows ARM runner) stays no for that connection; a
-  native lookup in harness-pty is its own task.
+  lookup that times out (5 s for the helper; 45 s for PowerShell, about a second on x64 and 20 to 25 s on the Windows ARM runner)
+  stays no for that connection.
 - Hooks post over the daemon's pipe (`hook/notify.mjs` `windowsDaemonPipe`), proving the token without sending it, and take an
   answer only with the daemon's proof. With no live pipe they post nothing, as on macOS with no socket.
 - CLI clients never put the credential on TCP (`localCredentialHeaders` gives nothing on Windows). Their fetch helper and their

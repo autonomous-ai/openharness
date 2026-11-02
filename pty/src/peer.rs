@@ -11,8 +11,8 @@
 /// `FILETIME` units in one second.
 pub const TICKS_PER_SECOND: u64 = 10_000_000;
 
-/// The file name of the lookup: this binary.
-const LOOKUP_NAME: &str = "harness-pty.exe";
+/// What the daemon starts for a lookup: this binary, the fallback PowerShell, and their console hosts.
+const LOOKUP_PROCESSES: [&str; 3] = ["harness-pty.exe", "powershell.exe", "conhost.exe"];
 
 /// One row of the TCP table the connection's pair of ports matched.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,19 +80,17 @@ pub fn verdict(
     }
     // Nor another lookup running at once, or its console host, started in the connection's second:
     // it could have taken the freed id, and nothing of the kind the daemon starts calls its port
-    // with a secret.
-    let lookup_of_daemon =
-        |p: &Process| p.parent == Some(daemon) && p.name.eq_ignore_ascii_case(LOOKUP_NAME);
-    if lookup_of_daemon(&caller) {
-        return no("a lookup the daemon started owns it".into());
-    }
-    if caller.name.eq_ignore_ascii_case("conhost.exe")
-        && caller
-            .parent
-            .and_then(&mut process)
-            .is_some_and(|p| lookup_of_daemon(&p))
+    // with a secret. The rule of W1's PowerShell query, word for word, so both give the same answers.
+    if LOOKUP_PROCESSES
+        .iter()
+        .any(|name| caller.name.eq_ignore_ascii_case(name))
+        && (caller.parent == Some(daemon)
+            || caller
+                .parent
+                .and_then(&mut process)
+                .is_some_and(|parent| parent.parent == Some(daemon)))
     {
-        return no("a console host of a lookup the daemon started owns it".into());
+        return no(format!("a {} the daemon started owns it", caller.name));
     }
     match caller.this_account {
         Some(true) => Verdict::Yes,

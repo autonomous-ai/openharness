@@ -1,8 +1,10 @@
+import type { ExecFileException } from 'node:child_process'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, connect, type AddressInfo, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { ExecDone } from './patientExec.js'
 import { lsofShowsPeer, nativeFirst, peerIsThisAccount, portHolderIsThisAccount, procNetListener, procNetOwner, runWindowsNative, WINDOWS_PEER_LOOKUPS, WINDOWS_PEER_MS, WINDOWS_PEER_NATIVE_MS, WINDOWS_PEER_QUEUE, windowsListenerQuery, windowsPeerQuery, type WindowsNativeRun, type WindowsPeerRun } from './peerAccount.js'
 
 describe('who is at the other end of a loopback connection', () => {
@@ -326,16 +328,15 @@ describe('who is at the other end of a loopback connection', () => {
       }
     })
 
-    type Done = (error: (Error & { code?: unknown }) | null, stdout: string, stderr: string) => void
-    const exec = (error: (Error & { code?: unknown }) | null, stdout = '') => {
+    const exec = (error: ExecFileException | null, stdout = '') => {
       const calls: Array<{ file: string; args: readonly string[]; options: Record<string, unknown> }> = []
-      const run = (file: string, args: readonly string[], options: object, done: Done) => {
+      const run = (file: string, args: readonly string[], options: object, done: ExecDone) => {
         calls.push({ file, args, options: options as Record<string, unknown> })
         done(error, stdout, '')
       }
       return { run, calls }
     }
-    const failed = (code: unknown) => Object.assign(new Error('failed'), { code })
+    const failed = (code: string | number | null): ExecFileException => Object.assign(new Error('failed'), { code })
 
     it('runs the helper with the ports and the daemon as arguments, hidden, and bounded', async () => {
       const ran = exec(null, 'yes\r\n')

@@ -65,3 +65,5 @@
 - [ ] **Step 1: Commit failing tests:** yes and no are taken from the helper; PowerShell runs only when the helper is missing or says 2 or 3; a hang or crash is no, without PowerShell; the real spec measures each lookup under 1 s.
 - [ ] **Step 2: Watch them fail.**
 - [ ] **Step 3: Commit the code. Mark the pull request ready; message Reed and Orion in their steps; ask the PM for the real Windows run.**
+
+Found while wiring: the helper refused only its own kind of process the daemon started, and W1's query only PowerShell and console hosts. A fallback PowerShell runs beside a helper that just refused the command, so both now refuse all three, with the same parent and grandparent rule.
