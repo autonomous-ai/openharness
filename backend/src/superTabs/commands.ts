@@ -1,4 +1,4 @@
-import { admitMachineStart, BUDDY_WINDOWS_REFUSAL, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
+import { admitMachineStart, BUDDY_WINDOWS_REFUSAL, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { keepUsernames, setUsername, swarmUsernames } from './usernames.js'
 import { z } from 'zod'
@@ -51,6 +51,12 @@ const NO_REASON = 'No reason given.'
 export const IGNORED_NOTE = 'Routing and roles live in each project\'s instructions now. Update Harness to edit them there.'
 const title = z.string().trim().min(1).max(160)
 const reason = z.string().trim().min(1).max(300)
+/** What a host reports it can do for a Product Manager's switch; a host from before it is never asked (HOST_OUTDATED). */
+const SWITCH_CAPABILITY = 'leadSwitch'
+const SWITCH_LEASE_MS = 15 * 60_000
+/** The engines as people read them in a switch's line. */
+const ENGINE_NAMES: Record<string, string> = { claude: 'Claude', codex: 'Codex' }
+const moveToProfile = (target: Agent, profileId: string) => { if (profileId === 'default') delete target.profileId; else target.profileId = profileId }
 const text = z.string().trim().min(1).max(32_000)
 const swarmEngine = z.string().min(1).max(80).refine((engine): boolean => engine === 'claude' || engine === 'codex', 'A Swarm agent runs only Claude Code or Codex.')
 const configuration = z.object({
@@ -164,6 +170,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('lead.start'), projectId: id, machineId: id.nullable(), engine: swarmEngine,
     model: z.string().trim().min(1).max(200).optional(), effort: z.string().trim().min(1).max(80).optional(),
     branchRef: z.string().max(1024).regex(/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/).optional(), repositoryUrl: repositoryUrl.optional() }).strict(),
+  z.object({ type: z.literal('lead.switch'), projectId: id, engine: swarmEngine, profileId: id,
+    model: z.string().trim().min(1).max(200).optional(), effort: z.string().trim().min(1).max(80).optional() }).strict(),
   z.object({ type: z.literal('project.skills'), projectId: id, mode: z.enum(['default', 'orchestration', 'custom']), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('project.roles.create'), projectId: id, roles: roleSet }).strict(),
   z.object({ type: z.literal('project.role.set'), projectId: id, role }).strict(),
@@ -225,6 +233,9 @@ export const commandSchema = z.discriminatedUnion('type', [
     configuration: configuration.optional() }).strict(),
   z.object({ type: z.literal('agent.startFailed'), startId: id, error: text }).strict(),
   z.object({ type: z.literal('agent.stopLease'), agentId: id, releaseId: id }).strict(),
+  z.object({ type: z.literal('agent.switchClaim'), agentId: id, switchId: id }).strict(),
+  // The host's own words for why it failed: free text, so capped and redacted.
+  z.object({ type: z.literal('agent.switchResult'), agentId: id, switchId: id, ok: z.boolean(), error: z.string().trim().min(1).max(300).optional() }).strict(),
   z.object({ type: z.literal('agent.stopRefused'), agentId: id, releaseId: id }).strict(),
   z.object({ type: z.literal('agent.remove'), agentId: id, releaseId: id.optional() }).strict(),
   z.object({ type: z.literal('agent.release'), agentId: id, decision: z.enum(['keep', 'stop']) }).strict(),
@@ -302,6 +313,7 @@ const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'agent.add': ['name', 'initialMessage'],
   'agent.start': ['request.name', 'overrideReason'],
   'agent.startFailed': ['error'],
+  'agent.switchResult': ['error'],
   'agent.startSettled': ['warning'],
   'conversation.create': ['title', 'brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'task.review.focus', 'checks[].description'],
   'conversation.rename': ['title'],
@@ -1388,6 +1400,30 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       Object.assign(result, { startId: start.id, machineId: start.request.machineId })
       break
     }
+    case 'lead.switch': {
+      if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person moves a project\'s coordinator.', 403)
+      const project = projectOf(state, command.projectId)
+      const home = conversation(state, project.leadConversationId)
+      const pm = state.agents.find(a => a.id === home.leadId && home.agentIds.includes(a.id))
+      const pool = state.machines?.find(m => m.machineId === pm?.machineId)
+      // The project's owner, or the owner of the machine the PM runs on (who can already drive it from Desktop).
+      if (pool?.contributorId === actor.userId && actor.userId !== project.ownerId) {
+        author(state, actor, true)
+        mutableProjects(state)
+      } else manageProject(state, actor, project.id)
+      const name = coordinatorNameOf(project)
+      if (!pm || !pool) fail('NO_LEAD', `This project has no running ${name}.`)
+      if (machineOffline(pool, context.now)) fail('MACHINE_OFFLINE', `Wait for a fresh reading from ${pool.name}.`)
+      if (!pool.observation!.capabilities?.includes(SWITCH_CAPABILITY)) fail('HOST_OUTDATED', `Update Harness on ${pool.name} to move the ${name}.`, 409)
+      if (pm.switchRequest) fail('LEAD_SWITCHING', `The ${name} is already being moved.`, 409)
+      if (!contributedEngines(pool).includes(command.engine)) fail('ENGINE_NOT_OFFERED', `${ENGINE_NAMES[command.engine]} isn’t offered on ${pool.name}.`, 403)
+      if (command.profileId !== 'default' && !pool.observation!.profiles?.some(p => p.engine === command.engine && p.id === command.profileId)) {
+        fail('PROFILE_UNKNOWN', `That account isn’t on ${pool.name} any more.`, 409)
+      }
+      const { type: _type, projectId: _projectId, ...asked } = command
+      pm.switchRequest = { id: operationId, ...asked, requestedBy: actor.userId, at: new Date(context.now).toISOString() }
+      break
+    }
     case 'project.skills':
       // Skill modes are the project's instructions now: whoever reads the project is answered, and nothing is kept.
       readProject(state, actor, command.projectId)
@@ -2291,6 +2327,15 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (target.harnessId !== command.previousHarnessId || command.harnessId === command.previousHarnessId) {
         fail('AGENT_CHANGED', 'The member’s terminal changed. Read its current binding before replacing it.')
       }
+      // The new account is not limited: only a switch that kept the engine and the account leaves the limit mark.
+      const moved = command.configuration.engine !== target.configuration?.engine || (!!target.switchRequest && target.switchRequest.profileId !== (target.profileId ?? 'default'))
+      if (moved) {
+        target.limitedUntil = null
+        target.alerting = target.alerting?.filter(a => a !== 'limit')
+      }
+      // A rebind to the engine it asked for is the switch landing; one back to the old engine is #2493 rolling back.
+      if (target.switchRequest?.engine === command.configuration.engine) moveToProfile(target, target.switchRequest.profileId)
+      delete target.switchRequest
       target.harnessId = command.harnessId
       target.replacement = { previousHarnessId: command.previousHarnessId, harnessId: command.harnessId }
       // A new terminal is not the session that lost its task, nor one started on a grid model: it reports its own.
@@ -2349,6 +2394,34 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       delete target.releaseId
       delete target.idleStop
       target.keptAt = context.now
+      break
+    }
+    case 'agent.switchClaim': {
+      const target = agent(state, command.agentId)
+      if (actor.kind !== 'agent' || actor.agentId !== target.id || target.switchRequest?.id !== command.switchId) {
+        fail('STALE_SWITCH', 'Only the execution host can claim the current switch.', 403)
+      }
+      // Covers #2493's 3 minute prepare and 10 minute create limits.
+      result.leaseId = operationId
+      result.expiresAt = context.now + SWITCH_LEASE_MS
+      target.switchRequest.claimedUntil = new Date(result.expiresAt as number).toISOString()
+      break
+    }
+    case 'agent.switchResult': {
+      const target = agent(state, command.agentId)
+      // agent.rebind already cleared a request whose new session started, so no request left is as good as the current one.
+      if (actor.kind !== 'agent' || actor.agentId !== target.id || (target.switchRequest && target.switchRequest.id !== command.switchId)) {
+        fail('STALE_SWITCH', 'Only the execution host can report the current switch.', 403)
+      }
+      const project = ledProject(state, target.id)
+      if (command.ok && target.switchRequest) moveToProfile(target, target.switchRequest.profileId)
+      delete target.switchRequest
+      if (!project) break
+      const engine = ENGINE_NAMES[target.configuration?.engine ?? ''] ?? 'its engine'
+      const label = target.profileId && state.machines?.find(m => m.machineId === target.machineId)?.observation?.profiles
+        ?.find(p => p.engine === target.configuration?.engine && p.id === target.profileId)?.label
+      effects.messages.push({ id: operationId, conversationId: project.leadConversationId, author: sender, replyTo: null, recipients: [], source: SYSTEM_ROW,
+        text: command.ok ? `PM moved to ${engine}${label ? ` · ${label}` : ''}.` : `Couldn't switch the PM: ${command.error ?? 'it failed'}. It is back on ${engine}.` })
       break
     }
     case 'agent.stopLease': {

@@ -63,6 +63,11 @@ export interface Agent {
    *  close it (agent.stopRefused). */
   idleStop?: { previous: 'awaiting' | 'keep' | null }
   releaseId?: string
+  /** A person's request to move this Product Manager to another engine or account (lead.switch), carried out by its host.
+   *  `id` is the operation that asked; `claimedUntil` is set once the host took it (agent.switchClaim). */
+  switchRequest?: { id: string; engine: string; profileId: string; model?: string; effort?: string; requestedBy: string; at: string; claimedUntil?: string }
+  /** The account it runs in on its machine once a switch moved it; absent for the machine's default account. */
+  profileId?: string
   /** Captured from the original Swarm launch, never inferred from a later live session with the same id. */
   startedSession?: { creationId: string; sessionId: string; createdAt: string }
   /** The model on the Swarm's grid its start named, which its engine never reports. Kept here because a command does not
