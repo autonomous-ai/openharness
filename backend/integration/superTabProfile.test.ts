@@ -464,6 +464,8 @@ describe('the ship moment', () => {
     const work = state.conversations.find(c => c.id === group)!
     await run(tab, { type: 'work.check', conversationId: group, assignmentId: work.assignment!.id, checkId: work.checks[0]!.id, passed: true,
       evidence: 'npm test: 12 passed' }, owner, builder)
+    // Shipped says merged: the merge is recorded before the work is Done.
+    await run(tab, { type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/example/app/pull/7' })
     const operationId = randomUUID()
     const done: Command = { type: 'work.status', conversationId: group, assignmentId: work.assignment!.id, status: 'done',
       result: 'Merged https://github.com/example/app/pull/7' }
