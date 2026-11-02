@@ -533,6 +533,8 @@ void main() {
     );
     expect(pages.last.conversationId, 'task-42');
     final openPages = pages.length;
+    Navigator.of(tester.element(find.byType(SwarmConversationPage).last)).pop();
+    await tester.pumpAndSettle();
 
     fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
       cursor: 'c4',

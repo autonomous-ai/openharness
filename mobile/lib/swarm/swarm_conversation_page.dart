@@ -1371,7 +1371,10 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                   children: [
                     Positioned.fill(
                       child: ListenableBuilder(
-                        listenable: Listenable.merge([c, _held]),
+                        // Message links can target any conversation in the
+                        // Swarm, not only this chat. Rebuild when that index
+                        // changes even if this chat's messages did not.
+                        listenable: Listenable.merge([c, c.reader, _held]),
                         builder: (context, _) =>
                             _messages(context, session, c, view, tty),
                       ),

@@ -48,6 +48,13 @@ class SwarmMessageText extends StatelessWidget {
         child: SizedBox(
           width: double.infinity,
           child: MarkdownBody(
+            // MarkdownBody caches its parsed tree while its source and style
+            // stay the same. Reparse when a #N target arrives or disappears.
+            key: ValueKey(
+              references.entries
+                  .map((entry) => '${entry.key}:${entry.value}')
+                  .join(','),
+            ),
             data: text,
             extensionSet: md.ExtensionSet.gitHubFlavored,
             softLineBreak: true,
