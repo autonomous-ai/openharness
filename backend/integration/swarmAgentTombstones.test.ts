@@ -178,3 +178,38 @@ describe('tombstones compacted before the purge', () => {
     expect(await requeueCompactedAgents(db, NOW)).toBe(0)
   })
 })
+
+describe('the purge when something changes or fails under it', () => {
+  const LATER = NOW + 2 * DAY
+
+  it('leaves a tombstone whose Swarm\'s floor it could not raise, and checks it again a day later instead of every pass', async () => {
+    // No head: the floor's update matches nothing, so the tombstone's version would be lost. A full batch of them must not spin.
+    const headless = `headless-${randomUUID()}`
+    await db.swarmAgent.createMany({ data: Array.from({ length: 500 }, (_, i) => removed(headless, `gone-${i}`, new Date(LATER - DAY))) })
+    // Earlier cases' tombstones fall due by now too; these 500 are among the kept.
+    expect((await purgeAgentTombstones(db, LATER)).kept).toBeGreaterThanOrEqual(500)
+    expect(await db.swarmAgent.count({ where: { tabId: headless } })).toBe(500)
+    expect((await db.swarmAgent.findUniqueOrThrow({ where: { id: `${headless}:gone-0` } })).purgeAt).toEqual(new Date(LATER + AGENT_RECHECK_MS))
+  })
+
+  it('leaves a tombstone revived between its read and its delete, at the version it continued from', async () => {
+    const tabId = (await store.create(maker, randomUUID(), 'Racing')).id
+    await db.swarmAgent.create({ data: { ...removed(tabId, 'back', new Date(LATER - DAY)), version: 7 } })
+    // The agent comes back (parts/write.ts continues from its tombstone) just before the purge deletes.
+    let revived = false
+    const racing = new Proxy(db, { get(target, property, receiver) {
+      if (property !== '$runCommandRaw') return Reflect.get(target, property, receiver)
+      return async (command: Record<string, unknown>) => {
+        if (command.delete === 'SwarmAgent' && !revived) {
+          revived = true
+          await db.$transaction(tx => guardedWrite(tx, tabId, { op: 'insert', kind: 'agent', key: 'back', ordinal: 1, first: 1,
+            data: { id: 'back', machineId: 'm', machineOwnerId: maker.sub, contributorId: maker.sub } }, LATER))
+        }
+        return target.$runCommandRaw(command as never)
+      }
+    } })
+    expect(await purgeAgentTombstones(racing, LATER)).toEqual({ purged: 0, kept: 0 })
+    expect(revived).toBe(true)
+    expect(await db.swarmAgent.findUniqueOrThrow({ where: { id: `${tabId}:back` } })).toMatchObject({ deleted: false, version: 8 })
+  })
+})
