@@ -188,6 +188,34 @@ void main() {
     },
   );
 
+  testWidgets('every title starts in one column, and a heading starts where '
+      'its rows do', (tester) async {
+    await withClock(Clock.fixed(_now), () async {
+      final activity = await loaded(tester, full());
+      await show(tester, activity);
+      double left(Finder f) => tester.getTopLeft(f).dx;
+      final titles = {
+        left(find.text('W1 ships alone or waits?')),
+        left(find.text('Nico is waiting on you')),
+        left(find.text('Wren mentioned you in # web-project')),
+        left(find.text('Windows credential fix')),
+        left(find.text('Closed agents leave the list')),
+      };
+      expect(titles, hasLength(1), reason: 'title columns: $titles');
+      // The mark column starts where the headings do.
+      final marks = {
+        left(find.text('◐').first),
+        left(find.text('@')),
+        left(find.text('↳')),
+        left(find.text('✓').first),
+      };
+      expect(marks, hasLength(1), reason: 'mark columns: $marks');
+      for (final heading in ['Needs you', 'New replies', 'Done today']) {
+        expect(left(find.text(heading)), marks.single, reason: heading);
+      }
+    });
+  });
+
   testWidgets('a row opens where it is: agent, tag, thread and done task', (
     tester,
   ) async {
