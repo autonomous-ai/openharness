@@ -526,6 +526,31 @@ describe('the purge of a confidential session the Swarm ended', () => {
     expect(ownHomeFolder('/Users/team/.harness-pm-homes', null)).toBeNull()
   })
 
+  // Windows drops a name's trailing spaces and dots: `.. ` is `..`, and this path's folder is then the whole Team home, which
+  // purge deletes. The rule pmEngineHome names a home by (teamDaemon.ts PM_START_ID), as isPmCodexHome holds it to (#2568).
+  it('takes only a start id pmEngineHome could have made: never `.. `, nor a name Windows would cut, nor a separator inside it', () => {
+    const win = 'C:\\Users\\team\\.harness-pm-homes', posix = '/Users/team/.harness-pm-homes'
+    for (const id of ['.. ', '. ', '.', '..', 'super-start.', 'super-start ', 'a b', 'a.b', '..\u00a0', 'caf\u00e9', 'x'.repeat(161)]) {
+      expect(ownHomeFolder(win, `${win}\\${id}\\codex`), `win ${id}`).toBeNull()
+      expect(ownHomeFolder(posix, `${posix}/${id}/codex`), `posix ${id}`).toBeNull()
+    }
+    for (const path of [`${win}\\a\\b\\codex`, `${win}/.. /codex`, `${win}\\.. /codex`, `${win}/..\\codex`]) expect(ownHomeFolder(win, path), path).toBeNull()
+    expect(ownHomeFolder(posix, `${posix}/a\\b/codex`)).toBeNull()
+    expect(ownHomeFolder(win, `${win}\\super-start_1\\codex`)).toBe(`${win}\\super-start_1`)
+    expect(ownHomeFolder(win, `${win}/super-start_1/codex`)).toBe(`${win}/super-start_1`)
+    expect(ownHomeFolder(posix, `${posix}/${'x'.repeat(160)}/codex`)).toBe(`${posix}/${'x'.repeat(160)}`)
+  })
+
+  it('a session\'s `.. ` home is left alone, the Team home with it, confidential or not', async () => {
+    const { home } = teamHome()
+    const s = service(home)
+    writeFileSync(join(home, 'keep.txt'), 'kept')
+    const purge = createConfidentialPurge({ confidential: () => false, home, record: purgeRecord(join(dir(), 'purges.json')), purge: s.purge,
+      session: () => ({ agentId: 'r', sessionId: 's', registeredAt: 1, engine: 'codex', cwd: CWD, codexHome: join(home, PM_HOMES, '.. ', 'codex') }) })
+    expect(await purge('r')).toEqual({ skipped: true })
+    expect(readFileSync(join(home, 'keep.txt'), 'utf8')).toBe('kept')
+  })
+
   it('removes Team-written work\'s own Codex home when the agent ends, confidential or not, and nothing else (audit H2)', async () => {
     const { home } = teamHome()
     const s = service(home), own = join(home, PM_HOMES, 'super-start', 'codex'), other = join(home, 'elsewhere', 'codex')
