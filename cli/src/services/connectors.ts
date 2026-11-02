@@ -95,7 +95,7 @@ function listenSocket(vault: Store, path: string, retryMs: number, said = false)
 /** The bridge's pipe on Windows (bridge.ts `serveBridgePipe`), a new name at each try. Said once, as the socket is. */
 function listenPipe(vault: Store, path: (() => string) | undefined, retryMs: number, said = false): void {
   serveBridgePipe(vault, path?.()).catch((error: unknown) => {
-    if (!said) console.warn(`[connectors] the bridge's pipe is not listening, trying again: ${error instanceof Error ? error.message : String(error)}`)
+    if (!said) console.warn(`[connectors] the bridge's pipe is not listening, trying again: ${String(error)}`)
     setTimeout(() => listenPipe(vault, path, retryMs, true), retryMs).unref()
   })
 }
