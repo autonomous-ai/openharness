@@ -7,6 +7,7 @@ import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/manage_page.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/swarm_delete.dart';
 import 'package:harness/super_tabs/swarm_switcher.dart';
@@ -245,31 +246,41 @@ Future<SuperTabController> _pump(
       debugShowCheckedModeBanner: false,
       theme: grid.buildAppTheme(brightness: brightness),
       home: Scaffold(
-        body: Align(
-          alignment: Alignment.topLeft,
-          child: SizedBox(
-            width: 300,
-            child: ListenableBuilder(
-              listenable: app,
-              builder: (context, _) =>
-                  switch (app.superTabs.peek(app.activeSwarm.superTabId!)) {
-                    null => const SizedBox(),
-                    final c => ListenableBuilder(
-                      listenable: c,
-                      builder: (context, _) => ProjectSidebar(
-                        key: ValueKey(c.tabId),
-                        controller: c,
-                        app: app,
-                        onAddAgent: (_) {},
-                        needsHuman: (_) => 0,
-                        onSelect: c.select,
-                        onNewProject: () {},
-                        onNewSwarm: () {},
+        body: ListenableBuilder(
+          listenable: app,
+          builder: (context, _) =>
+              switch (app.superTabs.peek(app.activeSwarm.superTabId!)) {
+                null => const SizedBox(),
+                final c => ListenableBuilder(
+                  listenable: c,
+                  builder: (context, _) => Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(
+                        width: 300,
+                        child: ProjectSidebar(
+                          key: ValueKey(c.tabId),
+                          controller: c,
+                          app: app,
+                          needsHuman: (_) => 0,
+                          onSelect: c.select,
+                          onNewProject: () {},
+                          onNewSwarm: () {},
+                        ),
                       ),
-                    ),
-                  },
-            ),
-          ),
+                      Expanded(
+                        child: SuperTabManagePage(
+                          key: ValueKey('manage-${c.tabId}'),
+                          controller: c,
+                          app: app,
+                          tab: SuperTabManageTab.swarm,
+                          onAddAgent: (_) {},
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              },
         ),
       ),
     ),
@@ -294,7 +305,8 @@ Future<void> _openMenu(WidgetTester tester) async {
   await tester.pump();
 }
 
-const _deleteItem = ValueKey('swarm-switch-delete');
+const _deleteItem = ValueKey('super-manage-delete');
+const _leaveItem = ValueKey('super-manage-leave');
 const _confirm = ValueKey('swarm-delete-confirm');
 const _nameField = ValueKey('swarm-delete-name');
 
@@ -306,7 +318,6 @@ Future<void> _run(WidgetTester tester) async {
 }
 
 Future<void> _openDialog(WidgetTester tester) async {
-  await _openMenu(tester);
   await tester.tap(find.byKey(_deleteItem));
   await tester.pump();
   await tester.pump();
@@ -321,14 +332,13 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() => loadCaptureFonts(_shots));
 
-  testWidgets('the dropdown offers Delete to the owner of the shown Swarm '
-      'alone: not to a member, and never for Personal', (tester) async {
+  testWidgets('Manage offers Delete to the owner of the shown Swarm alone: '
+      'a member may leave, and Personal offers neither', (tester) async {
     late AppNotifier app;
     await tester.runAsync(() async => (app, _) = await _swarms());
     await _pump(tester, app);
-    await _openMenu(tester);
     expect(find.byKey(_deleteItem), findsOneWidget);
-    expect(find.text('Delete “Alpha”…'), findsOneWidget);
+    expect(find.byKey(_leaveItem), findsNothing);
     await _releaseAll(tester, app);
 
     // The owner's Personal Swarm, shown in the tab: never offered.
@@ -345,9 +355,8 @@ void main() {
     await _pump(tester, mine);
     expect(mine.activeSwarm.superTabId, 'personal');
     expect(PersonalSwarm.of(mine).id, 'personal');
-    await _openMenu(tester);
-    expect(find.byKey(const ValueKey('swarm-switch-personal')), findsOneWidget);
     expect(find.byKey(_deleteItem), findsNothing);
+    expect(find.byKey(_leaveItem), findsNothing);
     await _releaseAll(tester, mine);
 
     late AppNotifier member;
@@ -355,10 +364,31 @@ void main() {
       () async => (member, _) = await _swarms(account: 'member'),
     );
     await _pump(tester, member);
+    expect(find.byKey(_deleteItem), findsNothing);
+    expect(find.byKey(_leaveItem), findsOneWidget);
+    await _releaseAll(tester, member);
+  });
+
+  testWidgets('the dropdown holds only Swarms', (tester) async {
+    late AppNotifier app;
+    await tester.runAsync(() async {
+      late _Backend backend;
+      (app, backend) = await _swarms();
+      backend.add('old', 'test-1');
+      backend.deleted['old'] =
+          backend.now - const Duration(days: 1).inMilliseconds;
+      await app.superTabs.refreshTabs();
+    });
+    await _pump(tester, app);
     await _openMenu(tester);
     expect(find.byKey(const ValueKey('swarm-switch-alpha')), findsOneWidget);
-    expect(find.byKey(_deleteItem), findsNothing);
-    await _releaseAll(tester, member);
+    expect(find.byKey(const ValueKey('swarm-switch-new')), findsOneWidget);
+    expect(find.byKey(const ValueKey('swarm-switch-delete')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('swarm-switch-restore-old')),
+      findsNothing,
+    );
+    await _releaseAll(tester, app);
   });
 
   testWidgets('the dialog names who loses access and deletes only once the '
@@ -424,12 +454,20 @@ void main() {
     expect(swarmChoices(app).map((c) => c.id), isNot(contains('alpha')));
     expect(app.superTabs.ownerOf('alpha'), isNull);
 
-    await _openMenu(tester);
-    expect(find.byKey(const ValueKey('swarm-switch-alpha')), findsNothing);
-    expect(find.text('Restore “Alpha”'), findsOneWidget);
+    // Its tab moves on, and Manage there can bring it back.
+    await tester.runAsync(() async {
+      backend.add('personal', 'Personal');
+      await app.superTabs.refreshTabs();
+      final tab = app.swarms.firstWhere((s) => s.superTabId == 'alpha');
+      app.showSuperTabIn(tab.id, 'personal', 'Personal');
+      await (await app.superTabs.open('personal')).refresh();
+    });
+    await _pump(tester, app);
+    await _run(tester);
+    expect(find.text('Alpha'), findsOneWidget);
     expect(find.text('Deleted · 7 days left'), findsOneWidget);
 
-    await tester.tap(find.byKey(const ValueKey('swarm-switch-restore-alpha')));
+    await tester.tap(find.byKey(const ValueKey('super-manage-restore-alpha')));
     await _run(tester);
     await _run(tester);
     final (who, id, command) = backend.commands.last;
@@ -607,12 +645,6 @@ void main() {
         await app.superTabs.refreshTabs();
       });
       await _pump(tester, app, brightness: brightness);
-      await _openMenu(tester);
-      await captureWindow(
-        tester,
-        _shots,
-        'swarm-delete-menu-${brightness.name}',
-      );
       await tester.tap(find.byKey(_deleteItem));
       await tester.pump();
       await tester.pump();
