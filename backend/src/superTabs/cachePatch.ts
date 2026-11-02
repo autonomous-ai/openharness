@@ -9,16 +9,19 @@
  * lists that share every part that did not change (the cache freezes what is new).
  */
 import { createHash } from 'node:crypto'
-import { type GroupData, type MachineData, type Part, type PartKind, type SwarmParts } from './parts/index.js'
+import { PART_KINDS, type GroupData, type MachineData, type Part, type PartKind, type SwarmParts } from './parts/index.js'
 import type { SwarmDelta } from './parts/load.js'
 import { startFinished } from './parts/write.js'
-import type { AgentStart } from './model.js'
+import { stableId, type AgentStart } from './model.js'
 
 export interface PatchRule<T> {
   /** The part kinds whose changes this entry holds: a refresh reads only those. */
   kinds: readonly PartKind[]
   /** The held value with the delta applied, or 'reload' when the delta cannot be applied and the entry loads again. */
   apply(held: T, delta: SwarmDelta): T | 'reload'
+  /** What of a patched value and a fresh load the verify sample compares (cache.ts verify), when not the whole: a fresh load
+   *  can cover a different window than the held value (the feed). */
+  comparable?(patched: T, fresh: T): [unknown, unknown]
 }
 
 /** A changed part as a load would have given it: a change read adds `readAt`, which no load carries. */
@@ -87,6 +90,40 @@ export const machinesRule: PatchRule<Part<MachineData>[]> = {
 export const finishedStartsRule: PatchRule<Part<AgentStart>[]> = {
   kinds: ['start'],
   apply: (held, delta) => applyByKey(held, delta.parts, 'start', p => live(p) && finished(p)),
+}
+
+/** The `feed` entry (cachedReads.ts readChanged): every part changed after `from`, as `loadChanged` reads them, tombstones,
+ *  dormant groups and machines' `readAt` included. Its full reloads were 610 MB per 20 minutes on prod (2026-11-02). */
+export const feedRule: PatchRule<{ from: number; parts: Part[] }> = {
+  kinds: PART_KINDS,
+  apply(held, delta) {
+    let next: Map<string, Part> | null = null
+    const id = (part: Part) => `${part.kind}\u0000${part.key}`
+    for (const part of delta.parts) {
+      const current = (next ?? null)?.get(id(part)) ?? held.parts.find(p => p.kind === part.kind && p.key === part.key)
+      if (current && part.version <= current.version) continue
+      next ??= new Map(held.parts.map(p => [id(p), p]))
+      next.set(id(part), part)
+    }
+    return next ? { from: held.from, parts: [...next.values()] } : held
+  },
+  // The check's own load starts where its reader's cursor does: only the parts both windows cover compare (final review).
+  comparable(patched, fresh) {
+    const from = Math.max(patched.from, fresh.from)
+    const covered = (parts: Part[]) => parts.filter(p => Math.max(p.changedAt, p.readAt ?? 0) > from)
+    return [covered(patched.parts), covered(fresh.parts)]
+  },
+}
+
+/** A `startsOf:{agents}` entry (read/service.ts pollStarts): the live starts of these agents, an agent being its machine and
+ *  harness (`stableId`). A start whose agent left the list goes, as does a tombstone. */
+export function startsOfRule(agents: readonly string[]): PatchRule<Part<AgentStart>[]> {
+  const listed = new Set(agents)
+  const ofListed = (p: Part) => {
+    const start = p.data as AgentStart | null
+    return !!start?.harnessId && listed.has(stableId(start.request.machineId, start.harnessId))
+  }
+  return { kinds: ['start'], apply: (held, delta) => applyByKey(held, delta.parts, 'start', p => live(p) && ofListed(p)) }
 }
 
 /** The `dormant` entry: every live dormant group. */

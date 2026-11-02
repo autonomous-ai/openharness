@@ -45,7 +45,7 @@ export function ms(value: unknown): number {
   return Number((date as { $numberLong?: string }).$numberLong)
 }
 
-function lightGroup(row: Record<string, unknown>): Part<GroupData> {
+export function lightGroup(row: Record<string, unknown>): Part<GroupData> {
   const raw = (row.data ?? {}) as Partial<GroupData> & { task?: { owns?: string[] } }
   // A conversation with no work has nothing to project there; never read it as having work.
   // Finished work comes without its machine or result: placeholders keep the shape, and nothing reads them.

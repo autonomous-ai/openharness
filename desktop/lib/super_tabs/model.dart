@@ -342,6 +342,7 @@ class SuperTabConversation {
           : null,
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
+      reactionSeq = (row['reactionSeq'] as num?)?.toInt() ?? 0,
       assignment = row['assignment'] == null
           ? null
           : Map.unmodifiable(superTabMap(row['assignment'])),
@@ -415,6 +416,11 @@ class SuperTabConversation {
   /// leaves it. Null from a backend before threads, or before this
   /// conversation's first message since.
   final int? lastMainSequence;
+
+  /// Counts reaction changes here (backend reactions.ts), as its messages
+  /// pages also say: a move asks for the page shown again. Absent, as before
+  /// the first reaction, it is 0, the pages' own value then.
+  final int reactionSeq;
   final Map<String, dynamic>? assignment;
 
   /// Whether its task waits on purpose or is stuck, as the server last found

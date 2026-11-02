@@ -142,6 +142,9 @@ export class SwarmCache {
 
   get size() { return { entries: this.entries.size, bytes: this.bytes } }
 
+  /** Whether a bump patches what is held (a delta reader is configured) rather than dropping it. */
+  get patching(): boolean { return !!this.delta }
+
   /** One read's view of these Swarms: their stamps, read once, before anything is loaded. */
   async at(tabIds: readonly string[]): Promise<CacheView> {
     const at = this.now()
@@ -226,7 +229,7 @@ export class SwarmCache {
       if (next === 'reload') return reload('epoch')
       this.keep(tabId, name, { tabId, stamp, scope, at: read.at, fullAt: entry.fullAt, bytes: 0, value: next, stale: false, patch: patch as PatchRule<unknown> })
       recordCache(name, 'patch', { parts: delta.parts.length, bytes: sizeOf(delta.parts) })
-      this.verify(tabId, name, scope, stamp, load, next, patch.kinds)
+      this.verify(tabId, name, scope, stamp, load, next, patch)
       return next
     })()
     this.loading.set(flight, patching)
@@ -275,7 +278,7 @@ export class SwarmCache {
    * and is logged with the part keys that differ, never their data.
    */
   private verify<T>(tabId: string, name: string, scope: StampScope | 'all', stamp: Stamp, load: () => Promise<T>, patched: T,
-    kinds: readonly PartKind[]): void {
+    patch: PatchRule<T>): void {
     if (this.verifying || !(this.random() < this.verifyRate)) return
     this.verifying = true
     const unmoved = (now: Stamp | undefined) => !!now && now.main === stamp.main && (scope === 'main' || now.machine === stamp.machine)
@@ -285,11 +288,12 @@ export class SwarmCache {
       const after = (await this.stamps.read([tabId])).get(tabId)
       if (!unmoved(before) || !unmoved(after)) return
       recordCache(name, 'verify')
-      if (cacheDigest(fresh) === cacheDigest(patched)) return
+      const [mine, theirs] = patch.comparable ? patch.comparable(patched, fresh) : [patched, fresh]
+      if (cacheDigest(mine) === cacheDigest(theirs)) return
       const k = key(tabId, name)
       if (this.entries.get(k)?.value === patched) this.drop1(k)
       recordCache(name, 'mismatch')
-      logger.warn('swarm cache verify mismatch', { entry: name.split(':', 1)[0], tabId, kinds: [...kinds], keys: differingKeys(patched, fresh) })
+      logger.warn('swarm cache verify mismatch', { entry: name.split(':', 1)[0], tabId, kinds: [...patch.kinds], keys: differingKeys(mine, theirs) })
     })().catch(() => { /* A check that cannot run says nothing; the 10-minute full load stays the net. */ })
       .finally(() => { this.verifying = false })
   }
@@ -340,6 +344,10 @@ export class CacheView {
   constructor(private readonly cache: SwarmCache | null, private readonly stamps: Map<string, Stamp> | null, readonly at = Date.now()) {}
 
   get available(): boolean { return this.stamps !== null }
+
+  /** Whether entries are patched from deltas (cache.ts SwarmCache.patching): only then is a value built from the held base
+   *  cheaper than its own load, since a base dropped on every bump would load in full each time. */
+  get patching(): boolean { return this.stamps !== null && !!this.cache?.patching }
 
   /** This Swarm's main stamp as the view read it, or none without stamps or a cache. */
   mainStamp(tabId: string): number | undefined {

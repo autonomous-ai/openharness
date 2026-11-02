@@ -1547,6 +1547,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (notice.type === 'machines_changed' && outOfProcess.has('sharedMachines')) {
       serviceLinks.notify('sharedMachines', { type: 'service_event', payload: { kind: 'notice', notice } })
     }
+    // The devices' fleet reads the machine list on `machines_changed` (services/fleet.ts); in its own process it hears it
+    // only through this (services/devicesProcess.ts), in the core's through `account.onNotice`.
+    if (notice.type === 'machines_changed' && outOfProcess.has('devices')) {
+      serviceLinks.notify('devices', { type: 'service_event', payload: { kind: 'notice', notice } })
+    }
   }
   // What shared machines in their own process reach through the core: this machine's sharing on the
   // backend, signed in here, and the gateway's trust stores (core/sharedMachinesQueries.ts).

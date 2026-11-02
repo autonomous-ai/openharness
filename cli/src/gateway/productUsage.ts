@@ -25,6 +25,13 @@ const listed = (code: unknown): LaunchErrorCode => typeof code === 'string' && l
 // fleet spreads out again; the mean interval stays a minute.
 const FIRST_REPORT_MS: readonly [number, number] = [10_000, 60_000]
 const TICK_MS: readonly [number, number] = [45_000, 75_000]
+// Spec 2026-11-02-poll-cost Part 4.1: every tick read the choice and reported (prod 2026-11-02: 330 settings GETs and 284
+// report POSTs a minute). The ticks stay, for the counts kept on this computer (the resource samples need them 45 s apart),
+// but the choice is read at start, by this computer's own `sync`, after a failed read or request, and then hourly: a report
+// carries its revision, so one sent after an opt-out elsewhere is refused (CHOICE_CHANGED) and the choice read at the next
+// tick. Reports go at most every 5 minutes, from the queue kept on disk.
+const SETTINGS_EVERY_MS = 3_600_000
+const REPORT_EVERY_MS = 300_000
 // A refusal that says the backend is busy or down (429, 5xx, a timeout) waits longer each time it repeats: full
 // jitter under a doubling ceiling, at most half an hour, and never sooner than its Retry-After.
 const BACKOFF_BASE_MS = 60_000
@@ -111,6 +118,8 @@ export function createProductUsage(deps: ProductUsageDeps) {
   writers.set(deps.file, writer)
   // A report waits until `postAt` after a busy or failing backend; `backoffs` counts those refusals in a row.
   let postAt = 0, backoffs = 0
+  // When the ticks next read the choice and next report (SETTINGS_EVERY_MS, REPORT_EVERY_MS).
+  let settingsAt = 0, reportAt = 0
   // hn's counters: those it observed before the first choice read, held in RAM until that is known
   // (hn is often opened at the daemon's start), and the UTC day a backend from before `tui` refused
   // them. Neither is persisted; a restart tries again.
@@ -291,23 +300,27 @@ export function createProductUsage(deps: ProductUsageDeps) {
   function unit(): number { const r = random(); return Number.isFinite(r) && r >= 0 && r < 1 ? r : 0.5 }
   /** A delay in [low, high) milliseconds, at random: the fleet's reports spread out across it. */
   const between = ([low, high]: readonly [number, number]): number => low + Math.floor(unit() * (high - low))
-  /** [post]: send a report now. The gateway's first read of the choice does not, so collection starts at once
-   *  and the report waits for the first tick; every tick reads the choice and posts unless backing off. */
-  async function syncOnce(post: boolean): Promise<void> {
+  /** [read]: read the choice first; [post]: send a report now. The gateway's first read of the choice does not
+   *  report, so collection starts at once and the report waits for the first tick; a tick reads the choice when it is
+   *  due (SETTINGS_EVERY_MS) and reports when one is due (REPORT_EVERY_MS) unless backing off. */
+  async function syncOnce(read: boolean, post: boolean): Promise<void> {
     let posting = false
     try {
-      const response = await deps.request('GET', '/api/product-usage/settings')
-      if (stopped) return
-      const body = response.body.data as ProductUsageChoice | undefined
-      if (response.status !== 200 || typeof body?.enabled !== 'boolean'
-          || !Number.isSafeInteger(body.revision) || body.revision < 0) { enabled = false; forget(); health.clearObservations(); return }
-      await choice(body)
-      if (!choiceKnown) {
-        // Counted only now that sharing is known to be on; discarded when it is off.
-        choiceKnown = true
-        const held = tuiHeld
-        tuiHeld = []
-        if (enabled && !tuiRefused()) for (const metric of held) add(metric)
+      if (read) {
+        const response = await deps.request('GET', '/api/product-usage/settings')
+        if (stopped) return
+        const body = response.body.data as ProductUsageChoice | undefined
+        if (response.status !== 200 || typeof body?.enabled !== 'boolean'
+            || !Number.isSafeInteger(body.revision) || body.revision < 0) { enabled = false; forget(); health.clearObservations(); return }
+        await choice(body)
+        settingsAt = now() + SETTINGS_EVERY_MS
+        if (!choiceKnown) {
+          // Counted only now that sharing is known to be on; discarded when it is off.
+          choiceKnown = true
+          const held = tuiHeld
+          tuiHeld = []
+          if (enabled && !tuiRefused()) for (const metric of held) add(metric)
+        }
       }
       if (!enabled) return
       if (context) {
@@ -347,6 +360,7 @@ export function createProductUsage(deps: ProductUsageDeps) {
       const report = state.pending
       if (!report) return
       posting = true
+      reportAt = now() + REPORT_EVERY_MS
       const answer = await deps.request('POST', '/api/product-usage/report', report)
       if (stopped) return
       // Busy, failing or out of time (429, 5xx; a timeout is a 504): the next report waits. Anything else is an
@@ -355,7 +369,7 @@ export function createProductUsage(deps: ProductUsageDeps) {
       else { backoffs = 0; postAt = 0 }
       const result = answer.body.data as { accepted?: boolean; reason?: string } | undefined
       if (answer.status === 200 && result?.accepted === true) { state.pending = null; await persist() }
-      else if (result?.reason === 'CHOICE_CHANGED') { enabled = false; state = fresh(-1); forget(); health.reset(); await persist() }
+      else if (result?.reason === 'CHOICE_CHANGED') { enabled = false; settingsAt = 0; state = fresh(-1); forget(); health.reset(); await persist() }
       else if (result?.reason === 'EXPIRED') { state.pending = null; add('health_cli_report_expired'); await persist() }
       else if (answer.status === 400 && Object.keys(report.counters).length && Object.keys(report.counters).every(isTuiMetric)) {
         // A backend from before `tui` knows none of hn's names. That is not a failed delivery, so it
@@ -371,15 +385,17 @@ export function createProductUsage(deps: ProductUsageDeps) {
     } catch {
       if (posting) backOff()
       if (enabled) add('health_cli_report_failed')
-      enabled = false; forget(); health.clearObservations() /* No error text or request body in logs. */
+      // Off until the choice is read again, at the next tick.
+      enabled = false; settingsAt = 0; forget(); health.clearObservations() /* No error text or request body in logs. */
     }
   }
   /** Read the choice and, with [post] (the default), send a report now. */
-  const sync = (post = true): Promise<void> => syncing ??= syncOnce(post).finally(() => { syncing = null })
+  const sync = (post = true): Promise<void> => syncing ??= syncOnce(true, post).finally(() => { syncing = null })
+  const tick = (): Promise<void> => syncing ??= syncOnce(now() >= settingsAt, now() >= postAt && now() >= reportAt).finally(() => { syncing = null })
   let timer: ReturnType<typeof setTimeout> | undefined
   const schedule = (ms: number): void => {
     if (stopped) return
-    timer = setTimeout(() => { void sync(now() >= postAt).finally(() => schedule(between(TICK_MS))) }, ms)
+    timer = setTimeout(() => { void tick().finally(() => schedule(between(TICK_MS))) }, ms)
     timer.unref?.()
   }
   schedule(between(FIRST_REPORT_MS))

@@ -1,6 +1,6 @@
 import Fastify from 'fastify'
 import { expect, it } from 'vitest'
-import { createRouteLatency, registerRouteLatency } from './routeLatency.js'
+import { createRouteLatency, markNothingNew, registerRouteLatency } from './routeLatency.js'
 
 type Logged = { message: string; context: Record<string, unknown> }
 type Route = { n: number; p50: number; p95: number; max: number }
@@ -80,4 +80,28 @@ it('counts each route by kind of client, from its user agent and whether it read
     .toEqual({ web: 1, app: 2, cli: 1, agent: 1, other: 1 })
   expect(JSON.stringify(logs)).not.toMatch(/agent-secret|curl|Chrome/)
   await app.close()
+})
+
+it('a reply marked nothing-new counts as empty, and bytes are summed per route (spec 2026-11-02 poll cost, Part 0)', async () => {
+  const logs: Logged[] = []
+  const app = Fastify()
+  const l = registerRouteLatency(app, { pod: 'p', log: (message, context) => logs.push({ message, context }) })
+  app.get('/poll/:id', async (request) => {
+    if ((request.params as { id: string }).id === 'none') markNothingNew(request)
+    return { rows: (request.params as { id: string }).id === 'none' ? [] : ['abc'] }
+  })
+  await app.inject('/poll/none'); await app.inject('/poll/none'); await app.inject('/poll/some')
+  l.flush()
+  const route = (logs[0]!.context.routes as Record<string, { n: number; empty?: number; bytes?: number }>)['GET /poll/:id']!
+  expect(route.n).toBe(3)
+  expect(route.empty).toBe(2)
+  expect(route.bytes).toBe(2 * '{"rows":[]}'.length + '{"rows":["abc"]}'.length)
+  await app.close()
+})
+
+it('leaves empty and bytes out of a route that has none', () => {
+  const { l, routes } = latency()
+  l.record('GET /a', 1)
+  l.flush()
+  expect(routes()['GET /a']).toEqual({ n: 1, p50: 1, p95: 1, max: 1 })
 })

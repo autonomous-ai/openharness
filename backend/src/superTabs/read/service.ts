@@ -2,6 +2,7 @@
  * The read API by parts (design section 4; shapes in contract.ts). Every read takes its time `T0` before any query and
  * makes the next cursor from it, so a write that commits late, inside the overlap, is still seen by the next poll.
  */
+import { startsOfRule } from '../cachePatch.js'
 import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
@@ -124,7 +125,9 @@ export class SwarmReads {
       return [...seen.runningHarnessIds, ...seen.stoppedHarnessIds, ...Object.keys(seen.harnessProgress ?? {}), ...(seen.stoppedReservations ?? []).map(r => r.harnessId)]
         .map(harnessId => stableId(pool.machineId, harnessId))
     }))].filter(id => !covered.has(id)).sort()
-    const named = listed.length ? await cached.get(tabId, `startsOf:${JSON.stringify(listed)}`, 'main', () => parts.loadStartsOfAgents(tx, tabId, listed)) : []
+    // Patched from each change (cachePatch.ts startsOfRule, spec 2026-11-02 poll cost), not loaded again after every bump.
+    const named = listed.length ? await cached.get(tabId, `startsOf:${JSON.stringify(listed)}`, 'main', () => parts.loadStartsOfAgents(tx, tabId, listed),
+      startsOfRule(listed)) : []
     const taken = new Set([...held, ...fresh.map(s => s.key)])
     return [...fresh, ...named.filter(s => !taken.has(s.key))]
   }

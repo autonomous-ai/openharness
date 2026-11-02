@@ -271,15 +271,17 @@ export class SuperTabNativeStore {
  *  again at every use). Most commands change no access and read nothing here: rebuilding every viewer and every member
  *  outside every private conversation on each command kept prod Mongo busy (2026-10-28). Returns those who lost sight of
  *  an agent (watchersLost), for the observers to check again. */
-export async function revokeNativeContexts(tx: Transaction, before: SuperTabState, after: SuperTabState) {
+/** `ending` (store.ts endDeliveries) runs the cancel of the revoked contexts' waiting deliveries, so a host holding one hears. */
+export async function revokeNativeContexts(tx: Transaction, before: SuperTabState, after: SuperTabState,
+  ending: (end: () => Promise<{ count: number }>) => Promise<{ count: number }> = end => end()) {
   const { conditions, watchersLost } = revokeConditions(before, after)
   if (conditions.length) {
     const where = { tabId: before.id, revoked: false, OR: conditions }
     const revoked = await tx.superTabNativeContext.findMany({ where, select: { id: true } })
     await tx.superTabNativeContext.updateMany({ where, data: { revoked: true } })
-    if (revoked.length) await tx.superTabDelivery.updateMany({ where: { tabId: before.id,
+    if (revoked.length) await ending(() => tx.superTabDelivery.updateMany({ where: { tabId: before.id,
       nativeContextId: { in: revoked.map(r => r.id) }, status: { in: [...CANCELLABLE_DELIVERY] } },
-      data: { status: 'cancelled', holdReason: null, holdSince: null } })
+      data: { status: 'cancelled', holdReason: null, holdSince: null } }))
   }
   return watchersLost
 }

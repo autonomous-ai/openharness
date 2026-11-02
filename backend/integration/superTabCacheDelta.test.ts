@@ -10,10 +10,10 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import { configureSwarmStamps, swarmTransaction, SwarmCache } from '../src/superTabs/cache.js'
 import { MemoryStamps } from '../src/superTabs/cache.test-support.js'
-import { cacheDigest } from '../src/superTabs/cachePatch.js'
+import { cacheDigest, startsOfRule } from '../src/superTabs/cachePatch.js'
 import * as parts from '../src/superTabs/parts/index.js'
-import { guardedWrite } from '../src/superTabs/parts/write.js'
-import { DIRECT, readDelta, readLastChangedAt, readParts, type ReadNamed } from '../src/superTabs/cachedReads.js'
+import { guardedWrite, startFinished } from '../src/superTabs/parts/write.js'
+import { DIRECT, deriveLight, readChanged, readDelta, readLastChangedAt, readLight, readParts, type ReadNamed } from '../src/superTabs/cachedReads.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { stableId, type SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
@@ -74,6 +74,7 @@ const liveOf = <T>(list: parts.Part<T>[]) => list.filter(p => !p.deleted)
 
 describe('the patched cache answers as reads with no cache do', () => {
   it('patched entries equal fresh loads after every write', { timeout: 120_000 }, async () => {
+    const sceneStart = Date.now() - 60_000
     const { tabId, web, secret } = await scene()
     const delta = vi.fn(readDelta(db))
     const cache = new SwarmCache(stamps, { delta })
@@ -126,6 +127,28 @@ describe('the patched cache answers as reads with no cache do', () => {
         expect(cacheDigest(fresh), `loadActive ${step} ${JSON.stringify(named)}`).toBe(cacheDigest(active))
       }
       expect(await readLastChangedAt(db, await cache.at([tabId]), tabId)).toBe(await readLastChangedAt(db, DIRECT, tabId))
+      // Spec 2026-11-02 poll cost, Part 1: the change feed, the light base, each machine's host state and the starts of
+      // listed agents, through the patching cache, against direct loads.
+      const view = await cache.at([tabId])
+      expect(cacheDigest(await readChanged(db, view, tabId, sceneStart)), `feed ${step}`).toBe(cacheDigest(await readChanged(db, DIRECT, tabId, sceneStart)))
+      expect(cacheDigest(await readLight(db, view, tabId, { groups: 'working' })), `light ${step}`)
+        .toBe(cacheDigest(await readLight(db, DIRECT, tabId, { groups: 'working' })))
+      const all = await parts.loadAll(db, tabId)
+      for (const machineId of new Set(liveOf(all.agents).map(a => (a.data as { machineId: string }).machineId))) {
+        const agentIds = liveOf(all.agents).filter(a => (a.data as { machineId: string }).machineId === machineId).map(a => a.key)
+        const starts = liveOf(all.starts).filter(s => !startFinished(s.data!) && s.data!.request.machineId === machineId)
+        const groupIds = [...new Set(starts.map(s => s.data!.request.conversationId))]
+        const projectIds = [...new Set(liveOf(all.groups).filter(g => groupIds.includes(g.key)).map(g => g.data!.projectId ?? 'lead'))]
+        const fresh = await db.$transaction(tx => parts.loadLight(tx, tabId, { groups: 'working', agentIds, groupIds, projectIds, machines: false }))
+        // Machines come from their own entry (read/host.ts tabState); the light load leaves them empty.
+        expect(cacheDigest({ ...await deriveLight(db, view, tabId, { groups: 'working', machineId }), machines: [] }), `host state ${machineId} ${step}`)
+          .toBe(cacheDigest(fresh))
+      }
+      const listed = [...new Set(liveOf(all.starts).filter(s => !!s.data!.harnessId).map(s => stableId(s.data!.request.machineId, s.data!.harnessId!)))].sort()
+      if (listed.length) {
+        const named = await view.get(tabId, `startsOf:${JSON.stringify(listed)}`, 'main', () => parts.loadStartsOfAgents(db, tabId, listed), startsOfRule(listed))
+        expect(cacheDigest(named), `startsOf ${step}`).toBe(cacheDigest(await parts.loadStartsOfAgents(db, tabId, listed)))
+      }
     }
 
     await check('start')

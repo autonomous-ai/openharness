@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { stableId, type AgentStart } from './model.js'
 import type { Part } from './parts/index.js'
-import { namedStarts, readChanged, readDelta, readLastChangedAt, readLastChangedAts, readLight, readLightGroups, readMachines, readParts } from './cachedReads.js'
+import { deriveLight, namedStarts, readChanged, readDelta, readLastChangedAt, readLastChangedAts, readLight, readLightGroups, readMachines, readParts } from './cachedReads.js'
 import { CacheView } from './cache.js'
-import { baseRule, dormantRule, machinesRule } from './cachePatch.js'
+import { baseRule, dormantRule, feedRule, machinesRule } from './cachePatch.js'
 
 /** A start, finished once it has a harness. `untouchable`: reading its request throws, so a test sees the read hash its
  *  agent (stableId, a sha256 of the request's machine and the harness). */
@@ -111,7 +111,7 @@ describe('which entries a refresh patches (spec 2026-11-02, Phase 1)', () => {
     expect(rules.get('lastChangedAt')).toBeUndefined()
     expect(rules.get('light:')).toBeUndefined()
     expect(rules.get('light-group:g2')).toBeUndefined()
-    expect(rules.get('feed')).toBeUndefined()
+    expect(rules.get('feed')).toBe(feedRule)
   })
 })
 
@@ -175,5 +175,71 @@ describe('the delta a refresh reads', () => {
     expect(await readDelta(db as never)('t', 5, ['group', 'start'])).toEqual({ parts: [], head: null, hostDigests: new Map() })
     expect(db.$transaction).toHaveBeenCalledTimes(1)
     expect(aggregateRaw).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('light and host state derived from held entries (spec 2026-11-02 poll cost, Part 1.2)', () => {
+  const g = (key: string, data: Record<string, unknown>, dormant = false) => ({ kind: 'group', key, version: 1, changedAt: 1, ordinal: 1,
+    ...dormant ? { dormant: true } : {}, data: { id: key, agentIds: [], archived: false, title: key, ...data } })
+  const base = { tabId: 't', head: { kind: 'head', key: 'head', version: 1, changedAt: 1, ordinal: 0, data: { projects: [{ id: 'p1', leadConversationId: 'lead1' }], invitations: [] } },
+    members: [], agents: [{ kind: 'agent', key: 'a1', version: 1, changedAt: 1, ordinal: 1, data: { id: 'a1', machineId: 'm1', projectId: 'p1', workDecision: 'stop' } },
+      { kind: 'agent', key: 'a2', version: 1, changedAt: 1, ordinal: 1, data: { id: 'a2', machineId: 'm2', projectId: 'p1', workDecision: 'stop' } }],
+    groups: [g('run', { agentIds: ['a2'], assignment: { id: 'w', agentId: 'a2', status: 'working', execution: { machineId: 'm2', harnessId: 'h', machineOwnerId: 'o' } } }),
+      g('idle', { agentIds: ['a1'] })],
+    machines: [], starts: [], progress: [], sequenceBase: 0, visibilityEpoch: 0, groupCounter: 0 }
+  // Any touch of the database fails the test: a derived read must come from what the cache holds.
+  const db = new Proxy({}, { get: (_t, key) => { throw new Error(`read the database: ${String(key)}`) } }) as never
+  function stub(extra: Record<string, unknown> = {}, patching = true) {
+    const view = new CacheView(null, null), names: string[] = []
+    Object.defineProperty(view, 'available', { get: () => true })
+    Object.defineProperty(view, 'patching', { get: () => patching })
+    vi.spyOn(view, 'get').mockImplementation(async (_tabId, name) => {
+      names.push(name)
+      if (name === 'parts') return base
+      if (name === 'machines') return []
+      if (name in extra) return extra[name]
+      if (name.startsWith('light-group:')) return null
+      if (name.startsWith('dormant:agent:')) return []
+      throw new Error(`unexpected entry ${name}`)
+    })
+    return { view, names }
+  }
+
+  it('the light base derives from the held base and reads no Swarm collection', async () => {
+    const { view } = stub({ 'light-group:lead1': g('lead1', { brief: '' }, true) })
+    const light = await deriveLight(db, view, 't', { groups: 'working' })
+    expect(light.groups.map(x => x.key).sort()).toEqual(['lead1', 'run'])
+    expect(light.groups.find(x => x.key === 'run')!.data!.brief).toBe('')
+  })
+
+  it('host state takes the machine\'s agents\' dormant conversations from dormant:agent entries', async () => {
+    const { view, names } = stub({ 'dormant:agent:a1': [g('old', { agentIds: ['a1'] }, true)] })
+    const light = await deriveLight(db, view, 't', { groups: 'working', machineId: 'm1' })
+    expect(names).toContain('dormant:agent:a1')
+    expect(light.groups.map(x => x.key).sort()).toEqual(['idle', 'old', 'run'])
+  })
+
+  it('readLight derives on a cache miss instead of reading Mongo', async () => {
+    const { view } = stub({ 'light-group:lead1': null })
+    const get = vi.mocked(view.get)
+    const fallback = get.getMockImplementation()!
+    get.mockImplementation(async (tabId, name, scope, load, patch) => name.startsWith('light:') ? load() : fallback(tabId, name, scope, load, patch))
+    const light = await readLight(db, view, 't', { groups: 'working' })
+    expect(light.groups.map(x => x.key)).toEqual(['run'])
+  })
+
+  it('a cache that does not patch reads the light base as before: deriving it would load the whole base on every bump', async () => {
+    const { view } = stub({}, false)
+    const get = vi.mocked(view.get)
+    const fallback = get.getMockImplementation()!
+    get.mockImplementation(async (tabId, name, scope, load, patch) => name.startsWith('light:') ? load() : fallback(tabId, name, scope, load, patch))
+    await expect(readLight(db, view, 't', { groups: 'working' })).rejects.toThrow('read the database: $transaction')
+  })
+
+  it('a machine whose agents all left derives no conversation of theirs', async () => {
+    const { view, names } = stub()
+    const light = await deriveLight(db, view, 't', { groups: 'working', machineId: 'gone' })
+    expect(names.filter(n => n.startsWith('dormant:agent:'))).toEqual([])
+    expect(light.groups.map(x => x.key)).toEqual(['run'])
   })
 })

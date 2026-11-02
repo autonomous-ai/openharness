@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyReply } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { z, ZodError } from 'zod'
 import { prisma } from '../lib/prisma.js'
 import { env } from '../config/env.js'
@@ -38,6 +38,18 @@ import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../li
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { DEFAULT_DAYS, MAX_DAYS } from '../superTabs/costs/read.js'
 import { WORKSPACE_ACCESS_REVOKED } from '../superTabs/workspaceStore.js'
+import { markNothingNew } from '../lib/routeLatency.js'
+
+/** Runs a poll and marks its reply nothing-new for `route latency` when `empty` says so (spec 2026-11-02 poll cost, Part 0). */
+const noting = <T>(req: FastifyRequest, run: () => Promise<T>, empty: (result: T) => boolean) => async (): Promise<T> => {
+  const result = await run()
+  if (empty(result)) markNothingNew(req)
+  return result
+}
+/** A change read that found nothing: no reload, no head, and every list of changed parts empty. */
+const nothingChanged = (changes: object): boolean =>
+  (changes as { reload?: unknown }).reload === false && (changes as { head?: unknown }).head == null
+    && Object.values(changes).every(value => !Array.isArray(value) || value.length === 0)
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const tabParams = z.object({ tabId: id })
@@ -230,7 +242,7 @@ const updateRequired = (_req: unknown, reply: FastifyReply) => sendError(reply, 
 
 /** The store this server runs on. Loaded only here: importing the bus opens its Redis connections. */
 async function productionStore(github: GitHubTokens | null): Promise<SuperTabStore> {
-  const [bus, { announceSwarmDeliveries }, { announceSwarmHostChanges }, { announceSwarmChanges }, { tellSessionViewers }] = await Promise.all([
+  const [bus, { announceSwarmDeliveries, announceSwarmTerminal }, { announceSwarmHostChanges }, { announceSwarmChanges }, { tellSessionViewers }] = await Promise.all([
     import('../lib/bus.js'), import('../lib/swarmDeliveryPushes.js'), import('../lib/swarmHostPushes.js'), import('../lib/swarmClientPushes.js'),
     import('./harnessLinks.js')])
   return new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
@@ -245,7 +257,7 @@ async function productionStore(github: GitHubTokens | null): Promise<SuperTabSto
       polls: redisPollMemory(bus.pub),
       // What each machine's full report saw, so its heartbeats skip the Swarm load, and one sweep clock per Swarm (DB 2.5).
       reports: redisReportMemory(bus.pub),
-      deliveriesWaiting: announceSwarmDeliveries,
+      deliveriesWaiting: announceSwarmDeliveries, terminalWaiting: announceSwarmTerminal,
       // And each machine whose host read a commit changed, so hosts read their Swarm changes only when told (WS Phase 2a).
       hostsChanged: announceSwarmHostChanges,
       // And each person in the Swarm, so their apps read it when told instead of every 3–15 s (WS Phase 2a).
@@ -461,7 +473,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     (req, reply) => respond(reply, () => store.join(req.user!, req.params.tabId, req.body)))
   app.get('/api/super-tabs/hosts/:machineId', updateRequired)
   app.post<{ Params: z.infer<typeof hostParams> }>('/api/super-tabs/hosts/:machineId/terminal', { preHandler: validateParams(hostParams) },
-    (req, reply) => respond(reply, () => store.hostTerminal(req.user!, req.params.machineId)))
+    (req, reply) => respond(reply, noting(req, () => store.hostTerminal(req.user!, req.params.machineId), picked => !picked.length)))
   // Long-polls about 20 seconds; a request still waiting then answers `pending` and is read again.
   app.get<{ Params: z.infer<typeof terminalParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/terminal/:requestId',
     { preHandler: [validateParams(terminalParams), validateQuery(agentQuery)] },
@@ -475,7 +487,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     (req, reply) => respond(reply, () => reads.firstLoad(req.user!, req.params.tabId, req.query.asAgentId)))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof changesQuery> }>('/api/super-tabs/:tabId/changes',
     { preHandler: [validateParams(tabParams), validateQuery(changesQuery)] },
-    (req, reply) => respond(reply, () => reads.changes(req.user!, req.params.tabId, req.query.cursor, req.query.asAgentId)))
+    (req, reply) => respond(reply, noting(req, () => reads.changes(req.user!, req.params.tabId, req.query.cursor, req.query.asAgentId), nothingChanged)))
   // A person's unread threads and each chat's latest message (read/inbox.ts): read when the change feed moves, never on a timer.
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery> }>('/api/super-tabs/:tabId/inbox',
     { preHandler: [validateParams(tabParams), validateQuery(noQuery)] }, async (req, reply) => {
@@ -606,7 +618,8 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     (req, reply) => respond(reply, () => store.start(req.user!, req.params.tabId, req.params.startId, req.query.asAgentId)))
   app.get<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof messageQuery> }>('/api/super-tabs/:tabId/conversations/:conversationId/messages',
     { preHandler: [validateParams(messageParams), validateQuery(messageQuery)] },
-    (req, reply) => respond(reply, () => store.messages(req.user!, req.params.tabId, req.params.conversationId, req.query, req.query.asAgentId)))
+    (req, reply) => respond(reply, noting(req, () => store.messages(req.user!, req.params.tabId, req.params.conversationId, req.query, req.query.asAgentId),
+      page => req.query.after !== undefined && !page.messages.length)))
   // A fresh short-lived link to one file of one message, for whoever may read that message now (superTabs/fileLinks.ts).
   app.get<{ Params: z.infer<typeof fileParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/attachments/:attachmentId',
     { preHandler: [validateParams(fileParams), validateQuery(agentQuery)] },
@@ -658,7 +671,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     (req, reply) => respond(reply, () => store.routeDecision(req.user!, req.params.tabId, req.params.decisionId, req.query.asAgentId)))
   app.get<{ Params: z.infer<typeof deliveryParams> }>('/api/super-tabs/:tabId/agents/:agentId/deliveries',
     { preHandler: validateParams(deliveryParams) },
-    (req, reply) => respond(reply, () => store.deliveries(req.user!, req.params.tabId, req.params.agentId)))
+    (req, reply) => respond(reply, noting(req, () => store.deliveries(req.user!, req.params.tabId, req.params.agentId), open => !open.length)))
   app.post<{ Params: z.infer<typeof deliveryActionParams>; Body: z.infer<typeof deliveryAction> }>('/api/super-tabs/:tabId/agents/:agentId/deliveries/:deliveryId',
     { bodyLimit: HOT_BODY_LIMIT, preHandler: [validateParams(deliveryActionParams), validateBody(deliveryAction)] },
     (req, reply) => respond(reply, () => store.delivery(req.user!, req.params.tabId, req.params.agentId, req.params.deliveryId, req.body)))
