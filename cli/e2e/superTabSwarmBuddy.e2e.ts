@@ -24,7 +24,9 @@ afterEach(async () => {
 it('starts in a folder of its own, from the checkouts here, with no token and nothing cloned', async () => {
   const backend = await FakeBackend.start(); relay = backend
   backend.addMachine(ME)
-  const d = await signedInDaemon(backend, ME, { ANTHROPIC_API_KEY: 'fixture-only' }); daemon = d
+  // As a real engine does: it asks about a folder it has no answer for, in a terminal no Swarm view shows.
+  const d = await signedInDaemon(backend, ME, { ANTHROPIC_API_KEY: 'fixture-only' }, undefined, true); daemon = d
+  writeFileSync(join(d.env.HOME!, '.claude.json'), '{}')
   const project = join(d.projectsDir, 'api'); mkdirSync(project, { recursive: true })
   const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.com', ...args], { cwd: project, stdio: 'ignore' })
   git('init', '-q'); writeFileSync(join(project, 'README.md'), 'fixture\n'); git('add', '.'); git('commit', '-qm', 'fixture')

@@ -10,7 +10,7 @@ import { permissionModeFlags } from '../lib/engineLaunch.js'
 import type { AgentEngine } from '../engines/types.js'
 import { isSwarmSkillMode, swarmSkillUse, wireRole, type SwarmSkillMode } from '../lib/swarmSkills.js'
 import { isTeamDaemon, pmEngineHome } from './teamDaemon.js'
-import { BUDDY_HOMES, buddyProjectsOf, prepareBuddyHome } from './buddyHome.js'
+import { BUDDY_HOMES, buddyProjectsOf, prepareBuddyHome, trustBuddyHome } from './buddyHome.js'
 import { markBuddyNarrow } from '../lib/buddyGuard.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
@@ -382,6 +382,7 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       // backend's folder for it only admits the start.
       const homeFolder = swarmBuddy ? joinPath(projectsRoot(), 'worktrees', BUDDY_HOMES, worktreeFolderName(`super-tab/${startId}`)) : null
       const home = homeFolder ? await prepareBuddyHome(homeFolder, buddyProjectsOf(request)) : null
+      if (homeFolder) await trustBuddyHome(homeFolder, request.engine)
       // A Buddy of one project launches with no wide guard: its folder is marked before its launch (lib/buddyGuard.ts).
       if (buddy && request.buddyNarrow === true) markBuddyNarrow(worktreeFolderName(`super-tab/${startId}`))
       // A project's Product Manager (backend leadStart.ts): the Lead of its project's conversation once it runs.
