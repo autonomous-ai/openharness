@@ -25,12 +25,10 @@ import 'controller.dart';
 import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
-import 'leaderboard/format.dart';
 import 'leaderboard/member_row.dart';
 import 'leaderboard/model.dart';
 import 'leaderboard/person_row.dart';
 import 'leaderboard/reader.dart';
-import 'leaderboard/waiting_line.dart';
 import 'model.dart';
 import 'profile_sheet.dart';
 import 'roster_scope.dart';
@@ -642,7 +640,6 @@ class _SuperTabRosterState extends State<SuperTabRoster>
         return pb.compareTo(pa);
       },
     );
-    final current = leaderboardWeekOf(widget.now());
     // One points column for every person's row.
     final columns = board == null || board.people.isEmpty
         ? null
@@ -650,84 +647,11 @@ class _SuperTabRosterState extends State<SuperTabRoster>
             context,
             points: board.people.map((s) => s.points),
           );
-    final week = board?.spanName ?? weekName(_board.week, current);
     final openProject = projectId == null
         ? null
         : state?.projectById(projectId);
-    final showWeek =
-        board != null ||
-        _board.week != null ||
-        (_board.period ?? leaderboardDefaultPeriod) != leaderboardDefaultPeriod;
-    Widget weekSelect({double? width}) => switch (_board.period) {
-      final period? => AppSelectField<String>(
-        key: const ValueKey('leaderboard-period'),
-        value: period,
-        width: width,
-        height: DesktopChrome.compactControlHeight,
-        semanticLabel: 'Period',
-        options: [
-          for (final option in leaderboardPeriods)
-            SelectOption(value: option, label: leaderboardPeriodLabel(option)),
-        ],
-        onChanged: (period) => unawaited(_board.showPeriod(period)),
-      ),
-      // A server before periods keeps the weeks.
-      null => AppSelectField<int>(
-        key: const ValueKey('leaderboard-week'),
-        value: _board.week ?? current,
-        width: width,
-        height: DesktopChrome.compactControlHeight,
-        semanticLabel: 'Week',
-        options: [
-          for (var back = 0; back < 4; back++)
-            SelectOption(
-              value: current - back * weekMs,
-              label: capitalized(weekName(current - back * weekMs, current)),
-            ),
-        ],
-        onChanged: (week) =>
-            unawaited(_board.showWeek(week == current ? null : week)),
-      ),
-    };
     return [
-      _heading(),
-      // Humans and Agents: the two roles in one team (Dee, 2026-10-29).
-      SuperTabSectionHeading(
-        'Humans',
-        actions: [if (showWeek) weekSelect(width: 112)],
-        onAdd: c.isOwner ? widget.onInvite : null,
-        addTooltip: 'Invite people',
-      ),
-      if (openProject != null)
-        Padding(
-          padding: const EdgeInsets.fromLTRB(
-            DesktopChrome.groupGap,
-            0,
-            DesktopChrome.groupGap,
-            DesktopChrome.controlGap,
-          ),
-          // The pane is too narrow for the scope beside the week on the
-          // heading's line, so it takes the line below.
-          child: AppSelectField<SuperTabRosterScope>(
-            key: const ValueKey('roster-scope'),
-            value: scoped == null
-                ? SuperTabRosterScope.all
-                : SuperTabRosterScope.project,
-            height: DesktopChrome.compactControlHeight,
-            semanticLabel: 'Show',
-            options: [
-              const SelectOption(
-                value: SuperTabRosterScope.all,
-                label: 'All projects',
-              ),
-              SelectOption(
-                value: SuperTabRosterScope.project,
-                label: openProject.name,
-              ),
-            ],
-            onChanged: _choice.choose,
-          ),
-        ),
+      _heading(openProject == null ? null : scoped != null),
       if (_board.error case final error?)
         Padding(
           padding: const EdgeInsets.fromLTRB(
@@ -738,26 +662,21 @@ class _SuperTabRosterState extends State<SuperTabRoster>
           ),
           child: Text(error, style: DesktopChrome.metadata()),
         ),
+      // People and Agents: the two roles in one team (Quiet Swarm, screen 4).
+      SuperTabSectionHeading(
+        'People',
+        onAdd: c.isOwner ? widget.onInvite : null,
+        addTooltip: 'Invite people',
+      ),
+      // Points are the last 7 days, the period on hover; who waits on whom is
+      // Activity's Needs you (Quiet Swarm, 2026-11-02).
       for (final person in sorted)
         LeaderboardPersonRow(
           person: person,
           score: scores[person.id],
           columns: columns,
           own: person.id == c.accountId,
-          weekName: week,
           onTap: () => _person(person, scores[person.id]),
-        ),
-      if (board != null && board.waiting.total > 0)
-        LeaderboardWaitingLine(
-          waiting: board.waiting,
-          viewerId: c.accountId,
-          nameOf: (id) {
-            final person = state?.people.where((p) => p.id == id).firstOrNull;
-            return person == null
-                ? 'Former member'
-                : leaderboardName(person, scores[id]);
-          },
-          onAnswer: widget.onAnswer,
         ),
       const SizedBox(height: DesktopChrome.groupGap),
       SuperTabSectionHeading(
@@ -772,27 +691,67 @@ class _SuperTabRosterState extends State<SuperTabRoster>
     ];
   }
 
-  /// The column's heading, with its close at the right as a thread's has.
-  Widget _heading() => Padding(
-    padding: const EdgeInsets.fromLTRB(
-      DesktopChrome.groupGap,
-      0,
-      DesktopChrome.controlGap,
-      DesktopChrome.controlGap,
-    ),
-    child: Row(
-      children: [
-        const Spacer(),
-        if (widget.onClose case final close?)
-          AppIconButton(
-            key: const ValueKey('super-members-close'),
-            icon: AppIcons.close,
-            tooltip: 'Close members',
-            onPressed: close,
+  /// The column's heading: the project-or-Swarm choice while a project is
+  /// open ([narrowed] says which is chosen), All projects alone otherwise,
+  /// and its close at the right as a thread's has.
+  Widget _heading(bool? narrowed) {
+    final style = DesktopChrome.heading();
+    return Padding(
+      key: const ValueKey('super-members-heading'),
+      padding: const EdgeInsets.fromLTRB(
+        DesktopChrome.groupGap,
+        0,
+        DesktopChrome.controlGap,
+        DesktopChrome.controlGap,
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: narrowed == null
+                  ? Semantics(
+                      header: true,
+                      child: Text(
+                        superTabRosterScopeLabel(SuperTabRosterScope.all),
+                        style: style,
+                      ),
+                    )
+                  : AppSelectField<SuperTabRosterScope>(
+                      key: const ValueKey('roster-scope'),
+                      value: narrowed
+                          ? SuperTabRosterScope.project
+                          : SuperTabRosterScope.all,
+                      width: AppSelectField.fitWidth(
+                        context,
+                        labels: SuperTabRosterScope.values.map(
+                          superTabRosterScopeLabel,
+                        ),
+                      ),
+                      height: DesktopChrome.compactControlHeight,
+                      semanticLabel: 'Show',
+                      options: [
+                        for (final scope in SuperTabRosterScope.values.reversed)
+                          SelectOption(
+                            value: scope,
+                            label: superTabRosterScopeLabel(scope),
+                          ),
+                      ],
+                      onChanged: _choice.choose,
+                    ),
+            ),
           ),
-      ],
-    ),
-  );
+          if (widget.onClose case final close?)
+            AppIconButton(
+              key: const ValueKey('super-members-close'),
+              icon: AppIcons.close,
+              tooltip: 'Close members',
+              onPressed: close,
+            ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
