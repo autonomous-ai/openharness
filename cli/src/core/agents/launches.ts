@@ -146,7 +146,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       // 2026-10-30, a new Swarm made with Cmd+S on a local openharness checkout started its PM in a worktree of it, and
       // the PM sat at Claude Code's trust question, which no Swarm view shows; it read Idle and every message to it was
       // withheld. Only from a local frame: a relayed request could name any repository on this machine.
-      const swarmAgent = input.engine === 'claude' && !!input.swarmRole && input.permissionMode === 'full'
+      const swarmAgent = input.engine === 'claude' && !!input.swarmRole && (input.permissionMode === 'full' || input.permissionMode === 'teamWritten')
       const swarmCheckout = swarmAgent && (projectFolder.source === 'remote' || (projectFolder.source === 'worktree' && local))
       try {
         // A Codex agent on its own profile reads its trust from that profile's config.toml, not ~/.codex.
@@ -606,6 +606,10 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     const permissionMode = payload.permissionMode
     if (permissionMode !== undefined && (operation !== 'resume' || typeof permissionMode !== 'string'
       || !['ask', 'auto', 'plan', 'full'].includes(permissionMode))) {
+      reply({ error: 'INVALID_PERMISSION_MODE' }); return
+    }
+    // Team-written work keeps its project settings off: no resume trades that mode for another (audit H2).
+    if (permissionMode !== undefined && byAgent(target)?.permissionMode === 'teamWritten') {
       reply({ error: 'INVALID_PERMISSION_MODE' }); return
     }
     const invoke = () => permissionMode === undefined ? restart(target) : resumeAgent()!(target, permissionMode)
