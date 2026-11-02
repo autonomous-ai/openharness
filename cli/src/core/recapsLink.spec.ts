@@ -13,7 +13,6 @@ function setup() {
     call: vi.fn(async (_type: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> => ({ cards: [] })),
     clients: { turnCard: vi.fn(), turnSummary: vi.fn() },
     lastTurn: vi.fn(async (sessionId: string) => (sessionId === 's1' ? { assistantText: 'done', userMessage: 'go' } : null)),
-    jev: vi.fn(async (_body: unknown): Promise<{ status: number; body: Record<string, unknown> }> => ({ status: 200, body: { data: { answers: {} } } })),
     log: vi.fn(),
     now: () => clock,
   }
@@ -115,7 +114,7 @@ describe('the recaps in their own process, as the core sees them', () => {
 
   it('says it to the daemon\'s log unless told otherwise', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const link = createRecapsLink({ notify: vi.fn(() => true), buffered: () => RECAPS_BUFFER_LIMIT + 1, call: vi.fn(), clients: { turnCard: vi.fn(), turnSummary: vi.fn() }, lastTurn: vi.fn(), jev: vi.fn() })
+    const link = createRecapsLink({ notify: vi.fn(() => true), buffered: () => RECAPS_BUFFER_LIMIT + 1, call: vi.fn(), clients: { turnCard: vi.fn(), turnSummary: vi.fn() }, lastTurn: vi.fn() })
     link.port.lifecycle({ kind: 'stopped', sessionId: 's1' }, watchers)
     expect(warn).toHaveBeenCalledTimes(1)
     warn.mockRestore()
