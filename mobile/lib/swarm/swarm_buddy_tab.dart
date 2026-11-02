@@ -52,6 +52,25 @@ SwarmListing? swarmBuddySwarm(SwarmSession session) {
   return newest;
 }
 
+/// Whether [swarmBuddySwarm] can be trusted to act on: a choice is kept, or
+/// there is one Swarm, or every Swarm has answered its read. Before that the
+/// tab waits rather than open a chat, or keep a pick, in the first Swarm listed
+/// because the one used last has not been read yet.
+bool swarmBuddySwarmSettled(SwarmSession session) {
+  final inbox = session.inbox, home = session.home;
+  if (!home.loaded) return false;
+  final offered = [
+    for (final swarm in inbox.swarms)
+      if (swarmHomeOffers(inbox, swarm.id)) swarm.id,
+  ];
+  if (offered.length < 2 ||
+      offered.contains(home.buddySwarmId) ||
+      offered.contains(home.swarmId)) {
+    return true;
+  }
+  return offered.every((id) => !(inbox.reader(id)?.loading ?? false));
+}
+
 /// The Swarms whose one Buddy chat has something unread: the tab's count. A
 /// Swarm's older Buddy chats never count (the desktop's `_countedBuddyChats`),
 /// nor does a muted chat.
@@ -119,7 +138,7 @@ class SwarmBuddyDot extends StatelessWidget {
 }
 
 /// Picks the Swarm the Buddy tab shows, among those the account can read, by
-/// name; the one shown is ticked and one with something unread says so. A
+/// name; the one shown says current, another with something unread says so. A
 /// Swarm that leaves while it is open leaves the sheet, and is not picked.
 Future<void> showSwarmBuddySwitcher(
   BuildContext context,
@@ -136,17 +155,19 @@ Future<void> showSwarmBuddySwitcher(
         for (final swarm in inbox.swarms)
           if (swarmHomeOffers(inbox, swarm.id))
             PhoneSheetAction(
-              icon: swarm.id == shown ? LucideIcons.check : LucideIcons.hexagon,
+              icon: LucideIcons.hexagon,
               label: swarm.name,
-              value: switch (inbox.reader(swarm.id)) {
-                final reader?
-                    when switch (swarmBuddyChat(reader, swarmBuddyKey)) {
-                      final chat? => swarmUnreadShown(reader, chat),
-                      null => false,
-                    } =>
-                  'unread',
-                _ => null,
-              },
+              value: swarm.id == shown
+                  ? 'current'
+                  : switch (inbox.reader(swarm.id)) {
+                      final reader?
+                          when switch (swarmBuddyChat(reader, swarmBuddyKey)) {
+                            final chat? => swarmUnreadShown(reader, chat),
+                            null => false,
+                          } =>
+                        'unread',
+                      _ => null,
+                    },
               onTap: () {
                 if (swarmHomeOffers(inbox, swarm.id)) {
                   session.home.showBuddy(swarm.id);
@@ -282,6 +303,7 @@ class _SwarmBuddyTabViewState extends State<SwarmBuddyTabView> {
           ? const _Plain(loading: true)
           : const _Plain(note: 'No Swarm yet.');
     }
+    if (!swarmBuddySwarmSettled(session)) return const _Plain(loading: true);
     final reader = inbox.reader(swarm.id);
     final snapshot = reader?.snapshot;
     final several =

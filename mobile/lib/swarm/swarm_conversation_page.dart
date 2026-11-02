@@ -1407,14 +1407,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                                 ),
                                 label: 'Open Buddy',
                                 style: SwarmButtonStyle.link,
-                                onPressed: () => unawaited(
-                                  openSwarmBuddy(
-                                    context,
-                                    c.reader,
-                                    widget.swarmId,
-                                    swarmBuddyKey,
-                                  ),
-                                ),
+                                onPressed: () => _openBuddy(c),
                               ),
                           ],
                         ),
@@ -1450,6 +1443,24 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       ),
     ],
   );
+
+  /// From an old chat, back to the person's one Buddy: the Buddy tab, in this
+  /// Swarm, with what covered it gone; its chat as its own page with no tabs
+  /// up.
+  void _openBuddy(SwarmConversation c) {
+    final session = _session;
+    if (session == null) return;
+    final show = session.showBuddyTab;
+    if (show == null) {
+      unawaited(
+        openSwarmBuddy(context, c.reader, widget.swarmId, swarmBuddyKey),
+      );
+      return;
+    }
+    session.home.showBuddy(widget.swarmId);
+    Navigator.of(context).popUntil((route) => route.isFirst);
+    show();
+  }
 
   /// Opens [projectId]'s chat with [pmId] mentioned in its draft: the PM's
   /// private line answered where the PM reads, and everyone with it.

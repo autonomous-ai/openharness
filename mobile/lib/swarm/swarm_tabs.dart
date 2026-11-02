@@ -141,6 +141,25 @@ class _SwarmTabsPageState extends State<SwarmTabsPage> {
   /// after, so opening a tab builds nothing under the others.
   final _screens = <SwarmTab, Widget>{};
 
+  SwarmSession? _session;
+
+  void _showBuddy() => _show(SwarmTab.buddy);
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final session = SwarmScope.of(context);
+    if (identical(session, _session)) return;
+    _session?.showBuddyTab = null;
+    _session = session?..showBuddyTab = _showBuddy;
+  }
+
+  @override
+  void dispose() {
+    _session?.showBuddyTab = null;
+    super.dispose();
+  }
+
   void _show(SwarmTab tab) {
     if (tab == _open || !_tabs.any((entry) => entry.tab == tab)) return;
     setState(() => _open = tab);

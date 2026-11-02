@@ -71,6 +71,10 @@ class SwarmSession extends ChangeNotifier {
   SwarmActivity get activity => _activity ??= SwarmActivity(this);
   SwarmActivity? _activity;
 
+  /// Brings the Buddy tab forward, while Swarm's tabs are up ([SwarmTabsPage]);
+  /// null under none.
+  VoidCallback? showBuddyTab;
+
   /// What the person chose for Home on this phone: the projects pinned and
   /// the one Swarm shown. A Swarm the account no longer has takes its own.
   final SwarmHomePrefs home;

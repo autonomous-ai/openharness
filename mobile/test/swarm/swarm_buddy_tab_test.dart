@@ -484,7 +484,22 @@ void main() {
       await openOld(tester);
       await tester.tap(key('swarm-old-chat-open-buddy'));
       await settle(tester);
-      expect(find.text('Hello from the one Buddy'), findsWidgets);
+      expect(find.text('Hello from the one Buddy'), findsOneWidget);
+      expect(key('swarm-old-chat'), findsNothing);
+      // The tab itself, not a second page of its chat over it.
+      expect(key('swarm-tab-buddy'), findsOneWidget);
+      expect(key('tty-back'), findsNothing);
+    });
+
+    testWidgets('an old chat\'s ⋮ is titled Old chat, not its stored title', (
+      tester,
+    ) async {
+      await pump(tester, withOld());
+      await openTab(tester);
+      await openOld(tester);
+      await tester.tap(key('swarm-chat-menu'));
+      await settle(tester);
+      expect(find.text("$me's Buddy"), findsNothing);
     });
 
     testWidgets('a project the person no longer reads drops off', (
@@ -621,6 +636,47 @@ void main() {
       await settle(tester);
 
       expect(find.text('In the first Swarm'), findsOneWidget);
+    });
+
+    testWidgets('the Swarm sheet says which Swarm is shown', (tester) async {
+      await pump(tester, two(mineMoved: 20, otherMoved: 10));
+      await openTab(tester);
+      await openMenu(tester);
+      await tester.tap(find.text('Swarm'));
+      await settle(tester);
+      expect(find.text('current'), findsOneWidget);
+    });
+
+    testWidgets('with no choice kept, it waits for every Swarm before picking: '
+        'nothing opens in the first listed', (tester) async {
+      final fake = FakeSwarm();
+      listed(fake, [tab, other]);
+      route(fake);
+      route(
+        fake,
+        swarm: other,
+        chats: [oneChat(id: 'buddy-two')],
+      );
+      fake.routes[messages('buddy-two', swarm: other)] = (_) => {
+        'messages': [line('buddy-two', 1, 'In the second Swarm')],
+        'next': null,
+      };
+      final load = fake.routes['/api/super-tabs/$other/parts']!;
+      final slow = Completer<void>();
+      fake.routes['/api/super-tabs/$other/parts'] = (body) async {
+        await slow.future;
+        return load(body);
+      };
+      await pump(tester, fake);
+      await openTab(tester);
+      expect(sent(fake, 'buddy.chat'), isEmpty);
+      expect(key('swarm-buddy-loading'), findsOneWidget);
+
+      slow.complete();
+      await settle(tester);
+
+      expect(sent(fake, 'buddy.chat'), isEmpty);
+      expect(find.text('In the second Swarm'), findsOneWidget);
     });
 
     testWidgets('with one Swarm there is no Swarm row', (tester) async {
