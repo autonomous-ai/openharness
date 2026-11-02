@@ -33,7 +33,7 @@ A project-chat message, `source`:
 
 ```
 { kind: 'task-line', taskId: string, number?: number, title: string,
-  state: 'planned' | 'working' | 'waiting' | 'review' | 'shipped' | 'stopped',
+  state: 'planned' | 'working' | 'waiting' | 'review' | 'ready' | 'shipped' | 'done' | 'stopped',
   answerFor?: string,     // the asked person's id, only while waiting
   builderId: string,      // the task's Engineer (its assignment's agent)
   requesterId?: string }  // who asked for it, when recorded
@@ -54,8 +54,13 @@ A project-chat message, `source`:
 | working, blocked, reconciling, lost | `working` |
 | needs_human | `waiting` (`answerFor` = `assignment.askedOf` when set) |
 | review | `review` |
-| done, or no active work and `ledger.shippedAt` set (Lark's field) | `shipped` |
-| cancelled / stopped, never shipped | `stopped` |
+| a merge recorded (`ledger.mergedAt`, by `conversation.merged`), no active work | `shipped` |
+| done with a linked pull request, no merge recorded yet | `ready` |
+| done with no pull request (a review task) | `done` |
+| cancelled / stopped, never merged | `stopped` |
+
+PM's calls on the review of #2633: shipped only once a merge is recorded, never on Done alone; the requester's Buddy
+hears it then, once. An edit only when the line's words change is accepted as the rate limit.
 
 A line exists only for a top-level work group of a project (not a step or `reviewOf` group, not the project chat, not a
 Buddy chat, not Leads) and is first posted on a command that changes its assignment. Older tasks get theirs at their next

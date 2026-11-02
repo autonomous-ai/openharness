@@ -14,14 +14,17 @@ import { usernameOf } from './usernames.js'
  * text. It wakes nobody.
  */
 export const TASK_LINE_KIND = 'task-line'
-export type TaskLineState = 'planned' | 'working' | 'waiting' | 'review' | 'shipped' | 'stopped'
+/** `ready`: Done with its pull request, not merged yet; `shipped`: a merge of it recorded; `done`: Done with no pull request,
+ *  such as a review (PM, review of #2633). */
+export type TaskLineState = 'planned' | 'working' | 'waiting' | 'review' | 'ready' | 'shipped' | 'done' | 'stopped'
 /** What the line last showed, kept on its task (cards.ts GroupCards.line). `reported`: the assignment whose agent has sent a
  *  status, so the line reads planned until then. */
 export interface TaskLine { messageId: string; conversationId: string; state: TaskLineState; title: string; builderId: string; answerFor?: string; reported?: string }
 /** A stored message's new words, written by the store over the row with that id (store.ts). */
 export interface MessageEdit { id: string; conversationId: string; text: string; source: Record<string, unknown> }
 
-const WORDS: Record<Exclude<TaskLineState, 'waiting'>, string> = { planned: 'planned', working: 'working', review: 'in review', shipped: 'shipped', stopped: 'stopped' }
+const WORDS: Record<Exclude<TaskLineState, 'waiting'>, string> = { planned: 'planned', working: 'working', review: 'in review', ready: 'ready',
+  shipped: 'shipped', done: 'done', stopped: 'stopped' }
 const MOVING: ReadonlySet<WorkStatus> = new Set(['working', 'blocked', 'reconciling', 'lost'])
 
 /** A task of a project with work of its own: never a step, the project chat, a Buddy chat, the Leads chat, or a private
@@ -35,9 +38,10 @@ function drawn(group: Conversation, line: TaskLine | undefined, reported: boolea
   const assignment = group.assignment!
   const status = assignment.status
   const heard = reported || line?.reported === assignment.id
+  // Shipped only once a merge is recorded (conversation.merged), never on Done alone: the batch merges after the review passed.
   const state: TaskLineState = status === 'working' && !heard ? 'planned' : MOVING.has(status) ? 'working'
-    : status === 'needs_human' ? 'waiting' : status === 'review' ? 'review'
-    : status === 'done' || group.ledger?.shippedAt != null ? 'shipped' : 'stopped'
+    : status === 'needs_human' ? 'waiting' : group.ledger?.mergedAt != null ? 'shipped' : status === 'review' ? 'review'
+    : status === 'done' ? group.pullRequestUrls?.length ? 'ready' : 'done' : 'stopped'
   return { state, title: group.title, builderId: assignment.agentId, ...(state === 'waiting' && assignment.askedOf ? { answerFor: assignment.askedOf } : {}),
     ...(heard ? { reported: assignment.id } : {}) }
 }
@@ -97,8 +101,8 @@ export function syncTaskLines(before: SuperTabState, effects: CommandEffects, re
       effects.messages.push(message)
       group.cards = { ...group.cards, line: { messageId: message.id, conversationId: chat.id, ...now } }
     }
-    // Only its first ship is news, as the Shipped line was: a request reopened and Done again tells nobody again.
-    if (now.state === 'shipped' && was(group.id)?.ledger?.shippedAt == null) {
+    // Only its first recorded merge is news, as the Shipped line was: a merge recorded again tells nobody again.
+    if (now.state === 'shipped' && was(group.id)?.ledger?.mergedAt == null) {
       const news = sender && shippedNotice(state, group, sender, operationId)
       if (news) effects.messages.push(news)
     }
