@@ -345,4 +345,41 @@ void main() {
     expect(find.textContaining('Two findings on the draft'), findsOneWidget);
     expect(find.textContaining('Nova · Design'), findsOneWidget);
   });
+
+  // Final review, finding 4: each conversation numbers its own messages, so a
+  // step's row last in the task's chat must not move the task's read mark
+  // (markRead keeps it within the task's own loaded rows).
+  testWidgets("a step's row last in the chat leaves the task's read mark on "
+      "the task's own newest row", (tester) async {
+    final server = groupServer(
+      linked: [
+        {
+          ...conversationFixture('design', 'Design'),
+          'number': 31,
+          'reviewOf': 'offline',
+          'step': 'Design',
+          'agentIds': ['reviewer'],
+        },
+      ],
+      messages: [for (var i = 0; i < 40; i++) ('builder', 'Line $i')],
+    );
+    final taskLast = server.messages.last['sequence'] as int;
+    server.append('Step row', conversationId: 'design');
+    server.messages.last
+      ..['sequence'] = taskLast + 5
+      ..['createdAt'] = '2026-10-18T00:05:00Z';
+    await showView(tester, server);
+    await tester.pumpAndSettle();
+    // Read back, then down to the end: reaching the end marks the chat read.
+    final list = find.byType(Scrollable).first;
+    await tester.drag(list, const Offset(0, 600));
+    await tester.pumpAndSettle();
+    await tester.drag(list, const Offset(0, -3000));
+    await tester.pumpAndSettle();
+    final marks = server.readMarkPosts.where(
+      (m) => m['conversationId'] == 'offline',
+    );
+    expect(marks, isNotEmpty);
+    expect(marks.last['sequence'], taskLast);
+  });
 }
