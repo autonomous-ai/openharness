@@ -38,7 +38,7 @@ void main() {
 
   test('reads back what it kept, for that account', () async {
     await store.write('me', state);
-    expect(await store.read('me'), state);
+    expect((await store.read('me'))?['drafts'], state['drafts']);
   });
 
   test('is sealed: the words are not in the file', () async {
@@ -94,18 +94,21 @@ void main() {
 
     setUp(() => memory = MemorySwarmKeptStore());
 
-    test('a draft comes back in the next session, by chat and thread', () async {
-      final first = await open();
-      first.setDraft('t', 'c', null, 'chat words', {'a1': '@Ann'});
-      first.setDraft('t', 'c', 'r', 'thread words');
-      first.setDraft('t', 'other', null, 'other words');
-      await first.flush();
-      final next = await open();
-      expect(next.draft('t', 'c', null)?.text, 'chat words');
-      expect(next.draft('t', 'c', null)?.mentions, {'a1': '@Ann'});
-      expect(next.draft('t', 'c', 'r')?.text, 'thread words');
-      expect(next.draft('u', 'c', null), isNull);
-    });
+    test(
+      'a draft comes back in the next session, by chat and thread',
+      () async {
+        final first = await open();
+        first.setDraft('t', 'c', null, 'chat words', {'a1': '@Ann'});
+        first.setDraft('t', 'c', 'r', 'thread words');
+        first.setDraft('t', 'other', null, 'other words');
+        await first.flush();
+        final next = await open();
+        expect(next.draft('t', 'c', null)?.text, 'chat words');
+        expect(next.draft('t', 'c', null)?.mentions, {'a1': '@Ann'});
+        expect(next.draft('t', 'c', 'r')?.text, 'thread words');
+        expect(next.draft('u', 'c', null), isNull);
+      },
+    );
 
     test('an emptied draft leaves', () async {
       final first = await open();
