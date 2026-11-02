@@ -51,7 +51,10 @@ class _Cli extends CliLogin {
   @override
   Future<CliAuthStatus> checkStatus() async => status;
   @override
-  Future<void> login({void Function(String url)? onAuthorizeUrl, SignInProvider? provider}) async {}
+  Future<void> login({
+    void Function(String url)? onAuthorizeUrl,
+    SignInProvider? provider,
+  }) async {}
   @override
   Future<void> logout() async {}
 }
@@ -65,7 +68,10 @@ class _Environment extends EnvironmentProvisioner {
     EnvironmentSetupMode? mode,
   }) async {
     final ready = EnvironmentReadiness(
-      steps: {for (final step in EnvironmentStep.values) step: EnvironmentStepStatus.ready},
+      steps: {
+        for (final step in EnvironmentStep.values)
+          step: EnvironmentStepStatus.ready,
+      },
       phase: EnvironmentSetupPhase.ready,
     );
     onProgress(ready);
@@ -78,7 +84,8 @@ class _Discovery extends LocalCliDiscovery {
   @override
   Future<String?> computerId() async => null;
   @override
-  Future<LocalCliEndpoint?> discover({String? expectedComputerId}) async => null;
+  Future<LocalCliEndpoint?> discover({String? expectedComputerId}) async =>
+      null;
 }
 
 class _App extends AppNotifier {
@@ -117,9 +124,15 @@ void main() {
   final apps = <_App>[];
   final apis = <_Api>[];
 
-  Future<({_App app, _Api api})> open(String? machine, {bool loggedIn = true}) async {
+  Future<({_App app, _Api api})> open(
+    String? machine, {
+    bool loggedIn = true,
+  }) async {
     final api = _Api();
-    final app = _App(_Cli(CliAuthStatus(loggedIn: loggedIn, machineId: machine)), storage)..api = api;
+    final app = _App(
+      _Cli(CliAuthStatus(loggedIn: loggedIn, machineId: machine)),
+      storage,
+    )..api = api;
     apps.add(app);
     apis.add(api);
     await app.bootstrap();
@@ -153,7 +166,11 @@ void main() {
     await signedInBefore('machine-a', 'ada');
     final again = await open('machine-a');
     again.api.profiles.single.complete({
-      'user': {'id': 'ada', 'email': 'ada@example.invalid', 'name': 'Ada Lovelace'},
+      'user': {
+        'id': 'ada',
+        'email': 'ada@example.invalid',
+        'name': 'Ada Lovelace',
+      },
     });
     await _ticks();
     expect(again.app.currentUser?.name, 'Ada Lovelace');
@@ -169,12 +186,15 @@ void main() {
     expect(await ProfileCache(storage).read('machine-a'), isNull);
   });
 
-  test('a session with no machine id yet, or an older CLI, shows nobody', () async {
-    await signedInBefore('machine-a', 'ada');
-    final other = await open(null);
-    expect(other.app.atDaemon, isNull);
-    expect(other.app.currentUser, isNull);
-  });
+  test(
+    'a session with no machine id yet, or an older CLI, shows nobody',
+    () async {
+      await signedInBefore('machine-a', 'ada');
+      final other = await open(null);
+      expect(other.app.atDaemon, isNull);
+      expect(other.app.currentUser, isNull);
+    },
+  );
 
   test('never keeps a profile with no machine id to prove it', () async {
     final first = await open(null);
@@ -183,14 +203,17 @@ void main() {
     expect(storage.values, isNot(contains(ProfileCache.key)));
   });
 
-  test('if the server names another account, it wins, and the old one is not kept', () async {
-    await signedInBefore('machine-a', 'ada');
-    final again = await open('machine-a');
-    again.api.profiles.single.complete(_me('grace'));
-    await _ticks();
-    expect(again.app.currentUser?.id, 'grace');
-    expect((await ProfileCache(storage).read('machine-a'))?.id, 'grace');
-  });
+  test(
+    'if the server names another account, it wins, and the old one is not kept',
+    () async {
+      await signedInBefore('machine-a', 'ada');
+      final again = await open('machine-a');
+      again.api.profiles.single.complete(_me('grace'));
+      await _ticks();
+      expect(again.app.currentUser?.id, 'grace');
+      expect((await ProfileCache(storage).read('machine-a'))?.id, 'grace');
+    },
+  );
 
   test('a signed-out computer shows nobody and removes it', () async {
     await signedInBefore('machine-a', 'ada');
@@ -210,7 +233,13 @@ void main() {
   });
 
   group('what is kept on disk', () {
-    final good = {'machineId': 'machine-a', 'id': 'ada', 'email': 'ada@example.invalid', 'name': 'Ada', 'avatarUrl': null};
+    final good = {
+      'machineId': 'machine-a',
+      'id': 'ada',
+      'email': 'ada@example.invalid',
+      'name': 'Ada',
+      'avatarUrl': null,
+    };
     for (final (name, stored) in [
       ('not JSON', 'not json'),
       ('not an object', '[]'),
@@ -226,14 +255,30 @@ void main() {
     }
 
     test('holds no more than who the person is', () async {
-      await ProfileCache(storage).write('machine-a', const CurrentUserProfile(id: 'ada', email: 'a@example.invalid', name: 'Ada'));
-      expect((jsonDecode(storage.values[ProfileCache.key]!) as Map).keys.toSet(), {'machineId', 'id', 'email', 'name', 'avatarUrl'});
+      await ProfileCache(storage).write(
+        'machine-a',
+        const CurrentUserProfile(
+          id: 'ada',
+          email: 'a@example.invalid',
+          name: 'Ada',
+        ),
+      );
+      expect(
+        (jsonDecode(storage.values[ProfileCache.key]!) as Map).keys.toSet(),
+        {'machineId', 'id', 'email', 'name', 'avatarUrl'},
+      );
     });
 
-    test('a store that fails reads as none, and a failed write changes nothing', () async {
-      expect(await ProfileCache(null).read('machine-a'), isNull);
-      await ProfileCache(null).write('machine-a', const CurrentUserProfile(id: 'ada', email: 'a@example.invalid'));
-      await ProfileCache(null).clear();
-    });
+    test(
+      'a store that fails reads as none, and a failed write changes nothing',
+      () async {
+        expect(await ProfileCache(null).read('machine-a'), isNull);
+        await ProfileCache(null).write(
+          'machine-a',
+          const CurrentUserProfile(id: 'ada', email: 'a@example.invalid'),
+        );
+        await ProfileCache(null).clear();
+      },
+    );
   });
 }

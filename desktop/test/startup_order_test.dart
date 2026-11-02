@@ -20,7 +20,8 @@ class _Api extends ApiClient {
   @override
   Future<Map<String, dynamic>?> desk() async => null;
   @override
-  Future<Map<String, dynamic>?> me() => Completer<Map<String, dynamic>?>().future;
+  Future<Map<String, dynamic>?> me() =>
+      Completer<Map<String, dynamic>?>().future;
   @override
   Future<List<Machine>> machines() async => const [];
 }
@@ -32,13 +33,19 @@ class _Cli extends CliLogin {
   @override
   Future<CliAuthStatus> checkStatus() => answers[asked++]();
   @override
-  Future<void> login({void Function(String url)? onAuthorizeUrl, SignInProvider? provider}) async {}
+  Future<void> login({
+    void Function(String url)? onAuthorizeUrl,
+    SignInProvider? provider,
+  }) async {}
   @override
   Future<void> logout() async {}
 }
 
 EnvironmentReadiness _ready() => EnvironmentReadiness(
-  steps: {for (final step in EnvironmentStep.values) step: EnvironmentStepStatus.ready},
+  steps: {
+    for (final step in EnvironmentStep.values)
+      step: EnvironmentStepStatus.ready,
+  },
   phase: EnvironmentSetupPhase.ready,
 );
 
@@ -67,7 +74,8 @@ class _Discovery extends LocalCliDiscovery {
   @override
   Future<String?> computerId() async => null;
   @override
-  Future<LocalCliEndpoint?> discover({String? expectedComputerId}) async => null;
+  Future<LocalCliEndpoint?> discover({String? expectedComputerId}) async =>
+      null;
 }
 
 class _HeldStore implements LocalKeyValueStore {
@@ -145,45 +153,69 @@ void main() {
   });
 
   test('a check that failed early, as with no CLI yet, is asked again once the tools are ready', () async {
-    final cli = _Cli([() async => throw CliNotAvailableException('no CLI yet'), () async => _in]);
+    final cli = _Cli([
+      () async => throw CliNotAvailableException('no CLI yet'),
+      () async => _in,
+    ]);
     final app = make(cli, _Environment());
     await app.bootstrap();
     expect(cli.asked, 2);
     expect(app.signedIn, isTrue);
   });
 
-  test('a check from before an install is not trusted: it is asked again after', () async {
-    final review = EnvironmentReadiness(
-      steps: {for (final step in EnvironmentStep.values) step: EnvironmentStepStatus.pending},
-      phase: EnvironmentSetupPhase.review,
-      plan: const [EnvironmentPlanItem(step: EnvironmentStep.tmux, title: 'tmux', detail: 'tmux', command: 'tmux')],
-    );
-    final cli = _Cli([() async => _out, () async => _in]);
-    final environment = _Environment(first: review);
-    final app = make(cli, environment);
-    await app.bootstrap();
-    expect(environment.installs, contains(true));
-    expect(cli.asked, 2);
-    expect(app.signedIn, isTrue);
-  });
+  test(
+    'a check from before an install is not trusted: it is asked again after',
+    () async {
+      final review = EnvironmentReadiness(
+        steps: {
+          for (final step in EnvironmentStep.values)
+            step: EnvironmentStepStatus.pending,
+        },
+        phase: EnvironmentSetupPhase.review,
+        plan: const [
+          EnvironmentPlanItem(
+            step: EnvironmentStep.tmux,
+            title: 'tmux',
+            detail: 'tmux',
+            command: 'tmux',
+          ),
+        ],
+      );
+      final cli = _Cli([() async => _out, () async => _in]);
+      final environment = _Environment(first: review);
+      final app = make(cli, environment);
+      await app.bootstrap();
+      expect(environment.installs, contains(true));
+      expect(cli.asked, 2);
+      expect(app.signedIn, isTrue);
+    },
+  );
 
-  test('a check answered before a sign-out never signs the app back in', () async {
-    final held = Completer<void>(), cli = _Cli([() async => _in, () async => _out]);
-    final app = make(cli, _Environment(held: held));
-    final boot = app.bootstrap();
-    await _ticks();
-    expect(cli.asked, 1);
-    await app.logout();
-    held.complete();
-    await boot;
-    await _ticks();
-    expect(app.signedIn, isFalse);
-    expect(app.currentUser, isNull);
-  });
+  test(
+    'a check answered before a sign-out never signs the app back in',
+    () async {
+      final held = Completer<void>(),
+          cli = _Cli([() async => _in, () async => _out]);
+      final app = make(cli, _Environment(held: held));
+      final boot = app.bootstrap();
+      await _ticks();
+      expect(cli.asked, 1);
+      await app.logout();
+      held.complete();
+      await boot;
+      await _ticks();
+      expect(app.signedIn, isFalse);
+      expect(app.currentUser, isNull);
+    },
+  );
 
   test('checks the daemon while the saved tabs are still being read, and finishes only with both', () async {
     final store = _HeldStore(), daemon = Completer<void>();
-    final app = make(_Cli([() async => _in]), _Environment(), panes: PaneLayoutStore(storage: store))..daemon = daemon;
+    final app = make(
+      _Cli([() async => _in]),
+      _Environment(),
+      panes: PaneLayoutStore(storage: store),
+    )..daemon = daemon;
     final boot = app.bootstrap();
     await _ticks();
     expect(store.reads, greaterThan(0));
@@ -198,7 +230,11 @@ void main() {
 
   test('a daemon that fails still waits for the saved tabs, then opens with its error', () async {
     final store = _HeldStore();
-    final app = _FailingDaemon(_Cli([() async => _in]), _Environment(), panes: PaneLayoutStore(storage: store));
+    final app = _FailingDaemon(
+      _Cli([() async => _in]),
+      _Environment(),
+      panes: PaneLayoutStore(storage: store),
+    );
     apps.add(app);
     final boot = app.bootstrap();
     await _ticks();
@@ -212,12 +248,16 @@ void main() {
   test('keeps a stopwatch of the startup steps', () async {
     final app = make(_Cli([() async => _in]), _Environment());
     await app.bootstrap();
-    expect(app.startupTimings.keys, containsAll(<String>['signed-in check', 'tools', 'saved tabs', 'daemon']));
+    expect(
+      app.startupTimings.keys,
+      containsAll(<String>['signed-in check', 'tools', 'saved tabs', 'daemon']),
+    );
   });
 }
 
 class _FailingDaemon extends _App {
-  _FailingDaemon(super.cli, super.environment, {PaneLayoutStore? panes}) : super(paneLayoutStore: panes);
+  _FailingDaemon(super.cli, super.environment, {PaneLayoutStore? panes})
+    : super(paneLayoutStore: panes);
   @override
   Future<void> ensureCliDaemonReady() async => throw StateError('no daemon');
 }

@@ -21,10 +21,22 @@ class ProfileCache {
       if (stored == null) return null;
       final value = jsonDecode(stored);
       if (value is! Map || value['machineId'] != machineId) return null;
-      final (id, email, name, avatar) = (value['id'], value['email'], value['name'], value['avatarUrl']);
-      if (id is! String || id.isEmpty || email is! String || email.isEmpty) return null;
+      final (id, email, name, avatar) = (
+        value['id'],
+        value['email'],
+        value['name'],
+        value['avatarUrl'],
+      );
+      if (id is! String || id.isEmpty || email is! String || email.isEmpty) {
+        return null;
+      }
       if (name is! String? || avatar is! String?) return null;
-      return CurrentUserProfile(id: id, email: email, name: name, avatarUrl: avatar);
+      return CurrentUserProfile(
+        id: id,
+        email: email,
+        name: name,
+        avatarUrl: avatar,
+      );
     } catch (_) {
       return null;
     }
@@ -34,13 +46,16 @@ class ProfileCache {
     final id = profile.id;
     if (id == null || id.isEmpty) return;
     try {
-      await _storage?.write(key, jsonEncode({
-        'machineId': machineId,
-        'id': id,
-        'email': profile.email,
-        'name': profile.name,
-        'avatarUrl': profile.avatarUrl,
-      }));
+      await _storage?.write(
+        key,
+        jsonEncode({
+          'machineId': machineId,
+          'id': id,
+          'email': profile.email,
+          'name': profile.name,
+          'avatarUrl': profile.avatarUrl,
+        }),
+      );
     } catch (_) {
       /* Only the next open's wait depends on it. */
     }
