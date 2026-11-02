@@ -538,6 +538,8 @@ export const NOTICE_READERS = {
   // longer written (the automatic review's `auto-review`, a routing rule's `rule`) read as people's, as any kind not listed does.
   'review-capacity': 'recipients',
   // #2177's rulings: a failed start and a terminal's alert or typed input stay the people's to see.
+  // A PM switch nobody answered, in its project chat (tidy.ts staleSwitches).
+  switch: 'people',
   'start-timeout': 'people', 'terminal-alert': 'people', 'terminal-input': 'people',
 } as const satisfies Record<string, 'people' | 'recipients' | 'agent'>
 const readersOf = (kind: unknown): 'people' | 'recipients' | 'agent' =>

@@ -41,7 +41,7 @@ import { answersRequest, dirtyGroups, noteWorkChanges, projectUpdateRequest, UNA
 import { cloneData } from './cloneData.js'
 import { digestDue, digestMessageId, digestOf, digestRequest, digestSince } from './digest.js'
 import { judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
-import { archivable, archiveLine, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests } from './tidy.js'
+import { archivable, archiveLine, idleNotices, staleSwitches, reviewClosable, reviewCloseLine, reviewPullRequests } from './tidy.js'
 import { clock, insertParts, loadActive, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
 import { memberSwarms } from './swarmRows.js'
@@ -3101,6 +3101,7 @@ export class SuperTabStore {
       // It reads no asleep group: only loaded groups' active work keeps an agent from being idle (project instructions, phase 4).
       if (led) written.push(...idleNotices(state, led.id, this.now(), new Set((await tx.superTabDelivery.findMany({
         where: { tabId, status: { in: [...OPEN_DELIVERY] } }, select: { agentId: true }, distinct: ['agentId'] })).map(d => d.agentId))))
+      written.push(...staleSwitches(state, this.now()))
       const update = projectUpdateRequest(state, target, this.now())
       let woken = false
       if (update) {
