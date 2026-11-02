@@ -172,15 +172,23 @@ class SuperTabAttention extends ChangeNotifier {
   /// The Threads row's number: tags of the reader inside threads they have
   /// not read past, in chats this Swarm still lists for them. A muted chat's
   /// threads never count, as its main stream does not ([mentionsIn]).
+  ///
+  /// Only threads the Threads view lists count ([unread] and [read]): the
+  /// number promises something to open there. A tag in a thread the server
+  /// left out (older than its bounds, unfollowed, a root the reader cannot
+  /// read) stays in Activity, and counts nothing here. None until the list
+  /// has been read.
   int get threadMentions {
     final snapshot = controller.snapshot;
-    if (controller.accessRevoked || snapshot == null) return 0;
+    if (controller.accessRevoked || snapshot == null || !loaded) return 0;
     final chats = {for (final g in snapshot.conversations) g.id};
+    final listed = {for (final t in unread) t.key, for (final t in read) t.key};
     return mentions.waiting
         .where(
           (m) =>
               m.threadId != null &&
               chats.contains(m.conversationId) &&
+              listed.contains('${m.conversationId}/${m.threadId}') &&
               controller.notifyOf(m.conversationId) != SuperTabNotify.muted &&
               (m.messageSequence ?? _unknown) >
                   controller.threadReadMark(m.threadId!),
