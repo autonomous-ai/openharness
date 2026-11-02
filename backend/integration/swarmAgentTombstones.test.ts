@@ -7,7 +7,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
 import { loadDeliveryParts } from '../src/superTabs/parts/light.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
-import { AGENT_RECHECK_MS, purgeAgentTombstones } from '../src/superTabs/agentTombstones.js'
+import { AGENT_RECHECK_MS, purgeAgentTombstones, requeueCompactedAgents } from '../src/superTabs/agentTombstones.js'
 import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
 
 // Prod profile 2026-11-02 (v1.3.86): a Swarm's live-agent read planned on [tabId, changedAt] and examined 1,070 agents to
@@ -145,5 +145,25 @@ describe('the hourly purge of agent tombstones', () => {
     expect(groups.map(e => e.command?.hint), JSON.stringify(plan(groups))).toEqual([{ tabId: 1, dormant: 1, changedAt: 1 }, { tabId: 1, dormant: 1, changedAt: 1 }])
     const starts = reads(entries, 'SwarmStart', ['agentId'])
     expect(starts.map(e => e.planSummary), JSON.stringify(plan(starts))).toEqual(['IXSCAN { tabId: 1, agentId: 1 }', 'IXSCAN { tabId: 1, agentId: 1 }'])
+  })
+})
+
+describe('tombstones compacted before the purge', () => {
+  it('get a purge time, and the next sweep purges them', async () => {
+    await db.swarmMember.create({ data: { id: `${busy}:gone-member`, tabId: busy, key: 'gone-member', version: 1, changedAt: new Date(NOW - 30 * DAY),
+      ordinal: 1, data: {}, deleted: true, purgeAt: null } })
+    let queued = 0
+    const entries = await profiled(db, async () => { queued = await requeueCompactedAgents(db, NOW) })
+    expect(queued).toBe(REMOVED + 50)
+    const update = reads(entries, 'SwarmAgent', ['deleted', 'purgeAt'])
+    expect(update, JSON.stringify(plan(update))).toHaveLength(1)
+    expect(update[0]!.planSummary, JSON.stringify(plan(update))).toMatch(/IXSCAN \{ tabId: 1, deleted: 1 \}/)
+    expect(update[0]!.docsExamined, JSON.stringify(plan(update))).toBe(REMOVED + 50)
+    // A member's tombstone keeps its compaction for good.
+    expect((await db.swarmMember.findUniqueOrThrow({ where: { id: `${busy}:gone-member` } })).purgeAt).toBeNull()
+    expect(await purgeAgentTombstones(db, NOW + 1)).toEqual({ purged: REMOVED + 50, kept: 0 })
+    expect(await db.swarmAgent.count({ where: { tabId: busy } })).toBe(LIVE)
+    expect(await db.swarmAgent.count({ where: { tabId: empty } })).toBe(0)
+    expect(await requeueCompactedAgents(db, NOW)).toBe(0)
   })
 })
