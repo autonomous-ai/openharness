@@ -23,6 +23,7 @@ class _Screen {
   final rebuilt = <Type, int>{};
   final rows = <String, int>{};
   int machineCalls = 0;
+  int rosterBuilds = 0;
   ValueNotifier<bool>? collapsed;
 
   static int _at() => clock.now().millisecondsSinceEpoch;
@@ -114,15 +115,21 @@ class _Screen {
     );
     await tester.pump();
     await tester.pump(const Duration(seconds: 3));
+    // What opening the chat changed (its read mark) is read before counting.
+    c.told(main: true);
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pump();
     debugOnRebuildDirtyWidget = _count;
     addTearDown(() => debugOnRebuildDirtyWidget = null);
     rebuilt.clear();
     rows.clear();
+    rosterBuilds = 0;
     machineCalls = 0;
   }
 
   void _count(Element element, bool _) {
     final key = element.widget.key;
+    if (key == const PageStorageKey('super-tab-resources-tab')) rosterBuilds++;
     if (key is ValueKey<String> && key.value.startsWith('super-machine-row-')) {
       rows.update(key.value.substring(18), (n) => n + 1, ifAbsent: () => 1);
     }
@@ -171,27 +178,18 @@ void main() {
     (tester) async {
       final s = _Screen(tester);
       await s.show();
-      // What a minute with no report rebuilds anyway (the roster's own clock):
-      // a heartbeat adds nothing to it.
-      for (var i = 0; i < 20; i++) {
-        await tester.pump(const Duration(seconds: 3));
-      }
-      final quiet = Map.of(s.rebuilt);
-      s.rebuilt.clear();
       for (var i = 0; i < 20; i++) {
         await s.beat(_ids[i % 5]);
       }
       // ignore: avoid_print
       print(
-        'COUNT rebuilt elements: quiet minute $quiet, heartbeats ${s.rebuilt}',
+        'COUNT rebuilt elements a minute: ${s.rebuilt}, '
+        'roster list builds ${s.rosterBuilds}',
       );
-      for (final type in const [
-        SuperTabView,
-        SuperTabRoster,
-        SuperTabProjectStatusCard,
-      ]) {
-        expect(s.rebuilt[type] ?? 0, lessThanOrEqualTo(quiet[type] ?? 0));
-      }
+      expect(s.rebuilt[SuperTabView] ?? 0, 0);
+      expect(s.rebuilt[SuperTabProjectStatusCard] ?? 0, 0);
+      // Only its own 30-second clock, for ages and leases on a quiet Swarm.
+      expect(s.rosterBuilds, lessThanOrEqualTo(2));
       await s.close();
     },
   );
@@ -199,6 +197,12 @@ void main() {
   testWidgets('a machine\'s report redraws its own row alone', (tester) async {
     final s = _Screen(tester);
     await s.show();
+    // The first report of a test draws what the clock moved since the screen
+    // opened (no clock runs here): each row's "just now" passing.
+    await s.beat('m1');
+    await tester.pump(const Duration(seconds: 6));
+    await s.beat('m1');
+    s.rows.clear();
     await s.beat('m2');
     expect(s.rows.keys, ['m2']);
     await s.close();

@@ -600,6 +600,8 @@ class SuperTabController extends ChangeNotifier {
   set away(bool value) {
     if (_away == value) return;
     _away = value;
+    // The machines list's clock runs only while it shows.
+    if (!_disposed) _machinesChanged.value++;
     if (_startedAt == null || _disposed) return;
     if (!_policy.pausesAway) {
       // Going away slows the poll; coming back reads at once unless a poll
