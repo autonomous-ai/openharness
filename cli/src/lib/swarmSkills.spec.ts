@@ -917,6 +917,23 @@ describe('a Buddy\'s folder (Lead\'s ruling on the privacy review of #1992)', ()
     expect(statSync(join(root, '.claude', 'buddy-launch')).mode & 0o222).toBe(0)
   })
 
+  it('tells a Buddy\'s guard and sandbox its own private temporary folder, and no other', () => {
+    const workspace = fixture()
+    const root = realpathSync(workspace), own = join(root, '..', 'own-temp')
+    const wide = buddyWideOf({ home: join(root, 'home'), dataDir: process.env.ADAPTER_DATA_DIR!, tmpDirs: [], repos: [], hosts: [] })
+    const asked: string[] = []
+    prepareSwarmSkill(workspace, { role: 'buddy', key: 'session' }, () => wide, (at) => { asked.push(at); return own })
+    expect(asked).toEqual([root])
+    expect(JSON.parse(readFileSync(join(workspace, '.claude', 'settings.local.json'), 'utf8')).sandbox).toEqual(buddySandboxSettings(root, wide, own))
+    expect(readFileSync(join(root, '.claude', 'buddy-guard.mjs'), 'utf8')).toBe(buddyGuardSource(root, buddyReadsOf('session'), wide, own))
+  })
+
+  it('asks for no folder for a role other than Buddy', () => {
+    const asked: string[] = []
+    prepareSwarmSkill(fixture(), { role: 'agent', key: 'session' }, () => null, (at) => { asked.push(at); return null })
+    expect(asked).toEqual([])
+  })
+
   it('takes back at each launch the grant a session had before it', () => {
     const workspace = fixture()
     const reads = buddyReadsOf('relaunched')

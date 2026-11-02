@@ -1,5 +1,6 @@
 /** Built into the CLI so contributed machines need no separately installed plugin. */
 import { ignoreHarnessRuntime } from './harnessRuntimeIgnore.js'
+import { buddyTmpOf } from './agentTmp.js'
 import { buddyGuardCommand, buddyGuardSource, buddyLaunchFile, buddyLaunchWide, buddyReadsOf, buddySandboxSettings, revokeBuddyWide, type BuddyWide } from './buddyGuard.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { isMessagesCommand } from '../engines/kit/messagesHook.js'
@@ -710,11 +711,12 @@ const modeOf = (skill: SwarmSkill, version: string) =>
  * A new file holds the text of the session's saved mode; a kept one is described by the text it holds, so the prompt line
  * never names one mode while the file holds the other. No project-wide native skill links: two roles may share a workspace. */
 /** [wideOf]: whether a Buddy launched here reads beyond its folder (lib/buddyGuard.ts buddyLaunchWide); tests name it. */
-export function prepareSwarmSkill(workspace: string, saved: SavedSwarmSkill, wideOf: (root: string) => BuddyWide | null = buddyLaunchWide): { file: string; instructions: string } {
+export function prepareSwarmSkill(workspace: string, saved: SavedSwarmSkill, wideOf: (root: string) => BuddyWide | null = buddyLaunchWide,
+  tmpOf: (root: string) => string | null = buddyTmpOf): { file: string; instructions: string } {
   const skill = skillOf(saved)
   const root = realpathSync(workspace)
   // First, so a skill that cannot be prepared still leaves a Buddy's folder locked (re-check of #1992).
-  if (skill.role === 'buddy') lockBuddyFolder(root, skill.key, wideOf(root))
+  if (skill.role === 'buddy') lockBuddyFolder(root, skill.key, wideOf(root), tmpOf(root))
   const dir = skillDirectory(root, skill, true)!
   ignoreHarnessRuntime(root)
   const file = join(dir, 'SKILL.md')
@@ -807,7 +809,7 @@ function ignoreBuddyFiles(root: string): void {
   writeFileSync(file, BUDDY_IGNORE, { mode: 0o600 })
 }
 
-function lockBuddyFolder(root: string, key: string, wide: BuddyWide | null): void {
+function lockBuddyFolder(root: string, key: string, wide: BuddyWide | null, ownTemp: string | null): void {
   const settings = join(root, '.claude', 'settings.local.json'), guard = join(root, '.claude', 'buddy-guard.mjs')
   mkdirSync(join(root, '.claude'), { recursive: true })
   // Both were made read-only by the last launch, and both are written again: a relaunch runs this release's guard.
@@ -818,8 +820,8 @@ function lockBuddyFolder(root: string, key: string, wide: BuddyWide | null): voi
   const launchFile = buddyLaunchFile(root)
   if (existsSync(launchFile)) chmodSync(launchFile, 0o600)
   if (wide) writeFileSync(launchFile, `${wide.launch}\n`, { mode: 0o600 }); else rmSync(launchFile, { force: true })
-  writeFileSync(guard, buddyGuardSource(root, buddyReadsOf(key), wide), { mode: 0o600 })
-  writeFileSync(settings, `${JSON.stringify(buddyClaudeSettings(guard, wide ? buddySandboxSettings(root, wide) : null), null, 2)}\n`, { mode: 0o600 })
+  writeFileSync(guard, buddyGuardSource(root, buddyReadsOf(key), wide, ownTemp), { mode: 0o600 })
+  writeFileSync(settings, `${JSON.stringify(buddyClaudeSettings(guard, wide ? buddySandboxSettings(root, wide, ownTemp) : null), null, 2)}\n`, { mode: 0o600 })
   ignoreBuddyFiles(root)
   const walk = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {

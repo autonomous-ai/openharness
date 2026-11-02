@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { buddyTmpParent } from './agentTmp.js'
 import { PERMISSION_MODES } from './engineLaunch.js'
 import { prepareSwarmSkill } from './swarmSkills.js'
 import { buddyAccountFile, buddyApprovalsOf, buddyLaunchOf, buddyLaunchWide, buddyReadsOf, grantBuddyWide, judgeBuddyApprovals, recordBuddyApprovals,
@@ -38,13 +39,14 @@ describe.skipIf(!claudeBin || process.platform !== 'darwin')('a wide-mode Buddy 
   const ranOf = (name: string) => existsSync(join(ran, name)) ? readFileSync(join(ran, name), 'utf8') : ''
 
   /** Runs [calls] through Claude Code in [at] (the Buddy's folder), as a Buddy launches, and answers what each returned. */
-  async function drive(calls: Call[], at: string) {
+  async function drive(calls: Call[], at: string, temp?: string) {
     const api = fakeModel(calls)
     await new Promise<void>((resolve) => api.server.listen(0, '127.0.0.1', resolve))
     const env: NodeJS.ProcessEnv = {
       PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`, HOME: home, SHELL: '/bin/bash', CLAUDE_CONFIG_DIR: join(root, 'config'), ANTHROPIC_API_KEY: API_KEY,
       ANTHROPIC_BASE_URL: `http://127.0.0.1:${(api.server.address() as AddressInfo).port}`, GIT_CONFIG_GLOBAL: '/dev/null', DISABLE_AUTOUPDATER: '1',
-      TMPDIR: root,
+      TMPDIR: temp ?? root,
+      ...(temp ? { CLAUDE_CODE_TMPDIR: temp } : {}),
     }
     const claude = spawn(claudeBin!, ['-p', 'go', ...PERMISSION_MODES.claude!.buddy, '--model', 'claude-sonnet-4-5', '--output-format', 'json'],
       { cwd: at, env, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -54,7 +56,7 @@ describe.skipIf(!claudeBin || process.platform !== 'darwin')('a wide-mode Buddy 
   }
 
   // A Buddy's folder is a worktree of its person's clone, as Harness creates it (review of #2310).
-  function buddyFolder(name: string) {
+  function buddyFolder(name: string, ownTemp: string | null = null) {
     const clone = join(root, `${name}-clone`), at = join(root, name)
     mkdirSync(clone)
     git(clone, 'init', '-q', '-b', 'main')
@@ -64,7 +66,7 @@ describe.skipIf(!claudeBin || process.platform !== 'darwin')('a wide-mode Buddy 
     git(clone, 'worktree', 'add', '-q', '-b', name, at)
     // Harness prepares it in wide mode, as on its person's own Mac: their home is the throwaway one.
     prepareSwarmSkill(at, { role: 'buddy', key }, (folderRoot) => buddyLaunchWide(folderRoot, { platform: 'darwin', team: false, home,
-      dataDir: process.env.ADAPTER_DATA_DIR!, uid: process.getuid?.() ?? 0, hasBwrap: false, engineHomes: [] }))
+      dataDir: process.env.ADAPTER_DATA_DIR!, uid: process.getuid?.() ?? 0, hasBwrap: false, engineHomes: [] }), () => ownTemp)
     return realpathSync(at)
   }
 
@@ -151,6 +153,51 @@ describe.skipIf(!claudeBin || process.platform !== 'darwin')('a wide-mode Buddy 
       expect(run.result(calls.readNotes)).toMatchObject({ content: expect.stringContaining('the person\'s own notes') })
       expect(run.result(calls.postClean)).toMatchObject({ is_error: false, content: expect.stringContaining('harness-ran') })
       expect(ranOf('harness')).toContain('API CPU is steady')
+    })
+  })
+
+  // Beside a Team account: Claude Code and its tools keep their temporary files in the Buddy's own folder, and the sandbox
+  // opens that one alone, with the guard taken out too.
+  describe('its private temporary folder, in the sandbox', () => {
+    const steps = { own: bash(''), read: bash(''), viaTmpdir: bash('touch "$TMPDIR/through-tmpdir"'), other: bash(''), otherKey: bash(''), system: bash('') }
+    let run: Awaited<ReturnType<typeof drive>>, own: string, other: string
+    const shared = join('/private/tmp', `planted-${process.pid}-${Date.now()}`)
+
+    beforeAll(async () => {
+      const parent = buddyTmpParent(process.env.ADAPTER_DATA_DIR!)
+      own = join(parent, 'own-buddy'); other = join(parent, 'other-buddy')
+      for (const dir of [own, other]) mkdirSync(dir, { recursive: true, mode: 0o700 })
+      writeFileSync(join(other, 'output'), `${KEY}-other-buddy\n`)
+      own = realpathSync(own); other = realpathSync(other)
+      const at = buddyFolder('with-temp', own)
+      steps.own.input.command = `touch '${join(own, 'made-here')}'`
+      steps.read.input.command = `cat '${join(own, 'made-here')}'`
+      steps.other.input.command = `touch '${join(other, 'planted')}'`
+      steps.otherKey.input.command = `cat '${join(other, 'output')}'`
+      steps.system.input.command = `touch '${shared}'`
+      const settingsFile = join(at, '.claude', 'settings.local.json')
+      const settings = JSON.parse(readFileSync(settingsFile, 'utf8'))
+      chmodSync(settingsFile, 0o600)
+      writeFileSync(settingsFile, JSON.stringify({ ...settings, hooks: {}, permissions: { defaultMode: 'dontAsk', allow: ['Bash'] } }))
+      run = await drive(Object.values(steps), at, own)
+    }, 180_000)
+
+    it('lets commands write and read there, TMPDIR included', () => {
+      for (const step of [steps.own, steps.read, steps.viaTmpdir]) expect(run.result(step)?.is_error, step.input.command as string).toBeFalsy()
+      expect(existsSync(join(own, 'made-here'))).toBe(true)
+    })
+
+    it('refuses another Buddy\'s folder and the shared /tmp', () => {
+      for (const step of [steps.other, steps.otherKey, steps.system]) expect(run.result(step)?.is_error, step.input.command as string).toBe(true)
+      expect(existsSync(join(other, 'planted'))).toBe(false)
+      expect(existsSync(shared)).toBe(false)
+      expect(run.bodies.join('\n')).not.toContain(`${KEY}-other-buddy`)
+    })
+
+    afterAll(() => rmSync(buddyTmpParent(process.env.ADAPTER_DATA_DIR!), { recursive: true, force: true }))
+
+    it('leaves Claude Code\'s own files for this session in that folder', () => {
+      expect(existsSync(join(own, `claude-${process.getuid?.() ?? 0}`))).toBe(true)
     })
   })
 

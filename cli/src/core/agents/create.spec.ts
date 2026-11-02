@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installedDsh } from '../../dsh/installed.js'
-import { agentTmpEnv } from '../../lib/agentTmp.js'
+import { agentTmpEnv, buddyTmpEnv } from '../../lib/agentTmp.js'
 import { dshPinnedPermissionMode } from '../../dsh/manifest.js'
 import { incompatibleHarnessEngine } from '../../dsh/compatibility.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
@@ -257,6 +257,17 @@ describe('creating an agent', () => {
     expect(await setup().create(request({ dsh: 'blender', swarmRole: 'agent' }))).toMatchObject({ ok: true })
     expect(agentTmpEnv).toHaveBeenLastCalledWith('claude', 'agent')
     expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ HARNESS_DSH: 'blender', TMPDIR: '/data/agent-tmp' })
+  })
+
+  // A Buddy's folder of its own, named for the folder it runs in, and never the owner's agents' shared one.
+  it('gives a Buddy its own private temporary folder, and the launch\'s own variables win', async () => {
+    vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
+    vi.mocked(buddyTmpEnv).mockReturnValueOnce({ TMPDIR: '/data-buddy-tmp/one', CLAUDE_CODE_TMPDIR: '/data-buddy-tmp/one', HARNESS_DSH: 'mine' })
+    const calls = vi.mocked(agentTmpEnv).mock.calls.length
+    expect(await setup().create(request({ dsh: 'blender', swarmRole: 'buddy' }))).toMatchObject({ ok: true })
+    expect(buddyTmpEnv).toHaveBeenLastCalledWith('claude', expect.any(String))
+    expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ TMPDIR: '/data-buddy-tmp/one', CLAUDE_CODE_TMPDIR: '/data-buddy-tmp/one', HARNESS_DSH: 'blender' })
+    expect(vi.mocked(agentTmpEnv).mock.calls.length).toBe(calls)
   })
 
   it('keeps a selected Store harness when attaching a Swarm skill', async () => {
