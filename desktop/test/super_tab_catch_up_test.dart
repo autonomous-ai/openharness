@@ -340,6 +340,21 @@ void main() {
       expect(SuperTabActivity.of(c).filter, SuperTabActivityFilter.decisions);
     });
 
+    testWidgets(
+      'Activity opened from the sidebar starts on All after a Decisions visit',
+      (tester) async {
+        final c = await showCounted(tester);
+        await tester.tap(find.byKey(_decisions));
+        await tester.pumpAndSettle();
+        expect(SuperTabActivity.of(c).filter, SuperTabActivityFilter.decisions);
+        // The row, with Activity still showing.
+        await tester.tap(find.byKey(const ValueKey('super-activity')));
+        await tester.pumpAndSettle();
+        expect(activityView(), findsOneWidget);
+        expect(SuperTabActivity.of(c).filter, SuperTabActivityFilter.all);
+      },
+    );
+
     testWidgets("Needs you's more opens Activity on Mentions", (tester) async {
       final c = await showCounted(tester);
       expect(

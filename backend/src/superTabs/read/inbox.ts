@@ -29,6 +29,7 @@ import { threadSummaries } from '../threads.js'
 import { sessionReadsRow } from '../buddySessions.js'
 import { readMarks, readThreadMarkRows, type ThreadMarkRow } from '../readMarks.js'
 import { readBy } from '../parts/indexed.js'
+import { logger } from '../../utils/logger.js'
 import { ms } from '../parts/light.js'
 import type { SuperTabStore } from '../store.js'
 
@@ -151,6 +152,44 @@ export async function perRange(db: PrismaClient, pipelines: Prisma.InputJsonValu
   return rows
 }
 
+/** One thread's rows in a sequence range. */
+export interface ThreadRange { conversationId: string; thread: string; sequence: Record<string, number> }
+
+/**
+ * Each range's newest `limit` rows, newest first, range by range, as `perRange` of each thread's own pipeline answers, or only those
+ * of them `namedBy` wrote or is tagged in. Ken's production profile (task #2148): a union plans every branch, racing the sequence
+ * index against the thread index, and a hint reaches only its first pipeline. So each batch is one read, hinted to the thread index:
+ * nothing to race and one plan, about 200 ms of planning down to 3 for 100 ranges. It reads every row of a range, not only its newest,
+ * so past a cap of a quarter of what the ranges' limits allow, a batch of long threads takes the union instead, which bounds each one.
+ */
+export async function newestInThreads(db: PrismaClient, tabId: string, ranges: ThreadRange[], limit: number, namedBy?: string): Promise<Row[]> {
+  const rows: Row[] = []
+  const named = namedBy === undefined ? [] : [{ $match: { $or: [{ 'author.kind': 'person', 'author.id': namedBy }, { mentions: namedBy }] } }]
+  for (let i = 0; i < ranges.length; i += CHATS_PER_READ) {
+    const batch = ranges.slice(i, i + CHATS_PER_READ)
+    const cap = Math.max(limit, Math.ceil(limit * batch.length / 4))
+    const newest = namedBy === undefined ? '$newest' : { $filter: { input: '$newest', as: 'm', cond: { $or: [
+      { $and: [{ $eq: ['$$m.author.kind', 'person'] }, { $eq: ['$$m.author.id', { $literal: namedBy }] }] },
+      { $in: [{ $literal: namedBy }, { $ifNull: ['$$m.mentions', []] }] }] } } }
+    const found = await readBy(db, 'SuperTabMessage', 'thread', [
+      { $match: { $or: batch.map(r => ({ tabId, conversationId: r.conversationId, thread: r.thread, sequence: r.sequence })) } },
+      { $project: { ...SCAN_FIELDS, conversationId: 1 } }, { $limit: cap + 1 },
+      { $group: { _id: { conversationId: '$conversationId', thread: '$thread' }, seen: { $sum: 1 },
+        newest: { $topN: { n: limit, sortBy: { sequence: -1 }, output: '$$ROOT' } } } },
+      { $project: { seen: 1, newest } }] as Prisma.InputJsonValue[]) as unknown as
+      Array<{ _id: { conversationId: string; thread: string }; seen: number; newest: Array<Record<string, unknown>> }>
+    if (found.reduce((seen, thread) => seen + Number(thread.seen), 0) > cap) {
+      logger.info('[inbox] a batch of thread ranges passed its cap and read by union', { ranges: batch.length, limit })
+      rows.push(...await perRange(db, batch.map(r => [{ $match: { tabId, conversationId: r.conversationId, thread: r.thread, sequence: r.sequence } },
+        { $sort: { sequence: -1 } }, { $limit: limit }, ...named, { $project: { ...SCAN_FIELDS, conversationId: 1 } }] as Prisma.InputJsonValue[])))
+      continue
+    }
+    const byThread = new Map(found.map(thread => [threadKey(thread._id.conversationId, thread._id.thread), thread.newest]))
+    for (const r of batch) rows.push(...(byThread.get(threadKey(r.conversationId, r.thread)) ?? []).map(row))
+  }
+  return rows
+}
+
 /** Up to `limit` rows of one chat, newest first, in its (sequence, id) index range. */
 const newestIn = (tabId: string, conversationId: string, sequence: Record<string, number>, limit: number, fields: Record<string, unknown>): Prisma.InputJsonValue[] =>
   [{ $match: { tabId, conversationId, sequence } }, { $sort: { sequence: -1, _id: -1 } }, { $limit: limit }, { $project: { ...fields, conversationId: 1 } }] as Prisma.InputJsonValue[]
@@ -205,8 +244,7 @@ async function threadsIn(db: PrismaClient, tabId: string, state: SuperTabState, 
   const inIt = (m: Row) => own(m.author) || m.mentions.includes(personId)
   const lagging = behind.slice(0, BEHIND_THREADS)
   const [scanned, past] = await Promise.all([perRange(db, chats.map(g => newestIn(tabId, g.id, { $gt: marks.get(g.id)! }, UNREAD_SCAN + 1, SCAN_FIELDS))),
-    perRange(db, lagging.map(r => [{ $match: { tabId, conversationId: r.conversationId, thread: r.threadId, sequence: { $gt: r.sequence } } },
-      { $sort: { sequence: -1 } }, { $limit: UNREAD_SCAN + 1 }, { $project: { ...SCAN_FIELDS, conversationId: 1 } }]))])
+    newestInThreads(db, tabId, lagging.map(r => ({ conversationId: r.conversationId, thread: r.threadId, sequence: { $gt: r.sequence } })), UNREAD_SCAN + 1)])
   const byChat = groupBy(scanned, m => m.conversationId)
   const pastByThread = groupBy(past, m => threadKey(m.conversationId, m.thread!))
   // A chat or thread whose newest UNREAD_SCAN rows do not reach its mark: older unread replies are not counted.
@@ -245,9 +283,7 @@ async function threadsIn(db: PrismaClient, tabId: string, state: SuperTabState, 
   // index range; only the rows that name them come back.
   const unknown = withRoot.filter(c => !c.member)
   if (unknown.length) {
-    const named = await perRange(db, unknown.map(c => [{ $match: { tabId, conversationId: c.conversationId, thread: c.root, sequence: { $lte: c.mark } } },
-      { $sort: { sequence: -1 } }, { $limit: MEMBER_SCAN },
-      { $match: { $or: [{ 'author.kind': 'person', 'author.id': personId }, { mentions: personId }] } }, { $project: { ...SCAN_FIELDS, conversationId: 1 } }]))
+    const named = await newestInThreads(db, tabId, unknown.map(c => ({ conversationId: c.conversationId, thread: c.root, sequence: { $lte: c.mark } })), MEMBER_SCAN, personId)
     const members = new Set((await readable(db, tabId, named, state)).map(m => threadKey(m.conversationId, m.thread!)))
     for (const c of unknown) if (members.has(threadKey(c.conversationId, c.root))) c.member = true
   }

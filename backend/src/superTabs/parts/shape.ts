@@ -11,9 +11,9 @@ interface LegacyProgress { dirtyRevision: number; summarizedRevision: number; re
 export { knownKind }
 const PART_ONLY_GROUP_FIELDS = ['messageSeq', 'reportSeq', 'dormant', 'lastActivityAt'] as const
 /** Optional lists of `SuperTab.state` an empty one of which differs from an absent one (`[]` after the last machine left). */
-const LISTS = ['parkedConversations', 'starts', 'machines', 'harnessReservations', 'releasedHarnesses', 'closingSessions', 'machineCleanups'] as const
+const LISTS = ['parkedConversations', 'starts', 'machines', 'harnessReservations', 'releasedHarnesses', 'closingSessions', 'removedSessions', 'machineCleanups'] as const
 const STATE_ONLY = ['people', 'agents', 'conversations', 'parkedConversations', 'starts', 'machines', 'harnessReservations',
-  'releasedHarnesses', 'closingSessions', 'machineCleanups', 'otherProjectsWork', 'groupCounter', 'sequenceBase'] as const
+  'releasedHarnesses', 'closingSessions', 'removedSessions', 'machineCleanups', 'otherProjectsWork', 'groupCounter', 'sequenceBase'] as const
 
 const isLegacyProgress = (progress: unknown): progress is LegacyProgress =>
   !!progress && typeof progress === 'object' && 'dirtyRevision' in progress
@@ -39,6 +39,7 @@ function machineParts(state: SuperTabState): Map<string, MachineData> {
   // With its Team account hold (`heldFor`, `since`, `noticed`): dropped here, the account was free on the next read (review of #2142).
   for (const { machineId, ...closing } of state.closingSessions ?? []) of(machineId).closingSessions.push(closing)
   for (const { machineId, ...cleanup } of state.machineCleanups ?? []) of(machineId).cleanups.push(cleanup)
+  for (const { machineId, ...removed } of state.removedSessions ?? []) (of(machineId).removedSessions ??= []).push(removed)
   return machines
 }
 
@@ -122,6 +123,7 @@ export function reassemble(parts: SwarmParts, { share = false }: { share?: boole
   const released = flat(m => m.released.map(harnessId => ({ machineId: m.machineId, harnessId })))
   const closing = flat(m => m.closingSessions.map(c => ({ ...c, machineId: m.machineId })))
   const cleanups: MachineCleanup[] = flat(m => m.cleanups.map(c => ({ machineId: m.machineId, ...c })))
+  const removed = flat(m => (m.removedSessions ?? []).map(r => ({ machineId: m.machineId, ...r })))
   const list = <K extends typeof LISTS[number]>(key: K, items: NonNullable<SuperTabState[K]>) => {
     if (items.length || present.has(key)) state[key] = copy(items)
   }
@@ -131,6 +133,7 @@ export function reassemble(parts: SwarmParts, { share = false }: { share?: boole
   list('harnessReservations', reservations)
   list('releasedHarnesses', released)
   list('closingSessions', closing)
+  list('removedSessions', removed)
   list('machineCleanups', cleanups)
   return state
 }

@@ -116,6 +116,7 @@ function pool(tabId: string, state: SuperTabState, machineId: string, user: Auth
   const leadStarts = pending.filter(s => s.request.leadFor)
   const buddyChats = new Set(buddyStarts.map(s => s.request.conversationId))
   const reservations = (state.harnessReservations ?? []).filter(r => r.machineId === machineId)
+  const removedHere = (state.removedSessions ?? []).filter(r => r.machineId === machineId).map(r => r.harnessId)
   return { tabId, paused: state.paused, machine: contribution, starts, ...(buddyStarts.length ? { buddyStarts } : {}), ...(leadStarts.length ? { leadStarts } : {}),
     ...(contribution.scope === 'swarm' ? { projects: projectsOf(state).filter(p => pending.some(s => startProject(state, s.request)?.id === p.id))
       .map(p => ({ id: p.id, leadConversationId: p.leadConversationId, repository: p.repository,
@@ -125,6 +126,9 @@ function pool(tabId: string, state: SuperTabState, machineId: string, user: Auth
     // A Buddy-only machine never joins the Swarm's grid: it serves nobody's models (machines.ts buddyOnly).
     ...(contribution.buddyOnly ? {} : hostLocalGrid(state)),
     reservations: reservations.map(({ harnessId, generation }) => ({ harnessId, generation })),
+    // Sessions whose agents left as closed, which this host lists again if they reopen (closedAgents.ts restoreSessions). Ids only,
+    // and only to the machine's own host. Absent when there are none.
+    ...(removedHere.length ? { removedHarnessIds: removedHere } : {}),
     harnessIds: [...new Set([...state.agents.filter(a => a.machineId === machineId).map(a => a.harnessId), ...reservations.map(r => r.harnessId),
       ...(state.starts ?? []).filter(s => s.request.machineId === machineId && s.harnessId).map(s => s.harnessId!)])],
     ...(githubApp ? { githubApp: true as const } : {}),

@@ -183,18 +183,25 @@ const changedPart = (kind: PartKind, row: Record<string, unknown>): Part => {
 
 /** What changed in one Swarm after `since`, for the read cache to patch what it holds (cache.ts; spec 2026-11-02 Phase 1):
  *  the parts of `kinds`, and the head's own columns when the head is among them. */
-export interface SwarmDelta { parts: Part[]; head: HeadColumns | null }
+export interface SwarmDelta {
+  parts: Part[]
+  head: HeadColumns | null
+  /** Each changed group's stored host digest (null while it has none), by key: the host signature's entry patches from it
+   *  (read/hostInputs.ts). A loader that does not carry it leaves it out, and that entry loads again. */
+  hostDigests?: ReadonlyMap<string, string | null>
+}
 
 export async function loadDelta(tx: Transaction, tabId: string, since: number, kinds: readonly PartKind[]): Promise<SwarmDelta> {
-  const parts: Part[] = []
+  const parts: Part[] = [], hostDigests = new Map<string, string | null>()
   let head: HeadColumns | null = null
   for (const [kind, rows] of await changedRows(tx, [tabId], new Date(since), kinds)) {
     for (const row of rows) {
       parts.push(changedPart(kind, row))
+      if (kind === 'group') hostDigests.set(row.key as string, typeof row.hostDigest === 'string' ? row.hostDigest : null)
       if (kind === 'head') head = { groupCounter: Number(row.groupCounter), visibilityEpoch: Number(row.visibilityEpoch), sequenceBase: Number(row.sequenceBase) }
     }
   }
-  return { parts, head }
+  return { parts, head, hostDigests }
 }
 
 /** The live starts of these agents (an agent is its machine and harness: write.ts extracted), whole, by the (tabId, agentId)
@@ -211,6 +218,8 @@ const COLLECTION = { head: 'SwarmHead', member: 'SwarmMember', agent: 'SwarmAgen
   progress: 'SwarmProgress' } as const satisfies Record<PartKind, NamedCollection>
 /** What a changed part is made of: its other fields are indexed copies of its data. */
 const CHANGED_FIELDS = { tabId: 1, key: 1, version: 1, changedAt: 1, deleted: 1, ordinal: 1, data: 1, dormant: 1, readAt: 1,
+  // A group's stored host digest (no other kind has one): the host signature's entry patches from it.
+  hostDigest: 1,
   // The head's own columns (no other kind has them): a patched base keeps them too.
   groupCounter: 1, visibilityEpoch: 1, sequenceBase: 1 }
 

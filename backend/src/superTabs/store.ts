@@ -13,7 +13,7 @@ import { isTeamSession, teamMachine, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE 
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, notThere } from './deletion.js'
-import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, LOOP_NOTICE_AT, mayResumeStart, operationSchema, PAIR_CHAIN_LIMIT, postable, ruleProject, type Command, type CommandContext } from './commands.js'
+import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, LOOP_NOTICE_AT, mayResumeStart, operationSchema, PAIR_CHAIN_LIMIT, postable, reserveHarnessSlot, ruleProject, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
 import { reactionCounts, type ReactionTarget } from './reactions.js'
@@ -30,7 +30,7 @@ import { logger } from '../utils/logger.js'
 import { retryTransient } from './retry.js'
 import { recordReload } from './retryStats.js'
 import { buddyChatId, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
-import { accountOf, wordsOf, buddyPerson, canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility } from './projects.js'
+import { accountOf, wordsOf, buddyPerson, canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
 import { isBuddy, isBuddyChat, isBuddyReader, refuseBuddyRouting, routingRow } from './buddies.js'
@@ -43,7 +43,7 @@ import { confidentialSessions, otherRegistrations, recordConfidential } from './
 import { answersRequest, dirtyGroups, noteWorkChanges, projectUpdateRequest, UNANSWERED_REQUEST_MS } from './projectUpdates.js'
 import { cloneData } from './cloneData.js'
 import { digestDue, digestMessageId, digestOf, digestRequest, digestSince } from './digest.js'
-import { closedAgents, nextRemovalAt, removeClosedAgents } from './closedAgents.js'
+import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefusal, restoreSessions } from './closedAgents.js'
 import { judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { archivable, archiveLine, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
@@ -831,7 +831,11 @@ export class SuperTabStore {
       const delivery = await tx.superTabDelivery.findFirst({ where: { id: command.deliveryId, tabId }, select: { conversationId: true } })
       if (delivery) groupIds.push(delivery.conversationId)
     }
-    if (command.type === 'agent.remove' || command.type === 'agent.input' || command.type === 'agent.alert' || command.type === 'agent.rebind') agentIds.push(command.agentId)
+    if (command.type === 'agent.remove') agentIds.push(command.agentId)
+    // These only ask about the agent. A coordinator's project chat, always loaded, answers them, and every group it was ever in is
+    // what a read by agent gave: 1,668 on prod, growing with every task (Ken's profile, 2026-11-02, up to 1.66 s a read). Filtering
+    // that read by dormant would not do: its index has no dormant, so it examines them all, and removals need them (design D8).
+    if ((command.type === 'agent.input' || command.type === 'agent.alert' || command.type === 'agent.rebind') && !ledProject(state, command.agentId)) agentIds.push(command.agentId)
     if (command.type === 'agent.remove') startAgentIds.push(command.agentId)
     if (command.type === 'machine.remove') {
       const pool = state.machines?.find(m => m.machineId === command.machineId)
@@ -2928,8 +2932,11 @@ export class SuperTabStore {
       let loaded = loadedFrom(row, observed)
       // Agents this reading shows closed leave with their groups' membership, so every group they are in is read, quiet ones too.
       const closed = closedAgents(loaded.state, machineId, observation, this.now()).map(a => a.id)
-      if (closed.length) {
-        const more = await loadGroups(tx, tabId, 'agents', { agentIds: { $in: closed } })
+      // Sessions it shows open again come back with their groups (closedAgents.ts restoreSessions), so those are read too.
+      const back = reopened(loaded.state, machineId, observation.runningHarnessIds, this.now())
+      if (closed.length || back.length) {
+        const more = [...closed.length ? await loadGroups(tx, tabId, 'agents', { agentIds: { $in: closed } }) : [],
+          ...back.length ? await loadGroups(tx, tabId, 'key', { key: { $in: back.flatMap(r => [...r.groupIds, ...r.leadOf]) } }) : []]
         loaded = loadedFrom(row, { ...observed, groups: [...new Map([...observed.groups, ...more].map(g => [g.key, g])).values()] })
       }
       const state = cloneData(loaded.state)
@@ -2997,6 +3004,29 @@ export class SuperTabStore {
       const checked = [...loseTasks(state, now, worker => worker.machineId === machineId), ...sweep ? sweepLiveness(state, now) : []]
       // Then the agents it shows closed leave, those with no active work left: the Lead is told of their tasks above (closedAgents.ts).
       removedIds.push(...removeClosedAgents(state, state.agents.filter(a => closed.includes(a.id)), now).map(a => a.id))
+      // And the sessions it shows open again come back, by this report alone: it is proved this machine's contributor's above.
+      const allowed = new Set<string>()
+      if (back.length) {
+        const elsewhere = await otherRegistrations(tx, state, back.map(r => ({ machineId, harnessId: r.harnessId })))
+        const facts = { elsewhere: new Set(back.flatMap(r => { const key = sessionKey(machineId, r.harnessId); return elsewhere.registered.has(key) || elsewhere.confidential.has(key) ? [r.harnessId] : [] })),
+          teamMachines: await this.teamMachines(tx, state), otherWorkspaceMachines: await this.otherWorkspaceMachines(tx, state) }
+        for (const record of back) {
+          const refused = restoreRefusal(state, record, user.sub, now, facts)
+          if (refused) { logger.info('[swarm] a reopened session was not restored', { reason: refused }); continue }
+          // Its share, then the record every Swarm registering this session writes: withdrawn, stopping or tied to a private project.
+          try {
+            await this.agentGrant(tx, state, record.agent)
+            await bindSession(tx, state, record.agent, now)
+            allowed.add(record.harnessId)
+          } catch (error) {
+            if (!(error instanceof SuperTabError)) throw error
+            logger.info('[swarm] a reopened session was not restored', { reason: error.code })
+          }
+        }
+      }
+      const restored = restoreSessions(state, machineId, observation.runningHarnessIds, now, allowed, harnessId => reserveHarnessSlot(state, machineId, harnessId, `rejoin-${stamp}`))
+      // An agent reads its groups again from here: said, as nothing else records why (security review 2 of #2601).
+      for (const agent of restored) logger.info('[swarm] a reopened session rejoined', { tabId, agentId: agent.id, machineId, projectId: agent.projectId ?? null })
       const written = await saved(checked)
       // What the next reports of this machine need to skip the load, as this commit leaves the Swarm.
       const mine = state.machines?.find(m => m.machineId === machineId)

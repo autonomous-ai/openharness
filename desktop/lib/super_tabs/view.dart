@@ -456,10 +456,12 @@ class _SuperTabViewState extends State<SuperTabView>
     advance(0);
   }
 
-  bool get _chatIsVisible {
+  bool get _chatIsVisible => !_chatCovered && _viewIsVisible;
+
+  /// A person can see this Swarm's chat area, whatever covers the chat itself.
+  bool get _viewIsVisible {
     if (!mounted ||
         !_viewEnabled ||
-        _chatCovered ||
         c.accessRevoked ||
         _devicesVisible ||
         _terminalsVisible ||
@@ -492,6 +494,12 @@ class _SuperTabViewState extends State<SuperTabView>
     final sequence = c.messages(id).lastOrNull?.sequence ?? 0;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && !_jumpingToEnd) _readToEnd(id, sequence);
+      // A thread restored open counts as read only once its pane is seen.
+      if (mounted &&
+          c.openedThread?.conversationId == c.selectedId &&
+          _viewIsVisible) {
+        c.threadPaneShown();
+      }
     });
     // Widget updates already have a frame in progress. Reuse it so routine
     // polling does not request an otherwise unnecessary frame after each build.
@@ -1661,7 +1669,8 @@ class _SuperTabViewState extends State<SuperTabView>
     SuperTabController? from,
   }) {
     if (!mounted || (from != null && from != c)) return;
-    if (filter != null) SuperTabActivity.of(c).setFilter(filter);
+    // Its row asks for no list: All, whichever one was showing.
+    SuperTabActivity.of(c).setFilter(filter ?? SuperTabActivityFilter.all);
     _closeSidebar();
     setState(() {
       _showNotifications = true;
