@@ -7,6 +7,7 @@ import 'model.dart';
 import 'prompt_alerts.dart';
 import 'swarm_chat_cache.dart';
 import 'swarm_buddy.dart' show swarmIsOldBuddyChat;
+import 'swarm_buddy_sessions.dart';
 import 'swarm_outbox.dart';
 import 'swarm_outgoing_files.dart';
 import 'swarm_reader.dart';
@@ -257,7 +258,12 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
         _uploads.forget(post.files);
       }
       _restore(post);
-      error = post.error;
+      if (_refusedForSessions(post)) {
+        swarmSessionsRefused(reader);
+        error = swarmSessionsUnavailable;
+      } else {
+        error = post.error;
+      }
     },
   );
 
@@ -314,6 +320,102 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   set replyingTo(SuperTabMessage? message) {
     _replyingTo = message;
     _composer.changed();
+  }
+
+  /// New session is chosen for the next post (Desktop's chat composer), and
+  /// the project it works in: none is All projects.
+  bool _newSession = false;
+  String? _sessionProjectId;
+
+  /// Whether the composer shows New session: the person's own Buddy chat, on
+  /// a server that takes it, where they may post. It may still show disabled,
+  /// saying why ([sessionBlocked]).
+  bool get offersSessions {
+    final group = conversation;
+    return group != null && canPost && swarmOffersChatSessions(reader, group);
+  }
+
+  /// Why New session cannot start a session now; null when it can.
+  String? get sessionBlocked {
+    final group = conversation;
+    return group == null || !offersSessions
+        ? null
+        : swarmSessionBlocked(reader, group);
+  }
+
+  /// Whether the next post starts a session: chosen, offered and not blocked.
+  bool get newSession =>
+      _newSession && offersSessions && sessionBlocked == null;
+  set newSession(bool value) {
+    if (_newSession == value) return;
+    _newSession = value;
+    _composer.changed();
+  }
+
+  /// The project the next session works in, while the person still reads it
+  /// (a lost one is no longer chosen); null is All projects: it reads every
+  /// project and sends no work to a PM.
+  String? get sessionProjectId =>
+      reader.snapshot?.projects.any((p) => p.id == _sessionProjectId) == true
+      ? _sessionProjectId
+      : null;
+  set sessionProjectId(String? value) {
+    if (_sessionProjectId == value) return;
+    _sessionProjectId = value;
+    _composer.changed();
+  }
+
+  /// The threads whose session an end is under way for.
+  final _ending = <String>{};
+
+  /// Whether an end is under way for [root]'s session.
+  bool endingSession(String root) => _ending.contains(root);
+
+  /// Ends [root]'s session in the person's own Buddy chat (Desktop's
+  /// `endThreadSession`): closing the thread only hides it, this stops it.
+  /// False when there is none, one end is already under way, or the backend
+  /// refused (said in [error]).
+  Future<bool> endSession(String root) async {
+    final group = conversation;
+    if (_disposed ||
+        group == null ||
+        !canPost ||
+        group.sessionFor(root) == null ||
+        !_ending.add(root)) {
+      return false;
+    }
+    error = null;
+    notifyListeners();
+    String? refused;
+    try {
+      await reader.request(
+        'POST',
+        '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/commands',
+        body: {
+          'operationId': superTabOperationId(),
+          'command': {
+            'type': 'buddy.sessionEnd',
+            'conversationId': id,
+            'thread': root,
+            'reason': 'ended',
+          },
+        },
+      );
+    } on SuperTabFailure catch (failure) {
+      refused = failure.message;
+    } catch (_) {
+      refused = 'The session did not end. Try again.';
+    }
+    if (_disposed) return refused == null;
+    _ending.remove(root);
+    if (refused != null) {
+      error = refused;
+    } else {
+      unawaited(reader.refresh());
+      unawaited(_reread());
+    }
+    notifyListeners();
+    return refused == null;
   }
 
   /// The person may post here: a writer of the Swarm, in a conversation that
@@ -742,11 +844,19 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
         operationId: body['operationId'] as String,
       ),
       files: outgoing,
-      held: (draft: _draft, mentions: Map.of(_mentions), replyTo: _replyingTo),
+      held: (
+        draft: _draft,
+        mentions: Map.of(_mentions),
+        replyTo: _replyingTo,
+        newSession: _newSession,
+        sessionProjectId: _sessionProjectId,
+      ),
     );
     _draft = '';
     _mentions.clear();
     _replyingTo = null;
+    _newSession = false;
+    _sessionProjectId = null;
     // Only what goes with this post: more may have been added meanwhile.
     for (final file in outgoing) {
       files.remove(file);
@@ -1200,6 +1310,19 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     }
   }
 
+  /// [post] was refused only because the server does not know New session
+  /// (the schema's `Unrecognized key`, naming the field).
+  bool _refusedForSessions(SwarmPost post) {
+    final command = post.body['command'];
+    final failure = post.refusedBy;
+    return command is Map &&
+        command['newSession'] == true &&
+        failure != null &&
+        failure.code == 'VALIDATION_ERROR' &&
+        failure.message.contains('Unrecognized key') &&
+        failure.message.contains('newSession');
+  }
+
   /// A refused post's text back in the draft, before anything typed since.
   void _restore(SwarmPost post) {
     final sent = post.held;
@@ -1208,12 +1331,20 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
           String draft,
           Map<String, String> mentions,
           SuperTabMessage? replyTo,
+          bool newSession,
+          String? sessionProjectId,
         })) {
       return;
     }
     _draft = _draft.trim().isEmpty ? sent.draft : '${sent.draft}\n$_draft';
     _mentions.addAll(sent.mentions);
     _replyingTo ??= sent.replyTo;
+    // Refused for New session itself, it comes back without it, ready to send
+    // as a plain message; refused for anything else, the choice stays.
+    if (!_refusedForSessions(post)) {
+      _newSession = _newSession || sent.newSession;
+      _sessionProjectId ??= sent.sessionProjectId;
+    }
     if (post.files.isNotEmpty) {
       final since = files.files;
       files
@@ -1250,6 +1381,10 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
         if (attachmentIds.isNotEmpty) 'attachmentIds': attachmentIds,
         // As the desktop's: the server refuses it in an older Buddy chat.
         if (reader.snapshot?.swarmBuddy == true) 'oneBuddy': true,
+        if (newSession) 'newSession': true,
+        // A New session in one project of the person's one Buddy chat.
+        if (newSession && sessionProjectId != null && group.isSwarmBuddyChat)
+          'sessionProjectId': sessionProjectId,
       },
     };
   }

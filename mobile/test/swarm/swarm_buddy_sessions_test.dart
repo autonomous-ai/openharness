@@ -10,9 +10,7 @@ import 'swarm_session_fixture.dart';
 /// `offersChatSessions`, `offersThreadSessions` and `threadSessionBlocked`
 /// decide (spec 2026-10-30-buddy-thread-sessions).
 void main() {
-  Future<(SwarmReader, SuperTabConversation)> rig(
-    FakeSwarm fake,
-  ) async {
+  Future<(SwarmReader, SuperTabConversation)> rig(FakeSwarm fake) async {
     final reader = await sessionReader(fake);
     addTearDown(reader.dispose);
     return (reader, reader.snapshot!.conversation(sessionChat)!);
@@ -49,15 +47,18 @@ void main() {
       );
     });
 
-    test('a machine whose report lacks buddySessions names the machine', () async {
-      final (reader, chat) = await rig(
-        sessionBackend(machine: sessionMachine(capabilities: const [])),
-      );
-      expect(
-        swarmSessionBlocked(reader, chat),
-        'Update Harness on Tonys-MacBook-Pro to start sessions',
-      );
-    });
+    test(
+      'a machine whose report lacks buddySessions names the machine',
+      () async {
+        final (reader, chat) = await rig(
+          sessionBackend(machine: sessionMachine(capabilities: const [])),
+        );
+        expect(
+          swarmSessionBlocked(reader, chat),
+          'Update Harness on Tonys-MacBook-Pro to start sessions',
+        );
+      },
+    );
 
     test('an older host, whose report has no capabilities list', () async {
       final (reader, chat) = await rig(
@@ -97,10 +98,7 @@ void main() {
         swarmOffersThreadSessions(reader, chat, hadSession: false),
         isFalse,
       );
-      expect(
-        swarmOffersThreadSessions(reader, chat, hadSession: true),
-        isTrue,
-      );
+      expect(swarmOffersThreadSessions(reader, chat, hadSession: true), isTrue);
     });
 
     test('never in an older Buddy chat or someone else\'s', () async {
@@ -118,13 +116,19 @@ void main() {
   });
 
   test('why a session ended, as its thread says it', () {
-    expect(swarmSessionEndedWords('idle'), 'Session ended: idle for 30 minutes');
+    expect(
+      swarmSessionEndedWords('idle'),
+      'Session ended: idle for 30 minutes',
+    );
     expect(swarmSessionEndedWords('ended'), 'Session ended: you ended it');
     expect(
       swarmSessionEndedWords('stopped'),
       'Session ended: it stopped unexpectedly',
     );
-    expect(swarmSessionEndedWords('failed'), 'Session ended: it couldn\'t start');
+    expect(
+      swarmSessionEndedWords('failed'),
+      'Session ended: it couldn\'t start',
+    );
     expect(
       swarmSessionEndedWords('removed'),
       'Session ended: its Buddy was removed or replaced',
@@ -137,4 +141,3 @@ void main() {
     expect(swarmSessionEndedWords('other'), 'Session ended');
   });
 }
-

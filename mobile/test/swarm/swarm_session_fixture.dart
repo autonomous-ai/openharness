@@ -116,11 +116,7 @@ FakeSwarm sessionBackend({
         agent('agent-lead', name: 'Lead', displayName: 'River'),
         if (buddy)
           {
-            ...buddyData(
-              'agent-wren',
-              displayName: 'Wren',
-              engine: engine,
-            ),
+            ...buddyData('agent-wren', displayName: 'Wren', engine: engine),
             'buddyScope': 'swarm',
             'downSince': ?downSince,
           }..remove('projectId'),
@@ -149,11 +145,7 @@ FakeSwarm sessionBackend({
 
 /// A reader of [fake]'s Swarm, read once.
 Future<SwarmReader> sessionReader(FakeSwarm fake) async {
-  final reader = SwarmReader(
-    tabId: tab,
-    accountId: me,
-    request: fake.request,
-  );
+  final reader = SwarmReader(tabId: tab, accountId: me, request: fake.request);
   await reader.refresh();
   return reader;
 }

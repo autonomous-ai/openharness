@@ -28,19 +28,22 @@ void main() {
   Map<String, dynamic> sent(FakeSwarm fake) =>
       fake.commands.lastWhere((c) => c['type'] == 'message.send');
 
-  test('New session over All projects sends newSession and no project', () async {
-    final (fake, _, chat) = await rig();
-    expect(chat.offersSessions, isTrue);
-    chat.newSession = true;
-    chat.draft = 'Fix the flaky login test';
-    expect(await chat.send(), isTrue);
-    final command = sent(fake);
-    expect(command['newSession'], isTrue);
-    expect(command.containsKey('sessionProjectId'), isFalse);
-    expect(command['text'], 'Fix the flaky login test');
-    // Taken: the next message is a plain one.
-    expect(chat.newSession, isFalse);
-  });
+  test(
+    'New session over All projects sends newSession and no project',
+    () async {
+      final (fake, _, chat) = await rig();
+      expect(chat.offersSessions, isTrue);
+      chat.newSession = true;
+      chat.draft = 'Fix the flaky login test';
+      expect(await chat.send(), isTrue);
+      final command = sent(fake);
+      expect(command['newSession'], isTrue);
+      expect(command.containsKey('sessionProjectId'), isFalse);
+      expect(command['text'], 'Fix the flaky login test');
+      // Taken: the next message is a plain one.
+      expect(chat.newSession, isFalse);
+    },
+  );
 
   test('New session over one project sends that project', () async {
     final (fake, _, chat) = await rig();
@@ -75,9 +78,7 @@ void main() {
   });
 
   test('a chat that cannot start a session sends a plain message', () async {
-    final (fake, _, chat) = await rig(
-      backend: sessionBackend(engine: 'codex'),
-    );
+    final (fake, _, chat) = await rig(backend: sessionBackend(engine: 'codex'));
     expect(chat.offersSessions, isTrue);
     expect(chat.sessionBlocked, 'Sessions need a Claude Code Buddy');
     chat
