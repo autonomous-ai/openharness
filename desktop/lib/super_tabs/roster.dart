@@ -729,10 +729,16 @@ class _SuperTabRosterState extends State<SuperTabRoster>
   }
 }
 
-/// An agent row's state word: the glance's, as the chat says its words
-/// ("waiting", "working", "limited until 09:05").
-String superTabMemberWord(String label) =>
-    label.isEmpty ? label : '${label[0].toLowerCase()}${label.substring(1)}';
+/// An agent row's state word: the glance's in the chat's words ("waiting",
+/// "working", "in review"), one short word so the row stays one line; a
+/// reset time or a reason is on hover.
+String superTabMemberWord(String label) => switch (label) {
+  'Waiting on others' => 'in review',
+  'Kept (closed)' => 'kept',
+  _ when label.startsWith('Limited until') => 'limited',
+  '' => label,
+  _ => '${label[0].toLowerCase()}${label.substring(1)}',
+};
 
 /// Whether an agent folds under Idle (N): it holds no task and is idle,
 /// stopped or offline. An agent with work, lost work too, stays in view.
