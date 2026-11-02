@@ -157,8 +157,10 @@ export class SwarmCache {
   }
 
   /** What these stamps' moves make stale of a Swarm, everything by default: an entry with a patch rule is kept to be patched,
-   *  any other is forgotten. */
+   *  any other is forgotten. The Swarm's latest delta predates the change, so no entry refreshes from it; a bump owed by this
+   *  process leaves the stamps as they were, where an entry older than that delta would otherwise reuse it. */
   drop(tabId: string, scopes: readonly StampScope[] = ['main']): void {
+    this.deltas.delete(tabId)
     const main = scopes.includes('main')
     for (const name of [...this.bySwarm.get(tabId) ?? []]) {
       const entry = this.entries.get(name)!
@@ -242,11 +244,15 @@ export class SwarmCache {
    * stamp: one read per kind was up to five reads of the same window per bump, final review Important 3): over the kinds
    * of every entry of the Swarm due for a refresh, from the earliest of their reads, less OVERLAP_MS. An entry refreshed
    * too long ago (DELTA_MAX_GAP_MS) is left out: it loads in full when read.
+   *
+   * The stamps can stand still while the Swarm changes (a bump lost, or owed by this process), so a delta is shared only with
+   * an entry read before it started: an older one could miss a change the entry's refresh exists to find, or bring back a
+   * part the entry was loaded without.
    */
   private deltaFor(tabId: string, stamp: Stamp, kinds: readonly PartKind[], entry: Entry): Delta {
     const stamped = `${stamp.main}\u0000${stamp.machine}`
     const latest = this.deltas.get(tabId)
-    if (latest && latest.stamp === stamped && kinds.every(kind => latest.kinds.has(kind)) && entry.at - OVERLAP_MS >= latest.since) return latest
+    if (latest && latest.stamp === stamped && kinds.every(kind => latest.kinds.has(kind)) && latest.at > entry.at && entry.at - OVERLAP_MS >= latest.since) return latest
     const now = this.now(), union = new Set(kinds)
     let earliest = entry.at
     for (const name of this.bySwarm.get(tabId) ?? []) {

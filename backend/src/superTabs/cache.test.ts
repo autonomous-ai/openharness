@@ -3,7 +3,7 @@ import { configureSwarmStamps, freeze, noteChange, readStamps, sizeOf, stampOwed
 import { MemoryStamps } from './cache.test-support.js'
 import { machinesRule, type PatchRule } from './cachePatch.js'
 import { logger } from '../utils/logger.js'
-import type { Part, PartKind } from './parts/index.js'
+import type { MachineData, Part, PartKind } from './parts/index.js'
 import type { SwarmDelta } from './parts/load.js'
 
 /** A loader that counts its calls and returns a fresh object each time, numbered. */
@@ -299,14 +299,99 @@ describe('a stale entry is patched, not loaded again (spec 2026-11-02, Phase 1)'
   })
 
   it('one delta per Swarm and stamp, over the kinds its stale entries need', async () => {
-    const { stamps, delta, read } = setup({ parts: [part('g2')] })
+    const { stamps, delta, read, advance } = setup({ parts: [part('g2')] })
     await read(rule(['group']), 'main', 'base')
     await read(rule(['machine']), 'all', 'machines')
+    advance(1)
     await stamps.bump('t1', ['main'])
     await read(rule(['group']), 'main', 'base')
     await read(rule(['machine']), 'all', 'machines')
     expect(delta).toHaveBeenCalledTimes(1)
     expect([...delta.mock.calls[0]![2]].sort()).toEqual(['group', 'machine'])
+  })
+
+  describe('a same-stamp refresh never reuses a delta older than what it refreshes (review of #2519)', () => {
+    it('a change whose bump was lost is read at the next 60 s refresh, not left to the 120 s gap reload', async () => {
+      const changes = { parts: [] as Part[] }
+      const { delta, load, read, advance } = setup(changes)
+      await read(rule(), 'main', 'a')
+      await read(rule(), 'main', 'b')
+      advance(61_000)
+      await read(rule(), 'main', 'a')
+      await read(rule(), 'main', 'b')
+      expect(delta).toHaveBeenCalledTimes(1)
+      // Committed, and no pod ever heard: the stamps stand still.
+      changes.parts = [part('lost')]
+      advance(61_000)
+      expect(await read(rule(), 'main', 'a')).toEqual({ keys: ['g1', 'lost'] })
+      expect(await read(rule(), 'main', 'b')).toEqual({ keys: ['g1', 'lost'] })
+      expect(delta).toHaveBeenCalledTimes(2)
+      expect(load).toHaveBeenCalledTimes(2)
+    })
+
+    it('a machine removed before an entry loaded does not come back from an older delta', async () => {
+      const machine = (version: number, deleted = false): Part<MachineData> =>
+        ({ kind: 'machine', key: 'm1', version, changedAt: version, ordinal: 1, data: {} as MachineData, ...(deleted ? { deleted: true } : {}) })
+      let now = 1_000_000, changed: Part[] = [machine(2)], stored: Part<MachineData>[] = [machine(1)]
+      const cache = new SwarmCache(new MemoryStamps(), { now: () => now, delta: async () => ({ parts: changed, head: null }) })
+      const read = async (name: string) => (await cache.at(['t1'])).get('t1', name, 'all', async () => stored, machinesRule)
+      await read('a')
+      // A second entry of the Swarm: with one, replacing it forgets the delta and hides this.
+      await read('other')
+      now += 61_000
+      // The delta 'a' refreshes from holds the machine, live.
+      expect((await read('a')).map(p => p.key)).toEqual(['m1'])
+      // Then it is removed, its bump lost, and 'b' loads correctly without it.
+      changed = [machine(3, true)]
+      stored = []
+      now += 1
+      expect(await read('b')).toEqual([])
+      now += 60_000
+      expect(await read('b')).toEqual([])
+    })
+
+    it('a member removed before an entry loaded does not come back from an older delta', async () => {
+      const changes = { parts: [part('removed-member')] }
+      const { read, advance, load } = setup(changes)
+      await read(rule(), 'main', 'a')
+      await read(rule(), 'main', 'other')
+      advance(61_000)
+      await read(rule(), 'main', 'a')
+      changes.parts = []
+      advance(1)
+      load.mockResolvedValueOnce({ keys: ['correct'] })
+      expect(await read(rule(), 'main', 'b')).toEqual({ keys: ['correct'] })
+      advance(60_000)
+      expect(await read(rule(), 'main', 'b')).toEqual({ keys: ['correct'] })
+    })
+
+    it('the writing pod reads its own commit while its bump is owed, on every entry', async () => {
+      const changes = { parts: [] as Part[] }
+      const { cache, delta, read, advance } = setup(changes)
+      await read(rule(), 'main', 'a')
+      await read(rule(), 'main', 'b')
+      advance(61_000)
+      // 'a' refreshes from a delta; 'b', not read since, is still older than that delta.
+      await read(rule(), 'main', 'a')
+      expect(delta).toHaveBeenCalledTimes(1)
+      advance(1_000)
+      // A commit here that Redis would not take: announce() drops the Swarm, and the stamps stand still.
+      changes.parts = [part('mine')]
+      cache.drop('t1')
+      expect(await read(rule(), 'main', 'b')).toEqual({ keys: ['g1', 'mine'] })
+      expect(await read(rule(), 'main', 'a')).toEqual({ keys: ['g1', 'mine'] })
+    })
+
+    it('entries refreshed together still share one delta', async () => {
+      const { delta, load, read, advance } = setup({ parts: [] })
+      await read(rule(), 'main', 'a')
+      await read(rule(), 'main', 'b')
+      advance(61_000)
+      await read(rule(), 'main', 'a')
+      await read(rule(), 'main', 'b')
+      expect(delta).toHaveBeenCalledTimes(1)
+      expect(load).toHaveBeenCalledTimes(2)
+    })
   })
 
   it('an entry not read for two minutes loads in full, and never stretches another entry\'s delta', async () => {
