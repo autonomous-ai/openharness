@@ -1754,12 +1754,18 @@ class SuperTabController extends ChangeNotifier {
         ? const <SuperTabConversation>[]
         : superTabStepsOf(state, task);
     if (steps.isEmpty) return messages(id);
-    return List.unmodifiable(
-      superTabMergeSteps(messages(id), {
-        for (final step in steps) step.id: messages(step.id),
-      }),
+    // Merged from the rows held, as they are held: an unchanged chat is the
+    // same list, not sorted again on each of a build's reads of it.
+    final merged = (_merges[id] ??= SuperTabStepsMerge()).of(
+      _messages[id] ?? const [],
+      {for (final step in steps) step.id: _messages[step.id] ?? const []},
     );
+    return merged.every(_listed)
+        ? merged
+        : List.unmodifiable(merged.where(_listed));
   }
+
+  final _merges = <String, SuperTabStepsMerge>{};
 
   /// The name of the step [message] was written in; null for a task's own.
   String? stepNameOf(SuperTabMessage message) {
@@ -3658,6 +3664,10 @@ class SuperTabController extends ChangeNotifier {
     final task = state?.conversation(id);
     if (state == null || task == null) return;
     for (final step in superTabStepsOf(state, task)) {
+      // Read again only when the Swarm says the step moved past the rows held
+      // (final review, minor 8: every poll read every step).
+      final held = _messages[step.id]?.lastOrNull?.sequence;
+      if (held != null && step.lastMessageSequence <= held) continue;
       unawaited(_readMessages(step.id, light: light));
     }
   }

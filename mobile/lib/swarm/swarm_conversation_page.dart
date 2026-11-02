@@ -1406,6 +1406,10 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// steps design): a step keeps its own conversation.
   final _steps = <String, SwarmConversation>{};
 
+  /// The merged chat, the same list while no row changed, so the timeline is
+  /// not made again on every build (final review, minor 8).
+  final _merge = SuperTabStepsMerge();
+
   void _stepsMoved() {
     if (mounted) setState(() {});
   }
@@ -1548,7 +1552,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     // merged in by time (task steps design).
     final stream = _steps.isEmpty
         ? c.stream
-        : superTabMergeSteps(c.stream, {
+        : _merge.of(c.stream, {
             for (final MapEntry(:key, :value) in _steps.entries)
               key: value.stream,
           });

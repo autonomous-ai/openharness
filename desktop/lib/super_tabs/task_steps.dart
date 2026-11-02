@@ -43,3 +43,28 @@ List<SuperTabMessage> superTabMergeSteps(
   });
   return all;
 }
+
+/// The last merge of a task's chat, kept while its rows are the same lists:
+/// a chat drawn again with nothing new is not sorted again (final review,
+/// minor 8).
+class SuperTabStepsMerge {
+  List<SuperTabMessage>? _task;
+  Map<String, List<SuperTabMessage>> _steps = const {};
+  List<SuperTabMessage> _rows = const [];
+
+  List<SuperTabMessage> of(
+    List<SuperTabMessage> task,
+    Map<String, List<SuperTabMessage>> steps,
+  ) {
+    final same =
+        identical(task, _task) &&
+        steps.length == _steps.length &&
+        steps.entries.every((e) => identical(_steps[e.key], e.value));
+    if (!same) {
+      _task = task;
+      _steps = Map.of(steps);
+      _rows = List.unmodifiable(superTabMergeSteps(task, steps));
+    }
+    return _rows;
+  }
+}

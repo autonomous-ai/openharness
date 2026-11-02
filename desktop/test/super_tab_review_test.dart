@@ -382,4 +382,40 @@ void main() {
     expect(marks, isNotEmpty);
     expect(marks.last['sequence'], taskLast);
   });
+
+  // Final review, minor 8: the open task's reads read each step again only
+  // when the Swarm says it moved past the rows held.
+  test("a task's reads skip a step that has nothing new", () async {
+    final server = groupServer(
+      linked: [
+        {
+          ...conversationFixture('design', 'Design'),
+          'number': 31,
+          'reviewOf': 'offline',
+          'step': 'Design',
+        },
+      ],
+    );
+    server.append('Step row', conversationId: 'design');
+    final paths = <String>[];
+    server.onRead = paths.add;
+    final controller = server.controller();
+    addTearDown(controller.dispose);
+    await controller.refresh();
+    controller.select('offline');
+    await controller.loadMessages('offline');
+    await Future<void>.delayed(Duration.zero);
+    int stepReads() =>
+        paths.where((p) => p.contains('/conversations/design/messages')).length;
+    final first = stepReads();
+    expect(first, 1);
+    await controller.loadMessages('offline');
+    await Future<void>.delayed(Duration.zero);
+    expect(stepReads(), first);
+    server.append('Another step row', conversationId: 'design');
+    await controller.refresh();
+    await controller.loadMessages('offline');
+    await Future<void>.delayed(Duration.zero);
+    expect(stepReads(), first + 1);
+  });
 }

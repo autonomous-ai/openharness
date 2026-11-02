@@ -106,4 +106,46 @@ void main() {
       ['s1'],
     );
   });
+
+  // Final review, minor 8: a chat built again with nothing new is not sorted
+  // again.
+  test('a merge of unchanged rows is the same list', () {
+    final task = [row('t1', 'task', '2026-11-02T09:00:00Z', 1)];
+    final step = [row('s1', 'review', '2026-11-02T09:05:00Z', 1)];
+    final merge = SuperTabStepsMerge();
+    final first = merge.of(task, {'review': step});
+    expect(identical(merge.of(task, {'review': step}), first), isTrue);
+    final more = [...step, row('s2', 'review', '2026-11-02T09:06:00Z', 2)];
+    expect(merge.of(task, {'review': more}).map((m) => m.id), [
+      't1',
+      's1',
+      's2',
+    ]);
+  });
+
+  test(
+    "the controller's merged chat is the same list while nothing changed",
+    () async {
+      final server = ConversationServer();
+      (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
+        {
+          ...conversationFixture('s1', 'Review'),
+          'number': 31,
+          'reviewOf': 'offline',
+          'step': 'Review',
+        },
+      ]);
+      server.append('Task row', conversationId: 'offline');
+      server.append('Step row', conversationId: 's1');
+      final controller = server.controller();
+      addTearDown(controller.dispose);
+      await controller.refresh();
+      controller.select('offline');
+      await controller.loadMessages('offline');
+      await controller.loadMessages('s1');
+      final first = controller.taskMessages('offline');
+      expect(first.map((m) => m.text), ['Task row', 'Step row']);
+      expect(identical(controller.taskMessages('offline'), first), isTrue);
+    },
+  );
 }
