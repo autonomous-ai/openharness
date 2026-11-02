@@ -4,7 +4,7 @@
 
 **Goal:** The share list (`GET /api/harness-shares`) reads its rows through an index that also gives the `createdAt` order, so Mongo does no in-memory sort.
 
-**Architecture:** Add `@@index([recipientEmail, autonomousEnv, createdAt])` to `HarnessShare`. The list filters the first two by equality, then `revokedAt`/`expiresAt`, and sorts by `createdAt` ascending with `take: 1000`. Equality fields first, then the sort field, lets Mongo walk one recipient's shares in order and stop at 1000. The existing `(recipientEmail, autonomousEnv, expiresAt)` index stays: nothing is dropped.
+**Architecture:** Add `@@index([recipientEmail, autonomousEnv, revokedAt, createdAt, expiresAt])` to `HarnessShare`. The list filters the first two by equality, then `revokedAt`/`expiresAt`, and sorts by `createdAt` ascending with `take: 1000`. Equality fields first (`revokedAt: null` included, so the revoked-but-unexpired shares, about 1,084 of the busiest recipient's 1,116 in prod, are never fetched), then the sort field, lets Mongo walk one recipient's live shares in order and stop at 1000; `expiresAt` last drops an expired share from its key before the fetch. Lead's before numbers on the PR showed the sort is not the cost (32 rows); the fetches are. The existing `(recipientEmail, autonomousEnv, expiresAt)` index stays: nothing is dropped.
 
 **Tech Stack:** Prisma (MongoDB), vitest with a loopback `MongoMemoryReplSet` (`integration/plans.test-support.ts`).
 
@@ -20,9 +20,9 @@
 
 ## Design
 
-- Growth: one index entry per share row (three small fields). Rows leave with `superTabs/purge.ts` (`deleteMany` by `superTabId`) and when a share is removed; nothing new grows.
-- Concurrency: building an index takes a brief exclusive collection lock; the collection is small (shares, not events). Writes to a share (create, rename, revoke) update one more index entry; `createdAt` never changes, so only inserts and deletes touch the new index.
-- Read cost: the list reads only the recipient's shares, in order, and stops at 1000. Before: an index scan on `(recipientEmail, autonomousEnv, expiresAt)` plus a blocking SORT of every unexpired share of that recipient.
+- Growth: one index entry per share row (five small fields). Rows leave with `superTabs/purge.ts` (`deleteMany` by `superTabId`) and when a share is removed; nothing new grows.
+- Concurrency: building an index takes a brief exclusive collection lock; the collection is small (shares, not events). Inserts, deletes and a revoke (`revokedAt`) update one more index entry; a rename does not touch it.
+- Read cost: the list reads only the recipient's shares, in order, and stops at 1000. Before: an index scan on `(recipientEmail, autonomousEnv, expiresAt)` that fetches every unexpired share of that recipient, revoked ones included, then sorts them.
 - Scale 10x: reads stay bounded by one recipient's shares. The warning metric is the list's slow-log count and `docsExamined` per call.
 - Compatibility: indexes are invisible to clients; old and new backends read the same rows.
 - Migration + rollback: `prisma db push` builds the index; rollback is dropping it (the old index still serves the filter). Both are production writes needing Ken's go.
@@ -50,9 +50,9 @@
 
 **Interfaces:**
 - Consumes: `planDatabase`, `profiled`, `reads`, `plan` from `integration/plans.test-support.ts`; `harnessShareRoutes` from `src/routes/harnessShares.ts`.
-- Produces: the index `HarnessShare_recipientEmail_autonomousEnv_createdAt_idx`.
+- Produces: the index `HarnessShare_recipientEmail_autonomousEnv_revokedAt_createdAt_expiresAt_idx`.
 
-- [ ] **Step 1: Write the failing test** — seed shares of several recipients (revoked, expired, other env), call the list through the route, and expect the share-list read to plan as an `IXSCAN` on `recipientEmail, autonomousEnv, createdAt` with no `SORT` stage, examining only that recipient's rows.
+- [ ] **Step 1: Write the failing test** — seed shares of several recipients (30 revoked but unexpired, one expired, one other environment, explicit `revokedAt: null` as the route writes it), call the list through the route, and expect the share-list read to plan as an `IXSCAN` on the new index and examine no more documents than the 5 it returns.
 - [ ] **Step 2: Run it and watch it fail** — `cd backend && NODE_ENV=test npx vitest run --config vitest.super-tabs.config.ts integration/harnessSharesIndexPlan.test.ts`. Expected: FAIL, plan is the `expiresAt` index with a `SORT`.
 - [ ] **Step 3: Commit the failing test.**
 - [ ] **Step 4: Add `@@index([recipientEmail, autonomousEnv, createdAt])` after the existing index.**

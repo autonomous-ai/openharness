@@ -25,7 +25,7 @@ beforeAll(async () => {
   ({ replica, db } = await planDatabase('share_index_plan'))
   shared.db = db
   const share = (recipientEmail: string, i: number, extra: Record<string, unknown> = {}) => ({ id: randomUUID(), ownerId: 'b'.repeat(24), machineId: `m-${i}`,
-    agentId: `agent-${i}`, recipientEmail, autonomousEnv: 'prod', name: `agent ${i}`, ownerPublicKey: 'fixture-key', expiresAt: new Date(Date.now() + DAY),
+    agentId: `agent-${i}`, recipientEmail, autonomousEnv: 'prod', name: `agent ${i}`, ownerPublicKey: 'fixture-key', revokedAt: null, expiresAt: new Date(Date.now() + DAY),
     createdAt: new Date(Date.now() - (100 - i) * 1000), ...extra })
   await db.harnessShare.createMany({ data: [
     // Many other recipients' shares, which a read not bounded by recipient examines too.
