@@ -402,7 +402,8 @@ Lent is shared out evenly when a period starts or ends inside it, so Last 24h's
 lent hours are an estimate. Weekly records are still written for older apps, which
 keep their week picker, as a new app does on an older server. Time recorded by
 week before the finer records began counts once, in the middle of its week.
-A period's Lent is what the board's own project earned.
+A period's Lent is what the board's own project earned, plus any of that older
+weekly time, which names no project.
 
 On Desktop, All projects sums every project the reader can read, for the chosen
 period, and lists everyone in the Swarm. A project the reader can't read adds
