@@ -387,6 +387,8 @@ export interface CableHost {
    * so the dial needs no table for a set it does not own.
    */
   selectMachine(machineId: string): Promise<{ ok: true } | { ok: false; code: string; message: string }>
+  /** The machine a pick is still on its way to, or '' when none is. Picking the selected machine then has to replace it. */
+  pendingPick?(): string
   /** The window's swarms and which is on screen. Empty with no window: the dial then draws no swarm line. */
   listSwarms(): { selected: string; swarms: CableSwarm[]; tiles: CableTile[] }
   /** The dial picked a swarm. Relayed to the window, which switches and re-describes its desk. */
@@ -3227,7 +3229,9 @@ export class CableSession {
    */
   private async selectMachine(machineId: string, isCurrent = () => true): Promise<void> {
     if (!machineId) return
-    if (machineId === this.host.selectedMachine()) {
+    // Not while a pick is on its way elsewhere: this one replaces it, so the host has to hear of it. Answered here alone,
+    // the slow pick landed afterwards and moved the check mark to a machine the person had left (Diego's Buddy, 11-02).
+    if (machineId === this.host.selectedMachine() && !this.host.pendingPick?.()) {
       await this.send({ t: 'machine.selected', machineId })
       await this.syncAgents()
       this.restoreInBackground()
@@ -3589,6 +3593,9 @@ export class CableSession {
     if (!this.link?.isOpen || this.greetedMac === null) return
     if (!agentId) return
 
+    // Read now: the focus step below writes the record. Desktop re-sends the same focus whenever its visible panes change,
+    // and a dial's own turn comes back as an echo: neither is anyone choosing anything (review of #2504).
+    const moved = agentId !== this.desiredFocus || this.appFocusUnsent
     const generation = ++this.appFocusGeneration
     const task = this.appFocusTail.then(async () => {
       // A newer desktop selection made this queued one obsolete before it started.
@@ -3636,7 +3643,8 @@ export class CableSession {
       await focused
       const isCurrent = () => generation === this.appFocusGeneration
       if (!isCurrent() || !machineId) return
-      if (machineId === this.host.selectedMachine()) {
+      // Only a focus that really moved replaces a pick on its way elsewhere (see selectMachine).
+      if (machineId === this.host.selectedMachine() && !(moved && this.host.pendingPick?.())) {
         // An older attachment to this same machine may have finished without acknowledging it,
         // because a newer pane superseded that request. The wheel still needs its selection.
         await this.syncMachines()

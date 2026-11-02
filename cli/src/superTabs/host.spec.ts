@@ -314,18 +314,19 @@ describe('Super Tab native delivery handoff', () => {
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
   })
   // The design of #1726 (section 5.3): the roster names the Leads conversation, so no delivery costs a read of the Swarm.
-  it('reads no Swarm to judge a delivery, for an agent that leads nothing or a Lead', async () => {
+  // Agent context design, section 2: a delivery reads the Swarm once, for the lines that say where it is (by what changed
+  // since the last read); judging the delivery itself still reads none, and a delivery tried again reads nothing more.
+  it('reads the Swarm once per delivery, for its context lines, and not again when it is tried again', async () => {
     const t = setup(), host = t.open()
+    const swarmReads = () => vi.mocked(t.call).mock.calls.filter(([, path]) => path.includes('asAgentId=')).length
     await host.tick()
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    const first = swarmReads()
+    expect(first).toBe(1)
     t.event('rejected', 'team_waiting_busy')
     await host.tick()
-    expect(vi.mocked(t.call).mock.calls.some(([, path]) => path.includes('asAgentId='))).toBe(false)
-    const lead = setup()
-    lead.row.lead = true
-    await lead.open().tick()
-    expect(lead.core.turns.deliver).toHaveBeenCalledTimes(1)
-    expect(vi.mocked(lead.call).mock.calls.some(([, path]) => path.includes('asAgentId='))).toBe(false)
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+    expect(swarmReads()).toBe(first)
   })
   it('keeps roster members through host failure and restart, releasing only a confirmed removal', async () => {
     const t = setup(), first = t.open()
@@ -748,6 +749,78 @@ describe('Super Tab native delivery handoff', () => {
     await person.open().tick()
     expect(vi.mocked(person.core.turns.deliver).mock.calls[0]![1] as string).not.toContain('--to')
   })
+  // Agent context design, section 2 (Ken, 2026-11-02): a delivery named only a 24-hex conversation id, so agents lost which
+  // task a message was about and who else had answered in its thread.
+  describe('where a delivery is', () => {
+    const SWARM = { projects: [{ id: 'app', name: 'App', leadConversationId: 'lead' }], agents: [{ id: 'agent', name: 'Dev1' }],
+      conversations: [{ id: 'lead', projectId: 'app', leadId: 'pm', archived: false, assignment: null },
+        { id: 'g12', projectId: 'app', number: 12, title: 'Fix login', leadId: 'pm', archived: false, assignment: { agentId: 'agent', status: 'working' } }] }
+    const page = (rows: Array<Record<string, unknown>>, threads: Array<Record<string, unknown>> = []) => ({ messages: rows, next: null, threads })
+    const ROOT = { id: 'root', conversationId: 'g12', text: 'Should we ship today?\nDetails', author: { name: 'Ken' }, createdAt: '2026-11-02T09:15:00.000Z', thread: 'root' }
+    function wired(fields: Record<string, unknown>, pages: Record<string, unknown> = {}, swarm: () => unknown = () => SWARM) {
+      const t = setup({ conversationId: 'g12', ...fields })
+      const original = vi.mocked(t.call).getMockImplementation()!
+      const reads: string[] = []
+      vi.mocked(t.call).mockImplementation(async (method, path, body) => {
+        const one = /\/messages\?asAgentId=agent&messageId=([a-z0-9]+)$/.exec(path)
+        if (one) { reads.push(one[1]!); return { status: 200, body: { success: true, data: pages[one[1]!] ?? page([]) } } }
+        if (/\/api\/super-tabs\/tab\/(parts|changes)/.test(path)) return { status: 200, body: { success: true, data: swarmReply(path, swarm() as never) } }
+        return original(method, path, body)
+      })
+      return { t, reads }
+    }
+    const delivered = async (t: ReturnType<typeof setup>) => { await t.open().tick(); return vi.mocked(t.core.turns.deliver).mock.calls[0]![1] as string }
+    it('names its task and the agent\'s own work before the message', async () => {
+      const { t } = wired({})
+      const prompt = await delivered(t)
+      expect(prompt).toContain('In task #12 "Fix login" (conversation g12).\nYou are assigned task #12 "Fix login" (working).\n')
+      expect(prompt.indexOf('You are assigned')).toBeLessThan(prompt.indexOf('Message message from'))
+    })
+    it('a delivery whose read fails still goes, without its lines', async () => {
+      const { t } = wired({}, {}, () => { throw new Error('offline') })
+      const prompt = await delivered(t)
+      expect(prompt).toContain('Message message from Collaborator')
+      expect(prompt).not.toContain('You are assigned')
+    })
+    // Final review, finding 3: a delivery never waits on its context; a read that hangs leaves its lines out.
+    it('a delivery whose context read hangs still goes, without its lines', async () => {
+      const { t } = wired({ thread: 'root', replyTo: 'm2' })
+      const original = vi.mocked(t.call).getMockImplementation()!
+      const hangs = (path: string) => /messageId=root$/.test(path) || /\/api\/super-tabs\/tab\/(parts|changes)/.test(path)
+      vi.mocked(t.call).mockImplementation(async (method, path, body) => hangs(path) ? new Promise(() => {}) as never : original(method, path, body))
+      await t.open({ contextWaitMs: 20 }).tick()
+      const prompt = vi.mocked(t.core.turns.deliver).mock.calls[0]![1] as string
+      expect(prompt).toContain('Message message from Collaborator')
+      expect(prompt).not.toContain('You are assigned')
+      expect(prompt).not.toContain('In a thread')
+    })
+    it('a reply to the root needs no extra read', async () => {
+      const { t, reads } = wired({ thread: 'root', replyTo: 'root' }, { root: page([ROOT], [{ id: 'root', replies: 3, authors: [{ name: 'Dev1' }, { name: 'Rev1' }] }]) })
+      const prompt = await delivered(t)
+      expect(prompt).toContain('In a thread Ken started (2026-11-02 09:15 UTC): "Should we ship today?" — 3 replies so far, from Dev1, Rev1. '
+        + 'Read the whole thread before acting on it: ')
+      expect(prompt).toContain("messages 'g12' --thread 'root'")
+      expect(reads).toEqual(['root'])
+    })
+    it('a reply to a later reply reads the root once', async () => {
+      const later = { id: 'm2', conversationId: 'g12', text: 'Not yet', author: { name: 'Dev1' }, createdAt: '2026-11-02T09:20:00.000Z', thread: 'root' }
+      const { t, reads } = wired({ thread: 'root', replyTo: 'm2' }, { m2: page([later]), root: page([ROOT], [{ id: 'root', replies: 2, authors: [{ name: 'Dev1' }] }]) })
+      const prompt = await delivered(t)
+      expect(prompt).toContain('In a thread Ken started')
+      expect(reads.filter(id => id === 'root')).toHaveLength(1)
+    })
+    it('a thread\'s only reply has no thread line', async () => {
+      const { t } = wired({ thread: 'root', replyTo: 'root' }, { root: page([ROOT], [{ id: 'root', replies: 1, authors: [{ name: 'Collaborator' }] }]) })
+      expect(await delivered(t)).not.toContain('In a thread')
+    })
+    it('a work.assign delivered right after it names the new task', async () => {
+      let swarm: Record<string, unknown> = { ...SWARM, conversations: [SWARM.conversations[0]] }
+      const { t } = wired({}, {}, () => swarm)
+      swarm = SWARM
+      expect(await delivered(t)).toContain('You are assigned task #12 "Fix login" (working).')
+    })
+  })
+
   it('keeps workflow out of the delivered prompt (it lives in the project instructions)', async () => {
     const t = setup({ author: { kind: 'person', id: 'p1', name: 'sam@example.com' }, text: 'Hi' })
     await t.open().tick()
@@ -1649,12 +1722,14 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
     expect(delivered[0]!.text).not.toContain('Artifact links your owner sent')
   })
 
-  it('lists nothing for a session that is not a Buddy, and reads nothing for it', async () => {
+  it('lists nothing for a session that is not a Buddy, and reads only for its context lines', async () => {
     const { t, host, delivered, reads } = buddyOn()
     vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', swarmSkill: { role: 'dev', key } } as never)
     await host.tick()
     expect(delivered).toHaveLength(1)
-    expect([listed(), reads]).toEqual([null, []])
+    // Its one read is the delivery's context lines (agent context design, section 2), not a Buddy's grant.
+    expect(listed()).toBeNull()
+    expect(reads).toHaveLength(1)
   })
 
   // Each message its person sends decides whether it reads beyond its folder (security reviews 1 and 2 of #2310): one read
@@ -3258,10 +3333,34 @@ describe('project instructions from the roster', () => {
     return { t, sent, reads, pass, holdNext, file, roleFiles, launched, folder, agents,
       save: (summary: string, text: string, at = LONG_AGO) => { const revision = saves.length + 1; saves.push({ revision, hash: `hash-${revision}`, summary, text, at }); return revision },
       move: (revision: number) => { doc = { projectId: 'app', revision, hash: `hash-${revision}`, coordinatorName: 'Product Manager' } },
+      /** The project on the built-in template (nothing saved: revision 0) whose text is [text], as a backend build serves it. */
+      template: (hash: string, text: string) => { saves.length = 0; saves.push({ revision: 0, hash, summary: '', text, at: LONG_AGO })
+        doc = { projectId: 'app', revision: 0, hash, coordinatorName: 'Product Manager' } },
       setDoc: (next: typeof doc) => { doc = next }, setLag: (revision: number | undefined) => { lag = revision }, setHistory: (served: boolean) => { history = served } }
   }
   const instructionsRead = (agentId: string) => `/api/super-tabs/tab/projects/app/instructions?asAgentId=${agentId}`
   const historyRead = (agentId: string) => `/api/super-tabs/tab/projects/app/instructions/revisions?asAgentId=${agentId}`
+
+  // 2026-11-02, the rollout of #2495: a project with nothing saved stays at revision 0, so the text read once was kept until
+  // the daemon restarted. The template's hash moves with each backend build that changes it.
+  it('reads a changed template again at revision 0', async () => {
+    const f = docFixture()
+    f.template('template-1', 'Template one.\n')
+    const host = await f.pass()
+    expect(readFileSync(f.file('tester'), 'utf8')).toContain('Template one.')
+    f.template('template-2', 'Template two.\n')
+    await f.pass(host, 120_000)
+    expect(f.reads.filter(path => path === instructionsRead('a-tester'))).toHaveLength(2)
+    expect(readFileSync(f.file('tester'), 'utf8')).toContain('Template two.')
+  })
+
+  it('does not read the template again while its hash stays', async () => {
+    const f = docFixture()
+    f.template('template-1', 'Template one.\n')
+    const host = await f.pass()
+    for (let i = 1; i <= 3; i++) await f.pass(host, i * 120_000)
+    expect(f.reads.filter(path => path === instructionsRead('a-tester'))).toHaveLength(1)
+  })
 
   it('installs a Tester\'s instructions from the roster and tells it nothing at first', async () => {
     const f = docFixture()

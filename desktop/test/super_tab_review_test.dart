@@ -254,4 +254,206 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('This task has no description yet.'), findsOneWidget);
   });
+
+  // Task steps design (Ken, 2026-11-02: one pull request showed as three tasks). A step sits on its task's row, by its own
+  // name and agent; a linked task from before steps reads as before.
+  test("a task's steps line names each step and its agent", () {
+    final server = groupServer(
+      linked: [
+        {
+          ...conversationFixture('copy', 'Copy'),
+          'number': 30,
+          'reviewOf': 'offline',
+          'step': 'Copy',
+          'assignment': {'id': 'w1', 'agentId': 'builder', 'status': 'done'},
+        },
+        {
+          ...conversationFixture('design', 'Thiết kế "v2"'),
+          'number': 31,
+          'reviewOf': 'offline',
+          'step': 'Thiết kế "v2"',
+          'assignment': {
+            'id': 'w2',
+            'agentId': 'reviewer',
+            'status': 'working',
+          },
+        },
+        {
+          ...conversationFixture('old', 'Review PR 12'),
+          'number': 20,
+          'reviewOf': 'offline',
+        },
+      ],
+    );
+    final snapshot = SuperTabSnapshot.fromJson(server.state);
+    expect(snapshot.conversation('copy')!.step, 'Copy');
+    expect(superTabIsStep(snapshot.conversation('copy')!), isTrue);
+    expect(superTabIsStep(snapshot.conversation('old')!), isFalse);
+    expect(
+      superTabLinkedLine(snapshot, snapshot.conversation('offline')!),
+      '#20 Review PR 12: not started · Copy (Atlas): done · '
+      'Thiết kế "v2" (Nova): working',
+    );
+  });
+
+  test('the sidebar lists no step as a task of its own', () {
+    final server = groupServer(
+      linked: [
+        {
+          ...conversationFixture('copy', 'Copy'),
+          'number': 30,
+          'reviewOf': 'offline',
+          'step': 'Copy',
+        },
+        {
+          ...conversationFixture('old', 'Review PR 12'),
+          'number': 20,
+          'reviewOf': 'offline',
+        },
+      ],
+    );
+    final snapshot = SuperTabSnapshot.fromJson(server.state);
+    final listed = superTabListedWork(snapshot.conversations).map((g) => g.id);
+    expect(listed, contains('old'));
+    expect(listed, isNot(contains('copy')));
+  });
+
+  // Task steps design: a task's chat shows its steps' rows by time, each
+  // with its step's name beside the author.
+  testWidgets("a task's chat shows its steps' rows with the step's name", (
+    tester,
+  ) async {
+    final server = groupServer(
+      linked: [
+        {
+          ...conversationFixture('design', 'Design'),
+          'number': 31,
+          'reviewOf': 'offline',
+          'step': 'Design',
+          'agentIds': ['reviewer'],
+        },
+      ],
+      messages: [('builder', 'Draft is up')],
+    );
+    server.append('Two findings on the draft', conversationId: 'design');
+    server.messages.last['author'] = {
+      'kind': 'agent',
+      'id': 'reviewer',
+      'name': 'Nova',
+    };
+    await showView(tester, server);
+    expect(find.textContaining('Two findings on the draft'), findsOneWidget);
+    expect(find.textContaining('Nova · Design'), findsOneWidget);
+  });
+
+  // Final review, finding 4: each conversation numbers its own messages, so a
+  // step's row last in the task's chat must not move the task's read mark
+  // (markRead keeps it within the task's own loaded rows).
+  testWidgets("a step's row last in the chat leaves the task's read mark on "
+      "the task's own newest row", (tester) async {
+    final server = groupServer(
+      linked: [
+        {
+          ...conversationFixture('design', 'Design'),
+          'number': 31,
+          'reviewOf': 'offline',
+          'step': 'Design',
+          'agentIds': ['reviewer'],
+        },
+      ],
+      messages: [for (var i = 0; i < 40; i++) ('builder', 'Line $i')],
+    );
+    final taskLast = server.messages.last['sequence'] as int;
+    server.append('Step row', conversationId: 'design');
+    server.messages.last
+      ..['sequence'] = taskLast + 5
+      ..['createdAt'] = '2026-10-18T00:05:00Z';
+    await showView(tester, server);
+    await tester.pumpAndSettle();
+    // Read back, then down to the end: reaching the end marks the chat read.
+    final list = find.byType(Scrollable).first;
+    await tester.drag(list, const Offset(0, 600));
+    await tester.pumpAndSettle();
+    await tester.drag(list, const Offset(0, -3000));
+    await tester.pumpAndSettle();
+    final marks = server.readMarkPosts.where(
+      (m) => m['conversationId'] == 'offline',
+    );
+    expect(marks, isNotEmpty);
+    expect(marks.last['sequence'], taskLast);
+  });
+
+  // Final review, minor 8: the open task's reads read each step again only
+  // when the Swarm says it moved past the rows held.
+  test("a task's reads skip a step that has nothing new", () async {
+    final server = groupServer(
+      linked: [
+        {
+          ...conversationFixture('design', 'Design'),
+          'number': 31,
+          'reviewOf': 'offline',
+          'step': 'Design',
+        },
+      ],
+    );
+    server.append('Step row', conversationId: 'design');
+    final paths = <String>[];
+    server.onRead = paths.add;
+    final controller = server.controller();
+    addTearDown(controller.dispose);
+    await controller.refresh();
+    controller.select('offline');
+    await controller.loadMessages('offline');
+    await Future<void>.delayed(Duration.zero);
+    int stepReads() =>
+        paths.where((p) => p.contains('/conversations/design/messages')).length;
+    final first = stepReads();
+    expect(first, 1);
+    await controller.loadMessages('offline');
+    await Future<void>.delayed(Duration.zero);
+    expect(stepReads(), first);
+    server.append('Another step row', conversationId: 'design');
+    await controller.refresh();
+    await controller.loadMessages('offline');
+    await Future<void>.delayed(Duration.zero);
+    expect(stepReads(), first + 1);
+  });
+
+  // Final review, finding 4: the New messages line is placed by the task's
+  // own sequences; a step's row, numbered in its own conversation, is not
+  // where it goes.
+  testWidgets("a task's New messages line ignores its steps' sequences", (
+    tester,
+  ) async {
+    final server = groupServer(
+      linked: [
+        {
+          ...conversationFixture('design', 'Design'),
+          'number': 31,
+          'reviewOf': 'offline',
+          'step': 'Design',
+        },
+      ],
+      messages: [for (var i = 1; i <= 6; i++) ('builder', 'Line $i')],
+    );
+    final read =
+        (server.messages.where((m) => m['text'] == 'Line 4').single['sequence']
+            as int);
+    server.markReadElsewhere('offline', read);
+    server.append('Early step row', conversationId: 'design');
+    server.messages.last
+      ..['sequence'] = 999
+      ..['createdAt'] = '2026-10-17T23:00:00Z';
+    await showView(tester, server);
+    const line = ValueKey('super-new-messages-line');
+    expect(find.byKey(line), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.byKey(line)).dy,
+      greaterThan(tester.getTopLeft(find.textContaining('Line 4')).dy),
+    );
+    expect(
+      tester.getTopLeft(find.byKey(line)).dy,
+      lessThan(tester.getTopLeft(find.textContaining('Line 5')).dy),
+    );
+  });
 }
