@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:collection/collection.dart' show mergeSort;
 import 'package:flutter/material.dart';
 
+import '../core/local_key_value_store.dart';
 import '../core/relative_time.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
@@ -28,6 +29,7 @@ import 'leaderboard/reader.dart';
 import 'leaderboard/waiting_line.dart';
 import 'model.dart';
 import 'profile_sheet.dart';
+import 'roster_scope.dart';
 import 'section_heading.dart';
 import 'agent_line.dart';
 
@@ -45,6 +47,7 @@ class SuperTabRoster extends StatefulWidget {
     required this.onAnswer,
     this.app,
     this.board,
+    this.storage,
     this.now = DateTime.now,
   });
   final SuperTabController controller;
@@ -60,6 +63,10 @@ class SuperTabRoster extends StatefulWidget {
   /// The open project's week board, shared with the sidebar's Models; the
   /// roster reads its own when not given.
   final SuperTabLeaderboardReader? board;
+
+  /// Where the scope choice is kept on this computer; kept for this visit
+  /// only when null.
+  final LocalKeyValueStore? storage;
   final DateTime Function() now;
   @override
   State<SuperTabRoster> createState() => _SuperTabRosterState();
@@ -73,13 +80,48 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
   late final SuperTabLeaderboardReader _board =
       widget.board ?? (_ownBoard = SuperTabProjectBoard(c));
 
+  /// Whole Swarm or the open project, remembered per account and Swarm.
+  late final _choice = SuperTabRosterScopeChoice(
+    storage: widget.storage,
+    accountId: c.accountId,
+    tabId: c.tabId,
+  );
+
   /// One tick for the whole list, so ages and leases stay true on a quiet
   /// Swarm (review of #2281); a change in the Swarm rebuilds it anyway.
   Timer? _tick;
 
+  /// The project the list is narrowed to now, so its loss is told from the
+  /// person simply opening another project's chat.
+  String? _scopedId;
+
+  /// The scope follows the project open in the chat. A project that leaves
+  /// the Swarm the reader sees (access revoked, deleted) while it is the one
+  /// narrowing the list puts the choice back on All projects, and saves that,
+  /// rather than carrying it over to whichever project opens next.
+  void _scopeMoved() {
+    if (_choice.scope != SuperTabRosterScope.project) {
+      _scopedId = null;
+      return;
+    }
+    final state = c.snapshot;
+    final last = _scopedId;
+    if (last != null && state != null && state.projectById(last) == null) {
+      _scopedId = null;
+      _choice.choose(SuperTabRosterScope.all);
+      return;
+    }
+    final open = c.selected?.projectId;
+    if (open != null && open.isNotEmpty && state?.projectById(open) != null) {
+      _scopedId = open;
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    c.addListener(_scopeMoved);
+    _choice.addListener(_scopeMoved);
     _tick = Timer.periodic(
       const Duration(seconds: 30),
       (_) => mounted ? setState(() {}) : null,
@@ -89,7 +131,10 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
   @override
   void dispose() {
     _tick?.cancel();
+    c.removeListener(_scopeMoved);
+    _choice.removeListener(_scopeMoved);
     _ownBoard?.dispose();
+    _choice.dispose();
     super.dispose();
   }
 
@@ -481,10 +526,25 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         : c.selected?.projectId;
     // Who reads a private conversation still decides its +, never the list.
     final audience = c.selected?.audience;
+    // The project the list is narrowed to, only while the person chose it and
+    // a project they can read is open; otherwise the whole Swarm (Dee,
+    // 2026-11-02). Read from the live snapshot, so a project that is gone or
+    // no longer readable never narrows anything.
+    final scoped =
+        _choice.scope == SuperTabRosterScope.project && projectId != null
+        ? state?.projectById(projectId)
+        : null;
     final members = state?.teamAgents ?? const <SuperTabAgent>[];
-    final leads = members.where((a) => state!.isLead(a.id)).toList();
-    final agents = members.where((a) => !state!.isLead(a.id)).toList();
-    final people = state?.people ?? const <SuperTabPerson>[];
+    bool inScope(SuperTabAgent a) =>
+        scoped == null ||
+        (state!.leadProjectForAgent(a.id)?.id ?? _agentProjectId(a)) ==
+            scoped.id;
+    final leads = members
+        .where((a) => state!.isLead(a.id) && inScope(a))
+        .toList();
+    final agents = members
+        .where((a) => !state!.isLead(a.id) && inScope(a))
+        .toList();
     // Only the open project's board: an answer for any other never lends
     // its numbers to these rows.
     final board = switch (_board.board) {
@@ -492,6 +552,11 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         board,
       _ => null,
     };
+    final people = [
+      for (final person in state?.people ?? const <SuperTabPerson>[])
+        if (scoped == null || personInProject(scoped, person.id, board: board))
+          person,
+    ];
     final scores = {
       for (final score in board?.people ?? const []) score.personId: score,
     };
@@ -542,34 +607,64 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             points: board.people.map((s) => s.points),
           );
     final week = weekName(_board.week, current);
+    final openProject = projectId == null
+        ? null
+        : state?.projectById(projectId);
+    final showWeek = board != null || _board.week != null;
+    Widget weekSelect({double? width}) => AppSelectField<int>(
+      key: const ValueKey('leaderboard-week'),
+      value: _board.week ?? current,
+      width: width,
+      height: DesktopChrome.compactControlHeight,
+      semanticLabel: 'Week',
+      options: [
+        for (var back = 0; back < 4; back++)
+          SelectOption(
+            value: current - back * weekMs,
+            label: capitalized(weekName(current - back * weekMs, current)),
+          ),
+      ],
+      onChanged: (week) =>
+          unawaited(_board.showWeek(week == current ? null : week)),
+    );
     return [
       // Humans and Agents: the two roles in one team (Dee, 2026-10-29).
       SuperTabSectionHeading(
         'Humans',
-        actions: [
-          if (board != null || _board.week != null)
-            AppSelectField<int>(
-              key: const ValueKey('leaderboard-week'),
-              value: _board.week ?? current,
-              width: 112,
-              height: DesktopChrome.compactControlHeight,
-              semanticLabel: 'Week',
-              options: [
-                for (var back = 0; back < 4; back++)
-                  SelectOption(
-                    value: current - back * weekMs,
-                    label: capitalized(
-                      weekName(current - back * weekMs, current),
-                    ),
-                  ),
-              ],
-              onChanged: (week) =>
-                  unawaited(_board.showWeek(week == current ? null : week)),
-            ),
-        ],
+        actions: [if (showWeek) weekSelect(width: 112)],
         onAdd: c.isOwner ? widget.onInvite : null,
         addTooltip: 'Invite people',
       ),
+      if (openProject != null)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            DesktopChrome.groupGap,
+            0,
+            DesktopChrome.groupGap,
+            DesktopChrome.controlGap,
+          ),
+          // The pane is too narrow for the scope beside the week on the
+          // heading's line, so it takes the line below.
+          child: AppSelectField<SuperTabRosterScope>(
+            key: const ValueKey('roster-scope'),
+            value: scoped == null
+                ? SuperTabRosterScope.all
+                : SuperTabRosterScope.project,
+            height: DesktopChrome.compactControlHeight,
+            semanticLabel: 'Show',
+            options: [
+              const SelectOption(
+                value: SuperTabRosterScope.all,
+                label: 'All projects',
+              ),
+              SelectOption(
+                value: SuperTabRosterScope.project,
+                label: openProject.name,
+              ),
+            ],
+            onChanged: _choice.choose,
+          ),
+        ),
       if (_board.error case final error?)
         Padding(
           padding: const EdgeInsets.fromLTRB(
@@ -623,6 +718,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         listenable: Listenable.merge([
           c,
           _board,
+          _choice,
           if (widget.app != null) ...[widget.app!, widget.app!.agentUnread],
           terminalThemeStore,
           appearancePrefsStore,
