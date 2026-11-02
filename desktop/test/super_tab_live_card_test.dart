@@ -434,4 +434,32 @@ void main() {
     // The read mark it just made is saved a moment later.
     await tester.pump(const Duration(milliseconds: 250));
   });
+
+  // Task #2195: a card on a Swarm that isn't showing asks nothing of GitHub.
+  testWidgets('a card off screen does not watch its pull request, and watches again on coming back', (tester) async {
+    final server = cardServer(mergedAt: 5);
+    final c = server.controller();
+    addTearDown(c.dispose);
+    await c.refresh();
+    await c.loadMessages('work');
+    final group = c.snapshot!.conversation('work')!;
+    final facts = SuperTabPullRequestFacts((urls) async => {'account': 'ada', 'rows': const <Object>[]});
+    addTearDown(facts.dispose);
+    Widget frame(bool on) => MaterialApp(
+      home: Scaffold(
+        body: TickerMode(
+          enabled: on,
+          child: SuperTabLiveCard(group: group, card: group.cards.of('message-2')!, controller: c, facts: facts),
+        ),
+      ),
+    );
+    await tester.pumpWidget(frame(false));
+    expect(facts.watching, isEmpty);
+    await tester.pumpWidget(frame(true));
+    expect(facts.watching, isNotEmpty);
+    await tester.pumpWidget(frame(false));
+    expect(facts.watching, isEmpty);
+    await tester.pumpWidget(const SizedBox());
+    expect(facts.watching, isEmpty);
+  });
 }

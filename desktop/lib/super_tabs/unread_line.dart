@@ -4,7 +4,6 @@ import 'package:flutter/rendering.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
-import 'catch_up.dart';
 import 'model.dart';
 
 /// The first message of [shown] the reader has not read, for the New messages line: in the main stream (a reply
@@ -45,9 +44,6 @@ class SuperTabUnreadLines {
   /// Reads back that failed this visit, by conversation: tried again up to [_tries] times.
   final _failed = <String, int>{};
   static const _tries = 3;
-
-  /// The catch-up card under each line, kept and forgotten with it.
-  final catchUps = SuperTabCatchUps();
 
   /// The line on screen, to tell whether it is scrolled out of view.
   final key = GlobalKey(debugLabel: 'New messages line');
@@ -134,14 +130,12 @@ class SuperTabUnreadLines {
     _loaded.remove(id);
     _failed.remove(id);
     _seen.remove(id);
-    catchUps.forget(id);
     away = below = false;
   }
 
-  /// Read with Esc: no line or card until the next visit.
+  /// Read with Esc: no line until the next visit.
   void clear(String id) {
     _at[id] = null;
-    catchUps.dismiss(id);
     away = below = false;
   }
 
@@ -151,7 +145,6 @@ class SuperTabUnreadLines {
     _loaded.clear();
     _failed.clear();
     _seen.clear();
-    catchUps.reset();
     away = below = false;
   }
 }

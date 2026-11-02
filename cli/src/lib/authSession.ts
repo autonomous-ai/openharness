@@ -93,6 +93,12 @@ export const newSignInEpoch = (now = Date.now()): string => `${randomBytes(16).t
  *  being made here, so the device key log may take its file over for it but never starts one over. */
 export const ADOPTED_SIGN_IN = 'adopted:'
 
+/** A Team sign-in's epoch, made as it signs in. Adopted, so the device key log treats it as it always has (a Team session was
+ *  given an adopted epoch at its first read), and can never start over for another account on it; and its own form, as it is a
+ *  new sign-in, never an old session given an epoch meanwhile ([sameSignIn]). */
+const TEAM_SIGN_IN = `${ADOPTED_SIGN_IN}team:`
+export const teamSignInEpoch = (now = Date.now()): string => TEAM_SIGN_IN + newSignInEpoch(now)
+
 /** Give a session from before epochs existed one (`ADOPTED_SIGN_IN`), under the refresh lock so a
  *  rotated refresh token is never written back over. The session's epoch; null when signed out. */
 export async function ensureSignInEpoch(): Promise<string | null> {
@@ -210,6 +216,24 @@ export function updateAuthSession(change: (latest: AuthSession) => AuthSession |
     writeAuthSession(next)
     return next
   })
+}
+
+/**
+ * A machine id the backend named for the sign-in [startedUnder] (its `signInEpoch` when the lookup began), merged into the
+ * newest session only if that is still the same sign-in. A lookup can outlive a sign-out and a new sign-in, and its answer is
+ * the old account's machine: dropped, as a later lookup finds the new one. A refresh keeps the epoch, so it keeps the answer. A
+ * session from before epochs may only have been given one meanwhile (adopted): still that sign-in. The newest session; null
+ * when there is none, or it is marked signed out.
+ */
+export function recordMachineId(machineId: string, startedUnder: string | undefined): Promise<AuthSession | null> {
+  return updateAuthSession((latest) => !sameSignIn(latest, startedUnder) || latest.machineId === machineId
+    ? null : { ...latest, machineId, updatedAt: Date.now() })
+}
+
+/** Whether [latest] is still the sign-in a lookup started under ([recordMachineId]). */
+export function sameSignIn(latest: AuthSession, startedUnder: string | undefined): boolean {
+  if (latest.signInEpoch === startedUnder) return true
+  return startedUnder === undefined && signInOf(latest.signInEpoch)?.adopted === true && !latest.signInEpoch?.startsWith(TEAM_SIGN_IN)
 }
 
 /** The first wait before a refused refresh is tried again, and the longest. The app asks `auth status` often,
@@ -453,7 +477,7 @@ export class AuthSessionManager {
     })
   }
 
-  async updateMachineId(machineId: string): Promise<void> {
-    await updateAuthSession((current) => current.machineId === machineId ? null : { ...current, machineId, updatedAt: Date.now() })
+  async updateMachineId(machineId: string, startedUnder: string | undefined): Promise<void> {
+    await recordMachineId(machineId, startedUnder)
   }
 }

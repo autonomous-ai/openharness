@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { env } from '../config/env.js'
-import { localWsTarget } from './localTransport.js'
+import { openLocalWs } from './localTransport.js'
 import { readdir, readFile, realpath } from 'node:fs/promises'
 import { dirname, isAbsolute, join, posix, resolve, win32 } from 'node:path'
 import { addressOf, atMachineRefusal, EXIT, machineOption, refusalNext, REFUSED_CODES, step, VIA_MCP_ENV } from '../agentClient/commands.js'
@@ -343,7 +343,8 @@ export interface NewCommandDeps {
   /** What to say when the daemon cannot be reached: stopped, or kept out by a sandbox (lib/unreachable.ts). */
   unreachable?: () => string
   listMachines: () => Promise<NewMachine[]>
-  connect: (url: string) => NewSocket
+  /** A WebSocket to [url] with [headers]; on Windows the daemon's pipe is opened instead (lib/localTransport.ts). */
+  connect: (url: string, headers: Record<string, string>) => NewSocket
   output: (line: string) => void
   error: (line: string) => void
   timeoutMs?: number
@@ -485,7 +486,7 @@ export function daemonSession(deps: Pick<NewCommandDeps, 'port' | 'connect' | 't
   close: () => void
 }> {
   return new Promise((resolveSession, rejectSession) => {
-    const socket = deps.connect(localWsTarget(env.ADAPTER_DATA_DIR, deps.port).url)
+    const socket = openLocalWs(env.ADAPTER_DATA_DIR, deps.port, deps.connect)
     const waiting = new Map<string, { done: (payload: Record<string, unknown>) => void; fail: (error: Error) => void; timer: NodeJS.Timeout }>()
     let ready = false
     const failAll = (error: Error): void => {
