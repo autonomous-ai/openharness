@@ -202,7 +202,7 @@ static bool queue(action_t a) {
     if (a.kind==A_NOTICE_READ) { notice_reads_sent++; notice_read_queued=a; }
     if (a.kind==A_DESKTOP) { desktop_opens++; COPY(opened_agent,a.id); }
     if (a.kind==A_SUPERTAB && swarm_sent<64) {
-        static const char *ops[]={"recap.get","open","select","side"};
+        static const char *ops[]={"recap.get","open","select","side","side-kept"};
         snprintf(swarm_wire[swarm_sent++],sizeof swarm_wire[0],"%s %s %s",ops[a.value],a.text,a.id);
     }
     if (a.kind==A_STOP_YES) COPY(stopped_agent,a.id);
@@ -1674,8 +1674,10 @@ static void swarm_pane_checks(const char *dir) {
         ui_supertabs_ids(none, 0); assert(s.view == TABS);
         ui_supertabs_ids(ids, 3); openharness_card(); ht_supertabs_put(&swarm, &card, ms(), NULL, 0);
         ui_supertab_focus("s1", "L2"); assert(swarm_mode() && !strcmp(sw.lead, "L2") && s.view == HOME);
-        // A Swarm that really went, back only after 10 s: TABS stays, and the person's touch browses as before.
-        ui_supertabs_ids(none, 0); fake_ms += 10000; ui_supertabs_ids(ids, 3); card_send();
+        // A Swarm that really went (the list came back without it), back later: TABS stays, and the person's touch browses as before.
+        { const char others[2][ID_MAX] = {"s3", "s2"}; ui_supertabs_ids(others, 2); }
+        assert(!swarm_mode() && s.view == TABS);
+        ui_supertabs_ids(ids, 3); openharness_card(); card_send();
         assert(!swarm_mode() && s.view == TABS);
         habitat_touch(true, 233, 233, fake_ms);
         ht_tab_carousel_reset(&tab_carousel, tabs_total(), tab_index_of("t2")); tabs_sync(); assert(tab_switches == switched + 1);
@@ -2081,7 +2083,70 @@ static bool clear_of_text(void) {
 static bool pm_dots(void) { return disc_at(442, 218, 12, 0xeaeaf0) && disc_at(442, 248, 9, 0x55565f); }
 static bool buddy_dots(void) { return disc_at(442, 218, 9, 0x55565f) && disc_at(442, 248, 12, 0xc49bff); }
 static bool any_dot(void) { return disc_at(442, 218, 12, 0xeaeaf0) || disc_at(442, 218, 9, 0x55565f); }
-static bool badge(void) { return disc_at(449, 241, 14, 0x000000) && disc_at(449, 241, 10, 0xc49bff); }
+// The Buddy's unheard word on the PM side: the lower dot itself turns lilac, at its own place and size.
+static bool badge(void) { return disc_at(442, 218, 12, 0xeaeaf0) && disc_at(442, 248, 9, 0xc49bff); }
+// Nothing drawn off the dots' line: the old badge, 7 px off the lower dot, smeared the two together.
+static bool offset_disc(void) {
+    for (int i = 0; i < scene.count; i++) {
+        const ht_run_t *r = &scene.runs[i];
+        if (r->box.h > 1 && r->x + r->w / 2 == 449 && r->y + r->box.h / 2 == 241) return true;
+    }
+    return false;
+}
+/*
+ * Diego's dial, 2026-11-02: every daemon restart (each CLI update) dropped the dial on the tabs list, because the Swarm cards
+ * took 5-40 s to come back. The face comes back on its Swarm, Lead and side whenever the cards do, unless the person moved on.
+ */
+static void swarm_restart_checks(void) {
+    const char none[1][ID_MAX] = {""}, ids[3][ID_MAX] = {"s1", "s3", "s2"}, others[2][ID_MAX] = {"s3", "s2"};
+    // The session goes down for 40 s and the cards come back: the same Lead, on the same screen, with no pick sent.
+    swarm_setup(); enter_at("s1", "L2"); s.view = HOME; swarm_sent = 0;
+    ui_supertabs_clear(); sw.opened = false; s.connected = false; assert(!swarm_mode() && s.view == HOME);
+    fake_ms += 40000; s.connected = true;
+    ui_supertabs_ids(ids, 3); assert(s.view == HOME);
+    openharness_card(); card_send();
+    assert(swarm_mode() && !strcmp(sw.tab, "s1") && !strcmp(sw.lead, "L2") && s.view == HOME && !wire_has(0, "select s1 L2"));
+    // The app is on another Lead of that Swarm by now: the face follows it.
+    ui_supertab_focus("s1", "L3"); assert(!strcmp(sw.lead, "L3") && s.view == HOME);
+    // The same when the focus comes before the card has brought the face back.
+    swarm_setup(); enter_at("s1", "L2"); s.view = HOME;
+    ui_supertabs_clear(); fake_ms += 40000; ui_supertabs_ids(ids, 3); openharness_card(); ht_supertabs_put(&swarm, &card, ms(), NULL, 0);
+    ui_supertab_focus("s1", "L3"); assert(swarm_mode() && !strcmp(sw.lead, "L3") && s.view == HOME);
+    // The daemon came back with an empty list (it had not read them yet, or signed in late): TABS for now, the face after 40 s.
+    swarm_setup(); enter_at("s1", "L2"); s.view = HOME;
+    ui_supertabs_ids(none, 0); assert(!swarm_mode() && s.view == TABS && sw.auto_tabs);
+    fake_ms += 40000; ui_supertabs_ids(ids, 3); openharness_card(); card_send();
+    assert(swarm_mode() && !strcmp(sw.lead, "L2") && s.view == HOME && !sw.auto_tabs);
+    // That TABS, then a session down too: it still comes back.
+    swarm_setup(); enter_at("s1", "L2"); s.view = HOME;
+    ui_supertabs_ids(none, 0); ui_supertabs_clear(); assert(s.view == TABS && sw.auto_tabs);
+    fake_ms += 40000; ui_supertabs_ids(ids, 3); openharness_card(); card_send();
+    assert(swarm_mode() && !strcmp(sw.lead, "L2") && s.view == HOME);
+    // The Swarm on the face really went, and the app is on another: the auto-opened TABS follows the app.
+    swarm_setup(); enter_at("s1", "L2"); s.view = HOME;
+    ui_supertabs_ids(none, 0); ui_supertabs_ids(others, 2); assert(s.view == TABS && sw.auto_tabs);
+    card_begin("s2", "t2", "playground"); card_lead("P0", "sandbox", "claude", "h9", "work", 0, 12); card_send();
+    COPY(s.selected_tab, "t2"); ui_supertab_focus("s2", "P0");
+    assert(swarm_mode() && !strcmp(sw.tab, "s2") && !strcmp(sw.lead, "P0") && s.view == HOME);
+    // The Swarm really gone once the cards are back: it does not come back over the dial later.
+    swarm_setup(); enter_at("s1", "L2"); s.view = HOME;
+    ui_supertabs_clear(); fake_ms += 40000; ui_supertabs_ids(others, 2);
+    ui_supertabs_ids(ids, 3); openharness_card(); card_send(); assert(!swarm_mode());
+    // The person touched the dial meanwhile: that is their screen now, and the Swarm stays off the face.
+    swarm_setup(); enter_at("s1", "L2"); s.view = HOME;
+    ui_supertabs_clear(); habitat_touch(true, 233, 233, fake_ms); habitat_touch_cancel(); fake_ms += 40000;
+    ui_supertabs_ids(ids, 3); openharness_card(); card_send(); assert(!swarm_mode());
+    // A person's own TABS is never followed off, by the focus either.
+    swarm_setup(); s.view = HOME; dispatch((action_t){.kind = A_TABS}); assert(s.view == TABS && !sw.auto_tabs);
+    COPY(s.selected_tab, "t1"); ui_supertab_focus("s1", "L2"); assert(!swarm_mode() && s.view == TABS);
+    // The side comes back too, and the new daemon, which remembers none, is told it.
+    buddy_setup(); enter_at("s1", "B1"); s.view = HOME; swipe_up(); assert(swarm_side_buddy("s1"));
+    ui_supertabs_clear(); assert(!swarm_side_buddy("s1")); fake_ms += 40000; swarm_sent = 0;
+    { const char one[1][ID_MAX] = {"s1"}; ui_supertabs_ids(one, 1); }
+    buddy_card("lead");
+    assert(swarm_mode() && !strcmp(sw.lead, "B1") && swarm_side_buddy("s1") && wire_has(0, "side-kept s1 buddy") && !wire_has(0, "side s1 buddy"));
+    puts("Swarm restart: the face keeps its Swarm, Lead and side across a session down or an empty list with no time limit, follows the app, and only the person or a Swarm really gone ends it");
+}
 static void swarm_buddy_checks(const char *dir) {
     // 7a the PM side: today's face and two dots, the upper one lit.
     buddy_setup();
@@ -2234,16 +2299,16 @@ static void swarm_buddy_checks(const char *dir) {
     assert(scene_says("No Buddy here yet") && lilac_ring());
     { int before = starts; tap(fake_ms + 2000, 233, 260); assert(starts == before); }
 
-    // 7d the quiet notice: on the PM side the Buddy's word is a lilac badge and a line on the lower arc, with no beep, no
-    // inbox entry and no wake. The run count holds.
+    // 7d the quiet notice: on the PM side the Buddy's word turns the lower dot lilac and writes a line on the lower arc, with
+    // no beep, no inbox entry and no wake. The run count holds.
     buddy_setup();
     ui_supertab_recap("s1", "B0", "lead-web", "Assigned #2083 to web-api. I'll post here when the PR is up.", 1792560000u, false);
     scene_take(); pm_runs = scene.count;
-    assert(!badge() && !scene_says("Your Buddy replied"));
+    assert(!badge() && pm_dots() && !offset_disc() && !scene_says("Your Buddy replied"));
     int entries = s.notice_count; int woke = wakes;
     assert(!ui_supertab_notice("s1", "B0", HT_CHAT_BUDDY, "b0", "Cache it.", 1792560002u));
     scene_take();
-    assert(s.notice_count == entries && wakes == woke && badge() && scene_says("Your Buddy replied") && scene.count == pm_runs);
+    assert(s.notice_count == entries && wakes == woke && badge() && !pm_dots() && !offset_disc() && scene_says("Your Buddy replied") && scene.count == pm_runs);
     FOCUS_PAGE("buddy-7d");
     // Another project shows none; back on web-api it is still there.
     swipe_next(); assert(!badge() && !scene_says("Your Buddy replied"));
@@ -2253,8 +2318,8 @@ static void swarm_buddy_checks(const char *dir) {
     // The resting face keeps its own line on the lower arc: there the badge alone tells it.
     ui_supertab_recap("s1", "B0", "lead-web", "", 1792560000u, true);
     assert(!ui_supertab_notice("s1", "B0", HT_CHAT_BUDDY, "b0", "Later.", 1792560002u));
-    scene_take(); assert(badge() && !scene_says("Your Buddy replied"));
-    swipe_up(); swipe_down(); assert(!badge());
+    scene_take(); assert(badge() && !offset_disc() && !scene_says("Your Buddy replied"));
+    swipe_up(); swipe_down(); assert(!badge() && pm_dots());
     // A Buddy word while its side is open is read there; the desktop opening the Buddy chat reads one too.
     swipe_up(); buddy_card("buddy");
     assert(!ui_supertab_notice("s1", "B0", HT_CHAT_BUDDY, "b0", "Done.", 1792560003u));
@@ -3865,6 +3930,7 @@ int main(int argc, char **argv) {
     puts("touch UI: PASS (production contacts/renderers; voice start/finish/discard, target pinning, sensor cancellation, immediate scroll, swipes, round trips, congestion and holds)");
     // Last, so every face above renders exactly as it did before chats: the faces are compared byte for byte.
     swarm_chat_checks(argc>1 ? argv[1] : NULL);
+    swarm_restart_checks();
     swarm_buddy_checks(argc>1 ? argv[1] : NULL);
 }
 '''

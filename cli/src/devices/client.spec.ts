@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadOrCreateHookCredential } from '../lib/hookAuth.js'
@@ -71,8 +71,9 @@ describe('Devices DSH commands', () => {
     expect(await reply).toEqual(snapshot())
     expect(socket.close).toHaveBeenCalledOnce()
   })
-  it('shows the daemon this OS user\'s local credential on its loopback socket and fetches', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'devices-cred-'))
+  it('shows the daemon this OS user\'s local credential on its loopback socket and fetches only where no socket can exist', async () => {
+    const dataDir = join(mkdtempSync(join(tmpdir(), 'devices-cred-')), 'd'.repeat(100))
+    mkdirSync(dataDir, { mode: 0o700 })
     try {
       const credential = loadOrCreateHookCredential(dataDir)
       const socket = Object.assign(new EventEmitter(), { send: vi.fn(), close: vi.fn() })

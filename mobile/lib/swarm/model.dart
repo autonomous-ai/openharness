@@ -127,7 +127,11 @@ class SuperTabAgent {
   SuperTabAgent.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
       hasProjectId = row['projectId'] != null,
-      projectId = row['projectId'] as String? ?? 'lead',
+      // A person's one Buddy reads every project they read: it belongs to none,
+      // as on the desktop (spec 2026-10-31-one-buddy-per-swarm).
+      projectId =
+          row['projectId'] as String? ??
+          (row['buddyScope'] == 'swarm' ? '' : 'lead'),
       buddyScope = row['buddyScope'] as String?,
       buddyNarrow = row['buddyNarrow'] == true,
       name = _text(row, 'name'),
@@ -150,6 +154,10 @@ class SuperTabAgent {
       alerting = List.unmodifiable(
         (row['alerting'] as List?)?.whereType<String>() ?? const <String>[],
       ),
+      switchRequest = row['switchRequest'] is Map
+          ? Map.unmodifiable(superTabMap(row['switchRequest']))
+          : null,
+      profileId = row['profileId'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
       workDecision = switch (row['workDecision']) {
@@ -178,6 +186,16 @@ class SuperTabAgent {
   /// What its machine is alerting about now (backend terminal.ts): `prompt`
   /// while it waits at a prompt in its terminal, gone once that is answered.
   final List<String> alerting;
+
+  /// A Product Manager's switch to another engine or account that is asked for
+  /// and not yet done (backend `switchRequest`), as the desktop's model reads
+  /// it; null otherwise. Not drawn on the phone yet.
+  final Map<String, dynamic>? switchRequest;
+
+  /// The account on its machine it runs in; `default` when none is chosen.
+  /// Null until the backend reports it: the engine's default account. As the
+  /// desktop's model reads it; not drawn on the phone yet.
+  final String? profileId;
 
   /// Since when its machine has reported its session gone, or its host confirmed a stop (backend machines.ts). Null
   /// while it runs.
@@ -262,8 +280,12 @@ class SuperTabTask {
 class SuperTabConversation {
   SuperTabConversation.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
-      // A group from before projects belongs to the first.
-      projectId = row['projectId'] as String? ?? 'lead',
+      // A group from before projects belongs to the first; a person's one
+      // Buddy chat for the Swarm belongs to none (spec
+      // 2026-10-31-one-buddy-per-swarm).
+      projectId =
+          row['projectId'] as String? ??
+          (row['kind'] == 'swarm-buddy' ? '' : 'lead'),
       kind = row['kind'] as String?,
       buddyOwnerId = row['buddyOwnerId'] as String?,
       buddyName = row['buddyName'] as String?,
@@ -280,7 +302,9 @@ class SuperTabConversation {
       archived = row['archived'] == true,
       dormant = row['dormant'] == true,
       // A Buddy chat names no audience: its person alone reads it.
-      audience = row['kind'] == 'buddy' && row['buddyOwnerId'] is String
+      audience =
+          (row['kind'] == 'buddy' || row['kind'] == 'swarm-buddy') &&
+              row['buddyOwnerId'] is String
           ? List.unmodifiable([row['buddyOwnerId'] as String])
           : row['audience'] is Map
           ? List.unmodifiable([
@@ -329,7 +353,11 @@ class SuperTabConversation {
   /// chat with their Buddy. A `leads` one, the removed Product Managers'
   /// conversation, is in no read ([SuperTabSnapshot.fromJson]).
   final String? kind;
-  bool get isBuddyChat => kind == 'buddy';
+  bool get isBuddyChat => kind == 'buddy' || kind == 'swarm-buddy';
+
+  /// A person's one Buddy chat for the whole Swarm (spec
+  /// 2026-10-31-one-buddy-per-swarm): in no project, keyed by the empty id.
+  bool get isSwarmBuddyChat => kind == 'swarm-buddy';
 
   /// The person a Buddy chat belongs to; only they read it.
   final String? buddyOwnerId;

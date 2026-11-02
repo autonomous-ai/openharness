@@ -236,6 +236,7 @@ void cable_client_supertab_send(const char *t, const char *tab, const char *lead
 // `supertab.side` {tab, side}: the dial swiped that Swarm to its Buddy side (true) or its PM side (spec
 // 2026-10-29-round-dial-pm-buddy). A tab id it cannot hold sends nothing.
 void cable_client_supertab_side(const char *tab, bool buddy);
+void cable_client_supertab_side_kept(const char *tab);
 
 // Send what the user asked for, into `agent_id`. Fire-and-forget: everything after this arrives back as
 // `turn.started` / `turn.done`, or as `turn.error` in words a person can act on.

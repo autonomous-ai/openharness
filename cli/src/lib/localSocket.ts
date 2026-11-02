@@ -7,7 +7,9 @@
  * user's processes can connect. A request that arrives over it is from this user, and needs none of
  * the address checks a TCP request does — its peer has no address at all.
  *
- * TCP stays: the CLI, engine hooks and scripts still use it, as do app builds that predate this. On Windows the
+ * TCP stays for what cannot use this (MCP clients, engine plugins, Store agents, old app builds) and for a data folder
+ * too long for a socket. The CLI, engine hooks and the app use only this socket while it can exist: any account can
+ * bind the port once it is free (audit H1, lib/localTransport.ts). On Windows the
  * daemon serves a named pipe instead (`listenAuthenticated` below). Reaching that pipe is no credential, so every
  * request over it proves the daemon's token (lib/windows/pipeAuth.ts).
  */

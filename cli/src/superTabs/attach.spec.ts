@@ -84,7 +84,8 @@ function direct(put = () => new Response(null, { status: 200 })) {
 
 it('sends a file of up to 10 MB by the form, and a larger one by a link: straight to storage, then complete', async () => {
   const folder = dir('attach-direct-')
-  const credential = loadOrCreateHookCredential(folder)
+  // The credential is there, and over the socket a call does not show it (audit H1).
+  loadOrCreateHookCredential(folder)
   const target = { tabId: 'tab', conversationId: 'c1', port: 14001, dataDir: folder }
   const small = sparse(folder, 'small.bin', 10 * MiB), big = sparse(folder, 'big.bin', 10 * MiB + 1)
   const fetcher = direct()
@@ -98,8 +99,8 @@ it('sends a file of up to 10 MB by the form, and a larger one by a link: straigh
   const [form, link, put, complete] = fetcher.mock.calls.map(([, init]) => init!)
   // 10 MB exactly still goes by the form, as before.
   expect((form!.body as FormData).get('file')).toMatchObject({ name: 'small.bin', size: 10 * MiB })
-  // The daemon's calls carry its write gate and local credential, and only those.
-  for (const local of [link!, complete!]) expect(local.headers).toEqual({ 'x-adapter-local': '1', 'X-Harness-Local': credential, 'content-type': 'application/json' })
+  // The daemon's calls carry its write gate, and only that.
+  for (const local of [link!, complete!]) expect(local.headers).toEqual({ 'x-adapter-local': '1', 'content-type': 'application/json' })
   expect(JSON.parse(String(link!.body))).toEqual({ conversationId: 'c1', name: 'big.bin', mime: 'application/octet-stream', size: 10 * MiB + 1 })
   expect(JSON.parse(String(complete!.body))).toEqual({})
   // Storage gets exactly the signed headers and the length, never a credential: the link is the credential.

@@ -75,6 +75,64 @@ Widget _mark(HarnessActivity activity) => ActivityMark(
   ),
 );
 
+/// End session, for [root]'s session: in the thread pane, and on the thread's
+/// line in the chat ([metadata], that line's size), so a session is closed
+/// without opening it.
+class SuperTabSessionEnd extends StatefulWidget {
+  const SuperTabSessionEnd({
+    super.key,
+    required this.controller,
+    required this.root,
+    this.metadata = false,
+  });
+
+  final SuperTabController controller;
+  final String root;
+  final bool metadata;
+
+  @override
+  State<SuperTabSessionEnd> createState() => _SuperTabSessionEndState();
+}
+
+class _SuperTabSessionEndState extends State<SuperTabSessionEnd> {
+  // The thread an end is under way for: its answer changes nothing once
+  // another thread is shown.
+  String? _ending;
+
+  Future<void> _end() async {
+    final root = widget.root;
+    if (_ending == root) return;
+    setState(() => _ending = root);
+    await widget.controller.endThreadSession(root);
+    if (!mounted || _ending != root) return;
+    setState(() => _ending = null);
+  }
+
+  @override
+  void didUpdateWidget(SuperTabSessionEnd old) {
+    super.didUpdateWidget(old);
+    if (old.root != widget.root) _ending = null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final ending = _ending == widget.root;
+    return SuperTabLink(
+      label: ending ? 'Ending session' : 'End session',
+      // Disabled while its end is on its way: pointer, keyboard and screen
+      // readers alike.
+      onTap: ending ? null : () => unawaited(_end()),
+      child: Text(
+        ending ? 'Ending…' : 'End session',
+        style: widget.metadata
+            ? DesktopChrome.metadata(color: DesktopChrome.foreground)
+            : DesktopChrome.control(),
+      ),
+    );
+  }
+}
+
 /// The line under the thread pane's header: which session answers the
 /// thread and what it is doing, with End session as a quiet text action; or
 /// why its last session ended. Nothing for a thread with neither.
@@ -96,25 +154,6 @@ class SuperTabThreadSessionLine extends StatefulWidget {
 }
 
 class _SuperTabThreadSessionLineState extends State<SuperTabThreadSessionLine> {
-  // The thread an End session is under way for: its answer changes nothing
-  // once another thread is shown.
-  String? _ending;
-
-  Future<void> _end() async {
-    final root = widget.root;
-    if (_ending == root) return;
-    setState(() => _ending = root);
-    await widget.controller.endThreadSession(root);
-    if (!mounted || _ending != root) return;
-    setState(() => _ending = null);
-  }
-
-  @override
-  void didUpdateWidget(SuperTabThreadSessionLine old) {
-    super.didUpdateWidget(old);
-    if (old.root != widget.root) _ending = null;
-  }
-
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
@@ -150,16 +189,10 @@ class _SuperTabThreadSessionLineState extends State<SuperTabThreadSessionLine> {
             ),
           ),
           if (c.canWrite)
-            SuperTabLink(
+            SuperTabSessionEnd(
               key: const ValueKey('super-thread-session-end'),
-              label: _ending == widget.root ? 'Ending session' : 'End session',
-              // Disabled while its end is on its way: pointer, keyboard and
-              // screen readers alike.
-              onTap: _ending == widget.root ? null : () => unawaited(_end()),
-              child: Text(
-                _ending == widget.root ? 'Ending…' : 'End session',
-                style: DesktopChrome.control(color: DesktopChrome.muted),
-              ),
+              controller: c,
+              root: widget.root,
             ),
         ],
       );

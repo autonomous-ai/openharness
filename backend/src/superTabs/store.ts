@@ -786,6 +786,8 @@ export class SuperTabStore {
       // And their one Buddy chat, which takes it too (spec: Guard).
       if (asked && command.delegate) swarmChat(asked.personId)
     }
+    // A switch's result tells the machine's owner in their one Buddy chat, quiet or not (commands.ts agent.switchResult).
+    if (command.type === 'agent.switchResult') swarmChat(state.agents.find(a => a.id === command.agentId)?.machineOwnerId)
     // A project's sharing ends its sessions in the one Buddy chats of whoever loses it (commands.ts endLostProjectSessions).
     if (command.type === 'project.sharing') {
       for (const owner of new Set([...state.agents.filter(a => a.buddySession?.projectId === command.projectId).map(a => a.buddyOf!.personId),
@@ -1362,14 +1364,16 @@ export class SuperTabStore {
         // The thread's root says whose proposal the reply answers (buddyNews.ts): the reply itself, or one more read by id.
         const root = reply?.thread && reply.thread !== reply.id
           ? await tx.superTabMessage.findFirst({ where: { id: reply.thread, tabId, conversationId: command.conversationId }, select: { source: true } }) : reply
-        // In a Buddy chat: whether the thread ever had a session (buddySessions.ts), by the thread index, one row at most.
+        // In a Buddy chat: whether the thread ever had a session (buddySessions.ts), by the thread index, one row at most: its
+        // latest, whose project a session reopened there keeps.
         const buddyChat = original.conversations.find(c => c.id === command.conversationId)
-        const sessionThread = reply?.thread && buddyChat && isBuddyChat(buddyChat)
-          ? !!await tx.superTabMessage.findFirst({ where: { tabId, conversationId: command.conversationId, thread: reply.thread, buddySession: true }, select: { id: true } })
-          : false
+        const sessionRow = reply?.thread && buddyChat && isBuddyChat(buddyChat)
+          ? await tx.superTabMessage.findFirst({ where: { tabId, conversationId: command.conversationId, thread: reply.thread, buddySession: true },
+            orderBy: [{ sequence: 'desc' }, { id: 'desc' }], select: { buddyProject: true } })
+          : null
         if (reply) context.reply = { id: reply.id, conversationId: reply.conversationId, author: reply.author as unknown as Author, createdAt: reply.createdAt.getTime(),
           thread: reply.thread, threadSource: (root?.source ?? null) as Record<string, unknown> | null,
-          ...(agentOnly(reply.source, reply.recipientIds) ? { agentOnly: true } : {}), ...(sessionThread ? { sessionThread: true as const } : {}) }
+          ...(agentOnly(reply.source, reply.recipientIds) ? { agentOnly: true } : {}), ...(sessionRow ? { sessionThread: true as const, ...(sessionRow.buddyProject ? { sessionProject: sessionRow.buddyProject } : {}) } : {}) }
       }
       if (command.type === 'message.send' && actor.kind === 'person') context.openTags = await openTags(tx, tabId, command.conversationId, actor.userId, context.now)
       // A stale save is refused with the stored text, to merge (instructions.ts); an older client's rule.set appends to it

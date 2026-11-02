@@ -5,11 +5,13 @@ import 'package:flutter/material.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 import 'attention.dart';
+import 'composer_newline.dart' show kComposerMaxLength;
 import 'composer_tags.dart';
 import '../shared/theme/app_icons.dart';
 import 'controller.dart';
 import 'identity.dart';
 import 'message_more_menu.dart';
+import 'message_receipt.dart';
 import 'machine_status.dart' show superTabAgo;
 import 'model.dart';
 import 'reply_box.dart';
@@ -420,6 +422,65 @@ class _ThreadCardState extends State<_ThreadCard> {
     if (mounted) setState(() {});
   }
 
+  /// What the box says, unless a failed reply above it already says the same.
+  String? _boxError() {
+    final error = _c.threadComposerError(
+      _thread.conversationId,
+      _thread.rootId,
+    );
+    return widget.attention
+            .ownReplies(_thread)
+            .any((reply) => reply.outgoing?.error == error)
+        ? null
+        : error;
+  }
+
+  /// The reader's own reply: as sent, or the thread pane's Sending… and Not
+  /// sent with Retry and Delete. A failed one keeps its text here.
+  Widget _ownReply(SuperTabOwnReply reply) {
+    final outgoing = reply.outgoing;
+    return Padding(
+      padding: const EdgeInsets.only(
+        left: _indent,
+        top: grid.AppDesktop.controlGap,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _message(
+            {'kind': 'person', 'id': _c.accountId},
+            reply.shownText,
+            at: reply.at,
+            strong: !reply.sending,
+            // A failed one whole: this row is all that is left of its text.
+            lines: reply.sent || reply.sending ? 4 : kComposerMaxLength,
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: _indent),
+            child: reply.sent || outgoing == null
+                ? Semantics(
+                    liveRegion: true,
+                    child: Text('Sent', style: DesktopChrome.metadata()),
+                  )
+                : SuperTabOutgoingReceipt(
+                    inline: true,
+                    message: outgoing,
+                    // A refused reply goes again only when nothing else is on
+                    // its way.
+                    onRetry:
+                        _c.saving ||
+                            (outgoing.state == SuperTabOutgoingState.refused &&
+                                _c.hasPendingAction)
+                        ? null
+                        : () => unawaited(_c.retryOutgoing(outgoing)),
+                    onDelete: () => _c.discardOutgoing(outgoing),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _follow(bool follow) async {
     final kept = await widget.attention.setFollow(_thread, follow);
     if (!mounted || kept) return;
@@ -559,6 +620,27 @@ class _ThreadCardState extends State<_ThreadCard> {
                       lines: 4,
                     ),
                   ),
+              // Its own listener: a send moves on with no change to the list.
+              ListenableBuilder(
+                listenable: _c,
+                builder: (context, _) {
+                  // Sent ones only while the card is new; one on its way or
+                  // failed always.
+                  final own = [
+                    for (final reply in a.ownReplies(_thread))
+                      if (fresh || !reply.sent) reply,
+                  ];
+                  return own.isEmpty
+                      ? const SizedBox.shrink()
+                      : Column(
+                          key: ValueKey(
+                            'super-thread-own-reply-${_thread.key}',
+                          ),
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [for (final r in own) _ownReply(r)],
+                        );
+                },
+              ),
               if (canReply && buddyThread)
                 Padding(
                   padding: const EdgeInsets.only(
@@ -620,10 +702,7 @@ class _ThreadCardState extends State<_ThreadCard> {
                           enabled: _c.canWrite,
                           writable: _writable,
                           busy: _busy,
-                          error: _c.threadComposerError(
-                            _thread.conversationId,
-                            _thread.rootId,
-                          ),
+                          error: _boxError(),
                           onEdited: _edited,
                           onSend: () => unawaited(_send()),
                           surfaceKey: ValueKey(

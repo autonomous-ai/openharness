@@ -3744,6 +3744,8 @@ function lifeFixture(rows: Record<string, unknown>[], options: SuperTabHostOptio
   t.core.agents.byAgent = vi.fn(() => (live ? { agentId: 'harness' } : undefined) as never)
   t.core.agents.keepLeadAlive = keepLeadAlive
   t.core.agents.closeMember = closeMember
+  // No turn open, unless a test says otherwise.
+  t.core.agents.activity = vi.fn(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, 'idle' as const])))
   t.core.account.backend = async (_method, path, body) => {
     if ((body as any)?.command) { commands.push(body as Record<string, unknown>); return { status: 200, body: { data: {} } } }
     if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(rows, { tabs: ['tab'] }) } }
@@ -3841,6 +3843,37 @@ describe('ending a Buddy\'s thread sessions', () => {
     await t.poll(1)
     await vi.waitFor(() => expect(ends(t)).toHaveLength(1))
   })
+
+  it('never ends one in a long job with a quiet screen: an open turn is work, and it ends 30 minutes after the turn closes', async () => {
+    const t = lifeFixture([sessionRow()])
+    t.live(true)
+    let state = 'working'
+    t.core.agents.activity = vi.fn(async () => ({ harness: state })) as never
+    await t.poll()
+    await awake(t, 3 * BUDDY_SESSION_IDLE_MS)
+    expect(ends(t)).toEqual([])
+    expect(t.core.agents.activity).toHaveBeenCalledWith(['harness'])
+    state = 'idle'
+    await awake(t, BUDDY_SESSION_IDLE_MS)
+    await t.poll(1)
+    await vi.waitFor(() => expect(ends(t)).toHaveLength(1))
+  })
+
+  // A failed read in the Swarm's own process answers no state at all (processCoreApi.ts), and an open turn whose evidence lapsed
+  // answers unknown: neither says it is idle.
+  for (const [what, answer] of [['fails', async () => { throw new Error('worker restarting') }], ['answers nothing', async () => ({})], ['answers unknown', async () => ({ harness: 'unknown' })]] as const) {
+    it(`does not end one whose activity read ${what}, and ends it once the read says idle`, async () => {
+      const t = lifeFixture([sessionRow()])
+      t.live(true)
+      t.core.agents.activity = vi.fn(answer) as never
+      await t.poll()
+      await awake(t, BUDDY_SESSION_IDLE_MS + 60_000)
+      expect(ends(t)).toEqual([])
+      t.core.agents.activity = vi.fn(async () => ({ harness: 'idle' })) as never
+      await awake(t, 5 * 60_000)
+      await vi.waitFor(() => expect(ends(t)).toHaveLength(1))
+    })
+  }
 
   it('never ends one a delivery waits for', async () => {
     const t = lifeFixture([sessionRow()])

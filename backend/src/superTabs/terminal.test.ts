@@ -273,6 +273,9 @@ describe('terminal alerts', () => {
     const lead = s.run({ type: 'agent.alert', agentId: s.lead, alert: 'limit', active: true }, as(s.lead))
     expect(s.state.agents.find(a => a.id === s.lead)!.limitedUntil).toBe(new Date(1_000_000 + 3_600_000).toISOString())
     expect(lead.messages[0]).toMatchObject({ conversationId: 'lead', recipients: [] })
+    // The PM's line names it with no time (Desktop shows `limitedUntil` in local time); a worker's row keeps the UTC time.
+    expect(lead.messages[0]).toMatchObject({ text: `${name(s, s.lead)} hit a usage limit.`, source: { lead: true, limitedUntil: expect.any(String) } })
+    expect(effects.messages[0].source).not.toHaveProperty('lead')
   })
 
   it('tells the Lead when an agent cannot get answers from its model, once per episode', () => {

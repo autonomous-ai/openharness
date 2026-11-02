@@ -1,12 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, linkSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, linkSync, realpathSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CoreApi } from '../core/api.js'
 import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from '../lib/secureState.js'
+import { profileId } from '../lib/claudeProfiles.js'
 import { parseRuntimeProfile } from '../lib/runtimeProfileWire.js'
 import { handoffIntentHash } from '../lib/handoffAuthority.js'
 import { validateHandoff } from '../lib/handoffValidation.js'
-import { identifier, object } from './wire.js'
+import { defaultCodexHome } from '../lib/codexProfiles.js'
+import { FIELD_REFUSED_MS, fieldRefused, identifier, object } from './wire.js'
 
 interface Replacement { machineId: string; previousHarnessId: string; harnessId: string; changeId: string; cwd: string; engine: string }
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -74,6 +76,37 @@ async function candidates(core: CoreApi, machineId: string): Promise<Replacement
   return result
 }
 
+/** The account the replacement runs in, by the opaque id the machine reports its profiles with. */
+function accountId(machineId: string, agent: { engine: string; claudeHome?: string | null; codexHome?: string | null }): string {
+  const engine = agent.claudeHome ? 'claude' : agent.codexHome ? 'codex' : agent.engine as 'claude' | 'codex'
+  const home = agent.claudeHome || agent.codexHome
+  if (!home) return profileId(machineId, engine, 'default')
+  let real = home
+  try { real = realpathSync(home) } catch { /* A folder that is gone keeps the id of the path it was given. */ }
+  // A native Codex launch records CODEX_HOME even for ~/.codex: that is still the default account, under its one id.
+  return profileId(machineId, engine, engine === 'codex' && real === defaultCodexHome() ? 'default' : real)
+}
+
+/**
+ * Sends the host's agent.rebind. A backend that predates `profileId` refuses the whole command (its schema is strict), so a
+ * 400 is answered once with the same rebind without the field, and the refusal is remembered for FIELD_REFUSED_MS. Only a
+ * resend that succeeds counts as the field's refusal.
+ */
+export class RebindSender {
+  private refusedUntil = 0
+  constructor(private readonly send: (path: string, body: unknown) => Promise<unknown>, private readonly now: () => number) {}
+  async post({ path, body }: { path: string; body: Record<string, unknown> }): Promise<void> {
+    const { profileId: _profileId, ...bare } = object(body.command)
+    const without = { ...body, command: bare }
+    if (this.now() < this.refusedUntil) { await this.send(path, without); return }
+    try { await this.send(path, body) } catch (error) {
+      if (!fieldRefused(error) || !('profileId' in object(body.command))) throw error
+      await this.send(path, without)
+      this.refusedUntil = this.now() + FIELD_REFUSED_MS
+    }
+  }
+}
+
 export async function replacementObservations(core: CoreApi, machineId: string, rows: unknown[]) {
   // Healthy members need no recovery or disk scan. In particular, do not reread every historical
   // handoff and its transcript on a machine with live Swarm members every five seconds.
@@ -105,7 +138,7 @@ export async function replacementObservations(core: CoreApi, machineId: string, 
     const known = profile?.sessionId === target.agentId && profile.engine === target.engine
     const configuration = { engine: target.engine, model: known ? profile.model : null, effort: known ? profile.effort : null,
       contextWindow: null, engineVersion: null }
-    const command = { type: 'agent.rebind', agentId: agent.id, machineId, projectId: agent.projectId ?? 'lead',
+    const command = { type: 'agent.rebind', agentId: agent.id, profileId: accountId(machineId, target), machineId, projectId: agent.projectId ?? 'lead',
       previousHarnessId: agent.harnessId, harnessId: target.agentId, configuration }
     observations.push({ path: `/api/super-tabs/${row.tabId}/commands`, body: {
       operationId: `replacement-${digest([row.tabId, agent.id, report.changeId, target.agentId])}`, asAgentId: agent.id, command } })

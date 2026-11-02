@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'model.dart';
 import 'prompt_alerts.dart';
 import 'swarm_chat_cache.dart';
+import 'swarm_buddy.dart' show swarmIsOldBuddyChat;
 import 'swarm_outbox.dart';
 import 'swarm_outgoing_files.dart';
 import 'swarm_reader.dart';
@@ -316,11 +317,16 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   }
 
   /// The person may post here: a writer of the Swarm, in a conversation that
-  /// is not archived.
+  /// is not archived, nor an older Buddy chat kept to read.
   bool get canPost {
     final snapshot = reader.snapshot;
     final group = conversation;
-    if (snapshot == null || group == null || group.archived) return false;
+    if (snapshot == null ||
+        group == null ||
+        group.archived ||
+        swarmIsOldBuddyChat(reader, id)) {
+      return false;
+    }
     return snapshot.people
             .where((p) => p.id == reader.accountId)
             .firstOrNull
@@ -861,6 +867,8 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
             'messageId': message.id,
             'emoji': emoji.key,
             'on': on,
+            // As the desktop's: the server refuses it in an older Buddy chat.
+            if (reader.snapshot?.swarmBuddy == true) 'oneBuddy': true,
           },
         },
       );
@@ -1240,6 +1248,8 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
         ],
         if (tagged.isNotEmpty) 'mentions': tagged,
         if (attachmentIds.isNotEmpty) 'attachmentIds': attachmentIds,
+        // As the desktop's: the server refuses it in an older Buddy chat.
+        if (reader.snapshot?.swarmBuddy == true) 'oneBuddy': true,
       },
     };
   }

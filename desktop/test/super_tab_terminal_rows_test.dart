@@ -273,4 +273,116 @@ void main() {
       controller.dispose();
     },
   );
+
+  testWidgets(
+    'the PM\'s limit line shows local time and Switch PM… until the limit alert ends',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(900, 520));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final server = ConversationServer();
+      final pm = <String, dynamic>{
+        'id': 'pm',
+        'name': 'Lead',
+        'displayName': 'Wren',
+        'machineId': 'm',
+        'harnessId': 'pm',
+        'contributorId': 'owner',
+        'configuration': {'engine': 'claude'},
+        'alerting': ['limit'],
+      };
+      server.state['agents'] = [pm];
+      ((server.state['conversations'] as List)[0] as Map)['leadId'] = 'pm';
+      server.append('Wren hit a usage limit.', conversationId: 'lead');
+      server.messages.last['author'] = {
+        'kind': 'agent',
+        'id': 'pm',
+        'name': 'Agent',
+      };
+      server.messages.last['source'] = {
+        'kind': 'terminal-alert',
+        'agentId': 'pm',
+        'alert': 'limit',
+        'limitedUntil': '2099-01-02T14:00:00.000Z',
+        'lead': true,
+      };
+      final controller = server.controller(
+        initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
+      );
+      await controller.refresh();
+      Future<void> show() async {
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: grid.buildAppTheme(brightness: Brightness.dark),
+            home: Scaffold(
+              body: SuperTabView(
+                controller: controller,
+                onInvite: () {},
+                onAddAgent: (_) {},
+                onOpenTerminal: (_) {},
+                machineName: (_) => 'Team Mac',
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+      }
+
+      await show();
+      final local = DateTime.utc(2099, 1, 2, 14).toLocal();
+      final time = MaterialLocalizations.of(
+        tester.element(find.byType(SuperTabTerminalRow)),
+      ).formatTimeOfDay(TimeOfDay.fromDateTime(local));
+      // The backend's sentence stays verbatim; the reset time is its own muted text.
+      expect(find.text('Wren hit a usage limit.'), findsOneWidget);
+      expect(find.textContaining('until '), findsOneWidget);
+      expect(find.textContaining(time), findsOneWidget);
+      final button = find.widgetWithText(TextButton, 'Switch PM…');
+      expect(button, findsOneWidget);
+
+      // The limit is over (the machine stopped alerting): the line stays, the button goes.
+      pm['alerting'] = <String>[];
+      server.revision++;
+      await controller.refresh();
+      await tester.pumpAndSettle();
+      expect(find.byType(SuperTabTerminalRow), findsOneWidget);
+      expect(button, findsNothing);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await controller.flush();
+      controller.dispose();
+    },
+  );
+
+  testWidgets('a pm-switch-notice line renders as a plain message', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(900, 520));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final server = ConversationServer();
+    server.append('Your PM now runs on Codex.', conversationId: 'offline');
+    server.messages.last['source'] = {'kind': 'pm-switch-notice'};
+    final controller = server.controller(
+      initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'offline'},
+    );
+    await controller.refresh();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.dark),
+        home: Scaffold(
+          body: SuperTabView(
+            controller: controller,
+            onInvite: () {},
+            onAddAgent: (_) {},
+            onOpenTerminal: (_) {},
+            machineName: (_) => 'Team Mac',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Your PM now runs on Codex.'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
 }

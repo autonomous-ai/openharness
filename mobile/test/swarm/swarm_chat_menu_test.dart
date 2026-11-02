@@ -6,9 +6,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
-import 'package:harness_mobile/swarm/model.dart';
-import 'package:harness_mobile/swarm/swarm_buddies_page.dart';
-import 'package:harness_mobile/swarm/swarm_buddy_list.dart';
 import 'package:harness_mobile/swarm/swarm_chat_notify.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
@@ -289,38 +286,5 @@ void main() {
       await tester.pumpAndSettle();
       expect(key('swarm-chat-menu'), findsNothing);
     });
-  });
-
-  testWidgets('a muted Buddy chat on Buddies: greyed with a crossed bell, '
-      'no dot', (tester) async {
-    final row = SwarmBuddyRow(
-      swarmId: tab,
-      project: SuperTabProject.fromJson({
-        'id': project,
-        'name': 'Mobile',
-        'ownerId': me,
-        'leadConversationId': leadChat,
-        'visibility': 'public',
-        'members': <Object>[],
-      }),
-      name: 'Wren',
-      muted: true,
-    );
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.dark),
-        home: Scaffold(
-          body: SwarmBuddiesRow(
-            row: row,
-            line: 'Done',
-            now: DateTime.utc(2026, 11, 1),
-            onTap: () {},
-          ),
-        ),
-      ),
-    );
-
-    expect(key('swarm-buddies-muted-${row.key}'), findsOneWidget);
-    expect(key('swarm-buddies-unread-${row.key}'), findsNothing);
   });
 }

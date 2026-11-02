@@ -65,6 +65,7 @@ import 'project_sidebar.dart';
 import 'buddy_sessions.dart';
 import 'swarm_switcher.dart' show fallBackToPersonal;
 import 'project_options.dart';
+import 'switch_pm.dart';
 import 'project_status_card.dart';
 import 'pane_layout.dart';
 import '../widgets/dial_list_scroll.dart';
@@ -803,8 +804,7 @@ class _SuperTabViewState extends State<SuperTabView>
     final newSession =
         _chatSessions.contains(id) &&
         c.offersChatSessions &&
-        c.threadSessionBlocked == null &&
-        !c.buddySessionsFull;
+        c.threadSessionBlocked == null;
     final result = await c.send(
       replyTo: _replies[id]?.id,
       newSession: newSession,
@@ -854,17 +854,12 @@ class _SuperTabViewState extends State<SuperTabView>
   Widget _chatSessionChoice(bool writable) {
     final id = c.selectedId;
     final blocked = c.threadSessionBlocked;
-    final full = blocked == null && c.buddySessionsFull;
     return SuperTabComposerToggle(
       key: const ValueKey('super-chat-new-session'),
-      on: _chatSessions.contains(id) && blocked == null && !full,
+      on: _chatSessions.contains(id) && blocked == null,
       label: 'New session',
-      hint:
-          blocked ??
-          (full
-              ? '${SuperTabController.maxBuddySessions} sessions running. End one to start another.'
-              : 'Starts a separate Buddy session for this message'),
-      onChanged: writable && blocked == null && !full
+      hint: blocked ?? 'Starts a separate Buddy session for this message',
+      onChanged: writable && blocked == null
           ? (on) => setState(
               () => on ? _chatSessions.add(id) : _chatSessions.remove(id),
             )
@@ -1396,6 +1391,11 @@ class _SuperTabViewState extends State<SuperTabView>
       if (project != null) {
         await showSuperTabInstructions(context, c, project.id);
       }
+      return;
+    }
+    if (action == 'switch-pm') {
+      final project = c.snapshot?.projectFor(group.id);
+      if (project != null) await showSwitchPm(context, c, project.id);
       return;
     }
     if (c.snapshot?.isProjectLead(group.id) == true && action != 'archived') {
@@ -2455,6 +2455,12 @@ class _SuperTabViewState extends State<SuperTabView>
           // them sends no coordinatorName.
           if (project?.hasInstructions == true)
             item('Instructions', () => _groupAction('instructions', group)),
+          // While the PM has a switch under way, there is nothing to ask for.
+          if (editable &&
+              project != null &&
+              c.snapshot?.maySwitchLead(project.id, c.accountId) == true &&
+              c.snapshot?.leadOf(project.id)?.switchRequest == null)
+            item('Switch PM…', () => _groupAction('switch-pm', group)),
           if (editable && project?.ownerId == c.accountId)
             item('Delete Project', () => _groupAction('delete', group)),
         ] else if (_isBuddyChat(group)) ...[
@@ -2705,6 +2711,7 @@ class _SuperTabViewState extends State<SuperTabView>
           '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
         ),
         message: message,
+        controller: c,
       );
     }
     if (SuperTabShipRow.shows(message)) {
@@ -2825,6 +2832,18 @@ class _SuperTabViewState extends State<SuperTabView>
         ),
         null => null,
       },
+      threadEnd:
+          thread == null ||
+              inThread ||
+              !c.canWrite ||
+              c.threadSession(thread.id) == null
+          ? null
+          : SuperTabSessionEnd(
+              key: ValueKey('super-thread-session-end-${thread.id}'),
+              controller: c,
+              root: thread.id,
+              metadata: true,
+            ),
       onOpenThread:
           !inThread && root != null && (thread != null || message.threadReply)
           ? () => c.openThread(root)
@@ -3904,8 +3923,7 @@ class _SuperTabViewState extends State<SuperTabView>
             child: Visibility(
               visible:
                   _chatSessions.contains(chatId) &&
-                  c.threadSessionBlocked == null &&
-                  !c.buddySessionsFull,
+                  c.threadSessionBlocked == null,
               maintainSize: true,
               maintainAnimation: true,
               maintainState: true,

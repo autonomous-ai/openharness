@@ -36,6 +36,7 @@ import '../widgets/resting_section.dart'
     show confirmStopInUse, confirmSwitchAnyway;
 import '../widgets/finger_target.dart';
 import '../widgets/session_close_dialog.dart';
+import '../super_tabs/swarm_accounts.dart';
 import '../super_tabs/lead_guard.dart';
 import '../notify/system_notifications.dart';
 import '../widgets/account_device_detail.dart';
@@ -3419,19 +3420,22 @@ class _SwarmScreenState extends State<SwarmScreen> {
           else
             KeyedSubtree(
               key: _accountButtonKey,
-              child: fingerTarget(
-                enabled: compact,
-                WorkspaceAvatarButton(
-                  key: const ValueKey('swarm-account-button'),
-                  initial: _accountInitial,
-                  tooltip: _accountTooltip,
-                  onPressed: _shortcutsEnabled
-                      ? () => unawaited(_showAccountMenu())
-                      : null,
-                ),
-              ),
+              child: compact
+                  ? phoneBarCell(_avatarButton(size: kPhoneBarIcon))
+                  : _avatarButton(),
             ),
         ];
+
+  Widget _avatarButton({double size = WorkspaceAvatarButton.diameter}) =>
+      WorkspaceAvatarButton(
+        key: const ValueKey('swarm-account-button'),
+        initial: _accountInitial,
+        tooltip: _accountTooltip,
+        size: size,
+        onPressed: _shortcutsEnabled
+            ? () => unawaited(_showAccountMenu())
+            : null,
+      );
 
   double _accountControlWidth(BuildContext context) => !_accountControlShown
       ? 0
@@ -6904,7 +6908,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
           agentId = search.agentSelectionId;
       if (machineId == null || agentId == null) return;
       _closeSearch(restoreFocus: true);
-      final error = await app.changeAgent(machineId, agentId, engine);
+      if (choice.destination.managesSwarmAccounts) {
+        if (mounted) await showSwarmAccounts(context, app, machineId);
+        return;
+      }
+      final error = choice.destination.addsClaudeAccount
+          ? await app.addClaudeAccount(machineId, agentId)
+          : await app.changeAgent(
+              machineId,
+              agentId,
+              engine,
+              profile: choice.destination.agentProfile,
+            );
       if (mounted && error != null) _showPaneActionHint(error);
       return;
     }
@@ -9334,8 +9349,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     },
   );
 
-  Widget _daemonTabButton() => DaemonSlotButton(
+  Widget _daemonTabButton({bool phoneBar = false}) => DaemonSlotButton(
     face: _face,
+    phoneBar: phoneBar,
     enabled: _shortcutsEnabled,
     selected: _daemonOverlay != null,
     onPressed: _activateDaemon,
@@ -9359,15 +9375,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
     builder: (context, emphasized) => SizedBox(
       width: workspaceBarCellSizeOf(context).width * 4,
       height: workspaceBarControlHeight(context),
-      child: Icon(
-        AppIcons.search,
-        size: 16,
-        color: theme.foreground.withValues(
-          alpha: !_shortcutsEnabled
-              ? .28
-              : emphasized
-              ? 1
-              : .75,
+      child: Center(
+        child: Icon(
+          AppIcons.search,
+          size: workspaceIsCompact(context) ? kPhoneBarIcon : 16,
+          color: theme.foreground.withValues(
+            alpha: !_shortcutsEnabled
+                ? .28
+                : emphasized
+                ? 1
+                : .75,
+          ),
         ),
       ),
     ),
@@ -9429,38 +9447,44 @@ class _SwarmScreenState extends State<SwarmScreen> {
         );
 
   /// A compact host uses a tab switcher instead of the tab list.
-  Widget _compactTabStrip(WorkspaceChrome chrome, TerminalTheme theme) =>
-      Builder(
-        builder: (context) {
-          final cell = workspaceBarCellSizeOf(context);
-          return Material(
-            key: const ValueKey('workspace-tab-bar'),
-            color: grid.AppPalette.swarmTabBar,
-            // A phone's bar: every control a finger's size, its icon as it
-            // was, so the bar is at least that tall too.
-            child: SizedBox(
-              height: math.max(
-                kFingerTarget,
-                math.max(_tabBarHeight, cell.height * 2),
+  Widget _compactTabStrip(
+    WorkspaceChrome chrome,
+    TerminalTheme theme,
+  ) => Builder(
+    builder: (context) {
+      final cell = workspaceBarCellSizeOf(context);
+      return Material(
+        key: const ValueKey('workspace-tab-bar'),
+        color: grid.AppPalette.swarmTabBar,
+        // A phone's bar: every control a finger's size, its icon as it
+        // was, so the bar is at least that tall too.
+        child: SizedBox(
+          height: math.max(
+            kFingerTarget,
+            math.max(_tabBarHeight, cell.height * 2),
+          ),
+          // What is drawn starts and ends [kPhoneBarGutter] from the screen's
+          // edges: the switcher pads its text by a cell, an icon's square
+          // pads its icon by the rest of the finger's width.
+          child: Row(
+            children: [
+              SizedBox(width: math.max(0, kPhoneBarGutter - cell.width)),
+              Expanded(child: chrome.compactTabs!(context, _workspaceCommands)),
+              phoneBarCell(_searchButton(theme)),
+              phoneBarCell(_notificationsButton(theme)),
+              if (kIsWeb && _slotShown) _daemonTabButton(phoneBar: true),
+              ..._accountControl(compact: true),
+              SizedBox(
+                width: _accountControlShown && app.isGuest
+                    ? cell.width
+                    : kPhoneBarGutter - (kFingerTarget - kPhoneBarIcon) / 2,
               ),
-              child: Row(
-                children: [
-                  SizedBox(width: cell.width),
-                  Expanded(
-                    child: chrome.compactTabs!(context, _workspaceCommands),
-                  ),
-                  fingerTarget(enabled: true, _searchButton(theme)),
-                  fingerTarget(enabled: true, _notificationsButton(theme)),
-                  if (kIsWeb && _slotShown)
-                    fingerTarget(enabled: true, _daemonTabButton()),
-                  ..._accountControl(compact: true),
-                  SizedBox(width: cell.width),
-                ],
-              ),
-            ),
-          );
-        },
+            ],
+          ),
+        ),
       );
+    },
+  );
 
   Widget _statusToolIcon(
     String id,

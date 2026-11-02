@@ -87,7 +87,8 @@ function cliEnv(port: number): NodeJS.ProcessEnv {
     ...process.env,
     HOME: root,
     HARNESS_AUTH_DIR: join(root, 'auth'),
-    ADAPTER_DATA_DIR: join(root, 'data'),
+    // Too long to hold a socket: the one case where the CLI asks this fake daemon's port.
+    ADAPTER_DATA_DIR: join(root, 'd'.repeat(100)),
     ADAPTER_RUNTIME_DIR: join(root, 'runtime'),
     ADAPTER_CLI_DIR: join(root, 'cli'),
     ADAPTER_COMPUTER_ID_FILE: join(root, 'computer-id'),

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { engineUnusable } from './engineHealth.js'
 import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
@@ -69,6 +70,14 @@ export const cleanupOverdue = (cleanup: MachineCleanup, now: number): boolean =>
 export type RemovalEnd = 'confirmed' | 'offline' | 'timedOut'
 /** Older contributions may name engines that Swarm no longer starts. Their fresh
  * observation lists the supported engines that are actually installed. */
+/** The default account's id for an engine on a machine: the CLI and Desktop compute the same 16 hex (sha256 of `machine:engine:default`). */
+export const defaultProfileId = (machineId: string, engine: string): string =>
+  createHash('sha256').update(`${machineId}:${engine}:default`).digest('hex').slice(0, 16)
+
+/** A profile id as the agent stores it: the default account (literal or hashed) is absent. */
+export const storedProfileId = (machineId: string, engine: string, profileId: string | undefined): string | undefined =>
+  profileId === undefined || profileId === 'default' || profileId === defaultProfileId(machineId, engine) ? undefined : profileId
+
 export function contributedEngines(pool: ContributedMachine, observation: MachineObservation | undefined = pool.observation): string[] {
   const supported = (engine: string) => engine === 'claude' || engine === 'codex'
   return pool.engines.some(engine => !supported(engine))
@@ -156,6 +165,11 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
   /** What this host can launch beyond workers: `leadStart`, a project's Product Manager (leadStart.ts). Absent from hosts
    *  before it, which are never given one. */
   capabilities: z.array(z.string().regex(/^[a-zA-Z]{1,40}$/)).max(16).optional(),
+  /** The accounts a Product Manager could move to, per engine (cli superTabs/profiles): `id` is a stable 16-hex handle,
+   *  `label` a name its owner chose (never an email, so no '@'), `leftPercent` the allowance left. Absent from hosts before it. */
+  profiles: z.array(z.object({ engine: z.enum(['claude', 'codex']), id: z.string().regex(/^[0-9a-f]{16}$/),
+    label: z.string().min(1).max(40).refine(l => !l.includes('@')), leftPercent: z.number().int().min(0).max(100).nullable(),
+    resetsAt: z.string().datetime().nullable() }).strict()).max(16).optional(),
 }).strict()
 export type MachineObservation = z.infer<typeof machineObservationSchema>
 
@@ -177,13 +191,15 @@ export const preparableStart = (start: AgentStart, machineId: string): boolean =
  */
 export function storedObservation(pool: ContributedMachine, observation: MachineObservation,
   opts: { team: boolean; now: number; preparable: (startId: string) => boolean }): StoredReading {
-  const { privacy: reported, harnessProgress, harnessTokens, preparingStartIds, ...reading } = observation
+  const { privacy: reported, harnessProgress, harnessTokens, preparingStartIds, profiles, ...reading } = observation
   const running = (id: string) => observation.runningHarnessIds.includes(id)
   const progress = harnessProgress && Object.fromEntries(Object.entries(harnessProgress).filter(([id]) => running(id)))
   const tokens = harnessTokens && Object.fromEntries(Object.entries(harnessTokens).filter(([id]) => running(id)))
   const preparing = preparingStartIds?.filter(opts.preparable)
   const privacy = observedPrivacy(pool.observation?.privacy, reported, opts.team, opts.now)
-  return { ...reading, quotas: observation.quotas.filter(q => contributedEngines(pool, observation).includes(q.engine)), receivedAt: opts.now,
+  const engines = contributedEngines(pool, observation)
+  return { ...reading, quotas: observation.quotas.filter(q => engines.includes(q.engine)), receivedAt: opts.now,
+    ...(profiles ? { profiles: profiles.filter(p => engines.includes(p.engine)) } : {}),
     sessionKind: opts.team ? 'team' : 'computer', ...(privacy ? { privacy } : {}), ...(progress ? { harnessProgress: progress } : {}),
     ...(tokens ? { harnessTokens: tokens } : {}), ...(preparing ? { preparingStartIds: preparing } : {}) }
 }

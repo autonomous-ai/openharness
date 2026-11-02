@@ -20,9 +20,11 @@ import { attentionOf } from './attention.js'
 import { prepareContribution, prepareTeamContribution } from './contribution.js'
 import { homedir, hostname } from 'node:os'
 import { recordsOtherFolder, scrubClaudeSession, type PurgeTarget, type ScrubTold } from './inCore/teamPurge.js'
-import { replacementObservations } from './replacements.js'
+import { RebindSender, replacementObservations } from './replacements.js'
 import { TerminalHost } from './terminal.js'
 import { LimitResume } from './limitResume.js'
+import { LeadSwitchRequests, type SwitchRow } from './leadSwitchRequest.js'
+import { isTeamDaemon } from './teamDaemon.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
 import { placeLine, threadLine, workLine } from './deliveryContext.js'
@@ -357,7 +359,7 @@ const agentIdOf = (machineId: string, harnessId: string) =>
 export const buddyChatIdOf = (projectId: string, personId: string, generation: string) =>
   createHash('sha256').update(JSON.stringify(['buddy', projectId, personId, generation])).digest('hex').slice(0, 24)
 /** A Buddy's thread session (spec 2026-10-30-buddy-thread-sessions) ends after this long with its screen unchanged, nothing
- *  waiting for it and nothing delivered to it: a session still working on a long question changes its screen. */
+ *  waiting for it, nothing delivered to it and no turn open: a long job with a quiet screen is still working. */
 export const BUDDY_SESSION_IDLE_MS = 30 * 60_000
 /** How long a thread session's terminal may be missing before it counts as stopped, so a slow read is never taken for one. */
 export const BUDDY_SESSION_GONE_MS = 60_000
@@ -446,6 +448,9 @@ export class SuperTabHost {
   private running: Promise<void> | null = null
   private stopsRunning: Promise<void> | null = null
   private readonly releases = new Set<string>()
+  /** The switches the Swarm asked of this machine's PMs (leadSwitchRequest.ts). */
+  private readonly leadSwitches: LeadSwitchRequests
+  private readonly rebinds: RebindSender
   /** Eligibility and failures belong to this stop and native runtime; a new runtime or stop gets a fresh decision. */
   /** `failures` counts final answers toward the five tries; `waits` the transient ones behind the current backoff. */
   private readonly releaseAttempts = new Map<string, { signature: string; failures: number; waits: number; retryAt: number; closed?: true }>()
@@ -533,6 +538,8 @@ export class SuperTabHost {
     this.limitResume = new LimitResume(core, machineId, { now: this.now, log: this.log,
       owns: async (tabId, assignmentId, harnessId) => (await this.sources.feed.fresh()).assignments
         .some(a => a.tabId === tabId && a.assignmentId === assignmentId && a.harnessId === harnessId) })
+    this.rebinds = new RebindSender((path, body) => backend(this.core, 'POST', path, body), this.now)
+    this.leadSwitches = new LeadSwitchRequests(core, machineId, { now: this.now, log: this.log, team: isTeamDaemon })
     this.sources = options.sources ?? { feed: new HostFeed(core, machineId, { now: this.now }), reads: new SwarmReads(core) }
     this.journal = { version: 1, machineId, entries: {} }
     if (existsSync(this.file)) {
@@ -1004,6 +1011,7 @@ export class SuperTabHost {
       if (row.lead === true) {
         leads.add(target.agent.harnessId)
         this.keepAlive(target.agent.harnessId)
+        void this.leadSwitches.serve(target as unknown as SwitchRow).catch(error => this.log(`PM switch: ${error instanceof Error ? error.name : typeof error}`))
       }
       // Never adopt another live session as a replacement for the recorded harness.
       if (!this.core.agents.byAgent(target.agent.harnessId) || !this.core.agents.terminalAvailable(target.agent.harnessId)) continue
@@ -1200,7 +1208,7 @@ export class SuperTabHost {
 
   /** A Buddy's thread sessions (spec 2026-10-30-buddy-thread-sessions) end on their own, so none is left running on its
    *  person's machine: idle for BUDDY_SESSION_IDLE_MS, with no screen change, nothing waiting for it and nothing delivered
-   *  in that time, or its terminal gone for BUDDY_SESSION_GONE_MS. This host asks the backend as the machine's owner, who is
+   *  in that time and no turn open, or its terminal gone for BUDDY_SESSION_GONE_MS. This host asks the backend as the machine's owner, who is
    *  the Buddy's person (a Buddy runs only on its person's own machine); the backend then ends it, and this host closes it
    *  as any session the backend ends (endSession). Asked once, retried with backoff while the backend does not answer. */
   private watchThreadSessions(data: unknown[]): void {
@@ -1250,9 +1258,20 @@ export class SuperTabHost {
       const ending = reason, short = String(agent.harnessId).slice(0, 8)
       // One id per session and reason: a retry is the same request, and a changed reason never reuses an id for another.
       // An older chat's Buddy is removed from that chat, as its person's Remove there does; its chat stays.
-      void backend(this.core, 'POST', `/api/super-tabs/${row.tabId}/commands`, { operationId: `buddy-session-end-${agent.id}-${ending}`,
+      const harnessId = agent.harnessId
+      const end = () => backend(this.core, 'POST', `/api/super-tabs/${row.tabId}/commands`, { operationId: `buddy-session-end-${agent.id}-${ending}`,
         command: oldChat ? { type: 'buddy.remove', projectId: agent.projectId } : { type: 'buddy.sessionEnd', conversationId, thread: session.thread, reason: ending } })
         .then(() => { state.ended = true; this.log(`Ended thread session ${short} in Swarm ${row.tabId}: ${ending}.`) })
+      // A long job can leave the screen as it was: its spinner is not progress (terminal.ts STATUS_LINE). Only a closed turn ends
+      // it (Scholes, 11-02: a busy session never closes). An open turn with its evidence lapsed reads unknown, and a read that
+      // failed reads as no answer (processCoreApi.ts): neither says it is idle, so it retries.
+      void (ending === 'idle' ? this.core.agents.activity([harnessId]) : Promise.resolve({ [harnessId]: 'idle' } as Record<string, string>))
+        .then(activity => {
+          const turn = activity[harnessId]
+          if (turn === 'working') state.activeAt = this.now()
+          else if (turn === 'idle') return end()
+          else throw new Error('its turn could not be read')
+        })
         .catch(error => {
           state.retryAt = this.now() + Math.min(END_RETRY_MAX_MS, END_RETRY_MS * 2 ** state.failures++)
           this.log(`Could not end thread session ${short} in Swarm ${row.tabId} (${ending}): ${error instanceof Error ? error.message : String(error)}`)
@@ -1977,7 +1996,7 @@ export class SuperTabHost {
     try {
       for (const observation of await replacementObservations(this.core, this.machineId, rows)) {
         if (this.stopped) return
-        await backend(this.core, 'POST', observation.path, observation.body)
+        await this.rebinds.post(observation)
       }
     } catch (error) { this.log(error instanceof Error ? error.message : String(error)) }
   }

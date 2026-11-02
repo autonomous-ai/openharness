@@ -63,6 +63,14 @@ export interface Agent {
    *  close it (agent.stopRefused). */
   idleStop?: { previous: 'awaiting' | 'keep' | null }
   releaseId?: string
+  /** A person's request to move this Product Manager to another engine or account (lead.switch), carried out by its host.
+   *  `id` is the operation that asked; `claimedUntil` is set once the host took it (agent.switchClaim). */
+  /** The switch request the last rebind settled, until its result arrives: that result is the one line the chat gets, and
+   *  it still tells the machine owner who asked. */
+  switchLanded?: { id: string; requestedBy: string }
+  switchRequest?: { id: string; engine: string; profileId: string; model?: string; effort?: string; requestedBy: string; at: string; claimedUntil?: string }
+  /** The account it runs in on its machine once a switch moved it; absent for the machine's default account. */
+  profileId?: string
   /** Captured from the original Swarm launch, never inferred from a later live session with the same id. */
   startedSession?: { creationId: string; sessionId: string; createdAt: string }
   /** The model on the Swarm's grid its start named, which its engine never reports. Kept here because a command does not
@@ -112,7 +120,7 @@ export interface Agent {
 /** A thread session's thread root and the main chat's last sequence it may read (buddySessions.ts). A project session also
  *  names its project (buddies.ts; Dee, 10-31): it reads that project alone, and is the only Buddy that writes into it. */
 export interface BuddySession { thread: string; from: number; projectId?: string }
-/** A Buddy chat's live or starting thread session, at most MAX_BUDDY_SESSIONS (buddySessions.ts). `agentId` once it runs;
+/** A Buddy chat's live or starting thread session (buddySessions.ts); it leaves when the session ends. `agentId` once it runs;
  *  `waiting`, the person's messages sent while it started, delivered to it when it joins. */
 export interface BuddySessionEntry { thread: string; startId: string; agentId?: string; at: number; waiting?: string[] }
 export type AgentRole = 'builder' | 'reviewer'
@@ -533,6 +541,10 @@ export const NOTICE_READERS = {
   // longer written (the automatic review's `auto-review`, a routing rule's `rule`) read as people's, as any kind not listed does.
   'review-capacity': 'recipients',
   // #2177's rulings: a failed start and a terminal's alert or typed input stay the people's to see.
+  // A PM switch nobody answered, in its project chat (tidy.ts staleSwitches).
+  switch: 'people',
+  // The machine owner's one line when another person moves a PM onto one of their non-default accounts (commands.ts agent.switchResult).
+  'pm-switch-notice': 'people',
   'start-timeout': 'people', 'terminal-alert': 'people', 'terminal-input': 'people',
 } as const satisfies Record<string, 'people' | 'recipients' | 'agent'>
 const readersOf = (kind: unknown): 'people' | 'recipients' | 'agent' =>
@@ -795,6 +807,16 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   for (const pool of visible.machines ?? []) {
     const privacy = pool.observation?.privacy
     if (privacy && 'detail' in privacy && !(actor.kind === 'person' && actor.userId === pool.contributorId)) delete (privacy as { detail?: string }).detail
+  }
+  // A machine's accounts (labels, percent left) are for those who may switch a PM running there: its owner, and the owners of
+  // projects whose PM runs on it. Agents and everyone else read the machine without them.
+  for (const pool of visible.machines ?? []) {
+    if (!pool.observation?.profiles) continue
+    const there = state.agents.filter(a => a.machineId === pool.machineId)
+    const owners = new Set(there.length ? there.map(a => a.machineOwnerId) : [pool.contributorId])
+    const mayMove = actor.kind === 'person' && (owners.has(actor.userId) ||
+      there.some(a => projectsOf(state).some(p => p.ownerId === actor.userId && state.conversations.some(c => c.id === p.leadConversationId && c.leadId === a.id))))
+    if (!mayMove) delete pool.observation.profiles
   }
   expireRemovals(visible, now)
   // A read never hands out the cleanup records it just applied (read/hostRows.ts delivers them to the machine's host).
