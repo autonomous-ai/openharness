@@ -117,6 +117,7 @@ class SwarmConversationPage extends StatefulWidget {
     this.buddy,
     this.messageId,
     this.threadId,
+    this.threadFocus,
     this.mention,
     this.homeC = false,
     this.tabRoot = false,
@@ -130,6 +131,9 @@ class SwarmConversationPage extends StatefulWidget {
   /// root: as Threads opens one on the desktop (`_openThreadFromList`), the
   /// chat behind it at the root.
   final String? threadId;
+
+  /// Where [threadId]'s thread lands as it opens; its top when none.
+  final SwarmThreadFocus? threadFocus;
 
   /// An agent to @mention in the draft as the chat opens: the PM, as its
   /// private line is answered in the project chat.
@@ -853,7 +857,11 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   }
 
   /// Opens [root]'s thread of [c] over the chat, full screen.
-  void _openThread(SwarmConversation c, String root) {
+  void _openThread(
+    SwarmConversation c,
+    String root, {
+    SwarmThreadFocus? focus,
+  }) {
     if (_acting != null) setState(() => _acting = null);
     _focus.unfocus();
     unawaited(
@@ -865,17 +873,25 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               swarmId: widget.swarmId,
               chat: c,
               root: root,
+              focus: focus,
               title: _view.value?.title,
               row:
-                  (t, m, {required grouped, required acting, required onTap}) =>
-                      _threadRow(
-                        c,
-                        t,
-                        m,
-                        grouped: grouped,
-                        acting: acting,
-                        onTap: onTap,
-                      ),
+                  (
+                    t,
+                    m, {
+                    required grouped,
+                    required acting,
+                    required lit,
+                    required onTap,
+                  }) => _threadRow(
+                    c,
+                    t,
+                    m,
+                    grouped: grouped,
+                    acting: acting,
+                    lit: lit,
+                    onTap: onTap,
+                  ),
               pending: (t, post) => _threadPending(c, t, post),
             ),
           ),
@@ -893,6 +909,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     SuperTabMessage m, {
     required bool grouped,
     required bool acting,
+    required bool lit,
     required VoidCallback onTap,
   }) {
     final view = _view.value;
@@ -910,7 +927,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       taggedAddresses: _taggedOf(c, m),
       readerId: c.reader.accountId,
       grouped: grouped,
-      lit: false,
+      lit: lit,
       quote: null,
       actions: acting,
       onTap: onTap,
@@ -965,6 +982,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// The thread the chat opens with, until its first jump
   /// ([SwarmConversationPage.threadId]).
   late String? _threadAt = widget.threadId;
+  late SwarmThreadFocus? _threadFocusAt = widget.threadFocus;
 
   /// Brings [messageId] into view and lights it — read in from earlier pages
   /// when it is further back — or says why it cannot.
@@ -972,8 +990,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     if (_finding) return;
     // Only the jump the chat opened with opens [SwarmConversationPage.threadId]:
     // a quote of the root tapped later brings the root into view.
-    final thread = _threadAt;
+    final thread = _threadAt, focus = _threadFocusAt;
     _threadAt = null;
+    _threadFocusAt = null;
     final landing = _land();
     setState(() {
       _finding = true;
@@ -993,10 +1012,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     if (thread == messageId &&
         !c.reader.accessRevoked &&
         c.reader.snapshot?.conversation(c.id) != null) {
-      _openThread(c, messageId);
-    }
-    if (target != null && target.threadReply) {
-      _openThread(c, target.thread!);
+      _openThread(c, messageId, focus: focus);
+    } else if (target != null && target.threadReply) {
+      _openThread(
+        c,
+        target.thread!,
+        focus: SwarmThreadFocus.message(messageId),
+      );
       if (!target.inMainStream) {
         setState(() => _finding = false);
         if (!_scroll.hasClients || _scroll.offset <= _readingBack) {

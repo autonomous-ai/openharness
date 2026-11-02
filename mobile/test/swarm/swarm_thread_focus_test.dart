@@ -177,11 +177,7 @@ void main() {
       // 600 replies in pages of 100: the newest five are read on open, so
       // reply 3 is on the last page and not loaded at first.
       final fake = backend(600, perPage: 100);
-      await openAt(
-        tester,
-        fake,
-        focus: const SwarmThreadFocus.message('m3'),
-      );
+      await openAt(tester, fake, focus: const SwarmThreadFocus.message('m3'));
 
       expect(find.byType(SwarmThreadPage), findsOneWidget);
       expect(onScreen(tester, find.text('Reply 3.')), isTrue);
@@ -191,11 +187,7 @@ void main() {
     testWidgets('one that is not in the thread leaves it at its top, no '
         'error, no endless reading', (tester) async {
       final fake = backend(40);
-      await openAt(
-        tester,
-        fake,
-        focus: const SwarmThreadFocus.message('m999'),
-      );
+      await openAt(tester, fake, focus: const SwarmThreadFocus.message('m999'));
 
       expect(find.byType(SwarmThreadPage), findsOneWidget);
       expect(find.text('The question.'), findsOneWidget);
