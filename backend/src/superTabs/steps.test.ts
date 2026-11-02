@@ -230,3 +230,18 @@ describe('the PM\'s reports', () => {
     expect(reportedAs(f.state, f.group(f.task))).toBe(`#${f.group(f.task).number}`)
   })
 })
+
+// Ken, 2026-11-02 (a Reviewer's and a builder's every hand-over reached the PM): an agent's Ready on its own task wakes
+// nobody by itself. It names whom it hands to; the PM hears Done, Stuck and Needs a human.
+describe('an agent\'s own Ready', () => {
+  it('reaches nobody by itself', () => {
+    const f = stepsFixture()
+    const messages = f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'review', result: 'PR 7' } as Command, f.as(f.dev)).messages
+    expect(messages.filter(m => m.conversationId === f.task).map(m => m.recipients)).toEqual([[]])
+  })
+  it('Done still reaches the coordinator', () => {
+    const f = stepsFixture()
+    const messages = f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'done', result: 'Merged' } as Command, f.as(f.dev)).messages
+    expect(messages.filter(m => m.conversationId === f.task && m.text.startsWith('Done')).map(m => m.recipients)).toEqual([[f.lead]])
+  })
+})

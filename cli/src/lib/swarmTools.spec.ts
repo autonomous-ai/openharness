@@ -51,4 +51,9 @@ describe('SWARM_TOOLS_SKILL', () => {
     expect(SWARM_TOOLS_SKILL).toContain('Add a step to a task:')
     expect(SWARM_TOOLS_SKILL).not.toMatch(/Review, Test|review and test steps/i)
   })
+  // Ken, 2026-11-02: an agent's own Ready no longer reaches the coordinator (backend commands.ts work.status).
+  it('says a review status wakes nobody by itself', () => {
+    expect(SWARM_TOOLS_SKILL).toContain('A \`review\` status wakes nobody by itself')
+    expect(SWARM_TOOLS_SKILL).not.toContain('tells only the reviewed group\'s coordinator')
+  })
 })

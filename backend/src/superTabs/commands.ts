@@ -2814,7 +2814,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         // confirmed it stopped) and the coordinator (final review). Nobody else is woken by role: the agent whose work is
         // ready names who reviews it (project instructions, phase 4).
         const told = stepTold ? stepTold.filter((id): id is string => !!id)
-          : own ? (lead && ['needs_human', 'blocked', 'review', 'done'].includes(command.status) ? [lead] : [])
+          // Its own Ready wakes nobody (Ken, 2026-11-02: every hand-over reached the PM): it names whom it hands to.
+          : own ? (lead && ['needs_human', 'blocked', 'done'].includes(command.status) ? [lead] : [])
           : [...command.status === 'stopped' ? [] : [assignment.agentId], ...lead ? [lead] : []]
         const recipients = [...new Set(told)].filter(id => actor.kind !== 'agent' || id !== actor.agentId)
         const asked = !command.ask ? '' : effects.result.notAsked ? `\n\n${effects.result.notAsked}` : `\n\nAsked ${person(state, command.ask.personId).email}.`
