@@ -171,6 +171,13 @@ const kSwarmPushSafetyNet = Duration(seconds: 60);
 /// often; a change to one asks for a read at once (`SuperTabClient`).
 const kSwarmDiscoverySafetyNet = Duration(minutes: 2);
 
+/// The files waiting in a Swarm's boxes: by conversation, and by a thread's
+/// conversation and root.
+typedef SuperTabKeptFiles = ({
+  Map<String, List<HarnessAttachment>> chats,
+  Map<(String, String), List<HarnessAttachment>> threads,
+});
+
 class SuperTabController extends ChangeNotifier {
   SuperTabController({
     required this.tabId,
@@ -969,6 +976,34 @@ class SuperTabController extends ChangeNotifier {
   /// stay in memory: only the text of a draft is saved.
   HarnessAttachments attachments(String id) =>
       _attachments.putIfAbsent(id, () => _newFiles(id, id));
+
+  /// The files waiting to go, for the next controller of this Swarm: bytes are
+  /// never saved, so the running app hands them on ([SuperTabClient.release]).
+  /// Nothing once access has gone.
+  SuperTabKeptFiles get keptFiles => (
+    chats: {
+      if (!accessRevoked)
+        for (final MapEntry(key: id, value: files) in _attachments.entries)
+          if (!files.isEmpty) id: files.files,
+    },
+    threads: {
+      if (!accessRevoked)
+        for (final MapEntry(key: thread, value: files)
+            in _threadAttachments.entries)
+          if (!files.isEmpty) thread: files.files,
+    },
+  );
+
+  /// Takes the files the last controller of this Swarm left ([keptFiles]). The
+  /// first read lets go of those for a conversation no longer read.
+  void adoptFiles(SuperTabKeptFiles kept) {
+    for (final MapEntry(key: id, value: files) in kept.chats.entries) {
+      attachments(id).add(files);
+    }
+    for (final MapEntry(key: thread, value: files) in kept.threads.entries) {
+      threadAttachments(thread.$1, thread.$2).add(files);
+    }
+  }
 
   /// The files waiting to go with the next reply of [root]'s thread in
   /// [conversationId]. Like [attachments], they stay in memory, and they are
