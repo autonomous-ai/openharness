@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../core/machine_resources.dart';
 import '../core/models.dart';
@@ -785,6 +786,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   /// Once a second, so that ages, states and the heading's count follow the clock between the Swarm's reads.
   Timer? _tick;
   final _tips = <String, GlobalKey<TooltipState>>{};
+
+  /// One per Swarm menu open now, each keeping the browser's menu off.
+  final _menuHolds = <Object>{};
   ModelsMenuController? _usage;
   Timer? _timer;
   bool _reading = false;
@@ -919,6 +923,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 
   @override
   void dispose() {
+    _menuHolds.forEach(BrowserMenuGuard.release);
+    _menuHolds.clear();
     _revision++;
     _timer?.cancel();
     _tick?.cancel();
@@ -1622,26 +1628,37 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 
   /// A machine row's right-click: its details, and Remove from Swarm for whoever may.
   Future<void> _menu(_MachineView view, Offset at) async {
-    final choice = await showMenu<String>(
-      context: context,
-      position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx, at.dy),
-      items: [
-        const PopupMenuItem(value: 'details', child: Text('Details')),
-        if (_canRemove(view.id))
-          PopupMenuItem(
-            key: ValueKey('super-machine-menu-remove'),
-            value: 'remove',
-            enabled: _removeReason(view.id) == null,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Remove from Swarm'),
-                if (_removeReason(view.id) case final reason?) Text(reason),
-              ],
+    // The menu's barrier takes the pointer from the row, so a second right-click would bring up the browser's menu
+    // over this one. Off until it closes; dispose lets go too, for a screen that goes with the menu still up.
+    final hold = Object();
+    _menuHolds.add(hold);
+    BrowserMenuGuard.hold(hold);
+    final String? choice;
+    try {
+      choice = await showMenu<String>(
+        context: context,
+        position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx, at.dy),
+        items: [
+          const PopupMenuItem(value: 'details', child: Text('Details')),
+          if (_canRemove(view.id))
+            PopupMenuItem(
+              key: ValueKey('super-machine-menu-remove'),
+              value: 'remove',
+              enabled: _removeReason(view.id) == null,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Remove from Swarm'),
+                  if (_removeReason(view.id) case final reason?) Text(reason),
+                ],
+              ),
             ),
-          ),
-      ],
-    );
+        ],
+      );
+    } finally {
+      _menuHolds.remove(hold);
+      BrowserMenuGuard.release(hold);
+    }
     if (!mounted) return;
     if (choice == 'details') await _openDetails(view);
     if (choice == 'remove' &&
@@ -1778,44 +1795,61 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     final selected = _selectedMachineId == view.id;
     final row = BrowserMenuOff(
       active: true,
-      child: Material(
-        color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
-        borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-        clipBehavior: Clip.antiAlias,
-        // No chevron (Dee, 2026-10-27): a click expands the machine, and its
-        // details are in the right-click menu, or a long press on a touch screen.
-        child: Builder(
-          builder: (rowContext) => InkWell(
-            key: ValueKey('super-machine-${view.id}'),
-            onTap: () {
-              c.toggleMachineExpanded(view.id);
-              _changed();
-            },
-            onLongPress: () => unawaited(_menu(view, _longPressAt(rowContext))),
-            onSecondaryTapUp: (event) =>
-                unawaited(_menu(view, event.globalPosition)),
-            hoverColor: grid.AppSurface.hoverFill,
-            focusColor: grid.AppSurface.hoverFill,
-            borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-            onFocusChange: (focused) {
-              if (focused &&
-                  FocusManager.instance.highlightMode ==
-                      FocusHighlightMode.traditional) {
-                tipKey.currentState?.ensureTooltipVisible();
-              } else if (!focused) {
-                Tooltip.dismissAllToolTips();
-              }
-            },
-            child: Semantics(
-              expanded: expanded,
-              child: _MachineLine(
-                view: view,
-                onSetUpTeam: view.setUpTeam
-                    ? () async {
-                        await showTeamAccountSetup(context, widget.app!);
-                        await _readTeamSetup();
-                      }
-                    : null,
+      child: _RowHoverRegion(
+        child: Material(
+          color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
+          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+          clipBehavior: Clip.antiAlias,
+          // No chevron (Dee, 2026-10-27): a click expands the machine, and its
+          // details are in the right-click menu, or a long press on a touch screen.
+          child: Builder(
+            builder: (rowContext) => CallbackShortcuts(
+              bindings: {
+                const SingleActivator(LogicalKeyboardKey.contextMenu): () =>
+                    unawaited(_menu(view, _longPressAt(rowContext))),
+                const SingleActivator(
+                  LogicalKeyboardKey.f10,
+                  shift: true,
+                ): () =>
+                    unawaited(_menu(view, _longPressAt(rowContext))),
+              },
+              child: InkWell(
+                key: ValueKey('super-machine-${view.id}'),
+                onTap: () {
+                  c.toggleMachineExpanded(view.id);
+                  _changed();
+                },
+                onLongPress: () =>
+                    unawaited(_menu(view, _longPressAt(rowContext))),
+                onSecondaryTapUp: (event) =>
+                    unawaited(_menu(view, event.globalPosition)),
+                hoverColor: grid.AppSurface.hoverFill,
+                focusColor: grid.AppSurface.hoverFill,
+                borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+                onFocusChange: (focused) {
+                  if (focused &&
+                      FocusManager.instance.highlightMode ==
+                          FocusHighlightMode.traditional) {
+                    tipKey.currentState?.ensureTooltipVisible();
+                  } else if (!focused) {
+                    Tooltip.dismissAllToolTips();
+                  }
+                },
+                child: Semantics(
+                  expanded: expanded,
+                  child: _MachineLine(
+                    view: view,
+                    onMore: BrowserMenuGuard.inBrowser
+                        ? (at) => _menu(view, at)
+                        : null,
+                    onSetUpTeam: view.setUpTeam
+                        ? () async {
+                            await showTeamAccountSetup(context, widget.app!);
+                            await _readTeamSetup();
+                          }
+                        : null,
+                  ),
+                ),
               ),
             ),
           ),
@@ -2445,9 +2479,12 @@ const _noQuotaLeft = 'No quota left until it resets.';
 
 /// The same leading icon/name and trailing status column as projects.
 class _MachineLine extends StatelessWidget {
-  const _MachineLine({required this.view, this.onSetUpTeam});
+  const _MachineLine({required this.view, this.onSetUpTeam, this.onMore});
 
   final _MachineView view;
+
+  /// In a browser, opens the machine's menu at a point until it closes: the ⋯ that needs no right-click.
+  final Future<void> Function(Offset at)? onMore;
 
   /// This Mac's row, without its Harness Team account: Set up under the paused line.
   final VoidCallback? onSetUpTeam;
@@ -2555,6 +2592,11 @@ class _MachineLine extends StatelessWidget {
               padding: const EdgeInsets.only(left: 6),
               child: Text('Cleaning up', style: DesktopChrome.metadata()),
             ),
+          if (onMore case final open?)
+            _MachineMore(
+              key: ValueKey('super-machine-more-${view.id}'),
+              onOpen: open,
+            ),
           SizedBox(
             width: 32,
             child: Center(
@@ -2574,6 +2616,104 @@ class _MachineLine extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The ⋯ on a machine row. It takes no room until the row is pointed at or the button has focus, and stays in the
+/// focus order the whole time, so a key can reach it.
+class _MachineMore extends StatefulWidget {
+  const _MachineMore({super.key, required this.onOpen});
+
+  final Future<void> Function(Offset at) onOpen;
+
+  /// The button's width and height when shown: [AppIconButton]'s target.
+  static const width = 32.0;
+
+  @override
+  State<_MachineMore> createState() => _MachineMoreState();
+}
+
+class _MachineMoreState extends State<_MachineMore> {
+  bool _focused = false;
+
+  /// With its menu up the row loses the pointer to the menu's barrier; the ⋯ stays, so the row does not jump.
+  bool _open = false;
+
+  Future<void> _press() async {
+    final box = context.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return;
+    setState(() => _open = true);
+    try {
+      await widget.onOpen(box.localToGlobal(Offset(0, box.size.height)));
+    } finally {
+      if (mounted) setState(() => _open = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final shown = _focused || _open || _RowHover.of(context);
+    return Focus(
+      canRequestFocus: false,
+      skipTraversal: true,
+      onFocusChange: (focused) => setState(() => _focused = focused),
+      child: SizedBox(
+        width: shown ? _MachineMore.width : 0,
+        height: _MachineMore.width,
+        child: OverflowBox(
+          alignment: Alignment.centerRight,
+          minWidth: _MachineMore.width,
+          maxWidth: _MachineMore.width,
+          child: Opacity(
+            opacity: shown ? 1 : 0,
+            child: IgnorePointer(
+              ignoring: !shown,
+              child: AppIconButton(
+                icon: AppIcons.ellipsis,
+                tooltip: 'More',
+                size: 16,
+                onPressed: () => unawaited(_press()),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Whether the pointer is over the row below it.
+class _RowHover extends InheritedWidget {
+  const _RowHover({required this.hovered, required super.child});
+
+  final bool hovered;
+
+  static bool of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<_RowHover>()?.hovered ?? false;
+
+  @override
+  bool updateShouldNotify(_RowHover oldWidget) => hovered != oldWidget.hovered;
+}
+
+/// Tells [_RowHover] readers below it when the pointer enters and leaves.
+class _RowHoverRegion extends StatefulWidget {
+  const _RowHoverRegion({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_RowHoverRegion> createState() => _RowHoverRegionState();
+}
+
+class _RowHoverRegionState extends State<_RowHoverRegion> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+    opaque: false,
+    onEnter: (_) => setState(() => _hovered = true),
+    onExit: (_) => setState(() => _hovered = false),
+    child: _RowHover(hovered: _hovered, child: widget.child),
+  );
 }
 
 /// The expanded reading block wraps complete values, without filling missing slots.

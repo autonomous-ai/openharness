@@ -13,6 +13,7 @@ import '../shared/widgets/app_select_field.dart';
 import '../state/app_state.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
+import '../widgets/browser_menu_guard.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/harness_activity_mark.dart';
 import 'agent_details.dart';
@@ -453,75 +454,79 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     return Tooltip(
       message: tooltip,
       constraints: const BoxConstraints(maxWidth: 820),
-      child: GestureDetector(
-        onSecondaryTapUp: (event) async {
-          final choice = await showMenu<String>(
-            context: context,
-            position: RelativeRect.fromLTRB(
-              event.globalPosition.dx,
-              event.globalPosition.dy,
-              event.globalPosition.dx,
-              event.globalPosition.dy,
-            ),
-            items: [
-              const PopupMenuItem(value: 'details', child: Text('Details')),
-              if (_canRemove(c.snapshot?.agent(agent.id) ?? agent))
-                PopupMenuItem(
-                  value: 'remove',
-                  enabled: _removeReason(agent) == null,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Remove from Swarm'),
-                      if (_removeReason(agent) case final reason?) Text(reason),
-                    ],
+      child: BrowserMenuOff(
+        active: true,
+        child: GestureDetector(
+          onSecondaryTapUp: (event) async {
+            final choice = await showMenu<String>(
+              context: context,
+              position: RelativeRect.fromLTRB(
+                event.globalPosition.dx,
+                event.globalPosition.dy,
+                event.globalPosition.dx,
+                event.globalPosition.dy,
+              ),
+              items: [
+                const PopupMenuItem(value: 'details', child: Text('Details')),
+                if (_canRemove(c.snapshot?.agent(agent.id) ?? agent))
+                  PopupMenuItem(
+                    value: 'remove',
+                    enabled: _removeReason(agent) == null,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Remove from Swarm'),
+                        if (_removeReason(agent) case final reason?)
+                          Text(reason),
+                      ],
+                    ),
                   ),
-                ),
-            ],
-          );
-          if (choice == 'details' && mounted) await _details(agent);
-          if (choice == 'remove' && mounted) {
-            final current = c.snapshot?.agent(agent.id);
-            if (current != null &&
-                _canRemove(current) &&
-                _removeReason(current) == null) {
-              await _remove(current);
+              ],
+            );
+            if (choice == 'details' && mounted) await _details(agent);
+            if (choice == 'remove' && mounted) {
+              final current = c.snapshot?.agent(agent.id);
+              if (current != null &&
+                  _canRemove(current) &&
+                  _removeReason(current) == null) {
+                await _remove(current);
+              }
             }
-          }
-        },
-        child: SuperTabMemberRow(
-          rowKey: ValueKey('super-member-${agent.id}'),
-          onTap: open,
-          onLongPress: () => unawaited(_details(agent)),
-          avatar: SuperTabAvatar.agent(
-            agent,
-            name: name,
-            size: SuperTabAvatar.rowSize,
-            engineBadge: false,
-          ),
-          name: _agentIdentity(
-            name,
-            role,
-            badge,
-            model: glance.modelEffort,
-            modelKey: ValueKey('super-member-model-${agent.id}'),
-          ),
-          detail: Text(
-            detail,
-            key: ValueKey('super-member-line-${agent.id}'),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: DesktopChrome.metadata(),
-          ),
-          trailing: ActivityMark(
-            key: ValueKey('super-member-mark-${agent.id}'),
-            activity: shown,
-            tooltip: false,
-            showIdle: true,
-            color: activityColor(
-              shown,
-              theme,
-              color: appearancePrefsStore.value.prompt.color,
+          },
+          child: SuperTabMemberRow(
+            rowKey: ValueKey('super-member-${agent.id}'),
+            onTap: open,
+            onLongPress: () => unawaited(_details(agent)),
+            avatar: SuperTabAvatar.agent(
+              agent,
+              name: name,
+              size: SuperTabAvatar.rowSize,
+              engineBadge: false,
+            ),
+            name: _agentIdentity(
+              name,
+              role,
+              badge,
+              model: glance.modelEffort,
+              modelKey: ValueKey('super-member-model-${agent.id}'),
+            ),
+            detail: Text(
+              detail,
+              key: ValueKey('super-member-line-${agent.id}'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: DesktopChrome.metadata(),
+            ),
+            trailing: ActivityMark(
+              key: ValueKey('super-member-mark-${agent.id}'),
+              activity: shown,
+              tooltip: false,
+              showIdle: true,
+              color: activityColor(
+                shown,
+                theme,
+                color: appearancePrefsStore.value.prompt.color,
+              ),
             ),
           ),
         ),
