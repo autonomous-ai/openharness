@@ -7,6 +7,7 @@ import { activeWork, agent, appendPullRequestUrls, author, conversation, fail, s
   type Actor, type Agent, type Author, type Conversation, type SuperTabState } from './model.js'
 import { accessInputs, canReadGroup, readConversation, watchersLost } from './projects.js'
 import { mayDrive } from './terminal.js'
+import { CANCELLABLE_DELIVERY } from './pageReads.js'
 import { cloneData } from './cloneData.js'
 import { numberMessages, type Touch } from './parts/commit.js'
 import { redactCredentials } from './credentials.js'
@@ -277,7 +278,7 @@ export async function revokeNativeContexts(tx: Transaction, before: SuperTabStat
     const revoked = await tx.superTabNativeContext.findMany({ where, select: { id: true } })
     await tx.superTabNativeContext.updateMany({ where, data: { revoked: true } })
     if (revoked.length) await tx.superTabDelivery.updateMany({ where: { tabId: before.id,
-      nativeContextId: { in: revoked.map(r => r.id) }, status: { in: ['queued', 'claimed', 'uncertain'] } },
+      nativeContextId: { in: revoked.map(r => r.id) }, status: { in: [...CANCELLABLE_DELIVERY] } },
       data: { status: 'cancelled', holdReason: null, holdSince: null } })
   }
   return watchersLost

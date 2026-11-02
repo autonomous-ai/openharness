@@ -520,6 +520,8 @@ export const NOTICE_READERS = {
   'update-request': 'recipients', 'digest-request': 'recipients', overlap: 'recipients',
   // Two agents that may be talking in a loop, told to the coordinator (commands.ts pairLoop, project instructions phase 1).
   'pair-loop': 'recipients',
+  // The server's routine notices to the coordinator, gathered into one message (noticeDigest.ts).
+  'notice-digest': 'recipients',
   // Each its own case in commands.ts, decided by the row (forRecipients): statuses, briefs, merges, starts, removals.
   system: 'people',
   // A save of the project's instructions, with its summary: the team sees it without opening the document (instructions.ts).

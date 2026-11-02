@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TeamConfig } from '../team/config.js'
-import { agentTmpEnv, agentTmpFolder, agentTmpRoot, agentTmpState, prepareAgentTmp, resetAgentTmpSweep, sweepAgentTmp, type AgentTmpDeps } from './agentTmp.js'
+import { agentTmpEnv, agentTmpFolder, agentTmpRoot, agentTmpState, buddyTmpEnv, buddyTmpFolder, buddyTmpOf, buddyTmpParent, prepareAgentTmp, resetAgentTmpSweep, sweepAgentTmp, sweepBuddyTmp, type AgentTmpDeps } from './agentTmp.js'
 
 const made: string[] = []
 afterEach(() => { for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true }); resetAgentTmpSweep() })
@@ -173,5 +173,120 @@ describe('what deletes it', () => {
 
   it('a sweep of a folder that cannot be read deletes nothing and does not throw', async () => {
     expect(await sweepAgentTmp(join(scratch(), 'missing'), NOW)).toBe(0)
+  })
+})
+
+describe('a Buddy\'s private temporary folder', () => {
+  const DAY = 24 * 60 * 60_000
+  /** A data folder in a scratch folder of its own, so the sibling `-buddy-tmp` is cleaned with it. */
+  const dataIn = () => join(scratch(), 'data')
+
+  it('is a 0700 folder under a 0700 parent, for Claude Code\'s own files too, outside the data folder', () => {
+    const data = dataIn()
+    const env = buddyTmpEnv('claude', '/work/one', deps(data))
+    expect(env).toEqual({ TMPDIR: buddyTmpFolder('/work/one', data), CLAUDE_CODE_TMPDIR: buddyTmpFolder('/work/one', data) })
+    expect(statSync(env.TMPDIR!).mode & 0o777).toBe(0o700)
+    expect(statSync(buddyTmpParent(data)).mode & 0o777).toBe(0o700)
+    expect(statSync(env.TMPDIR!).uid).toBe(process.geteuid!())
+    expect(env.TMPDIR!.startsWith(`${data}/`)).toBe(false)
+  })
+
+  it('is one per Buddy, and stays the same across a relaunch', () => {
+    const data = dataIn()
+    expect(buddyTmpFolder('/work/one', data)).not.toBe(buddyTmpFolder('/work/two', data))
+    expect(buddyTmpOf('/work/one', deps(data))).toBe(buddyTmpOf('/work/one', deps(data)))
+  })
+
+  it('gives another engine TMPDIR alone', () => {
+    const data = dataIn()
+    expect(buddyTmpEnv('codex', '/work/one', deps(data))).toEqual({ TMPDIR: buddyTmpFolder('/work/one', data) })
+  })
+
+  it('is only for the owner\'s account on a computer with a Team account, on macOS and Linux', () => {
+    const data = dataIn()
+    expect(buddyTmpEnv('claude', '/work/one', deps(data, { config: () => null }))).toEqual({})
+    expect(buddyTmpEnv('claude', '/work/one', deps(data, { user: () => 'harnessteam' }))).toEqual({})
+    expect(buddyTmpEnv('claude', '/work/one', deps(data, { platform: 'win32' }))).toEqual({})
+    expect(buddyTmpOf('/work/one', deps(data, { config: () => null }))).toBeNull()
+    expect(existsSync(buddyTmpParent(data))).toBe(false)
+  })
+
+  // Not yet run in Linux's sandbox (bubblewrap): a folder it would not open breaks every command of a Buddy (review of #2563).
+  it('leaves Linux on the system\'s folder until the sandbox has been tried there', () => {
+    const data = dataIn()
+    expect(buddyTmpEnv('claude', '/work/one', deps(data, { platform: 'linux' }))).toEqual({})
+    expect(buddyTmpOf('/work/one', deps(data, { platform: 'linux' }))).toBeNull()
+    expect(existsSync(buddyTmpParent(data))).toBe(false)
+  })
+
+  it('names the folder by its real path when the data folder is reached through a link, as the guard compares real paths', () => {
+    const at = scratch(), real = join(at, 'real'), data = join(at, 'data')
+    mkdirSync(real); symlinkSync(real, data)
+    expect(buddyTmpOf('/work/one', deps(data))).toBe(join(`${data}-buddy-tmp`, buddyTmpFolder('/work/one', data).split('/').at(-1)!))
+    const linked = join(scratch(), 'link'), parentReal = scratch()
+    symlinkSync(scratch(), linked)
+    const nested = join(parentReal, 'real-data'), viaLink = join(scratch(), 'via')
+    mkdirSync(nested); symlinkSync(parentReal, viaLink)
+    expect(buddyTmpOf('/work/one', deps(join(viaLink, 'real-data')))).toBe(join(`${nested}-buddy-tmp`, buddyTmpFolder('/work/one', nested).split('/').at(-1)!))
+  })
+
+  it('closes a folder someone left open, and a parent too', () => {
+    const data = dataIn(), folder = buddyTmpFolder('/work/one', data)
+    mkdirSync(folder, { recursive: true, mode: 0o777 })
+    chmodSync(folder, 0o777); chmodSync(buddyTmpParent(data), 0o777)
+    expect(buddyTmpOf('/work/one', deps(data))).toBe(folder)
+    expect(statSync(folder).mode & 0o777).toBe(0o700)
+    expect(statSync(buddyTmpParent(data)).mode & 0o777).toBe(0o700)
+  })
+
+  it.each(['the folder', 'the parent'])('refuses a link in place of %s, and the Buddy keeps the system\'s folder, saying so', (which) => {
+    const data = dataIn(), elsewhere = scratch(), folder = buddyTmpFolder('/work/one', data)
+    if (which === 'the folder') { mkdirSync(buddyTmpParent(data), { recursive: true, mode: 0o700 }); symlinkSync(elsewhere, folder) } else { mkdirSync(data, { recursive: true }); symlinkSync(elsewhere, buddyTmpParent(data)) }
+    chmodSync(elsewhere, 0o755)
+    const d = deps(data)
+    expect(buddyTmpOf('/work/one', d)).toBeNull()
+    expect(buddyTmpEnv('claude', '/work/one', d)).toEqual({})
+    expect(d.log).toHaveBeenCalledWith(expect.stringContaining('private temporary folder'))
+    expect(statSync(elsewhere).mode & 0o777).toBe(0o755)
+  })
+
+  it('deletes what nothing has changed in for 7 days inside each Buddy\'s folder, keeping the folder a live Buddy has as its TMPDIR', async () => {
+    const data = dataIn(), folder = buddyTmpOf('/work/one', deps(data))!
+    writeFileSync(join(folder, 'stale'), 'x')
+    const later = Date.now() + 8 * DAY
+    writeFileSync(join(folder, 'fresh'), 'x'); utimesSync(join(folder, 'fresh'), new Date(later), new Date(later))
+    expect(await sweepBuddyTmp(buddyTmpParent(data), later)).toBe(1)
+    expect(existsSync(join(folder, 'stale'))).toBe(false)
+    expect(existsSync(join(folder, 'fresh'))).toBe(true)
+    expect(existsSync(folder)).toBe(true)
+  })
+
+  it('removes a Buddy\'s folder only when empty and idle for 30 days', async () => {
+    const data = dataIn(), folder = buddyTmpOf('/work/one', deps(data))!
+    await sweepBuddyTmp(buddyTmpParent(data), Date.now() + 8 * DAY)
+    expect(existsSync(folder)).toBe(true)
+    await sweepBuddyTmp(buddyTmpParent(data), Date.now() + 31 * DAY)
+    expect(existsSync(folder)).toBe(false)
+  })
+
+  it('sweeps nothing through a link, in the parent\'s place or among the Buddies\' folders', async () => {
+    const data = dataIn(), target = scratch()
+    writeFileSync(join(target, 'kept'), 'x')
+    mkdirSync(buddyTmpParent(data), { recursive: true, mode: 0o700 })
+    symlinkSync(target, join(buddyTmpParent(data), 'link'))
+    await sweepBuddyTmp(buddyTmpParent(data), Date.now() + 40 * DAY)
+    expect(existsSync(join(target, 'kept'))).toBe(true)
+    const other = join(scratch(), 'parent')
+    symlinkSync(target, other)
+    expect(await sweepBuddyTmp(other, Date.now() + 40 * DAY)).toBe(0)
+    expect(existsSync(join(target, 'kept'))).toBe(true)
+  })
+
+  it('is swept by a launch, with the Team account gone too', async () => {
+    const data = dataIn(), folder = buddyTmpOf('/work/one', deps(data))!
+    writeFileSync(join(folder, 'stale'), 'x')
+    resetAgentTmpSweep()
+    agentTmpEnv('claude', undefined, deps(data, { config: () => null, now: () => Date.now() + 8 * DAY }))
+    await vi.waitFor(() => expect(existsSync(join(folder, 'stale'))).toBe(false))
   })
 })

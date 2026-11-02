@@ -81,11 +81,14 @@ async function swarm({ legacy = false, client = db, hooks, independent = false, 
   /** The member name people and the Lead read for an agent. */
   const name = async (agentId: string) => (await timed.read(owner, tab)).state.agents.find(a => a.id === agentId)!.displayName
   const assignment = async () => (await timed.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!
-  /** What the Lead's host receives now (this poll is also the Lead's wake-up path), with each row's text. */
+  /** What the Lead's host receives now (this poll is also the Lead's wake-up path), with each row's text, and what it hears in a
+   *  digest (noticeDigest.ts): gathered for one, or named by one. Those of no digest of its own come first, in the order written. */
   const leadInbox = async () => {
     const rows = await timed.deliveries(host, tab, lead)
-    const messages = await db.superTabMessage.findMany({ where: { id: { in: rows.map(r => r.messageId) } } })
-    return rows.map(r => messages.find(m => m.id === r.messageId)!)
+    const digest = await db.superTabDelivery.findMany({ where: { tabId: tab, agentId: lead, status: { in: ['gathered', 'digested'] } }, orderBy: { createdAt: 'asc' } })
+    const ids = [...rows, ...digest].map(r => r.messageId)
+    const messages = await db.superTabMessage.findMany({ where: { id: { in: ids } } })
+    return ids.map(id => messages.find(m => m.id === id)!).filter(m => (m.source as { kind?: string } | null)?.kind !== 'notice-digest')
   }
   const lostRows = async () => (await db.superTabMessage.findMany({ where: { tabId: tab }, orderBy: { sequence: 'asc' } }))
     .filter(m => (m.source as { kind?: string } | null)?.kind === 'work-lost')
@@ -1088,7 +1091,8 @@ describe('a start that never runs', () => {
     f.clock.now = dispatched + 3 * MINUTE
     await f.leadInbox()
     expect((await f.timed.read(owner, f.tab)).state.starts!.find(s => s.id === startId)!.error).toBeNull()
-    f.clock.now = dispatched + 3 * MINUTE + 1
+    // Nothing open for its Lead, so its next full poll is the sweep's, 30 s on.
+    f.clock.now = dispatched + 3 * MINUTE + 30_001
     const told = (await f.leadInbox()).find(m => (m.source as { kind?: string }).kind === 'start-timeout')!
     // Every group member reads the notice, so it names no machine (review of #1847); the start's Lead reads which one.
     expect(told).toMatchObject({ conversationId: 'lead', text: 'Could not start Builder on fixture-model: its machine did not start it within 3 minutes.' })
@@ -1640,6 +1644,9 @@ describe('the delivery poll of an agent with a held delivery', () => {
     }
     f.clock.now += 6 * MINUTE
     const expectedIds = assignments.map(assignment => stableId(stableId('work-lost', assignment, String(f.clock.now)), 'lead'))
+    await f.timed.deliveries(host, f.tab, f.lead)
+    // Gathered for a digest; each goes on its own after the settle pass's 30 minutes, the ones these cases are about.
+    await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: f.lead, status: 'gathered' }, data: { status: 'queued' } })
     const first = (await f.timed.deliveries(host, f.tab, f.lead)).filter(row => expectedIds.includes(row.messageId))
     expect(first).toHaveLength(3)
     await f.timed.delivery(host, f.tab, f.lead, first[0]!.id, { type: 'claim', claimId: 'claim-1' })
@@ -1717,6 +1724,9 @@ describe('the push for a new delivery', () => {
     // Each loss notice is named by its task and the time of the loss (this poll).
     const expectedIds = assignments.map(assignment => stableId(stableId('work-lost', assignment, String(f.clock.now)), 'lead'))
     // One poll expires all three assignments and inserts their messages/deliveries together.
+    await f.timed.deliveries(host, f.tab, f.lead)
+    // Gathered for a digest; each goes on its own after the settle pass's 30 minutes, the ones these cases are about.
+    await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: f.lead, status: 'gathered' }, data: { status: 'queued' } })
     const first = (await f.timed.deliveries(host, f.tab, f.lead)).filter(row => expectedIds.includes(row.messageId))
     expect(first).toHaveLength(3)
     expect(new Set(first.map(row => row.messageId))).toEqual(new Set(expectedIds))
