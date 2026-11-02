@@ -153,8 +153,8 @@ describe('installation tokens', () => {
   // A Harness Team account's commits are the app's (PR #1934): its bot account, as GitHub names it.
   it('names the app\'s bot account as its commit identity, reading the bot\'s id once', async () => {
     const { app, github } = setup()
-    expect(await app.commitIdentity()).toEqual({ name: 'harness-fixture[bot]', email: '4242+harness-fixture[bot]@users.noreply.github.com' })
-    expect(await app.commitIdentity()).toEqual({ name: 'harness-fixture[bot]', email: '4242+harness-fixture[bot]@users.noreply.github.com' })
+    expect(await app.commitIdentity()).toEqual({ name: 'Harness', email: '4242+harness-fixture[bot]@users.noreply.github.com' })
+    expect(await app.commitIdentity()).toEqual({ name: 'Harness', email: '4242+harness-fixture[bot]@users.noreply.github.com' })
     const asked = github.calls.filter(c => c.path.startsWith('/users/'))
     expect(asked).toEqual([expect.objectContaining({ method: 'GET', path: '/users/harness-fixture%5Bbot%5D', auth: '' })])
     // With no app name configured, the app's own answer names it.
@@ -163,7 +163,7 @@ describe('installation tokens', () => {
     await signed.app.commitIdentity('ghs_issued')
     expect(signed.github.calls.find(c => c.path.startsWith('/users/'))?.auth).toBe('Bearer ghs_issued')
     const unnamed = setup({ slug: null })
-    expect(await unnamed.app.commitIdentity()).toMatchObject({ name: 'harness-fixture[bot]' })
+    expect(await unnamed.app.commitIdentity()).toMatchObject({ name: 'Harness', email: '4242+harness-fixture[bot]@users.noreply.github.com' })
     expect(unnamed.github.calls.map(c => c.path)).toEqual(['/app', '/users/harness-fixture%5Bbot%5D'])
   })
 
