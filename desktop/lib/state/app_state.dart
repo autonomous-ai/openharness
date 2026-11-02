@@ -7258,7 +7258,7 @@ class AppNotifier extends ChangeNotifier {
     if (status == AppStatus.unauthenticated) return;
     status = AppStatus.authenticated;
     _markStartup('window');
-    appLog.info('startup', _startupTimings.entries.map((step) => '\${step.key} after \${step.value} ms').join(', '));
+    appLog.info('startup', startupLogLine(_startupTimings));
     _startupClock.stop();
     notifyListeners();
     // The CLI has confirmed daemon readiness. Display-name/avatar metadata is
@@ -7406,6 +7406,8 @@ class AppNotifier extends ChangeNotifier {
     _signInStep = true;
     currentUser = null;
     _provenMachineId = null;
+    _keptProfileId = null;
+    _profileConfirmed = false;
     unawaited(_profileCache.clear());
     if (banner != null) {
       _lastError = banner;
@@ -7583,6 +7585,7 @@ class AppNotifier extends ChangeNotifier {
       final me = await api.me();
       if (me != null && _authWorkCurrent(revision)) {
         currentUser = CurrentUserProfile.fromMe(me);
+        _profileConfirmed = true;
       }
     } catch (_) {
       /* Unknown: the profile load after boot tries again. */
@@ -7593,20 +7596,56 @@ class AppNotifier extends ChangeNotifier {
   String? _provenMachineId;
   late final _profileCache = ProfileCache(_paneLayout?.storage);
 
+  /// The account the kept profile showing now names, if one is: a server answer for another account clears it.
+  String? _keptProfileId;
+
+  /// Whether the server has answered who is signed in during this run. A kept profile shows until it has, and it is asked again
+  /// when the backend returns, as a person with no profile at all is. Security review of #2617.
+  bool _profileConfirmed = false;
+
   /// The last profile, when the CLI's session is the one it was read under; otherwise it goes (task #2169). A viewer has no CLI
   /// session to prove it, and reads its profile before the layout instead ([_identifyBeforeLayout]).
   Future<void> _useKeptProfile(CliAuthStatus authStatus, int revision) async {
     if (viewer != null) return;
     final machineId = authStatus.loggedIn ? authStatus.machineId : null;
     _provenMachineId = machineId;
+    _keptProfileId = null;
+    _profileConfirmed = false;
     final kept = machineId == null ? null : await _profileCache.read(machineId);
     if (!_authWorkCurrent(revision)) return;
     if (kept == null) {
       await _profileCache.clear();
       return;
     }
+    _keptProfileId = kept.id;
     currentUser = kept;
     notifyListeners();
+  }
+
+  /// Keeps what the server just answered, only where it can't name another account later: a machine id proves the account only
+  /// while everything under it is that account's. Someone can sign in as another in a terminal while the answer is on its way,
+  /// so an answer naming another account than the record goes, and a first record waits for the CLI to name the machine still.
+  Future<void> _keepProfile(CurrentUserProfile profile, int revision) async {
+    final machineId = _provenMachineId;
+    if (machineId == null) return;
+    final kept = _keptProfileId;
+    if (kept != null && kept != profile.id) {
+      _provenMachineId = null;
+      _keptProfileId = null;
+      await _profileCache.clear();
+      return;
+    }
+    if (kept == null) {
+      final CliAuthStatus still;
+      try {
+        still = await cliLogin.checkStatus();
+      } catch (_) {
+        return;
+      }
+      if (!_authWorkCurrent(revision) || !still.loggedIn || still.machineId != machineId) return;
+      _keptProfileId = profile.id;
+    }
+    await _profileCache.write(machineId, profile);
   }
 
   Future<void> _readProfile(int revision) async {
@@ -7617,9 +7656,8 @@ class AppNotifier extends ChangeNotifier {
       }
       if (me != null) {
         currentUser = CurrentUserProfile.fromMe(me);
-        if ((_provenMachineId, currentUser) case (final String machineId, final CurrentUserProfile profile)) {
-          unawaited(_profileCache.write(machineId, profile));
-        }
+        _profileConfirmed = true;
+        if (currentUser case final profile?) unawaited(_keepProfile(profile, revision));
         // A sign-in by hand: the device log keeps which account it was made to.
         if (currentUser!.id case final id?)
           unawaited(_deviceLog?.signedInAs(id));
@@ -7726,7 +7764,7 @@ class AppNotifier extends ChangeNotifier {
     appLog.info('daemon', 'backend ${online ? 'online' : 'offline'}');
     if (online && wasOffline && status == AppStatus.authenticated) {
       if (refetch && !machinesRefreshing) unawaited(retryMachines());
-      if (currentUser == null) unawaited(_loadProfile());
+      if (!_profileConfirmed) unawaited(_loadProfile());
       _deskEnsure(_authRevision);
       // A daemon whose backend was away answered the last read with an error.
       if (_desk.enabled) unawaited(agentMessages.refresh());
@@ -7960,6 +7998,8 @@ class AppNotifier extends ChangeNotifier {
     _sessionExpired = true;
     currentUser = null;
     _provenMachineId = null;
+    _keptProfileId = null;
+    _profileConfirmed = false;
     unawaited(_profileCache.clear());
     signingIn = false;
     pendingAuthorizeUrl = null;
@@ -9359,6 +9399,8 @@ class AppNotifier extends ChangeNotifier {
     if (!becomesGuest) status = AppStatus.unauthenticated;
     currentUser = null;
     _provenMachineId = null;
+    _keptProfileId = null;
+    _profileConfirmed = false;
     unawaited(_profileCache.clear());
     notifyListeners();
     // Clear saved credentials alongside connection cleanup. A new login must
@@ -12152,7 +12194,7 @@ class AppNotifier extends ChangeNotifier {
     if (!_authWorkCurrent(revision) || status == AppStatus.unauthenticated) {
       return;
     }
-    if (signedIn && currentUser == null) unawaited(_loadProfile());
+    if (signedIn && !_profileConfirmed) unawaited(_loadProfile());
     // A boot that found the daemon still connecting finishes THROUGH here (see
     // `_loadProfile`), so the local id is followed and the desk joined here as
     // well — once, after the list, as the boot does.
@@ -23140,3 +23182,8 @@ String machineSelectErrorText(String code, String machine) => switch (code) {
     'The subscription for $machine has ended. Renew it to use it again.',
   _ => 'Could not connect to $machine. Try again in a moment.',
 };
+
+/// The startup stopwatch as its log line: each step, in the order it finished.
+String startupLogLine(Map<String, int> timings) => timings.entries
+    .map((step) => '${step.key} after ${step.value} ms')
+    .join(', ');

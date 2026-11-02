@@ -42,30 +42,36 @@ class ProfileCache {
     }
   }
 
-  Future<void> write(String machineId, CurrentUserProfile profile) async {
-    final id = profile.id;
-    if (id == null || id.isEmpty) return;
-    try {
-      await _storage?.write(
-        key,
-        jsonEncode({
-          'machineId': machineId,
-          'id': id,
-          'email': profile.email,
-          'name': profile.name,
-          'avatarUrl': profile.avatarUrl,
-        }),
-      );
-    } catch (_) {
-      /* Only the next open's wait depends on it. */
-    }
-  }
+  /// One at a time, in the order asked: a sign-out's clear never lands before a write already on its way.
+  Future<void> _last = Future.value();
+  Future<void> _inOrder(Future<void> Function() step) =>
+      _last = _last.then((_) => step());
 
-  Future<void> clear() async {
+  Future<void> write(String machineId, CurrentUserProfile profile) =>
+      _inOrder(() async {
+        final id = profile.id;
+        if (id == null || id.isEmpty) return;
+        try {
+          await _storage?.write(
+            key,
+            jsonEncode({
+              'machineId': machineId,
+              'id': id,
+              'email': profile.email,
+              'name': profile.name,
+              'avatarUrl': profile.avatarUrl,
+            }),
+          );
+        } catch (_) {
+          /* Only the next open's wait depends on it. */
+        }
+      });
+
+  Future<void> clear() => _inOrder(() async {
     try {
       await _storage?.delete(key);
     } catch (_) {
       /* A record left behind is read only under its own machine id. */
     }
-  }
+  });
 }

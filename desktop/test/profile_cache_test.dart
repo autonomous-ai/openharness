@@ -229,7 +229,10 @@ void main() {
 
   test('a first record waits for the CLI to name the same machine still: a sign-in meanwhile keeps nothing', () async {
     final first = await open('machine-a');
-    first.cli.status = const CliAuthStatus(loggedIn: true, machineId: 'machine-b');
+    first.cli.status = const CliAuthStatus(
+      loggedIn: true,
+      machineId: 'machine-b',
+    );
     first.api.profiles.single.complete(_me('grace'));
     await _ticks();
     expect(first.app.currentUser?.id, 'grace');
@@ -281,15 +284,21 @@ void main() {
     expect(storage.values, isNot(contains(ProfileCache.key)));
   });
 
-  test('a sign-out during a write leaves nothing: the store takes them in order', () async {
-    final slow = _SlowWrites();
-    final cache = ProfileCache(slow);
-    final write = cache.write('machine-a', const CurrentUserProfile(id: 'ada', email: 'a@example.invalid'));
-    final clear = cache.clear();
-    slow.release.complete();
-    await Future.wait([write, clear]);
-    expect(slow.values, isEmpty);
-  });
+  test(
+    'a sign-out during a write leaves nothing: the store takes them in order',
+    () async {
+      final slow = _SlowWrites();
+      final cache = ProfileCache(slow);
+      final write = cache.write(
+        'machine-a',
+        const CurrentUserProfile(id: 'ada', email: 'a@example.invalid'),
+      );
+      final clear = cache.clear();
+      slow.release.complete();
+      await Future.wait([write, clear]);
+      expect(slow.values, isEmpty);
+    },
+  );
 
   group('what is kept on disk', () {
     final good = {
