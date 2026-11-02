@@ -359,8 +359,11 @@ describe('the connectors service', () => {
     it('says what went wrong when the failure is not an Error', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       vi.mocked(serveBridgeSocket).mockRejectedValueOnce('a plain reason')
-      startConnectors(fakeCore(), { vault: new Store(join(shortHome(), 'p'), env), env, port: 0, offered: async () => ({}), retryMs: 10, vaultPort: null })
+      const vault = new Store(join(shortHome(), 'p'), env), path = join(vault.root, 'bridge.sock')
+      startConnectors(fakeCore(), { vault, env, port: 0, offered: async () => ({}), retryMs: 10, vaultPort: null })
       await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining('a plain reason')))
+      // Its retry goes on and listens: waited for, or it would make the folder again after this test's cleanup.
+      await vi.waitFor(() => new Promise<void>((resolve, reject) => { const client = connect(path, () => { client.destroy(); resolve() }); client.once('error', reject) }))
       warn.mockRestore()
     })
   })
