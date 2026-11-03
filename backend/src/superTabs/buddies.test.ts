@@ -555,12 +555,13 @@ describe('a Buddy\'s proposal to the PM', () => {
       text: "Let's build: Sync edits made offline" })
     expect(details).toMatchObject({ conversationId: f.app.conversationId, recipients: [f.pm], replyTo: root!.id, thread: root!.id,
       author: { kind: 'agent', id: 'buddy' },
-      text: "Proposal from peer's Buddy, on peer's behalf.\n\nGoal: Sync edits made offline\nScope: Desktop drafts only; no phone yet\nPriority: high" })
+      text: 'Goal: Sync edits made offline\nScope: Desktop drafts only; no phone yet\nPriority: high' })
   })
 
   it.each([
     ['  Offline drafts  ', 'Requested by Dee. Save drafts. Keep them.', 'Offline drafts'],
-    [undefined, 'Requested by Dee. Save drafts. Keep them.', 'Save drafts.'],
+    [undefined, 'Requested by Dee. Save drafts. Keep them.', 'Save drafts'],
+    [undefined, 'Requested by dee@autonomous.ai through Harness. Hub reports hide an item from everyone.', 'Hub reports hide an item from everyone'],
     [undefined, 'Save drafts! Keep them.', 'Save drafts!'],
     [undefined, 'A'.repeat(100), 'A'.repeat(80)],
   ])('uses a bounded short name for the root (%s)', (title, goal, name) => {
