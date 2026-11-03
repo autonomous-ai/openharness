@@ -81,6 +81,10 @@ String? normalizedRemote(String? remote) {
   return [host, ...parts].join('/').toLowerCase();
 }
 
+/// The project key of a tab's panes with no repo: the desk's tab id, the same
+/// on each of the person's computers and through a rename (task #2376).
+String personalTabKey(String tabId) => 'tab:$tabId';
+
 /// The repo's own name: `github.com/owner/api` is `api`.
 String repoName(String repo) => repo.split('/').last;
 
