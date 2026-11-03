@@ -117,6 +117,13 @@ export function buddyModelResult(state: SuperTabState, actor: Actor,
       buddy.gridModel ? servers(state, buddy.gridModel, now).map(s => s.machine) : [])
   }
   delete buddy.gridModelUnservedSince
+  // Its machine moved its thread sessions with it (cli superTabs/buddyModel.ts): what they run on is recorded the same way, so
+  // costs and the serving member's "Used by" read it right.
+  const sessions = state.agents.filter(a => a.buddySession && a.buddyOf?.personId === owner.personId && a.buddyOf.generation === owner.generation)
+  for (const session of sessions) {
+    if (request.gridModel === null) delete session.gridModel
+    else session.gridModel = request.gridModel
+  }
   if (request.gridModel === null) {
     delete buddy.gridModel
     delete buddy.gridModelName
