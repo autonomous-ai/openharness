@@ -5,7 +5,7 @@ import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
 import { activeWork, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { WORKSPACE_LABEL } from './workspaces.js'
 import { startFinished } from './parts/write.js'
-import { agentProjectId, canReadProject, groupProject, ledProject, projectOf, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
+import { agentProjectId, canReadAgent, canReadProject, groupProject, ledProject, projectOf, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
 import { isSwarmBuddyChat } from './buddies.js'
 export { teamAccountPool } from './projects.js'
 import { conversation } from './model.js'
@@ -540,15 +540,21 @@ export function removalPreview(state: SuperTabState, actor: Actor, machineId: st
   const teams = owned.pool ? teamPoolsOf(state, owned.pool).filter(m => !m.removal).map(m => m.machineId) : []
   const members = [...owned.members, ...state.agents.filter(a => teams.includes(a.machineId))]
   const led = members.map(a => ledProject(state, a.id)).find(Boolean)
+  const visibleAgents = members.filter(a => canReadAgent(state, actor, a))
+  const soleSourceProjects = projectsOf(state).filter(p => p.repository?.machineId === machineId && !p.repository.repositoryUrl)
+  const visibleSoleSourceProjects = soleSourceProjects.filter(p => canReadProject(state, actor, p))
   return {
-    blockedBy: led ? { projectId: led.id, projectName: led.name } : null,
-    agents: members.map(a => {
+    blockedBy: led ? canReadProject(state, actor, led)
+      ? { projectId: led.id, projectName: led.name } : { reason: "A PM of a project you can't see runs here." } : null,
+    agents: visibleAgents.map(a => {
       const task = state.conversations.find(c => activeWork(c) && c.assignment!.agentId === a.id)
       return { id: a.id, name: a.displayName ?? a.name, projectName: projectsOf(state).find(p => p.id === agentProjectId(state, a))?.name ?? '',
         ...(task ? { task: task.title } : {}) }
     }),
+    hiddenAgentCount: members.length - visibleAgents.length,
     // Their code is only on this machine: no other machine can start agents for them until someone shares a repository.
-    soleSourceProjects: projectsOf(state).filter(p => p.repository?.machineId === machineId && !p.repository.repositoryUrl).map(p => ({ id: p.id, name: p.name })),
+    soleSourceProjects: visibleSoleSourceProjects.map(p => ({ id: p.id, name: p.name })),
+    hiddenSoleSourceProjectCount: soleSourceProjects.length - visibleSoleSourceProjects.length,
   }
 }
 
