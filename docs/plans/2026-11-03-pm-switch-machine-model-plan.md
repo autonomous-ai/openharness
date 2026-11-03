@@ -79,11 +79,11 @@
 - Consumes: current machine observations, profiles, capabilities, project/source-machine access and Task 1's `lead.switch` fields.
 - Produces: the agreed Switch PM dialog with machine picker, destination engine/account rows, model picker (Default first), one-line no-choice reason, and a submission containing the chosen destination, profile and model.
 
-- [ ] **Step 1: Write failing widget tests** for machine options (enabled and disabled with reasons), destination profile refresh, model choices, current destination marking, stale choice refusal, one-line no-choice message, agreed explanatory copy, and command payload.
-- [ ] **Step 2: Run** `cd desktop && flutter test test/super_tab_switch_pm_test.dart`; confirm expected UI and payload failures.
-- [ ] **Step 3: Implement the dialog** in Harness design language, with the agreed ASCII layout as its interaction source and no phone UI changes.
-- [ ] **Step 4: Run** the widget tests and `cd desktop && flutter analyze lib/super_tabs`.
-- [ ] **Step 5: Commit** as `feat(desktop): choose a machine and model when switching PMs`.
+- [x] **Step 1: Write failing widget tests** for machine options (enabled and disabled with reasons), destination profile refresh, model choices, current destination marking, stale choice refusal, one-line no-choice message, agreed explanatory copy, and command payload.
+- [x] **Step 2: Run** `cd desktop && flutter test test/super_tab_switch_pm_test.dart`; confirm expected UI and payload failures. The tests failed on the old dialog because Machine and no-choice UI were absent.
+- [x] **Step 3: Implement the dialog** in Harness design language, with the agreed ASCII layout as its interaction source and no phone UI changes.
+- [ ] **Step 4: Run** the widget tests and `cd desktop && flutter analyze lib/super_tabs`. The widget tests passed; the whole-folder analyzer reports 8 existing diagnostics in untouched `controller.dart` and `project_sidebar.dart`. The changed `switch_pm.dart` analyzer is clean.
+- [x] **Step 5: Commit** as `feat(desktop): choose a machine and model when switching PMs`.
 
 ### Task 4: Validate the integrated change and hand it to independent review
 

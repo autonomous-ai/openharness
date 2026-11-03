@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../shared/widgets/app_dialog.dart';
@@ -6,6 +8,8 @@ import '../usage/usage_account_key.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
+import 'identity.dart' show superTabMachineName;
+import 'machine_status.dart';
 import 'model.dart';
 
 /// "2:00 PM" for today, "Nov 3, 2:00 PM" for another day this year, with the
@@ -25,18 +29,23 @@ String switchPmTime(BuildContext context, DateTime at) {
   return '$day, $time';
 }
 
-/// Moves [projectId]'s Product Manager to another engine or account on the
-/// machine it runs on (spec 2026-11-02-pm-switch-engine-account-design.md). The
-/// machine's host does the switch; this sends `lead.switch` and shows a refusal.
+/// Moves [projectId]'s Product Manager to another machine, engine/account, or
+/// model. The host starts the replacement and sends the handoff note.
 Future<void> showSwitchPm(
   BuildContext context,
   SuperTabController c,
   String projectId,
 ) {
+  final snapshot = c.snapshot;
+  final lead = snapshot?.leadOf(projectId);
+  var machineId = lead?.machineId;
   ({String engine, String id})? picked;
+  String? model;
   var busy = false;
-  // An earlier refusal belongs to that dialog, not to this one.
+  var catalogRead = false;
+  List<Map<String, dynamic>> catalogModels = const [];
   if (!c.hasPendingAction) c.operationError = null;
+
   return showAppDialog<void>(
     context: context,
     builder: (context) => SuperTabDialogScope(
@@ -47,18 +56,124 @@ Future<void> showSwitchPm(
         builder: (context, update) => ListenableBuilder(
           listenable: Listenable.merge([c, c.machinesChanged]),
           builder: (context, _) {
-            final snapshot = c.snapshot;
-            final lead = snapshot?.leadOf(projectId);
-            final pool = snapshot?.pool(lead?.machineId ?? '');
-            var profiles = superTabProfilesOf(pool);
-            final reported = profiles.isNotEmpty;
-            if (!reported && lead != null) {
-              // A machine that reports no accounts: its default account, per
-              // engine it offers.
+            final currentSnapshot = c.snapshot;
+            final currentLead = currentSnapshot?.leadOf(projectId);
+            if (!catalogRead) {
+              catalogRead = true;
+              unawaited(() async {
+                try {
+                  final rawAnswer = await c.request(
+                    'GET',
+                    '/api/super-tabs/${Uri.encodeComponent(c.tabId)}/routing-policy',
+                  );
+                  final answer = superTabMap(rawAnswer);
+                  final raw = (answer['catalog'] as Map?)?['models'];
+                  if (raw is List) {
+                    catalogModels = [
+                      for (final row in raw)
+                        if (row is Map &&
+                            row['engine'] is String &&
+                            row['model'] is String &&
+                            row['offered'] != false)
+                          superTabMap(row),
+                    ];
+                  }
+                } catch (_) {
+                  // The subscription's default model remains available.
+                }
+                update(() {});
+              }());
+            }
+
+            final pools = currentSnapshot?.machines ?? const [];
+            final now = DateTime.now().millisecondsSinceEpoch;
+            Map<String, dynamic> part(Object? value) =>
+                value is Map ? superTabMap(value) : const {};
+            bool fresh(Map<String, dynamic>? pool) {
+              final received = part(pool?['observation'])['receivedAt'];
+              return received is num &&
+                  now - received < kSuperTabMachineOfflineAfter.inMilliseconds;
+            }
+
+            final sourcePool = currentSnapshot?.pool(
+              currentLead?.machineId ?? '',
+            );
+            String? sourceRefusal;
+            if (!fresh(sourcePool)) {
+              sourceRefusal = 'Wait for a fresh reading from the PM’s machine.';
+            } else {
+              final capabilities =
+                  part(sourcePool?['observation'])['capabilities'] as List? ??
+                  const [];
+              if (!capabilities.contains('leadSwitch')) {
+                final name = superTabMachineName(
+                  sourcePool?['name'] as String? ?? 'the PM’s machine',
+                );
+                sourceRefusal =
+                    'Update Harness on $name to switch this Product Manager.';
+              }
+            }
+
+            String? unavailable(Map<String, dynamic> pool) {
+              final id = pool['machineId'];
+              if (id == currentLead?.machineId) return null;
+              final name = superTabMachineName(
+                pool['name'] as String? ?? 'Mac',
+              );
+              if (!fresh(pool)) return '$name is offline.';
+              final observation = part(pool['observation']);
+              final capabilities =
+                  observation['capabilities'] as List? ?? const [];
+              if (!capabilities.contains('leadSwitch') ||
+                  !capabilities.contains('leadStart')) {
+                return 'Update Harness on $name to move a Product Manager there.';
+              }
+              final own = pool['contributorId'] == c.accountId;
+              final mayUse =
+                  own ||
+                  (pool['teamWork'] is Map &&
+                      (pool['teamWork'] as Map)['allowed'] == true);
+              if (!mayUse) {
+                final refusal = (pool['teamWork'] as Map?)?['reason'];
+                return refusal is String
+                    ? refusal
+                    : 'This machine cannot take this project’s work.';
+              }
+              if (pool['removal'] != null || pool['paused'] == true) {
+                return '$name is unavailable in this Swarm.';
+              }
+              return null;
+            }
+
+            final machineRows = [
+              for (final pool in pools)
+                if (pool['machineId'] is String &&
+                    (pool['hostMachineId'] == null ||
+                        pool['machineId'] == currentLead?.machineId))
+                  pool,
+            ];
+            final selectedPool = machineRows
+                .where((pool) => pool['machineId'] == machineId)
+                .firstOrNull;
+            if (selectedPool == null &&
+                currentLead != null &&
+                machineId != currentLead.machineId) {
+              machineId = currentLead.machineId;
+              picked = null;
+              model = null;
+            }
+            final activePool = machineRows
+                .where((pool) => pool['machineId'] == machineId)
+                .firstOrNull;
+            List<SuperTabProfile> profilesFor(Map<String, dynamic>? pool) {
+              final rows = superTabProfilesOf(pool);
+              if (rows.isNotEmpty) return rows;
               final offered = (pool?['engines'] as List?)?.whereType<String>();
-              profiles = [
+              return [
                 for (final engine in kLeadEngines)
-                  if (offered?.contains(engine) ?? engine == lead.engine)
+                  if (offered?.contains(engine) ??
+                      (pool?['machineId'] == currentLead?.machineId &&
+                          engine == currentLead?.engine))
                     (
                       engine: engine,
                       id: 'default',
@@ -68,39 +183,120 @@ Future<void> showSwitchPm(
                     ),
               ];
             }
+
+            var profiles = profilesFor(activePool);
             profiles.sort(
               (a, b) =>
                   kLeadEngines.indexOf(a.engine) -
                   kLeadEngines.indexOf(b.engine),
             );
-            // A PM that reports no account runs its engine's default one.
-            final currentId =
-                lead?.profileId ??
-                (reported
+            final profileId =
+                currentLead?.profileId ??
+                (superTabProfilesOf(activePool).isNotEmpty
                     ? swarmProfileId(
-                        lead?.machineId ?? '',
-                        lead?.engine ?? '',
+                        currentLead?.machineId ?? '',
+                        currentLead?.engine ?? '',
                         'default',
                       )
                     : 'default');
             bool current(SuperTabProfile p) =>
-                p.engine == lead?.engine && p.id == currentId;
-            final switching = lead?.switchRequest != null;
+                machineId == currentLead?.machineId &&
+                p.engine == currentLead?.engine &&
+                p.id == profileId;
+            final switching = currentLead?.switchRequest != null;
+            final alternatives = profiles
+                .where(
+                  (p) =>
+                      !current(p) &&
+                      p.leftPercent != 0 &&
+                      unavailable(activePool ?? const {}) == null,
+                )
+                .toList();
+            final otherMachines = machineRows
+                .where(
+                  (pool) =>
+                      pool['machineId'] != currentLead?.machineId &&
+                      unavailable(pool) == null,
+                )
+                .toList();
+            final otherMachineHasChoice = otherMachines.any(
+              (pool) =>
+                  profilesFor(pool).any((profile) => profile.leftPercent != 0),
+            );
+            final noChoice = alternatives.isEmpty && !otherMachineHasChoice;
+            final offeredModels = [
+              for (final row in catalogModels)
+                if (row['engine'] == (picked?.engine ?? currentLead?.engine))
+                  row['model'] as String,
+            ];
+            if (model != null && !offeredModels.contains(model)) model = null;
+            final selectedStillOffered =
+                picked == null ||
+                profiles.any(
+                  (p) =>
+                      p.engine == picked!.engine &&
+                      p.id == picked!.id &&
+                      p.leftPercent != 0,
+                );
+            final selectedMachineStillAllowed =
+                activePool != null && unavailable(activePool) == null;
+
             return AlertDialog(
               title: const Text('Switch PM'),
               content: SizedBox(
-                width: 400,
+                width: 440,
                 child: SingleChildScrollView(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      Row(
+                        children: [
+                          const SizedBox(width: 74, child: Text('Machine')),
+                          Expanded(
+                            child: DropdownButtonFormField<String>(
+                              key: const ValueKey('switch-pm-machine'),
+                              initialValue: machineId,
+                              isExpanded: true,
+                              decoration: const InputDecoration(isDense: true),
+                              items: [
+                                for (final pool in machineRows)
+                                  DropdownMenuItem<String>(
+                                    value: pool['machineId'] as String,
+                                    enabled: unavailable(pool) == null,
+                                    child: Text(
+                                      '${superTabMachineName(pool['name'] as String? ?? 'Mac')}${pool['machineId'] == currentLead?.machineId ? ' · Current' : ''}${unavailable(pool) == null ? '' : ' · ${unavailable(pool)}'}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                              ],
+                              onChanged: (value) => update(() {
+                                machineId = value;
+                                picked = null;
+                                model = null;
+                              }),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (profiles.isEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: Text(
+                            unavailable(activePool ?? const {}) ?? 'No engine or account is available on this machine.',
+                            style: DesktopChrome.metadata(),
+                          ),
+                        ),
                       for (final p in profiles)
                         ListTile(
                           key: ValueKey('switch-pm-${p.engine}-${p.id}'),
                           dense: true,
-                          contentPadding: EdgeInsets.zero,
-                          enabled: !current(p) && p.leftPercent != 0,
+                          contentPadding: const EdgeInsets.only(left: 74),
+                          enabled:
+                              !current(p) &&
+                              p.leftPercent != 0 &&
+                              unavailable(activePool ?? const {}) == null,
                           selected:
                               picked?.engine == p.engine && picked?.id == p.id,
                           title: Text(
@@ -115,12 +311,59 @@ Future<void> showSwitchPm(
                                 'resets ${switchPmTime(context, p.resetsAt!)}',
                             ].join(' · '),
                           ),
-                          onTap: () => update(
-                            () => picked = (engine: p.engine, id: p.id),
+                          onTap: () => update(() {
+                            picked = (engine: p.engine, id: p.id);
+                            model = null;
+                          }),
+                        ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          const SizedBox(width: 74, child: Text('Model')),
+                          Expanded(
+                            child: DropdownButtonFormField<String?>(
+                              key: const ValueKey('switch-pm-model'),
+                              initialValue: model,
+                              isExpanded: true,
+                              decoration: const InputDecoration(isDense: true),
+                              items: [
+                                const DropdownMenuItem<String?>(
+                                  value: null,
+                                  child: Text('Default'),
+                                ),
+                                for (final value in offeredModels.toSet())
+                                  DropdownMenuItem<String?>(
+                                    value: value,
+                                    child: Text(value),
+                                  ),
+                              ],
+                              onChanged: (value) => update(() => model = value),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (sourceRefusal case final reason?)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: Text(
+                            reason,
+                            key: const ValueKey('switch-pm-no-choice'),
+                            style: DesktopChrome.metadata(),
+                          ),
+                        )
+                      else if (noChoice)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: Text(
+                            otherMachines.isEmpty
+                                ? 'No other machine or account can run a Product Manager right now.'
+                                : 'No engine or account can run a Product Manager right now.',
+                            key: const ValueKey('switch-pm-no-choice'),
+                            style: DesktopChrome.metadata(),
                           ),
                         ),
-                      if (lead != null &&
-                          lead.machineOwnerId != c.accountId) ...[
+                      if (activePool != null &&
+                          activePool['contributorId'] != c.accountId) ...[
                         const SizedBox(height: 8),
                         Text(
                           'Only accounts its owner offered are listed.',
@@ -163,16 +406,25 @@ Future<void> showSwitchPm(
                           c.saving ||
                           c.hasPendingAction ||
                           switching ||
-                          picked == null
+                          picked == null ||
+                          !selectedMachineStillAllowed ||
+                          !selectedStillOffered ||
+                          sourceRefusal != null ||
+                          noChoice
                       ? null
                       : () async {
                           update(() => busy = true);
-                          final result = await c.command({
+                          final command = <String, dynamic>{
                             'type': 'lead.switch',
                             'projectId': projectId,
                             'engine': picked!.engine,
                             'profileId': picked!.id,
-                          });
+                            if (machineId case final selectedMachine?
+                                when selectedMachine != currentLead?.machineId)
+                              'machineId': selectedMachine,
+                          };
+                          if (model != null) command['model'] = model;
+                          final result = await c.command(command);
                           if (!context.mounted) return;
                           if (result != null) {
                             Navigator.pop(context);
