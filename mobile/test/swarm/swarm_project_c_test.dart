@@ -1891,7 +1891,8 @@ void main() {
       expect(key('swarm-jump-latest'), findsNothing);
     });
 
-    testWidgets("direction B's chat has none", (tester) async {
+    // Every chat has both, as on Desktop: direction B's, opened by none, too.
+    testWidgets("direction B's chat has it too", (tester) async {
       await pump(
         tester,
         chat([for (var i = 1; i <= 4; i++) said(i)], mark: 2),
@@ -1903,10 +1904,13 @@ void main() {
       );
 
       expect(find.text('Update 4.'), findsOneWidget);
-      expect(line, findsNothing);
+      expect(line, findsOneWidget);
+      final y = tester.getTopLeft(line).dy;
+      expect(tester.getTopLeft(find.text('Update 2.')).dy, lessThan(y));
+      expect(tester.getTopLeft(find.text('Update 3.')).dy, greaterThan(y));
     });
 
-    testWidgets("direction B's chat offers no Jump to latest", (tester) async {
+    testWidgets("direction B's chat offers Jump to latest too", (tester) async {
       await pump(
         tester,
         chat([for (var i = 1; i <= 40; i++) said(i)], mark: 40),
@@ -1920,7 +1924,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(onScreen(tester, find.text('Update 40.')), isFalse);
-      expect(key('swarm-jump-latest'), findsNothing);
+      expect(key('swarm-jump-latest'), findsOneWidget);
     });
   });
 
