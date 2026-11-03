@@ -70,15 +70,16 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('four filters, each with its count, each a thumb tall', (
-    tester,
-  ) async {
+  testWidgets('five filters, All first, each with its count, each a thumb '
+      'tall', (tester) async {
     await pump(tester, activityBackend(page: activityPage));
 
     expect(find.text('Activity'), findsOneWidget);
     for (final (name, label, count) in [
+      ('all', 'All', '4'),
       ('needsYou', 'Needs you', '2'),
-      ('mentions', '@', '1'),
+      // A word a screen reader says, on the phone (2026-11-03).
+      ('mentions', 'Mentions', '1'),
       ('threads', 'Threads', '1'),
       ('reactions', 'Reactions', '0'),
     ]) {

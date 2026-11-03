@@ -304,11 +304,12 @@ void main() {
           'swarm-title-button',
           'swarm-new-message',
           'swarm-away',
+          'swarm-you-button',
+          'swarm-search-pill',
           'swarm-project-$tab-p-oh',
         ])
           rect(key),
-        for (final tab in [SwarmTab.home, SwarmTab.activity, SwarmTab.you])
-          rect('swarm-tab-${tab.name}'),
+        for (final tab in SwarmTab.values) rect('swarm-tab-${tab.name}'),
       ];
       await tester.pump();
       await capture('targets');
@@ -327,7 +328,8 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('swarm-tab-activity')));
       await tester.pumpAndSettle();
       await capture('activity');
-      await tester.tap(find.byKey(const ValueKey('swarm-tab-you')));
+      // You is the avatar on Activity's title, as on Home's.
+      await tester.tap(find.byKey(const ValueKey('swarm-you-button')));
       await tester.pumpAndSettle();
       await capture('you');
       targets.value = [

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import 'package:harness_mobile/phone/fzf.dart' show fzfAge;
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
@@ -77,21 +76,6 @@ class SwarmTeamDots extends StatelessWidget {
   }
 }
 
-/// A project's line on Home: "5 humans • 8 agents running", leaving out what
-/// is none, then its Swarm, the first to go when the row is short, where Home
-/// shows several. Empty with nothing to say.
-String swarmProjectLine({
-  required int humans,
-  required SwarmTeamGlance glance,
-  String? swarmName,
-}) => [
-  if (humans > 0) swarmHumans(humans),
-  ?glance.running,
-  ?swarmName,
-].join(_lineGap);
-
-const _lineGap = ' • ';
-
 /// What a need asks, as its Home row's title: a decision's question, a tag's
 /// words, the question work waits on (or the work itself).
 String swarmNeedAsk(SwarmNeed need) => switch (need) {
@@ -145,32 +129,31 @@ class SwarmInvitationRow extends StatelessWidget {
   }
 }
 
-/// One project on Home, as C1 draws it: a dot in the colour of how its team
-/// is ([swarmProjectColor]), its name as a channel's ("#openharness") — bold
-/// and bright with something new in it, quiet otherwise — how many people read
-/// it and how many agents are running ([swarmProjectLine]), and at its right
-/// how long ago it last moved, over the tags waiting in it ("@2", filled) or,
-/// unread, a dot; a skeleton in their place while what waits is on its way
-/// ([tagsLoading]). A tap opens it; a long press offers its pin ([onLongPress]).
+/// One project on Home, on one line as Slack's channels (Tony, 2026-11-03): a
+/// dot in the colour of how its team is ([swarmProjectColor]), its name as a
+/// channel's ("#openharness") — bold and bright with something new in it,
+/// quiet otherwise — its Swarm faint after it where Home shows several, the
+/// first to go when the row is short, and at its end the tags waiting in it
+/// ("@2", filled), or a skeleton in their place while what waits is on its way
+/// ([tagsLoading]). No second line: who reads it and how long ago it moved
+/// were the same on every row. A tap opens it; a long press offers its pin
+/// ([onLongPress]).
 class SwarmHomeProjectRow extends StatelessWidget {
   const SwarmHomeProjectRow({
     super.key,
     required this.project,
     required this.glance,
-    required this.humans,
-    required this.now,
     this.swarmName,
     this.tagsLoading = false,
     required this.onTap,
     this.onLongPress,
   });
 
+  /// One line, as tall as a thumb's touch.
+  static const double height = minTouchTarget;
+
   final SwarmHomeProject project;
   final SwarmTeamGlance glance;
-
-  /// How many people read it ([swarmProjectPeople]).
-  final int humans;
-  final DateTime now;
 
   /// Its Swarm, where Home shows several.
   final String? swarmName;
@@ -185,24 +168,16 @@ class SwarmHomeProjectRow extends StatelessWidget {
     AppTheme.watch(context);
     final news = project.news;
     final bright = news.bold || news.tags > 0;
-    final age = switch (project.active) {
-      final at? => fzfAge(at.toLocal(), now.toLocal()),
-      null => '',
-    };
-    final line = swarmProjectLine(
-      humans: humans,
-      glance: glance,
-      swarmName: swarmName,
-    );
+    final name = '#${project.project.name}';
     return _Tap(
       onTap: onTap,
       onLongPress: onLongPress,
       child: ConstrainedBox(
-        constraints: const BoxConstraints(minHeight: SwarmRow.height),
+        constraints: const BoxConstraints(minHeight: height),
         child: Padding(
           padding: const EdgeInsets.symmetric(
             horizontal: AppSpace.l,
-            vertical: AppSpace.m,
+            vertical: AppSpace.xs,
           ),
           child: Row(
             children: [
@@ -220,77 +195,47 @@ class SwarmHomeProjectRow extends StatelessWidget {
               ),
               const SizedBox(width: AppSpace.s),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Semantics(
-                      label: bright && news.tags == 0
-                          ? 'Unread messages'
-                          : null,
-                      child: Text(
-                        '#${project.project.name}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppType.label(
-                          color: bright
-                              ? AppPalette.textPrimary
-                              : AppPalette.textSecondary,
-                          height: 1.3,
-                          fontWeight: bright ? AppFont.semibold : null,
-                        ),
-                      ),
+                child: Semantics(
+                  label: bright && news.tags == 0 ? 'Unread messages' : null,
+                  child: Text.rich(
+                    TextSpan(
+                      text: name,
+                      children: [
+                        if (swarmName case final swarm?)
+                          TextSpan(
+                            text: '  $swarm',
+                            style: AppType.caption(
+                              color: AppPalette.textFaint,
+                              height: 1.3,
+                            ),
+                          ),
+                      ],
                     ),
-                    if (line.isNotEmpty) ...[
-                      const SizedBox(height: 3),
-                      Text(
-                        line,
-                        key: const ValueKey('swarm-project-line'),
-                        semanticsLabel: line.replaceAll(_lineGap, ', '),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppType.caption(
-                          color: AppPalette.textSecondary,
-                          height: 1.35,
-                        ),
-                      ),
-                    ],
-                  ],
+                    key: const ValueKey('swarm-project-name'),
+                    semanticsLabel: [name, ?swarmName].join(', '),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppType.label(
+                      color: bright
+                          ? AppPalette.textPrimary
+                          : AppPalette.textSecondary,
+                      height: 1.3,
+                      fontWeight: bright ? AppFont.semibold : null,
+                    ),
+                  ),
                 ),
               ),
-              if (age.isNotEmpty || bright || tagsLoading) ...[
+              if (news.tags > 0) ...[
                 const SizedBox(width: 12),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (age.isNotEmpty)
-                      Text(
-                        age,
-                        style: AppType.caption(
-                          color: AppPalette.textFaint,
-                          height: 1.3,
-                        ),
-                      ),
-                    if (news.tags > 0) ...[
-                      const SizedBox(height: 4),
-                      SwarmTags(news.tags, filled: true),
-                    ] else if (tagsLoading) ...[
-                      const SizedBox(height: 4),
-                      // As big as the filled tags it stands for.
-                      const Skeleton(
-                        key: ValueKey('swarm-project-tags-loading'),
-                        width: 36,
-                        height: 20,
-                        radius: 10,
-                      ),
-                    ] else if (news.bold) ...[
-                      const SizedBox(height: 8),
-                      ExcludeSemantics(
-                        child: _Dot(size: 7, color: AppPalette.textPrimary),
-                      ),
-                    ],
-                  ],
+                SwarmTags(news.tags, filled: true),
+              ] else if (tagsLoading) ...[
+                const SizedBox(width: 12),
+                // As big as the filled tags it stands for.
+                const Skeleton(
+                  key: ValueKey('swarm-project-tags-loading'),
+                  width: 36,
+                  height: 20,
+                  radius: 10,
                 ),
               ],
             ],

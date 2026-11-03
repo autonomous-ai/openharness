@@ -14,6 +14,7 @@ import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/swarm_tokens_set_b.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
+import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 
 import 'identity.dart';
@@ -1285,46 +1286,49 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
             ),
           ),
         Expanded(
-          child: title == null
-              ? Column(
-                  key: const ValueKey('swarm-header-placeholder'),
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    SkeletonText(
-                      style: tty.style(
-                        size: TtySize.title,
-                        weight: FontWeight.w600,
+          child: _switchOnTitle(
+            title,
+            title == null
+                ? Column(
+                    key: const ValueKey('swarm-header-placeholder'),
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SkeletonText(
+                        style: tty.style(
+                          size: TtySize.title,
+                          weight: FontWeight.w600,
+                        ),
+                        width: 140,
                       ),
-                      width: 140,
-                    ),
-                    SkeletonText(style: swarmChatText(13), width: 72),
-                  ],
-                )
-              : Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      key: const ValueKey('swarm-title'),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: tty.style(
-                        size: TtySize.title,
-                        weight: FontWeight.w600,
-                      ),
-                    ),
-                    if (project != null)
+                      SkeletonText(style: swarmChatText(13), width: 72),
+                    ],
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                       Text(
-                        project,
+                        title,
+                        key: const ValueKey('swarm-title'),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: swarmChatText(
-                          13,
-                          color: AppPalette.textSecondary,
+                        style: tty.style(
+                          size: TtySize.title,
+                          weight: FontWeight.w600,
                         ),
                       ),
-                  ],
-                ),
+                      if (project != null)
+                        Text(
+                          project,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: swarmChatText(
+                            13,
+                            color: AppPalette.textSecondary,
+                          ),
+                        ),
+                    ],
+                  ),
+          ),
         ),
         // The screen's side margin from its edge: the header's own end
         // inset, and the rest of the margin.
@@ -1339,6 +1343,29 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       ],
     ),
   );
+
+  /// The Buddy tab's title, with several Swarms to switch between: a tap on
+  /// it opens the switcher, as Home's title does (Tony, 2026-11-03); the
+  /// menu's Swarm row stays. [words] alone otherwise.
+  Widget _switchOnTitle(String? title, Widget words) {
+    final swarm = widget.swarmSwitch;
+    if (!widget.tabRoot || swarm == null || title == null) return words;
+    return Semantics(
+      button: true,
+      label: '$title. Switch Swarm',
+      excludeSemantics: true,
+      onTap: swarm.open,
+      child: InkWell(
+        key: const ValueKey('swarm-buddy-title-switch'),
+        borderRadius: BorderRadius.circular(AppCard.insetRadius),
+        onTap: swarm.open,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: minTouchTarget),
+          child: Align(alignment: Alignment.centerLeft, child: words),
+        ),
+      ),
+    );
+  }
 
   /// The header's inset at its end.
   static const _headerEnd = AppSpace.s;

@@ -8,6 +8,7 @@ import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 
+import 'swarm_activity.dart' show SwarmActivityFilter;
 import 'swarm_activity_page.dart';
 import 'swarm_buddy_tab.dart';
 import 'swarm_page.dart';
@@ -15,8 +16,9 @@ import 'swarm_session.dart';
 import 'swarm_style.dart';
 import 'swarm_you_page.dart';
 
-/// Swarm's four tabs, along the foot of the screen in this order, as Tony's
-/// prototype C draws them (2026-10-30).
+/// Swarm's three tabs, along the foot of the screen in this order: Slack's
+/// trio (Tony, 2026-11-03), from prototype C's four (2026-10-30) with You
+/// moved to the avatar at the top of Home and Activity ([SwarmYouButton]).
 enum SwarmTab {
   /// Swarm Home: the Swarms' projects, and what moved in them.
   home,
@@ -26,9 +28,6 @@ enum SwarmTab {
 
   /// What needs the person, and what came for them.
   activity,
-
-  /// The person: their status, models, devices and Settings.
-  you,
 }
 
 /// A count on a tab's glyph: blue, or yellow ([warn]) for what waits on the
@@ -66,12 +65,10 @@ class SwarmTabEntry {
 
 /// Swarm's tabs, in the bar's order: each part of Swarm plugs its screen in
 /// here, one entry each: Home; Buddy ([SwarmBuddyTabView]) with the Swarms whose
-/// Buddy chat has something unread counted, lit while the Buddy runs; Activity ([SwarmActivityView])
-/// with what waits on the person counted; and You ([SwarmYouPage]).
-/// [onSettings] opens the phone's Settings over the tabs, from You.
-List<SwarmTabEntry> swarmTabs({
-  void Function(BuildContext context)? onSettings,
-}) => [
+/// Buddy chat has something unread counted, lit while the Buddy runs; and
+/// Activity ([SwarmActivityView]) with what waits on the person counted. You
+/// ([SwarmYouPage]) is no tab: the avatar on Home and Activity opens it.
+List<SwarmTabEntry> swarmTabs() => [
   SwarmTabEntry(
     tab: SwarmTab.home,
     label: 'Home',
@@ -93,19 +90,19 @@ List<SwarmTabEntry> swarmTabs({
     screen: (_) => const SwarmActivityView(),
     badge: (session) => (count: session.activity.badge, warn: true),
   ),
-  SwarmTabEntry(
-    tab: SwarmTab.you,
-    label: 'You',
-    icon: LucideIcons.circleUser300,
-    screen: (_) => SwarmYouPage(onSettings: onSettings),
-  ),
 ];
 
 /// Opens [tab] of the tabs [context] is under; false under none, as on a
-/// page pushed over them.
-bool showSwarmTab(BuildContext context, SwarmTab tab) {
+/// page pushed over them. With [activity], Activity opens on that filter: a
+/// tile on Home asking for what needs the person, say.
+bool showSwarmTab(
+  BuildContext context,
+  SwarmTab tab, {
+  SwarmActivityFilter? activity,
+}) {
   final scope = context.getInheritedWidgetOfExactType<_SwarmTabsScope>();
   if (scope == null) return false;
+  if (activity != null) scope.ask(activity);
   scope.show(tab);
   return true;
 }
@@ -121,7 +118,7 @@ bool showSwarmTab(BuildContext context, SwarmTab tab) {
 class SwarmTabsPage extends StatefulWidget {
   const SwarmTabsPage({super.key, this.onSettings, this.tabs});
 
-  /// The phone's Settings over the tabs, from You.
+  /// The phone's Settings, from You ([SwarmYouSettings]).
   final void Function(BuildContext context)? onSettings;
 
   /// The tabs, in the bar's order; [swarmTabs] when null.
@@ -132,8 +129,24 @@ class SwarmTabsPage extends StatefulWidget {
 }
 
 class _SwarmTabsPageState extends State<SwarmTabsPage> {
-  late final List<SwarmTabEntry> _tabs =
-      widget.tabs ?? swarmTabs(onSettings: widget.onSettings);
+  late final List<SwarmTabEntry> _tabs = widget.tabs ?? swarmTabs();
+
+  /// What Activity was last asked to show ([showSwarmTab]).
+  final _activityAsks = ValueNotifier<SwarmActivityAsk?>(null);
+
+  void _ask(SwarmActivityFilter filter) => _activityAsks.value = (
+    filter: filter,
+    n: (_activityAsks.value?.n ?? 0) + 1,
+  );
+
+  /// You, each time the avatar opened it over the tabs. It goes with them:
+  /// Swarm turned off from its own Settings puts the terminal at the root,
+  /// and back from Settings is then the terminal, not a You with no Swarm.
+  final _yous = <Route<void>>[];
+
+  void _youOpened(Route<void> route) => _yous
+    ..removeWhere((you) => !you.isActive)
+    ..add(route);
 
   late SwarmTab _open = _tabs.first.tab;
 
@@ -157,6 +170,19 @@ class _SwarmTabsPageState extends State<SwarmTabsPage> {
   @override
   void dispose() {
     _session?.showBuddyTab = null;
+    _activityAsks.dispose();
+    // Not while the tree is torn down: once this frame is done.
+    final yous = [..._yous];
+    if (yous.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        for (final you in yous) {
+          final navigator = you.navigator;
+          if (navigator != null && navigator.mounted && you.isActive) {
+            navigator.removeRoute(you);
+          }
+        }
+      });
+    }
     super.dispose();
   }
 
@@ -181,24 +207,32 @@ class _SwarmTabsPageState extends State<SwarmTabsPage> {
       },
       child: _SwarmTabsScope(
         show: _show,
-        child: Scaffold(
-          backgroundColor: Tty.of(context).ground,
-          body: Stack(
-            fit: StackFit.expand,
-            children: [
-              for (final entry in _tabs)
-                if (_screens[entry.tab] case final screen?)
-                  KeptOutOfSight(
-                    key: ValueKey('swarm-tab-screen-${entry.tab.name}'),
-                    hidden: entry.tab != _open,
-                    child: screen,
-                  ),
-            ],
-          ),
-          bottomNavigationBar: SwarmTabBar(
-            tabs: _tabs,
-            open: _open,
-            onOpen: _show,
+        ask: _ask,
+        child: SwarmActivityAsks(
+          asks: _activityAsks,
+          child: SwarmYouSettings(
+            onSettings: widget.onSettings,
+            onOpened: _youOpened,
+            child: Scaffold(
+              backgroundColor: Tty.of(context).ground,
+              body: Stack(
+                fit: StackFit.expand,
+                children: [
+                  for (final entry in _tabs)
+                    if (_screens[entry.tab] case final screen?)
+                      KeptOutOfSight(
+                        key: ValueKey('swarm-tab-screen-${entry.tab.name}'),
+                        hidden: entry.tab != _open,
+                        child: screen,
+                      ),
+                ],
+              ),
+              bottomNavigationBar: SwarmTabBar(
+                tabs: _tabs,
+                open: _open,
+                onOpen: _show,
+              ),
+            ),
           ),
         ),
       ),
@@ -208,16 +242,23 @@ class _SwarmTabsPageState extends State<SwarmTabsPage> {
 
 /// How a screen under the tabs opens another ([showSwarmTab]).
 class _SwarmTabsScope extends InheritedWidget {
-  const _SwarmTabsScope({required this.show, required super.child});
+  const _SwarmTabsScope({
+    required this.show,
+    required this.ask,
+    required super.child,
+  });
 
   final ValueChanged<SwarmTab> show;
+
+  /// Activity is asked to show this filter next.
+  final ValueChanged<SwarmActivityFilter> ask;
 
   @override
   bool updateShouldNotify(_SwarmTabsScope oldWidget) => false;
 }
 
 /// The bar along the foot of Swarm's tabs: each tab its glyph over its name,
-/// a quarter of the width and at least 52 points tall, the open one in the
+/// an equal share of the width and at least 52 points tall, the open one in the
 /// main ink, a count on a glyph while there is one; over the home indicator,
 /// under a hairline.
 class SwarmTabBar extends StatelessWidget {

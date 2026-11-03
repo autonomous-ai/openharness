@@ -13,6 +13,7 @@ import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_home_list.dart';
 import 'package:harness_mobile/swarm/swarm_home_prefs.dart';
 import 'package:harness_mobile/swarm/swarm_home_rows.dart';
+import 'package:harness_mobile/swarm/swarm_home_view_sheet.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_style.dart';
@@ -568,6 +569,8 @@ void main() {
       expect(project_(project), findsOneWidget);
       expect(project_(web), findsNothing);
 
+      // Mark all read, in the same sheet (2026-11-03).
+      await open(tester);
       await tester.tap(key('swarm-mark-all-read'));
       await tester.pumpAndSettle();
       expect(project_(project), findsNothing);
@@ -580,6 +583,94 @@ void main() {
       expect(host.session!.home.filter, SwarmHomeFilter.all);
       expect(dot(), findsNothing);
       await tester.pump(const Duration(seconds: 7));
+    });
+
+    testWidgets('the top bar has Sort and filter and the avatar, no Mark all '
+        'read: that is in the sheet, under its options, with Refresh', (
+      tester,
+    ) async {
+      await pump(tester, backend());
+      expect(
+        key('swarm-mark-all-read'),
+        findsNothing,
+        reason: 'not on the bar',
+      );
+      expect(key('swarm-you-button'), findsOneWidget);
+      expect(
+        tester.getTopLeft(key('swarm-home-view')).dx,
+        lessThan(tester.getTopLeft(key('swarm-you-button')).dx),
+        reason: 'the avatar last',
+      );
+
+      await open(tester);
+
+      expect(key('swarm-mark-all-read'), findsOneWidget);
+      expect(key('swarm-home-refresh'), findsOneWidget);
+      expect(
+        tester.getTopLeft(key('swarm-view-filter')).dy,
+        lessThan(tester.getTopLeft(key('swarm-mark-all-read')).dy),
+      );
+      expect(
+        tester.getTopLeft(key('swarm-mark-all-read')).dy,
+        lessThan(tester.getTopLeft(key('swarm-home-refresh')).dy),
+      );
+    });
+
+    testWidgets('Mark all read in the sheet closes it and marks, with its '
+        'Undo; with nothing unread it is greyed and heard as off', (
+      tester,
+    ) async {
+      final handle = tester.ensureSemantics();
+      await pump(tester, backend());
+      SwarmHomeViewAction mark() =>
+          tester.widget<SwarmHomeViewAction>(key('swarm-mark-all-read'));
+      await open(tester);
+      expect(mark().onTap, isNotNull);
+
+      await tester.tap(key('swarm-mark-all-read'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(key('swarm-view-sort'), findsNothing, reason: 'the sheet closed');
+      expect(
+        find.textContaining(RegExp(r'^Marked \d+ chats? read$')),
+        findsOne,
+      );
+      expect(find.text('Undo'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 7));
+      await tester.pumpAndSettle();
+
+      await open(tester);
+      expect(mark().onTap, isNull);
+      expect(
+        tester.getSemantics(key('swarm-mark-all-read')),
+        matchesSemantics(
+          label: 'Mark all read',
+          isButton: true,
+          hasEnabledState: true,
+          isEnabled: false,
+        ),
+      );
+      handle.dispose();
+    });
+
+    testWidgets('Refresh in the sheet closes it, says so, and reads the '
+        'Swarms again', (tester) async {
+      final fake = backend();
+      await pump(tester, fake);
+      int lists() =>
+          fake.paths.where((p) => p == '/api/super-tabs/list').length;
+      final before = lists();
+      await open(tester);
+
+      await tester.tap(key('swarm-home-refresh'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(key('swarm-view-sort'), findsNothing, reason: 'the sheet closed');
+      expect(find.text('Refreshing…'), findsOneWidget);
+      expect(lists(), greaterThan(before));
+      await tester.pumpAndSettle();
     });
 
     Map<String, dynamic> tagInWeb() => {

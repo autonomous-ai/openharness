@@ -900,8 +900,9 @@ void main() {
       expect(key('swarm-title-button'), findsOneWidget);
     });
 
-    testWidgets("a project's row counts who reads it and who is running: "
-        'a private one only its owner and members', (tester) async {
+    testWidgets("a project's row is one line: no count of who reads it nor "
+        'of who is running, public or private (Slack\'s channels, '
+        '2026-11-03)', (tester) async {
       final fake = backend();
       Map<String, dynamic> inProject(String id, String visibility) => {
         'id': id,
@@ -940,17 +941,23 @@ void main() {
 
       const publicRow = 'swarm-project-$tab-$project';
       const privateRow = 'swarm-project-$tab-$web';
+      for (final row in [publicRow, privateRow]) {
+        expect(inside(row, find.textContaining('human')), findsNothing);
+        expect(inside(row, find.textContaining('running')), findsNothing);
+        expect(inside(row, find.byType(SwarmAvatar)), findsNothing);
+        expect(tester.getSize(key(row)).height, SwarmHomeProjectRow.height);
+      }
       expect(
-        inside(publicRow, find.text('3 humans • 1 agent running')),
-        findsOneWidget,
+        dotOf(tester, publicRow),
+        swarmStateColor(SwarmAgentState.working),
+        reason: 'who is running is its dot now',
       );
-      expect(inside(privateRow, find.text('2 humans')), findsOneWidget);
-      expect(inside(publicRow, find.byType(SwarmAvatar)), findsNothing);
     });
 
     testWidgets('a project with a task-chat tag stays bold without a number; '
-        'the rest are quiet; each has how many people read '
-        'it and when it last moved', (tester) async {
+        'the rest are quiet; each on one line, with no people and no time', (
+      tester,
+    ) async {
       final semantics = tester.ensureSemantics();
       await pump(tester, backend());
 
@@ -962,10 +969,10 @@ void main() {
       expect(weightOf(tester, webRow, 'Web'), isNot(AppFont.semibold));
       expect(inside(webRow, find.textContaining('@')), findsNothing);
       for (final row in [mobileRow, webRow]) {
-        expect(inside(row, find.text('1 human')), findsOneWidget);
+        expect(inside(row, find.textContaining('human')), findsNothing);
         expect(inside(row, find.byType(SwarmTeamDots)), findsNothing);
       }
-      expect(inside(mobileRow, find.text('30m')), findsOneWidget);
+      expect(inside(mobileRow, find.text('30m')), findsNothing);
       expect(inside(mobileRow, find.text('#Mobile')), findsOneWidget);
       expect(inside(webRow, find.text('#Web')), findsOneWidget);
       expect(
@@ -1002,9 +1009,7 @@ void main() {
       expect(inside(webRow, find.byType(SwarmTags)), findsNothing);
     });
 
-    testWidgets('projects newest first, each with how long ago it moved', (
-      tester,
-    ) async {
+    testWidgets('projects newest first, the time off the row', (tester) async {
       final now = DateTime.utc(2026, 10, 29, 10);
       int ago(int minutes) =>
           now.subtract(Duration(minutes: minutes)).millisecondsSinceEpoch;
@@ -1016,8 +1021,11 @@ void main() {
         y(tester, 'swarm-project-$tab-$web'),
         lessThan(y(tester, 'swarm-project-$tab-$project')),
       );
-      expect(inside('swarm-project-$tab-$web', find.text('2m')), findsOne);
-      expect(inside('swarm-project-$tab-$project', find.text('9m')), findsOne);
+      expect(inside('swarm-project-$tab-$web', find.text('2m')), findsNothing);
+      expect(
+        inside('swarm-project-$tab-$project', find.text('9m')),
+        findsNothing,
+      );
     });
 
     testWidgets('a project quiet for a day folds under Other projects, which '
@@ -1064,7 +1072,7 @@ void main() {
         y(tester, 'swarm-other-projects'),
         lessThan(y(tester, 'swarm-project-$tab-$project')),
       );
-      expect(inside('swarm-project-$tab-$project', find.text('2d')), findsOne);
+      expect(key('swarm-project-$tab-$project'), findsOneWidget);
 
       await tester.tap(key('swarm-other-projects'));
       await tester.pumpAndSettle();
@@ -1573,12 +1581,9 @@ void main() {
 
       const mobileRow = 'swarm-project-$tab-$project';
       const backendRow = 'swarm-project-$second-$project';
-      expect(inside(mobileRow, find.text('#Mobile')), findsOneWidget);
-      expect(inside(backendRow, find.text('#Backend')), findsOneWidget);
-      expect(
-        inside(backendRow, find.textContaining(' • Work Swarm')),
-        findsOneWidget,
-      );
+      // Its Swarm after its name, on its one line.
+      expect(inside(mobileRow, find.text('#Mobile  Phone Swarm')), findsOne);
+      expect(inside(backendRow, find.text('#Backend  Work Swarm')), findsOne);
 
       await tester.longPress(key(backendRow));
       await tester.pumpAndSettle();

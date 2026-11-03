@@ -57,6 +57,8 @@ class SwarmTopBar extends StatelessWidget {
     this.subtitle,
     this.line,
     this.trailing,
+    this.onTitle,
+    this.titleLabel,
   });
 
   final Widget leading;
@@ -69,10 +71,56 @@ class SwarmTopBar extends StatelessWidget {
   /// At the bar's end: a [SwarmIconButton].
   final Widget? trailing;
 
+  /// The title, with its line, is a button too: a channel's name opens its
+  /// details in Slack, a project's here. [titleLabel] is how it is heard.
+  final VoidCallback? onTitle;
+  final String? titleLabel;
+
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final tty = Tty.of(context);
+    Widget words = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          title,
+          key: const ValueKey('swarm-title'),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: tty
+              .style(size: 17, weight: FontWeight.w600)
+              .copyWith(height: 1.25),
+        ),
+        if (line case final line?)
+          line
+        else if (subtitle case final subtitle?)
+          Text(
+            subtitle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: AppType.caption(color: AppPalette.textSecondary),
+          ),
+      ],
+    );
+    if (onTitle case final onTitle?) {
+      words = Semantics(
+        button: true,
+        label: titleLabel,
+        onTap: onTitle,
+        excludeSemantics: titleLabel != null,
+        child: InkWell(
+          key: const ValueKey('swarm-title-button'),
+          borderRadius: BorderRadius.circular(AppCard.insetRadius),
+          onTap: onTitle,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: minTouchTarget),
+            child: Align(alignment: Alignment.centerLeft, child: words),
+          ),
+        ),
+      );
+    }
     return ConstrainedBox(
       constraints: const BoxConstraints(minHeight: 52),
       child: Padding(
@@ -86,32 +134,7 @@ class SwarmTopBar extends StatelessWidget {
           children: [
             leading,
             const SizedBox(width: 4),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    title,
-                    key: const ValueKey('swarm-title'),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: tty
-                        .style(size: 17, weight: FontWeight.w600)
-                        .copyWith(height: 1.25),
-                  ),
-                  if (line case final line?)
-                    line
-                  else if (subtitle case final subtitle?)
-                    Text(
-                      subtitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppType.caption(color: AppPalette.textSecondary),
-                    ),
-                ],
-              ),
-            ),
+            Expanded(child: words),
             ?trailing,
           ],
         ),
@@ -371,7 +394,7 @@ class SwarmSkeletonRow extends StatelessWidget {
   final bool titleOnly;
 
   /// A project's small dot on Home ([SwarmHomeProjectRow]) rather than a tile,
-  /// in the room that row keeps for it.
+  /// in the room that row keeps for it, on its one line, as tall as it.
   final bool dot;
 
   /// The title bar's share of the row's words.
@@ -382,12 +405,13 @@ class SwarmSkeletonRow extends StatelessWidget {
     // The real rows' metrics.
     final title = AppType.label(height: 1.3);
     final line = AppType.caption(height: 1.35);
+    final titleOnly = this.titleOnly || dot;
     return ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: 56),
+      constraints: BoxConstraints(minHeight: dot ? minTouchTarget : 56),
       child: Padding(
-        padding: const EdgeInsets.symmetric(
+        padding: EdgeInsets.symmetric(
           horizontal: AppSpace.l,
-          vertical: AppSpace.m,
+          vertical: dot ? AppSpace.xs : AppSpace.m,
         ),
         child: Row(
           children: [
