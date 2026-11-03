@@ -17,7 +17,7 @@ import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
 /// Rename a Swarm on the phone (Tony's task 17), as the desktop's Rename Tab
-/// does it with `tab.rename`: held from its row in Home's switcher, for
+/// does it with `tab.rename`: from its row's ⋮ in Home's switcher (or held), for
 /// someone who may write there; the new name shows at once, and the old one
 /// comes back when the server does not keep it.
 void main() {
@@ -314,6 +314,54 @@ void main() {
       expect(key('swarm-switch-join'), findsNothing, reason: 'it closed');
       expect(find.text('Phone Swarm'), findsWidgets);
       expect(find.text('Rename Swarm'), findsOneWidget);
+    });
+
+    testWidgets("the Swarm's row shows a ⋮ that opens its menu, as a "
+        "chat's ⋮ does", (tester) async {
+      await pump(tester);
+      await tester.tap(key('swarm-title-button'));
+      await tester.pumpAndSettle();
+
+      final dots = key('swarm-switch-menu-$tab');
+      expect(dots, findsOneWidget);
+      expect(
+        find.descendant(of: key('swarm-switch-$tab'), matching: dots),
+        findsOneWidget,
+        reason: "on the Swarm's own row",
+      );
+      expect(find.bySemanticsLabel('Swarm options'), findsOneWidget);
+      final size = tester.getSize(dots);
+      expect(size.width, greaterThanOrEqualTo(44));
+      expect(size.height, greaterThanOrEqualTo(44));
+
+      await tester.tap(dots);
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-switch-join'), findsNothing, reason: 'it closed');
+      expect(title('Phone Swarm'), findsOneWidget, reason: 'not picked anew');
+      expect(find.text('Rename Swarm'), findsOneWidget);
+      await tester.tap(find.text('Rename Swarm'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-rename-name'), findsOneWidget);
+    });
+
+    testWidgets('a viewer sees no ⋮ on the row', (tester) async {
+      await pump(tester, as: 'viewer');
+      await tester.tap(key('swarm-title-button'));
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-switch-$tab'), findsOneWidget);
+      expect(key('swarm-switch-menu-$tab'), findsNothing);
+    });
+
+    testWidgets("the name field is labelled 'Swarm name', for a screen "
+        'reader too', (tester) async {
+      await pump(tester);
+      await open(tester);
+
+      final field = tester.widget<TextField>(key('swarm-rename-name'));
+      expect(field.decoration?.labelText, 'Swarm name');
+      expect(find.bySemanticsLabel(RegExp('Swarm name')), findsOneWidget);
     });
 
     testWidgets('a viewer holds a slow tap: no menu', (tester) async {
