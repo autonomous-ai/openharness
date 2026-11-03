@@ -327,6 +327,7 @@ class _ImportAgentDialogState extends State<_ImportAgentDialog> {
                 formatDownloadSize(file.size),
                 style: DesktopChrome.metadata(),
               ),
+              const SizedBox(width: DesktopChrome.controlGap),
               TextButton(
                 onPressed: () =>
                     setState(() => open ? _open.remove(file) : _open.add(file)),
