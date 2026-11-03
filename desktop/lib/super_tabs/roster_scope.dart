@@ -96,3 +96,12 @@ bool personInProject(
   if (!project.isPrivate) return true;
   return project.ownerId == personId || project.memberIds.contains(personId);
 }
+
+/// The people "This project" lists ([active]: points above 0 on the open
+/// project's own board, which counts only its work) and those it folds under
+/// Others (N): everyone else who can read the project (Dee, 2026-11-03). Each
+/// keeps the order [people] came in.
+({List<SuperTabPerson> active, List<SuperTabPerson> others}) splitProjectPeople(
+  List<SuperTabPerson> people,
+  Map<String, SuperTabPersonScore> scores,
+) => (active: people, others: const <SuperTabPerson>[]);
