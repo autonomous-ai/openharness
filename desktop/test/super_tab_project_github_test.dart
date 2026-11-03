@@ -144,6 +144,101 @@ void main() {
     },
   );
 
+  // Task #2316 (Dee, 2026-11-03): after lampos's repository was allowed, the line stayed on everyone's computer for up to
+  // 5 minutes. The backend moves the project's GitHub revision; the app reads again when it moves.
+  group('the project\'s GitHub revision', () {
+    /// The fixture's project with its GitHub revision at [revision], then a Swarm read.
+    Future<void> moved(SuperTabController c, int revision) async {
+      final projects = server.state['projects'] ??= <dynamic>[
+        projectFixture('lead', server.state['name'] as String, 'lead'),
+      ];
+      ((projects as List).first as Map)['githubRevision'] = revision;
+      server.revision++;
+      await c.refresh();
+    }
+
+    testWidgets(
+      'the sidebar line clears when it moves, without waiting 5 minutes',
+      (tester) async {
+        answer = {
+          'state': 'not-approved',
+          'repository': 'acme/app',
+          'canApprove': true,
+        };
+        final c = await mount(
+          tester,
+          (c, p) => ProjectGitHubLine(controller: c, project: p),
+        );
+        expect(find.text('Set up GitHub for teammates'), findsOneWidget);
+        expect(asked, hasLength(1));
+        answer = {'state': 'covered', 'repository': 'acme/app'};
+        await moved(c, 1);
+        await tester.pumpAndSettle();
+        expect(find.text('Set up GitHub for teammates'), findsNothing);
+        // Asks GitHub again: another server may still keep "not installed".
+        expect(asked, hasLength(2));
+        expect(asked.last, endsWith('/github?refresh=1'));
+        c.dispose();
+      },
+    );
+
+    testWidgets('a read that does not move it keeps the 5-minute keep', (
+      tester,
+    ) async {
+      final c = await mount(
+        tester,
+        (c, p) => ProjectGitHubLine(controller: c, project: p),
+      );
+      expect(asked, hasLength(1));
+      await moved(c, 0);
+      await tester.pumpAndSettle();
+      expect(asked, hasLength(1));
+      c.dispose();
+    });
+
+    test('a read in flight when it moves is read again once it lands', () async {
+      final c = controllerFor();
+      await c.refresh();
+      final project = c.snapshot!.projects.first;
+      hold = Completer<void>();
+      final first = c.readGitHubAccess(project.id);
+      await moved(c, 1);
+      // Asked while the first read is still out: that one answers for the revision before.
+      unawaited(c.readGitHubAccess(project.id));
+      hold!.complete();
+      await first;
+      hold = null;
+      await c.readGitHubAccess(project.id);
+      expect(asked, hasLength(2));
+      expect(asked.last, endsWith('/github?refresh=1'));
+      await c.readGitHubAccess(project.id);
+      expect(asked, hasLength(2));
+      c.dispose();
+    });
+  });
+
+  // Task #2316: a setup done on GitHub's own site is picked up when anyone opens the dialog or Project details.
+  testWidgets('opening GitHub access asks GitHub again, even within 5 minutes', (
+    tester,
+  ) async {
+    final c = controllerFor();
+    await c.refresh();
+    final project = c.snapshot!.projects.first;
+    await c.readGitHubAccess(project.id);
+    expect(asked, hasLength(1));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ProjectGitHubAccess(controller: c, projectId: project.id),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(asked, hasLength(2));
+    expect(asked.last, endsWith('/github?refresh=1'));
+    c.dispose();
+  });
+
   testWidgets('nothing is asked or shown in a Swarm of one, or when covered', (
     tester,
   ) async {
