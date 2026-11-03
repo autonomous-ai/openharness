@@ -472,10 +472,14 @@ class _RootShellState extends ConsumerState<RootShell>
         final deviceBands = home && shared == null;
         return Column(
           children: [
-            // The app's commands as a menu strip (Linux and Windows; macOS
-            // carries them in its native menu bar, and this renders nothing
-            // there).
-            InWindowMenuBar(onAction: runAppMenuAction),
+            // The app's commands as a menu strip. Linux always (on GNOME it
+            // is the title bar); macOS carries them in its native menu bar and
+            // renders nothing. Windows draws a ☰ in the workspace tab strip
+            // instead, but the screens before it — sign-in, setup, the tour —
+            // have no tab strip, so they keep the strip until the workspace is
+            // up.
+            if (!RuntimePlatform.isWindows || !home)
+              InWindowMenuBar(onAction: runAppMenuAction),
             if (app.hasAvailableUpdate &&
                 !touring &&
                 !signInStep &&

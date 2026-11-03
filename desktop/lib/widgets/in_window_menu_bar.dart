@@ -28,17 +28,38 @@ typedef AppMenuActionHandler = Future<void> Function(String action);
 /// shell goes away; null in a test that never mounted one.
 AppMenuActionHandler? appMenuActionSink;
 
+/// The compact button's natural width: 8px of padding on each side plus its
+/// 16px glyph. The tab strip reserves at least this much, because two cells of
+/// the 13px bar font are narrower than it on Windows — and a narrower slot does
+/// not overflow, it squashes the glyph silently (10px at a 26px slot, nothing
+/// at 16).
+const double appMenuButtonWidth = 32;
+
 /// The app's commands as an in-window menu bar.
 ///
 /// On macOS the commands live in the native menu bar: the application menu's
 /// own rows and View's font rows are installed in MainFlutterWindow.swift,
 /// and File, Edit's Find rows, View's workspace rows and History are built by
-/// SwarmTitlebar.swift from the `harness/swarm_tabs` payloads. Linux and Windows have no native menu bar to hand any of
-/// that to, so this draws the same menus in the window instead: the state
-/// comes off [SwarmMenuBus] (what Swift would have received), the rows
-/// dispatch back through the same handler the macOS channel delivers to, and
-/// the application-menu commands fire the same action strings through
-/// [onAction].
+/// SwarmTitlebar.swift from the `harness/swarm_tabs` payloads.
+///
+/// Linux and Windows have no native menu bar to hand any of that to, so this
+/// widget draws the same menus itself. Two shapes, one set of rows:
+///
+/// - **Linux: the strip** ([compact] false). On GNOME it IS the title bar, so it
+///   carries the menus, the drag area and the window buttons; under a window
+///   manager's own caption it is a 30px strip of menus. [LinuxTitleBar] says
+///   which. Windows used to draw this strip too, under its OS caption; it no
+///   longer does (desktop/design/windows-app-menu.md). The shell still mounts
+///   it on Windows for the screens that have no tab strip — sign-in, setup, the
+///   tour — and the workspace's tab strip draws the compact bar instead.
+/// - **Windows: [compact]**, one ☰ whose panel groups the same seven menus. The
+///   button lives at the left of the workspace tab strip, the row the window's
+///   own controls sit in, because two stacked bars was the legacy shape.
+///
+/// Either way the state comes off [SwarmMenuBus] (what Swift would have
+/// received), the rows dispatch back through the same handler the macOS channel
+/// delivers to, and the application-menu commands fire the same action strings
+/// through [onAction] or [appMenuActionSink].
 ///
 /// The tab strip and the title-bar buttons are not here: on Linux and Windows Flutter
 /// draws those itself, as it does anywhere AppKit is not drawing them. Two
@@ -50,8 +71,9 @@ AppMenuActionHandler? appMenuActionSink;
 /// test can force the bar on without caring which OS the host is. Widget
 /// tests at large keep the bar off by default: it is window chrome — on macOS
 /// it costs the layout nothing at all — and pane-geometry assertions should
-/// not depend on whether a Linux or Windows build is drawing it. Windows keeps
-/// its native caption (spec §2.9), so there the bar is a strip under it.
+/// not depend on whether a Linux build is drawing it. Windows keeps its native
+/// caption (spec §2.9): the compact button is drawn by the workspace's tab
+/// strip there, not by this widget's default visibility.
 /// Who draws the Linux window's title bar — decided by the runner
 /// (`my_application.cc`) and handed over as `HARNESS_LINUX_TITLE_BAR`.
 enum LinuxTitleBar {
@@ -342,7 +364,20 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
             setState(() => _openMenu = null);
           }
         },
-        menuChildren: [for (final child in sections) _menuFocusRegion(child)],
+        // The panel takes focus as it opens, so Escape and the menu keys
+        // reach MenuAnchor's own bindings with the pointer never having left
+        // the ☰. Without this the panel opened with focus on the button and
+        // Escape did nothing.
+        menuChildren: [
+          Focus(
+            autofocus: true,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [for (final child in sections) _menuFocusRegion(child)],
+            ),
+          ),
+        ],
         child: Tooltip(
           message: 'Menu',
           child: TextButton(

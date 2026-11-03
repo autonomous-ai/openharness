@@ -206,7 +206,7 @@ Each is switched off in code; the line is given so the claim can be checked.
 | Account avatar menu | `lib/screens/swarm_screen.dart:3268`: `_accountControlShown => app.viewer == null`; the web app menu carries the email and Sign out instead |
 | Finder | `lib/finder/finder_availability.dart:12`: `canOpenFinderOn` needs `!kViewerMode` |
 | Settings ▸ Connectors | `lib/settings/settings_section.dart:110`: hidden when `kIsWeb` |
-| In-window menu bar, Export logs, About dialog | Linux/Windows menu bar and the native menu only (`lib/app_shell.dart` `runAppMenuAction`); Settings ▸ Debug hides Export on web (`settings/sections/debug_toolbar.dart:35`) |
+| In-window menu bar, Export logs, About dialog | Linux menu strip, the Windows tab-strip menu and the native menu only (`lib/app_shell.dart` `runAppMenuAction`); Settings ▸ Debug hides Export on web (`settings/sections/debug_toolbar.dart:35`) |
 
 ## Findings
 

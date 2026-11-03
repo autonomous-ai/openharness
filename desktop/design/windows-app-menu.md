@@ -34,6 +34,13 @@ is gone. Its commands open from one **☰ at the left of the workspace tab strip
 which is the row the window's own controls already sit in (search,
 notifications, Store, account at the right).
 
+- The slot is **at least 32px** — the button's own 8 + 16 + 8 — because two
+  cells of the 13px bar font are 14–16px on Windows and a narrower slot does not
+  overflow, it squashes the ☰ silently (10px in a 26px slot, 0 at 16). The tab
+  budget comes down by exactly that.
+- Screens before the workspace — sign-in, setup, the welcome tour — have no tab
+  strip, so on Windows they keep the strip (the shell mounts it whenever the
+   workspace is not on screen, and never as an invisible ghost in it).
 - One panel, grouped in the same seven sections in the same order and with the
   same rows as the strip, so nothing becomes unreachable: About, Settings,
   Update, Export Logs, Quick Start, New Tab, Close Tab, Edit's clipboard rows,

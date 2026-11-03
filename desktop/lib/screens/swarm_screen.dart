@@ -64,7 +64,11 @@ import '../state/app_state.dart';
 import '../state/notification_inbox.dart';
 import '../state/status_menu.dart';
 import '../widgets/in_window_menu_bar.dart'
-    show InWindowMenuBar, LinuxTitleBar, linuxTitleBarActions;
+    show
+        InWindowMenuBar,
+        LinuxTitleBar,
+        appMenuButtonWidth,
+        linuxTitleBarActions;
 import '../widgets/account_menu.dart';
 import '../widgets/notification_inbox.dart';
 import '../widgets/workspace_notifications_button.dart';
@@ -273,7 +277,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// Whether the strip draws the compact app menu's ☰: Windows, where no menu
   /// row sits above the workspace, or a test that asked for it.
   bool get _appMenuButton =>
-      widget.appMenuButton ?? (RuntimePlatform.isWindows && !kIsWeb);
+      widget.appMenuButton ??
+      (RuntimePlatform.isWindows && !kIsWeb && !kUnderTest);
 
   /// The tab the middle button went down on, so an up that slid onto another
   /// tab closes nothing. Null between presses.
@@ -9083,7 +9088,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
           : cell.width * 8 + accountWidth;
       // The app menu's ☰, where the host keeps no menu row above the
       // workspace: it comes out of the tabs' budget like any other control.
-      final menuWidth = _appMenuButton ? cell.width * 2 : 0.0;
+      // The button is 8 + 16 + 8 wide of its own, and two cells of the bar
+      // font are less than that on Windows — a narrower slot silently squashes
+      // the glyph (10px at 26, 0px at 16), so the slot never drops below it.
+      final menuWidth = _appMenuButton
+          ? math.max(cell.width * 2, appMenuButtonWidth)
+          : 0.0;
       final tabBudget = math.max(
         0.0,
         constraints.maxWidth -

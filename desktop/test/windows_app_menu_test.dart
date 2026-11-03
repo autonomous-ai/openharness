@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:harness/screens/swarm_menu_bus.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart';
 import 'package:harness/widgets/in_window_menu_bar.dart';
 
@@ -80,6 +81,40 @@ void main() {
     }
     fail('no tappable widget for $key');
   }
+
+  testWidgets('keeps the glyph whole in the strip\'s narrowest slot', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildAppTheme(brightness: Brightness.dark),
+        home: Scaffold(
+          // Two cells of the Windows bar font are 14-16px; the slot the tab
+          // strip reserves is pinned to the button's own 32px width.
+          body: Align(
+            alignment: Alignment.centerLeft,
+            child: SizedBox(
+              width: appMenuButtonWidth,
+              child: const InWindowMenuBar(compact: true),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(tester.getSize(find.byIcon(AppIcons.menu)).width, 16);
+  });
+
+  testWidgets('Escape closes the panel', (tester) async {
+    await pumpCompact(tester);
+    await tap(tester, 'app-menu-button');
+    expect(find.text('HARNESS'), findsOneWidget);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+
+    expect(find.text('HARNESS'), findsNothing);
+  });
 
   testWidgets('draws one button and no menu strip', (tester) async {
     await pumpCompact(tester);
