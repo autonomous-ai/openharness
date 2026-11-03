@@ -122,7 +122,10 @@ beforeEach(async () => {
     issue: vi.fn(async () => ({ token: 'fixture-token', expiresAt: new Date(0).toISOString() })), release: vi.fn(async () => {}),
     prepare: vi.fn(async () => ({ token: 'fixture-read-token', expiresAt: new Date(0).toISOString(), repository: 'example/project' })) }
   // The read API by parts is recorded the same way: its classes reach the store only through it.
-  await app.register(superTabRoutes, { store: store.store, reads: store.store as never, hosts: store.store as never, github: github as never })
+  // The project's repository is approved for it, as every Swarm needs before a token (task #1694); approvals have their own
+  // tests (integration/superTabGithub.test.ts).
+  const approvals = { approved: vi.fn(async () => true), approve: vi.fn(), refuse: vi.fn(), reader: vi.fn(async () => null), approvedProjects: vi.fn(async () => []) }
+  await app.register(superTabRoutes, { store: store.store, reads: store.store as never, hosts: store.store as never, github: github as never, approvals })
   await app.register(harnessShareRoutes)
   await app.register(deviceKeyRoutes)
   await app.register(machineRoutes)
