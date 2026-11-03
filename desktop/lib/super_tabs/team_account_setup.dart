@@ -140,6 +140,13 @@ class _Words {
 
   static const _computerLead =
       'This computer joined a Swarm, so it needs Harness Team before you go on.';
+
+  /// Once Remove was refused: Not now is the way on, and it says so instead
+  /// of asking for Remove again.
+  String get notNowWhy =>
+      'Choose Not now to go on without it. You can set up Harness Team on '
+      '$here later from Machines.';
+
   static const _computerRemoveOnly =
       'To go on, remove this computer from the Swarm. You can add it again from Machines.';
   static const _computerRemove = 'Remove this computer from the Swarm';
@@ -523,6 +530,12 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
     });
   }
 
+  Future<void> _notNow() async {
+    setState(() => _busy = true);
+    await widget.app.declineTeamSetupLock();
+    if (mounted) setState(() => _busy = false);
+  }
+
   @override
   Widget build(BuildContext context) {
     final locked = widget.app.teamSetupLocked;
@@ -577,6 +590,13 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
       ),
     ];
     final removeError = _removeError;
+    // Remove was refused: the one way left, so nobody is held without an
+    // administrator's password (Diego, 2026-11-03).
+    final notNow = TextButton(
+      key: const Key('team-account-lock-not-now'),
+      onPressed: _busy ? null : _notNow,
+      child: const Text('Not now'),
+    );
     return Center(
       key: const Key('team-account-lock'),
       child: FocusScope(
@@ -627,6 +647,15 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
                       key: const Key('team-account-lock-confirm'),
                       style: body,
                     ),
+                  ] else if (removeError != null &&
+                      (_step == _LockStep.cancelled ||
+                          _step == _LockStep.cannot)) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      words.notNowWhy,
+                      key: const Key('team-account-lock-not-now-why'),
+                      style: muted,
+                    ),
                   ] else if (_step == _LockStep.cancelled) ...[
                     const SizedBox(height: 12),
                     Text(words.removeWhy, style: muted),
@@ -660,8 +689,12 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
                   ],
                   _LockStep.waiting => const [],
                   _LockStep.retry => [retry],
-                  _LockStep.cancelled => [remove, retry],
-                  _LockStep.cannot => [remove],
+                  _LockStep.cancelled => [
+                    if (removeError != null) notNow,
+                    remove,
+                    retry,
+                  ],
+                  _LockStep.cannot => [if (removeError != null) notNow, remove],
                 },
         ),
       ),

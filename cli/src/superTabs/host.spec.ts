@@ -924,6 +924,31 @@ describe('Super Tab native delivery handoff', () => {
       const { t } = wired({ thread: 'root', replyTo: 'root' }, { root: page([ROOT], [{ id: 'root', replies: 1, authors: [{ name: 'Collaborator' }] }]) })
       expect(await delivered(t)).not.toContain('In a thread')
     })
+    // Ken 11-03 (#2492): in a thread of his Buddy chat he answered "ok để thử"; the delivery quoted only the thread's root,
+    // so the Buddy guessed at the reply. A Buddy reads no Swarm state (no place or work line), but it gets the thread line,
+    // with the read command in its own prefix (no --agent: its guard refuses one).
+    const asBuddy = (t: ReturnType<typeof setup>) =>
+      vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', swarmSkill: { role: 'buddy', key: 'k' } } as never)
+    it('a Buddy gets the thread line with its own --thread command, and no place or work line', async () => {
+      const { t, reads } = wired({ thread: 'root', replyTo: 'root' }, { root: page([ROOT], [{ id: 'root', replies: 3, authors: [{ name: 'Buddy' }, { name: 'Ken' }] }]) })
+      asBuddy(t)
+      const prompt = await delivered(t)
+      expect(prompt).toContain('In a thread Ken started (2026-11-02 09:15 UTC): "Should we ship today?" — 3 replies so far, from Buddy, Ken. '
+        + "Read the whole thread before acting on it: harness super-tab --port 18473 --machine 'machine-1' --tab 'tab' messages 'g12' --thread 'root'")
+      expect(prompt).not.toContain('--agent')
+      expect(prompt).not.toContain('In task #12')
+      expect(prompt).not.toContain('You are assigned')
+      // The root is in the page the quoted reply was read from: no read beyond it.
+      expect(reads).toEqual(['root'])
+    })
+    it('a Buddy\'s news from a thread elsewhere reads nothing for a thread line (its read boundary)', async () => {
+      const { t, reads } = wired({ thread: 'root' }, { root: page([ROOT], [{ id: 'root', replies: 3, authors: [{ name: 'Dev1' }] }]) }, undefined, { buddyNews: true })
+      asBuddy(t)
+      const prompt = await delivered(t)
+      expect(prompt.startsWith('News for your owner')).toBe(true)
+      expect(prompt).not.toContain('In a thread')
+      expect(reads).toEqual([])
+    })
     it('a work.assign delivered right after it names the new task', async () => {
       let swarm: Record<string, unknown> = { ...SWARM, conversations: [SWARM.conversations[0]] }
       const { t } = wired({}, {}, () => swarm)
@@ -4149,6 +4174,14 @@ describe('ending a Buddy\'s thread sessions', () => {
 })
 
 describe('keeping a Swarm Lead alive', () => {
+  it('services a landed PM switch after the source is no longer marked as Lead', async () => {
+    const t = lifeFixture([leadRow({ lead: false, agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1',
+      switchLanded: { id: 'landed-switch', candidateAgentId: 'destination-agent' } } })])
+    await t.poll()
+    const results = t.commands.map(command => command.command as Record<string, unknown>).filter(command => command.type === 'agent.switchResult')
+    expect(results).toContainEqual({ type: 'agent.switchResult', agentId: 'agent', switchId: 'landed-switch', ok: true })
+  })
+
   // The owner, 2026-10-23: a Lead whose session died (a machine restart, a kill) stalls its whole project until someone
   // reopens it by hand. Its host reopens it on its own conversation; a crash loop must not spin.
   it('reopens a Lead whose session is gone, backing off while it cannot, and leaves a live one alone', async () => {
