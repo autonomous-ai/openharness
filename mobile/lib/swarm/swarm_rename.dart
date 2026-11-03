@@ -59,8 +59,8 @@ List<PhoneSheetAction> _swarmMenuActions(
     ),
 ];
 
-/// Swarm [swarmId]'s menu, from holding its row in the switcher: the
-/// desktop's menu on a Swarm's tab, as holding a tab's chip in Find is.
+/// Swarm [swarmId]'s menu, from its row's ⋮ in the switcher, or by holding
+/// the row: the desktop's menu on a Swarm's tab, as a chat's ⋮ opens its.
 /// Rename Swarm, for someone who may write there. It goes once nothing in
 /// it is the person's to do ([swarmHasMenu]): access lost, the Swarm gone.
 Future<void> showSwarmMenu(
@@ -217,6 +217,9 @@ class _SwarmRenameDialogState extends State<SwarmRenameDialog> {
             textInputAction: TextInputAction.done,
             style: AppType.body(color: AppPalette.textPrimary),
             decoration: InputDecoration(
+              // Named for a screen reader as well as seen, as the
+              // desktop's Tab name is.
+              labelText: 'Swarm name',
               counterText: '',
               filled: true,
               fillColor: AppPalette.swarmField,

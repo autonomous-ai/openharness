@@ -1,11 +1,14 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'package:harness_mobile/shared/theme/app_icon_size.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
+import 'package:harness_mobile/shared/widgets/touch_target.dart';
 
 import 'model.dart';
 import 'swarm_inbox.dart';
@@ -51,8 +54,9 @@ String swarmHomeTitle(SwarmInbox inbox, List<SwarmListing> shown) =>
 /// Swarm, the one shown ticked and what waits in each other one counted,
 /// and Join or create a Swarm. A Swarm the account loses, or whose read is
 /// taken away, while it is open leaves it, and a tap on it shows nothing.
-/// Holding a Swarm with a menu for the person ([swarmHasMenu]) closes it
-/// for that menu over Home ([showSwarmMenu]).
+/// A Swarm with a menu for the person ([swarmHasMenu]) shows a ⋮ on its
+/// row; the ⋮, or holding the row, closes it for that menu over Home
+/// ([showSwarmMenu]).
 Future<void> showSwarmSwitcher(BuildContext context, SwarmSession session) =>
     showModalBottomSheet<void>(
       context: context,
@@ -82,8 +86,20 @@ class _Switcher extends StatelessWidget {
   final SwarmSession session;
   final VoidCallback onJoin;
 
-  /// A Swarm's row held, with its id.
+  /// A Swarm's menu asked for, from its row's ⋮ or by holding the row,
+  /// with its id.
   final ValueChanged<String> onHold;
+
+  /// A row's end: what it shows ([status]), then its ⋮ ([menu]).
+  static Widget? _trailing(Widget? status, {Widget? menu}) => menu == null
+      ? status
+      : Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (status != null) ...[status, const SizedBox(width: AppSpace.s)],
+            menu,
+          ],
+        );
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -153,18 +169,28 @@ class _Switcher extends StatelessWidget {
                   key: ValueKey('swarm-switch-${swarm.id}'),
                   leading: SwarmProjectTile(swarm.name),
                   title: swarm.name,
-                  trailing: swarm == shown
-                      ? tick('Shown on Swarm Home')
-                      // What waits in a Swarm Home does not show.
-                      : switch (shown == null
-                            ? 0
-                            : swarmNeedsOf(inbox, swarm.id).length) {
-                          0 => null,
-                          final count => SwarmBadge(count, warn: true),
-                        },
+                  trailing: _trailing(
+                    swarm == shown
+                        ? tick('Shown on Swarm Home')
+                        // What waits in a Swarm Home does not show.
+                        : switch (shown == null
+                              ? 0
+                              : swarmNeedsOf(inbox, swarm.id).length) {
+                            0 => null,
+                            final count => SwarmBadge(count, warn: true),
+                          },
+                    // Its menu, for someone with something in it to do,
+                    // from a ⋮ as a chat's is.
+                    menu: swarmHasMenu(inbox, swarm.id)
+                        ? _SwarmMenuButton(
+                            key: ValueKey('swarm-switch-menu-${swarm.id}'),
+                            onTap: () => onHold(swarm.id),
+                          )
+                        : null,
+                  ),
                   chevron: null,
                   onTap: () => show(swarm.id),
-                  // Its menu, for someone with something in it to do.
+                  // Held, the same menu: a shortcut to the ⋮.
                   onLongPress: swarmHasMenu(inbox, swarm.id)
                       ? () => onHold(swarm.id)
                       : null,
@@ -181,6 +207,41 @@ class _Switcher extends StatelessWidget {
         ),
       );
     },
+  );
+}
+
+/// A switcher row's ⋮: that Swarm's menu ([showSwarmMenu]), as a chat's ⋮
+/// opens its own. A thumb's size, inside the row.
+class _SwarmMenuButton extends StatelessWidget {
+  const _SwarmMenuButton({super.key, required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    // Its own button for a screen reader, not merged into the row's.
+    container: true,
+    button: true,
+    label: 'Swarm options',
+    excludeSemantics: true,
+    child: GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        HapticFeedback.selectionClick();
+        onTap();
+      },
+      child: SizedBox.square(
+        dimension: minTouchTarget,
+        child: Align(
+          alignment: AlignmentDirectional.centerEnd,
+          child: Icon(
+            LucideIcons.ellipsisVertical300,
+            size: AppIconSize.standalone,
+            color: AppPalette.textSecondary,
+          ),
+        ),
+      ),
+    ),
   );
 }
 
