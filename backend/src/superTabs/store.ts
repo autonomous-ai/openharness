@@ -48,7 +48,7 @@ import { moveChatMark } from './read/threadMarkSeeds.js'
 import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefusal, restoreSessions } from './closedAgents.js'
 import { sessionRows } from './memberRows.js'
 import { judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
-import { archivable, archiveLine, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests } from './tidy.js'
+import { archivable, archiveLine, archiveWaitsFor, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
 import { autoJoinSwarms, machineSwarms, memberSwarms } from './swarmRows.js'
@@ -3901,7 +3901,12 @@ export class SuperTabStore {
       const group = state.conversations.find(c => c.id === groupId)
       const now = this.now()
       if (!group) return false
-      const read = (urls: readonly string[]) => urls.every(url => checked[url] === 'merged' || checked[url] === 'closed')
+      // Its links, and a "PR #N" its result or check evidence names, read in its project's repository; with none to read
+      // it in it stays open (tidy.ts archiveWaitsFor). Read only once it may close, so its project is a real one.
+      const read = (urls: readonly string[]) => {
+        const waits = archiveWaitsFor(group, groupProject(state, group).repository?.repositoryUrl)
+        return !!waits && [...urls, ...waits].every(url => checked[url] === 'merged' || checked[url] === 'closed')
+      }
       // A step's task's pull requests count too: it may yet be handed back while one is open, and need its step again.
       const finished = archivable(state, group, now) && read(reviewPullRequests(state, group))
       // Only the group it reviews as the pass read it: one this write did not load would hide its open pull requests.
@@ -3937,6 +3942,7 @@ export class SuperTabStore {
       // A finished step's too: its task handed on again since the load must not lose the step it will need.
       await this.save(tx, loaded, state, clock.next(), group.reviewOf ? [{ kind: 'group', key: group.reviewOf }] : [])
       await this.writeMessages(tx, tabId, state, rows, sequences)
+      await writeMentions(tx, tabId, state, rows, now)
       return true
     })
   }
