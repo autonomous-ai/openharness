@@ -76,7 +76,7 @@ export interface Agent {
   /** A Buddy's owner asked its machine to move it onto a model on the Swarm's grid, or back to their subscription (null)
    *  (buddyModel.ts). What they were shown is kept for the line the result writes: the model's name, who serves it and its
    *  window, the smallest any serving machine reported. One at a time; the result or the liveness sweep's lease drops it. */
-  modelRequest?: { id: string; gridModel: string | null; gridName?: string; name?: string; servedBy?: string[]; contextWindow?: number; requestedBy: string; at: string
+  modelRequest?: { id: string; gridModel: string | null; gridName?: string; name?: string; servedBy?: string[]; machines?: string[]; contextWindow?: number; requestedBy: string; at: string
     /** Set when the Swarm sent the Buddy home by itself: the model hit a limit, kept failing, or nobody served it. */
     reason?: 'limit' | 'failing' | 'gone' }
   /** When the liveness sweep first found nobody serving the Buddy's `gridModel` (ms): two minutes on, it is sent home. */
@@ -642,8 +642,11 @@ export const agentWithoutMachine = <T extends Pick<Agent, 'machineId' | 'harness
  *  person's, so it goes too (delta review 1 of #2258), and so does its host grant, which under an older share policy names
  *  its contributor's email (lib/machineSharePolicy.ts; final check of #2258). */
 export const agentForBuddy = <T extends Pick<Agent, 'id' | 'machineId' | 'harnessId' | 'machineOwnerId' | 'contributorId' | 'membershipGeneration' | 'hostGrant' | 'teamAccount'
-  | 'replacement' | 'lostTask'>>(target: T, buddyId: string): T => {
-  const bare = agentWithoutMachine(target)
+  | 'replacement' | 'lostTask' | 'modelRequest'>>(target: T, buddyId: string): T => {
+  // A pending model switch names the machines serving the model (buddyModel.ts); its host reads it from its own rows, never here
+  // (security review 1 of #2787).
+  const { modelRequest: _switching, ...unswitched } = target
+  const bare = agentWithoutMachine(unswitched as T)
   if (target.id === buddyId) return bare
   const { teamAccount: _team, ...rest } = bare
   return { ...rest, machineOwnerId: '', contributorId: '', membershipGeneration: '', hostGrant: null } as T

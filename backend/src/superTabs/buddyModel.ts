@@ -44,8 +44,9 @@ function served(state: SuperTabState, gridModel: string, now: number) {
   const found = servers(state, gridModel, now)
   if (!found.length) return null
   const servedBy = [...new Set(found.map(s => s.api ? `${personName(state, s.personId)}'s saved API` : s.machine))]
+  const machines = [...new Set(found.filter(s => !s.api).map(s => s.machine))]
   const windows = found.flatMap(s => typeof s.reading.contextWindow === 'number' ? [s.reading.contextWindow] : [])
-  return { name: found.find(s => s.reading.name)?.reading.name ?? gridModel, servedBy,
+  return { name: found.find(s => s.reading.name)?.reading.name ?? gridModel, servedBy, machines,
     ...(windows.length ? { contextWindow: Math.min(...windows) } : {}) }
 }
 
@@ -101,6 +102,14 @@ function current(state: SuperTabState, buddy: Agent, now: number): string {
   return served(state, buddy.gridModel, now)?.name ?? buddy.gridModelName ?? buddy.gridModel
 }
 
+/** The machines any line about [request] must keep from a Buddy reading it (store.ts withoutMachineNames): those the owner was
+ *  shown when asking, which a host's refusal repeats, and those serving the request's model or the Buddy's own now. Worked out
+ *  from the request too, since a machine may stop serving between the ask and the answer (security review 1 of #2787). */
+function hiddenMachines(state: SuperTabState, buddy: Agent, request: NonNullable<Agent['modelRequest']>, now: number): string[] {
+  const serving = [request.gridModel, buddy.gridModel].flatMap(model => model ? servers(state, model, now).filter(s => !s.api).map(s => s.machine) : [])
+  return [...new Set([...(request.machines ?? []), ...serving])]
+}
+
 /** The Buddy's machine reports the switch it carried out: the Buddy is on the model, or stays where it was. The first line is
  *  the owner's; then one for each other member who serves the model it landed on. */
 export function buddyModelResult(state: SuperTabState, actor: Actor,
@@ -109,13 +118,13 @@ export function buddyModelResult(state: SuperTabState, actor: Actor,
   if (!buddy || actor.kind !== 'agent' || actor.agentId !== buddy.id || !isSwarmBuddy(buddy)) fail('BUDDY_FORBIDDEN', 'Only the Buddy\'s machine reports its switch.', 403)
   const request = buddy.modelRequest
   if (!request || request.id !== command.requestId) fail('STALE_SWITCH', 'This is not the switch your Buddy was asked for.', 409)
+  const hidden = hiddenMachines(state, buddy, request, now)
   delete buddy.modelRequest
   const owner = buddy.buddyOf!
   const conversationId = swarmBuddyChatId({ id: owner.personId, generation: owner.generation })
-  const mine = (text: string, machines: string[] = []): ModelLine[] => [{ conversationId, text, machines }]
+  const mine = (text: string): ModelLine[] => [{ conversationId, text, machines: hidden }]
   if (!command.ok) {
-    return mine(`Couldn't switch your Buddy: ${clean(command.error ?? '') || 'it failed'}. It is still on ${current(state, buddy, now)}.`,
-      buddy.gridModel ? servers(state, buddy.gridModel, now).map(s => s.machine) : [])
+    return mine(`Couldn't switch your Buddy: ${clean(command.error ?? '') || 'it failed'}. It is still on ${current(state, buddy, now)}.`)
   }
   delete buddy.gridModelUnservedSince
   // Its machine moved its thread sessions with it (cli superTabs/buddyModel.ts): what they run on is recorded the same way, so
@@ -137,7 +146,6 @@ export function buddyModelResult(state: SuperTabState, actor: Actor,
   const name = request.name ?? request.gridModel
   buddy.gridModelName = name
   const found = servers(state, request.gridModel, now)
-  const machines = found.filter(s => !s.api).map(s => s.machine)
   let text: string
   if (command.fresh) {
     const window = request.contextWindow ? ` (${windowWords(request.contextWindow)})` : ''
@@ -161,7 +169,7 @@ export function buddyModelResult(state: SuperTabState, actor: Actor,
   }
   // The Buddy moved; a thread session that could not is named, so its owner knows where that thread's answers come from.
   const stayed = clean(command.error ?? '')
-  return [...mine(stayed ? `${text} ${stayed}.` : text, machines), ...theirs]
+  return [...mine(stayed ? `${text} ${stayed}.` : text), ...theirs]
 }
 
 /** Requests nobody answered within their lease, dropped, each with the line its owner reads. */
@@ -172,7 +180,7 @@ export function expiredModelRequests(state: SuperTabState, now: number): Array<{
     if (!request || !buddy.buddyOf || now < Date.parse(request.at) + BUDDY_MODEL_LEASE_MS) continue
     delete buddy.modelRequest
     out.push({ buddy, requestId: request.id, conversationId: swarmBuddyChatId({ id: buddy.buddyOf.personId, generation: buddy.buddyOf.generation }),
-      machines: buddy.gridModel ? servers(state, buddy.gridModel, now).map(s => s.machine) : [],
+      machines: hiddenMachines(state, buddy, request, now),
       text: `Couldn't switch your Buddy: its computer didn't answer. It is still on ${current(state, buddy, now)}.` })
   }
   return out
