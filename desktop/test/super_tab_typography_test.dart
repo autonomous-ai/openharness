@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/message_row.dart';
+import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/theme/app_theme.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/widgets/markdown_style.dart';
 
 import 'super_tab_mentions_test.dart' show showView;
 import 'support/super_tab_fixture.dart';
+import 'support/super_tab_phone.dart';
 
 /// Task #2312 (Huy, 2026-11-03): the Swarm's text at Slack desktop's sizes, weights and line heights, in the system font.
 
@@ -130,5 +132,43 @@ void main() {
     );
     expect(field.style.fontSize, 15);
     expect(lineOf(field.style), closeTo(22, 0.01));
+  });
+
+  testWidgets('sidebar items read at 15 px on rows 28 px apart', (
+    tester,
+  ) async {
+    await showView(tester, ConversationServer());
+    final side = find.byType(ProjectSidebar);
+    final project = find.byKey(const ValueKey('super-group-lead'));
+    final name = tester.widget<Text>(
+      find.descendant(of: project, matching: find.text('Pilot')),
+    );
+    expect(name.style!.fontSize, 15);
+    expect(lineOf(name.style!), closeTo(22, 0.01));
+    // A 26 px row and its 2 px gap: Slack's 28 px pitch.
+    expect(tester.getSize(project).height, 26);
+    final activity = tester.widget<Text>(
+      find.descendant(of: side, matching: find.text('Activity')),
+    );
+    expect(activity.style!.fontSize, 15);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('super-activity'))).height,
+      26,
+    );
+    final heading = tester.widget<Text>(
+      find.descendant(of: side, matching: find.text('Projects')),
+    );
+    expect(heading.style!.fontSize, 15);
+  });
+
+  testWidgets('a phone keeps the app\'s sizes, which its finger rows were '
+      'measured on', (tester) async {
+    final (_, controller) = await mountPhoneSuperTab(
+      tester,
+      const Size(390, 844),
+      seed: (server) => server.append('Shipped the search field'),
+    );
+    expect(styleOf(tester, 'Shipped the search field')!.fontSize, 14);
+    await unmountPhoneSuperTab(tester, controller);
   });
 }
