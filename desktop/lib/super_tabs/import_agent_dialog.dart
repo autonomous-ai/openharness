@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../core/home_dir.dart';
 import '../core/relative_time.dart';
+import '../measurement/product_measurement.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
@@ -78,6 +79,25 @@ class _ImportAgentDialogState extends State<_ImportAgentDialog> {
   /// The files shown whole.
   final _open = <ImportFile>{};
 
+  /// The import counted while its preview shows (ENGINEERING.md 8): ended ok
+  /// by Import, failed when left after a failed step, cancelled otherwise.
+  void Function(ProductOutcome)? _counted;
+
+  void _end(ProductOutcome outcome) {
+    _counted?.call(outcome);
+    _counted = null;
+  }
+
+  @override
+  void dispose() {
+    _end(
+      _failure != null && _import != null
+          ? ProductOutcome.failed
+          : ProductOutcome.cancelled,
+    );
+    super.dispose();
+  }
+
   Future<void> _choose(ImportableAgent agent) async {
     if (_busy) return;
     setState(() {
@@ -87,7 +107,9 @@ class _ImportAgentDialogState extends State<_ImportAgentDialog> {
     });
     try {
       final handoff = await prepareImportHandoff(app, agent);
-      if (mounted) setState(() => _handoff = handoff);
+      if (!mounted) return;
+      _counted = app.productMeasurement.begin(ProductFlow.agentImport);
+      setState(() => _handoff = handoff);
     } on ImportFailure catch (failure) {
       if (mounted) setState(() => _failure = failure);
     } finally {
@@ -96,6 +118,7 @@ class _ImportAgentDialogState extends State<_ImportAgentDialog> {
   }
 
   void _back() => setState(() {
+    _end(ProductOutcome.cancelled);
     _agent = null;
     _handoff = null;
     _failure = null;
@@ -118,6 +141,7 @@ class _ImportAgentDialogState extends State<_ImportAgentDialog> {
         _handoff!,
         progress: import,
       );
+      _end(ProductOutcome.ok);
       if (mounted) Navigator.pop(context);
     } on ImportFailure catch (failure) {
       if (mounted) setState(() => _failure = failure);
