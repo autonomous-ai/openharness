@@ -672,6 +672,27 @@ describe('an Engineer waiting on its own steps', () => {
     expect(task()).toMatchObject({ status: 'lost' })
   })
 
+  // Review of #2744 (Wren2): a Reviewer stays working through the fix round its verdict asked for, waiting on the Engineer's
+  // new revision; counting that step held the two on each other, so a hung Engineer was never found.
+  for (const via of ['a post', 'a failed check'] as const) {
+    it(`gets its 30 minutes from a verdict asking for changes by ${via}, while its Reviewer waits on it`, () => {
+      const { f, id, rev, reviewFor, task } = reviewing()
+      reviewFor(8)
+      if (via === 'a post') {
+        f.run({ type: 'message.send', conversationId: id, text: 'Ready to merge: With fixes. One Important.', replyTo: null, recipientIds: [f.dev] } as Command, f.as(rev))
+      } else {
+        f.run({ type: 'work.check', conversationId: f.task, assignmentId: task().id, checkId: f.group(f.task).checks[0]!.id, passed: false,
+          evidence: 'One Important at x.ts:1' } as Command, f.as(rev))
+      }
+      f.tick(QUIET_RUNNING_MS - MIN)
+      sweepLiveness(f.state, f.now)
+      expect(task()).toMatchObject({ status: 'working' })
+      f.tick(2 * MIN)
+      sweepLiveness(f.state, f.now)
+      expect(task()).toMatchObject({ status: 'lost' })
+    })
+  }
+
   it('a step in Ready waits on its task owner and never wakes the PM as a stalled review', () => {
     const { f, id, stepStatus } = reviewing()
     stepStatus('review')
