@@ -124,8 +124,10 @@ function buddyOf(agents: Json[], chat: Json, me: string | undefined, local: (a: 
 }
 
 /**
- * One Lead per project of the Swarm, most urgent first with ties in project order; the 12 most urgent are kept, and each
- * carries its project's index as `order` (gaps where a project has no Lead or was cut). `live` says whether this machine's core has a
+ * One Lead per project of the Swarm, most urgent first with ties in the app's project order; the 12 most urgent are kept, and
+ * each carries its project's place in that order as `order` (gaps where a project has no Lead or was cut), which a dial swipes
+ * by. The app's order is by name, case-insensitively A to Z (desktop super_tabs/project_sidebar.dart: the sidebar and
+ * superTabSidebarOrder), ties in server order: the two must match. `live` says whether this machine's core has a
  * harness and whether it is in a turn (null: not here); `me` is the signed-in person's id, so a Lead on someone else's
  * machine names that owner (people[] has an email, which is the name a Swarm shows a person by).
  */
@@ -140,7 +142,12 @@ export function leadsOf(state: Json, machineId: string, live: (harnessId: string
     : conversations.find(c => (Array.isArray(c.agentIds) && c.agentIds.includes(a.id)) || c.leadId === a.id)?.projectId ?? 'lead'
   const turnHere = (a: Json) => a.machineId === machineId && typeof a.harnessId === 'string' && a.harnessId !== '' ? live(a.harnessId) : null
   const leads: SwarmLead[] = []
-  for (const [order, project] of projects.entries()) {
+  // Compared by code unit, as Dart's String.compareTo; Array.sort is stable, so a tie keeps server order.
+  const named = (p: Json) => String(p.name ?? '').toLowerCase()
+  const places = new Map(projects.map((p, i) => ({ p, i })).sort((a, b) => named(a.p) < named(b.p) ? -1 : named(a.p) > named(b.p) ? 1 : a.i - b.i)
+    .map(({ p }, place) => [p, place]))
+  for (const project of projects) {
+    const order = places.get(project)!
     const lead = conversations.find(c => c.id === project.leadConversationId)
     const agent = lead && agents.find(a => a.id === lead.leadId)
     if (!agent) continue
@@ -178,8 +185,8 @@ export function leadsOf(state: Json, machineId: string, live: (harnessId: string
       ...(sideChat ? { sideChat } : {}), ...(buddies ? { buddies: true as const } : {}), ...(buddy ? { buddy } : {}),
     })
   }
-  // Array.sort is stable: equal urgency keeps the project order.
-  const ordered = leads.map((l, i) => ({ l, i })).sort((a, b) => ORDER[a.l.state] - ORDER[b.l.state] || a.i - b.i).map(x => x.l)
+  // Equal urgency keeps the app's project order.
+  const ordered = [...leads].sort((a, b) => ORDER[a.state] - ORDER[b.state] || a.order - b.order)
   return { count: ordered.length, leads: ordered.slice(0, MAX_LEADS) }
 }
 
