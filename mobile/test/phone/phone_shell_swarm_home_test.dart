@@ -175,6 +175,11 @@ void main() {
 
     await youTo(tester, 'swarm-you-settings');
     expect(find.byType(SettingsPage), findsOneWidget);
+    expect(
+      tester.widget<SettingsPage>(find.byType(SettingsPage)).swarm,
+      isTrue,
+      reason: "drawn as Swarm's pages are",
+    );
 
     await tester.binding.handlePopRoute();
     await frames(tester);
@@ -244,6 +249,11 @@ void main() {
     // The terminal's Settings (its menu, Find), as the person reaches it.
     openPhoneSettings(tester.element(find.byType(AgentHome)), app);
     await frames(tester);
+    expect(
+      tester.widget<SettingsPage>(find.byType(SettingsPage)).swarm,
+      isFalse,
+      reason: "the terminal's Settings keeps the phone's own look",
+    );
     await tapSwarmSwitch(tester);
     await tester.tap(find.text('Turn on Swarm'));
     await frames(tester);

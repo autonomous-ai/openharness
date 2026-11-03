@@ -370,7 +370,7 @@ export const accountOf = (agent: Pick<Agent, 'machineId' | 'machineOwnerId'>, on
 
 /** Notices the server writes in its own words under an agent's name (security reviews of #2570): they quote no agent, task
  *  titles and names aside. */
-const SERVER_WORDS: ReadonlySet<unknown> = new Set(['work-stalled', 'work-resumed', 'idle', 'review-capacity', 'overlap', 'pm-switch-notice'])
+const SERVER_WORDS: ReadonlySet<unknown> = new Set(['work-stalled', 'work-resumed', 'idle', 'review-capacity', 'overlap', 'pm-switch-notice', 'others-work-notice'])
 /** Whose words a row carries, for the mark of another account's (audit M3): its author's (a post, a status row, a brief, a
  *  route's reason); a lost task's notice, its worker's last result; none, a notice in the server's own words. A review's
  *  failed findings name no reviewer: they count as unknown, which is marked. */
@@ -476,7 +476,12 @@ export function deleteProject(state: SuperTabState, actor: Actor, projectId: str
   // A person's one Buddy chat belongs to no project and stays; that project's sessions in it go with their agents.
   const groups = state.conversations.filter(c => !isLeads(c) && !isSwarmBuddyChat(c) && groupProject(state, c).id === project.id)
   const groupIds = new Set(groups.map(c => c.id))
+  // A queued start in an archived conversation can never be dispatched (commands.ts open() refuses it), so it no longer
+  // blocks the delete; it goes with the project's other starts below. On 2026-11-03 one queued two days earlier kept an
+  // owner from deleting a cleaned-up project, and no command could settle it.
+  const archived = new Set(groups.filter(c => c.archived).map(c => c.id))
   if (state.starts?.some(s => groupIds.has(s.request.conversationId) && !s.error &&
+    !(!s.dispatched && !s.harnessId && archived.has(s.request.conversationId)) &&
     (!s.harnessId || s.poolGeneration && !s.poolSettled))) {
     fail('STARTS_PENDING', 'Resolve this project’s pending agent starts before deleting it.')
   }

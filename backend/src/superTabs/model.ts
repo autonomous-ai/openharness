@@ -601,6 +601,8 @@ export const NOTICE_READERS = {
   switch: 'people',
   // The machine owner's one line when another person moves a PM onto one of their non-default accounts (commands.ts agent.switchResult).
   'pm-switch-notice': 'people',
+  // The machine owner's line, once a week, when someone else's work starts on their machine (othersWork.ts).
+  'others-work-notice': 'people',
   'start-timeout': 'people', 'terminal-alert': 'people', 'terminal-input': 'people',
 } as const satisfies Record<string, 'people' | 'recipients' | 'agent'>
 const readersOf = (kind: unknown): 'people' | 'recipients' | 'agent' =>
@@ -920,6 +922,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
       if (pool.observation.harnessProgress) pool.observation.harnessProgress = Object.fromEntries(Object.entries(pool.observation.harnessProgress).filter(([id]) => harnesses.has(id)))
       // Each attempt's tokens are read through the cost summary (costs/read.ts), never from the machine's raw counts.
       delete pool.observation.harnessTokens
+      // What the server refused this machine's host is for the sweep alone (liveness.ts failRefusedStarts), never a reader.
+      delete pool.observation.refusedStarts
       if (pool.observation.stoppedReservations) pool.observation.stoppedReservations = pool.observation.stoppedReservations.filter(r => harnesses.has(r.harnessId))
       if (pool.observation.preparingStartIds) pool.observation.preparingStartIds = pool.observation.preparingStartIds.filter(id => visible.starts?.some(s => s.id === id))
     }

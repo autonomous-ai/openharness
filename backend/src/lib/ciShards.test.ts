@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { durationShards, readTimingHints } from './ciShards.js'
+import { durationShards, readTimingHints } from './ciShards.test-support.js'
 
 const entry = (key: string, durationMs: number) => ({ key, durationMs, value: key })
 

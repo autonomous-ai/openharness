@@ -9,6 +9,7 @@ import 'package:harness/super_tabs/view.dart';
 import 'support/capture.dart';
 import 'support/humans_fixture.dart';
 import 'support/super_tab_fixture.dart';
+import 'support/super_tab_members.dart';
 
 /// Set to a folder to write the Humans leaderboard's screenshots there: the
 /// real right pane over the in-memory Swarm, never a backend or the live app.
@@ -62,6 +63,58 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('super-person-peer')));
       await tester.pumpAndSettle();
       await captureWindow(tester, shots, 'person-$name');
+      await tester.pumpWidget(const SizedBox());
+    }
+  }, skip: shots == null);
+
+  testWidgets('Brought screenshots for review (contributor view, #2444)', (
+    tester,
+  ) async {
+    ConversationServer brought() {
+      final server = humansSwarm();
+      final ken = (server.leaderboard!['people'] as List)
+          .cast<Map>()
+          .firstWhere((p) => p['personId'] == 'owner');
+      final resets = DateTime.now()
+          .add(const Duration(days: 3, hours: 2))
+          .millisecondsSinceEpoch;
+      (ken['details'] as Map)['brought'] = [
+        {
+          'machineId': 'studio',
+          'machineName': 'Mac Studio',
+          'shipped': 5,
+          'busyHours': 31,
+          'subscriptions': [
+            {'engine': 'claude', 'usedPercent': 38, 'resetsAt': resets},
+            {'engine': 'codex', 'usedPercent': null, 'resetsAt': null},
+          ],
+        },
+        {
+          'machineId': 'mbp',
+          'machineName': 'MacBook Pro',
+          'shipped': 0,
+          'busyHours': 0,
+          'subscriptions': [
+            {
+              'engine': 'claude',
+              'usedPercent': 71,
+              'resetsAt': resets + 3 * 86400000,
+            },
+          ],
+        },
+      ];
+      return server;
+    }
+
+    for (final (brightness, name) in [
+      (Brightness.light, 'light'),
+      (Brightness.dark, 'dark'),
+    ]) {
+      await showHumans(tester, brightness, swarm: brought);
+      await openSuperTabMembers(tester);
+      await tester.tap(find.byKey(const ValueKey('super-person-owner')));
+      await tester.pumpAndSettle();
+      await captureWindow(tester, shots, 'brought-$name');
       await tester.pumpWidget(const SizedBox());
     }
   }, skip: shots == null);
