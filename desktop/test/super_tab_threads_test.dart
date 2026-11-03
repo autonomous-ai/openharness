@@ -4,7 +4,6 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
@@ -388,11 +387,8 @@ void main() {
       expect(left.name, 'gone');
       expect(left.picture, isNull);
       expect(left.status, isNull);
-      // Its size is unchanged.
-      expect(
-        tester.getSize(find.byWidget(person)).width,
-        grid.AppDesktop.iconSize,
-      );
+      // Faces about 24 points, as Slack's (Huy, 2026-11-03, #2315).
+      expect(tester.getSize(find.byWidget(person)).width, 24);
     });
 
     testWidgets('a person with a preset shows it', (tester) async {
@@ -986,37 +982,40 @@ void main() {
         )
         .opacity;
 
-    testWidgets('hovering anywhere on it highlights it and offers View thread', (
-      tester,
-    ) async {
-      await pump(tester);
-      final resting = tester.getSize(bar);
-      expect(find.text('Last reply 2 min ago'), findsOneWidget);
-      expect(chevronOpacity(tester), 0);
-      expect(frame(tester).color, isNot(grid.AppSurface.hoverFill));
+    testWidgets(
+      'hovering anywhere on it highlights it and offers View thread',
+      (tester) async {
+        await pump(tester);
+        final resting = tester.getSize(bar);
+        expect(find.text('Last reply 2 min ago'), findsOneWidget);
+        expect(chevronOpacity(tester), 0);
+        expect(frame(tester).color, isNot(grid.AppSurface.hoverFill));
 
-      final mouse = await tester.createGesture(
-        kind: PointerDeviceKind.mouse,
-        pointer: 1,
-      );
-      await mouse.addPointer(location: Offset.zero);
-      addTearDown(mouse.removePointer);
-      // Its right end, past the words: still the bar.
-      await mouse.moveTo(tester.getRect(bar).centerRight - const Offset(3, 0));
-      await tester.pumpAndSettle();
+        final mouse = await tester.createGesture(
+          kind: PointerDeviceKind.mouse,
+          pointer: 1,
+        );
+        await mouse.addPointer(location: Offset.zero);
+        addTearDown(mouse.removePointer);
+        // Its right end, past the words: still the bar.
+        await mouse.moveTo(
+          tester.getRect(bar).centerRight - const Offset(3, 0),
+        );
+        await tester.pumpAndSettle();
 
-      expect(find.text('View thread'), findsOneWidget);
-      expect(find.text('Last reply 2 min ago'), findsNothing);
-      expect(chevronOpacity(tester), 1);
-      expect(frame(tester).color, grid.AppSurface.hoverFill);
-      expect((frame(tester).border! as Border).top.color, DesktopChrome.rim);
-      expect(
-        RendererBinding.instance.mouseTracker.debugDeviceActiveCursor(1),
-        SystemMouseCursors.click,
-      );
-      // Hover moves nothing.
-      expect(tester.getSize(bar), resting);
-    });
+        expect(find.text('View thread'), findsOneWidget);
+        expect(find.text('Last reply 2 min ago'), findsNothing);
+        expect(chevronOpacity(tester), 1);
+        expect(frame(tester).color, grid.AppSurface.hoverFill);
+        expect((frame(tester).border! as Border).top.color, DesktopChrome.rim);
+        expect(
+          RendererBinding.instance.mouseTracker.debugDeviceActiveCursor(1),
+          SystemMouseCursors.click,
+        );
+        // Hover moves nothing.
+        expect(tester.getSize(bar), resting);
+      },
+    );
 
     testWidgets('one click anywhere on it opens the thread', (tester) async {
       final opened = await pump(tester);
