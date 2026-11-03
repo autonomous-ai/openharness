@@ -23,9 +23,10 @@ import { startTurnCredentialRefresh } from './lib/turnCredentials.js'
 import { closeBus, pub, redisCount, redisSsoProfileStore, redisSwarmStamps } from './lib/bus.js'
 import { prisma } from './lib/prisma.js'
 import { backendReadinessChecks, createReadiness, drainBeforeClosing, processDrain } from './lib/readiness.js'
-import { configureSwarmStamps } from './superTabs/cache.js'
+import { configureSwarmStamps, swarmReadCache } from './superTabs/cache.js'
 import { startCacheStats } from './superTabs/cacheStats.js'
 import { startDeliveryCalls } from './lib/deliveryCalls.js'
+import { startMemoryStats } from './lib/memoryStats.js'
 import { readDelta } from './superTabs/cachedReads.js'
 import { watchGroupIndexes } from './superTabs/parts/indexed.js'
 import { startMessageReadStats } from './superTabs/messageReadStats.js'
@@ -156,6 +157,8 @@ async function start(): Promise<void> {
   const stopDeliveryCalls = startDeliveryCalls()
   // Every minute: how the Swarm read cache served reads (hit, patched, loaded in full and why) and what its checks found.
   const stopCacheStats = startCacheStats()
+  // Every minute: the process's memory and what the read cache holds of it (lib/memoryStats.ts; the HPA scales on memory).
+  const stopMemoryStats = startMemoryStats({ cache: () => swarmReadCache()?.size ?? null })
   const stopRouteLatency = startRouteLatency(registerRouteLatency(app))
   // Every minute: who reads messages how, with the rows each page decoded and showed (superTabs/messageReadStats.ts).
   const stopMessageReadStats = startMessageReadStats()
@@ -248,6 +251,7 @@ async function start(): Promise<void> {
       stopRetryStats()
       stopDeliveryCalls()
       stopCacheStats()
+      stopMemoryStats()
       stopRouteLatency()
       stopMachineReportLog()
       stopMessageReadStats()
