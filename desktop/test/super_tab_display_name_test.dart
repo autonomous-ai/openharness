@@ -50,7 +50,11 @@ SuperTabMessage _from(String id, String email) => SuperTabMessage.fromJson({
 void main() {
   group('the model', () {
     final swarm = _swarm([
-      _person('relay', 'wkpnjjhbnm@privaterelay.appleid.com', name: 'Minh Nguyen'),
+      _person(
+        'relay',
+        'wkpnjjhbnm@privaterelay.appleid.com',
+        name: 'Minh Nguyen',
+      ),
       _person('dee', 'dee@autonomous.ai'),
     ]);
     final minh = swarm.people.first, dee = swarm.people.last;
@@ -65,9 +69,7 @@ void main() {
 
     test('signs a person’s message with the name they set', () {
       expect(
-        swarm.authorName(
-          _from('relay', 'wkpnjjhbnm@privaterelay.appleid.com'),
-        ),
+        swarm.authorName(_from('relay', 'wkpnjjhbnm@privaterelay.appleid.com')),
         'Minh Nguyen',
       );
       expect(swarm.authorName(_from('dee', 'dee@autonomous.ai')), 'dee');
