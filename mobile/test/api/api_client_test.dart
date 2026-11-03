@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -50,6 +51,7 @@ class _Backend implements HttpClientAdapter {
       _Headers(options.headers),
       body,
       host: options.uri.host,
+      followRedirects: options.followRedirects,
     );
     final index = requests.length;
     requests.add(request);
@@ -76,8 +78,10 @@ class _Request {
     this.headers,
     this.body, {
     this.host = '',
+    this.followRedirects = true,
   });
   final String method, path, host;
+  final bool followRedirects;
   final Map<String, String> query;
   final _Headers headers;
   final List<int> body;
@@ -223,6 +227,191 @@ void main() {
         throwsA(failure('BACKEND_UNAVAILABLE', 200)),
       );
     });
+  });
+
+  group('a Swarm write', () {
+    const path = '/api/super-tabs/tab-1/commands';
+    const body = {
+      'operationId': 'one-command',
+      'command': {
+        'type': 'message.send',
+        'conversationId': 'chat-1',
+        'text': 'private phone message',
+      },
+    };
+
+    test(
+      'posts JSON as the phone with its environment and returns the result',
+      () async {
+        backend.answer = (_, _) => (
+          status: 200,
+          body: ok({
+            'result': {'messageId': 'm1'},
+          }),
+        );
+
+        expect(
+          await client(_Tokens(['phone-token'])).swarmWrite(path, body: body),
+          {
+            'result': {'messageId': 'm1'},
+          },
+        );
+
+        final request = backend.requests.single;
+        expect(request.method, 'POST');
+        expect(request.path, path);
+        expect(request.host, 'api.invalid');
+        expect(request.headers.value('authorization'), 'Bearer phone-token');
+        expect(request.headers.value('x-autonomous-env'), 'stag');
+        expect(jsonDecode(utf8.decode(request.body)), body);
+        expect(request.followRedirects, isFalse);
+      },
+    );
+
+    test(
+      'refreshing a bearer retries the same decision and operation ID once',
+      () async {
+        final tokens = _Tokens(['expired-phone-token', 'fresh-phone-token']);
+        backend.answer = (_, i) => i == 0
+            ? (
+                status: 401,
+                body: {
+                  'success': false,
+                  'error': {'code': 'UNAUTHORIZED'},
+                },
+              )
+            : (
+                status: 200,
+                body: ok({
+                  'result': {'answered': true},
+                }),
+              );
+        const answer = {
+          'operationId': 'one-answer',
+          'command': {
+            'type': 'decision.answer',
+            'decisionId': 'd1',
+            'choice': 1,
+          },
+        };
+
+        expect(await client(tokens).swarmWrite(path, body: answer), {
+          'result': {'answered': true},
+        });
+
+        expect(backend.requests, hasLength(2));
+        expect(backend.requests.map((r) => jsonDecode(utf8.decode(r.body))), [
+          answer,
+          answer,
+        ]);
+        expect(backend.requests.map((r) => r.headers.value('authorization')), [
+          'Bearer expired-phone-token',
+          'Bearer fresh-phone-token',
+        ]);
+        expect(
+          tokens.asks.where((a) => a.force).single.failedToken,
+          'expired-phone-token',
+        );
+      },
+    );
+
+    test('with no credentials never writes to the backend', () async {
+      final api = ApiClient(
+        config: const AppConfig(apiBaseUrl: 'https://api.invalid'),
+        session: AuthSession(storage: MemoryKeyValueStore()),
+        httpClientAdapter: backend,
+      );
+      await expectLater(api.swarmWrite(path, body: body), throwsStateError);
+      expect(backend.requests, isEmpty);
+    });
+
+    for (final status in [401, 403, 404, 426, 429, 503]) {
+      test('preserves a backend refusal with status $status', () async {
+        backend.answer = (_, _) => (
+          status: status,
+          body: {
+            'success': false,
+            'error': {'code': 'REFUSED', 'message': 'Cannot write here.'},
+          },
+        );
+        await expectLater(
+          client(_Tokens(['token'])).swarmWrite(path, body: body),
+          throwsA(
+            isA<SuperTabFailure>()
+                .having((f) => f.statusCode, 'status', status)
+                .having(
+                  (f) => f.code,
+                  'code',
+                  status == 426 ? 'UPDATE_REQUIRED' : 'REFUSED',
+                ),
+          ),
+        );
+      });
+    }
+
+    test('a redirect is a refusal with no command body forwarded', () async {
+      backend.answer = (_, _) => (status: 307, body: '<html>Redirect</html>');
+      await expectLater(
+        client(_Tokens(['token'])).swarmWrite(path, body: body),
+        throwsA(
+          isA<SuperTabFailure>().having((f) => f.statusCode, 'status', 307),
+        ),
+      );
+      expect(backend.requests.single.followRedirects, isFalse);
+    });
+
+    test('cancelling an in-flight write prevents a later 401 replay', () async {
+      final tokens = _Tokens(['old-account', 'new-account']);
+      final reached = Completer<void>();
+      final release = Completer<void>();
+      backend.hold = (_, _) async {
+        reached.complete();
+        await release.future;
+      };
+      backend.answer = (_, _) => (status: 401, body: {'success': false});
+      final cancel = CancelToken();
+      final writing = client(tokens)
+          .swarmWrite(path, body: body, cancel: cancel);
+      final stopped = expectLater(writing, throwsA(isA<DioException>()));
+      await reached.future;
+      cancel.cancel('account changed');
+      release.complete();
+      await stopped;
+      await Future<void>.delayed(Duration.zero);
+      expect(backend.requests, hasLength(1));
+      expect(tokens.asks.where((a) => a.force), isEmpty);
+    });
+
+    for (final path in [
+      'https://elsewhere.invalid/api/super-tabs/t/commands',
+      '//elsewhere.invalid/api/super-tabs/t/commands',
+      '/api/super-tabs/../auth/logout',
+      '/api/super-tabs/%2e%2e/auth/logout',
+      '/api/machines',
+    ]) {
+      test('rejects an unsafe Swarm write path before using credentials: $path', () async {
+        final tokens = _Tokens(['token']);
+        await expectLater(client(tokens).swarmWrite(path, body: body), throwsArgumentError);
+        expect(tokens.asks, isEmpty);
+        expect(backend.requests, isEmpty);
+      });
+    }
+
+    test(
+      'logs contain neither the bearer nor the private command text',
+      () async {
+        final before = appLog;
+        final log = _Log();
+        appLog = log;
+        addTearDown(() => appLog = before);
+
+        await client(_Tokens(['secret-phone-bearer']))
+            .swarmWrite(path, body: body);
+
+        expect(log.lines.join('\n'), isNot(contains('secret-phone-bearer')));
+        expect(log.lines.join('\n'), isNot(contains('private phone message')));
+      },
+    );
   });
 
   group('signing', () {

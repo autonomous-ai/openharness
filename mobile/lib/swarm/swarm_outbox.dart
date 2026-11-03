@@ -142,8 +142,9 @@ class SwarmOutbox {
     this.timeout = defaultTimeout,
   });
 
-  /// A send through the account's computers can take 30 seconds a computer
-  /// (`AppNotifier.swarmRequest`): past this one, the post says Not sent and
+  /// A send goes straight to the backend; a fallback through the account's
+  /// computers can take 30 seconds a computer (`AppNotifier.swarmRequest`).
+  /// Past this timeout, the post says Not sent and
   /// may be sent again, while its first answer may still land.
   static const defaultTimeout = Duration(seconds: 40);
 
