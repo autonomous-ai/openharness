@@ -10,7 +10,6 @@ import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 
-import 'identity.dart';
 import 'model.dart';
 import 'swarm_activity.dart';
 import 'swarm_activity_feed.dart';
@@ -943,7 +942,7 @@ class SwarmActivityRow extends StatelessWidget {
 /// Who an Activity row is from, by an id its avatar is coloured by and a
 /// name, read in the row's own Swarm ([reader]) and never another's: the
 /// asker, the tagging Lead, the worker, a thread's last writer, or who
-/// reacted. A person is named by their email's name, never the email.
+/// reacted. A person is named by their username, never the email.
 ({String id, String name}) swarmActivityWho(
   SwarmActivityItem item,
   SwarmReader? reader,
@@ -954,10 +953,8 @@ class SwarmActivityRow extends StatelessWidget {
     if (kind == 'agent') {
       return snapshot?.agentName(id, fallback: fallback) ?? fallback;
     }
-    final email = snapshot?.people.where((p) => p.id == id).firstOrNull?.email;
-    return email == null || email.isEmpty
-        ? 'Someone'
-        : superTabPersonName(email);
+    final person = snapshot?.people.where((p) => p.id == id).firstOrNull;
+    return person == null || person.email.isEmpty ? 'Someone' : person.username;
   }
 
   return switch (item) {
