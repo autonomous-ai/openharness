@@ -91,11 +91,31 @@ export function modelFailing(text: string): boolean {
   return text.split('\n').slice(-LIMIT_NEAR_LINES).some(line => MODEL_LINE.test(line))
 }
 
+/** Claude Code's tool call, whose output it draws under it: "⏺ Bash(…)", "⏺ Read(…)", "⏺ mcp__github__get_pr(…)". */
+const TOOL_CALL = /^⏺\s+[\w.-]+\(/
+
+/** Whether line [at] of [lines] is where an engine draws its own notice, not text the agent printed (Ken, 11-03: River
+ *  was listed limited while working, as it had just printed another agent's screen showing Codex's limit line). An engine
+ *  draws its notice at the margin: Claude Code's status line and the border of its limit dialog, Codex's "■" line; or, in
+ *  Claude Code, as the "⎿" line under its own reply ("⏺ All green." then "⎿  You've hit your session limit"). What a tool
+ *  printed is under the tool's call ("⏺ Bash(…)" then "⎿  …"), indented below that, or under Codex's "• Ran" as "└". */
+function ownNotice(lines: string[], at: number): boolean {
+  const line = lines[at]!
+  if (/^\S/.test(line)) return true
+  if (!/^\s*⎿\s/.test(line)) return false
+  for (let above = at - 1; above >= 0; above--) {
+    const before = lines[above]!
+    if (/^\S/.test(before)) return !TOOL_CALL.test(before)
+  }
+  return true
+}
+
 /** A usage limit on screen, with when it resets if the screen says; null for none. */
 export function limitOf(text: string, now: number): { resetAt?: string } | null {
   const lines = text.split('\n')
-  const tail = lines.slice(-LIMIT_NEAR_LINES)
-  const at = tail.findIndex(line => LIMIT_LINE.test(line))
+  const from = Math.max(0, lines.length - LIMIT_NEAR_LINES)
+  const tail = lines.slice(from)
+  const at = tail.findIndex((line, i) => LIMIT_LINE.test(line) && ownNotice(lines, from + i))
   if (at < 0) return null
   const said = tail.slice(at, at + 3).join(' ')
   const reset = resetOf(said, now)
