@@ -15,6 +15,7 @@ import * as parts from '../src/superTabs/parts/index.js'
 import { stableId, type SuperTabState } from '../src/superTabs/model.js'
 import { roleVersion } from '../src/superTabs/projects.js'
 import { assignmentRows, poolRows, rosterRows } from './hostRows.test-support.js'
+import { logger } from '../src/utils/logger.js'
 
 // A team session (docs/plans/2026-10-24-swarm-team-account.md, Task 1) is the owner's account signed in on a second
 // macOS user of the owner's Mac. In a Swarm it may host its own machine and speak as the agents running there, and
@@ -43,6 +44,9 @@ const TEAM_COMPUTER = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 const owner: AuthUser = { sub: '200000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
 const person: AuthUser = { sub: '200000000000000000000002', email: 'person@example.com', autonomousEnv: 'prod', role: 'user' }
 const team: AuthUser = { ...person, harnessSessionId: 'team-session', harnessSessionKind: 'team', harnessComputerId: TEAM_COMPUTER }
+/** The owner's own Harness Team account, on another Mac: a second Team machine in the same Swarm. */
+const OWNER_TEAM_COMPUTER = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+const ownerTeam: AuthUser = { ...owner, harnessSessionId: 'owner-team-session', harnessSessionKind: 'team', harnessComputerId: OWNER_TEAM_COMPUTER }
 const config = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 const requirements = { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false }
 const run = (tab: string, command: Command, user: AuthUser = owner, asAgentId?: string) =>
@@ -102,6 +106,7 @@ beforeAll(async () => {
   await machine('personal-mac', person.sub, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'computer')
   await machine('personal-laptop', person.sub, 'dddddddddddddddddddddddddddddddd', 'computer')
   await machine('team-mac', person.sub, TEAM_COMPUTER, 'team')
+  await machine('owner-team-mac', owner.sub, OWNER_TEAM_COMPUTER, 'team')
 })
 afterAll(async () => {
   await db?.$disconnect()
@@ -290,6 +295,46 @@ describe('a team session speaking in a Swarm', () => {
     await expect(run(f.tab, { type: 'invite.create', email: 'stranger@example.com', role: 'collaborator', conversationId: 'lead' }, team, f.builder))
       .rejects.toMatchObject({ status: 403 })
     expect((await store.read(owner, f.tab)).state.machines!.map(m => m.machineId)).toEqual(['team-mac'])
+  })
+
+  // Tasks #2178 and #2215 (11-02): a Team Engineer could not assign its review step to a Reviewer on another Team machine,
+  // and the PM had to. Assigning or adding an agent that also runs in a Team account crosses no account; typing into its
+  // terminal or reading it still would cross a machine, and anything in the main account stays out of reach.
+  it('assigns and adds an agent in another machine\'s Team account, and still reaches nothing in a main account', async () => {
+    const f = await fixture()
+    await run(f.tab, { type: 'machine.contribute', machineId: 'owner-team-mac', name: 'Mac Studio · Team', cwd: '/team', engines: ['codex'], maxAgents: 4 })
+    const generation = (await poolRows(store, ownerTeam, 'owner-team-mac')).find(p => p.tabId === f.tab)!.machine.generation
+    await store.observeMachine(ownerTeam, f.tab, 'owner-team-mac', reading(generation))
+    await run(f.tab, { type: 'work.assign', conversationId: f.teamGroup, agentId: f.builder })
+    const review = String((await run(f.tab, { type: 'conversation.create', projectId: 'lead', title: 'Review', brief: 'Review it', reviewOf: f.teamGroup,
+      step: 'Review', checks: [] })).result.conversationId)
+    const startId = String((await run(f.tab, { type: 'agent.start', request: { conversationId: review, machineId: 'owner-team-mac', engine: 'codex',
+      name: 'Reviewer', cwd: '/team', worktree: false, requirements } })).result.startId)
+    await hostRun(f.tab, { type: 'agent.startDispatch', startId }, 'owner-team-mac', ownerTeam)
+    const reviewer = String((await hostRun(f.tab, { type: 'agent.started', startId, harnessId: `owner-team-reviewer-${randomUUID()}`, configuration: config },
+      'owner-team-mac', ownerTeam)).result.agentId)
+    await hostRun(f.tab, { type: 'agent.startSettled', startId, warning: null }, 'owner-team-mac', ownerTeam)
+    const refused = vi.spyOn(logger, 'warn')
+    onTestFinished(() => refused.mockRestore())
+
+    // The Engineer in the person's Team account hands its review to the Reviewer in the owner's.
+    await run(f.tab, { type: 'conversation.agent', conversationId: review, agentId: reviewer, present: false, lead: false }, team, f.builder)
+    await run(f.tab, { type: 'conversation.agent', conversationId: review, agentId: reviewer, present: true, lead: false }, team, f.builder)
+    expect((await run(f.tab, { type: 'work.assign', conversationId: review, agentId: reviewer }, team, f.builder)).result.assignmentId).toBeTruthy()
+    expect((await storedState(f.tab)).conversations.find(c => c.id === review)!.assignment).toMatchObject({ agentId: reviewer, status: 'working' })
+    expect(refused).not.toHaveBeenCalledWith('[super-tab] team command refused', expect.anything())
+
+    // The same Reviewer's terminal stays its own machine's; so does the person's main-account agent, for every command.
+    for (const command of [{ type: 'agent.screen', agentId: reviewer }, { type: 'agent.input', agentId: reviewer, text: 'echo hi' },
+      { type: 'agent.release', agentId: reviewer, decision: 'stop' }, { type: 'agent.stopLease', agentId: reviewer, releaseId: 'release-1' },
+      { type: 'work.assign', conversationId: f.personalGroup, agentId: f.personal },
+      { type: 'conversation.agent', conversationId: f.teamGroup, agentId: f.personal, present: true, lead: false }] as Command[]) {
+      await expect(run(f.tab, command, team, f.builder), command.type).rejects.toMatchObject(LIMITED)
+    }
+    expect(refused).toHaveBeenCalledWith('[super-tab] team command refused', expect.objectContaining({ tabId: f.tab, command: 'agent.input',
+      teamMachineId: 'team-mac', targetMachineId: 'owner-team-mac', targetTeamAccount: true }))
+    expect(refused).toHaveBeenCalledWith('[super-tab] team command refused', expect.objectContaining({ command: 'work.assign',
+      targetMachineId: 'personal-mac', targetTeamAccount: false }))
   })
 
   it('confirms stops, reads receipts and records native terminals only for its own machine', async () => {
@@ -993,12 +1038,6 @@ describe('a project\'s Product Manager on a teammate\'s Team machine', () => {
 // agents, which would act on it with the owner's rights. The claim says when the writer is an agent of another account, from
 // the Swarm's own records of both agents, so the receiving host can mark it; the message's text plays no part.
 describe('a message from an agent of another account (audit M3)', () => {
-  const OWNER_TEAM_COMPUTER = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
-  const ownerTeam: AuthUser = { ...owner, harnessSessionId: 'owner-team-session', harnessSessionKind: 'team', harnessComputerId: OWNER_TEAM_COMPUTER }
-  beforeAll(async () => {
-    await db.machine.create({ data: { machineId: 'owner-team-mac', userId: owner.sub, computerId: OWNER_TEAM_COMPUTER, sessionKind: 'team',
-      apiKey: 'fixture-owner-team-mac', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
-  })
   /** The fixture, with the owner's own Team machine contributed and an agent of the owner's project started there by its
    *  team session, and a second agent of the owner's on the owner's own machine. All three of the owner's in the task. */
   async function accounts() {

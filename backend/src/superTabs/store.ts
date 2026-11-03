@@ -615,14 +615,27 @@ export class SuperTabStore {
 
   /**
    * What a team session's agent may command beyond the Swarm's own rules for that agent: a machine is the person's to
-   * contribute, pause or remove, and nothing may start, add, move or drive an agent on another machine. Messages and
-   * work reports go to the Swarm as from any agent. An agent that is gone is left to the command's own answer.
+   * contribute, pause or remove, and nothing may start, add, move or drive an agent on another machine. It may assign or
+   * add an agent that runs in a Team account too, on any machine: that crosses no account, and a Team Engineer handing its
+   * review step to a Reviewer on another Team machine had to ask the PM instead (tasks #2178 and #2215, 11-02). Typing into
+   * or reading another machine's terminal stays refused, whatever account it runs in. Messages and work reports go to the
+   * Swarm as from any agent. An agent that is gone is left to the command's own answer.
    */
   private teamCommand(state: SuperTabState, team: string, user: AuthUser, command: Command): void {
-    const refuse = () => fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+    const refuse = (target?: Agent) => {
+      // Refusals were counted only from agents saying so in chat (15 lines in 10 days): the log says which command, and
+      // whether its target was in a Team account, so a workflow the check blocks shows up before people work around it.
+      logger.warn('[super-tab] team command refused', { tabId: state.id, command: command.type, teamMachineId: team,
+        ...target ? { targetMachineId: target.machineId, targetTeamAccount: onTeamAccount(state, target) } : {} })
+      fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+    }
     const onTeam = (agentId: string) => {
       const target = state.agents.find(a => a.id === agentId)
-      if (target && target.machineId !== team) refuse()
+      if (target && target.machineId !== team) refuse(target)
+    }
+    const inTeamAccount = (agentId: string) => {
+      const target = state.agents.find(a => a.id === agentId)
+      if (target && target.machineId !== team && !onTeamAccount(state, target)) refuse(target)
     }
     switch (command.type) {
       case 'machine.contribute': case 'machine.pause': case 'machine.remove': case 'machine.engineResume': return refuse()
@@ -643,7 +656,10 @@ export class SuperTabStore {
         if (start && start.request.machineId !== team) refuse()
         return
       }
-      case 'agent.screen': case 'agent.input': case 'work.assign': case 'conversation.agent':
+      // Team-written code keeps the main account out of these in the command itself (teamWritten.ts, audit H2).
+      case 'work.assign': case 'conversation.agent':
+        return inTeamAccount(command.agentId)
+      case 'agent.screen': case 'agent.input':
       case 'agent.release': case 'agent.stopLease': case 'agent.remove':
         return onTeam(command.agentId)
       case 'agent.sessionClosed': {
