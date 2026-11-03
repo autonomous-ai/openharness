@@ -4792,7 +4792,7 @@ describe('lead.switch', () => {
     expect(s.f.state.conversations.find(c => c.id === 'lead')!.leadId).toBe(s.pm)
     expect(s.agent().switchRequest).toBeUndefined()
     expect(failed.messages).toHaveLength(1)
-    expect(failed.messages[0]!.text).toBe("Couldn't switch the PM: its machine could not prepare or launch it. It is back on Claude.")
+    expect(failed.messages[0]!.text).toBe("Couldn't switch the PM: its machine could not prepare or launch it. It is back on Codex.")
     expect(s.f.run({ type: 'agent.startFailed', startId, error: '/private/path: sign in failed' }, owner).messages).toEqual([])
   })
 

@@ -21,7 +21,7 @@ import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQues
 import { leadOf, TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
 import { changesRequested, engineerAnswered, leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, revisionReady, toldEngineer, waitingForReview } from './liveness.js'
 import { DELETED_SWARM_COMMANDS, isPersonalSwarm, notThere, SWARM_DELETE_GRACE_MS } from './deletion.js'
-import { ABANDONED, askedModel, coordinatorCopy, failureNotice, failureRecipients, MACHINE_REMOVED } from './startFailure.js'
+import { ABANDONED, askedModel, coordinatorCopy, failureNotice, failureRecipients, MACHINE_REMOVED, publicReason } from './startFailure.js'
 import { noteStartFailed, noteStartSucceeded, resumeEngine } from './engineHealth.js'
 import { reviewCapacityNotice } from './reviewCapacity.js'
 import { digestStartsAfter, knownTimeZone } from './digest.js'
@@ -2364,6 +2364,15 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           const chat = conversation(state, start.request.conversationId)
           const entry = (chat.buddySessions ?? []).find(e => e.startId === start.id)
           if (entry) endBuddySession(chat, entry, 'failed', command.error)
+          break
+        }
+        const switchId = start.request.leadFor?.switchId
+        const source = switchId && state.agents.find(a => a.switchRequest?.id === switchId)
+        if (switchId && source) {
+          const home = conversation(state, projectOf(state, start.request.leadFor!.projectId).leadConversationId)
+          delete source.switchRequest
+          const reason = publicReason(command.error)
+          message(home.id, `Couldn't switch the PM: ${reason[0]!.toLowerCase()}${reason.slice(1)} It is back on ${ENGINE_NAMES[source.configuration.engine] ?? 'its engine'}.`, [], null, SYSTEM_ROW)
           break
         }
         // A Product Manager's start says so in its project's conversation (leadStart.ts).
