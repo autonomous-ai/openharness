@@ -9,17 +9,23 @@ import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
+import 'package:harness_mobile/widgets/engine_identity.dart' show EngineMark;
 
 import 'model.dart';
+import 'swarm_attach.dart' show SwarmOutgoingChips;
 import 'swarm_buddy.dart' show swarmCanWrite;
+import 'swarm_choices.dart' show swarmSendsFiles;
+import 'swarm_conversation_page.dart' show SwarmAttachButton, attachSwarmFiles;
 import 'swarm_home_list.dart' show swarmProjectActivity;
 import 'swarm_home_top.dart' show swarmHomeOffers;
 import 'swarm_inbox.dart';
+import 'swarm_outgoing_files.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
+import 'swarm_uploads.dart';
 
 /// New project from the phone (Tony, 10-30): Swarm Home's last Projects row
 /// ([SwarmNewProjectRow]) opens a sheet ([showSwarmNewProjectSheet]) that
@@ -164,7 +170,10 @@ class SwarmLeadMachine {
   /// Its line under its name, in words: why it cannot take the Product
   /// Manager, or the engine it starts it with and its room (Desktop's
   /// `leadMachineDetail`).
-  String get detail {
+  String get detail => detailFor(null);
+
+  /// [detail], naming [chosen] as its engine where it runs it.
+  String detailFor(String? chosen) {
     if (unavailable case final why?) return why;
     if (!online) return 'Offline';
     if (leadEngines.isEmpty) {
@@ -172,7 +181,7 @@ class SwarmLeadMachine {
       return 'Can’t run a Product Manager: '
           '${{for (final engine in swarmLeadEngines) ?engineRefusals[engine]}.join(', ')}';
     }
-    final engine = this.engine!;
+    final engine = chosen != null && runs(chosen) ? chosen : this.engine!;
     return [
       swarmLeadEngineLabel(engine),
       freeAgents <= 0
@@ -232,6 +241,43 @@ Map<String, String> swarmLeadModelListRefusals(Map<String, dynamic>? answer) {
             '${const {'claude': 'Claude', 'codex': 'Codex'}[key]} model',
   };
 }
+
+/// The model a Claude Product Manager runs when its person chose none: its
+/// role's default (Desktop's `kLeadModel`, backend
+/// `BUILT_IN_ROLE_DEFAULTS.lead`).
+const _leadModel = (model: 'opus', label: 'Opus 5.5', effort: 'xhigh');
+
+/// Whether the Swarm's model list, from the tab's routing-policy read
+/// ([answer]), leaves a Claude Product Manager's default model on: that
+/// effort's row when the list has one, else any row of the model at an
+/// effort; a model it does not name, a backend that sends its `catalog`, or
+/// no read, is on (Desktop's `LeadModelList.modelOn`).
+bool swarmLeadModelOn(Map<String, dynamic>? answer) {
+  if (answer == null || answer.containsKey('catalog')) return true;
+  final policy = answer['policy'] is Map ? superTabMap(answer['policy']) : null;
+  final named = <String, bool>{};
+  for (final row in policy?['models'] as List? ?? const []) {
+    if (row case {
+      'engine': 'claude',
+      'model': final String model,
+      'effort': final String effort,
+      'enabled': final bool on,
+    } when model == _leadModel.model) {
+      named[effort] = (named[effort] ?? false) || on;
+    }
+  }
+  return named.isEmpty ||
+      (named[_leadModel.effort] ?? named.values.any((on) => on));
+}
+
+/// The model a new project's Product Manager runs on [engine], as New
+/// project names it (Desktop's `leadModelLabel`): no model is sent, and the
+/// Swarm fills Claude's role default where its model list leaves it on
+/// ([leadModelOn]); else the engine runs its own.
+String swarmLeadModelLabel(String engine, {bool leadModelOn = true}) =>
+    engine == 'claude' && leadModelOn
+    ? '${_leadModel.label} · ${_leadModel.effort}'
+    : 'Default model';
 
 /// The Swarm's machines a new project's Product Manager could start on, one
 /// row per computer, best first: Desktop's `leadMachinesOf`, where every start
@@ -445,16 +491,25 @@ List<SwarmLeadMachine> swarmLeadMachines(
   );
 }
 
-/// Why the Product Manager cannot start on [machineId] now, in words that
-/// say what to do; null when it can (Desktop's `checkLeadMachine`).
+/// Why the Product Manager cannot start on [machineId] now, with [engine]
+/// when the person chose one, in words that say what to do; null when it can
+/// (Desktop's `checkLeadMachine`).
 String? swarmLeadMachineRefusal(
   List<SwarmLeadMachine> machines,
-  String machineId,
-) {
+  String machineId, {
+  String? engine,
+}) {
   final chosen = machines.where((m) => m.id == machineId).firstOrNull;
   if (chosen == null) return 'Choose one of this Swarm’s machines.';
-  if (chosen.startable) return null;
   final name = chosen.name;
+  if (chosen.startable) {
+    return switch (engine == null ? null : chosen.engineRefusals[engine]) {
+      final why? =>
+        '$name can’t run ${swarmLeadEngineLabel(engine!)}: $why. '
+            'Choose another engine.',
+      null => null,
+    };
+  }
   if (chosen.unavailable case final why?) {
     // One full stop, whether its reason ends with one or not.
     return '$name: ${why.endsWith('.') ? why : '$why.'} '
@@ -566,17 +621,22 @@ class SwarmNewProjectGone implements Exception {
 /// person's access to it or their account, and never outlive the session.
 final _heldSteps = Expando<SwarmNewProjectSteps>('New project steps');
 
+/// How long a file of the brief may go up without a byte moving before it is
+/// given up, as a chat's (`SwarmConversation.uploadTimeout`'s default).
+const _uploadTimeout = Duration(minutes: 2);
+
 /// One New project's steps in one Swarm, as Desktop's `startInSwarm` runs
-/// them: the project, its brief in its chat, its Product Manager's start on
-/// the machine picked, then its name. Each request is kept as first sent,
-/// under one operation id, until the steps finish: Create again repeats only
-/// what has not answered, and the Swarm answers a repeated operation with its
-/// receipt, so a lost answer never makes a second project. Only a definite
+/// them: the project, its brief and files in its chat, its Product Manager's
+/// start on the machine and engine picked, then its name. Each request is
+/// kept as first sent, under one operation id, until the steps finish:
+/// Create again repeats only what has not answered, and the Swarm answers a
+/// repeated operation with its receipt, so a lost answer never makes a second
+/// project, and a file that went up never goes up again. Only a definite
 /// refusal drops a request, so the next attempt (perhaps on another machine)
 /// is a new one. The Swarm's reader holds them ([SwarmNewProjectSteps.of]):
 /// the sheet closed or torn down between steps, opening it again resumes
-/// them (Lead's ruling on #2324).
-class SwarmNewProjectSteps {
+/// them (Lead's ruling on #2324). Listeners hear the files go up.
+class SwarmNewProjectSteps with ChangeNotifier {
   SwarmNewProjectSteps._(this.reader);
 
   /// The steps [reader]'s Swarm holds, or new ones it holds from now on.
@@ -592,21 +652,41 @@ class SwarmNewProjectSteps {
   String? _projectId, _conversationId;
   bool _briefPosted = false, _started = false, _named = false;
 
+  /// The files its brief goes with, as they were when its creation was
+  /// asked for.
+  List<SwarmOutgoingFile>? _files;
+
+  /// Those files on their way to the project's chat, and the ids of those
+  /// already up.
+  SwarmUploads? _uploads;
+
   Future<void>? _running;
 
   /// The run under way, if any: the next waits for it.
   Future<void>? get running => _running;
 
   /// What the sheet last chose and last said, to show again when it opens
-  /// on these steps.
-  String? chosenMachine, chosenRepository, failure;
+  /// on these steps. [chosenEngine] is null while the person left the
+  /// machine's own.
+  String? chosenMachine, chosenRepository, chosenEngine, failure;
 
   /// The project exists: its Swarm, brief and visibility are what it was
   /// made with.
   String? get projectId => _projectId;
 
-  /// Its creation was asked for: Swarm, brief and visibility stay as sent.
+  /// Its creation was asked for: Swarm, brief, files and visibility stay as
+  /// sent.
   bool get sent => _create != null || _projectId != null;
+
+  /// The files its brief goes with, once [sent].
+  List<SwarmOutgoingFile> get sentFiles => _files ?? const [];
+
+  /// Whether [file] is on its way to the project's chat.
+  bool isUploading(SwarmOutgoingFile file) =>
+      _uploads?.isUploading(file) ?? false;
+
+  /// How much of [file] has gone up, from 0 to 1, while it is going up.
+  double? uploadProgress(SwarmOutgoingFile file) => _uploads?.progress(file);
 
   /// Its creation was asked for and never answered: the Swarm may have made
   /// it all the same. A refusal made nothing, and drops the request.
@@ -636,28 +716,35 @@ class SwarmNewProjectSteps {
   String? get startRepository =>
       superTabMap(_start?['command'] ?? const {})['repositoryUrl'] as String?;
 
+  /// The engine of the start under way, if any.
+  String? get startEngine =>
+      superTabMap(_start?['command'] ?? const {})['engine'] as String?;
+
   /// Done with: the Swarm holds them no more.
   void forget() {
     if (identical(_heldSteps[reader], this)) _heldSteps[reader] = null;
   }
 
   /// Runs what is left: creates the project with [brief] and [visibility],
-  /// posts [brief] in its chat, starts its Product Manager on [machineId]
-  /// with the repository [repositoryUrl], then names it after that
-  /// repository. Answers the project's id once all of it is done and read.
-  /// Each answer is kept before [live] is asked: once it says no, nothing
-  /// more is sent and [SwarmNewProjectGone] is thrown, and the next run
-  /// starts after what was answered. [machinesOf] lists the machines from a
-  /// fresh read before a start is first sent, as Desktop checks the machine
-  /// again: one that can no longer take it is refused with why, and nothing
-  /// is sent. A project made in an earlier run is looked for first, and one
-  /// deleted since lets the steps go. A name the Swarm refuses counts as
-  /// done. One run at a time: a second waits for the first.
+  /// posts [brief] in its chat with [files], starts its Product Manager on
+  /// [machineId] with [engine] (the machine's first when null) and the
+  /// repository [repositoryUrl], then names it after that repository.
+  /// Answers the project's id once all of it is done and read. Each answer is
+  /// kept before [live] is asked: once it says no, nothing more is sent and
+  /// [SwarmNewProjectGone] is thrown, and the next run starts after what was
+  /// answered. [machinesOf] lists the machines from a fresh read before a
+  /// start is first sent, as Desktop checks the machine again: one that can
+  /// no longer take it, or no longer runs [engine], is refused with why, and
+  /// nothing is sent. A project made in an earlier run is looked for first,
+  /// and one deleted since lets the steps go. A name the Swarm refuses counts
+  /// as done. One run at a time: a second waits for the first.
   Future<String> run({
     required String brief,
     required String visibility,
     required String machineId,
     required String repositoryUrl,
+    String? engine,
+    List<SwarmOutgoingFile> files = const [],
     required bool Function() live,
     required List<SwarmLeadMachine> Function(SuperTabSnapshot snapshot)
     machinesOf,
@@ -673,6 +760,8 @@ class SwarmNewProjectSteps {
         visibility: visibility,
         machineId: machineId,
         repositoryUrl: repositoryUrl,
+        engine: engine,
+        files: files,
         live: live,
         machinesOf: machinesOf,
       );
@@ -687,6 +776,8 @@ class SwarmNewProjectSteps {
     required String visibility,
     required String machineId,
     required String repositoryUrl,
+    required String? engine,
+    required List<SwarmOutgoingFile> files,
     required bool Function() live,
     required List<SwarmLeadMachine> Function(SuperTabSnapshot snapshot)
     machinesOf,
@@ -713,15 +804,19 @@ class SwarmNewProjectSteps {
       }
     }
     if (_projectId == null) {
-      _create ??= {
-        'operationId': superTabOperationId(),
-        'command': {
-          'type': 'project.create',
-          'name': 'New project',
-          'visibility': visibility,
-          'brief': text,
-        },
-      };
+      if (_create == null) {
+        // The files go with the brief it is made with.
+        _files = List.unmodifiable(files);
+        _create = {
+          'operationId': superTabOperationId(),
+          'command': {
+            'type': 'project.create',
+            'name': 'New project',
+            'visibility': visibility,
+            'brief': text,
+          },
+        };
+      }
       final result = await _send(() => _create, (v) => _create = v);
       final (projectId, conversationId) = switch (result) {
         {
@@ -738,20 +833,35 @@ class SwarmNewProjectSteps {
       check();
     }
     final projectId = _projectId!;
-    // The brief the project was made with, whatever the field says now.
+    // The brief and files the project was made with, whatever the sheet
+    // holds now.
     final posted = sentBrief ?? text;
-    if (!_briefPosted && posted.isNotEmpty) {
-      _brief ??= {
-        'operationId': superTabOperationId(),
-        'command': {
-          'type': 'message.send',
-          'conversationId': _conversationId,
-          'text': posted,
-          'replyTo': null,
-          'recipientIds': const <String>[],
-        },
-      };
-      await _send(() => _brief, (v) => _brief = v);
+    final attached = sentFiles;
+    if (!_briefPosted && (posted.isNotEmpty || attached.isNotEmpty)) {
+      if (_brief == null) {
+        // Up once, to its chat, before the message they go with: written
+        // with their ids, it is repeated as it is.
+        final ids = await _upload(attached);
+        check();
+        _brief = {
+          'operationId': superTabOperationId(),
+          'command': {
+            'type': 'message.send',
+            'conversationId': _conversationId,
+            'text': posted,
+            'replyTo': null,
+            'recipientIds': const <String>[],
+            if (ids.isNotEmpty) 'attachmentIds': ids,
+          },
+        };
+      }
+      try {
+        await _send(() => _brief, (v) => _brief = v);
+      } on SuperTabFailure catch (failure) {
+        // Refused, its files go up afresh with the next one.
+        if (_refusedOutright(failure)) _uploads?.forget(attached);
+        rethrow;
+      }
       _briefPosted = true;
       check();
     }
@@ -771,7 +881,8 @@ class SwarmNewProjectSteps {
         }
         if (deleted) _gone();
         final machines = machinesOf(snapshot);
-        if (swarmLeadMachineRefusal(machines, machineId) case final why?) {
+        if (swarmLeadMachineRefusal(machines, machineId, engine: engine)
+            case final why?) {
           throw SuperTabFailure('MACHINE_UNAVAILABLE', why);
         }
         final machine = machines.firstWhere((m) => m.id == machineId);
@@ -783,7 +894,7 @@ class SwarmNewProjectSteps {
             'machineId': machineId,
             // No model: the Swarm fills its role's default where the owner's
             // model list and rules allow it (backend commands.ts lead.start).
-            'engine': machine.engine,
+            'engine': engine ?? machine.engine,
             'repositoryUrl': repositoryUrl,
           },
         };
@@ -856,6 +967,31 @@ class SwarmNewProjectSteps {
     throw const SuperTabFailure(
       'PROJECT_GONE',
       'The project was deleted meanwhile. Create it again.',
+    );
+  }
+
+  /// Uploads each of [files] not up yet to the project's chat and answers
+  /// their ids, those up kept for the next run. A failure says why in the
+  /// chat's words ([swarmUploadError]).
+  Future<List<String>> _upload(List<SwarmOutgoingFile> files) async {
+    if (files.isEmpty) return const [];
+    final uploads = _uploads ??= SwarmUploads(
+      reader,
+      _conversationId!,
+      timeout: _uploadTimeout,
+      onChanged: notifyListeners,
+      onProgress: notifyListeners,
+    );
+    final up = await uploads.upload(files);
+    if (up.ids case final ids?) return ids;
+    final failure = up.failure;
+    if (failure is SuperTabFailure) throw failure;
+    throw SuperTabFailure(
+      'UPLOAD_FAILED',
+      failure == null
+          ? 'Could not upload ${files.length == 1 ? 'the file' : 'the files'}. '
+                'Try again.'
+          : swarmUploadError(failure, files.length),
     );
   }
 
@@ -1017,11 +1153,22 @@ class SwarmNewProjectSheet extends StatefulWidget {
 }
 
 /// What the sheet shows in place of its form: one of its choices' lists.
-enum _Pick { swarm, visibility, repository, link, machine }
+enum _Pick { swarm, visibility, repository, link, machine, engine }
 
-class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
+class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
+    implements SwarmFilesBox {
   final _brief = TextEditingController();
   final _link = TextEditingController();
+
+  /// The files going with the brief: in memory, or a large one on disk in
+  /// the app's temporary folder while it is held (here, or by the steps once
+  /// sent).
+  final _files = SwarmOutgoingFiles();
+
+  /// What the last pick of files left out, if anything.
+  String? _attachNote;
+  bool _attaching = false;
+
   String? _swarmId;
   String _visibility = 'public';
 
@@ -1030,6 +1177,10 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
   String? _repository;
   bool _repositoryPicked = false;
   String? _machineId;
+
+  /// The engine the person chose for the Product Manager; until then, the
+  /// machine's first, as before there was a choice.
+  String? _engine;
   _Pick? _picking;
   String? _linkError;
 
@@ -1042,8 +1193,10 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
   /// until the next Create or another Swarm.
   bool _maybeMade = false;
 
-  /// The model list of the Swarm [_policySwarm], once read.
+  /// The model list of the Swarm [_policySwarm], once read: the engines it
+  /// rules out, and whether it leaves Claude's default model on.
   Map<String, String> _modelList = const {};
+  bool _leadModelOn = true;
   String? _policySwarm;
   int _policyReads = 0;
 
@@ -1101,6 +1254,7 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
           paused: _paused,
         );
     if (_steps case final steps?) _resume(steps);
+    _files.addListener(_filesChanged);
     if (_swarmId case final id?) unawaited(_readModelList(id));
   }
 
@@ -1115,6 +1269,9 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
       _repositoryPicked = true;
     }
     _machineId = steps.chosenMachine;
+    _engine = steps.chosenEngine;
+    // The files its brief went with, held as sent.
+    if (steps.sent) _files.add(steps.sentFiles);
     _error = steps.failure;
     if (_error != null) _showError();
     if (steps.running case final running?) {
@@ -1156,9 +1313,47 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
   @override
   void dispose() {
     _dropUnsent();
+    _files
+      ..removeListener(_filesChanged)
+      ..dispose();
     _brief.dispose();
     _link.dispose();
     super.dispose();
+  }
+
+  void _filesChanged() {
+    if (mounted && !_closing) setState(() {});
+  }
+
+  @override
+  SwarmOutgoingFiles get files => _files;
+
+  @override
+  bool isUploading(SwarmOutgoingFile file) =>
+      _steps?.isUploading(file) ?? false;
+
+  @override
+  double? uploadProgress(SwarmOutgoingFile file) =>
+      _steps?.uploadProgress(file);
+
+  /// +'s sheet and picker ([attachSwarmFiles]), their files into [_files];
+  /// what a pick left out is said under them.
+  Future<void> _attach() async {
+    if (_attaching || _busy) return;
+    _attaching = true;
+    try {
+      await attachSwarmFiles(
+        context,
+        _files,
+        stillWanted: () =>
+            mounted && !_closing && !_busy && !(_steps?.sent ?? false),
+        note: (note) {
+          if (mounted && !_closing) setState(() => _attachNote = note);
+        },
+      );
+    } finally {
+      _attaching = false;
+    }
   }
 
   /// The sheet still stands for [swarmId]: open, the account's session the
@@ -1177,6 +1372,7 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
     if (reader == null) return;
     final read = ++_policyReads;
     Map<String, String> refusals = const {};
+    var leadModelOn = true;
     try {
       final answer = superTabMap(
         await reader.request(
@@ -1185,6 +1381,7 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
         ),
       );
       refusals = swarmLeadModelListRefusals(answer);
+      leadModelOn = swarmLeadModelOn(answer);
     } catch (_) {
       // Unread: the start's own checks still apply.
     }
@@ -1195,11 +1392,13 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
     }
     setState(() {
       _modelList = refusals;
+      _leadModelOn = leadModelOn;
       _policySwarm = swarmId;
     });
   }
 
-  /// Closes the sheet once, after the frame it went blank in.
+  /// Closes the sheet once, after the frame it went blank in. A sheet or
+  /// dialog over it (+'s, or one it opened) goes too.
   void _close() {
     if (_closing) return;
     _closing = true;
@@ -1207,10 +1406,12 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
       if (!mounted) return;
       final route = ModalRoute.of(context);
       if (route == null || !route.isActive) return;
+      final navigator = Navigator.of(context);
+      navigator.popUntil((top) => top == route || top is! PopupRoute);
       if (route.isCurrent) {
-        Navigator.of(context).pop();
+        navigator.pop();
       } else {
-        Navigator.of(context).removeRoute(route);
+        navigator.removeRoute(route);
       }
     });
   }
@@ -1222,8 +1423,24 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
     snapshot,
     widget.session.inbox.reader(swarmId)?.accountId ?? '',
     now: widget.now(),
-    modelList: _policySwarm == swarmId ? _modelList : const {},
+    modelList: _modelListOf(swarmId),
   );
+
+  /// The engines Swarm [swarmId]'s model list rules out, once read.
+  Map<String, String> _modelListOf(String swarmId) =>
+      _policySwarm == swarmId ? _modelList : const {};
+
+  /// The engine the Product Manager starts with: the start's, once sent;
+  /// else the person's choice; else [machine]'s first, as before there was a
+  /// choice; else the first the Swarm's model list leaves.
+  String _engineOf(String swarmId, SwarmLeadMachine? machine) =>
+      _steps?.startEngine ??
+      _engine ??
+      machine?.engine ??
+      swarmLeadEngines
+          .where((engine) => !_modelListOf(swarmId).containsKey(engine))
+          .firstOrNull ??
+      swarmLeadEngines.first;
 
   @override
   Widget build(BuildContext context) {
@@ -1241,6 +1458,8 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
         // Not one replaced since: the inbox disposes it.
         for (final MapEntry(:key, :value) in _readers.entries)
           if (value != null && identical(_inbox.reader(key), value)) value,
+        // Its files going up.
+        ?_steps,
       ]),
       builder: (context, _) {
         final writable = _writable;
@@ -1410,6 +1629,7 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
     final machine = machines.where((m) => m.id == machineId).firstOrNull;
     final sent = steps?.sent ?? false;
     final startSent = steps?.startSent ?? false;
+    final engine = _engineOf(swarmId, machine);
     final blocked = _blocked(snapshot, machines, machine, repository);
     final swarmName =
         _inbox.swarms.where((s) => s.id == swarmId).firstOrNull?.name ??
@@ -1468,6 +1688,19 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
             ),
           ),
         ),
+        if (swarmSendsFiles) ...[
+          const SizedBox(height: AppSpace.s),
+          _attachments(locked: sent || _busy),
+          if (_attachNote case final note?)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppSpace.xs),
+              child: SwarmRow.line(
+                note,
+                key: const ValueKey('swarm-new-project-attach-note'),
+                lines: 3,
+              ),
+            ),
+        ],
         const SizedBox(height: AppSpace.m),
         SwarmGroup(
           children: [
@@ -1500,10 +1733,22 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
               key: const ValueKey('swarm-new-project-machine'),
               label: 'PM runs on',
               value: machine?.name ?? 'Choose',
-              detail: machine?.detail,
+              detail: machine?.detailFor(engine),
               onTap: startSent || _busy
                   ? null
                   : () => setState(() => _picking = _Pick.machine),
+            ),
+            // The engine and the model it runs, as Desktop's Agent and Model
+            // (Desktop's `leadModelLabel`: through the Swarm no model is
+            // sent, so the one it gets is shown, not chosen).
+            _Field(
+              key: const ValueKey('swarm-new-project-agent'),
+              label: 'Agent',
+              value: swarmLeadEngineLabel(engine),
+              detail: swarmLeadModelLabel(engine, leadModelOn: _leadModelOn),
+              onTap: startSent || _busy
+                  ? null
+                  : () => setState(() => _picking = _Pick.engine),
             ),
           ],
         ),
@@ -1588,6 +1833,26 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
     );
   }
 
+  /// + and the files going with the brief, in a row under it (Desktop's 📎
+  /// and its chips); fixed, as the brief is, once the project was asked for.
+  Widget _attachments({required bool locked}) => Row(
+    children: [
+      SwarmAttachButton(
+        key: const ValueKey('swarm-new-project-attach'),
+        onTap: locked || _files.room <= 0 ? null : () => unawaited(_attach()),
+      ),
+      if (_files.files.isNotEmpty) ...[
+        const SizedBox(width: AppSpace.s),
+        Expanded(
+          child: IgnorePointer(
+            ignoring: locked,
+            child: SwarmOutgoingChips(box: this),
+          ),
+        ),
+      ],
+    ],
+  );
+
   /// Lets the Swarm's steps go: the fields open again, and the next Create
   /// makes a new project. One already made stays in the list; one whose
   /// create was never answered may be there too, and the sheet says so.
@@ -1622,6 +1887,12 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
       return '${machine.name} cannot start the Product Manager. '
           'Choose another machine.';
     }
+    if (_engine case final engine?) {
+      if (machine.engineRefusals[engine] case final why?) {
+        return '${machine.name} can’t run ${swarmLeadEngineLabel(engine)}: '
+            '$why. Choose another engine.';
+      }
+    }
     return null;
   }
 
@@ -1636,6 +1907,7 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
     final steps = SwarmNewProjectSteps.of(reader)
       ..chosenMachine = machineId
       ..chosenRepository = repository
+      ..chosenEngine = _engine
       ..failure = null;
     setState(() {
       _busy = true;
@@ -1648,6 +1920,8 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
         visibility: _visibility,
         machineId: machineId,
         repositoryUrl: repository,
+        engine: _engine,
+        files: _files.files,
         live: () => _live(swarmId, reader),
         machinesOf: (snapshot) => _machinesOf(swarmId, snapshot),
       );
@@ -1709,6 +1983,7 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
         _Pick.repository => 'Repository',
         _Pick.link => 'Enter a link',
         _Pick.machine => 'PM runs on',
+        _Pick.engine => 'Agent',
       },
       SwarmIconButton(
         key: const ValueKey('swarm-new-project-back'),
@@ -1746,7 +2021,9 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
                       _repository = null;
                       _repositoryPicked = false;
                       _machineId = null;
+                      _engine = null;
                       _modelList = const {};
+                      _leadModelOn = true;
                       _policySwarm = null;
                       unawaited(_readModelList(id));
                     }),
@@ -1946,11 +2223,17 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
                         color: AppPalette.textSecondary,
                       ),
                       title: m.name,
-                      detail: m.detail,
+                      detail: m.detailFor(_engine),
                       trailing: m.id == _machineId ? tick() : null,
                       onTap: m.startable
                           ? () => setState(() {
                               _machineId = m.id;
+                              // The machine chosen last wins over an engine
+                              // it cannot run (Desktop's chooseLeadMachine).
+                              if (_engine case final engine?
+                                  when !m.runs(engine)) {
+                                _engine = null;
+                              }
                               _picking = null;
                               _error = null;
                             })
@@ -1958,6 +2241,42 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet> {
                     ),
                 ],
               ),
+          ],
+        );
+      case _Pick.engine:
+        final machine = _machinesOf(
+          swarmId,
+          snapshot,
+        ).where((m) => m.id == _machineId).firstOrNull;
+        final chosen = _engineOf(swarmId, machine);
+        // Each engine a Product Manager runs on, with the model it gets; one
+        // the machine chosen (or, before one is, the Swarm's model list)
+        // rules out says why.
+        Widget option(String engine) {
+          final why = (machine?.engineRefusals ?? _modelListOf(swarmId))[engine];
+          return _Option(
+            key: ValueKey('swarm-new-project-pick-agent-$engine'),
+            leading: EngineMark(engine: engine, size: 20),
+            title: swarmLeadEngineLabel(engine),
+            detail:
+                why ?? swarmLeadModelLabel(engine, leadModelOn: _leadModelOn),
+            trailing: engine == chosen ? tick() : null,
+            onTap: why == null
+                ? () => setState(() {
+                    _engine = engine;
+                    _picking = null;
+                    _error = null;
+                  })
+                : null,
+          );
+        }
+
+        return _frame(
+          header: header,
+          children: [
+            SwarmGroup(
+              children: [for (final engine in swarmLeadEngines) option(engine)],
+            ),
           ],
         );
     }
