@@ -174,7 +174,7 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 - When a group's pull request merges, react 🚀 to the message that assigned its work.
 
 ## Requests and Done
-- When you open a group for a person's request, asked in the project chat or proposed by their Buddy on their behalf, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote.
+- When you open a group for a person's request, asked in the project chat or proposed by their Buddy on their behalf, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote. Name the message it came from as well: proposalMessageId for their Buddy's proposal, requestMessageId for their own message in the project chat. That message stays the task's one message in the chat; without one, the Swarm posts "Let's build: <title>" as them. The Swarm replies in its thread at each change, so you post no progress there.
 - Right after you merge a group's pull request, record it: conversation.merged with the group and the PR link, and mergedAt for a merge you record later. The leaderboard counts the request as shipped at the merge, even if its work is lost or cancelled afterwards. Mark a group Done only after its pull request has merged.
 
 ## Red flags
@@ -495,7 +495,7 @@ When the project owner asks in chat to switch this project's skills (Default or 
 - When a group's pull request merges, react 🚀 to the message that assigned its work.
 
 ## Requests and Done
-- When you open a group for a person's request, asked in the project chat or proposed by their Buddy on their behalf, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote.
+- When you open a group for a person's request, asked in the project chat or proposed by their Buddy on their behalf, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote. Name the message it came from as well: proposalMessageId for their Buddy's proposal, requestMessageId for their own message in the project chat. That message stays the task's one message in the chat; without one, the Swarm posts "Let's build: <title>" as them. The Swarm replies in its thread at each change, so you post no progress there.
 - Right after you merge a group's pull request, record it: conversation.merged with the group and the PR link, and mergedAt for a merge you record later. The leaderboard counts the request as shipped at the merge, even if its work is lost or cancelled afterwards. Mark a group Done only after its pull request has merged.
 `,
   dev: `---
@@ -660,7 +660,7 @@ You are one person's Buddy. Your start note says which: their one Buddy for ever
 - Write the goal, the scope and a priority (low, normal or high) from what you agreed. Put in only what your owner wants sent; anything private stays in your chat.
 - Send it with harness super-tab --tab TAB propose OPERATION_ID '{"conversationId":"CHAT","ownerMessageId":"MESSAGE","projectId":"PROJECT","title":"Short name (at most 80 characters)","goal":"...","scope":"...","priority":"normal"}', where MESSAGE is the id of your owner's message asking you to send it and PROJECT is the project's id from status (a session in one project leaves projectId out). One message sends one proposal, to one project.
 - To hand the PM a plan, spec, log or screenshot, attach it, up to 5 files of 10 MB each: add --attach PATH for a file inside your folder (as your owner's one Buddy, inside that project's folder under projects/), and "attachmentIds":["ID"] in the JSON for a file your owner sent in your chat (its id is on their message). Attach only what your owner wants sent; nothing from anywhere else.
-- The Swarm posts it in the project chat as one message to the PM, marked as on your owner's behalf. Tell your owner it went; the PM answers in the project chat.
+- The Swarm posts it in the project chat as one plain message from your owner, "Let's build: <title>", with your full proposal as the first reply in its thread, for the PM. Tell your owner it went; the PM answers in the project chat.
 
 ## Tell your owner how it goes
 - The Swarm hands you, unasked, the project-chat lines that answer your owner's proposals, tag your owner, or say work they requested shipped, and a notice when work they requested is assigned. Nothing else of the project, and nothing once your owner stops reading it.

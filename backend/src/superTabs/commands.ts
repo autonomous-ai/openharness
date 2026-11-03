@@ -199,7 +199,9 @@ export const commandSchema = z.discriminatedUnion('type', [
     step: z.string().trim().min(1).max(40).regex(/^[^\u0000-\u001f\u007f]+$/, 'A step name is one line of text.').optional(), checks: z.array(check).max(40),
     audience: z.object({ personIds: z.array(id).max(200) }).strict().optional(), requesterId: id.optional(),
     // The Buddy's proposal message in the project chat the group comes from (Lead, 2026-10-29): the Buddy earns when it ships.
-    proposalMessageId: id.optional() }).strict()
+    proposalMessageId: id.optional(),
+    // A person's own message in the project chat that asked for the work: it stays the task's root (Dee, 2026-11-03).
+    requestMessageId: id.optional() }).strict()
     .refine(c => c.task !== undefined || c.brief !== undefined, 'Provide a task or brief.')
     .refine(c => !c.task || renderWorkTask(c.task).length <= 8000, 'Keep the rendered task within 8,000 characters.'),
   z.object({ type: z.literal('conversation.rename'), conversationId: id, title }).strict(),
@@ -416,6 +418,8 @@ export interface CommandContext {
   buddyNames?: import('./buddies.js').ChosenBuddyName[]
   /** The proposal a new group names as its origin (conversation.create proposalMessageId), loaded from this tab by the store. */
   proposal?: { id: string; conversationId: string; author: Author; source: Record<string, unknown> | null }
+  /** The chat message a new group names as its request (conversation.create requestMessageId), loaded from this tab by the store. */
+  request?: { id: string; conversationId: string; author: Author; source: unknown; replyTo: string | null }
   /** The message a Buddy's proposal names as its owner's request, loaded from this tab by the store. */
   proposalAsk?: { id: string; conversationId: string; author: Author; source: boolean; createdAt: number
     /** Whether it went to a thread session, which the main Buddy never hears: the main Buddy proposes for none of those. */
@@ -703,6 +707,16 @@ function proposalOf(state: SuperTabState, project: SwarmProject, proposal: Comma
     ? state.agents.find(a => isSwarmBuddy(a) && !a.buddySession && a.buddyOf!.personId === owner.personId && a.buddyOf!.generation === owner.generation)
     : undefined
   return { buddyId: main?.id ?? buddyId!, messageId: proposal.id, ...personId ? { personId } : {} }
+}
+/** The person's own top-level message in [project]'s chat that asked for a new group; anything else reads as unknown. */
+function requestOf(state: SuperTabState, project: SwarmProject, request: CommandContext['request']): { messageId: string; personId: string } {
+  const author = request?.author
+  const member = author?.kind === 'person' ? state.people.find(p => p.id === author.id && p.generation === author.membershipGeneration) : undefined
+  if (!request || request.conversationId !== project.leadConversationId || request.replyTo || request.source || !member
+    || !canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project)) {
+    fail('REQUEST_UNKNOWN', 'Name a person\'s own message in this project\'s chat, or leave the request out.', 400)
+  }
+  return { messageId: request.id, personId: member.id }
 }
 /** The person a proposal was sent for, while they are still in the Swarm and read [project]; otherwise nobody, so a person
  *  who left or lost the project is never credited and opening the group still works (the PM is told to name someone). */
@@ -1869,8 +1883,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       // Who asked: the person named, else the one a Buddy's proposal was sent for, else a person opening it themselves.
       const proposal = command.proposalMessageId ? proposalOf(state, project, context.proposal) : undefined
+      if (command.requestMessageId && (command.proposalMessageId || command.reviewOf || command.audience)) {
+        fail('INVALID_REQUEST', 'A request message opens a task of its own: leave out proposalMessageId, reviewOf and audience.', 400)
+      }
+      const request = command.requestMessageId ? requestOf(state, project, context.request) : undefined
       const requesterId = command.requesterId ? requester(state, project, command.requesterId)
-        : proposalRequester(state, project, proposal?.personId) ?? (actor.kind === 'person' ? actor.userId : undefined)
+        : proposalRequester(state, project, proposal?.personId) ?? request?.personId ?? (actor.kind === 'person' ? actor.userId : undefined)
       const number = nextConversationNumber(state)
       state.groupCounter = number
       // The agent that opens a task is in it, so an Engineer that opens its own review can post there and pass its checks.
@@ -1892,6 +1910,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       })
       recordAsked(state.conversations.at(-1)!, requesterId, context.now)
       if (proposal) recordProposal(state.conversations.at(-1)!, { buddyId: proposal.buddyId, messageId: proposal.messageId })
+      // The asker's message is the task's root; its thread takes the task's replies (taskLine.ts).
+      if (request) state.conversations.at(-1)!.cards = { line: { messageId: request.messageId, conversationId: project.leadConversationId,
+        state: 'planned', title: command.title, builderId: '' } }
       result.conversationId = operationId
       result.number = number
       // A build group an agent opens for nobody credits nobody when it ships: say so, as the PM can still name them.
@@ -2165,7 +2186,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const root = effects.messages.at(-1)!
       root.author = { kind: 'person', id: owner.id, name: owner.email, membershipGeneration: owner.generation }
       effects.messages.push({ id: stableId(operationId, 'proposal-details'), conversationId: home.id, author: sender,
-        text: proposalText(name, command), replyTo: root.id, thread: root.id,
+        text: proposalText(command), replyTo: root.id, thread: root.id,
         recipients: home.leadId && home.agentIds.includes(home.leadId) ? [home.leadId] : [],
         ...(attachments.length ? { attachments } : {}) })
       // Its own id: this command's id is the proposal's, and a second row with it rolls the command back. Marked with its project,

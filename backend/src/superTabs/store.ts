@@ -1492,6 +1492,13 @@ export class SuperTabStore {
         if (proposal) context.proposal = { id: proposal.id, conversationId: proposal.conversationId, author: proposal.author as unknown as Author,
           source: proposal.source as Record<string, unknown> | null }
       }
+      if (command.type === 'conversation.create' && command.requestMessageId) {
+        // By id within this tab: the person's chat message the new group answers (commands.ts requestOf checks where it is).
+        const request = await tx.superTabMessage.findFirst({ where: { id: command.requestMessageId, tabId },
+          select: { id: true, conversationId: true, author: true, source: true, replyTo: true } })
+        if (request) context.request = { id: request.id, conversationId: request.conversationId, author: request.author as unknown as Author,
+          source: request.source, replyTo: request.replyTo }
+      }
       if (command.type === 'buddy.propose') {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.ownerMessageId, tabId, conversationId: command.conversationId } })
         // The newest message its owner wrote there: the chat's newest rows, the Buddy's and the owner's in turn.

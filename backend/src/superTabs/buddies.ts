@@ -202,12 +202,13 @@ export const proposalSentText = (project: string, proposal: { goal: string; scop
   `Your Buddy sent this to the ${project} PM for you.\n\nGoal: ${proposal.goal}\nScope: ${proposal.scope}`
 
 /** Written by the server, never the Buddy: who it is for and on whose behalf, then the three parts the PM needs. */
-export function proposalText(owner: string, proposal: { goal: string; scope: string; priority: string }): string {
-  return `Proposal from ${owner}'s Buddy, on ${owner}'s behalf.\n\nGoal: ${proposal.goal}\nScope: ${proposal.scope}\nPriority: ${proposal.priority}`
+/** A proposal's first reply in its thread, from the Buddy: its author says whose Buddy sent it. */
+export function proposalText(proposal: { goal: string; scope: string; priority: string }): string {
+  return `Goal: ${proposal.goal}\nScope: ${proposal.scope}\nPriority: ${proposal.priority}`
 }
 
 /** A short opening message, with the complete goal kept in its thread. */
 export function proposalTitle(proposal: { title?: string; goal: string }): string {
   const goal = proposal.goal.replace(/^Requested by [^\r\n]+?\.(?:\s+|$)/i, '').trim() || proposal.goal.trim()
-  return (proposal.title?.trim() || goal.match(/^[^.!?。！？\r\n]+[.!?。！？]?/)?.[0] || goal).slice(0, 80).trim()
+  return (proposal.title?.trim() || (goal.match(/^[^.!?。！？\r\n]+[.!?。！？]?/)?.[0] || goal).replace(/[.。]$/, '')).slice(0, 80).trim()
 }
