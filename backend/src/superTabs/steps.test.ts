@@ -538,7 +538,7 @@ describe('checks with several checkers', () => {
     check(reviewer, true, 'Diff reads right')
     check(tester, true, 'Signs in offline now')
     expect(read()).toMatchObject({ passedBy: `agent:${tester}`, evidence: 'Signs in offline now' })
-    expect(read().verdicts!.map(v => [v.by, v.passed])).toEqual([[`agent:${tester}`, true], [`agent:${reviewer}`, true]])
+    expect(read().verdicts!.map(v => [v.by, v.passed])).toEqual([[`agent:${reviewer}`, true], [`agent:${tester}`, true]])
   })
 
   it('the assignee passing a check the Reviewer failed leaves it failed', () => {
@@ -567,7 +567,7 @@ describe('checks with several checkers', () => {
     expect(read()).toMatchObject({ passedBy: null, evidence: 'Crashes offline' })
     check(reviewer, true, 'Still right')
     expect(read().verdicts!.map(v => [v.by, v.passed, v.evidence])).toEqual([
-      [`agent:${reviewer}`, true, 'Still right'], [`agent:${tester}`, false, 'Crashes offline']])
+      [`agent:${tester}`, false, 'Crashes offline'], [`agent:${reviewer}`, true, 'Still right']])
   })
 
   it('a new attempt starts with no verdicts', () => {
