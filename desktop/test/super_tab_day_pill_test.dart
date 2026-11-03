@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -6,6 +7,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/widgets/laid_out_list.dart';
 
@@ -244,6 +246,41 @@ void main() {
       tester.getTopLeft(threadRoot).dy - before,
       moreOrLessEquals(-30, epsilon: .5),
     );
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+  });
+
+  testWidgets('the pill gives the top to "Finding the original message…" '
+      'and comes back after', (tester) async {
+    // 250 notes from one day; the last replies to one pages back.
+    final server = ConversationServer();
+    for (var i = 1; i <= 250; i++) {
+      server.append('Note $i');
+    }
+    server.messages.last['replyTo'] = 'message-10';
+    final c = server.controller();
+    addTearDown(c.dispose);
+    await _open(tester, c);
+    final day = _day(tester, '2026-10-18T00:00:00Z');
+    expect(_pill(tester, _chatPill), day);
+
+    server.holdReads = Completer<void>();
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const ValueKey('super-message-message-250')),
+        matching: find.byType(SuperTabReplyPreview),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const ValueKey('super-reply-finding')), findsOneWidget);
+    expect(_pill(tester, _chatPill), isNull);
+
+    server.holdReads!.complete();
+    server.holdReads = null;
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('super-reply-finding')), findsNothing);
+    expect(_pill(tester, _chatPill), day);
     await tester.pumpWidget(const SizedBox());
     await c.flush();
   });
