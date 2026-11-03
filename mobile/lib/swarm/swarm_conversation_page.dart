@@ -40,6 +40,7 @@ import 'swarm_outgoing_files.dart';
 import 'swarm_inbox.dart';
 import 'swarm_reader.dart';
 import 'swarm_live_card.dart';
+import 'swarm_link_previews.dart';
 import 'swarm_message_link.dart';
 import 'swarm_message_receipt.dart';
 import 'swarm_message_row.dart';
@@ -1038,6 +1039,10 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         nameOf: (kind, id) => _reactorName(c, kind, id),
         onReact: view.canPost ? (emoji) => unawaited(t.react(m, emoji)) : null,
       ),
+      links: switch (_session) {
+        final session? => _linkPreviews(session, c, m, inThread: true),
+        null => null,
+      },
       onLongPress: () => unawaited(_pickThreadReaction(c, t, m.id)),
     );
   }
@@ -1751,6 +1756,82 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     messageId: id,
   );
 
+  /// The quote of [replyTo] in [conversationId] when the chat has not read
+  /// it: the original read by itself ([SwarmReadQuote]).
+  Widget _readQuote(
+    SwarmSession session,
+    SwarmConversation c,
+    String conversationId,
+    String replyTo, {
+    Key? key,
+    VoidCallback? onTap,
+  }) => SwarmReadQuote(
+    key: key,
+    reads: session.messageReads,
+    reader: c.reader,
+    link: SwarmMessageLink(
+      tabId: c.reader.tabId,
+      conversationId: conversationId,
+      messageId: replyTo,
+    ),
+    author: (original) => _quoted(c, original),
+    onTap: onTap,
+  );
+
+  /// The previews of the message links [m] says, under it; null when it
+  /// says none. A link into another of the account's Swarms is read with
+  /// that Swarm's reader; one into a Swarm the account does not list is
+  /// unavailable.
+  Widget? _linkPreviews(
+    SwarmSession session,
+    SwarmConversation c,
+    SuperTabMessage m, {
+    bool inThread = false,
+  }) {
+    final links = SwarmMessageLink.allIn(m.text);
+    if (links.isEmpty) return null;
+    final tabId = c.reader.tabId;
+    return SwarmLinkPreviews(
+      key: ValueKey('swarm-link-previews-${m.id}'),
+      links: links,
+      reads: session.messageReads,
+      reread: c.reader.reads,
+      readerOf: (id) => id == tabId ? c.reader : session.inbox.reader(id),
+      tabId: tabId,
+      chatId: m.conversationId,
+      held: (link) => link.tabId == tabId && link.conversationId == c.id
+          ? c.messages.where((held) => held.id == link.messageId).firstOrNull
+          : null,
+      onOpen: (link) => _openLink(c, link, inThread: inThread),
+    );
+  }
+
+  /// Opens the message [link] points at: brought into view and lit when it
+  /// is in this chat, else its chat over this one, at it, which says what it
+  /// cannot show. From a thread it always opens its chat over the thread.
+  void _openLink(
+    SwarmConversation c,
+    SwarmMessageLink link, {
+    bool inThread = false,
+  }) {
+    if (!mounted) return;
+    if (!inThread &&
+        link.tabId == c.reader.tabId &&
+        link.conversationId == c.id) {
+      unawaited(_jumpTo(c, link.messageId));
+      return;
+    }
+    unawaited(
+      Navigator.of(context).push(
+        swarmChatRoute(
+          swarmId: link.tabId,
+          conversationId: link.conversationId,
+          messageId: link.messageId,
+        ),
+      ),
+    );
+  }
+
   /// The messages, newest at the foot, with the decisions asked among them.
   /// The entries are made again only when what they are made from changed,
   /// and each row is the one built before while it draws the same ([_row]):
@@ -1966,10 +2047,19 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                     )
                   : m.replyTo == null
                   ? null
+                  : reply == null
+                  ? _readQuote(
+                      session,
+                      c,
+                      m.conversationId,
+                      m.replyTo!,
+                      key: ValueKey('swarm-quote-${m.id}'),
+                      onTap: () => unawaited(_jumpTo(c, m.replyTo!)),
+                    )
                   : SwarmQuote(
                       key: ValueKey('swarm-quote-${m.id}'),
                       author: quoted,
-                      text: reply?.text,
+                      text: reply.text,
                       onTap: () => unawaited(_jumpTo(c, m.replyTo!)),
                     ),
               actions: acting,
@@ -1992,6 +2082,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                       key: ValueKey('swarm-card-${m.id}'),
                       facts: card,
                     ),
+              links: _linkPreviews(session, c, m),
               thread: line == null || line.replies == 0
                   ? null
                   : SwarmThreadLine(
@@ -2108,10 +2199,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
             state: post.state,
             quote: post.replyTo == null
                 ? null
-                : SwarmQuote(
-                    author: reply == null ? null : _quoted(c, reply),
-                    text: reply?.text,
-                  ),
+                : reply == null
+                ? _readQuote(session, c, c.id, post.replyTo!)
+                : SwarmQuote(author: _quoted(c, reply), text: reply.text),
             onSendAgain: () => unawaited(_retry(c, post)),
             onDelete: () => c.deletePost(post),
           );
