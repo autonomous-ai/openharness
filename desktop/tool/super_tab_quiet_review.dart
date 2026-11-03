@@ -2,7 +2,8 @@
 ///
 /// Build for web with `--dart-define=HARNESS_TEST=true -t
 /// tool/super_tab_quiet_review.dart` and open with `?theme=dark` (Graphite;
-/// light Paper is the default). It renders the real [SuperTabView] against an
+/// light Paper is the default), or build with `--dart-define=REVIEW_THEME=dark`
+/// where there is no address to read it from (Desktop). It renders the real [SuperTabView] against an
 /// in-memory fake backend on made-up data, read by dee, and never touches a
 /// real account or production data.
 library;
@@ -22,7 +23,8 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // Let headless browsers address the rendered buttons by role/name.
   WidgetsBinding.instance.ensureSemantics();
-  final palette = Uri.base.queryParameters['theme'] == 'dark'
+  const theme = String.fromEnvironment('REVIEW_THEME');
+  final palette = (Uri.base.queryParameters['theme'] ?? theme) == 'dark'
       ? HarnessPalette.graphite
       : HarnessPalette.paper;
   grid.AppTheme.palette.value = palette;
@@ -102,11 +104,19 @@ ConversationServer _seed() {
           ('scholes', 'collaborator'),
           ('phamngochuy.1989', 'collaborator'),
         ])
-          {'id': id, 'email': '$id@autonomous.ai', 'role': role},
+          {
+            'id': id,
+            'email': '$id@autonomous.ai',
+            'role': role,
+            if (id == 'dee') 'avatar': {'kind': 'preset', 'key': 'fox'},
+          },
       ],
       'agents': [
         _agent('river', 'River', 'studio', role: 'lead'),
-        _agent('nico', 'Nico', 'studio'),
+        {
+          ..._agent('nico', 'Nico', 'studio'),
+          'avatar': {'kind': 'preset', 'key': 'owl'},
+        },
         _agent('theo', 'Theo', 'm9'),
         _agent('iris', 'Iris', 'studio', model: 'claude-sonnet-5-5'),
         for (final name in [
@@ -323,7 +333,50 @@ ConversationServer _seed() {
     agent: true,
   );
   final mentioned = sequence - 1;
-  say('dee', "ok i like a. let's make it perfect.", const Duration(minutes: 1));
+  // A sender's run of lines, and a thread with replies (task #2426 review).
+  for (final (text, ago) in [
+    ('Nico here: the read fix is on its branch.', 12),
+    ('Tests pass locally.', 11),
+    ('Opening the PR now.', 10),
+  ]) {
+    say('nico', text, Duration(minutes: ago), agent: true);
+  }
+  final root = 'lead-$sequence';
+  server.messages.add({
+    'id': root,
+    'conversationId': 'lead',
+    'thread': root,
+    'sequence': sequence++,
+    'text': 'Which avatar shape do we keep in threads?',
+    'author': {'kind': 'person', 'id': 'tony', 'name': 'tony@autonomous.ai'},
+    'source': const <String, Object>{},
+    'attachments': const <Object>[],
+    'deliveries': const <Object>[],
+    'createdAt': _now.subtract(const Duration(minutes: 8)).toIso8601String(),
+  });
+  for (final (who, text, agent, ago) in [
+    ('nico', 'The same rounded square as the chat.', true, 7),
+    ('dee', 'Agreed.', false, 6),
+    ('dee', 'Same spacing too.', false, 6),
+    ('tony', 'Thanks, both.', false, 5),
+  ]) {
+    server.messages.add({
+      'id': 'lead-$sequence',
+      'conversationId': 'lead',
+      'thread': root,
+      'sequence': sequence++,
+      'text': text,
+      'author': agent
+          ? {'kind': 'agent', 'id': who, 'name': who}
+          : {'kind': 'person', 'id': who, 'name': '$who@autonomous.ai'},
+      'source': const <String, Object>{},
+      'attachments': const <Object>[],
+      'deliveries': const <Object>[],
+      'createdAt': _now.subtract(Duration(minutes: ago)).toIso8601String(),
+    });
+  }
+  say('dee', "ok i like a. let's make it perfect.", const Duration(minutes: 2));
+  say('dee', 'One more pass on the spacing.', const Duration(minutes: 1));
   for (final (who, text) in [
     ('theo', 'Ready: PR #2605.'),
     ('river', 'With fixes: one Important.'),
@@ -340,6 +393,14 @@ ConversationServer _seed() {
       'deliveries': const <Object>[],
       'createdAt': _now.subtract(const Duration(minutes: 20)).toIso8601String(),
     });
+  }
+  for (final g in (server.state['conversations'] as List).cast<Map>()) {
+    final own = server.messages.where((m) => m['conversationId'] == g['id']);
+    if (own.isNotEmpty) {
+      g['lastMessageSequence'] = own
+          .map((m) => m['sequence'] as int)
+          .reduce((a, b) => a > b ? a : b);
+    }
   }
   server.ask(['W1 ships alone or waits?'], projectId: 'oh');
   server.tag(
