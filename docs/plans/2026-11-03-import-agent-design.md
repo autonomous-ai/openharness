@@ -97,4 +97,5 @@ doing.
 
 ## Measures (ENGINEERING.md 8)
 
-`agent_import` counted per outcome (previewed, imported, cancelled, failed by step), with no content, names or ids.
+`agent_import` in the usage vocabulary (revision 7, backend and CLI): started when the preview shows, then ok on
+Import, failed when left after a failed step, cancelled otherwise; with its durations. No content, names or ids.

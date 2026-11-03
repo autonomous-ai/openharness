@@ -82,3 +82,12 @@ new `desktop/lib/super_tabs/import_agent_dialog.dart`; widget test and screensho
 - [ ] Failing widget tests: menu order and copy; picker rows; preview shows both files whole with sizes and the two
   lines; Import runs Task 3 and opens the new conversation; errors show the step; Start a new agent opens today's
   picker. Then the code, `check-ui-style`, screenshots light and dark.
+
+### Task 5: Measures (ENGINEERING.md 8)
+
+**Files:** `backend/src/types/productUsage.ts`, `cli/src/lib/productUsageContract.ts`,
+`cli/src/lib/appProductUsageReport.ts` (vocabulary 7), `desktop/lib/measurement/product_measurement.dart`
+(`ProductFlow.agentImport`), the dialog; tests in each.
+
+- [ ] Failing tests: the backend keeps `ui_desktop_agent_import_*`, the CLI forwards them in vocabulary 7, the Desktop
+  waits for vocabulary 7, and the dialog counts started at the preview, then ok, failed or cancelled. Then the code.
