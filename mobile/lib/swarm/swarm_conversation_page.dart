@@ -380,6 +380,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     reader.addListener(_see);
     reader.addListener(_guardVoice);
     session.inbox.addListener(_see);
+    session.home.addListener(_see);
     _see();
     _watch();
     unawaited(
@@ -666,6 +667,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     session?.inbox
       ?..removeListener(_attach)
       ..removeListener(_see);
+    session?.home.removeListener(_see);
     if (_conversation case final c?) {
       c.composer.removeListener(_drafted);
       c.removeListener(_chatMoved);
@@ -1437,6 +1439,36 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                         );
                       },
                     ),
+                    if (view.decisionsAside.isNotEmpty)
+                      Padding(
+                        key: const ValueKey('swarm-decisions-aside'),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: AppSpace.l,
+                        ),
+                        child: Row(
+                          children: [
+                            Text(
+                              view.decisionsAside.length == 1
+                                  ? '1 decision set aside'
+                                  : '${view.decisionsAside.length} decisions set aside',
+                              style: swarmChatText(
+                                13.5,
+                                color: AppPalette.textSecondary,
+                              ),
+                            ),
+                            SwarmButton(
+                              key: const ValueKey('swarm-decisions-show'),
+                              label: 'Show',
+                              style: SwarmButtonStyle.link,
+                              onPressed: () => _session?.home.setDecisionsAside(
+                                c.reader.tabId,
+                                view.decisionsAside,
+                                aside: false,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     if (view.old)
                       Padding(
                         key: const ValueKey('swarm-old-chat'),
@@ -2366,6 +2398,7 @@ class _ChatView {
     required this.leads,
     required this.mentionable,
     required this.decisions,
+    required this.decisionsAside,
     required this.buddyProject,
     required this.hint,
     required this.cards,
@@ -2405,7 +2438,7 @@ class _ChatView {
     // (Dee, 11-01: they blocked the project chat). A chat not open to the
     // person shows none either, even while the decisions read has not caught
     // up.
-    final decisions = [
+    final asked = [
       if (group != null && buddyProject != null)
         for (final need in session.inbox.needs)
           if (need is SwarmDecisionNeed &&
@@ -2413,6 +2446,12 @@ class _ChatView {
               (buddyProject == swarmBuddyKey ||
                   need.decision.projectId == buddyProject))
             need,
+    ];
+    bool aside(SwarmDecisionNeed need) =>
+        session.home.decisionAside(need.swarmId, need.decision.id);
+    final decisions = [
+      for (final need in asked)
+        if (!aside(need)) need,
     ];
     return _ChatView(
       known: group != null,
@@ -2441,6 +2480,10 @@ class _ChatView {
       decisions: before != null && _sameAsks(before.decisions, decisions)
           ? before.decisions
           : List.unmodifiable(decisions),
+      decisionsAside: [
+        for (final need in asked)
+          if (aside(need)) need.decision.id,
+      ],
       buddyProject: buddyProject,
       // "Message Wren"; plain while no Buddy runs to read it.
       hint: buddyProject != null && swarmBuddy(reader, buddyProject) != null
@@ -2483,6 +2526,9 @@ class _ChatView {
   /// The agents a post can mention, by id.
   final List<String> mentionable;
   final List<SwarmDecisionNeed> decisions;
+
+  /// The decisions of this Buddy chat set aside with Not now, by id.
+  final List<String> decisionsAside;
 
   /// The project whose Buddy chat of the person's own this is; null for any
   /// other chat.
@@ -2528,6 +2574,7 @@ class _ChatView {
       setEquals(other.leads, leads) &&
       listEquals(other.mentionable, mentionable) &&
       identical(other.decisions, decisions) &&
+      listEquals(other.decisionsAside, decisionsAside) &&
       other.buddyProject == buddyProject &&
       other.hint == hint &&
       mapEquals(other.cards, cards);
@@ -2542,6 +2589,7 @@ class _ChatView {
     old,
     Object.hashAll(names),
     Object.hashAll(mentionable),
+    Object.hashAll(decisionsAside),
     decisions,
     buddyProject,
     hint,
@@ -3158,6 +3206,11 @@ class _Ask extends StatelessWidget {
                     session: session,
                     need: need,
                     fillRecommended: true,
+                    onNotNow: () => session.home.setDecisionsAside(
+                      need.swarmId,
+                      [need.decision.id],
+                      aside: true,
+                    ),
                   ),
                 ),
               ],

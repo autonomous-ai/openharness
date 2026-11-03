@@ -372,6 +372,12 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
         SwarmGroup(
           children: [for (final item in items) _row(context, session, item)],
         ),
+      if (_filter == SwarmActivityFilter.needsYou)
+        _AnsweredDecisions(
+          session: session,
+          swarmId: widget.swarmId,
+          projectId: widget.projectId,
+        ),
     ];
   }
 
@@ -636,6 +642,144 @@ class _ClosesWhenGoneState extends State<_ClosesWhenGone> {
 }
 
 /// A line over the rows, with what can be done about it.
+/// The last few decisions answered, as the desktop's Notifications pane lists
+/// them under the open ones: each with the option chosen, or that the
+/// coordinator decided, called what its project calls it, and never as the
+/// person's own. Read when this shows, and again after an answer.
+class _AnsweredDecisions extends StatefulWidget {
+  const _AnsweredDecisions({
+    required this.session,
+    required this.swarmId,
+    required this.projectId,
+  });
+
+  final SwarmSession session;
+  final String? swarmId, projectId;
+
+  /// How many stay in view, as on the desktop.
+  static const shown = 5;
+
+  @override
+  State<_AnsweredDecisions> createState() => _AnsweredDecisionsState();
+}
+
+class _AnsweredDecisionsState extends State<_AnsweredDecisions> {
+  /// What was asked for, by Swarm and its read: a Swarm read again from
+  /// nothing is read again, and each only once otherwise.
+  final _asked = <String>{};
+
+  Iterable<(String, SwarmAsks)> get _asks sync* {
+    for (final swarm in widget.session.inbox.swarms) {
+      if (widget.swarmId != null && swarm.id != widget.swarmId) continue;
+      if (widget.session.inbox.asks(swarm.id) case final asks?) {
+        yield (swarm.id, asks);
+      }
+    }
+  }
+
+  void _read(String swarmId, SwarmAsks asks) => unawaited(
+    asks.readAnswered().then((_) {
+      widget.session.home.forgetDecisionsAside(swarmId, [
+        for (final decision in asks.answered) decision.id,
+      ]);
+    }),
+  );
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: widget.session.inbox,
+    builder: (context, _) {
+      final all = _asks.toList();
+      for (final (swarmId, asks) in all) {
+        if (_asked.add('$swarmId/${asks.reader.generation}')) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _read(swarmId, asks);
+          });
+        }
+      }
+      return ListenableBuilder(
+        listenable: Listenable.merge([for (final (_, asks) in all) asks]),
+        builder: (context, _) => _list(context, all),
+      );
+    },
+  );
+
+  Widget _list(BuildContext context, List<(String, SwarmAsks)> all) {
+    final projectId = widget.projectId;
+    final rows = [
+      for (final (_, asks) in all)
+        for (final decision in asks.answered)
+          if (projectId == null || decision.projectId == projectId)
+            (decision, asks),
+    ];
+    final epoch = DateTime.fromMillisecondsSinceEpoch(0);
+    rows.sort(
+      (a, b) => (b.$1.createdAt ?? epoch).compareTo(a.$1.createdAt ?? epoch),
+    );
+    final failed = all.where((e) => e.$2.answeredError != null).firstOrNull;
+    final caption = AppType.caption(
+      color: AppPalette.textSecondary,
+      height: 1.35,
+    );
+    return Column(
+      key: rows.isEmpty ? null : const ValueKey('swarm-answered'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (failed != null)
+          Padding(
+            padding: const EdgeInsets.only(top: AppSpace.s),
+            child: _Note(
+              text: failed.$2.answeredError!,
+              action: SwarmButton(
+                key: const ValueKey('swarm-answered-retry'),
+                label: 'Try again',
+                style: SwarmButtonStyle.link,
+                onPressed: () => _read(failed.$1, failed.$2),
+              ),
+            ),
+          ),
+        if (rows.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpace.xs,
+              AppSpace.l,
+              AppSpace.xs,
+              AppSpace.s,
+            ),
+            child: Text('Answered', style: caption),
+          ),
+          SwarmGroup(
+            children: [
+              for (final (decision, asks) in rows.take(
+                _AnsweredDecisions.shown,
+              ))
+                Padding(
+                  key: ValueKey('swarm-answered-${decision.id}'),
+                  padding: const EdgeInsets.all(AppSpace.m),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        decision.question,
+                        style: AppType.body(color: AppPalette.textPrimary),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${decision.delegated ? '${asks.reader.snapshot?.coordinatorNameOf(decision.projectId) ?? kDefaultCoordinatorName} decided' : 'You chose'}: '
+                        '${swarmOption(decision.options, decision.choice ?? -1)}',
+                        style: caption,
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+}
+
 class _Note extends StatelessWidget {
   const _Note({super.key, required this.text, required this.action});
 
@@ -883,9 +1027,10 @@ class SwarmActivityRow extends StatelessWidget {
     if (item case SwarmActivityNeed(need: final SwarmDecisionNeed need)
         when handled == null) {
       final asks = session.inbox.asks(need.swarmId);
-      if (session.held(need) != null ||
+      if (session.holding(need) ||
           (asks?.answering.contains(need.decision.id) ?? false) ||
           asks?.unconfirmed(need.decision) != null ||
+          (asks?.unconfirmedDelegate(need.decision) ?? false) ||
           session.dropped(need)) {
         return SwarmDecisionAnswer(session: session, need: need);
       }
