@@ -50,15 +50,33 @@ class SuperTabLaunch {
     if (app.currentUser?.id != account) {
       throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
     }
+    // A project with no coordinator gets its Product Manager from New Harness
+    // in its chat, the person's first message going to it (River, 11-03,
+    // #2458: Tony's Personal project had none and joined a worker instead).
+    SuperTabSnapshot? snapshot;
+    if (raw == null && tab.superTabId != null && !newProject) {
+      snapshot = await app.superTabs.readSnapshot(tab.superTabId!);
+      if (app.currentUser?.id != account) {
+        throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+      }
+    }
+    final unled = snapshot?.projectFor(conversationId);
+    final coordinator =
+        unled != null &&
+        unled.leadConversationId == conversationId &&
+        snapshot!.leadOf(unled.id) == null;
     final saved = raw == null
         ? <String, dynamic>{
             'operationId': superTabOperationId(),
             'joinId': superTabOperationId(),
             'tabId': tab.superTabId,
             'conversationId': conversationId,
-            'lead': tab.superTabId == null || newProject,
+            'lead': tab.superTabId == null || newProject || coordinator,
             'newSwarm': tab.superTabId == null,
             'newProject': newProject,
+            // It leads a project already there: its and the Swarm's names
+            // and visibility stay as they are.
+            if (coordinator) ...{'coordinator': true, 'title': unled.name},
             'visibility': 'public',
             if (!newProject) 'projectId': 'lead',
           }
@@ -70,8 +88,9 @@ class SuperTabLaunch {
     // Swarm (no coordinator name on the project) has no such field.
     List<String>? roleSuggestions;
     if (saved['lead'] != true && tab.superTabId != null) {
-      final snapshot = await app.superTabs.readSnapshot(tab.superTabId!);
-      final project = snapshot.projectFor(conversationId);
+      final project =
+          (snapshot ?? await app.superTabs.readSnapshot(tab.superTabId!))
+              .projectFor(conversationId);
       if (project != null && project.hasInstructions) {
         roleSuggestions = await launch.readRoleSuggestions(
           tab.superTabId!,
@@ -144,13 +163,14 @@ class SuperTabLaunch {
                 : saved['roleName'] as String?,
             actionLabel: saved['newProject'] == true
                 ? 'New Project'
-                : saved['lead'] == true
+                : saved['lead'] == true && saved['coordinator'] != true
                 ? 'New Swarm'
                 : 'New Harness',
             // Routing reads quota for Claude Code and Codex only, so a Lead is one
             // of them; the agents it starts may be anything.
             engines: saved['lead'] == true ? const ['claude', 'codex'] : null,
-            projectVisibility: saved['lead'] == true
+            projectVisibility:
+                saved['lead'] == true && saved['coordinator'] != true
                 ? saved['visibility'] as String? ?? 'public'
                 : null,
             projectVisibilityLocked:
@@ -975,7 +995,8 @@ class SuperTabLaunch {
     // Waking the exact host starts only its authorized contributions. It is
     // safe to retry, and never grants machine access to the tab's members.
     await app.wakeSuperTabHost(machine);
-    if (saved['lead'] == true) {
+    // A new Swarm or project takes its Lead's name; one already there keeps its own.
+    if (saved['lead'] == true && saved['coordinator'] != true) {
       final name = Swarm.titleFor(native);
       final title =
           saved['title'] as String? ??
@@ -1040,7 +1061,9 @@ class SuperTabLaunch {
       saved.remove('files');
       await persist();
     }
-    if (saved['lead'] == true && saved['newProject'] != true) {
+    if (saved['lead'] == true &&
+        saved['newProject'] != true &&
+        saved['coordinator'] != true) {
       app.bindSuperTab(
         swarmId,
         tabId,
