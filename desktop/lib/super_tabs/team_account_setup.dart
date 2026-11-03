@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../core/runtime_platform.dart';
@@ -41,6 +43,13 @@ class _Words {
     required this.update,
     required this.cannot,
     required this.unreachable,
+    required this.lead,
+    required this.waiting,
+    required this.rejected,
+    required this.cancelled,
+    required this.removeWhy,
+    required this.removeOnly,
+    required this.remove,
     this.noPrompt,
   });
 
@@ -57,6 +66,17 @@ class _Words {
       cannot: _computerCannot,
       unreachable: _computerUnreachable,
       noPrompt: 'Run harness team setup in a terminal on this computer.',
+      lead: _computerLead,
+      waiting:
+          'Your system is asking for your password. '
+          'Setup then takes a minute or two, and Harness opens when it is done.',
+      rejected: 'Your system did not accept that password. Try again.',
+      cancelled: 'The password window was closed before setup finished.',
+      removeWhy:
+          'No administrator password for this computer? Remove it from the Swarm. '
+          'You can add it again from Machines.',
+      removeOnly: _computerRemoveOnly,
+      remove: _computerRemove,
     ),
     'windows' => const _Words(
       title: 'Set up Harness Team on this computer',
@@ -69,6 +89,17 @@ class _Words {
       update: _computerUpdate,
       cannot: _computerCannot,
       unreachable: _computerUnreachable,
+      lead: _computerLead,
+      waiting:
+          'Windows is asking for permission. '
+          'Setup then takes a minute or two, and Harness opens when it is done.',
+      rejected: 'Windows did not give permission. Try again.',
+      cancelled: 'The permission window was closed before setup finished.',
+      removeWhy:
+          'No administrator permission on this computer? Remove it from the Swarm. '
+          'You can add it again from Machines.',
+      removeOnly: _computerRemoveOnly,
+      remove: _computerRemove,
     ),
     _ => const _Words(
       title: 'Set up Harness Team on this Mac',
@@ -88,8 +119,26 @@ class _Words {
           'or run harness team setup in Terminal.',
       cannot: 'Harness Team cannot be set up on this Mac right now.',
       unreachable: 'Could not reach Harness on this Mac. Try again.',
+      lead:
+          'This Mac joined a Swarm, so it needs Harness Team before you go on.',
+      waiting:
+          'macOS is asking for your password in a window titled “osascript”. '
+          'Setup then takes a minute or two, and Harness opens when it is done.',
+      rejected: 'macOS did not accept that password. Try again.',
+      cancelled: 'The password window was closed before setup finished.',
+      removeWhy:
+          'No administrator password for this Mac? Remove it from the Swarm. '
+          'You can add it again from Machines.',
+      removeOnly: 'To go on, remove this Mac from the Swarm. You can add it again from Machines.',
+      remove: 'Remove this Mac from the Swarm',
     ),
   };
+
+  static const _computerLead =
+      'This computer joined a Swarm, so it needs Harness Team before you go on.';
+  static const _computerRemoveOnly =
+      'To go on, remove this computer from the Swarm. You can add it again from Machines.';
+  static const _computerRemove = 'Remove this computer from the Swarm';
 
   static const _computerAccount =
       'Teammates\' agents in your Swarms run on this computer in a separate '
@@ -103,6 +152,10 @@ class _Words {
   static const _computerUnreachable = 'Could not reach Harness on this computer. Try again.';
 
   final String title, account, prompt, started, exists, update, cannot, unreachable;
+
+  /// The lock's ([TeamAccountSetupLock]): why the app waits, setup under way,
+  /// the password refused, the system's window closed, and the one way out.
+  final String lead, waiting, rejected, cancelled, removeWhy, removeOnly, remove;
 
   /// For the daemon's `no-prompt` (cli/src/team/autoSetup.ts): no desktop session to ask in, so the terminal is the
   /// way. Null where that never happens.
@@ -217,6 +270,322 @@ class _TeamAccountSetupState extends State<_TeamAccountSetup> {
                 child: const Text('Continue'),
               ),
             ],
+    );
+  }
+}
+
+/// Holds the whole app while this computer's Harness Team account must be set
+/// up ([AppNotifier.teamSetupLocked]): from the moment it joins a Swarm, or is
+/// added to one, until setup succeeds (Scholes, 2026-11-03). It sits above the
+/// Navigator (app_shell.dart), so every route, dialog and menu is under it,
+/// and nothing there takes a click, a key, focus or a screen reader. There is
+/// no close. Where setup can never finish here (no administrator password, a
+/// Harness too old, a system that cannot ask), the one way out is removing
+/// this computer from the Swarm.
+///
+/// The password is asked only by the system's own prompt, through the same
+/// daemon actions as Set up on the machine row.
+///
+/// Nothing in it may need an Overlay (no tooltips): there is none above the
+/// Navigator.
+class TeamAccountSetupLock extends StatefulWidget {
+  const TeamAccountSetupLock({
+    super.key,
+    required this.app,
+    required this.child,
+    this.operatingSystem,
+  });
+
+  final AppNotifier app;
+  final Widget child;
+
+  /// Whose words, by [RuntimePlatform.operatingSystem] (this computer's when
+  /// null).
+  final String? operatingSystem;
+
+  @override
+  State<TeamAccountSetupLock> createState() => _TeamAccountSetupLockState();
+}
+
+enum _LockStep { intro, waiting, retry, cancelled, cannot }
+
+/// How long the system's prompt may stay open (cli/src/team/admin.ts, 15
+/// minutes), with a minute for the setup after it.
+const _setupLimit = Duration(minutes: 16);
+const _setupRead = Duration(seconds: 2);
+
+/// macOS's "The administrator user name or password was incorrect. (-60005)",
+/// as the daemon hands it back inside its detail.
+final _refusedPassword = RegExp(
+  r'-60005|incorrect|not accepted|wrong password',
+  caseSensitive: false,
+);
+
+class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
+  late final _Words _words = _Words.of(
+    widget.operatingSystem ?? RuntimePlatform.operatingSystem,
+  );
+  _LockStep _step = _LockStep.intro;
+  String? _outcome, _removeError;
+  bool _busy = false;
+  Timer? _read;
+  DateTime? _since;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.app.addListener(_changed);
+  }
+
+  @override
+  void didUpdateWidget(TeamAccountSetupLock old) {
+    super.didUpdateWidget(old);
+    if (!identical(old.app, widget.app)) {
+      old.app.removeListener(_changed);
+      widget.app.addListener(_changed);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.app.removeListener(_changed);
+    _read?.cancel();
+    super.dispose();
+  }
+
+  void _changed() {
+    if (!mounted) return;
+    setState(() {
+      if (!widget.app.teamSetupLocked) _reset();
+    });
+  }
+
+  void _reset() {
+    _read?.cancel();
+    _read = null;
+    _step = _LockStep.intro;
+    _outcome = _removeError = null;
+    _busy = false;
+  }
+
+  void _show(_LockStep step, String outcome) {
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _step = step;
+      _outcome = outcome;
+    });
+  }
+
+  Future<void> _start() async {
+    setState(() {
+      _busy = true;
+      _removeError = null;
+    });
+    final words = _words;
+    try {
+      switch (await widget.app.setUpTeamAccount()) {
+        case 'started' || 'running':
+          _since = DateTime.now();
+          _show(_LockStep.waiting, words.waiting);
+          _scheduleRead();
+        case 'exists':
+          await widget.app.teamAccountMade();
+        case 'update':
+          _show(_LockStep.cannot, words.update);
+        case 'no-prompt' when words.noPrompt != null:
+          _show(_LockStep.cannot, words.noPrompt!);
+        case _:
+          _show(_LockStep.cannot, words.cannot);
+      }
+    } on SuperTabFailure catch (failure) {
+      if (failure.code == 'NO_PROMPT') {
+        _show(_LockStep.cannot, words.noPrompt ?? failure.message);
+      } else {
+        _show(_LockStep.retry, failure.message);
+      }
+    } catch (_) {
+      _show(_LockStep.retry, words.unreachable);
+    }
+  }
+
+  /// The setup runs in this computer's daemon after the system's prompt;
+  /// nothing tells the app when it ends, so its status is read while the
+  /// prompt can still be open, and never after.
+  void _scheduleRead() {
+    _read?.cancel();
+    _read = Timer(_setupRead, () => unawaited(_readSetup()));
+  }
+
+  Future<void> _readSetup() async {
+    _read = null;
+    final setup = await widget.app.teamSetupStatus();
+    if (!mounted || _step != _LockStep.waiting) return;
+    switch (setup?.state) {
+      case 'exists':
+        await widget.app.teamAccountMade();
+        return;
+      case 'failed':
+        final detail = setup?.detail?.trim();
+        if (detail != null && _refusedPassword.hasMatch(detail)) {
+          _show(_LockStep.retry, _words.rejected);
+        } else {
+          _show(
+            _LockStep.retry,
+            detail == null || detail.isEmpty
+                ? 'Setup did not finish. Try again.'
+                : 'Setup did not finish: ${_sentence(detail)}',
+          );
+        }
+        return;
+      case 'declined':
+        _show(_LockStep.cancelled, _words.cancelled);
+        return;
+    }
+    final since = _since;
+    if (since != null && DateTime.now().difference(since) > _setupLimit) {
+      _show(_LockStep.retry, 'Setup did not finish. Try again.');
+      return;
+    }
+    _scheduleRead();
+  }
+
+  static String _sentence(String text) =>
+      RegExp(r'[.!?]$').hasMatch(text) ? text : '$text.';
+
+  Future<void> _remove() async {
+    setState(() {
+      _busy = true;
+      _removeError = null;
+    });
+    final why = await widget.app.removeLockedMachine();
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _removeError = why;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final locked = widget.app.teamSetupLocked;
+    // One tree shape locked or not, so the app below is never remounted.
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // The barrier takes every click and hides the app from a screen
+        // reader; keys follow focus, which nothing under it may hold.
+        ExcludeFocus(excluding: locked, child: widget.child),
+        if (locked) ...[
+          ModalBarrier(dismissible: false, color: dialogVeilTintOf(context)),
+          _panel(context),
+        ],
+      ],
+    );
+  }
+
+  Widget _panel(BuildContext context) {
+    final words = _words;
+    final body = grid.AppType.body(height: 1.45);
+    final muted = body.copyWith(color: Theme.of(context).hintColor);
+    final outcome = _outcome;
+    final retry = FilledButton(
+      key: const Key('team-account-lock-retry'),
+      autofocus: true,
+      onPressed: _busy ? null : _start,
+      child: const Text('Try again'),
+    );
+    final remove = TextButton(
+      key: const Key('team-account-lock-remove'),
+      autofocus: _step == _LockStep.cannot,
+      onPressed: _busy ? null : _remove,
+      child: Text(words.remove),
+    );
+    final removeError = _removeError;
+    return Center(
+      key: const Key('team-account-lock'),
+      child: FocusScope(
+        autofocus: true,
+        child: AlertDialog(
+          title: Text(words.title),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (_step == _LockStep.intro) ...[
+                  Text(words.lead, style: body),
+                  const SizedBox(height: 12),
+                  Text(words.account, style: body),
+                  const SizedBox(height: 12),
+                  Text(words.prompt, style: body),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Your home folder becomes private to you. Your own agents work as before. '
+                    'To remove the account later, run harness team remove.',
+                    style: muted,
+                  ),
+                ] else ...[
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (_step == _LockStep.waiting) ...[
+                        const Padding(
+                          padding: EdgeInsets.only(top: 3),
+                          child: SizedBox.square(
+                            dimension: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                      ],
+                      Expanded(
+                        child: Text(
+                          outcome ?? '',
+                          key: const Key('team-account-lock-outcome'),
+                          style: body,
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (_step == _LockStep.cancelled) ...[
+                    const SizedBox(height: 12),
+                    Text(words.removeWhy, style: muted),
+                  ],
+                  if (_step == _LockStep.cannot) ...[
+                    const SizedBox(height: 12),
+                    Text(words.removeOnly, style: muted),
+                  ],
+                ],
+                if (removeError != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    removeError,
+                    style: body.copyWith(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: switch (_step) {
+            _LockStep.intro => [
+              FilledButton(
+                key: const Key('team-account-lock-continue'),
+                autofocus: true,
+                onPressed: _busy ? null : _start,
+                child: const Text('Continue'),
+              ),
+            ],
+            _LockStep.waiting => const [],
+            _LockStep.retry => [retry],
+            _LockStep.cancelled => [remove, retry],
+            _LockStep.cannot => [remove],
+          },
+        ),
+      ),
     );
   }
 }
