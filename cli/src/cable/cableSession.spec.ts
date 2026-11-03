@@ -5293,6 +5293,68 @@ describe('swarm cards', () => {
       expect(await spoken(ROUND, [withBuddy({ local: 'h1' })], offline)).toEqual({ errors: ['Could not reach the Swarm. Try again.'], turns: [] })
     })
 
+    // Swarm parity part 3 on top of part 1's review fix: a Pro's words follow its face chat only when its voice.begin says they
+    // were spoken on the Lead view (`face`), which shows that chat. Its plain agent room names the same harness and shows none.
+    describe('a Pro speaks to its face chat from the Lead view only', () => {
+      const PRO_BUDDY = { ...BUDDY, board: 'pro' }
+      const proSpoken = async (leads: SwarmLead[], agentId: string, face: boolean, swarmSay: CableHost['swarmSay']) => {
+        const host = cardHost({ cards: [card('st1', leads)] }, { transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay })
+        const { session, port } = await connect(host)
+        try {
+          port.say(PRO_BUDDY); await settle()
+          port.say({ t: 'voice.begin', uploadId: `u-${agentId}`, agentId, ...(face ? { face: true } : {}) })
+          port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+          await vi.waitFor(() => expect(port.sent.some((m) => m.t === 'voice.error' || m.t === 'voice.transcript') || vi.mocked(host.sendTurn).mock.calls.length > 0).toBe(true))
+          await settle()
+          return { errors: ofType(port, 'voice.error').map((m) => m.message), turns: vi.mocked(host.sendTurn).mock.calls }
+        } finally { await session.stop() }
+      }
+
+      it('on the Buddy side, the words go to the Buddy chat, never the Lead conversation', async () => {
+        const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: true }))
+        expect(await proSpoken([withBuddy({ local: 'h1' })], 'h1', true, swarmSay)).toEqual({ errors: [], turns: [] })
+        expect(swarmSay.mock.calls).toEqual([['h1', 'ship it', 'buddy', 'pm1']])
+      })
+
+      it('on the PM side, the words go to the face chat it shows', async () => {
+        const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: true }))
+        const leadFace = { kind: 'lead' as const, id: 'lead-c1', name: 'Lead', working: false }
+        await proSpoken([withBuddy({ local: 'h1', sideChat: leadFace })], 'h1', true, swarmSay)
+        expect(swarmSay.mock.calls).toEqual([['h1', 'ship it', 'buddy', 'lead-c1']])
+      })
+
+      it('to a remote Lead named by its Swarm id, the words go to its face chat', async () => {
+        const remote = 'b'.repeat(24)
+        const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: true }))
+        await proSpoken([withBuddy({ id: remote })], remote, true, swarmSay)
+        expect(swarmSay.mock.calls).toEqual([[remote, 'ship it', 'buddy', 'pm1']])
+      })
+
+      it('a Buddy post that fails is a voice error, never the Lead\'s terminal', async () => {
+        const offline = vi.fn(async (): Promise<SaidOnCard> => { throw new Error('offline') })
+        expect(await proSpoken([withBuddy({ local: 'h1' })], 'h1', true, offline)).toEqual({ errors: ['Could not reach your Buddy. Try again.'], turns: [] })
+      })
+
+      it('without face (the plain agent room), the words stay in the Lead conversation as part 1 ruled', async () => {
+        const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: true }))
+        await proSpoken([withBuddy({ local: 'h1' })], 'h1', false, swarmSay)
+        expect(swarmSay.mock.calls).toEqual([['h1', 'ship it']])
+      })
+
+      it('a round dial ignores face and keeps its own rule', async () => {
+        const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: true }))
+        const host = cardHost({ cards: [card('st1', [withBuddy({ local: 'h1' })])] }, { transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay })
+        const { session, port } = await connect(host)
+        try {
+          port.say(BUDDY); await settle()
+          port.say({ t: 'voice.begin', uploadId: 'u-h1', agentId: 'h1' })
+          port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+          await vi.waitFor(() => expect(swarmSay).toHaveBeenCalled())
+          expect(swarmSay.mock.calls).toEqual([['h1', 'ship it', 'buddy', 'pm1']])
+        } finally { await session.stop() }
+      })
+    })
+
     it('a Buddy utterance never falls back after desktop focus changes during its post', async () => {
       const state = { cards: [card('st1', [withBuddy({ local: 'h1' })])] }
       let rejectPost!: (error: Error) => void
