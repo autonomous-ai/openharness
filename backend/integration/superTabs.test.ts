@@ -20,7 +20,7 @@ import { sweepPendingUploads } from '../src/lib/pendingUploadSweep.js'
 import { IGNORED_NOTE, type Command } from '../src/superTabs/commands.js'
 import { nextMachineShareGrants } from '../src/lib/machineSharePolicy.js'
 import { DEFAULT_ROUTING_POLICY } from '../src/superTabs/routingPolicy.js'
-import { stableId, type SuperTabState } from '../src/superTabs/model.js'
+import { stableId, type Agent, type SuperTabState } from '../src/superTabs/model.js'
 import { roleVersion } from '../src/superTabs/projects.js'
 import { ensureTerminalExpiry, TERMINAL_EXPIRY_MS } from '../src/superTabs/terminal.js'
 import { ensureMentionExpiry, MENTION_EXPIRY_MS, swarmsWithTags } from '../src/superTabs/mentions.js'
@@ -3684,6 +3684,42 @@ describe('machine removal', () => {
     expect(ack.statusCode, ack.body).toBe(200)
     expect(await cleanups(tab)).toEqual([])
     expect((await store.read(owner, tab)).state.machines).toEqual([])
+  })
+
+  it('the removal route counts an unreadable project and still refuses to remove its PM', async () => {
+    const tab = await contributed()
+    const projectId = String((await run(tab, { type: 'project.create', name: 'Secret Project', visibility: 'private', brief: '' })).result.projectId)
+    const taskConversationId = String((await run(tab, { type: 'conversation.create', projectId, title: 'Secret Task', brief: '', checks: [] })).result.conversationId)
+    const state = await storedState(tab)
+    const project = state.projects!.find(item => item.id === projectId)!
+    const leadChat = state.conversations.find(item => item.id === project.leadConversationId)!
+    const taskChat = state.conversations.find(item => item.id === taskConversationId)!
+    const hostGeneration = state.people.find(person => person.id === host.sub)!.generation
+    const pmId = randomUUID(), workerId = randomUUID()
+    const makeAgent = (id: string, name: string): Agent => ({ id, projectId, machineId: 'test-host', harnessId: randomUUID(),
+      machineOwnerId: host.sub, contributorId: host.sub, membershipGeneration: hostGeneration, hostGrant: null, name,
+      configuration: config, configurationVersion: randomUUID() })
+    const pm = makeAgent(pmId, 'Secret PM'), worker = makeAgent(workerId, 'Secret Builder')
+    leadChat.leadId = pmId
+    leadChat.agentIds.push(pmId)
+    taskChat.agentIds.push(workerId)
+    project.repository = { machineId: 'test-host', cwd: '/secret/repository', repositoryUrl: null }
+    state.agents.push(pm, worker)
+    await saveState(tab, state)
+    await run(tab, { type: 'work.assign', conversationId: taskConversationId, agentId: workerId })
+
+    const shown = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/machines/test-host/removal`, headers: { authorization: `Bearer ${host.sub}` } })
+    expect(shown.statusCode, shown.body).toBe(200)
+    expect(shown.json().data).toEqual({
+      blockedBy: { reason: "A PM of a project you can't see runs here." }, agents: [], hiddenAgentCount: 2,
+      soleSourceProjects: [], hiddenSoleSourceProjectCount: 1,
+    })
+    for (const unreadable of [projectId, pmId, workerId, 'Secret Project', 'Secret PM', 'Secret Builder', 'Secret Task', '/secret/repository']) {
+      expect(JSON.stringify(shown.json().data)).not.toContain(unreadable)
+    }
+    await expect(run(tab, { type: 'machine.remove', machineId: 'test-host' }, host)).rejects.toMatchObject({
+      code: 'LEAD_PROTECTED', message: "A PM of a project you can't see runs here.",
+    })
   })
 
   it('drops a machine that went silent while cleaning, and a reconnecting host gets that cleanup once before its ack', async () => {
