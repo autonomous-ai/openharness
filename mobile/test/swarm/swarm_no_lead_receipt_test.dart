@@ -196,12 +196,10 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Mac Studio'), findsOneWidget);
       expect(find.text('MacBook Pro'), findsOneWidget);
-      // Offline: listed, and not picked.
+      // Offline: listed, and not picked; the sheet stays.
       await tester.tap(find.text('MacBook Pro'));
       await tester.pumpAndSettle();
       expect(starts(r.swarm), isEmpty);
-      await tester.tap(addLead());
-      await tester.pumpAndSettle();
       await tester.tap(find.text('Mac Studio'));
       await tester.runAsync(pumpEventQueue);
       await tester.pumpAndSettle();
@@ -240,6 +238,13 @@ void main() {
     tester,
   ) async {
     final r = rig();
+    r.swarm.routes['/api/super-tabs/list'] = (_) => {
+      'tabs': [
+        {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
+      ],
+      'next': null,
+    };
+    r.swarm.routes['/api/super-tabs/invitations'] = (_) => <Object>[];
     final account = ValueNotifier<String?>(me);
     final host = SwarmHost(
       accountId: () => account.value,
@@ -251,13 +256,6 @@ void main() {
       readMarks: MemoryKeyValueStore(),
     )..foreground = false;
     addTearDown(host.dispose);
-    r.swarm.routes['/api/super-tabs/list'] = (_) => {
-      'tabs': [
-        {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
-      ],
-      'next': null,
-    };
-    r.swarm.routes['/api/super-tabs/invitations'] = (_) => <Object>[];
     await tester.runAsync(() => host.session!.inbox.refresh());
     await tester.pumpWidget(
       MaterialApp(
@@ -268,8 +266,10 @@ void main() {
         ),
       ),
     );
-    await tester.runAsync(pumpEventQueue);
-    await tester.pumpAndSettle();
+    for (var i = 0; i < 5; i++) {
+      await tester.runAsync(pumpEventQueue);
+      await tester.pump(const Duration(milliseconds: 100));
+    }
     expect(find.text(line), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(seconds: 1));
