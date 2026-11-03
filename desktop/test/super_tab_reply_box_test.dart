@@ -189,6 +189,29 @@ void main() {
     );
   }
 
+  /// Also send's [label] on its line under the box: whole wherever it
+  /// measures to fit that line in the face drawn (the Mac's face fits it at
+  /// every width the app allows, the screenshots show); in a face too wide
+  /// for even that (the test font on Linux CI), it ends in "…" there and
+  /// nothing overflows.
+  void expectWholeUnderBox(WidgetTester tester, String label) {
+    final room = tester.getRect(surface).width - 16;
+    if (SuperTabComposerToggle.widthOf(tester.element(alsoSend), label) <=
+        room) {
+      expectWhole(tester, alsoSend, label);
+    } else {
+      final text = find.descendant(of: alsoSend, matching: find.text(label));
+      expect(
+        tester.renderObject<RenderParagraph>(text).didExceedMaxLines,
+        isTrue,
+      );
+      expect(
+        tester.getRect(alsoSend).right,
+        lessThanOrEqualTo(tester.getRect(surface).right),
+      );
+    }
+  }
+
   /// Also send on its own line under the box, its square under the send
   /// row's first one, not on the send row.
   void expectUnderBox(WidgetTester tester) {
@@ -281,7 +304,11 @@ void main() {
           await panel(tester, server(), conversation, width: pane);
           expect(box(tester, alsoSend).label, full, reason: 'at $pane');
           expect(find.text(short), findsNothing);
-          expectWhole(tester, alsoSend, full);
+          if (below) {
+            expectWholeUnderBox(tester, full);
+          } else {
+            expectWhole(tester, alsoSend, full);
+          }
           expect(
             find.byTooltip('$full as well as this thread'),
             findsOneWidget,
@@ -438,8 +465,10 @@ void main() {
         } else {
           expectUnderBox(tester);
         }
-        if (!(width == SuperTabPaneLayout.rightWidth && scale == 2)) {
+        if (alsoLine.evaluate().isEmpty) {
           expectWhole(tester, alsoSend, 'Also post to the main chat');
+        } else {
+          expectWholeUnderBox(tester, 'Also post to the main chat');
         }
       });
     }
