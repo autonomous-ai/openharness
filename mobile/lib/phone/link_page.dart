@@ -100,8 +100,16 @@ class _LinkPageState extends State<LinkPage> {
     if (machine == null || closed) {
       _leaving = true;
       navigator.maybePop();
+      return;
     }
+    // Waiting for its key, or done waiting: the page swaps between the wait and the form.
+    final awaiting = machine.awaitingKey;
+    if (awaiting != _awaiting) setState(() => _awaiting = awaiting);
   }
+
+  /// What [build] last drew: the wait for the machine's key ([MachineState.awaitingKey]).
+  late bool _awaiting =
+      widget.notifier.stateOf(widget.machineId)?.awaitingKey ?? false;
 
   @override
   Widget build(BuildContext context) {
@@ -128,7 +136,11 @@ class _LinkPageState extends State<LinkPage> {
                 alignment: Alignment.centerRight,
                 child: PhoneSettingsButton(notifier: widget.notifier),
               ),
-            if (machine != null)
+            // Its key not in the account's log yet: it comes in by itself, so no QR and no password
+            // are asked for — only once the wait has run out ([MachineState.keyAwaitLimit]).
+            if (machine != null && machine.awaitingKey)
+              Expanded(child: _AwaitingKey(name: machine.machine.displayName))
+            else if (machine != null)
               Expanded(
                 child: UnlockComputer(
                   notifier: widget.notifier,
@@ -145,6 +157,45 @@ class _LinkPageState extends State<LinkPage> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// While [name]'s key is not in the account's device log yet ([MachineState.awaitingKey]): what
+/// the password form would have stood for, said as the wait it is. It goes by itself, to the
+/// agents once the key lands, to the form if it never does.
+class _AwaitingKey extends StatelessWidget {
+  const _AwaitingKey({required this.name});
+
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return ListView(
+      key: const Key('link-awaiting-key'),
+      padding: const EdgeInsets.fromLTRB(Tty.origin, 12, Tty.origin, 24),
+      children: [
+        Text(
+          'Connecting to $name',
+          style: tty.style(size: 24, weight: FontWeight.w600),
+        ),
+        const SizedBox(height: 12),
+        Text(
+          '$name is setting up its secure link to your account. It opens here by itself in a '
+          'moment: nothing to scan or type.',
+          style: tty.style(size: TtySize.row, color: tty.faint),
+        ),
+        const SizedBox(height: 24),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(3),
+          child: LinearProgressIndicator(
+            minHeight: 6,
+            color: tty.green,
+            backgroundColor: tty.green.withValues(alpha: 0.18),
+          ),
+        ),
+      ],
     );
   }
 }
