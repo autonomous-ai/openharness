@@ -77,6 +77,18 @@ export function autoJoinOn(state: Pick<SuperTabState, 'sharing' | 'deletion'>): 
   return !state.deletion && access?.mode === 'domain' && access.autoJoin === true && !isPublicEmailDomain(access.domain) ? access.domain : null
 }
 
+/** The people auto-join never adds again, with `userId` added: someone who left or was removed (spec, Leaving is final). Kept
+ *  sorted, so the same people always write the same row. */
+export function declinedWith(state: Pick<SuperTabState, 'autoJoinDeclined'>, userId: string): string[] {
+  return [...new Set([...state.autoJoinDeclined ?? [], userId])].sort()
+}
+
+/** Without `userId`: they came back on purpose, by an invitation or a link. Undefined when nobody is left. */
+export function declinedWithout(state: Pick<SuperTabState, 'autoJoinDeclined'>, userId: string): string[] | undefined {
+  const rest = (state.autoJoinDeclined ?? []).filter(id => id !== userId)
+  return rest.length ? rest : undefined
+}
+
 /** What the owner's Share dialog shows. `ownerEmail` is the reading owner's account email. A saved share at a domain anyone can
  *  have an address at, which this release no longer answers, shows as invite-only with the domain it turned off. */
 export function sharingDetails(state: SuperTabState, ownerEmail: string) {
