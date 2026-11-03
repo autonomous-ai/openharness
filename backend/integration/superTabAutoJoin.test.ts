@@ -6,7 +6,7 @@ import { promisify } from 'node:util'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { PrismaClient } from '@prisma/client'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
@@ -29,7 +29,9 @@ const relay = account(5, 'y@privaterelay.appleid.com'), partner = account(6, 'p@
 const w = account(9, 'w@acme.com'), v = account(10, 'v@acme.com'), u = account(11, 'u@acme.com'), t = account(12, 't@acme.com')
 const boss = account(13, 'boss@beta.io'), b1 = account(14, 'b1@beta.io'), s1 = account(15, 's1@acme.com'), r1 = account(16, 'r1@acme.com')
 const q1 = account(17, 'q1@acme.com'), d1 = account(18, 'd1@acme.com')
-const accounts = [ken, x, gmailOwner, xGmail, relay, partner, y, z, w, v, u, t, boss, b1, s1, r1, q1, d1]
+const leaver = account(19, 'leaver@acme.com'), removed = account(20, 'removed@acme.com'), invitee = account(21, 'invitee@acme.com')
+const linked = account(22, 'linked@acme.com'), banned = account(23, 'banned@acme.com'), wsGone = account(24, 'gone@acme.com'), toggler = account(25, 'toggler@acme.com')
+const accounts = [ken, x, gmailOwner, xGmail, relay, partner, y, z, w, v, u, t, boss, b1, s1, r1, q1, d1, leaver, removed, invitee, linked, banned, wsGone, toggler]
 
 /** A Swarm's whole state as its parts hold it. */
 async function storedState(tab: string): Promise<SuperTabState> {
@@ -271,5 +273,83 @@ describe('Joining by domain on the person\'s own list read', () => {
     const outcomes = await Promise.all([store.autoJoinSwarm(s1, tab), store.autoJoinSwarm(s1, tab)])
     expect(outcomes.sort()).toEqual(['joined', 'skipped'])
     expect((await storedState(tab)).people.filter(p => p.id === s1.sub)).toHaveLength(1)
+  })
+})
+
+describe('Leaving is final for auto-join', () => {
+  const declinedOf = async (tab: string) => (await db.superTab.findUniqueOrThrow({ where: { id: tab } })).autoJoinDeclined
+  const leave = (user: AuthUser, tab: string, by: AuthUser = user) =>
+    store.execute(by, tab, { operationId: randomUUID(), command: { type: 'member.remove', userId: user.sub } })
+
+  it('does not pull back someone who left', async () => {
+    const tab = await create()
+    await turnOn(tab)
+    expect(await listed(leaver)).toContain(tab)
+    await leave(leaver, tab)
+    expect(await declinedOf(tab)).toContain(leaver.sub)
+    later()
+    expect(await listed(leaver)).not.toContain(tab)
+    expect(await personIn(tab, leaver)).toBeUndefined()
+  })
+
+  it('does not pull back someone the owner removed, and keeps that across turning auto-join off and on', async () => {
+    const tab = await create()
+    await turnOn(tab)
+    await listed(removed)
+    await leave(removed, tab, ken)
+    await save(tab, { mode: 'invited', role: 'collaborator' })
+    await turnOn(tab)
+    expect(await declinedOf(tab)).toContain(removed.sub)
+    later()
+    expect(await listed(removed)).not.toContain(tab)
+  })
+
+  it('lets someone come back on purpose by an accepted invitation, which clears the decline', async () => {
+    const tab = await create()
+    await turnOn(tab)
+    await listed(invitee)
+    await leave(invitee, tab)
+    const invite = await store.execute(ken, tab, { operationId: randomUUID(),
+      command: { type: 'invite.create', email: invitee.email, role: 'viewer', conversationId: 'lead' } })
+    await store.execute(invitee, tab, { operationId: randomUUID(), command: { type: 'invite.accept', inviteId: String(invite.result.inviteId) } })
+    expect(await declinedOf(tab)).not.toContain(invitee.sub)
+    expect(await personIn(tab, invitee)).toMatchObject({ role: 'viewer' })
+    expect((await personIn(tab, invitee))!.joinedVia).toBeUndefined()
+  })
+
+  it('lets someone come back on purpose by a link, which clears the decline', async () => {
+    const tab = await create()
+    await turnOn(tab)
+    await listed(linked)
+    await leave(linked, tab)
+    expect((await request(`${tab}/join`, { operationId: randomUUID() }, linked)).statusCode).toBe(200)
+    expect(await declinedOf(tab)).not.toContain(linked.sub)
+    expect((await personIn(tab, linked))!.joinedVia).toBeUndefined()
+  })
+
+  it('declines someone the Workspace removed instead of joining them, and does not try that Swarm again', async () => {
+    const tab = await create()
+    await turnOn(tab)
+    const { workspaceId } = await storedState(tab)
+    await db.swarmWorkspaceMember.create({ data: { id: memberId(workspaceId!, banned.sub), workspaceId: workspaceId!, userId: banned.sub, email: banned.email,
+      role: 'guest', generation: 'old', addedBy: ken.sub, addedAt: new Date(), removedAt: new Date(), removedBy: ken.sub, purgeAt: null } })
+    expect(await listed(banned)).not.toContain(tab)
+    expect(await personIn(tab, banned)).toBeUndefined()
+    expect(await declinedOf(tab)).toContain(banned.sub)
+    const tried = vi.spyOn(store, 'autoJoinSwarm')
+    later()
+    await listed(banned)
+    expect(tried.mock.calls.filter(([, id]) => id === tab)).toEqual([])
+    tried.mockRestore()
+  })
+
+  it('declines someone who joined by domain and was then removed from the Workspace', async () => {
+    const tab = await create()
+    await turnOn(tab)
+    await listed(wsGone)
+    const { workspaceId } = await storedState(tab)
+    await store.workspaces.remove(ken, workspaceId!, wsGone.sub)
+    expect(await personIn(tab, wsGone)).toBeUndefined()
+    expect(await declinedOf(tab)).toContain(wsGone.sub)
   })
 })
