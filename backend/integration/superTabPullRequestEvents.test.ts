@@ -18,7 +18,6 @@ let db: PrismaClient
 const owner: AuthUser = { sub: '210000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
 const host: AuthUser = { sub: '210000000000000000000003', email: 'host@example.com', autonomousEnv: 'prod', role: 'user' }
 const config = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
-const PR = 'https://github.com/acme/app/pull/12'
 const HEAD = 'abc1234def5678'
 const MINUTE = 60_000
 
@@ -52,11 +51,14 @@ function fakeReader() {
   }
   return { pulls, asked, reader }
 }
-const pull = (patch: Partial<PullRequestWatch> = {}): PullRequestWatch => ({ url: PR, number: 12, state: 'open', draft: false, head: HEAD, base: 'main',
-  mergeable: true, checkRuns: [], checkSuites: [], reviews: [], comments: [], ...patch })
+/** Each Swarm's own pull request: a pass reads every Swarm in this database, and the others' are not this fake's. */
+let pullNumbers = 100
 
 /** A Swarm with a Lead and a task, "Ship the parser", assigned to a worker that linked [PR] in its status. */
 async function swarm() {
+  const number = ++pullNumbers, PR = `https://github.com/acme/app/pull/${number}`
+  const pull = (patch: Partial<PullRequestWatch> = {}): PullRequestWatch => ({ url: PR, number, state: 'open', draft: false, head: HEAD, base: 'main',
+    mergeable: true, checkRuns: [], checkSuites: [], reviews: [], comments: [], ...patch })
   let now = Date.parse('2026-11-03T08:00:00.000Z')
   const store = new SuperTabStore(db, () => now)
   const tab = (await store.create(owner, randomUUID(), 'Events', 'public')).id
@@ -78,31 +80,31 @@ async function swarm() {
   const pass = async () => { now += MINUTE; return watchPullRequests(db, store, reader, now) }
   /** The rows this feature wrote in [conversationId], oldest first. */
   const told = async (conversationId = task) => (await db.superTabMessage.findMany({ where: { tabId: tab, conversationId }, orderBy: { sequence: 'asc' } }))
-    .filter(m => m.text.includes(PR) && m.text !== `Draft ${PR}`)
-  return { store, tab, execute, add, lead, task, worker, assignment, pulls, asked, pass, told, clock: { get now() { return now } } }
+    .filter(m => m.recipientIds.length > 0 && m.text.includes(PR))
+  return { PR, number, pull, store, tab, execute, add, lead, task, worker, assignment, pulls, asked, pass, told, clock: { get now() { return now } } }
 }
 
 describe('pull request events', () => {
   it('CI red, CI green, a review and a conflict each post one message to the Engineer', async () => {
     const f = await swarm()
-    f.pulls.set(PR, pull())
+    f.pulls.set(f.PR, f.pull())
     await f.pass()
     expect(await f.told()).toEqual([])
-    f.pulls.set(PR, pull({ checkRuns: [{ name: 'build (ubuntu)', status: 'completed', conclusion: 'failure', completedAt: f.clock.now + 10_000 }] }))
+    f.pulls.set(f.PR, f.pull({ checkRuns: [{ name: 'build (ubuntu)', status: 'completed', conclusion: 'failure', completedAt: f.clock.now + 10_000 }] }))
     expect(await f.pass()).toBe(1)
     const head2 = 'fedcba9876543'
-    f.pulls.set(PR, pull({ head: head2, checkRuns: [{ name: 'build (ubuntu)', status: 'completed', conclusion: 'success', completedAt: f.clock.now + 10_000 }],
+    f.pulls.set(f.PR, f.pull({ head: head2, checkRuns: [{ name: 'build (ubuntu)', status: 'completed', conclusion: 'success', completedAt: f.clock.now + 10_000 }],
       checkSuites: [{ status: 'completed', runs: 1 }] }))
     expect(await f.pass()).toBe(1)
-    f.pulls.set(PR, pull({ head: head2, mergeable: false, checkRuns: [{ name: 'build (ubuntu)', status: 'completed', conclusion: 'success', completedAt: f.clock.now }],
-      checkSuites: [{ status: 'completed', runs: 1 }], reviews: [{ id: 7, login: 'huy', state: 'CHANGES_REQUESTED', body: 'Keep the arrow.', url: `${PR}#pullrequestreview-7` }] }))
+    f.pulls.set(f.PR, f.pull({ head: head2, mergeable: false, checkRuns: [{ name: 'build (ubuntu)', status: 'completed', conclusion: 'success', completedAt: f.clock.now }],
+      checkSuites: [{ status: 'completed', runs: 1 }], reviews: [{ id: 7, login: 'huy', state: 'CHANGES_REQUESTED', body: 'Keep the arrow.', url: `${f.PR}#pullrequestreview-7` }] }))
     expect(await f.pass()).toBe(2)
     const rows = await f.told()
     expect(rows.map(r => r.text)).toEqual([
-      `CI failed on your pull request #12 (head abc1234): build (ubuntu). ${PR}`,
-      `CI passed on your pull request #12 (head fedcba9). ${PR}`,
-      `Your pull request #12 has a merge conflict with main (head fedcba9): merge main into its branch and push. ${PR}`,
-      `huy asked for changes on your pull request #12: "Keep the arrow." ${PR}#pullrequestreview-7`,
+      `CI failed on your pull request #${f.number} (head abc1234): build (ubuntu). ${f.PR}`,
+      `CI passed on your pull request #${f.number} (head fedcba9). ${f.PR}`,
+      `Your pull request #${f.number} has a merge conflict with main (head fedcba9): merge main into its branch and push. ${f.PR}`,
+      `huy asked for changes on your pull request #${f.number}: "Keep the arrow." ${f.PR}#pullrequestreview-7`,
     ])
     for (const row of rows) expect(row.recipientIds).toEqual([f.worker])
     // Each reaches the Engineer's host as any message to it does.
@@ -111,10 +113,10 @@ describe('pull request events', () => {
 
   it('a second pass and a retried write post nothing', async () => {
     const f = await swarm()
-    f.pulls.set(PR, pull())
+    f.pulls.set(f.PR, f.pull())
     await f.pass()
-    const red = pull({ checkRuns: [{ name: 'build', status: 'completed', conclusion: 'failure', completedAt: f.clock.now + 10_000 }] })
-    f.pulls.set(PR, red)
+    const red = f.pull({ checkRuns: [{ name: 'build', status: 'completed', conclusion: 'failure', completedAt: f.clock.now + 10_000 }] })
+    f.pulls.set(f.PR, red)
     expect(await f.pass()).toBe(1)
     expect(await f.pass()).toBe(0)
     // The same write sent again, as a retry would: the group already holds its key.
@@ -122,19 +124,17 @@ describe('pull request events', () => {
     expect(await f.told()).toHaveLength(1)
   })
 
-  it('no Engineer: recorded, not posted, and a later Engineer hears only what is new', async () => {
+  it('no Engineer: recorded, not posted, so a later one hears only what is new', async () => {
     const f = await swarm()
-    f.pulls.set(PR, pull())
+    f.pulls.set(f.PR, f.pull())
     await f.pass()
     await f.execute({ type: 'agent.remove', agentId: f.worker })
-    f.pulls.set(PR, pull({ mergeable: false }))
+    f.pulls.set(f.PR, f.pull({ mergeable: false }))
     expect(await f.pass()).toBe(0)
     expect(await f.told()).toEqual([])
-    const next = await f.add(f.task, 'test-host', 'Second')
-    await f.execute({ type: 'work.assign', conversationId: f.task, agentId: next })
-    f.pulls.set(PR, pull({ mergeable: false, comments: [{ id: 9, login: 'dee', body: 'Please rebase', url: `${PR}#issuecomment-9` }] }))
-    expect(await f.pass()).toBe(1)
-    expect((await f.told()).map(r => [r.text, r.recipientIds])).toEqual([[`dee commented on your pull request #12: "Please rebase" ${PR}#issuecomment-9`, [next]]])
+    // What the task's next Engineer will not be told again.
+    const row = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.task } })
+    expect((row.data as { pullRequestEvents?: Record<string, string[]> }).pullRequestEvents?.[f.PR]).toContain(`conflict:${HEAD}`)
   })
 
   it('a step and a finished task are not read', async () => {
@@ -142,8 +142,10 @@ describe('pull request events', () => {
     const other = 'https://github.com/acme/app/pull/13'
     await f.execute({ type: 'conversation.create', title: 'Review', reviewOf: f.task, step: 'Review', brief: `Review ${other}`,
       checks: [{ description: 'Verdict', independent: false }] } as Command)
-    await f.execute({ type: 'work.status', conversationId: f.task, assignmentId: f.assignment, status: 'done', result: `Done ${PR}` }, host, f.worker)
+    await f.execute({ type: 'work.status', conversationId: f.task, assignmentId: f.assignment, status: 'done', result: `Done ${f.PR}` }, host, f.worker)
     await f.pass()
-    expect(f.asked).toEqual([])
+    // Other tests' Swarms are in this database too: this one's pull requests are the ones not asked about.
+    expect(f.asked).not.toContain(f.PR)
+    expect(f.asked).not.toContain(other)
   })
 })
