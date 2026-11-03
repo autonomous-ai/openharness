@@ -30,7 +30,8 @@ JOBS = {
     "cli": {"cli-typecheck", "cli-tests"},
     "pro": {"pro-firmware-build", "pro-golden"},
     "desktop": {"desktop-tests"},
-    "tui": {"tui-test"}, "backend": {"backend-desk"}, "companions": {"companion-subsystems"},
+    # backend-integration: the Super Tab integration suite (backend/integration) in four shards (task #2459).
+    "tui": {"tui-test"}, "backend": {"backend-desk", "backend-integration"}, "companions": {"companion-subsystems"},
     **{name: {name + "-checks"} for name in EXTRA},
 }
 MANUAL = {"full": CORE, "all": SUITES, "process": set(), **{name: {name} for name in SUITES}}
@@ -62,8 +63,11 @@ SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
 # test_ci_plan.CrossReadTests scans the components' sources and fails on an undeclared read.
 # The desktop VM tests run in a sparse checkout of exactly these inputs (ci-source-inputs.py).
 DEPENDS = {
-    "backend": ("cli/src/lib/productHealthContract.ts", "cli/src/lib/productUsageContract.ts", "daemons/frames.json",
-                "desktop/lib/measurement/", "desktop/lib/super_tabs/buddies.dart", "mobile/lib/measurement/",
+    # attachments.limits.test.ts compares the attachment size limits each client declares.
+    "backend": ("cli/src/lib/productHealthContract.ts", "cli/src/lib/productUsageContract.ts",
+                "cli/src/lib/superTabAttachmentProxy.ts", "cli/src/superTabs/attachments.ts", "daemons/frames.json",
+                "desktop/lib/measurement/", "desktop/lib/super_tabs/attachment_upload.dart",
+                "desktop/lib/super_tabs/buddies.dart", "mobile/lib/measurement/", "mobile/lib/swarm/swarm_outgoing_files.dart",
                 "provider/reference-provider/", "tests/fixtures/"),
     "cli": ("backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts", "desktop/",
             "cli/e2e/harness/", "devices/harness-device/firmware/test/vectors/", "docs/contracts/", "mobile/", "pty/", "tui/"),
@@ -92,16 +96,18 @@ DEPENDS = {
                 "cli/src/messages/command.ts", "desktop/lib/core/phone_app_links.dart",
                 "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png"),
 }
-# Folders inside a suite's own component that its PR jobs never read: the backend unit suite
-# runs src/**/*.test.ts, and the CLI's typecheck and unit tests cover src/ (end to end runs elsewhere).
+# Folders inside a suite's own component that its PR jobs never read: the CLI's typecheck and unit
+# tests cover src/ (end to end runs elsewhere). backend/integration is read: backend-integration runs it.
 # CrossReadTests fails when a file outside the folder refers into it.
-NOT_READ = {"backend": ("backend/integration/",), "cli": ("cli/e2e/",)}
+NOT_READ = {"cli": ("cli/e2e/",)}
 # Strings in a suite's files that name another directory's path but are not read by its PR jobs:
 # test data, or a script run only by hand. {source: (why, {path the scan reports})}.
 NOT_READS = {
     **{source: ("test data: owned-code paths and model names", {"desktop/lib/", "desktop/lib/super_tabs/",
                                                                 "desktop/lib/super_tabs/roster.dart"})
-       for source in ("backend/src/superTabs/commands.test.ts",)},
+       for source in ("backend/src/superTabs/commands.test.ts", "backend/integration/superTabs.test.ts")},
+    **{source: ("test data: a task's owned paths", {"docs/"})
+       for source in ("cli/src/superTabs/routeCheapFirst.spec.ts", "cli/src/superTabs/routeCommand.spec.ts")},
     # cli-tests runs vitest on src/ only; these start the real backend with its installed prisma.
     **{source: ("end-to-end and local stack scripts, run by hand", {"backend/"})
        for source in ("cli/e2e/harness/realBackend.ts", "cli/scripts/box-claim-e2e.ts", "cli/scripts/local-stack-peer.ts",
