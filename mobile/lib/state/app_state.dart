@@ -569,6 +569,10 @@ class AppNotifier extends ChangeNotifier {
       upload.cancel('account changed');
     }
     _swarmUploadsGoing.clear();
+    for (final write in _swarmWritesGoing) {
+      write.cancel('account changed');
+    }
+    _swarmWritesGoing.clear();
     // The copies large chat files were kept in went with the chats that held them.
     unawaited(clearSwarmPickerCopies());
     _profileInFlight = null;
@@ -6432,9 +6436,14 @@ class AppNotifier extends ChangeNotifier {
   /// refuses stands, being about this person; with no answer, or one that says nothing of them
   /// ([_swarmReadTriesMachine]), the read goes on through a machine as below.
   ///
-  /// A command, and a read going on, is forwarded by one of the account's own machines with its
-  /// session (`super_tabs`, `action: backend`, cli/src/superTabs/service.ts): the machine checks
-  /// that this connection is its owner's, and the backend what that account may read.
+  /// Writes also go straight to the backend with the phone's sign-in. Only unavailable transport
+  /// or server responses fall back to a machine; write refusals stand. In-flight writes are
+  /// cancelled on account change, including bearer-refresh retries. The unchanged body keeps
+  /// each command's operation ID across every path.
+  ///
+  /// A fallback uses one of the account's own machines with its session (`super_tabs`,
+  /// `action: backend`, cli/src/superTabs/service.ts): the machine checks that this connection
+  /// is its owner's, and the backend what that account may read or write.
   ///
   /// A refusal is asked again through each other machine that is up, one after another, up to
   /// [_swarmAsksPerCall] in all. One that answers shows the refusals before it were those
@@ -6461,17 +6470,17 @@ class AppNotifier extends ChangeNotifier {
     String path, {
     Map<String, dynamic>? body,
   }) async {
-    if (method == 'GET') {
-      final revision = _authRevision;
-      void stillThisAccount() {
-        if (!_authWorkCurrent(revision)) {
-          throw const SuperTabFailure(
-            'ACCOUNT_CHANGED',
-            'The account changed. Open Swarm again.',
-          );
-        }
+    final revision = _authRevision;
+    void stillThisAccount() {
+      if (!_authWorkCurrent(revision)) {
+        throw const SuperTabFailure(
+          'ACCOUNT_CHANGED',
+          'The account changed. Open Swarm again.',
+        );
       }
+    }
 
+    if (method == 'GET') {
       try {
         final value = await api.swarmRead(path);
         stillThisAccount();
@@ -6486,13 +6495,37 @@ class AppNotifier extends ChangeNotifier {
         _swarmReadGoesOn(error);
       }
     }
+    if (method == 'POST') {
+      final cancel = CancelToken();
+      _swarmWritesGoing.add(cancel);
+      try {
+        final value = await api.swarmWrite(path, body: body, cancel: cancel);
+        stillThisAccount();
+        return value;
+      } on SuperTabFailure catch (refusal) {
+        stillThisAccount();
+        // A write refusal belongs to this person. Never retry an expired
+        // sign-in, denied access or rate limit with a machine's credentials.
+        if (refusal.statusCode != 0 && refusal.statusCode < 500) rethrow;
+      } catch (_) {
+        stillThisAccount();
+      } finally {
+        _swarmWritesGoing.remove(cancel);
+      }
+      appLog.warn(
+        'swarm',
+        'Swarm write could not reach the backend, asking a machine',
+      );
+    }
     var machine = _swarmMachine() ?? await _swarmMachineBack();
+    stillThisAccount();
     if (machine == null) throw _swarmNoComputer();
     final asked = <MachineState>{}, refused = <MachineState>[];
     SuperTabFailure? lost;
     late Object failure;
     late StackTrace trace;
     while (machine != null) {
+      stillThisAccount();
       asked.add(machine);
       try {
         final value = await _swarmRequestVia(machine, method, path, body);
@@ -6516,6 +6549,7 @@ class AppNotifier extends ChangeNotifier {
               ? await _swarmMachineBack(except: asked)
               : null);
     }
+    stillThisAccount();
     if (lost != null) throw lost;
     if (machine == null &&
         failure is SuperTabFailure &&
@@ -6549,7 +6583,7 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// Sends one Swarm chat file to the backend ([SwarmUpload]): straight from this phone with its own
-  /// sign-in ([ApiClient.uploadSwarmAttachment]), not through a machine as [swarmRequest] goes — the
+  /// sign-in ([ApiClient.uploadSwarmAttachment]), with no machine fallback — the
   /// backend takes a chat file only from the client, and a machine forwards only JSON. An answer
   /// that lands after the account changed is dropped, and a sign-out or another sign-in stops the
   /// upload where it is ([_invalidateAuthWork]).
@@ -6598,6 +6632,9 @@ class AppNotifier extends ChangeNotifier {
       _swarmUploadsGoing.remove(going);
     }
   }
+
+  /// JSON writes cancelled before another account can refresh or retry them.
+  final _swarmWritesGoing = <CancelToken>{};
 
   /// The chat file uploads of this sign-in on their way ([swarmUpload]).
   final _swarmUploadsGoing = <CancelToken>{};
