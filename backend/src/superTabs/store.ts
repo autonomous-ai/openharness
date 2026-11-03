@@ -1,5 +1,5 @@
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
-import { expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, recordAgentPresence, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
+import { accountMachineName, expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, recordAgentPresence, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
 import { readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { createHash } from 'node:crypto'
@@ -949,8 +949,11 @@ export class SuperTabStore {
     person(state, contributorId)
     const machine = await tx.machine.findFirst({ where: { machineId: command.machineId, autonomousEnv: state.environment, ...machineAlive } })
     if (!machine || !machineBillingAllowsDataPlane(machine)) fail('HOST_UNAVAILABLE', 'This machine is unavailable.', 403)
+    // Its owner's name for it, from its account row: the name a client sends may be the computer's (#2308).
+    const named = accountMachineName(machine)
     // A Mac's Harness Team account names its Mac from its own account row, which only its owner's sign-in set (machines.ts).
-    const host = { ...(machine.sessionKind === 'team' && machine.hostMachineId ? { hostMachineId: machine.hostMachineId } : {}),
+    const host = { ...(named ? { machineName: named } : {}),
+      ...(machine.sessionKind === 'team' && machine.hostMachineId ? { hostMachineId: machine.hostMachineId } : {}),
       // A Team sign-in with no Mac (`harness team on`) is no person's own machine either (commands.ts buddy.create).
       ...(machine.sessionKind === 'team' ? { teamSession: true as const } : {}) }
     if (pooled) {

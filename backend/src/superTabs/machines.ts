@@ -357,6 +357,12 @@ export function teamPoolsOf(state: SuperTabState, pool: ContributedMachine): Con
   return state.machines?.filter(m => m.hostMachineId === pool.machineId && m.contributorId === pool.contributorId) ?? []
 }
 
+/** The name a machine's owner gave it in Machines (its account row, routes/machines.ts rename), which every Swarm list shows
+ *  (Dee, #2308): seeded from its computer's hostname, so a machine never renamed keeps that. Null when the row has none. */
+export function accountMachineName(row: { name: string | null } | null | undefined): string | null {
+  return row?.name?.trim() || null
+}
+
 /** The one of them that runs teammates' work on the Mac: not being removed, and the last to report. Undefined when none. */
 export function teamPoolOf(state: SuperTabState, pool: ContributedMachine, live?: readonly string[]): ContributedMachine | undefined {
   // [live]: the account rows still signed in as team accounts (store.ts teamMachines). One removed since (`harness team
