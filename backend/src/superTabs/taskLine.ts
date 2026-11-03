@@ -72,7 +72,7 @@ export function syncTaskLines(before: SuperTabState, effects: CommandEffects, re
     if (!chat || !coordinator) continue
     const reply = (id: string, text: string, author = sender ?? coordinator) => {
       const root = group.cards!.line!.messageId
-      effects.messages.push({ id, conversationId: chat.id, author, text, replyTo: root, thread: root, recipients: [] })
+      effects.messages.push({ id, conversationId: chat.id, author, text, replyTo: root, thread: root, recipients: [], source: { kind: 'system' } })
     }
     if (!line) {
       const proposal = group.ledger?.proposal
@@ -94,9 +94,11 @@ export function syncTaskLines(before: SuperTabState, effects: CommandEffects, re
     const stateChanged = !!group.assignment && (line.state !== now.state || previous?.assignment?.status !== group.assignment.status || line.answerFor !== now.answerFor)
     const freshPrs = (group.pullRequestUrls ?? []).filter(url => !previous?.pullRequestUrls?.includes(url))
     const merged = group.ledger?.mergedAt != null && previous?.ledger?.mergedAt == null
-    if (merged) {
-      reply(stableId(operationId, 'task-progress', group.id), `Merged ${(group.pullRequestUrls ?? []).join(', ')}.`)
-      const news = sender && shippedNotice(state, group, sender, operationId)
+    const mergedPrs = (group.cards?.pullRequests ?? []).filter(card => card.mergedAt !== undefined
+      && previous?.cards?.pullRequests?.find(was => was.url === card.url)?.mergedAt === undefined).map(card => card.url)
+    if (mergedPrs.length) {
+      reply(stableId(operationId, 'task-progress', group.id), `Merged ${mergedPrs.join(', ')}.`)
+      const news = merged && sender && shippedNotice(state, group, sender, operationId)
       if (news) effects.messages.push(news)
     } else if (assignmentChanged) {
       reply(stableId(operationId, 'task-progress', group.id), `Assigned to ${agentDisplayName(state.agents, group.assignment!.agentId)}.`)
@@ -105,7 +107,10 @@ export function syncTaskLines(before: SuperTabState, effects: CommandEffects, re
         review: 'Ready for review.', ready: 'Ready to merge.', shipped: 'Merged.', done: 'Work completed.', stopped: 'Work stopped.' }
       const result = reported === group.id ? group.assignment?.result : null
       const links = freshPrs.filter(url => !result?.includes(url))
-      reply(stableId(operationId, 'task-progress', group.id), [labels[now.state], result, ...links].filter(Boolean).join('\n\n'))
+      const status = group.assignment?.status
+      const label = status === 'blocked' ? 'Work is blocked.' : status === 'lost' ? 'Work needs a new engineer.'
+        : status === 'reconciling' ? 'Checking who can continue the work.' : status === 'cancelled' ? 'Work cancelled.' : labels[now.state]
+      reply(stableId(operationId, 'task-progress', group.id), [label, result, ...links].filter(Boolean).join('\n\n'))
     }
     for (const post of posts) {
       if (post.conversationId !== group.id || post.source) continue
