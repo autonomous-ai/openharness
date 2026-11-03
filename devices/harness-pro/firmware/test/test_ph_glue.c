@@ -2441,6 +2441,30 @@ static void nobuddy_screen_never_talks(void) {
     o = tap_(MID_X, MID_Y, 7000);
     CHECK(o.fx == POD_FX_VOICE_BEGIN && !strcmp(o.agent, "a1"));
 }
+// Review of #2299 (Heron): with a real Buddy on the face, a tap started voice for the Lead's harness, and a Pro's words post in the
+// Lead conversation, the shared chat, while the screen shows the person's private Buddy. Until voice comes to the face chat (part 3),
+// nothing on the Buddy side, or with the Buddy chat as the Lead's face, talks.
+static void buddy_screen_never_talks(void) {
+    pod_out_t o;
+    buddy_lead_open();
+    buddy_swarm()->side = POD_SIDE_BUDDY;   // the Buddy side, with a Buddy: avatar and lilac name
+    render(3400);
+    take();
+    t_(true, MID_X, MID_Y, 6000);
+    o = t_(false, MID_X, MID_Y, 6050);
+    CHECK(o.fx != POD_FX_VOICE_BEGIN && !U.talk_armed && !pod_ui_talking(&U));
+    buddy_swarm()->side = POD_SIDE_PM;      // the PM side, but the desktop has the Buddy chat open: that chat is the face
+    buddy_swarm()->leads[1].chat = POD_CHAT_BUDDY;
+    render(6100);
+    take();
+    o = tap_(MID_X, MID_Y, 7000);
+    CHECK(o.fx != POD_FX_VOICE_BEGIN && !pod_ui_talking(&U));
+    buddy_swarm()->leads[1].chat = POD_CHAT_PM;   // the PM chat as the face: it talks
+    render(7100);
+    take();
+    o = tap_(MID_X, MID_Y, 8000);
+    CHECK(o.fx == POD_FX_VOICE_BEGIN && !strcmp(o.agent, "a1"));
+}
 // A tapped segment that no frame answers goes back to the Swarm's own side after POD_SUPERTAB_RETRY_MS, and the view wakes to draw it.
 static void pressed_side_expires(void) {
     buddy_lead_open();
@@ -2492,6 +2516,7 @@ int main(void) {
     relink_clears_buddy_dot();
     side_kept_across_swipe();
     nobuddy_screen_never_talks();
+    buddy_screen_never_talks();
     pressed_side_expires();
     pressed_side_cleared_when_send_fails();
     buddy_dot_clears_when_buddy_face_shown();
