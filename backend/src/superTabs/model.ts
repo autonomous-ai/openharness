@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { cloneData } from './cloneData.js'
+import { autoJoinOn } from './autoJoinDomain.js'
 import { lostReasonWithoutMachine } from './lostReason.js'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
@@ -22,6 +23,8 @@ export interface Person {
   avatar?: import('./profile.js').Avatar
   /** The name they chose (usernames.ts), or one kept for them; absent, readers work out their default. Only members read it. */
   username?: string
+  /** `domain`: joined by themselves as someone at the owner's email domain (autoJoin.ts), so the people list says so. */
+  joinedVia?: 'domain'
 }
 export interface AgentConfiguration {
   engine: string
@@ -433,6 +436,11 @@ export interface SuperTabState {
   rules?: import('./rules.js').SwarmRule[]
   /** Owner-only sharing configuration; visibleState always removes it. */
   sharing?: import('./sharing.js').SwarmSharing
+  /** People who left or were removed, whom auto-join never adds again (autoJoin.ts); visibleState always removes it. */
+  autoJoinDeclined?: string[]
+  /** Only in what a reader gets (visibleState), never stored: people at the owner's domain join by themselves, so the leave
+   *  dialog says someone who leaves is not added back. */
+  autoJoin?: true
   paused: boolean
   /** Its owner deleted it (deletion.ts): nobody reads or writes it, its row lists no member, and its owner may restore it until
    *  `purgeAt` (ISO times). Absent on a live Swarm. */
@@ -814,9 +822,10 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // and closing sessions (only that machine's host roster lists them: read/hostRows.ts; a removed private agent's session is
   // not every member's), and overlap alerts. Nor a dormant conversation: it is read on demand, never in a whole-Swarm read
   // (spec, Archive); a command may still load one.
-  const { sharing: _sharing, harnessReservations: _reservations, releasedHarnesses: _released, overlapAlerts: _alerts, closingSessions: _closing,
+  const { sharing: _sharing, autoJoinDeclined: _declined, harnessReservations: _reservations, releasedHarnesses: _released, overlapAlerts: _alerts, closingSessions: _closing,
     removedSessions: _removed, ...kept } = state
   const visible = cloneData({ ...kept, conversations: state.conversations.filter(c => !c.dormant) })
+  if (autoJoinOn(state)) visible.autoJoin = true
   // A Buddy-only machine is no machine of the Swarm to anyone, its own person included (machines.ts buddyOnly): their Buddy
   // shows as a Buddy, and their machine stays theirs. Machines, status and the leaderboard's lent hours all read this.
   if (visible.machines) visible.machines = visible.machines.filter(m => !m.buddyOnly)

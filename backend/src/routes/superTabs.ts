@@ -11,6 +11,7 @@ import { PERIODS } from '../superTabs/leaderboard/rolling.js'
 import { fail, SuperTabError } from '../superTabs/model.js'
 import { SuperTabStore } from '../superTabs/store.js'
 import { redisPollMemory } from '../superTabs/pollMemory.js'
+import { redisAutoJoinMemory } from '../superTabs/autoJoin.js'
 import { redisReportMemory } from '../superTabs/machineReports.js'
 import { routingPolicySaveSchema } from '../superTabs/routingPolicy.js'
 import { nativeEventSchema, openNativeSchema } from '../superTabs/native.js'
@@ -238,6 +239,8 @@ async function productionStore(github: GitHubTokens | null): Promise<SuperTabSto
       // Every server answers the quiet delivery poll from any server's full one, and tells the agent's machine of new work
       // through whichever server holds its daemon socket (stability roadmap 2.4). Both only ever drop, never fail, on Redis.
       polls: redisPollMemory(bus.pub),
+      // Each person is tried for joining by domain once per 2 minutes across every server (superTabs/autoJoin.ts).
+      autoJoins: redisAutoJoinMemory(bus.pub),
       // What each machine's full report saw, so its heartbeats skip the Swarm load, and one sweep clock per Swarm (DB 2.5).
       reports: redisReportMemory(bus.pub),
       deliveriesWaiting: announceSwarmDeliveries, terminalWaiting: announceSwarmTerminal,

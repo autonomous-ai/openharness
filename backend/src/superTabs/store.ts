@@ -51,7 +51,7 @@ import { judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWE
 import { archivable, archiveLine, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
-import { memberSwarms } from './swarmRows.js'
+import { autoJoinSwarms, memberSwarms } from './swarmRows.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts, ms } from './parts/light.js'
 import { endSteps, stepEndedRows, stepsOf } from './steps.js'
@@ -62,7 +62,7 @@ import { freeze, readStamps, stampOwed, swarmReadCache, swarmTransaction, type C
 import { countReport, DEADLINE_CAP_MS, localReportMemory, RECORD_TTL_MS, type ReportMemory, type ReportRecord } from './machineReports.js'
 import { DIRECT, readLastChangedAt, readParts, type ReadNamed } from './cachedReads.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
-import { activeMember, addMember, hasWorkspaceAccess, listWorkspaces, memberId, WORKSPACE_ACCESS_REVOKED, workspaceForNewSwarm, requireWorkspaceAccess, requireWorkspaceRole, SwarmWorkspaces } from './workspaceStore.js'
+import { activeMember, addMember, autoJoinDeclinedBy, hasWorkspaceAccess, listWorkspaces, memberId, WORKSPACE_ACCESS_REVOKED, workspaceForNewSwarm, requireWorkspaceAccess, requireWorkspaceRole, SwarmWorkspaces } from './workspaceStore.js'
 import { WORKSPACE_LABEL, type WorkspaceRole } from './workspaces.js'
 import { STATUS_LABELS,
   activeWork, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
@@ -88,7 +88,9 @@ import { DEFAULT_ROUTING_POLICY, type RoutingPolicy } from './routingPolicy.js'
 import { catalogRead } from './catalog.js'
 import { invitedSwarms } from './invitedSwarms.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
-  saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
+  saveSharingSchema, sharingDetails, autoJoinOn, AUTO_JOIN_CAP, declinedWith, declinedWithout, type JoinSwarm, type SaveSharing } from './sharing.js'
+import { autoJoin, localAutoJoinMemory, type AutoJoinMemory, type AutoJoinOutcome } from './autoJoin.js'
+import { emailDomain } from '../lib/publicEmailDomains.js'
 
 type Transaction = Prisma.TransactionClient
 type ReactCommand = Extract<Command, { type: 'message.react' }>
@@ -329,6 +331,9 @@ export interface SuperTabStoreHooks {
   /** What each machine's full report saw, for its next reports, and each Swarm's sweep clock, shared by every server (Redis
    *  in production, machineReports.ts). Left out, this server remembers alone. */
   reports?: ReportMemory
+  /** When each person was last tried for joining by domain (autoJoin.ts), shared by every server (Redis in production). Left
+   *  out, this server remembers alone. */
+  autoJoins?: AutoJoinMemory
   /** A delivery now waits for this agent, committed: its machine's daemon socket tells its host to read it at once
    *  (lib/swarmDeliveryPushes.ts). Called after the write commits; it must not throw. */
   deliveriesWaiting?: (waiting: DeliveriesWaiting) => void
@@ -550,6 +555,7 @@ export class SuperTabStore {
     private readonly attachments: Attachments | null = null, private readonly hooks: SuperTabStoreHooks = {}) {
     this.fileLinks = attachments ? new FileLinks(attachments.store, attachments.publicBase, attachments.prefix) : null
     this.polls = hooks.polls ?? localPollMemory(now)
+    this.autoJoins = hooks.autoJoins ?? localAutoJoinMemory(now)
     this.reports = hooks.reports ?? localReportMemory(now)
     this.native = new SuperTabNativeStore({
       transaction: body => transaction(db, body),
@@ -1032,7 +1038,55 @@ export class SuperTabStore {
 
   async workspaceList(user: AuthUser) {
     this.personOnly(user)
+    // As the Swarm list does: a Swarm the person joins by domain is in the Workspace they see in this answer.
+    await this.autoJoin(user)
     return { workspaces: await listWorkspaces(this.db, user) }
+  }
+
+  /** Joins the person to the Swarms of their own email domain with auto-join on, at most every 2 minutes (autoJoin.ts). Run at
+   *  the start of the list reads apps poll. Never throws. */
+  async autoJoin(user: AuthUser): Promise<string[]> {
+    return autoJoin({ memory: this.autoJoins, find: (person, domain, limit) => autoJoinSwarms(this.db, person.autonomousEnv, domain, person.sub, limit),
+      join: (person, tabId) => this.autoJoinSwarm(person, tabId) }, user)
+  }
+
+  /** Joins `user` to Swarm [tabId] as someone at its owner's domain, by themselves (spec 2026-11-03). Everything the read found
+   *  is checked again in this transaction: auto-join still on at the person's domain, not a member, never declined, under 200
+   *  people. The join relies on the sharing the head holds, so turning auto-join off at once conflicts with it. Someone the
+   *  Workspace removed is declined instead, in its own write, so no later read finds this Swarm for them. */
+  async autoJoinSwarm(user: AuthUser, tabId: string): Promise<AutoJoinOutcome> {
+    this.personOnly(user)
+    const outcome = await transaction(this.db, async tx => {
+      const loaded = await this.load(tx, user, tabId), state = cloneData(loaded.state)
+      const domain = autoJoinOn(state), email = authenticatedEmail(user.email)
+      if (!domain || !email || emailDomain(email) !== domain || state.people.some(p => p.id === user.sub) ||
+        state.autoJoinDeclined?.includes(user.sub) || state.people.length >= AUTO_JOIN_CAP) return 'skipped' as const
+      const stamp = clock.next(), generation = stableId('auto-join', tabId, user.sub, String(stamp))
+      if (state.workspaceId) {
+        // As a link join: a guest of the Workspace, never higher; someone active there keeps their role (addMember).
+        const prior = await tx.swarmWorkspaceMember.findUnique({ where: { id: memberId(state.workspaceId, user.sub) } })
+        // Removed from the Workspace: its row says so until purged, and the Workspace's own decline after that.
+        if (prior?.removedAt || (!prior && await autoJoinDeclinedBy(tx, state.workspaceId, user.sub))) return 'revoked' as const
+        await addMember(tx, state.workspaceId, { id: user.sub, email }, 'guest', state.ownerId, generation)
+      }
+      state.people.push({ id: user.sub, email, role: state.sharing!.access.role, generation, joinedVia: 'domain' })
+      await this.save(tx, loaded, state, stamp, [{ kind: 'head', key: 'head' }])
+      // People per Swarm is what warns first at scale (spec, Design 4).
+      logger.info('[super-tab] auto-join', { tabId, userId: user.sub, people: state.people.length })
+      return 'joined' as const
+    }).catch(error => {
+      // A Swarm deleted since the read is found by nobody.
+      if (error instanceof SuperTabError && error.code === 'NOT_FOUND') return 'skipped' as const
+      throw error
+    })
+    if (outcome !== 'revoked') return outcome
+    await transaction(this.db, async tx => {
+      const loaded = await this.load(tx, user, tabId), state = cloneData(loaded.state)
+      if (state.autoJoinDeclined?.includes(user.sub) || state.people.some(p => p.id === user.sub)) return
+      state.autoJoinDeclined = declinedWith(state, user.sub)
+      await this.save(tx, loaded, state, clock.next())
+    })
+    return 'declined'
   }
 
   /** Opens a Swarm to its Workspace's members, or closes it again: its owner (not a guest) or the Workspace's owners and admins,
@@ -1096,7 +1150,7 @@ export class SuperTabStore {
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)
       requireSharingOwner(state, user.sub)
-      return sharingDetails(state)
+      return sharingDetails(state, user.email)
     })
   }
 
@@ -1112,14 +1166,14 @@ export class SuperTabStore {
         if (prior.requestHash !== requestHash) fail('OPERATION_REUSED', 'Use a new operation ID for a different request.')
         const result = prior.result as Record<string, unknown>
         if (state.sharing?.generation !== result.generation) fail('SHARING_CHANGED', 'Sharing changed after this request. Reload it and try again.')
-        return sharingDetails(state)
+        return sharingDetails(state, user.email)
       }
       if ((state.sharing?.revision ?? 0) !== request.revision) fail('REVISION_CHANGED', 'Sharing changed elsewhere. Reload it and try again.')
-      state.sharing = configureSharing(state.sharing, request.access, request.rotateLink)
+      state.sharing = configureSharing(state.sharing, request.access, request.rotateLink, user.email)
       const stamp = clock.next(), { written } = await this.save(tx, loaded, state, stamp, [{ kind: 'member', key: user.sub }])
       await tx.superTabOperation.create({ data: { id: receiptId, tabId, actorKey: `person:${user.sub}`, requestHash,
         revision: 0, parts: json(receiptParts(written, stamp)), result: { generation: state.sharing.generation } } })
-      return sharingDetails(state)
+      return sharingDetails(state, user.email)
     })
   }
 
@@ -1128,7 +1182,7 @@ export class SuperTabStore {
     this.personOnly(user)
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)
-      const sharing = authorizeSwarmJoin(state, user.email, token)
+      const sharing = authorizeSwarmJoin(state, user.email, token, user.sub)
       const member = state.people.find(p => p.id === user.sub)
       return { id: tabId, name: state.name, role: member?.role ?? sharing.access.role, alreadyMember: !!member }
     })
@@ -1141,7 +1195,7 @@ export class SuperTabStore {
       const loaded = await this.load(tx, user, tabId), state = cloneData(loaded.state)
       // Recheck the current grant before an old receipt. Disabling, replacing, or
       // changing access can never revive a removed membership through a retry.
-      const sharing = authorizeSwarmJoin(state, user.email, request.token)
+      const sharing = authorizeSwarmJoin(state, user.email, request.token, user.sub)
       const receiptId = stableId('swarm-join', tabId, user.sub, request.operationId), requestHash = hash(request)
       const prior = await tx.superTabOperation.findUnique({ where: { id: receiptId } })
       let member = state.people.find(p => p.id === user.sub)
@@ -1165,6 +1219,8 @@ export class SuperTabStore {
         member = { id: user.sub, email: authenticatedEmail(user.email)!, role: sharing.access.role, generation: receiptId }
         state.people.push(member)
       }
+      // A join by link or domain link is coming back on purpose: it clears a decline (spec 2026-11-03, Leaving is final).
+      if (state.autoJoinDeclined?.includes(user.sub)) state.autoJoinDeclined = declinedWithout(state, user.sub)
       // Existing people retain their role and private-project grants. A general
       // access link does not promote a viewer or grant a private project.
       // The join relied on the sharing generation the head holds: a concurrent sharing change conflicts with it.
@@ -3279,6 +3335,7 @@ export class SuperTabStore {
 
   /** When each caller's full delivery poll last succeeded for an agent: key is tab, agent and caller. */
   private readonly polls: PollMemory
+  private readonly autoJoins: AutoJoinMemory
 
   /**
    * Every running agent's host polls this each second. With nothing waiting and the full poll (which loads the Swarm and
