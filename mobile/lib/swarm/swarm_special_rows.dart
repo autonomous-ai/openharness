@@ -154,13 +154,14 @@ class _SwarmRouteRowState extends State<SwarmRouteRow> {
               ),
             ],
           ),
-          if (_expanded) DefaultTextStyle(style: style, child: _detailsView()),
+          if (_expanded) _detailsView(style),
         ],
       ),
     );
   }
 
-  Widget _detailsView() {
+  Widget _detailsView(TextStyle style) {
+    Text line(String words) => Text(words, style: style);
     final r = widget.route;
     final record = superTabMap(_details?['record'] ?? const {});
     final candidates = (record['candidates'] as List? ?? const []).map(
@@ -171,28 +172,28 @@ class _SwarmRouteRowState extends State<SwarmRouteRow> {
       crossAxisAlignment: CrossAxisAlignment.start,
       spacing: AppSpace.xs,
       children: [
-        Text(r.pick.title),
-        if (r.why.isNotEmpty) Text(r.why),
-        Text('Selection: $_how'),
-        if (_loading) const Text('Loading details…'),
+        line(r.pick.title),
+        if (r.why.isNotEmpty) line(r.why),
+        line('Selection: $_how'),
+        if (_loading) line('Loading details…'),
         if (_failed)
           Row(
             children: [
-              const Flexible(child: Text('Could not load this decision.')),
+              Flexible(child: line('Could not load this decision.')),
               _NoteAction(label: 'Retry', onTap: () => unawaited(_load())),
             ],
           ),
         if (record['instructionsRevision'] case final num revision)
-          Text(
+          line(
             revision == 0
                 ? 'Relied on the built-in instructions'
                 : 'Relied on instructions revision ${revision.toInt()}',
           ),
         if (candidates.isNotEmpty) ...[
-          const Text('Considered'),
+          line('Considered'),
           for (final c in candidates)
             if (c['title'] case final String title)
-              Text(
+              line(
                 [
                   title,
                   if (c['label'] case final String label) label,
@@ -200,7 +201,7 @@ class _SwarmRouteRowState extends State<SwarmRouteRow> {
               ),
         ],
         for (final e in excluded)
-          Text('Unavailable: ${e['title']} — ${e['reason']}'),
+          line('Unavailable: ${e['title']} — ${e['reason']}'),
       ],
     );
   }
