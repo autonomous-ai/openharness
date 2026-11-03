@@ -257,6 +257,189 @@ void main() {
     await finish(tester);
   });
 
+  testWidgets('the dialog switches machine, account and model together', (
+    tester,
+  ) async {
+    final server = swarm();
+    server.state['machines'] = [
+      ...(server.state['machines'] as List),
+      {
+        'machineId': 'target',
+        'name': 'Mac Two',
+        'contributorId': 'mac',
+        'teamWork': {'allowed': true},
+        'engines': ['claude', 'codex'],
+        'observation': {
+          'receivedAt': DateTime.now().millisecondsSinceEpoch,
+          'capabilities': ['leadStart', 'leadSwitch'],
+          'profiles': [
+            {
+              'engine': 'codex',
+              'id': 'cccccccccccccccc',
+              'label': 'Default',
+              'leftPercent': 80,
+              'resetsAt': null,
+            },
+          ],
+        },
+      },
+    ];
+    server.routingPolicy = {
+      'catalog': {
+        'models': [
+          {'engine': 'codex', 'model': 'gpt-6.1-sol', 'offered': true},
+          {'engine': 'claude', 'model': 'sonnet', 'offered': true},
+        ],
+      },
+    };
+    await mount(tester, server, 'owner');
+    await openMenu(tester);
+    await tester.tap(item);
+    await tester.pumpAndSettle();
+    expect(find.text('Machine'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('switch-pm-machine')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Mac Two').last);
+    await tester.pumpAndSettle();
+    expect(find.text('Codex · Default'), findsOneWidget);
+    await tester.tap(find.text('Codex · Default'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('switch-pm-model')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('gpt-6.1-sol').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Switch'));
+    await tester.pumpAndSettle();
+    final sent = [
+      for (final post in server.posts)
+        if ((post['command'] as Map?)?['type'] == 'lead.switch')
+          post['command'] as Map,
+    ];
+    expect(sent.single['machineId'], 'target');
+    expect(sent.single['engine'], 'codex');
+    expect(sent.single['profileId'], 'cccccccccccccccc');
+    expect(sent.single['model'], 'gpt-6.1-sol');
+    await finish(tester);
+  });
+
+  testWidgets('the dialog explains when no destination can change', (
+    tester,
+  ) async {
+    final server = swarm();
+    final currentPool = (server.state['machines'] as List).first as Map;
+    currentPool['engines'] = ['claude'];
+    currentPool['observation'] = {
+      'receivedAt': DateTime.now().millisecondsSinceEpoch,
+      'capabilities': ['leadStart'],
+      'profiles': [],
+    };
+    await mount(tester, server, 'owner');
+    await openMenu(tester);
+    await tester.tap(item);
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'No other machine or account can run a Product Manager right now.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('switch-pm-machine')), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await finish(tester);
+  });
+
+  testWidgets('an outdated machine stays listed with its reason and disabled', (
+    tester,
+  ) async {
+    final server = swarm();
+    server.state['machines'] = [
+      ...(server.state['machines'] as List),
+      {
+        'machineId': 'old',
+        'name': 'Old Mac',
+        'contributorId': 'owner',
+        'engines': ['claude'],
+        'observation': {
+          'receivedAt': DateTime.now().millisecondsSinceEpoch,
+          'capabilities': ['leadStart'],
+          'profiles': [],
+        },
+      },
+    ];
+    await mount(tester, server, 'owner');
+    await openMenu(tester);
+    await tester.tap(item);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('switch-pm-machine')));
+    await tester.pumpAndSettle();
+    final reason = find.textContaining('Update Harness on Old Mac');
+    expect(reason, findsOneWidget);
+    final old = tester.widget<DropdownMenuItem<String>>(
+      find.ancestor(
+        of: reason,
+        matching: find.byType(DropdownMenuItem<String>),
+      ),
+    );
+    expect(old.enabled, isFalse);
+    await finish(tester);
+  });
+
+  testWidgets('a destination that goes stale cannot be submitted', (
+    tester,
+  ) async {
+    final server = swarm();
+    server.state['machines'] = [
+      ...(server.state['machines'] as List),
+      {
+        'machineId': 'target',
+        'name': 'Mac Two',
+        'contributorId': 'owner',
+        'engines': ['codex'],
+        'observation': {
+          'receivedAt': DateTime.now().millisecondsSinceEpoch,
+          'capabilities': ['leadStart', 'leadSwitch'],
+          'profiles': [
+            {
+              'engine': 'codex',
+              'id': 'cccccccccccccccc',
+              'label': 'Default',
+              'leftPercent': 80,
+              'resetsAt': null,
+            },
+          ],
+        },
+      },
+    ];
+    final c = await mount(tester, server, 'owner');
+    await openMenu(tester);
+    await tester.tap(item);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('switch-pm-machine')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Mac Two').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Codex · Default'));
+    await tester.pumpAndSettle();
+    final target = (server.state['machines'] as List).last as Map;
+    (target['observation'] as Map)['capabilities'] = ['leadStart'];
+    await c.refresh();
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Switch'))
+          .onPressed,
+      isNull,
+    );
+    expect(
+      server.posts.where(
+        (post) => (post['command'] as Map?)?['type'] == 'lead.switch',
+      ),
+      isEmpty,
+    );
+    await tester.tap(find.text('Cancel'));
+    await finish(tester);
+  });
+
   testWidgets(
     'the PM\'s own profileId marks its row; no id means its engine\'s default',
     (tester) async {
@@ -271,7 +454,10 @@ void main() {
       ListTile row(String key) =>
           tester.widget<ListTile>(find.byKey(ValueKey(key)));
       expect(row('switch-pm-claude-$claudeDefault').enabled, isTrue);
-      expect(find.textContaining('Current'), findsOneWidget);
+      expect(
+        (row('switch-pm-claude-aaaaaaaaaaaaaaaa').subtitle as Text).data,
+        startsWith('Current'),
+      );
       await tester.tap(find.text('Cancel'));
       await finish(tester);
     },
