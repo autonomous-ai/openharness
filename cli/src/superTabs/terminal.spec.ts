@@ -447,6 +447,8 @@ describe('reading a usage limit off a screen', () => {
     ['claude-weekly-limit', { resetAt: new Date(2026, 9, 30, 9, 0).toISOString() }],
     ['claude-opus-limit', { resetAt: new Date(2026, 9, 30, 9, 0).toISOString() }],
     ['claude-fable-limit', {}],
+    // Mid-turn, its notice is a row of its own after a tool's output (review of #2712, Important 1).
+    ['claude-limit-after-tool', { resetAt: new Date(2026, 9, 23, 15, 0).toISOString() }],
     ['codex-usage-limit', { resetAt: new Date(2026, 9, 27, 15, 5).toISOString() }],
     ['codex-model-limit', { resetAt: new Date(2026, 9, 23, 16, 5).toISOString() }],
   ])('reads the %s screen', (name, limit) => {
@@ -463,6 +465,8 @@ describe('reading a usage limit off a screen', () => {
   it('reads no limit off a log a tool printed, quoted or indented, near the prompt', () => {
     expect(limitOf('⏺ Read(logs/codex.log)\n  ⎿  Read 3 lines\n     5-hour limit reached ∙ resets 3pm\n\n❯ ', now)).toBeNull()
     expect(limitOf('• Ran cat codex.log\n  └ ■ You\'ve hit your usage limit. Try again at 4:05 PM.\n\n› ', now)).toBeNull()
+    // A Claude Code screen printed in a tool's output, its header scrolled off: its "⎿" rows sit deeper than the engine's own.
+    expect(limitOf('       └  Test Files  1 passed (1)\n     ⎿  You\'ve hit your session limit · resets 3pm\n\n❯ ', now)).toBeNull()
     expect(limitOf('⏺ Update(notes.md)\n  ⎿  Added 1 line\n       1 + You\'ve hit your session limit · resets 3pm\n\n❯ ', now)).toBeNull()
   })
   it('still reads Claude Code\'s limit dialog', () => {

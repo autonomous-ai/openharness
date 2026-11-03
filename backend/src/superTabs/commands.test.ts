@@ -3912,21 +3912,19 @@ describe('lost work (liveness.ts)', () => {
     expect(marked()).toMatchObject({ limitedUntil: null, alerting: [] })
   })
 
-  it('clears the limit mark when the agent works again, and not when anyone else does', () => {
+  it('clears the limit mark when the agent reports its work, and not on posts its host sends as it, or anyone else\'s', () => {
     const { f, lead, group, worker, other, as, task, limit } = lostFixture()
     limit()
     const marked = () => f.state.agents.find(a => a.id === worker)!
     f.run({ type: 'message.send', conversationId: group, text: 'Still here.', replyTo: null, recipientIds: [] }, as(other))
     f.run({ type: 'message.send', conversationId: group, text: 'Checking.', replyTo: null, recipientIds: [] }, as(lead))
+    // Its host posts as the agent too: a skill refresh only it reads, a stop it could not make (review of #2712, Important 2).
+    f.run({ type: 'message.send', conversationId: group, text: 'Your skills changed.', replyTo: null, recipientIds: [worker], agentOnly: true }, as(worker))
+    f.run({ type: 'message.send', conversationId: group, text: 'Could not stop worker on host.', replyTo: null, recipientIds: [lead] }, as(worker))
     expect(marked().limitedUntil).toBe(new Date(3_600_000).toISOString())
-    f.run({ type: 'message.send', conversationId: group, text: 'Back at it.', replyTo: null, recipientIds: [] }, as(worker), { now: 2000 })
-    expect(marked()).toMatchObject({ limitedUntil: null, alerting: [] })
-    // A work status is work too.
-    limit()
-    expect(marked().limitedUntil).not.toBeNull()
     f.run({ type: 'work.resume', conversationId: group, assignmentId: task().assignment!.id, lostAt: task().assignment!.lost!.at }, as(worker), { now: 3_600_000 })
     f.run({ type: 'work.status', conversationId: group, assignmentId: task().assignment!.id, status: 'working', result: 'Going on.' }, as(worker), { now: 3_600_001 })
-    expect(marked()).toMatchObject({ limitedUntil: null })
+    expect(marked()).toMatchObject({ limitedUntil: null, alerting: [] })
   })
 
   it('loses a worker\'s task once its host says the model kept failing (its ten-minute alert); an ended alert loses nothing', () => {
