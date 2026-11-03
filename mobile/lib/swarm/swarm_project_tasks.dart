@@ -424,6 +424,17 @@ class SwarmWaitingRow extends StatelessWidget {
     if (need is! SwarmDecisionNeed) return (null, reply);
     final decision = need.decision;
     final asks = session.inbox.asks(need.swarmId);
+    if (session.heldDelegate(need)) {
+      return (
+        'Leaving it to be decided',
+        SwarmButton(
+          key: ValueKey('swarm-undo-${decision.id}'),
+          label: 'Undo',
+          style: SwarmButtonStyle.link,
+          onPressed: () => session.undo(need),
+        ),
+      );
+    }
     if (session.held(need) case final held?) {
       return (
         'Sending “${swarmOption(decision.options, held)}”',
@@ -450,6 +461,7 @@ class SwarmWaitingRow extends StatelessWidget {
     // Sent and not confirmed, or a recommendation the decision does not
     // offer: its chat says what can be done.
     if (asks?.unconfirmed(decision) != null ||
+        (asks?.unconfirmedDelegate(decision) ?? false) ||
         decision.recommended < 0 ||
         decision.recommended >= decision.options.length) {
       return (null, reply);

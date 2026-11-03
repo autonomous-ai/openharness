@@ -8,7 +8,6 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
-import 'identity.dart';
 import 'model.dart';
 
 /// A person of [snapshot] as the Swarm names them, for a task's "Waiting on
@@ -20,9 +19,7 @@ String? Function(String personId) swarmTaskPersonName(
 ) =>
     (personId) =>
         switch (snapshot.people.where((p) => p.id == personId).firstOrNull) {
-          final person? when person.email.isNotEmpty => superTabPersonName(
-            person.email,
-          ),
+          final person? when person.email.isNotEmpty => person.username,
           _ => null,
         };
 

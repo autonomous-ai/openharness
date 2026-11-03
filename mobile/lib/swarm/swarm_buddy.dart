@@ -1,6 +1,5 @@
 import 'package:flutter/foundation.dart';
 
-import 'identity.dart';
 import 'model.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
@@ -297,8 +296,15 @@ bool swarmCanWrite(SwarmReader reader) =>
 /// A machine a Buddy may start on, as Start your Buddy lists it: one of the
 /// person's own. One outside the Swarm ([inSwarm] false) stays theirs: the
 /// server records it for their Buddies alone and never adds it to the Swarm
-/// (Dee, 10-29). An [away] one is listed but cannot be picked.
-typedef SwarmBuddyMachine = ({String id, String name, bool inSwarm, bool away});
+/// (Dee, 10-29). An [away] one, or one [paused] in the Swarm, is listed but
+/// cannot be picked: the server refuses new work there.
+typedef SwarmBuddyMachine = ({
+  String id,
+  String name,
+  bool inSwarm,
+  bool away,
+  bool paused,
+});
 
 /// The menu's group of the person's own machines: the picker has only its
 /// heading, machine names and 'offline' (Dee, 10-29).
@@ -306,16 +312,27 @@ const swarmBuddyOwnMachines = 'Your machines';
 
 /// Why a row cannot be picked, as the sidebar says a Buddy is 'not started'.
 const swarmBuddyMachineOffline = 'offline';
+const swarmBuddyMachinePaused = 'paused';
+
+/// Why [m] cannot be picked in words, or null when it can.
+String? swarmBuddyMachineBlock(SwarmBuddyMachine m) => m.away
+    ? swarmBuddyMachineOffline
+    : m.paused
+    ? swarmBuddyMachinePaused
+    : null;
 
 /// What Start your Buddy says when none of the person's machines can take a
-/// Buddy now: none is signed in to their account, or all are offline (the
-/// desktop's words).
+/// Buddy now: none is signed in to their account, all are offline, or new work
+/// is paused on those that are not (the desktop's words).
 const swarmBuddyNoMachine =
     'Your Buddy runs on one of your own computers. Open Harness on one, '
     'signed in to your account.';
 const swarmBuddyAllOffline =
     'Your machines are offline. Open Harness on one of them to start your '
     'Buddy there.';
+const swarmBuddyAllPaused =
+    'New work is paused on your machines. Choose Resume new work in Machines '
+    'to start your Buddy.';
 
 /// The person's own machines a Buddy may run on, like a Lead, whatever its
 /// engine (Ken, 10-28): those of their account ([computers]), in the Swarm or
@@ -325,7 +342,7 @@ const swarmBuddyAllOffline =
 ///
 /// A phone has no "this computer" (Lead's ruling on #2240): online machines
 /// come first, the one the person last started a Buddy on before the rest,
-/// which go by name; offline ones last. A Swarm row no account record
+/// which go by name; then paused ones; offline ones last. A Swarm row no account record
 /// confirms is online only while its own reading is fresh, so before the
 /// account's list answers nothing unconfirmed is offered as up.
 List<SwarmBuddyMachine> swarmBuddyMachines(
@@ -347,6 +364,7 @@ List<SwarmBuddyMachine> swarmBuddyMachines(
       name: _machineName(m['name']),
       inSwarm: true,
       away: !_reporting(m, at),
+      paused: m['paused'] == true,
     );
   }
   for (final c in computers) {
@@ -356,18 +374,22 @@ List<SwarmBuddyMachine> swarmBuddyMachines(
       name: _machineName(c.name.isEmpty ? listed?.name : c.name),
       inSwarm: listed != null,
       away: c.away,
+      paused: listed?.paused ?? false,
     );
   }
   final last = _lastBuddyMachine(reader);
   int byName(SwarmBuddyMachine a, SwarmBuddyMachine b) =>
       a.name.toLowerCase().compareTo(b.name.toLowerCase());
-  final online = byId.values.where((m) => !m.away).toList()
-    ..sort((a, b) {
-      if ((a.id == last) != (b.id == last)) return a.id == last ? -1 : 1;
-      return byName(a, b);
-    });
+  final open =
+      byId.values.where((m) => swarmBuddyMachineBlock(m) == null).toList()
+        ..sort((a, b) {
+          if ((a.id == last) != (b.id == last)) return a.id == last ? -1 : 1;
+          return byName(a, b);
+        });
+  final paused = byId.values.where((m) => !m.away && m.paused).toList()
+    ..sort(byName);
   final away = byId.values.where((m) => m.away).toList()..sort(byName);
-  return [...online, ...away];
+  return [...open, ...paused, ...away];
 }
 
 /// Whether [pool]'s own reading is fresh (backend `MACHINE_FRESH_MS`, as the
@@ -476,17 +498,14 @@ String _machineName(Object? name, {String fallback = 'Your machine'}) {
       : name;
 }
 
-/// A person of [reader]'s Swarm by the name it shows them by: their address
-/// before the @; "its owner" while the Swarm does not list them (the
+/// A person of [reader]'s Swarm by the name it shows them by: their username;
+/// "its owner" while the Swarm does not list them (the
 /// desktop's `buddyPersonName`).
 String swarmBuddyPersonName(SwarmReader reader, String personId) {
-  final email = reader.snapshot?.people
+  final person = reader.snapshot?.people
       .where((p) => p.id == personId)
-      .firstOrNull
-      ?.email;
-  return email == null || email.isEmpty
-      ? 'its owner'
-      : superTabPersonName(email);
+      .firstOrNull;
+  return person == null || person.email.isEmpty ? 'its owner' : person.username;
 }
 
 /// Opens the person's Buddy chat in [projectId], on the server first when
