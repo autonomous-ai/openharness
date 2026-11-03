@@ -81,7 +81,9 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('Activity and Buddy sit as far apart as project rows', (
+    // Project rows are 4 px taller than the rest since Huy's ask (11-03,
+    // #2427); Activity and Buddy keep Slack's pitch.
+    testWidgets('Activity and Buddy sit 4 px closer than project rows', (
       tester,
     ) async {
       final server = swarm();
@@ -99,7 +101,7 @@ void main() {
           y(find.text('web-project').first);
       expect(
         y(_key('super-swarm-buddy')) - y(_key('super-activity')),
-        rows.abs(),
+        rows.abs() - 4,
       );
     });
   });

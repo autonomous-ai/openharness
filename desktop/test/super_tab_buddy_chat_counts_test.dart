@@ -541,7 +541,8 @@ void main() {
       final number =
           (tester.widget<Text>(name).textSpan! as TextSpan).children!.first;
       expect(number.toPlainText(), '196  ');
-      expect(number.style?.color, DesktopChrome.muted);
+      // Fainter and smaller than the title in the sidebar (Huy, 11-03, #2427).
+      expect(number.style?.color, grid.AppPalette.textFaint);
       await close(tester, c);
     });
 
@@ -578,12 +579,16 @@ void main() {
 
         expect(find.text('#196 Offline editing'), findsNothing);
         final names = find.text('196  Offline editing');
-        // The header's and the sidebar row's.
+        // The header's and the sidebar row's: the header's number in grey,
+        // the sidebar's fainter still (Huy, 11-03, #2427).
         expect(names, findsNWidgets(2));
-        for (final name in tester.widgetList<Text>(names)) {
-          final number = (name.textSpan! as TextSpan).children!.first;
-          expect(number.style?.color, DesktopChrome.muted);
-        }
+        expect(
+          {
+            for (final name in tester.widgetList<Text>(names))
+              (name.textSpan! as TextSpan).children!.first.style?.color,
+          },
+          {DesktopChrome.muted, grid.AppPalette.textFaint},
+        );
         await close(tester, c);
       },
     );
