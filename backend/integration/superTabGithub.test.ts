@@ -710,8 +710,9 @@ describe('the GitHub revision', () => {
     const state = new URL((asked.json().data as { authorizeUrl: string }).authorizeUrl).searchParams.get('state')!
     return { state, page: await env.app.inject({ method: 'GET', url: `/api/github/callback?code=c&state=${encodeURIComponent(state)}` }) }
   }
-  const check = (env: Env, tab: string, projectId: string, refresh = true) => env.app.inject({ method: 'GET',
-    url: `/api/super-tabs/${tab}/projects/${projectId}/github${refresh ? '?refresh=1' : ''}`, headers: { authorization: `Bearer ${owner.sub}` } })
+  const check = (env: Env, tab: string, projectId: string, refresh = true, record = true) => env.app.inject({ method: 'GET',
+    url: `/api/super-tabs/${tab}/projects/${projectId}/github${refresh ? `?refresh=1${record ? '' : '&record=0'}` : ''}`,
+    headers: { authorization: `Bearer ${owner.sub}` } })
 
   it('moves every project on the repository when someone allows it, and a swarm-wide approval moves them all', async () => {
     teamAccounts()
@@ -746,6 +747,29 @@ describe('the GitHub revision', () => {
     // A read that does not ask GitHub again records nothing: another server's cache may be older.
     expect((await check(env, tab, docs, false)).json().data).toMatchObject({ state: 'not-approved' })
     expect(await revisions(env, tab)).toEqual(found)
+  })
+
+  // Review of #2713: every member's app reads again when the revision moves, and those reads land on servers whose caches
+  // differ (an installation is kept 10 minutes, "not installed" 1 minute). Had they recorded what they found, two servers
+  // would move the revision back and forth, each move making every app read again.
+  it('a read that follows a revision move records nothing, whatever answer it gets; a person\'s check still does', async () => {
+    teamAccounts()
+    let at = Date.now()
+    const env = await fresh({ approveAll: false, signIn, now: () => at })
+    const { tab } = await swarm(env)
+    expect((await check(env, tab, 'lead')).json().data).toMatchObject({ state: 'not-approved' })
+    const seen = await revisions(env, tab)
+    // Removed from the repository, then put back, then removed: the answers alternate, as two servers' caches would.
+    for (const installed of [false, true, false]) {
+      if (installed) env.github.installed.set('example/app', 91)
+      else env.github.installed.delete('example/app')
+      at += 11 * 60_000
+      expect((await check(env, tab, 'lead', true, false)).json().data).toMatchObject({ state: installed ? 'not-approved' : 'not-installed' })
+      expect(await revisions(env, tab)).toEqual(seen)
+    }
+    // A person checks again: that records the answer, once.
+    expect((await check(env, tab, 'lead')).json().data).toMatchObject({ state: 'not-installed' })
+    expect((await revisions(env, tab)).lead).toBe(seen.lead! + 1)
   })
 
   it('GitHub sending a person back after installing forgets the cache and moves every project on the repository', async () => {

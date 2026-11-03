@@ -175,9 +175,10 @@ void main() {
         await moved(c, 1);
         await tester.pumpAndSettle();
         expect(find.text('Set up GitHub for teammates'), findsNothing);
-        // Asks GitHub again: another server may still keep "not installed".
+        // Asks GitHub again: another server may still keep "not installed". It records nothing, so servers whose
+        // caches differ cannot move the revision back and forth (review of #2713).
         expect(asked, hasLength(2));
-        expect(asked.last, endsWith('/github?refresh=1'));
+        expect(asked.last, endsWith('/github?refresh=1&record=0'));
         c.dispose();
       },
     );
@@ -212,12 +213,29 @@ void main() {
         hold = null;
         await c.readGitHubAccess(project.id);
         expect(asked, hasLength(2));
-        expect(asked.last, endsWith('/github?refresh=1'));
+        expect(asked.last, endsWith('/github?refresh=1&record=0'));
         await c.readGitHubAccess(project.id);
         expect(asked, hasLength(2));
         c.dispose();
       },
     );
+  });
+
+  // Review of #2713: a person's own check records what GitHub says, even right after the revision moved.
+  test('a person checking again records the answer, even after a revision move', () async {
+    final c = controllerFor();
+    await c.refresh();
+    final project = c.snapshot!.projects.first;
+    await c.readGitHubAccess(project.id);
+    final projects = server.state['projects'] ??= <dynamic>[
+      projectFixture('lead', server.state['name'] as String, 'lead'),
+    ];
+    ((projects as List).first as Map)['githubRevision'] = 1;
+    server.revision++;
+    await c.refresh();
+    await c.readGitHubAccess(project.id, refresh: true);
+    expect(asked.last, endsWith('/github?refresh=1'));
+    c.dispose();
   });
 
   // Task #2316: a setup done on GitHub's own site is picked up when anyone opens the dialog or Project details.
