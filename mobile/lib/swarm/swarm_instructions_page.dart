@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import 'package:harness_mobile/core/relative_time.dart';
 import 'package:harness_mobile/phone/phone_navigation.dart';
+import 'package:harness_mobile/phone/phone_sheet.dart';
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -30,11 +31,12 @@ void openSwarmInstructions(
   ),
 );
 
-/// A project's instruction document and its coordinator's notes, read only
-/// (project instructions, decisions 15 and 16). Read when it opens and again
-/// when the project's `instructionsRevision` or `notesRevision` moves in the
-/// Swarm read; a pull reads again. Nothing is read on a poll, and nothing is
-/// written from the phone.
+/// A project's instruction document and its coordinator's notes (project
+/// instructions, decisions 15 and 16). Read when it opens and again when the
+/// project's `instructionsRevision` or `notesRevision` moves in the Swarm read;
+/// a pull reads again. Nothing is read on a poll. A person who can write in the
+/// Swarm may delete a note, after confirming; the document is edited on a
+/// computer.
 class SwarmInstructionsPage extends StatefulWidget {
   const SwarmInstructionsPage({
     super.key,
@@ -59,6 +61,12 @@ class _SwarmInstructionsPageState extends State<SwarmInstructionsPage> {
   Future<void>? _reading;
   bool _again = false;
 
+  /// The notes a delete is under way for: one at a time each.
+  final _deleting = <String>{};
+
+  /// Why the last delete was refused; null when it went or none was tried.
+  String? _deleteError;
+
   SuperTabProject? get _project => widget.reader.snapshot?.projects
       .where((p) => p.id == widget.projectId)
       .firstOrNull;
@@ -70,6 +78,56 @@ class _SwarmInstructionsPageState extends State<SwarmInstructionsPage> {
           .firstOrNull
           ?.username ??
       'a member';
+
+  /// Whether the person may delete a note: as Desktop, one who can write in the
+  /// Swarm. The server decides.
+  bool get _canWrite =>
+      !widget.reader.accessRevoked &&
+      (widget.reader.snapshot?.people
+              .where((p) => p.id == widget.reader.accountId)
+              .firstOrNull
+              ?.canWrite ??
+          false);
+
+  Future<void> _delete(SuperTabNote note, String coordinator) async {
+    if (_deleting.contains(note.id)) return;
+    final confirmed = await confirmPhoneAction(
+      context,
+      title: 'Delete this note?',
+      message: '$coordinator is told it was deleted.',
+      confirmLabel: 'Delete',
+    );
+    if (!confirmed || !mounted || !_deleting.add(note.id)) return;
+    setState(() => _deleteError = null);
+    String? refused;
+    final reader = widget.reader;
+    try {
+      await reader.request(
+        'POST',
+        '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/commands',
+        body: {
+          'operationId': superTabOperationId(),
+          'command': {
+            'type': 'note.remove',
+            'projectId': widget.projectId,
+            'noteId': note.id,
+          },
+        },
+      );
+    } on SuperTabFailure catch (failure) {
+      refused = failure.message;
+    } on Object {
+      refused = 'The note was not deleted. Try again.';
+    }
+    if (!mounted) return;
+    setState(() {
+      _deleting.remove(note.id);
+      _deleteError = refused;
+    });
+    // Its revision moved with the command; a refusal may mean it is gone.
+    unawaited(_read());
+    if (refused == null) unawaited(reader.refresh());
+  }
 
   @override
   void initState() {
@@ -231,13 +289,14 @@ class _SwarmInstructionsPageState extends State<SwarmInstructionsPage> {
       );
     }
     final now = clock.now();
+    final canWrite = _canWrite;
     final notes = [...doc.notes]..sort((a, b) => b.at.compareTo(a.at));
     return SelectionArea(
       child: ListView(
         physics: scroll,
         padding: padding,
         children: [
-          if (_error case final error?) ...[
+          if (_deleteError ?? _error case final error?) ...[
             Text(
               error,
               key: const ValueKey('swarm-instructions-error'),
@@ -267,19 +326,51 @@ class _SwarmInstructionsPageState extends State<SwarmInstructionsPage> {
               Padding(
                 key: ValueKey('swarm-instructions-note-${note.id}'),
                 padding: const EdgeInsets.only(bottom: AppSpace.m),
-                child: Column(
+                child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(note.text, style: swarmChatText(15)),
-                    Text(
-                      [
-                        'asked by ${_personName(note.askedBy)}',
-                        relativeAgo(note.at, now),
-                        if (note.expiresAt case final until?)
-                          'until ${_until(until, now)}',
-                      ].join(' · '),
-                      style: quiet,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(note.text, style: swarmChatText(15)),
+                          Text(
+                            [
+                              'asked by ${_personName(note.askedBy)}',
+                              relativeAgo(note.at, now),
+                              if (note.expiresAt case final until?)
+                                'until ${_until(until, now)}',
+                            ].join(' · '),
+                            style: quiet,
+                          ),
+                        ],
+                      ),
                     ),
+                    if (canWrite)
+                      TtyTap(
+                        key: ValueKey('swarm-instructions-delete-${note.id}'),
+                        semanticsLabel: 'Delete this note',
+                        onTap: _deleting.contains(note.id)
+                            ? null
+                            : () =>
+                                  unawaited(_delete(note, doc.coordinatorName)),
+                        child: Padding(
+                          padding: const EdgeInsets.only(
+                            left: AppSpace.s,
+                            top: AppSpace.xs,
+                            bottom: AppSpace.xs,
+                          ),
+                          child: Text(
+                            'Delete',
+                            style: swarmChatText(
+                              14,
+                              color: _deleting.contains(note.id)
+                                  ? AppPalette.textFaint
+                                  : AppPalette.accentOnSurface,
+                            ),
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),
