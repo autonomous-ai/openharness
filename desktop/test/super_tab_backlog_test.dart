@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -5,6 +7,7 @@ import 'package:harness/super_tabs/backlog.dart';
 import 'package:harness/super_tabs/backlog_view.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/pull_request_facts.dart';
 
 import 'support/super_tab_fixture.dart';
 
@@ -52,6 +55,17 @@ void main() {
         task(assignment: working('stopped')),
         SuperTabBacklogGroup.waitingForMachine,
       ),
+      // Review of #2776: the server marks these orphaned while the assignment
+      // still reads working with an agent; each needs a new agent.
+      for (final why in ['removed', 'unstarted', 'start-failed', 'lost'])
+        (
+          'orphaned: $why',
+          task(
+            assignment: working('working'),
+            liveness: {'state': 'orphaned', 'why': why, 'since': now},
+          ),
+          SuperTabBacklogGroup.waitingForMachine,
+        ),
       (
         'planned with an agent',
         task(assignment: working('planned')),
@@ -309,8 +323,9 @@ void main() {
 
     Future<SuperTabController> show(
       WidgetTester tester,
-      ConversationServer server,
-    ) async {
+      ConversationServer server, {
+      SuperTabPullRequestFacts? facts,
+    }) async {
       opened.clear();
       final c = shown = server.controller();
       addTearDown(c.dispose);
@@ -325,6 +340,7 @@ void main() {
               listenable: c,
               builder: (context, _) => SuperTabBacklogView(
                 controller: c,
+                facts: facts,
                 onOpenConversation: opened.add,
                 // Five minutes after #11 last changed (the fixture's own
                 // clock), for its row's age.
@@ -466,6 +482,33 @@ void main() {
       await tester.pumpAndSettle();
       expect(listed(tester), ['review']);
       expect(header(SuperTabBacklogGroup.working), findsNothing);
+    });
+
+    // Review of #2776: GitHub's answer lands after the first frame, in a quiet
+    // Swarm where nothing else rebuilds the tab.
+    testWidgets('a row shows its pull request\'s checks once GitHub answers', (
+      tester,
+    ) async {
+      final answer = Completer<Map<String, dynamic>>();
+      final facts = SuperTabPullRequestFacts((_) => answer.future);
+      addTearDown(facts.dispose);
+      await show(tester, swarm(), facts: facts);
+      expect(rowText(tester, 'working'), isNot(contains('checks passed')));
+      answer.complete({
+        'account': 'ada',
+        'rows': [
+          {
+            'url': 'https://github.com/acme/app/pull/2733',
+            'status': 'found',
+            'title': 'Sidebar task groups',
+            'state': 'Open',
+            'checks': {'passed': 12, 'failed': 0, 'pending': 0, 'total': 12},
+          },
+        ],
+      });
+      await tester.pump();
+      await tester.pump();
+      expect(rowText(tester, 'working'), contains('PR #2733 12 checks passed'));
     });
 
     testWidgets('clicking a row opens its chat', (tester) async {
