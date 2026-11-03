@@ -575,6 +575,71 @@ void main() {
     expect(c.selectedId, 'design-fix');
   });
 
+  // A dial open that waits for its root (the post is still on its way).
+  String nextRoot(SuperTabLaunchFixture f) =>
+      'message-${f.connection.server.revision + 1}';
+
+  Future<void> arrive(SuperTabLaunchFixture f, SuperTabController c) async {
+    f.connection.server.append('Fix it', conversationId: 'design-lead');
+    await c.refresh();
+    await settle();
+  }
+
+  test('a thread the person opens while a dial open waits is kept', () async {
+    final (f, c) = await openChats();
+    final root = nextRoot(f);
+    await threadOnly(f, 'design-lead', root);
+    await settle();
+    expect(c.openedThread, isNull);
+    c.openThread('m-root');
+    await arrive(f, c);
+    expect(c.openedThread?.root, 'm-root');
+  });
+
+  test('a leave while the dial\'s thread still waits opens nothing later', () async {
+    final (f, c) = await openChats();
+    final root = nextRoot(f);
+    await threadOnly(f, 'design-lead', root);
+    await settle();
+    await threadOnly(f, 'design-lead', null);
+    await settle();
+    await arrive(f, c);
+    expect(c.openedThread, isNull);
+  });
+
+  test('a newer dial thread replaces a pending one', () async {
+    final (f, c) = await openChats();
+    final first = 'message-2';
+    await threadOnly(f, 'design-lead', first);
+    await settle();
+    f.connection.server.append('Other', conversationId: 'design-lead');
+    final second = 'message-${f.connection.server.revision}';
+    await threadOnly(f, 'design-lead', second);
+    await settle();
+    await arrive(f, c);
+    expect(c.openedThread?.root, second);
+  });
+
+  test('a thread the dial opens in a background tab marks nothing read until shown', () async {
+    final (f, c) = await openChats();
+    final server = f.connection.server..threads = true;
+    server.append('Fix it', conversationId: 'design-lead');
+    final root = 'message-${server.revision}';
+    server.append('Reply', conversationId: 'design-lead');
+    server.messages.last
+      ..['thread'] = root
+      ..['replyTo'] = root;
+    await threadOnly(f, 'design-lead', root);
+    await settle();
+    await c.loadThread();
+    await settle();
+    expect(c.openedThread?.root, root);
+    expect(server.threadMarkPosts, isEmpty);
+    c.threadPaneShown();
+    await settle();
+    expect(server.threadMarkPosts, hasLength(1));
+  });
+
   Future<void> pickThread(
     SuperTabLaunchFixture f,
     String project,

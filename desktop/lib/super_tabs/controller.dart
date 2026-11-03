@@ -1580,10 +1580,12 @@ class SuperTabController extends ChangeNotifier {
   }
 
   /// Opens [root]'s thread of the selected conversation beside the chat.
-  void openThread(String root) {
+  /// [shown] false opens it with its pane not on screen (the dial opened it
+  /// in a background tab): nothing reads until [threadPaneShown].
+  void openThread(String root, {bool shown = true}) {
     if (accessRevoked) return;
     openedThread = (conversationId: selectedId, root: root);
-    _threadUnshown = false;
+    _threadUnshown = !shown;
     _pruneThreadFiles();
     _seeThread(root);
     _saveSoon();

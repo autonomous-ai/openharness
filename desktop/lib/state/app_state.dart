@@ -4774,6 +4774,8 @@ class AppNotifier extends ChangeNotifier {
         !swarms.any((s) => s.superTabId == tabId)) {
       return;
     }
+    // Every thread frame, a leave included, supersedes a pending open.
+    final token = ++_dialThreadToken;
     try {
       final controller = await superTabs.open(tabId);
       if (_disposed) return;
@@ -4787,8 +4789,9 @@ class AppNotifier extends ChangeNotifier {
           await controller.select(conversationId);
         }
         if (_disposed || controller.selectedId != conversationId) return;
+        if (_dialThreadToken != token) return;
         // Not a new pick: a later pick bumps [_devicePick] and drops this.
-        await _openDialThread(controller, root, _devicePick);
+        await _openDialThread(controller, root, _devicePick, token);
       } else if (controller.openedThread?.conversationId == conversationId) {
         controller.closeThread();
       }
@@ -4804,23 +4807,36 @@ class AppNotifier extends ChangeNotifier {
   Future<void> _openDialThread(
     SuperTabController controller,
     String root,
-    int pick,
-  ) async {
+    int pick, [
+    int? token,
+  ]) async {
     final id = controller.selectedId;
+    // The person's own open or close while this waits makes it stale.
+    final before = controller.openedThread;
+    void open() {
+      // The pane may not be on screen (another Swarm tab, background window):
+      // the view's _syncThreadPane calls threadPaneShown when it is.
+      controller.openThread(root, shown: false);
+    }
     bool holds() => controller
         .messages(id)
         .any((m) => m.id == root || m.thread == root);
     if (!holds()) await controller.refresh();
-    if (_disposed || _devicePick != pick || controller.selectedId != id) return;
-    if (holds()) return controller.openThread(root);
+    bool superseded() =>
+        _disposed ||
+        _devicePick != pick ||
+        controller.selectedId != id ||
+        (token != null && _dialThreadToken != token) ||
+        controller.openedThread != before;
+    if (superseded()) return;
+    if (holds()) return open();
     Timer? giveUp;
     void listener() {
-      final stale =
-          _disposed || _devicePick != pick || controller.selectedId != id;
+      final stale = superseded();
       if (!stale && !holds()) return;
       giveUp?.cancel();
       controller.removeListener(listener);
-      if (!stale) controller.openThread(root);
+      if (!stale) open();
     }
 
     controller.addListener(listener);
@@ -6131,6 +6147,7 @@ class AppNotifier extends ChangeNotifier {
 
   bool _announceFromDevice = false;
   int _devicePick = 0;
+  int _dialThreadToken = 0;
 
   /// The project each Swarm tab's row last told the dial, by backend tab id;
   /// null while its Swarm had not loaded. See `onSnapshot`.
