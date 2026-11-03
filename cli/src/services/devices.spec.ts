@@ -637,9 +637,9 @@ describe('what the windows say, reaching the dial', () => {
     it('tells the cards the window\'s open Swarm conversation, again only when it changes', () => {
       const superTabRequest = vi.fn(async () => ({ ok: true }))
       const { port, reconnected } = withRequest(superTabRequest)
-      const open = (active: string, conversationId?: string) => ({ active, tiles: [], swarms: [
+      const open = (active: string, conversationId?: string, threadRoot?: string) => ({ active, tiles: [], swarms: [
         { id: 'plain', name: 'plain', agentIds: [], panes: 0 },
-        { id: 'tab-st1', name: 'st1', agentIds: [], panes: 0, superTabId: 'st1', projectId: 'p1', ...(conversationId ? { conversationId } : {}) }] })
+        { id: 'tab-st1', name: 'st1', agentIds: [], panes: 0, superTabId: 'st1', projectId: 'p1', ...(conversationId ? { conversationId } : {}), ...(threadRoot ? { threadRoot } : {}) }] })
       port.swarms(open('tab-st1', 'pm1'))
       seen.host.swarmCardsWanted!(true)
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['st1'], focus: { tabId: 'st1', conversationId: 'pm1' } })
@@ -659,6 +659,12 @@ describe('what the windows say, reaching the dial', () => {
       superTabRequest.mockClear()
       reconnected.forEach((run) => run())
       expect(superTabRequest.mock.calls).toEqual([[{ action: 'cardsWanted', on: true, include: ['st1'], focus: { tabId: 'st1', conversationId: 'g1' } }]])
+      // A thread opened beside it is news, and so is its closing.
+      port.swarms(open('tab-st1', 'g1', 'm1'))
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['st1'], focus: { tabId: 'st1', conversationId: 'g1', threadRoot: 'm1' } })
+      port.swarms(open('tab-st1', 'g1'))
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['st1'], focus: { tabId: 'st1', conversationId: 'g1' } })
+      superTabRequest.mockClear()
       // Nobody wants cards: a focus change says nothing.
       seen.host.swarmCardsWanted!(false)
       superTabRequest.mockClear()
@@ -690,6 +696,12 @@ describe('what the windows say, reaching the dial', () => {
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardOpen', session: 'c1', tabId: 'st1', leadId: 'lead1', chat: true })
       seen.host.swarmCardOpen!('c1', 'st1', null)
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardOpen', session: 'c1', tabId: 'st1', leadId: null })
+    })
+
+    // A refusal turned into null said nowhere why the dial's face stayed on the resting pet (Diego, 2026-11-03).
+    it('fails a refused recap with the service\'s code, so the dial\'s log says why', async () => {
+      withRequest(vi.fn(async () => ({ error: 'SERVICE_UNAVAILABLE' })))
+      await expect(seen.host.swarmCardRecap!('st1', 'lead1', true)).rejects.toThrow('SERVICE_UNAVAILABLE')
     })
 
     it('asks for a swarmBuddy dial\'s face with the buddy flag, says so on its recap, and sends its side as cardSide', async () => {
@@ -728,7 +740,10 @@ describe('what the windows say, reaching the dial', () => {
       expect(got).toMatchObject({ tabId: 'st1', leadId: 'lead1', at: 1792560000, none: false })
       expect(got!.text).toBe('é'.repeat(750))
       expect(await seen.host.swarmCardRecap!('st1', 'lead2')).toEqual({ tabId: 'st1', leadId: 'lead2', text: 'none', at: 0, none: true })
-      for (let i = 0; i < 6; i++) expect(await seen.host.swarmCardRecap!('st1', 'lead1')).toBeNull()
+      // A refusal fails with its code; anything else unusable is null.
+      await expect(seen.host.swarmCardRecap!('st1', 'lead1')).rejects.toThrow('NOT_FOUND')
+      for (let i = 0; i < 4; i++) expect(await seen.host.swarmCardRecap!('st1', 'lead1')).toBeNull()
+      await expect(seen.host.swarmCardRecap!('st1', 'lead1')).rejects.toThrow('SERVICE_UNAVAILABLE')
     })
 
     it('posts words for a Lead through the service; anything but said: true sends the turn instead', async () => {
@@ -757,7 +772,7 @@ describe('what the windows say, reaching the dial', () => {
 
     it('answers no recap when the core has no service to ask', async () => {
       start()
-      expect(await seen.host.swarmCardRecap!('st1', 'lead1')).toBeNull()
+      await expect(seen.host.swarmCardRecap!('st1', 'lead1')).rejects.toThrow('SERVICE_UNAVAILABLE')
       seen.host.swarmCardOpen!('c1', 'st1', 'lead1')   // nothing to tell, and nothing thrown
     })
 

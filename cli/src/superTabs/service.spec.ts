@@ -916,6 +916,11 @@ describe('the Swarm cards the devices ask for', () => {
     expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'], { tabId: 's1', conversationId: 'g1', fromDevice: true })
     await t.ask({ action: 'cardsWanted', on: true, include: ['s1'], focus: { tabId: 's1', conversationId: 'g1', fromDevice: 'yes' } }, owner)
     expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'], { tabId: 's1', conversationId: 'g1' })
+    // The thread open beside it, an id or nothing.
+    await t.ask({ action: 'cardsWanted', on: true, include: ['s1'], focus: { tabId: 's1', conversationId: 'g1', threadRoot: 'm1' } }, owner)
+    expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'], { tabId: 's1', conversationId: 'g1', threadRoot: 'm1' })
+    await t.ask({ action: 'cardsWanted', on: true, include: ['s1'], focus: { tabId: 's1', conversationId: 'g1', threadRoot: 'bad id' } }, owner)
+    expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'], { tabId: 's1', conversationId: 'g1' })
     // A focus that is not two ids is none.
     for (const focus of [{ tabId: 'bad id', conversationId: 'g1' }, { tabId: 's1', conversationId: 'x'.repeat(48) }, { tabId: 's1' }, 'g1']) {
       await t.ask({ action: 'cardsWanted', on: true, include: ['s1'], focus }, owner)

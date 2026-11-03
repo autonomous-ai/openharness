@@ -1,5 +1,5 @@
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
-import { expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, recordAgentPresence, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
+import { accountMachineName, expireRemovals, followAccountName, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
 import { readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { createHash } from 'node:crypto'
@@ -48,10 +48,11 @@ import { moveChatMark } from './read/threadMarkSeeds.js'
 import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefusal, restoreSessions } from './closedAgents.js'
 import { sessionRows } from './memberRows.js'
 import { judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
-import { archivable, archiveLine, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests } from './tidy.js'
+import { archivable, archiveLine, archiveWaitsFor, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
-import { autoJoinSwarms, memberSwarms } from './swarmRows.js'
+import { autoJoinSwarms, machineSwarms, memberSwarms } from './swarmRows.js'
+import type { MachineRename } from './machineRenames.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts, ms } from './parts/light.js'
 import { endSteps, stepEndedRows, stepsOf } from './steps.js'
@@ -105,6 +106,8 @@ const PROPOSED = 'This file already went with a proposal. Ask your owner to send
 const hash = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 /** The fields of a Swarm's row the store reads. A migrated row still keeps its whole old state (`legacyState`, about 1 MB
  *  for a busy Swarm) until the maintenance script removes it, and every command and read loads this row. */
+/** The most Swarms a rename reaches at once, as many as a host reads (read/host.ts FULL_TABS); its readings do the rest. */
+const MACHINE_RENAME_SWARMS = 500
 const SWARM_ROW = { id: true, ownerId: true, revision: true, format: true, deletedAt: true } satisfies Prisma.SuperTabSelect
 export type SwarmRow = Prisma.SuperTabGetPayload<{ select: typeof SWARM_ROW }>
 /** A Swarm whose state still waits for its split into parts (design section 6.1) is not served until it is split. */
@@ -955,8 +958,11 @@ export class SuperTabStore {
     person(state, contributorId)
     const machine = await tx.machine.findFirst({ where: { machineId: command.machineId, autonomousEnv: state.environment, ...machineAlive } })
     if (!machine || !machineBillingAllowsDataPlane(machine)) fail('HOST_UNAVAILABLE', 'This machine is unavailable.', 403)
+    // Its owner's name for it, from its account row: the name a client sends may be the computer's (#2308).
+    const named = accountMachineName(machine)
     // A Mac's Harness Team account names its Mac from its own account row, which only its owner's sign-in set (machines.ts).
-    const host = { ...(machine.sessionKind === 'team' && machine.hostMachineId ? { hostMachineId: machine.hostMachineId } : {}),
+    const host = { ...(named ? { machineName: named } : {}),
+      ...(machine.sessionKind === 'team' && machine.hostMachineId ? { hostMachineId: machine.hostMachineId } : {}),
       // A Team sign-in with no Mac (`harness team on`) is no person's own machine either (commands.ts buddy.create).
       ...(machine.sessionKind === 'team' ? { teamSession: true as const } : {}) }
     if (pooled) {
@@ -3071,6 +3077,8 @@ export class SuperTabStore {
     const part = loaded !== undefined ? loaded : (await loadMachineParts(this.db, [partId(tabId, machineId)])).get(partId(tabId, machineId))
     const pool = part && !part.deleted ? part.data.contribution : null
     if (!part || !pool || pool.contributorId !== user.sub || pool.generation !== observation.generation || pool.removal) return null
+    // Renamed by its owner since: the full report renames it, and its Team account's pools with it (#2308).
+    if (renamedBy(pool, accountMachineName(host.owned))) return null
     const data = structuredClone(part.data), mine = data.contribution!
     const reading = storedObservation(mine, observation, { team: isTeamSession(user), now, preparable: id => record.preparable.includes(id) })
     if (!readingOnly(mine.observation, reading)) return null
@@ -3163,6 +3171,8 @@ export class SuperTabStore {
         preparable: id => !!state.starts?.some(s => s.id === id && preparableStart(s, machineId)) })
       accrueLent(state, pool, now)
       pool.observation = reading
+      // The name its owner gave it in Machines, which a rename there changes (#2308).
+      followAccountName(state, pool, accountMachineName(owned))
       // A reading that shows a suspended engine signed in with quota offered again (engineHealth.ts); posts nothing.
       readingClearsSuspensions(pool, now)
       // Current-generation physical stop proof also finishes a close whose membership was already withdrawn.
@@ -3858,6 +3868,34 @@ export class SuperTabStore {
    *  needs `reviewOf`, the group the pass read as its task, which this write reads again: it stays open unless that task is
    *  done or cancelled and that task's pull requests are settled too. A review nobody is reviewing closes the same way
    *  (tidy.ts reviewClosable). True when it archived. */
+  /**
+   * A machine its owner renamed (machineRenames.ts): every Swarm it is in shows the name from its owner's account row now, its
+   * Mac's Team account pools with it (machines.ts followAccountName), as its next reading would. One Swarm at a time, each
+   * written only when its name differs; a Swarm that fails is logged and left to that reading. The Swarms renamed.
+   */
+  async machineRenamed({ machineId, ownerId, autonomousEnv }: MachineRename): Promise<number> {
+    const row = await this.db.machine.findFirst({ where: { machineId, userId: ownerId, autonomousEnv, ...machineAlive }, select: { name: true } })
+    const name = accountMachineName(row)
+    if (!name) return 0
+    let renamed = 0
+    for (const tabId of await machineSwarms(this.db, autonomousEnv, machineId, MACHINE_RENAME_SWARMS)) {
+      try {
+        if (await transaction(this.db, async tx => {
+          const swarm = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+          if (!swarm || swarm.deletedAt) return false
+          const loaded = await loadRow(tx, requireParts(swarm)), state = cloneData(loaded.state)
+          const pool = machineContribution(state, machineId)
+          if (!pool || pool.removal || !followAccountName(state, pool, name)) return false
+          await this.save(tx, loaded, state, clock.next())
+          return true
+        })) renamed++
+      } catch (error) {
+        logger.warn('[swarm] a machine rename did not reach a Swarm', { tabId, machineId, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+    return renamed
+  }
+
   async archiveFinished(tabId: string, groupId: string, checked: Readonly<Record<string, 'merged' | 'closed'>>, reviewOf?: string): Promise<boolean> {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
@@ -3866,7 +3904,12 @@ export class SuperTabStore {
       const group = state.conversations.find(c => c.id === groupId)
       const now = this.now()
       if (!group) return false
-      const read = (urls: readonly string[]) => urls.every(url => checked[url] === 'merged' || checked[url] === 'closed')
+      // Its links, and a "PR #N" its result or check evidence names, read in its project's repository; with none to read
+      // it in it stays open (tidy.ts archiveWaitsFor). Read only once it may close, so its project is a real one.
+      const read = (urls: readonly string[]) => {
+        const waits = archiveWaitsFor(group, groupProject(state, group).repository?.repositoryUrl)
+        return !!waits && [...urls, ...waits].every(url => checked[url] === 'merged' || checked[url] === 'closed')
+      }
       // A step's task's pull requests count too: it may yet be handed back while one is open, and need its step again.
       const finished = archivable(state, group, now) && read(reviewPullRequests(state, group))
       // Only the group it reviews as the pass read it: one this write did not load would hide its open pull requests.
@@ -3902,6 +3945,7 @@ export class SuperTabStore {
       // A finished step's too: its task handed on again since the load must not lose the step it will need.
       await this.save(tx, loaded, state, clock.next(), group.reviewOf ? [{ kind: 'group', key: group.reviewOf }] : [])
       await this.writeMessages(tx, tabId, state, rows, sequences)
+      await writeMentions(tx, tabId, state, rows, now)
       return true
     })
   }
