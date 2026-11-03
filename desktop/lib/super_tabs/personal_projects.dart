@@ -15,8 +15,9 @@ import 'swarm_switcher.dart' show PersonalSwarm;
 /// A person's panes as projects of their Personal Swarm (Dee, 10-30 design;
 /// "build the rest, but leave the tabs", 10-31): every pane of theirs joins
 /// the project of its repo, whatever tab it is in, the same repo on each of
-/// their computers being one project, and a pane with no repo joins
-/// # scratch. A project's [term] shows those very panes: the tab keeps them,
+/// their computers being one project, and a pane with no repo joins its tab's
+/// project, named after the tab (Huy, 11-03: his tabs' panes all landed in one
+/// # scratch). A project's [term] shows those very panes: the tab keeps them,
 /// and nothing about a tab changes.
 ///
 /// Which pane belongs where is worked out here, on the person's own Desktop,
@@ -26,10 +27,6 @@ import 'swarm_switcher.dart' show PersonalSwarm;
 ///
 /// Not yet: a repo that already has a team project joining that one. It
 /// crosses Swarms and needs its own security review.
-
-/// The key of the project for panes with no repo.
-const kScratchRepo = 'scratch';
-const kScratchProjectName = 'scratch';
 
 /// The form an agent reports its project's remote in: `host[:port]/owner/repo`
 /// with no scheme, user or `.git` (the CLI's `canonicalRepository`, and
@@ -102,14 +99,18 @@ String _hash(String text) => const DartSha256()
     .join()
     .substring(0, 24);
 
-/// The request id a repo's project is created with: the same on every
-/// computer of the person's, so the server answers each with the one project
-/// (backend commands.ts `project.create`: the project's id comes from it).
-String personalProjectOperation(String repo) =>
-    repo == kScratchRepo ? 'personal-scratch' : 'personal-repo-${_hash(repo)}';
+/// The request id a repo's or a tab's project is created with: the same on
+/// every computer of the person's, so the server answers each with the one
+/// project (backend commands.ts `project.create`: the project's id comes from
+/// it). Neither the URL nor the tab's id is in it.
+String personalProjectOperation(String key) => _isTab(key)
+    ? 'personal-tab-${_hash(key.substring(4))}'
+    : 'personal-repo-${_hash(key)}';
 
-/// One of the person's panes, the tab it is first in, and its repo
-/// ([kScratchRepo] for none).
+bool _isTab(String key) => key.startsWith('tab:');
+
+/// One of the person's panes, the tab it is first in, and its project's key:
+/// its repo, or [personalTabKey] of its tab for none.
 typedef PersonalPane = ({Swarm tab, TerminalPane pane, String repo});
 
 /// The person's own panes in their tabs, in tab order then each tab's reading
@@ -134,7 +135,8 @@ List<PersonalPane> personalPanes(AppNotifier app) {
       out.add((
         tab: tab,
         pane: pane,
-        repo: normalizedRemote(agent?.project?.remote) ?? kScratchRepo,
+        repo:
+            normalizedRemote(agent?.project?.remote) ?? personalTabKey(tab.id),
       ));
     }
   }
@@ -310,13 +312,18 @@ class PersonalProjects extends ChangeNotifier {
         _again.remove(scope);
         if (!eligible(c)) return;
         final projects = _projects(account, swarm);
-        final wanted = {for (final p in personalPanes(app)) p.repo};
+        // Each project's name when it is made: the repo's own, or its tab's
+        // name then (a later rename of the tab keeps the project, and its name).
+        final wanted = <String, String>{
+          for (final p in personalPanes(app))
+            p.repo: _isTab(p.repo) ? p.tab.name : repoName(p.repo),
+        };
         var made = false;
-        for (final repo in wanted) {
+        for (final MapEntry(key: repo, value: name) in wanted.entries) {
           if (projects.containsKey(repo)) continue;
           final retryAt = _retryAt['$scope/$repo'];
           if (retryAt != null && clock.now().isBefore(retryAt)) continue;
-          final answer = await _create(c, repo);
+          final answer = await _create(c, repo, name);
           if (!eligible(c)) return;
           if (answer case (:final id)) {
             projects[repo] = id;
@@ -348,7 +355,11 @@ class PersonalProjects extends ChangeNotifier {
   /// Creates (or finds again) [repo]'s project: its id, null once the person
   /// deleted it, or nothing on a failure, asked again after a wait that
   /// doubles up to [maxRetryWait] when the Swarm next changes.
-  Future<({String? id})?> _create(SuperTabController c, String repo) async {
+  Future<({String? id})?> _create(
+    SuperTabController c,
+    String repo,
+    String name,
+  ) async {
     final key = '${c.accountId}/${c.tabId}/$repo';
     try {
       final answer = await c.request(
@@ -359,8 +370,9 @@ class PersonalProjects extends ChangeNotifier {
           'command': {
             'type': 'project.create',
             // Every computer sends the same request, so the name is the repo's
-            // own; two of one name are told apart after ([_tellApart]).
-            'name': repo == kScratchRepo ? kScratchProjectName : repoName(repo),
+            // own, or the tab's (the desk names a tab alike on each); two repos
+            // of one name are told apart after ([_tellApart]).
+            'name': name,
             'visibility': 'private',
             'brief': '',
           },
@@ -400,7 +412,7 @@ class PersonalProjects extends ChangeNotifier {
     final renamed = (_renamed[account] ??= {})[swarm] ??= {};
     final byName = <String, List<String>>{};
     for (final MapEntry(key: repo, value: id) in projects.entries) {
-      if (id == null || repo == kScratchRepo) continue;
+      if (id == null || _isTab(repo)) continue;
       (byName[repoName(repo)] ??= []).add(repo);
     }
     var changed = false;

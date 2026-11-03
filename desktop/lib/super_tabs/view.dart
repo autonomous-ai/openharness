@@ -11,6 +11,7 @@ import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_icon_button.dart';
+import '../shared/widgets/empty_state.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/finger_target.dart';
 import '../widgets/new_harness_attachments.dart';
@@ -2374,6 +2375,36 @@ class _SuperTabViewState extends State<SuperTabView>
         null => 0,
       };
 
+  /// How many of the person's own panes a project of their Personal Swarm
+  /// holds (personal_projects.dart); none elsewhere.
+  int _personalPaneCount(SuperTabConversation group) =>
+      c.snapshot?.isProjectLead(group.id) == true
+      ? switch (widget.app) {
+          final app? => PersonalProjects.of(app).panesFor(c, group.id).length,
+          null => 0,
+        }
+      : 0;
+
+  /// A Personal project's empty chat when it holds panes: the panes are behind
+  /// the header's terminals button, so the empty view says so and opens them
+  /// (Huy, 11-03: # scratch looked empty with four panes in it).
+  Widget _panesWaiting(SuperTabConversation group) {
+    final count = _personalPaneCount(group);
+    return EmptyState(
+      icon: AppIcons.terminal,
+      title: count == 1
+          ? '1 pane in this project'
+          : '$count panes in this project',
+      message:
+          'Discuss the plan with ${c.snapshot!.coordinatorNameOf(group.projectId)}.',
+      action: OutlinedButton(
+        key: const ValueKey('super-project-show-panes'),
+        onPressed: _openTerminals(group),
+        child: const Text('Show panes'),
+      ),
+    );
+  }
+
   /// Opens the group's terminals beside the chat; null when it has none this
   /// reader may open (a read-only viewer's terminal reads are refused).
   VoidCallback? _openTerminals(SuperTabConversation group) =>
@@ -3655,6 +3686,12 @@ class _SuperTabViewState extends State<SuperTabView>
               ? const Center(child: CircularProgressIndicator())
               : unread && c.error != null
               ? _firstReadFailed(c.error!)
+              : messages.isEmpty &&
+                    outgoing.isEmpty &&
+                    !c.accessRevoked &&
+                    group != null &&
+                    _personalPaneCount(group) > 0
+              ? _panesWaiting(group)
               : messages.isEmpty && outgoing.isEmpty
               ? Padding(
                   // The pane's side padding, as the composer has: a long line
