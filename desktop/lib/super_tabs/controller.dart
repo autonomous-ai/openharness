@@ -3107,6 +3107,13 @@ class SuperTabController extends ChangeNotifier {
         null;
   }
 
+  /// Moves the reader's one Buddy onto [gridModel], a model shared in the
+  /// Swarm, or back to their own subscription when null (backend
+  /// buddyModel.ts). Its machine carries it out; the Buddy's `modelRequest`
+  /// shows it under way. False when refused: [operationError] says why.
+  Future<bool> switchBuddyModel(String? gridModel) async =>
+      await command({'type': 'buddy.model', 'gridModel': gridModel}) != null;
+
   /// Whether [group] is out of the app: there is no private channel to the
   /// PM (Ken, 10-29), so no private chat but a Buddy chat is listed or opened,
   /// the reader's old Chat with PM that an older server still sends included.

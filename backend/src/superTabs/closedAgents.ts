@@ -91,7 +91,7 @@ function keepRecord(state: SuperTabState, target: Agent, now: number): void {
     return
   }
   const { downSince: _down, lostTask: _lost, releaseId: _release, idleStop: _idle, idleNoticedAt: _noticed, workDecision: _decision,
-    switchRequest: _switch, switchLanded: _landed, alerting: _alerting, ...agent } = target
+    switchRequest: _switch, switchLanded: _landed, modelRequest: _model, alerting: _alerting, ...agent } = target
   const mine = others.filter(r => r.machineId === target.machineId)
   const over = mine.length + 1 - REMOVED_KEPT
   const dropped = new Set(over > 0 ? [...mine].sort((a, b) => a.removedAt - b.removedAt).slice(0, over) : [])

@@ -8,7 +8,7 @@ import { askedModel, coordinatorCopy, failureNotice, failureRecipients, leadPick
 import { leadOf, toLead } from './terminal.js'
 import { dropIdleBuddyMachines, MACHINE_FRESH_MS } from './machines.js'
 import { leadStartFailed } from './leadStart.js'
-import { staleSwitches } from './tidy.js'
+import { staleModelRequests, staleSwitches } from './tidy.js'
 import { ledProject, projectsOf } from './projects.js'
 import { coordinatorNameOf } from './instructions.js'
 import { waitedOn } from './leaderboard/record.js'
@@ -374,7 +374,7 @@ function leadNotice(state: SuperTabState, start: AgentStart, text: string | null
 /** The time checks, run on the Lead's poll and on any machine's report: every worker task with a reason is lost, and
  *  every start dispatched over 3 minutes ago that is not running fails, unless its machine is still preparing it. */
 export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {
-  const drafts = [...loseTasks(state, now), ...failStalledStarts(state, now), ...unpurged(state, now), ...staleSwitches(state, now)]
+  const drafts = [...loseTasks(state, now), ...failStalledStarts(state, now), ...unpurged(state, now), ...staleSwitches(state, now), ...staleModelRequests(state, now)]
   // A Buddy start that timed out may have been the last on its Buddy-only machine (security review 1 of #2234).
   dropIdleBuddyMachines(state, now)
   return drafts

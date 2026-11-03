@@ -9,6 +9,7 @@ import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'buddy_machines.dart';
+import 'buddy_model.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'model.dart';
@@ -46,13 +47,8 @@ List<SuperTabProject> buddyProjects(SuperTabController c) => [
 ];
 
 /// A person by the name the Swarm shows: their username.
-String buddyPersonName(SuperTabController c, String personId) {
-  return c.snapshot?.people
-          .where((p) => p.id == personId)
-          .firstOrNull
-          ?.username ??
-      'its owner';
-}
+String buddyPersonName(SuperTabController c, String personId) =>
+    c.snapshot?.usernameOf(personId) ?? 'its owner';
 
 /// The machine [machineId]'s name as the dialog and the chat show it.
 String buddyMachineName(
@@ -624,7 +620,17 @@ class SuperTabBuddyBar extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(where, style: DesktopChrome.metadata()),
+          // The one Buddy switches between its person's subscription and a
+          // model shared in the Swarm (task #2354); a project's Buddy cannot.
+          if (chat.isSwarmBuddyChat)
+            BuddyModelLine(
+              controller: c,
+              agent: agent,
+              machine: machine,
+              rest: where,
+            )
+          else
+            Text(where, style: DesktopChrome.metadata()),
           if (agent.downSince != null)
             Row(
               children: [

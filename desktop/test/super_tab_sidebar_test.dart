@@ -748,7 +748,7 @@ void main() {
     );
 
     test(
-      'lists only fresh readings, once each, and none while the add-on is off',
+      'lists only fresh readings, once per machine, and none while the add-on is off',
       () {
         final now = DateTime.fromMillisecondsSinceEpoch(1000000);
         SuperTabSnapshot snapshot({bool enabled = true, int at = 990000}) =>
@@ -783,6 +783,7 @@ void main() {
             grid: swarmGrid,
             model: 'm',
             name: 'm',
+            machineId: 'b',
             machine: 'A machine',
             kind: 'local',
           ),
@@ -790,6 +791,7 @@ void main() {
             grid: 'team',
             model: 'n',
             name: 'n',
+            machineId: 'b',
             machine: 'A machine',
             kind: 'shared',
           ),

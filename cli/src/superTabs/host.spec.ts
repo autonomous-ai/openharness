@@ -3908,6 +3908,26 @@ function lifeFixture(rows: Record<string, unknown>[], options: SuperTabHostOptio
 }
 const leadRow = (extra: Record<string, unknown> = {}) => ({ tabId: 'tab', lead: true, active: true, agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }, ...extra })
 
+// Task #2354: the switch its owner asked for reaches the Buddy's machine on its row, and is carried out there with the Buddy's
+// thread sessions on this machine (superTabs/buddyModel.ts).
+describe('a Buddy\'s model request', () => {
+  const BUDDY_OF = { personId: 'peer', generation: 'g' }
+  const buddyRow = (agent: Record<string, unknown>) => ({ tabId: 'tab', active: true, agent: { machineId: 'machine-1', buddyOf: BUDDY_OF, ...agent } })
+
+  it('is handed to the Buddy model runner with the Buddy\'s own thread sessions, and no one else\'s', async () => {
+    const serve = vi.fn(async () => {})
+    const main = buddyRow({ id: 'buddy', harnessId: 'h-main', modelRequest: { id: 'req1', gridModel: 'm' } })
+    const session = buddyRow({ id: 'session', harnessId: 'h-session', buddySession: { thread: 't', from: 0 } })
+    const other = { tabId: 'tab', active: true, agent: { id: 'other', harnessId: 'h-other', machineId: 'machine-1',
+      buddyOf: { personId: 'someone', generation: 'g' }, buddySession: { thread: 'u', from: 0 } } }
+    const t = lifeFixture([main, session, other], { buddyModels: { serve } })
+    await t.poll()
+    await vi.waitFor(() => expect(serve).toHaveBeenCalledTimes(1))
+    expect(serve).toHaveBeenCalledWith(expect.objectContaining({ agent: expect.objectContaining({ id: 'buddy' }) }),
+      [expect.objectContaining({ agent: expect.objectContaining({ id: 'session' }) })])
+  })
+})
+
 // Spec 2026-10-30-buddy-thread-sessions: a Buddy's thread session never stays on its person's machine once its thread is done
 // with it. Its host asks the backend to end it, as the machine's owner, when idle or when its terminal is gone.
 describe('ending a Buddy\'s thread sessions', () => {
