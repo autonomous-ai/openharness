@@ -4,6 +4,7 @@ import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'package:harness_mobile/phone/phone_sheet.dart';
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -12,6 +13,8 @@ import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'model.dart';
 import 'swarm_conversation.dart';
 import 'swarm_message_row.dart' show swarmChatText;
+import 'swarm_new_project_sheet.dart' show SwarmLeadMachine, swarmLeadMachines;
+import 'swarm_request.dart';
 import 'swarm_thread_line.dart' show swarmAgo;
 
 /// How long a queued delivery's claims fail before its sender is told, and how
@@ -125,6 +128,17 @@ class _SwarmMessageReceiptState extends State<SwarmMessageReceipt>
     final delivery = message.receiptDelivery;
     final agent = delivery == null ? null : snapshot?.agent(delivery.agentId);
     final now = clock.now();
+    // Desktop's "Not sent · this chat has no Lead": sent to nobody, where no
+    // Lead runs. A Buddy chat has none: its Buddy takes the message.
+    if (snapshot != null &&
+        group != null &&
+        delivery == null &&
+        group.leadId == null &&
+        !group.isBuddyChat &&
+        reader.error == null) {
+      _wakeUpAt(null, now);
+      return _noLead(context, c, snapshot.isProjectLead(group.id));
+    }
     // Said only of a recipient of this chat, from what was just read: a row
     // kept from before, or the Swarm out of reach, says nothing of where it is.
     if (snapshot == null ||
@@ -196,6 +210,122 @@ class _SwarmMessageReceiptState extends State<SwarmMessageReceipt>
     );
   }
 
+  /// A Lead being started from this line, and what refused it.
+  bool _startingLead = false;
+  String? _leadError;
+
+  /// One receipt per machine chosen, kept while its answer may have been lost,
+  /// so trying again is the same start.
+  final _leadStarts = <String, String>{};
+
+  /// Desktop's no-Lead line. Add a Lead only where the phone can start one: a
+  /// project chat, through `lead.start` as a new project does. A task chat's
+  /// Lead comes from Desktop's New Harness box, which the phone has not.
+  Widget _noLead(BuildContext context, SwarmConversation c, bool projectChat) {
+    final free = c.canPost && !_startingLead;
+    return _line(
+      icon: LucideIcons.triangleAlert,
+      color: Theme.of(context).colorScheme.error,
+      title: 'Not sent · this chat has no Lead',
+      note: _leadError,
+      actions: [
+        if (projectChat)
+          _ReceiptLink(
+            key: const ValueKey('swarm-receipt-add-lead'),
+            label: 'Add a Lead',
+            busy: _startingLead,
+            dimmed: !free && !_startingLead,
+            onPressed: free ? () => unawaited(_pickLeadMachine(c)) : null,
+          ),
+      ],
+    );
+  }
+
+  /// The Swarm's machines that could run the project's Lead, as New project
+  /// lists them; one that cannot now is listed with why, and not picked.
+  Future<void> _pickLeadMachine(SwarmConversation c) async {
+    final snapshot = c.reader.snapshot;
+    if (snapshot == null) return;
+    final machines = swarmLeadMachines(
+      snapshot,
+      c.reader.accountId,
+      now: clock.now(),
+    );
+    if (machines.isEmpty) {
+      setState(
+        () => _leadError =
+            'No machine in this Swarm can run a Lead. Add one on Desktop.',
+      );
+      return;
+    }
+    await showPhoneSheet(
+      context,
+      title: 'Machine',
+      sections: [
+        PhoneSheetSection(
+          actions: [
+            for (final m in machines)
+              PhoneSheetAction(
+                icon: LucideIcons.laptop,
+                label: m.name,
+                value: m.startable ? null : m.detail,
+                enabled: m.startable,
+                onTap: () => unawaited(_startLead(c, m)),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Future<void> _startLead(SwarmConversation c, SwarmLeadMachine machine) async {
+    final reader = c.reader;
+    final group = c.conversation;
+    final project = group == null
+        ? null
+        : reader.snapshot?.projectFor(group.id);
+    if (project == null || _startingLead || !machine.startable) return;
+    final url = project.repository?['repositoryUrl'];
+    final operationId = _leadStarts[machine.id] ??= superTabOperationId();
+    setState(() {
+      _startingLead = true;
+      _leadError = null;
+    });
+    try {
+      await reader.request(
+        'POST',
+        '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/commands',
+        body: {
+          'operationId': operationId,
+          'command': {
+            'type': 'lead.start',
+            'projectId': project.id,
+            'machineId': machine.id,
+            'engine': machine.engine,
+            if (url is String && url.isNotEmpty) 'repositoryUrl': url,
+          },
+        },
+      );
+      _leadStarts.remove(machine.id);
+      unawaited(reader.refresh());
+    } on SuperTabFailure catch (failure) {
+      // Refused, it made no start: the next try is a new one.
+      final status = failure.statusCode;
+      if (status >= 400 && status < 500 && status != 408 && status != 429) {
+        _leadStarts.remove(machine.id);
+      }
+      if (mounted) setState(() => _leadError = failure.message);
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => _leadError = 'Couldn’t start the Lead. Try again to check it.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _startingLead = false);
+    }
+  }
+
   /// The desktop's "Couldn't confirm delivery": its computer may have typed
   /// it without confirming, so the person checks before it goes again. Open
   /// terminal only where this phone can open that computer's terminals.
@@ -255,7 +385,7 @@ class _SwarmMessageReceiptState extends State<SwarmMessageReceipt>
     required IconData icon,
     required Color color,
     required String title,
-    required String note,
+    String? note,
     List<Widget> actions = const [],
   }) {
     return Padding(
@@ -275,28 +405,29 @@ class _SwarmMessageReceiptState extends State<SwarmMessageReceipt>
               ],
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.only(top: AppSpace.xs),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: .09),
-                borderRadius: BorderRadius.circular(AppCard.insetRadius),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(AppSpace.s),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: Text(
-                    note,
-                    style: AppType.caption(
-                      color: AppPalette.textSecondary,
-                      height: 1.45,
+          if (note != null)
+            Padding(
+              padding: const EdgeInsets.only(top: AppSpace.xs),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: .09),
+                  borderRadius: BorderRadius.circular(AppCard.insetRadius),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(AppSpace.s),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: Text(
+                      note,
+                      style: AppType.caption(
+                        color: AppPalette.textSecondary,
+                        height: 1.45,
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
           // Each link's own padding sets it in from the note's edge: the
           // first is pulled back to line up with it.
           if (actions.isNotEmpty)
