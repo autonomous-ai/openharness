@@ -270,7 +270,8 @@ String swarmBroughtSummary(SwarmBroughtMachine machine) =>
     '${machine.shipped} shipped · ${_broughtHours(machine.busyHours)} for others';
 
 /// Each of a brought machine's subscriptions with its week, as
-/// ("Claude", "38% used, resets in 3d").
+/// ("Claude", "38% used · resets in 3d"), in the desktop's words
+/// (`person_row.dart`).
 List<(String, String)> swarmBroughtSubscriptions(
   SwarmBroughtMachine machine,
   DateTime now,
@@ -280,30 +281,12 @@ List<(String, String)> swarmBroughtSubscriptions(
       _engineNames[sub.engine] ?? sub.engine,
       switch (sub) {
         (usedPercent: final used?, resetsAt: final at?, engine: _) =>
-          '$used% used, resets in ${_resetsIn(at, now)}',
+          '$used% used · resets in ${_resetsIn(at, now)}',
         (usedPercent: final used?, resetsAt: null, engine: _) => '$used% used',
         _ => 'not read yet',
       },
     ),
 ];
-
-/// A machine's Brought lines: what shipped and its hours for others, then each
-/// subscription's week.
-List<(String, String)> _broughtLines(SwarmScore score, DateTime now) {
-  final brought = score.brought!;
-  if (brought.isEmpty) return [('Brought', 'No machines brought yet')];
-  return [
-    for (final machine in brought)
-      (
-        machine.machineName,
-        [
-          swarmBroughtSummary(machine),
-          for (final (engine, week) in swarmBroughtSubscriptions(machine, now))
-            '$engine $week',
-        ].join('\n'),
-      ),
-  ];
-}
 
 /// "6 min" under an hour, then hours with one decimal unless whole: "3 h",
 /// "3.1 h" (the desktop's `leaderboardDuration`).
@@ -516,16 +499,13 @@ List<(String, String)> swarmPersonWeek(SwarmScore score, {DateTime? now}) {
           : '${score.unblocked} answered${median(score.medianAnswerMs, '')}'
                 ' · ${swarmDuration(score.unblockedMs)} of agent time freed',
     ),
-    if (score.brought != null)
-      ..._broughtLines(score, now ?? DateTime.now())
-    else
-      (
-        'Lent',
-        score.lentMachines == 0
-            ? 'Nothing lent yet'
-            : '${_plural(score.lentMachines, 'machine')}'
-                  ' · ${swarmHours(score.lentMs)} agent-hours',
-      ),
+    (
+      'Lent',
+      score.lentMachines == 0
+          ? 'Nothing lent yet'
+          : '${_plural(score.lentMachines, 'machine')}'
+                ' · ${swarmHours(score.lentMs)} agent-hours',
+    ),
     (
       'Streak',
       score.streakDays == 0
