@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createSuperTab, SuperTabError, type AgentStart, type AgentStartRequest, type SuperTabState } from './model.js'
 import { admitMachineStart, defaultProfileId, machineSlots, machineObservationSchema, preparableStart, readingOnly, removalPreview, servedLocalModels, storedObservation, type ContributedMachine,
   type MachineObservation } from './machines.js'
-import { NOW, owner, peer, richSwarm } from './read/fixture.test-support.js'
+import { owner, peer, richSwarm } from './read/fixture.test-support.js'
 
 const NOW = 1_000_000
 const requirements = { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 50, tools: ['git'], devices: [], quotaRequired: false }
