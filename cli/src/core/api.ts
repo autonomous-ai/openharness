@@ -568,8 +568,9 @@ export const ACCOUNT_BACKEND_OFF: Pick<CoreApi['account'], 'backend' | 'identity
 export const DAEMON_UNKNOWN: DaemonAddress = { command: 'harness', port: 0, machineId: () => '', autonomousEnv: 'prod' }
 
 /** How a delivery is told apart: `answersQuestion` marks a person's Swarm message, which closes the question it answers
- *  in a Claude pane (core/input.ts `beforeTeamWrite`). */
-export interface DeliveryOptions { answersQuestion?: true }
+ *  in a Claude pane (core/input.ts `beforeTeamWrite`);
+ *  `writtenAt` is when it was written (ms), as only a question open since then is its to close. */
+export interface DeliveryOptions { answersQuestion?: true; writtenAt?: number }
 
 /** What became of a delivered turn (`turns.deliver`), as the core's input says it: `queued`, written
  *  (`delivered`), its turn `started`, `rejected` with why, or `unknown`. `sessionId` is the agent it was

@@ -81,7 +81,8 @@ export function createDeliveries(deps: DeliveriesDeps) {
     return true
   }
   /** Deliveries from a person's message, which close a question open on the pane, until they settle. */
-  const answering = new Set<string>()
+  const answering = new Map<string, { writtenAt?: number }>()
+  const answers = (writtenAt: unknown) => Number.isFinite(writtenAt) ? { writtenAt: writtenAt as number } : {}
   const settled = (event: TurnDelivery): void => {
     if (event.state !== 'queued') answering.delete(event.deliveryId)
     for (const listener of listeners) {
@@ -95,7 +96,7 @@ export function createDeliveries(deps: DeliveriesDeps) {
 
   const turns: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery' | 'leaseDeliveries'> = {
     deliver: (agentId, content, deliveryId, options) => {
-      if (options?.answersQuestion) answering.add(deliveryId)
+      if (options?.answersQuestion) answering.set(deliveryId, answers(options.writtenAt))
       submit(agentId, content, deliveryId)
     },
     cancelDelivery: (deliveryId) => cancel(deliveryId),
@@ -118,8 +119,8 @@ export function createDeliveries(deps: DeliveriesDeps) {
       return (leases.get(service)?.get(deliveryId) ?? 0) > now()
     },
 
-    /** Whether the delivery is unsettled and came from a person's message (`DeliveryOptions.answersQuestion`). */
-    answersQuestion: (deliveryId: string): boolean => answering.has(deliveryId),
+    /** The delivery, when it is unsettled and came from a person's message (`DeliveryOptions.answersQuestion`), else null. */
+    answersQuestion: (deliveryId: string): { writtenAt?: number } | null => answering.get(deliveryId) ?? null,
 
     /** The core's input says what became of a delivery: every listener here hears it, each guarded, and the
      *  process that made it is told. A listener that throws costs that listener the event, never the input
@@ -149,7 +150,7 @@ export function createDeliveries(deps: DeliveriesDeps) {
       makers.delete(deliveryId)
       makers.set(deliveryId, service)
       if (makers.size > KEPT_DELIVERERS) makers.delete(makers.keys().next().value!)
-      if (payload.answersQuestion === true) answering.add(deliveryId)
+      if (payload.answersQuestion === true) answering.set(deliveryId, answers(payload.writtenAt))
       submit(agentId, payload.text, deliveryId)
       return {}
     },
