@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/home_dir.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
@@ -921,14 +922,15 @@ void main() {
     testWidgets('Import lists this Mac\'s agents and what is not offered', (
       tester,
     ) async {
-      await roster(tester);
+      final f = await roster(tester);
+      f.agents = [
+        _agent('fix', engine: 'codex', cwd: '/work/api'),
+        _agent('docs', cwd: '${homeDir()}/code/docs'),
+      ];
       await openImport(tester);
       expect(find.text('Import an agent into openharness'), findsOneWidget);
-      expect(find.text('Codex · fix-fix · ${folder.path}'), findsOneWidget);
-      expect(
-        find.text('Claude Code · fix-docs · ${folder.path}'),
-        findsOneWidget,
-      );
+      expect(find.text('Codex · fix-fix · /work/api'), findsOneWidget);
+      expect(find.text('Claude Code · fix-docs · ~/code/docs'), findsOneWidget);
       expect(
         find.text(
           'Not offered: agents already in a Swarm, Buddies and '
@@ -1056,7 +1058,9 @@ void main() {
       await tester.tap(find.text('Set up Harness Team'));
       await tester.pumpAndSettle();
       expect(
-        find.textContaining('Set up Harness Team on this'),
+        find.textContaining(
+          RegExp(r'^Set up Harness Team on this (Mac|computer)$'),
+        ),
         findsOneWidget,
       );
       expect(f.server.posts, isEmpty);
