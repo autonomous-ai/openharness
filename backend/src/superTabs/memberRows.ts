@@ -40,7 +40,7 @@ export function memberRowText(by: { id: string; label: string }, agent: { id: st
   return `${by.label} ${added ? 'added' : 'removed'} ${quotedName(agent.name)}.`
 }
 
-/** How a row names the actor [key] (model.ts actorKey): an agent by its quoted display name, a person by their username; none
+/** How a row names the actor [key] (model.ts actorKey): an agent by its quoted display name, a person by the name the Swarm shows for them; none
  *  once gone. */
 export function actorLabel(state: SuperTabState, key: string): string | undefined {
   const [kind, id] = [key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':') + 1)]
