@@ -4833,8 +4833,14 @@ class AppNotifier extends ChangeNotifier {
     }
 
     controller.addListener(listener);
-    giveUp = Timer(const Duration(seconds: 10), () {
+    giveUp = Timer(dialThreadWaitForTest, () {
       controller.removeListener(listener);
+      // A later dial frame asks again; nothing of the thread is logged.
+      appLog.warn(
+        'super-tab',
+        'The dial\'s thread never reached its chat in '
+            '${dialThreadWaitForTest.inSeconds} s; it stays closed',
+      );
     });
   }
 
@@ -6141,6 +6147,10 @@ class AppNotifier extends ChangeNotifier {
   bool _announceFromDevice = false;
   int _devicePick = 0;
   int _dialThreadToken = 0;
+
+  /// How long the dial's thread waits for its root to reach the chat.
+  @visibleForTesting
+  Duration dialThreadWaitForTest = const Duration(seconds: 10);
 
   /// The project each Swarm tab's row last told the dial, by backend tab id;
   /// null while its Swarm had not loaded. See `onSnapshot`.
