@@ -476,18 +476,49 @@ describe('the PM is not told what a step\'s agent says to its task', () => {
     const posted = f.run({ type: 'message.send', conversationId: f.task, text: 'Both re-checks pass.', replyTo: null, recipientIds: [] } as Command, f.as(rev)).messages
     expect(posted.map(m => m.recipients)).toEqual([[f.dev]])
   })
-  it('the PM is not told a step-only agent is idle', () => {
+  it('the PM is not told a step-only agent is idle while the task it checked is open', () => {
+    const f = stepsFixture()
+    const id = f.step('Review')
+    const rev = f.add('rev', id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
+    const project = f.state.projects![0]!.id
+    const idle = () => idleNotices(f.state, project, f.now + 60 * 60_000, new Set()).map(n => n.source?.agentId)
+    expect(idle()).not.toContain(rev)
+    // Its step done, the Engineer may still ask it for the next round (workflow 3).
+    f.run({ type: 'work.status', conversationId: id, assignmentId: f.group(id).assignment!.id, status: 'done', result: 'Passed' } as Command, f.as(rev))
+    expect(idle()).not.toContain(rev)
+  })
+  // Diego, 2026-11-02: a step-only Reviewer or Tester was never reported idle while its finished task stayed unarchived,
+  // holding a machine slot and quota unseen.
+  it('the PM is told a step-only agent is idle once every task it checked has ended, archived or not', () => {
     const f = stepsFixture()
     const id = f.step('Review')
     const rev = f.add('rev', id)
     f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
     f.run({ type: 'work.status', conversationId: id, assignmentId: f.group(id).assignment!.id, status: 'done', result: 'Passed' } as Command, f.as(rev))
     f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'done', result: 'Merged' } as Command, f.as(f.dev))
+    expect(f.group(f.task).archived).toBeFalsy()
     const project = f.state.projects![0]!.id
     const notices = idleNotices(f.state, project, f.now + 60 * 60_000, new Set()).map(n => n.source?.agentId)
-    // The Engineer, idle with its task done, is still told: an idle Engineer is stopped.
     expect(notices).toContain(f.dev)
-    expect(notices).not.toContain(rev)
+    expect(notices).toContain(rev)
+  })
+  it('a step-only agent with a step of another task still open is not reported idle', () => {
+    const f = stepsFixture()
+    const id = f.step('Review')
+    const rev = f.add('rev', id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
+    f.run({ type: 'work.status', conversationId: id, assignmentId: f.group(id).assignment!.id, status: 'done', result: 'Passed' } as Command, f.as(rev))
+    const other = f.run({ type: 'conversation.create', title: 'Fix logout', brief: 'Sign out works.', checks: [] }, f.as(f.lead)).result.conversationId as string
+    const dev2 = f.add('dev2', other)
+    f.run({ type: 'work.assign', conversationId: other, agentId: dev2 }, f.as(f.lead))
+    const second = f.step('Review', f.as(dev2), other)
+    f.run({ type: 'conversation.agent', conversationId: second, agentId: rev, present: true, lead: false } as Command, f.as(dev2))
+    f.run({ type: 'work.assign', conversationId: second, agentId: rev }, f.as(dev2))
+    f.run({ type: 'work.status', conversationId: second, assignmentId: f.group(second).assignment!.id, status: 'done', result: 'Passed' } as Command, f.as(rev))
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'done', result: 'Merged' } as Command, f.as(f.dev))
+    const project = f.state.projects![0]!.id
+    expect(idleNotices(f.state, project, f.now + 60 * 60_000, new Set()).map(n => n.source?.agentId)).not.toContain(rev)
   })
 })
 
