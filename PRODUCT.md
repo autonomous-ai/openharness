@@ -23,6 +23,14 @@ agents from every lab on them, with work verified before it ships.**
 - **People bring the capacity; the Product Manager decides what it builds.** Everyone in a Swarm can bring a machine
   or a subscription, and it joins one pool used before anyone waits.
 
+**Positioning** (Dee, 2026-11-03). Every change strengthens one of these, and nothing else is built:
+
+- **Tell the PM what you want, and your crew ships it.**
+- **Ken's router keeps the crew running.** It fits every agent to a machine with the CPU, memory, disk, tools, devices
+  and quota its job needs, so dozens of agents run at once through CI, end-to-end tests and VMs without choking. Tokens
+  are the least of the bottlenecks.
+- **Every lab in one crew, on the team's own machines, reviewed and tested before merge.**
+
 ## Who it is for
 
 In this order:
