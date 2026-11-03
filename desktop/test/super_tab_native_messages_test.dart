@@ -216,7 +216,9 @@ void main() {
               .first,
         );
         expect(source, findsOneWidget);
-        await tester.ensureVisible(source);
+        await tester.ensureVisible(
+          find.ancestor(of: source, matching: find.byType(SuperTabMessageRow)),
+        );
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
         if (capture != null) {
