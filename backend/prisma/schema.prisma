@@ -1032,6 +1032,11 @@ model SuperTab {
   autonomousEnv  String
   memberIds      String[]
   invitedEmails  String[]
+  /// The domain whose people join this Swarm by themselves while its owner has auto-join on (superTabs/autoJoin.ts); absent
+  /// otherwise. Derived from the head's sharing in every commit (parts/commit.ts indexesOf).
+  autoJoinDomain String?
+  /// People who left or were removed: auto-join never adds them again. Cleared by an invitation accepted or a link join.
+  autoJoinDeclined String[]
   machineIds     String[]
   /// Machines whose host still has to clean up after their removal: read apart from the 100-Swarm host poll.
   cleanupMachineIds String[] @default([])
@@ -1066,6 +1071,8 @@ model SuperTab {
   /// A machine's Swarms, newest first: the host poll's lookup, once a second per host (superTabs/swarmRows.ts machineSwarms).
   @@index([autonomousEnv, machineIds, updatedAt])
   @@index([autonomousEnv, cleanupMachineIds, updatedAt])
+  /// The Swarms a person at a domain joins by themselves: one read per person at most every 2 minutes (superTabs/autoJoin.ts).
+  @@index([autonomousEnv, autoJoinDomain])
 }
 
 // A terminal retains its history when removed from a roster. These bindings

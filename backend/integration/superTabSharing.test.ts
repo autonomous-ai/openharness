@@ -76,7 +76,7 @@ describe('Swarm sharing on the authenticated control API', () => {
   it('stays invite-only by default, requires the owner, and never joins on a read', async () => {
     const tab = await create()
     expect((await request(tab, 'sharing')).json().data).toEqual({ revision: 0,
-      access: { mode: 'invited', role: 'collaborator' }, joinUrl: null })
+      access: { mode: 'invited', role: 'collaborator' }, joinUrl: null, ownDomain: 'example.com', ownDomainPublic: false, autoJoinFull: false })
     expect((await request(tab, 'sharing', undefined, null)).statusCode).toBe(401)
     // Someone outside the Swarm is answered as for one that does not exist (routes/superTabs.ts NOT_AVAILABLE).
     expect((await request(tab, 'sharing', undefined, peer)).statusCode).toBe(404)

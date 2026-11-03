@@ -140,9 +140,9 @@ describe('Domain checks on save and join', () => {
     const state = await storedState(tab)
     state.sharing!.access = { mode: 'domain', domain: 'gmail.com', role: 'collaborator' }
     await saveState(tab, state)
-    const refused = await request(`${tab}/join`, { operationId: randomUUID() }, xGmail)
-    expect(refused.statusCode).toBe(404)
-    expect(refused.json().error.code).toBe('JOIN_UNAVAILABLE')
+    // The route answers a non-member's refusal as for a Swarm that does not exist (routes/superTabs.ts NOT_AVAILABLE).
+    expect((await request(`${tab}/join`, { operationId: randomUUID() }, xGmail)).statusCode).toBe(404)
+    await expect(store.join(xGmail, tab, { operationId: randomUUID() })).rejects.toMatchObject({ code: 'JOIN_UNAVAILABLE' })
     expect((await request(`${tab}/join/preview`, {}, xGmail)).statusCode).toBe(404)
     const details = (await request(`${tab}/sharing`)).json().data
     expect(details.access).toEqual({ mode: 'invited', role: 'collaborator' })

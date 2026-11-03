@@ -1096,7 +1096,7 @@ export class SuperTabStore {
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)
       requireSharingOwner(state, user.sub)
-      return sharingDetails(state)
+      return sharingDetails(state, user.email)
     })
   }
 
@@ -1112,14 +1112,14 @@ export class SuperTabStore {
         if (prior.requestHash !== requestHash) fail('OPERATION_REUSED', 'Use a new operation ID for a different request.')
         const result = prior.result as Record<string, unknown>
         if (state.sharing?.generation !== result.generation) fail('SHARING_CHANGED', 'Sharing changed after this request. Reload it and try again.')
-        return sharingDetails(state)
+        return sharingDetails(state, user.email)
       }
       if ((state.sharing?.revision ?? 0) !== request.revision) fail('REVISION_CHANGED', 'Sharing changed elsewhere. Reload it and try again.')
-      state.sharing = configureSharing(state.sharing, request.access, request.rotateLink)
+      state.sharing = configureSharing(state.sharing, request.access, request.rotateLink, user.email)
       const stamp = clock.next(), { written } = await this.save(tx, loaded, state, stamp, [{ kind: 'member', key: user.sub }])
       await tx.superTabOperation.create({ data: { id: receiptId, tabId, actorKey: `person:${user.sub}`, requestHash,
         revision: 0, parts: json(receiptParts(written, stamp)), result: { generation: state.sharing.generation } } })
-      return sharingDetails(state)
+      return sharingDetails(state, user.email)
     })
   }
 
