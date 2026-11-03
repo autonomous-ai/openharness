@@ -257,10 +257,17 @@ void main() {
       c.openThread('message-1');
       await tester.pumpAndSettle();
       final monday = _day(tester, _monday);
-      // The chat back in Monday, the thread at Tuesday's replies: a fixed
-      // distance, so main's run shows the same place.
+      // The chat back until Monday's last message is near its top, the
+      // thread at Tuesday's replies: the same place on main, with no pill.
       final scroll = _chatScroll(tester);
-      await _scrollTo(tester, scroll, scroll.position.pixels - 1000);
+      const lastMonday =
+          'Two devices editing at once settle on the newest edit. (30)';
+      final row = find.text(lastMonday, findRichText: true);
+      while ((row.evaluate().isEmpty ||
+              tester.getTopLeft(row.first).dy > 300) &&
+          scroll.position.pixels - 40 > scroll.position.minScrollExtent) {
+        await _scrollTo(tester, scroll, scroll.position.pixels - 40);
+      }
       await tester.pumpAndSettle();
 
       // Written before the checks, so main's run writes the "before" image.
