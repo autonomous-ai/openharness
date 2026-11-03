@@ -76,7 +76,7 @@ describe('ordinary task messages and progress replies', () => {
     expect(f.status(id, builder, 'working', 'Halfway.').messages.filter(m => m.thread === root)).toEqual([])
     const posted = f.run({ type: 'message.send', conversationId: id, text: 'Please check the draft.', replyTo: null, recipientIds: [] }, f.as(builder))
     expect(posted.messages.filter(m => m.thread === root)).toEqual([expect.objectContaining({ text: 'Please check the draft.',
-      conversationId: 'lead', replyTo: root, recipients: [], author: { kind: 'agent', id: builder } })])
+      conversationId: 'lead', replyTo: root, recipients: [], author: expect.objectContaining({ kind: 'agent', id: builder }) })])
     expect(posted.messages.filter(m => m.recipients.includes(f.pm))).toHaveLength(1)
   })
 

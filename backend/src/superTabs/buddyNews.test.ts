@@ -195,11 +195,13 @@ describe('work the PM opens from a Buddy\'s proposal without naming anyone (grou
     // and their Buddy hears it inside the task, once.
     const done = f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'done', result: 'Review passed: https://github.com/o/r/pull/7' },
       agentActor(worker))
-    expect(done.edits).toEqual([expect.objectContaining({ conversationId: f.app.conversationId, source: expect.objectContaining({ kind: TASK_LINE_KIND,
-      state: 'ready', requesterId: 'peer' }) })])
+    expect(done.edits ?? []).toEqual([])
+    expect(done.messages).toEqual(expect.arrayContaining([expect.objectContaining({ conversationId: f.app.conversationId,
+      thread: find().cards!.line!.messageId, text: expect.stringContaining('Ready to merge.') })]))
     expect(done.messages.filter(m => m.recipients.includes('buddy'))).toEqual([])
     const merged = f.run({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/o/r/pull/7' }, agentActor(worker))
-    expect(merged.edits).toEqual([expect.objectContaining({ source: expect.objectContaining({ state: 'shipped' }) })])
+    expect(merged.edits ?? []).toEqual([])
+    expect(merged.messages).toEqual(expect.arrayContaining([expect.objectContaining({ thread: find().cards!.line!.messageId, text: 'Merged https://github.com/o/r/pull/7.' })]))
     expect(merged.messages.filter(m => m.recipients.includes('buddy'))).toEqual([expect.objectContaining({ conversationId: group,
       source: { kind: 'agent-only' }, text: expect.stringContaining('which they requested, shipped') })])
     expect(f.run({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/o/r/pull/7' }, agentActor(worker))

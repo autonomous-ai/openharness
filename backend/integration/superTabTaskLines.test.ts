@@ -60,45 +60,37 @@ async function swarm() {
 }
 
 describe('a task\'s one message in its project chat', () => {
-  it('posts one message per task with an Engineer and edits it through each state', async () => {
+  it('opens one immutable ordinary root, then records details and updates as normal thread replies', async () => {
     const s = await swarm()
     const P = await s.add('Coordinator', 'lead', true)
-    const T = String((await s.as(P)({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [] })).result.conversationId)
+    const T = String((await s.as(P)({ type: 'conversation.create', title: 'Offline drafts', requesterId: owner.sub, brief: 'Keep drafts.', checks: [] })).result.conversationId)
+    const first = await s.page('lead')
+    expect(first.lines).toEqual([expect.objectContaining({ text: "Let's build: Offline drafts", recipientIds: [] })])
+    const root = first.lines[0]!.id
+    const readThread = () => store.messages(owner, s.tab, 'lead', { thread: root })
+    expect((await readThread()).messages.map(m => m.text)).toEqual(["Let's build: Offline drafts", 'Keep drafts.'])
     const E = await s.add('Engineer', T)
     const assignmentId = String((await s.as(P)({ type: 'work.assign', conversationId: T, agentId: E })).result.assignmentId)
-    const status = (value: 'working' | 'needs_human' | 'review' | 'done', result: string | null, extra: Record<string, unknown> = {}) =>
-      s.as(E)({ type: 'work.status', conversationId: T, assignmentId, status: value, result, ...extra } as Command)
-
-    const first = await s.page('lead')
-    expect(first.lines).toEqual([expect.objectContaining({ text: 'Offline drafts · planned', recipientIds: [],
-      source: expect.objectContaining({ kind: 'task-line', taskId: T, title: 'Offline drafts', state: 'planned', builderId: E }) })])
-    const lineId = first.lines[0]!.id
-    expect(await db.superTabDelivery.count({ where: { tabId: s.tab, messageId: lineId } })).toBe(0)
-
-    let seq = first.reactionSeq
-    const steps: Array<[Parameters<typeof status>[0], string | null, Record<string, unknown>, string, Record<string, unknown>]> = [
-      ['working', 'Started.', {}, 'Offline drafts · working', { state: 'working' }],
-      ['needs_human', 'Keep drafts after a restart?', { ask: { personId: peer.sub, options: ['Keep', 'Drop'], recommended: 0, unblocks: 'The release' } },
-        'Offline drafts · waiting on peer', { state: 'waiting', answerFor: peer.sub }],
-      ['review', 'Ready: https://github.com/example/app/pull/7 at abc1234.', {}, 'Offline drafts · in review', { state: 'review' }],
-      ['done', 'Review passed: https://github.com/example/app/pull/7.', {}, 'Offline drafts · ready', { state: 'ready' }],
-    ]
-    for (const [value, result, extra, text, source] of steps) {
-      await status(value, result, extra)
-      const now = await s.page('lead')
-      expect(now.lines).toEqual([expect.objectContaining({ id: lineId, text, source: expect.objectContaining({ taskId: T, ...source }) })])
-      if (!('answerFor' in source)) expect(now.lines[0]!.source).not.toHaveProperty('answerFor')
-      // The page a reader already shows changed: its counter moved, so the app reads it again.
-      expect(now.reactionSeq).toBeGreaterThan(seq)
-      seq = now.reactionSeq
-    }
-    // Shipped once the merge is recorded (PM, review of #2633).
-    await s.as(P)({ type: 'conversation.merged', conversationId: T, pullRequestUrl: 'https://github.com/example/app/pull/7' })
-    const shipped = await s.page('lead')
-    expect(shipped.lines).toEqual([expect.objectContaining({ id: lineId, text: 'Offline drafts · shipped', source: expect.objectContaining({ state: 'shipped' }) })])
-    expect(shipped.reactionSeq).toBeGreaterThan(seq)
-    // The Shipped line is gone: its line says it.
-    expect((await store.messages(owner, s.tab, 'lead', {}) as unknown as { messages: Row[] }).messages.filter(m => m.source?.kind === 'ship')).toEqual([])
+    await s.as(E)({ type: 'work.status', conversationId: T, assignmentId, status: 'working', result: 'Started.' })
+    const beforeRepeated = (await readThread()).messages.length
+    await s.as(E)({ type: 'work.status', conversationId: T, assignmentId, status: 'working', result: 'Halfway.' })
+    expect((await readThread()).messages).toHaveLength(beforeRepeated)
+    const operationId = randomUUID()
+    const post = { operationId, command: { type: 'message.send' as const, conversationId: T, text: 'Please check the draft.', replyTo: null, recipientIds: [] } }
+    await store.execute(host, s.tab, post, E)
+    await store.execute(host, s.tab, post, E)
+    const thread = await readThread()
+    expect(thread.messages.filter(m => m.text === 'Please check the draft.')).toHaveLength(1)
+    expect(thread.messages.filter(m => m.id !== root).every(m => m.thread === root && m.replyTo === root)).toBe(true)
+    expect((await s.page('lead')).lines).toEqual(first.lines)
+    const page = await store.messages(owner, s.tab, 'lead', {})
+    expect(page.threads).toEqual(expect.arrayContaining([expect.objectContaining({ id: root, replies: thread.messages.length - 1 })]))
+    const pr = 'https://github.com/example/app/pull/7'
+    await s.as(E)({ type: 'work.status', conversationId: T, assignmentId, status: 'done', result: `Checks passed: ${pr}` })
+    await s.as(P)({ type: 'conversation.merged', conversationId: T, pullRequestUrl: pr })
+    await s.as(P)({ type: 'conversation.merged', conversationId: T, pullRequestUrl: pr })
+    expect((await readThread()).messages.filter(m => m.text === `Merged ${pr}.`)).toHaveLength(1)
+    expect((await s.page('lead')).lines).toEqual(first.lines)
   })
 
   it('posts none for a task\'s steps', async () => {
@@ -114,7 +106,7 @@ describe('a task\'s one message in its project chat', () => {
     const reviewing = String((await s.as(E)({ type: 'work.assign', conversationId: R, agentId: V })).result.assignmentId)
     await s.as(V)({ type: 'work.status', conversationId: R, assignmentId: reviewing, status: 'done', result: 'Ready to merge: Yes.' })
     const { lines } = await s.page('lead')
-    expect(lines.map(l => [l.source?.taskId, l.source?.state])).toEqual([[T, 'review']])
+    expect(lines.map(l => [l.source?.taskId, l.text])).toEqual([[T, "Let's build: Offline drafts"]])
   })
 
   it('shows a private project\'s task line only to that project\'s readers', async () => {
@@ -127,7 +119,7 @@ describe('a task\'s one message in its project chat', () => {
     await s.as(E)({ type: 'work.status', conversationId: T, assignmentId, status: 'working', result: 'Started.' })
 
     const mine = await s.page(created.conversationId)
-    expect(mine.lines.map(l => [l.source?.taskId, l.source?.state])).toEqual([[T, 'working']])
+    expect(mine.lines.map(l => [l.source?.taskId, l.text])).toEqual([[T, "Let's build: Hidden work"]])
     const lineId = mine.lines[0]!.id
     // A Swarm member outside the project: no line on the chats they read, and neither the private chat nor the line by id.
     expect((await s.page('lead', peer)).lines).toEqual([])
