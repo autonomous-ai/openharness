@@ -5,8 +5,8 @@ import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { ensureIndex } from '../lib/db/indexes.js'
 import { activeWork, agentOnly, fail, isLeads, person, stableId, type Actor, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-import { canReadGroup, groupProject, projectAgent, projectOf } from './projects.js'
-import { isSwarmBuddyChat } from './buddies.js'
+import { canReadGroup, canReadProject, groupProject, projectAgent, projectOf, projectsOf } from './projects.js'
+import { isBuddyChat, isSwarmBuddyChat } from './buddies.js'
 import { groupsBy, readBy } from './parts/indexed.js'
 import { deliveredCopies } from './pageReads.js'
 import { shownNameOf } from './personNames.js'
@@ -155,6 +155,55 @@ export async function writeMentions(tx: Tx, tabId: string, state: SuperTabState,
 export async function resolveByReply(tx: Tx, tabId: string, conversationId: string, personId: string, now: number): Promise<void> {
   await tx.superTabMention.updateMany({ where: { tabId, conversationId, personId, createdAt: { lte: new Date(now) }, ...waiting },
     data: { resolvedAt: new Date(now), resolvedBy: 'reply' } })
+}
+
+/** A read mark moved to [sequence] resolves the person's waiting tags it passes: in the chat (threadId null) those shown there, in a
+ *  thread those shown only in it (threadsOf, as Desktop's mentionUnread reads them). Most marks find no tag and stop after one read.
+ *  A held tag (holdUntil) resolved before its time is never listed, as in resolveByReply (intended). */
+export async function resolveRead(db: Tx | PrismaClient, input: { tabId: string; personId: string; conversationId: string; threadId: string | null;
+  sequence: number; now: number }): Promise<number> {
+  const { tabId, personId, conversationId, threadId, sequence, now } = input, tx = db as Tx
+  const rows = await tx.superTabMention.findMany({ where: { tabId, personId, conversationId, createdAt: { gt: new Date(now - MENTION_EXPIRY_MS) }, ...waiting },
+    select: { id: true, messageId: true }, orderBy: { createdAt: 'desc' }, take: 500 })
+  if (!rows.length) return 0
+  // By id through its index (parts/indexed.ts), never a Prisma `in` on a hot collection (hotFilters.test.ts).
+  const messages = (await readBy(tx, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: [...new Set(rows.map(r => r.messageId))] }, tabId,
+    sequence: { $lte: sequence } } }, { $project: { conversationId: 1, thread: 1, alsoInChat: 1 } }]))
+    .map(m => ({ id: m._id as string, conversationId: m.conversationId as string, thread: (m.thread as string | undefined) ?? null,
+      alsoInChat: (m.alsoInChat as boolean | undefined) ?? null }))
+  const threads = await threadsOf(tx, tabId, messages)
+  const passed = new Set(messages.filter(m => (threads.get(m.id) ?? null) === threadId).map(m => m.id))
+  return resolveIds(tx, tabId, personId, rows.filter(r => passed.has(r.messageId)).map(r => r.id), 'read', now)
+}
+
+/** Resolves these waiting tags of the person in one write, by their ids (at most the 500 a read takes): raw, since Prisma sends
+ *  an `in` on this hot collection as $expr (hotFilters.test.ts). `resolvedAt: null` matches an unset one too. Answers how many. */
+async function resolveIds(tx: Tx, tabId: string, personId: string, ids: string[], by: 'read' | 'answer', now: number): Promise<number> {
+  if (!ids.length) return 0
+  const answer = await tx.$runCommandRaw({ update: 'SuperTabMention', updates: [{ q: { _id: { $in: ids }, tabId, personId, resolvedAt: null },
+    u: { $set: { resolvedAt: { $date: new Date(now).toISOString() }, resolvedBy: by } }, multi: true }] }) as { nModified?: number; writeErrors?: unknown[] }
+  if (answer.writeErrors?.length) throw new Error('The database refused some tag resolves')
+  return answer.nModified ?? 0
+}
+
+/** The agents a person's post answers: its recipients, and in their own Buddy chat also the coordinator of each project the Buddy
+ *  relays to (every project they read for the Swarm chat, the chat's own for a project chat). */
+export function answeredAgents(state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>, group: Conversation, recipients: readonly string[]): string[] {
+  const coordinators = !isBuddyChat(group) || !group.audience?.people.some(p => p.id === actor.userId) ? []
+    : (isSwarmBuddyChat(group) ? projectsOf(state).filter(p => canReadProject(state, actor, p)) : [projectOf(state, group.projectId ?? 'lead')])
+      .map(p => state.conversations.find(c => c.id === p.leadConversationId)?.leadId)
+  return [...new Set([...recipients.filter(id => state.agents.some(a => a.id === id)), ...coordinators.filter((id): id is string => !!id)])]
+}
+
+/** A post to an agent answers every tag that agent made for the person, in any conversation. A held tag (holdUntil) resolved
+ *  before its time is never listed, as in resolveByReply (intended). The agent that made a tag is in no index: the person's
+ *  waiting tags are read once by theirs, as resolveRead reads them, and the agents' resolved in one write. */
+export async function resolveByAnswer(tx: Tx, tabId: string, personId: string, agentIds: readonly string[], now: number): Promise<void> {
+  if (!agentIds.length) return
+  const answered = new Set(agentIds)
+  const rows = await tx.superTabMention.findMany({ where: { tabId, personId, createdAt: { gt: new Date(now - MENTION_EXPIRY_MS), lte: new Date(now) }, ...waiting },
+    select: { id: true, authorAgentId: true }, orderBy: { createdAt: 'desc' }, take: 500 })
+  await resolveIds(tx, tabId, personId, rows.filter(row => answered.has(row.authorAgentId)).map(row => row.id), 'answer', now)
 }
 
 /** A worker took the group: its held tags are over. A listed one moves to Earlier; one not yet listed is dropped, as if never

@@ -242,7 +242,7 @@ class SwarmYouPage extends StatelessWidget {
         children: [
           SwarmRow(
             key: const ValueKey('swarm-you-username'),
-            leading: const _Glyph(LucideIcons.atSign300),
+            leading: const SwarmRowGlyph(LucideIcons.atSign300),
             // How the Swarm tags them, as the server keeps it; nothing of a
             // Swarm before it is read, or once it is taken away.
             title: me?.username ?? 'Username',
@@ -256,7 +256,7 @@ class SwarmYouPage extends StatelessWidget {
         children: [
           SwarmRow(
             key: const ValueKey('swarm-you-models'),
-            leading: const _Glyph(LucideIcons.cpu300),
+            leading: const SwarmRowGlyph(LucideIcons.cpu300),
             title: 'Your models',
             detail: switch (_models(inbox, swarms)) {
               null => null,
@@ -267,7 +267,7 @@ class SwarmYouPage extends StatelessWidget {
           ),
           SwarmRow(
             key: const ValueKey('swarm-you-devices'),
-            leading: const _Glyph(LucideIcons.laptop300),
+            leading: const SwarmRowGlyph(LucideIcons.laptop300),
             title: 'Your devices',
             detail: switch (_devices(computers)) {
               null => null,
@@ -282,7 +282,7 @@ class SwarmYouPage extends StatelessWidget {
         children: [
           SwarmRow(
             key: const ValueKey('swarm-you-settings'),
-            leading: const _Glyph(LucideIcons.settings300),
+            leading: const SwarmRowGlyph(LucideIcons.settings300),
             title: 'Settings',
             onTap: switch (onSettings) {
               final settings? => () => settings(context),
@@ -409,7 +409,7 @@ class _Status extends StatelessWidget {
     final me = this.me;
     Widget row(String title, {required bool known}) => SwarmRow(
       leading: SizedBox(
-        width: _Glyph.width,
+        width: SwarmRowGlyph.width,
         child: Center(
           child: Container(
             width: 10,
@@ -454,19 +454,4 @@ class _Change extends StatelessWidget {
       ],
     );
   }
-}
-
-/// A row's glyph, in a 32-point box so the titles line up.
-class _Glyph extends StatelessWidget {
-  const _Glyph(this.icon);
-
-  static const double width = 32;
-
-  final IconData icon;
-
-  @override
-  Widget build(BuildContext context) => SizedBox(
-    width: width,
-    child: Icon(icon, size: 22, color: AppPalette.textSecondary),
-  );
 }

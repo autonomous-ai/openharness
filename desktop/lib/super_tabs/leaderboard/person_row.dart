@@ -371,6 +371,9 @@ class _LeaderboardPersonDetails extends StatefulWidget {
       _LeaderboardPersonDetailsState();
 }
 
+/// How Brought names a subscription's engine, as the Swarm's other lines do.
+const _engineNames = {'claude': 'Claude', 'codex': 'Codex'};
+
 class _LeaderboardPersonDetailsState extends State<_LeaderboardPersonDetails> {
   /// The newest a list shows before Show all.
   static const _shown = 5;
@@ -495,13 +498,57 @@ class _LeaderboardPersonDetailsState extends State<_LeaderboardPersonDetails> {
               'waited ${leaderboardDuration(unblocked.waitedMinutes * 60000)}',
             ),
         ]),
-        section('Lent', 'No machines lent yet', [
-          for (final lent in details.lent)
-            item(
-              line(superTabMachineName(lent.machineName)),
-              '${leaderboardDuration((lent.busyHours * 3600000).round())} busy',
-            ),
-        ]),
+        // What each machine the person brought did (contributor view, #2444);
+        // a server before it says only Lent.
+        if (details.brought case final brought?)
+          section('Brought', 'No machines brought yet', [
+            for (final machine in brought)
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  item(
+                    line(superTabMachineName(machine.machineName)),
+                    '${machine.shipped} shipped · '
+                    '${broughtHours(machine.busyHours)} for others',
+                  ),
+                  for (final sub in machine.subscriptions)
+                    Padding(
+                      padding: const EdgeInsetsDirectional.only(
+                        start: _gap * 2,
+                      ),
+                      child: item(
+                        line(
+                          _engineNames[sub.engine] ?? capitalized(sub.engine),
+                          style: quiet,
+                        ),
+                        switch (sub) {
+                          (
+                            usedPercent: final used?,
+                            resetsAt: final at?,
+                            engine: _,
+                          ) =>
+                            '$used% used · resets in ${resetsIn(DateTime.fromMillisecondsSinceEpoch(at), clock.now())}',
+                          (
+                            usedPercent: final used?,
+                            resetsAt: null,
+                            engine: _,
+                          ) =>
+                            '$used% used',
+                          _ => 'not read yet',
+                        },
+                      ),
+                    ),
+                ],
+              ),
+          ])
+        else
+          section('Lent', 'No machines lent yet', [
+            for (final lent in details.lent)
+              item(
+                line(superTabMachineName(lent.machineName)),
+                '${leaderboardDuration((lent.busyHours * 3600000).round())} busy',
+              ),
+          ]),
       ],
     );
   }
