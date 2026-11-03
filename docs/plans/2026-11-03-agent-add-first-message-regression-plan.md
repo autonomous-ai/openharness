@@ -12,7 +12,7 @@
 
 - Keep changes within `backend/src/superTabs/commands.ts` and `backend/src/superTabs/commands.test.ts`, plus this required plan.
 - Preserve the initial message's `operationId`, receipt, and result `messageId`.
-- Before Ready, record red/green evidence in a PR comment and run the full Super Tab integration suite.
+- Before Ready, record red/green evidence in a PR comment and get green backend-integration shards from PR CI. Do not run the full suite locally; reproduce only a failing shard.
 - Never run a test that signs the Mac out of the real CLI.
 - Start the pull request body with `Requested by diego@autonomous.ai through Harness.`
 
@@ -65,8 +65,8 @@
 
 **Interfaces:**
 - Consumes: Task 2 implementation.
-- Produces: recorded evidence for backend unit tests and the full Super Tab integration suite.
+- Produces: recorded evidence for backend unit tests and PR CI's Super Tab integration shards.
 
 - [ ] Run `npm test -- src/superTabs/commands.test.ts` from `backend/`.
-- [ ] Run `npm run test:super-tabs` from `backend/`.
+- [ ] Confirm all backend-integration CI shards pass on the PR head; reproduce only a failing shard locally.
 - [ ] Record exact commands, commit revisions, and results in the PR comment.
