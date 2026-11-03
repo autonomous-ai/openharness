@@ -159,8 +159,15 @@ String? currentBranchRef(GitProjectInfo info) =>
     ? 'refs/heads/${info.branch}'
     : null;
 
-/// Git projects keep Worktree on; an empty repository asks for a choice.
-bool worktreeByDefault(GitProjectInfo info) => info.isGit;
+/// A repository with nothing to branch from: `git init` and no commit yet, or
+/// a folder inside one (a `git init` in the home folder makes ~/Downloads
+/// one). As in Claude Code, work starts in the folder itself, with no Worktree
+/// or Branch to choose, until the first commit gives Git something to branch.
+bool hasNoCommits(GitProjectInfo info) => info.isGit && info.branches.isEmpty;
+
+/// Git projects keep Worktree on, once there is a commit to start it from.
+bool worktreeByDefault(GitProjectInfo info) =>
+    info.isGit && !hasNoCommits(info);
 
 /// New work starts from the branch the project calls its default
 /// (`origin/HEAD`), preferring the local copy; then main, for a project that
@@ -256,6 +263,8 @@ ProjectFolderRequest? gitFolderRequest(
   required String? branchName,
   required String placeholder,
 }) {
+  // Nothing to branch from: the folder is used as it is ([hasNoCommits]).
+  if (hasNoCommits(info)) return null;
   final ref = branchRef ?? defaultBranchRef(info, worktree: worktree);
   if (!worktree) {
     if (newBranchHere(info, branchName) case final name?) {
@@ -871,11 +880,17 @@ class NewHarnessController extends ChangeNotifier {
   DateTime? _branchesCheckedAt;
   bool get isGitProject => _gitProject.isGit && !_noGitSetup && !isCloud;
 
+  /// A Git project with no commit yet starts in its folder ([hasNoCommits]).
+  bool get noCommitsYet => isGitProject && hasNoCommits(_gitProject);
+
+  /// Whether Branch is offered: a Git project with something to branch from.
+  bool get choosesBranch => isGitProject && !noCommitsYet;
+
   /// A worktree the person picked: the harness works in it, on its branch.
   bool get inWorktree => _project.exact && _gitProject.mainFolder != null;
-  bool get canUseWorktree => isGitProject && !checkingGit && !inWorktree;
+  bool get canUseWorktree => choosesBranch && !checkingGit && !inWorktree;
   bool get worktree =>
-      isGitProject &&
+      choosesBranch &&
       !inWorktree &&
       // A Swarm's Product Manager never edits the person's checkout.
       (placesLead ||
@@ -896,7 +911,7 @@ class NewHarnessController extends ChangeNotifier {
   bool? get worktreeToRemember => placesLead
       ? null
       : _recoveredWorktreePreference ??
-            (isGitProject && !inWorktree ? worktree : null);
+            (choosesBranch && !inWorktree ? worktree : null);
 
   /// Fresh desktop work starts on the default branch, with or without a worktree. A retry
   /// must instead keep the branch of the folder its first attempt prepared.
@@ -1024,7 +1039,7 @@ class NewHarnessController extends ChangeNotifier {
         locked ||
         checkingGit ||
         refreshingBranches ||
-        !isGitProject ||
+        !choosesBranch ||
         _gitKey == null) {
       return;
     }
@@ -1038,7 +1053,7 @@ class NewHarnessController extends ChangeNotifier {
   }
 
   bool get canRefreshChoices => switch (field) {
-    NewHarnessField.branch => isGitProject,
+    NewHarnessField.branch => choosesBranch,
     NewHarnessField.project ||
     NewHarnessField.projectName => _visibleFolder != null,
     _ => false,
@@ -1529,7 +1544,7 @@ class NewHarnessController extends ChangeNotifier {
     if (!asGuest || (_guestFolders?.folders.isNotEmpty ?? false))
       NewHarnessField.projectMenu,
     if (advancedOpen) ...[
-      if (isGitProject && !asGuest) NewHarnessField.branch,
+      if (choosesBranch && !asGuest) NewHarnessField.branch,
       if (hasModes) NewHarnessField.mode,
       if (usesProfile) NewHarnessField.profile,
     ],
@@ -1542,7 +1557,7 @@ class NewHarnessController extends ChangeNotifier {
       value == NewHarnessField.projectName ||
       value == NewHarnessField.projectRepository ||
       value == NewHarnessField.machine ||
-      (value == NewHarnessField.branch && isGitProject) ||
+      (value == NewHarnessField.branch && choosesBranch) ||
       (value == NewHarnessField.mode && _settingsModes.isNotEmpty) ||
       (value == NewHarnessField.profile && hasProfile);
 
@@ -1961,17 +1976,22 @@ class NewHarnessController extends ChangeNotifier {
         message: 'This project is unavailable. Choose a project.',
       );
     }
+    // A harness starts in the folder of a project with no commit
+    // ([noCommitsYet]), but a Product Manager never works in the person's
+    // checkout, and its worktree needs a commit to start from.
+    if (!checkingGit && placesLead && noCommitsYet) {
+      return (
+        field: NewHarnessField.projectMenu,
+        message: 'This project has no commits, and a Product Manager works in its own worktree. Choose a project with a commit.',
+      );
+    }
     if (!checkingGit &&
-        isGitProject &&
-        (worktree || _startsOnDefault && _gitProject.branches.isNotEmpty) &&
+        choosesBranch &&
+        (worktree || _startsOnDefault) &&
         branchRef == null) {
       return (
-        field: _gitProject.branches.isEmpty
-            ? NewHarnessField.projectMenu
-            : NewHarnessField.branch,
-        message: _gitProject.branches.isEmpty
-            ? 'This project has no commits. Choose a project or make an initial commit.'
-            : 'This project has no default branch. Choose a branch.',
+        field: NewHarnessField.branch,
+        message: 'This project has no default branch. Choose a branch.',
       );
     }
     if (usesProfile &&
@@ -4701,7 +4721,7 @@ class NewHarnessController extends ChangeNotifier {
     // Working in a picked worktree says nothing about the next harness's.
     final launchedWorktree =
         _recoveredWorktreePreference ??
-        (isGitProject && !inWorktree ? worktree : null);
+        (choosesBranch && !inWorktree ? worktree : null);
     // A destination's journal keeps them for a later recovery's form.
     // Only a real folder: a new project's or a clone's label is no path, and a
     // recovery that unlocks the form after a failure would send it as one.
