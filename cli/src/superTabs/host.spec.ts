@@ -4130,7 +4130,7 @@ describe('ending a Buddy\'s thread sessions', () => {
 describe('keeping a Swarm Lead alive', () => {
   it('services a landed PM switch after the source is no longer marked as Lead', async () => {
     const t = lifeFixture([leadRow({ lead: false, agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1',
-      switchLanded: { id: 'landed-switch', candidateAgentId: 'destination-agent' } })])
+      switchLanded: { id: 'landed-switch', candidateAgentId: 'destination-agent' } } })])
     await t.poll()
     const results = t.commands.map(command => command.command as Record<string, unknown>).filter(command => command.type === 'agent.switchResult')
     expect(results).toContainEqual({ type: 'agent.switchResult', agentId: 'agent', switchId: 'landed-switch', ok: true })
