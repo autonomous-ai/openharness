@@ -433,4 +433,27 @@ void main() {
       },
     );
   });
+
+  group('next unread follows the groups', () {
+    testWidgets(
+      'each project\'s chat, then its tasks in group order, each group newest first',
+      (tester) async {
+        final server = groupedServer();
+        final c = server.controller();
+        await c.refresh();
+        expect(superTabSidebarOrder(c), [
+          'alpha-chat',
+          'alpha-busy',
+          'lead',
+          'mine',
+          'busy-new',
+          'busy-old',
+          'review',
+          'quiet-chat',
+        ]);
+        await c.flush();
+        c.dispose();
+      },
+    );
+  });
 }
