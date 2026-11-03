@@ -88,7 +88,7 @@ List<SwarmTabEntry> swarmTabs() => [
     label: 'Activity',
     icon: LucideIcons.bell300,
     screen: (_) => const SwarmActivityView(),
-    badge: (session) => (count: session.activity.badge, warn: true),
+    badge: (session) => (count: swarmActivityTabBadge(session), warn: true),
   ),
 ];
 

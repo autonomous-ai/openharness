@@ -21,7 +21,7 @@ Slack reports that people open its mobile apps 15–20 times a day, for 20–30 
 | A bar of tiles for unreads and secondary surfaces | Two large cards: While you were away, Threads | One tile bar: While you were away · Threads · Agents |
 | Filters in each tab, as a bottom sheet on Android, not an overflow menu | Home has a Sort and filter sheet | The same sheet, now also holding Mark all read and Refresh |
 | Pull down to open search, swipe sideways to change kind | No search in Swarm. Find lives only in the terminal | A Search field on Home plus a pull down at its top. Chips or a sideways swipe change the kind |
-| One feed for threads, mentions, alerts, invitations | What needs you is in 6 places. Invitations sit on Home | Activity opens on All, which includes Invitations |
+| One feed for threads, mentions, alerts, invitations | What needs you is in 6 places. Invitations sit on Home | Activity opens on All. Invitations head All and Needs you and count on the tab's badge |
 | The header shrinks as you scroll | Fixed header | The Search field folds away once Home scrolls |
 | Less-used surfaces move to familiar places | Harness is reachable only through 4 "Open terminal" menu items | An Agents tile, and Agents in Search |
 | Huddles, Canvases, Lists, Later, Drafts & Sent | Not Harness features | Not applied |
@@ -111,12 +111,14 @@ Each decision lists what was chosen, the alternatives, the reasoning, the cost, 
 ### D6. One Activity feed
 
 - **Chips:** All · Needs you · Mentions · Threads · Reactions.
-- **Alternatives:** keep Invitations on Home; put Needs you on Home (B); one list with no chips.
+- **Alternatives:** keep Invitations on Home; put Needs you on Home (B); one list with no chips; an Invitations chip.
 - **Why:** Slack calls Activity a "one-stop shop" that "minimizes pogo-sticking". A word is clearer than "@", and a screen reader can say it.
 - **Built** (`swarm/swarm_activity.dart`, `swarm/swarm_activity_page.dart`):
   - The Activity tab opens on All. A pushed Activity page (from a project) still opens on Needs you.
   - All (`swarmActivityAll`) lists what still needs the person first, as Needs you does. Then tags, replies and reactions, newest first, those with no time last. Then the needs already handled. Each row appears once.
-  - Invitations to other Swarms are listed in All, and only there; Home lists none. With nothing anywhere, All says "You're all caught up."
+  - Invitations to other Swarms head All and Needs you, the tab's only; a pushed Activity page and Home list none. They wait on the person's answer, so they count in both chips and on the Activity tab's badge (`swarmActivityTabBadge`): with Home's top gone, the badge is how the person learns one came. Needs you does not say "Nothing needs you." while one shows. With nothing anywhere, All says "You're all caught up."
+  - No Invitations chip (Tony, 2026-11-03): it would show 0 almost always, push Mentions further off a narrow phone, and an invitation is something that needs the person, which is what Needs you is for.
+  - Home's "While you were away · N need you" does not count invitations: it covers the Swarms Home shows.
   - "@" is renamed "Mentions" **on the phone only**. Desktop keeps "@" (Tony, 2026-11-03).
 
 ### D7. A way into Harness from Swarm
@@ -189,7 +191,7 @@ Widget and unit tests under `mobile/test/swarm/`. Run with `cd mobile && flutter
 - **Tiles** (`swarm_home_tiles_test.dart`): figures, skeletons and what a screen reader hears; the row's order, sizes and sideways scroll.
 - **Project rows** (`swarm_home_project_row_test.dart`, `swarm_home_test.dart`): one line, bold when new, the Swarm's name with several, no people line.
 - **Search** (`swarm_search_page_test.dart`, `swarm_home_search_test.dart`): the ways in; each kind and what it leaves out; ranking, case and accents; chips, swipes and the chip following; opening a row and coming back; agents; reading and failure; the keyboard inset (the page ends at the keyboard, once) and a drag putting the keyboard away. The pull is tested on clamping and bouncing lists, and a drag begun mid-list opens nothing. The field folds, takes no tap and is silent while folded.
-- **Activity** (`swarm_activity_test.dart`, `swarm_activity_page_test.dart`, `swarm_activity_feed_page_test.dart`, `swarm_invitations_in_swarm_test.dart`): All's order, Mentions, Invitations in All only.
+- **Activity** (`swarm_activity_test.dart`, `swarm_activity_page_test.dart`, `swarm_activity_feed_page_test.dart`, `swarm_invitations_in_swarm_test.dart`): All's order, Mentions, Invitations in All and Needs you with their counts, the tab badge counting them and dropping one put off.
 - **Filter sheet** (`swarm_home_view_test.dart`, `swarm_mark_all_test.dart`, `swarm_home_instant_test.dart`): Mark all read and Refresh in the sheet.
 - **Project details** (`swarm_project_details_test.dart`): the header button, every item and its order, Invite for the owner alone, Open terminal and its greyed states, each row's sheet, and the sheet closing with access, sign-out or the project.
 - **Agents** (`swarm_computers_test.dart`): what is listed, and when it tells.

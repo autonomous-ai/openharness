@@ -54,6 +54,13 @@ class SwarmActivityAsks extends InheritedWidget {
       !identical(asks, oldWidget.asks);
 }
 
+/// The count on the Activity tab: what waits on the person in their Swarms,
+/// and the invitations to a Swarm waiting on their answer, which Activity
+/// lists under All and Needs you (Tony, 2026-11-03): they left the top of
+/// Home, and the tab is how the person learns one came.
+int swarmActivityTabBadge(SwarmSession session) =>
+    session.activity.badge + session.inbox.invitations.length;
+
 /// Opens Activity over [context]'s page: [focus] — a row's key — open in
 /// full under its filter; only Swarm [swarmId]'s rows when Home shows that
 /// Swarm alone, and only its project [projectId]'s when a project's status
@@ -114,12 +121,15 @@ class SwarmActivityPage extends StatelessWidget {
 /// terminal's face, the filters — All · Needs you · Mentions · Replies ·
 /// Reactions (Threads from a server before Activity) — each with its count,
 /// then the open filter's rows. All, the tab's first (Slack's one feed, Tony,
-/// 2026-11-03), has what needs the person first, then the rest newest first,
-/// and on the tab the invitations to a Swarm over them. Each row: where and
-/// who over what, and Approve (which asks first) or Reply at the row's end. A need the person handled stays, dimmed, under the
-/// others; a reply or reaction is bold while unread. The rows shown are read
-/// on every device once Activity is left ([SwarmActivity.showing]). The
-/// Activity tab's screen, and [SwarmActivityPage]'s.
+/// 2026-11-03), has what needs the person first, then the rest newest first.
+/// On the tab, the invitations to a Swarm head All and Needs you, counted in
+/// both and on the tab's badge ([swarmActivityTabBadge]): they wait on the
+/// person's answer. Each row: where and who over what, and Approve (which
+/// asks first) or Reply at the row's end. A need the person handled stays,
+/// dimmed, under the others; a reply or reaction is bold while unread. The
+/// rows shown are read on every device once Activity is left
+/// ([SwarmActivity.showing]). The Activity tab's screen, and
+/// [SwarmActivityPage]'s.
 ///
 /// Only while it is in sight ([OutOfSight]) does it read the project chats
 /// ([SwarmActivity.watch]) and keep the Swarm's notices quiet.
@@ -332,7 +342,7 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
   }
 
   Widget _body(BuildContext context, SwarmSession session) {
-    final activity = session.activity;
+    final activity = session.activity, inbox = session.inbox;
     final items = _items(session, _filter);
     // What is open here is what goes read once Activity is left.
     activity.showing(items);
@@ -360,7 +370,9 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
                   ),
                   filter: filter,
                   label: filter == null ? null : activity.label(filter),
-                  count: _items(session, filter).where(activity.waiting).length,
+                  count:
+                      _items(session, filter).where(activity.waiting).length +
+                      (_invitesIn(filter) ? inbox.invitations.length : 0),
                   selected: filter == _filter,
                   onTap: () => setState(() => _filter = filter),
                 ),
@@ -396,10 +408,10 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
     final note = AppType.caption(color: AppPalette.textSecondary, height: 1.35);
     final missing = _focusMissing(session, items);
     if (missing == null) _showFocus();
-    // The account's invitations, on the tab's All: what a Swarm asks of the
-    // person before they are in it (Slack's Activity has them too).
-    final invited =
-        _filter == null && widget.swarmId == null && widget.leading == null
+    // The account's invitations, on the tab's All and Needs you: what a
+    // Swarm asks of the person before they are in it (Slack's Activity has
+    // them too).
+    final invited = _invitesIn(_filter)
         ? inbox.invitations
         : const <SwarmInvitation>[];
     return [
@@ -545,6 +557,13 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
       );
     });
   }
+
+  /// Whether [filter] lists the account's invitations: All and Needs you, on
+  /// the tab alone — not on a page pushed for one Swarm or one project.
+  bool _invitesIn(SwarmActivityFilter? filter) =>
+      (filter == null || filter == SwarmActivityFilter.needsYou) &&
+      widget.swarmId == null &&
+      widget.leading == null;
 
   static String _nothing(
     SwarmActivityFilter? filter, {

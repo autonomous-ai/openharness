@@ -6,6 +6,7 @@ import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_activity_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/swarm/swarm_tabs.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 
 import '../voice_fakes.dart';
@@ -118,8 +119,8 @@ void main() {
     expect(i.invitations, isEmpty);
   });
 
-  /// The invitations moved from Home to Activity's All (Slack's Activity,
-  /// 2026-11-03).
+  /// The invitations moved from Home to Activity's All and Needs you, counted
+  /// on the tab (Slack's Activity, 2026-11-03).
   group('Activity', () {
     Future<SwarmHost> pump(
       WidgetTester tester,
@@ -233,15 +234,51 @@ void main() {
       expect(section, findsNothing);
     });
 
-    testWidgets('only All has them: another filter, and a page pushed over a '
-        'page, do not', (tester) async {
+    testWidgets('All and Needs you have them, first, and count them: they '
+        'wait on the person; Mentions and a page pushed over a page do not', (
+      tester,
+    ) async {
       await pump(tester, backend());
+      Finder count(String filter, String n) => find.descendant(
+        of: key('swarm-activity-filter-$filter'),
+        matching: find.text(n),
+      );
+      expect(count('all', '1'), findsOneWidget);
+      expect(count('needsYou', '1'), findsOneWidget);
+      expect(count('mentions', '0'), findsOneWidget);
+
       await tester.tap(key('swarm-activity-filter-needsYou'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-invitation-i1'), findsOneWidget);
+      expect(find.text('Nothing needs you.'), findsNothing, reason: 'one does');
+
+      await tester.ensureVisible(key('swarm-activity-filter-mentions'));
+      await tester.tap(key('swarm-activity-filter-mentions'));
       await tester.pumpAndSettle();
       expect(key('swarm-invitation-i1'), findsNothing);
 
       await pump(tester, backend(), page: const SwarmActivityPage());
       expect(key('swarm-invitation-i1'), findsNothing);
+    });
+
+    testWidgets("the Activity tab's count has them, and loses one put off", (
+      tester,
+    ) async {
+      final host = await pump(tester, backend(), page: const SwarmTabsPage());
+      final badge = key('swarm-tab-badge-activity');
+      expect(swarmActivityTabBadge(host.session!), 1);
+      expect(
+        find.descendant(of: badge, matching: find.text('1')),
+        findsOneWidget,
+      );
+
+      await tester.tap(key('swarm-tab-activity'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-invitation-later-i1'));
+      await tester.pumpAndSettle();
+
+      expect(swarmActivityTabBadge(host.session!), 0);
+      expect(badge, findsNothing);
     });
 
     testWidgets('Home lists none: they are Activity\'s', (tester) async {
