@@ -1,5 +1,5 @@
 import type { Prisma } from '@prisma/client'
-import { prisma } from './prisma.js'
+import { machineAlive, prisma } from './prisma.js'
 import { logger } from '../utils/logger.js'
 
 const PENDING_RESERVATION_MS = 20 * 60_000
@@ -72,6 +72,46 @@ async function limitForMachine(machineId: string, db: DbClient = prisma): Promis
   return Math.max(0, plan?.dailyVoiceLimitSeconds ?? 0)
 }
 
+/**
+ * An account's bucket in the same usage and reservation tables a device's machineId keys. A machineId is
+ * 32 hex characters (sha256 of its key), so the `user:` prefix can never name a real machine, and no
+ * schema change or second cleanup is needed.
+ */
+export const userVoiceBucket = (userId: string): string => `user:${userId}`
+
+/** The Free tier's allowance (lib/db/seed.ts), for an account whose plans cannot be read at all. */
+const FALLBACK_USER_LIMIT_SECONDS = 10 * 60
+
+/**
+ * An account's daily voice seconds: the most generous plan among its live machines (0, unlimited, beats
+ * any number), else its environment's default plan. A machine whose checkout never completed grants
+ * nothing, or opening a Pro checkout would buy Pro voice. Unlike a device, an account with no plan to
+ * read is never unlimited: it is any signed-in account, so it falls back to the Free allowance.
+ */
+async function limitForUser(userId: string, autonomousEnv: string, db: DbClient = prisma): Promise<number> {
+  const machines = await db.machine.findMany({
+    where: { userId, ...machineAlive },
+    select: { planId: true, billingStatus: true, billingActivatedAt: true },
+  })
+  const planIds = [...new Set(machines
+    .filter((m) => m.planId && (m.billingStatus !== 'pending' || m.billingActivatedAt))
+    .map((m) => m.planId as string))]
+  const plans = planIds.length
+    ? await db.subscriptionPlan.findMany({ where: { id: { in: planIds } }, select: { dailyVoiceLimitSeconds: true } })
+    : []
+  const limits = plans
+    .map((p) => p.dailyVoiceLimitSeconds)
+    .filter((s): s is number => typeof s === 'number')
+    .map((s) => Math.max(0, s))
+  if (limits.length) return limits.includes(0) ? 0 : Math.max(...limits)
+  const fallback = await db.subscriptionPlan.findFirst({
+    where: { autonomousEnv, isDefault: true },
+    select: { dailyVoiceLimitSeconds: true },
+  })
+  const seconds = fallback?.dailyVoiceLimitSeconds
+  return typeof seconds === 'number' && seconds > 0 ? seconds : FALLBACK_USER_LIMIT_SECONDS
+}
+
 function transientTransactionError(err: unknown): boolean {
   const code = typeof err === 'object' && err ? (err as { code?: unknown }).code : undefined
   const message = err instanceof Error ? err.message : String(err)
@@ -96,6 +136,92 @@ async function withTransactionRetry<T>(
   throw lastError
 }
 
+/**
+ * Charge [durationMs] to one bucket's UTC day: a device's machineId, or an account's {@link userVoiceBucket}.
+ * [limitOf] resolves the bucket's plan inside the same transaction as the usage increment so a concurrent
+ * plan change cannot validate against one tier and charge against another snapshot.
+ */
+async function reserveInBucket(
+  machineId: string,
+  limitOf: (tx: Prisma.TransactionClient) => Promise<number>,
+  uploadId: string,
+  durationMs: number,
+  now: Date,
+): Promise<VoiceQuotaReservationResult> {
+  if (!uploadId) throw new Error('voice uploadId is required')
+  const roundedDurationMs = Math.max(1, Math.ceil(durationMs))
+  const { dayKey, resetAt, expiresAt } = utcWindow(now)
+
+  return withTransactionRetry(async (tx) => {
+    const limitSeconds = await limitOf(tx)
+    const limitMs = limitSeconds * 1000
+    const existing = await tx.machineVoiceReservation.findUnique({ where: { uploadId } })
+    if (existing && (existing.machineId !== machineId || existing.dayKey !== dayKey)) {
+      throw new Error('voice uploadId belongs to another machine or UTC day')
+    }
+    const usage = await tx.machineVoiceDailyUsage.upsert({
+      where: { machineId_dayKey: { machineId, dayKey } },
+      update: { expiresAt },
+      create: { machineId, dayKey, usedMs: 0, expiresAt },
+    })
+    if (existing?.status === 'committed' || existing?.status === 'pending') {
+      return {
+        snapshot: snapshot(machineId, dayKey, resetAt, usage.usedMs, limitSeconds),
+        state: existing.status,
+      }
+    }
+    if (limitSeconds > 0 && usage.usedMs + roundedDurationMs > limitMs) {
+      throw new VoiceQuotaExceededError(snapshot(machineId, dayKey, resetAt, usage.usedMs, limitSeconds))
+    }
+
+    const updated = await tx.machineVoiceDailyUsage.updateMany({
+      where: {
+        machineId,
+        dayKey,
+        ...(limitSeconds > 0 ? { usedMs: { lte: limitMs - roundedDurationMs } } : {}),
+      },
+      data: { usedMs: { increment: roundedDurationMs }, expiresAt },
+    })
+    if (updated.count !== 1) {
+      const current = await tx.machineVoiceDailyUsage.findUnique({
+        where: { machineId_dayKey: { machineId, dayKey } },
+      })
+      throw new VoiceQuotaExceededError(snapshot(machineId, dayKey, resetAt, current?.usedMs ?? 0, limitSeconds))
+    }
+
+    const releaseAt = new Date(now.getTime() + PENDING_RESERVATION_MS)
+    if (existing?.status === 'released') {
+      await tx.machineVoiceReservation.update({
+        where: { uploadId },
+        data: {
+          durationMs: roundedDurationMs,
+          status: 'pending',
+          releaseAt,
+          expiresAt,
+          committedAt: null,
+          releasedAt: null,
+        },
+      })
+    } else {
+      await tx.machineVoiceReservation.create({
+        data: {
+          uploadId,
+          machineId,
+          dayKey,
+          durationMs: roundedDurationMs,
+          status: 'pending',
+          releaseAt,
+          expiresAt,
+        },
+      })
+    }
+    return {
+      snapshot: snapshot(machineId, dayKey, resetAt, usage.usedMs + roundedDurationMs, limitSeconds),
+      state: 'reserved',
+    }
+  })
+}
+
 export const voiceQuotaService = {
   async snapshotForMachine(machineId: string, now = new Date()): Promise<VoiceQuotaSnapshot> {
     const [{ dayKey, resetAt }, limitSeconds] = await Promise.all([
@@ -115,82 +241,25 @@ export const voiceQuotaService = {
     durationMs: number,
     now = new Date(),
   ): Promise<VoiceQuotaReservationResult> {
-    if (!uploadId) throw new Error('voice uploadId is required')
-    const roundedDurationMs = Math.max(1, Math.ceil(durationMs))
-    const { dayKey, resetAt, expiresAt } = utcWindow(now)
-
-    return withTransactionRetry(async (tx) => {
-      // Resolve the plan inside the same transaction as the usage increment so a concurrent plan
-      // change cannot validate against one tier and charge against another snapshot.
-      const limitSeconds = await limitForMachine(machineId, tx)
-      const limitMs = limitSeconds * 1000
-      const existing = await tx.machineVoiceReservation.findUnique({ where: { uploadId } })
-      if (existing && (existing.machineId !== machineId || existing.dayKey !== dayKey)) {
-        throw new Error('voice uploadId belongs to another machine or UTC day')
-      }
-      const usage = await tx.machineVoiceDailyUsage.upsert({
-        where: { machineId_dayKey: { machineId, dayKey } },
-        update: { expiresAt },
-        create: { machineId, dayKey, usedMs: 0, expiresAt },
-      })
-      if (existing?.status === 'committed' || existing?.status === 'pending') {
-        return {
-          snapshot: snapshot(machineId, dayKey, resetAt, usage.usedMs, limitSeconds),
-          state: existing.status,
-        }
-      }
-      if (limitSeconds > 0 && usage.usedMs + roundedDurationMs > limitMs) {
-        throw new VoiceQuotaExceededError(snapshot(machineId, dayKey, resetAt, usage.usedMs, limitSeconds))
-      }
-
-      const updated = await tx.machineVoiceDailyUsage.updateMany({
-        where: {
-          machineId,
-          dayKey,
-          ...(limitSeconds > 0 ? { usedMs: { lte: limitMs - roundedDurationMs } } : {}),
-        },
-        data: { usedMs: { increment: roundedDurationMs }, expiresAt },
-      })
-      if (updated.count !== 1) {
-        const current = await tx.machineVoiceDailyUsage.findUnique({
-          where: { machineId_dayKey: { machineId, dayKey } },
-        })
-        throw new VoiceQuotaExceededError(snapshot(machineId, dayKey, resetAt, current?.usedMs ?? 0, limitSeconds))
-      }
-
-      const releaseAt = new Date(now.getTime() + PENDING_RESERVATION_MS)
-      if (existing?.status === 'released') {
-        await tx.machineVoiceReservation.update({
-          where: { uploadId },
-          data: {
-            durationMs: roundedDurationMs,
-            status: 'pending',
-            releaseAt,
-            expiresAt,
-            committedAt: null,
-            releasedAt: null,
-          },
-        })
-      } else {
-        await tx.machineVoiceReservation.create({
-          data: {
-            uploadId,
-            machineId,
-            dayKey,
-            durationMs: roundedDurationMs,
-            status: 'pending',
-            releaseAt,
-            expiresAt,
-          },
-        })
-      }
-      return {
-        snapshot: snapshot(machineId, dayKey, resetAt, usage.usedMs + roundedDurationMs, limitSeconds),
-        state: 'reserved',
-      }
-    })
+    return reserveInBucket(machineId, (tx) => limitForMachine(machineId, tx), uploadId, durationMs, now)
   },
 
+  /**
+   * The same daily ceiling for a signed-in account rather than a device: /api/voice/stt, which the phone's
+   * voice input and the cabled dial (through the CLI) both reach with the person's own sign-in. Its bucket
+   * is the account's ({@link userVoiceBucket}), so it is commit()ed and release()d by uploadId like any
+   * other reservation, and the cleanup worker releases a stale one the same way.
+   */
+  async reserveForUser(
+    userId: string,
+    autonomousEnv: string,
+    uploadId: string,
+    durationMs: number,
+    now = new Date(),
+  ): Promise<VoiceQuotaReservationResult> {
+    if (!userId) throw new Error('voice userId is required')
+    return reserveInBucket(userVoiceBucket(userId), (tx) => limitForUser(userId, autonomousEnv, tx), uploadId, durationMs, now)
+  },
   async commit(uploadId: string, now = new Date()): Promise<void> {
     await prisma.machineVoiceReservation.updateMany({
       where: { uploadId, status: 'pending' },
