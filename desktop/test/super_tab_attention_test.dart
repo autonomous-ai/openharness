@@ -224,12 +224,12 @@ void main() {
         await close(tester, c);
       });
 
-      testWidgets('an unread tag in a listed read thread counts on the '
+      testWidgets('a tag in an unread New replies thread also counts on the '
           'project row and in Needs you', (tester) async {
         final server = projectServer();
         server.followedThreads = {
-          'unread': [],
-          'read': [readThread('message-1', 2, conversationId: 'lead')],
+          'unread': [unreadThread('message-1', 2, conversationId: 'lead')],
+          'read': [],
           'more': false,
         };
         server.tag('message-1', threadId: 'message-1', messageSequence: 2);
@@ -239,6 +239,7 @@ void main() {
         await pumpSidebar(tester, c, attention);
         expect(attention.mentionsIn('lead'), 1);
         expect(attention.mentionsIn('offline'), 0);
+        expect(activity.newReplies, hasLength(1));
         expect(
           activity.needsYou.where((need) => need.conversationId == 'lead'),
           hasLength(1),
