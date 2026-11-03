@@ -4,6 +4,7 @@
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <ctype.h>
 #include <string.h>
 
 #include "board/board.h"
@@ -146,6 +147,10 @@ static bool msg_number(cJSON **root, const char *key, double value)
 {
     return *root && msg_check(root, cJSON_AddNumberToObject(*root, key, value) != NULL);
 }
+static bool msg_bool(cJSON **root, const char *key, bool value)
+{
+    return *root && msg_check(root, cJSON_AddBoolToObject(*root, key, value) != NULL);
+}
 
 const char *pro_cable_fw_version(void)
 {
@@ -229,7 +234,8 @@ static void send_hello(void)
     msg_string(&root, "player", "library-v1");
     msg_string(&root, "superTab", "wait-v1");   // a question with superTab + attention is shown as a wait (handle_question)
     msg_string(&root, "swarmCard", "v1");       // supertabs / supertab.recap / supertab.focus: the Swarm cards (handle_supertab)
-    msg_string(&root, "swarmChat", "v1");       // each Lead's face chat (chat, chatId, chatName), recaps by chatId, supertab.notice / .read; voice stays in the Lead conversation (cable.md)
+    msg_string(&root, "swarmChat", "v1");       // each Lead's face chat (chat, chatId, chatName), recaps by chatId, supertab.notice / .read; voice follows the face only with voice.begin face (cable.md)
+    msg_string(&root, "swarmBuddy", "v1");      // PM | Buddy: buddies, buddy {..}, the Swarm's side; supertab.side from the pill
     msg_string(&root, "ota", "v1");
     char mac[24] = "";
     device_mac_str(mac, sizeof(mac));
@@ -283,6 +289,15 @@ bool pro_cable_supertab_send(const char *t, const char *tab, const char *lead)
     return send_json_with(root, false);   // false: dropped on a busy link (the caller retries)
 }
 
+bool pro_cable_supertab_side(const char *tab, const char *side)
+{
+    if (!tab || !tab[0] || !side || (strcmp(side, "pm") && strcmp(side, "buddy"))) return false;
+    cJSON *root = msg("supertab.side");
+    msg_string(&root, "tab", tab);
+    msg_string(&root, "side", side);
+    return send_json_with(root, false);   // false: dropped on a busy link; the next supertab frame shows the true side
+}
+
 bool pro_cable_send_scroll(pro_scroll_phase_t phase, int dy, int velocity)
 {
     _Static_assert(PRO_SCROLL_DOWN == 0 && PRO_SCROLL_MOVE == 1 && PRO_SCROLL_UP == 2, "scroll phase wire order");
@@ -322,13 +337,14 @@ static bool upload_matches(const char *upload_id)
     return same;
 }
 
-bool pro_cable_voice_begin(const char *agent_id, const char *lang, int sample_rate, const char *upload_id)
+bool pro_cable_voice_begin(const char *agent_id, bool face, const char *lang, int sample_rate, const char *upload_id)
 {
     if (!upload_id || !upload_id[0]) return false;
     remember_upload(upload_id);
     cJSON *root = msg("voice.begin");
     // OMITTED, not empty, without an agent: absence tells the daemon to route the transcript itself.
     if (agent_id && agent_id[0]) msg_string(&root, "agentId", agent_id);
+    if (face) msg_bool(&root, "face", true);   // OMITTED otherwise: an older daemon ignores it, a newer one routes as before swarmChat
     msg_string(&root, "lang", lang && lang[0] ? lang : "en");
     msg_number(&root, "sr", sample_rate);
     msg_string(&root, "uploadId", upload_id);
@@ -562,6 +578,32 @@ static pod_lead_state_t lead_state(const char *s)
 }
 
 // The Leads in the Swarm's order (each Lead's `order`, the project's index in the app), whatever their urgency; a Lead without one keeps its place as it came.
+// The Lead's Buddy: `buddies` is true only for JSON true; the block counts only with a `cells` integer in 0..32767. Bad fields keep the Lead.
+static void read_buddy(const cJSON *l, pod_lead_t *ld)
+{
+    ld->buddies = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(l, "buddies"));
+    const cJSON *b = cJSON_GetObjectItemCaseSensitive(l, "buddy");
+    const cJSON *cells = cJSON_IsObject(b) ? cJSON_GetObjectItemCaseSensitive(b, "cells") : NULL;
+    if (!cJSON_IsNumber(cells) || cells->valuedouble < 0 || cells->valuedouble > 32767 || cells->valuedouble != (double)(int)cells->valuedouble) return;
+    pod_buddy_t *bd = &ld->buddy;
+    ld->has_buddy = true;
+    bd->cells = (uint16_t)cells->valuedouble;
+    const char *cid = str_of(b, "chatId");
+    if (cid && strlen(cid) < sizeof bd->chat_id) snprintf(bd->chat_id, sizeof bd->chat_id, "%s", cid);   // whole or none
+    cut_of(b, "name", bd->name, sizeof bd->name);
+    cut_of(b, "engine", bd->engine, sizeof bd->engine);
+    const char *col = str_of(b, "color");
+    bd->color = POD_BUDDY_INK;
+    if (col && strlen(col) == 7 && col[0] == '#') {
+        char *end = NULL;
+        bool hex = true;
+        for (int i = 1; i < 7; i++) hex = hex && isxdigit((unsigned char)col[i]);
+        const unsigned long v = hex ? strtoul(col + 1, &end, 16) : 0;
+        if (hex) bd->color = (uint32_t)v;
+    }
+    bd->live = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(b, "live"));
+}
+
 static void read_leads(const cJSON *it, pod_swarm_t *sw)
 {
     double order[SWARM_LEADS_MAX];
@@ -601,6 +643,7 @@ static void read_leads(const cJSON *it, pod_swarm_t *sw)
         if (cid && strlen(cid) < sizeof ld->chat_id) snprintf(ld->chat_id, sizeof ld->chat_id, "%s", cid);   // whole or none
         cut_of(l, "chatName", ld->chat_name, sizeof ld->chat_name);
         ld->recap = POD_RECAP_NONE;
+        read_buddy(l, ld);
     }
 }
 
@@ -632,6 +675,8 @@ static void handle_supertab(const cJSON *p)
     const char *tab = str_of(p, "tab");
     if (tab && strlen(tab) < sizeof sw->tab) snprintf(sw->tab, sizeof sw->tab, "%s", tab);
     cut_of(p, "name", sw->name, sizeof sw->name);
+    const char *side = str_of(p, "side");
+    sw->side = !side ? POD_SIDE_NONE : !strcmp(side, "buddy") ? POD_SIDE_BUDDY : !strcmp(side, "pm") ? POD_SIDE_PM : POD_SIDE_NONE;
     read_leads(p, sw);
     const cJSON *count = cJSON_GetObjectItemCaseSensitive(p, "count");   // absent: the Leads listed
     sw->count = cJSON_IsNumber(count) ? (count->valuedouble > 0 ? (count->valuedouble > 65535 ? 65535 : (uint16_t)count->valuedouble) : 0)
@@ -971,7 +1016,9 @@ static void handle_voice_error(const cJSON *p)
 
 static void session_up(const cJSON *p)
 {
-    atomic_store(&s_features, cable_features_parse(p));
+    const uint32_t features = cable_features_parse(p);
+    atomic_store(&s_features, features);
+    pro_app_features(features);   // pro_app keeps the ones the screens act on (swarm.remote: talk to a remote Lead)
     const cJSON *machine = p ? cJSON_GetObjectItemCaseSensitive(p, "machine") : NULL;
     const char *name = str_of(machine, "name");
     copy_cut(s_machine_name, sizeof s_machine_name, name ? name : "Machine");

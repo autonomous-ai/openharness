@@ -498,14 +498,16 @@ String _machineName(Object? name, {String fallback = 'Your machine'}) {
       : name;
 }
 
-/// A person of [reader]'s Swarm by the name it shows them by: their username;
+/// A person of [reader]'s Swarm by the name it shows them by ([SuperTabPerson.shownName]);
 /// "its owner" while the Swarm does not list them (the
 /// desktop's `buddyPersonName`).
 String swarmBuddyPersonName(SwarmReader reader, String personId) {
   final person = reader.snapshot?.people
       .where((p) => p.id == personId)
       .firstOrNull;
-  return person == null || person.email.isEmpty ? 'its owner' : person.username;
+  return person == null || person.email.isEmpty
+      ? 'its owner'
+      : person.shownName;
 }
 
 /// Opens the person's Buddy chat in [projectId], on the server first when

@@ -16,8 +16,8 @@
  *
  * The variable `GIT_CONFIG_KEY_n` is not used: Codex leaves out of its commands every variable whose name contains KEY.
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { accessSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { delimiter, join } from 'node:path'
 import { env } from '../config/env.js'
 import { daemonCommand } from './daemonCommand.js'
 import { readAuthSession } from './authSession.js'
@@ -59,6 +59,15 @@ export function gitConfigParameters(helper: string, hooks: string, identity?: st
   return entries.map(([key, value]) => `${shellWord(key)}=${shellWord(value)}`).join(' ')
 }
 
+/** Whether a program git-lfs that git can run is on [path] (a PATH value). */
+export function hasGitLfs(path: string | undefined): boolean {
+  const name = process.platform === 'win32' ? 'git-lfs.exe' : 'git-lfs'
+  return (path ?? '').split(delimiter).some(dir => {
+    if (!dir) return false
+    try { const file = join(dir, name); accessSync(file, constants.X_OK); return statSync(file).isFile() } catch { return false }
+  })
+}
+
 /**
  * The environment for the git a machine runs itself to prepare a Swarm agent's folder before the agent exists: the clone
  * and the fetch of the default branch (superTabs/projectFolder.ts), with [token], a read-only Harness GitHub App token for
@@ -81,10 +90,13 @@ export function swarmGitPrepareEnv(token: string, base: NodeJS.ProcessEnv = proc
     ['credential.https://github.com.helper', helper],
     ['url.https://github.com/.insteadof', 'git@github.com:'],
     ['url.https://github.com/.insteadof', 'ssh://git@github.com/'],
-    // Large files still arrive as git-lfs would bring them, when it is installed: its filter is in the global config skipped above.
-    ['filter.lfs.process', 'git-lfs filter-process'],
-    ['filter.lfs.clean', 'git-lfs clean -- %f'],
-    ['filter.lfs.smudge', 'git-lfs smudge -- %f'],
+    // Large files still arrive as git-lfs would bring them, when it is installed: its filter is in the global config skipped
+    // above. Only then: a filter naming a missing git-lfs failed Apple git's checkout of lampOS (MACs-Mac-Studio, 2026-11-03).
+    ...(hasGitLfs(env.PATH ?? env.Path) ? [
+      ['filter.lfs.process', 'git-lfs filter-process'],
+      ['filter.lfs.clean', 'git-lfs clean -- %f'],
+      ['filter.lfs.smudge', 'git-lfs smudge -- %f'],
+    ] as Array<[string, string]> : []),
   ]
   return {
     ...env,

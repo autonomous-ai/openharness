@@ -28,6 +28,7 @@ enum { PH_HOME_BG = 0x151413,
 void ph_working_mark_big(ht_scene_t *, int x, int y, uint32_t now_ms);
 // A title centred on x 360 at y 46 (ph_sb_26, PH_ROOM_INK), control characters as spaces, cut with an ellipsis at 640 px: the room's name, "Notices".
 void ph_title(ht_scene_t *, const char *);
+void ph_title_ink(ht_scene_t *, const char *, unsigned rgb);   // the same in another ink (the Buddy talk's lilac name)
 // Whether the agent has recap text (a non-empty line).
 bool ph_has_recap(const pod_agent_t *);
 // Text on one line, vertically centred on cy (the lowercase band), cut with an ellipsis at w px.
@@ -36,6 +37,9 @@ void ph_text(ht_scene_t *, int x, int cy, int w, const ht_pro_font_t *, unsigned
 int ph_runs(const pod_out_frame_t *);
 // pct % of colour a over colour b, per channel (0xRRGGBB).
 unsigned ph_mix(unsigned a, unsigned b, unsigned pct);
+// A Buddy's avatar (ph_avatar.c): a disc of diameter d at (x, y), `color` 22 % over bg, with a 3 px ring at 33 %, and the desktop's 5 x 5 agent pattern
+// (the 15-bit half `cells`, mirrored) over it in `color`. At most 27 runs.
+void ph_buddy_avatar(ht_scene_t *, int x, int y, int d, uint16_t cells, uint32_t color, unsigned bg);
 
 // ---- Home (ph_overview.c) ------------------------------------------------------------------------------------------
 // Cover cards (the owner's mockup): the TABS frame's scroll is the tab (clamped; Recent is not a page). The tab is a 540 x 560 card at (90, 56)

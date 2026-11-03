@@ -247,8 +247,11 @@ export class BackendSocket {
    * Separate from a restart (core/agents/launches.ts) because that one puts the agent back exactly as it
    * was; this one puts it back somewhere else. They share the swap underneath and differ in what they
    * hand it.
+   *
+   * `fresh` (with a grid only): the relaunch starts a new conversation instead of resuming, and the one it
+   * leaves on the own login is reopened by the move home (core/agents/retarget.ts).
    */
-  onRetargetAgent: ((input: { agentId: string; grid: GridLaunchOverride | null }) =>
+  onRetargetAgent: ((input: { agentId: string; grid: GridLaunchOverride | null; fresh?: boolean }) =>
     Promise<{ ok: true } | { ok: false; error: string; detail?: string }>) | null = null
   /** The requests that start an agent's process, answered through their last argument: `agent_create`,
    *  `agent_create_status`, `agent_resume` and `agent_restart`, and `agent_fork` (cli.ts binds
@@ -1249,6 +1252,12 @@ export class BackendSocket {
           if (!agentId) { reply(type, requestId, { error: 'MISSING_AGENT_ID' }); return }
           if (!this.onRetargetAgent) { reply(type, requestId, { error: 'UNSUPPORTED_ON_REMOTE' }); return }
           const clear = payload.clearGrid === true
+          // A new conversation is started on a grid or an API model; the own login reopens the one it left.
+          const fresh = payload.fresh === true
+          if (fresh && clear) {
+            reply(type, requestId, { error: 'INVALID_GRID', detail: 'A fresh session starts on a grid or API model, not on the own login.' })
+            return
+          }
           // `gridModel` is the header picker's frame: a model id and nothing else. The endpoint and
           // the credential are resolved HERE, from this machine's own signed-in `grid`, so neither
           // ever crosses the relay and the app cannot be the source of truth for an address it does
@@ -1305,7 +1314,7 @@ export class BackendSocket {
             return
           }
           const override = target.state === 'ok' ? target.override : null
-          const moved = await this.onRetargetAgent({ agentId, grid: override })
+          const moved = await this.onRetargetAgent({ agentId, grid: override, ...(fresh ? { fresh: true } : {}) })
           if (!moved.ok) {
             reply(type, requestId, moved.detail ? { error: moved.error, detail: moved.detail } : { error: moved.error })
             return

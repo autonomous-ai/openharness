@@ -92,6 +92,51 @@ void main() {
     });
   });
 
+  group('a ship line\'s pull requests', () {
+    const own = 'https://github.com/autonomous-ai/openharness/pull/2527';
+    const wrongOwner = 'https://github.com/openharness/openharness/pull/2527';
+
+    test('are one link per owner, repository and number', () {
+      final ship = SwarmShip.of(
+        shipMessage(
+          source: {
+            'kind': 'ship',
+            'pullRequests': [
+              own,
+              'https://github.com/Autonomous-AI/OpenHarness/pull/2527',
+              own,
+              'https://github.com/autonomous-ai/openharness/pull/2528',
+            ],
+          },
+        ),
+      );
+      expect([for (final link in ship.pullRequests) link.pathSegments[3]], [
+        '2527',
+        '2528',
+      ]);
+    });
+
+    test('name their repository only when it is not the project\'s', () {
+      final links = [Uri.parse(own), Uri.parse(wrongOwner)];
+      expect(
+        swarmPullRequestLabels(
+          links,
+          repositoryUrl: 'https://github.com/autonomous-ai/openharness.git',
+        ),
+        ['openharness · PR #2527', 'openharness/openharness · PR #2527'],
+      );
+      expect(swarmPullRequestLabels(links), [
+        'autonomous-ai/openharness · PR #2527',
+        'openharness/openharness · PR #2527',
+      ]);
+      expect(swarmPullRequestLabels(links.take(1).toList()), [
+        'openharness · PR #2527',
+      ]);
+      expect(swarmGithubRepository('git@github.com:a/b.git'), 'a/b');
+      expect(swarmGithubRepository('https://gitlab.com/a/b'), isNull);
+    });
+  });
+
   group('when a ship throws confetti', () {
     final now = DateTime.utc(2026, 10, 28, 3);
 

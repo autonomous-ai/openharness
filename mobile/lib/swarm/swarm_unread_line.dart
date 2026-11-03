@@ -22,7 +22,8 @@ String? swarmFirstUnread(
 }) {
   if (mark == null || mark <= 0 || messages.isEmpty) return null;
   if (hasOlder && messages.first.sequence > mark + 1) return null;
-  bool own(SuperTabMessage m) => !m.fromAgent && m.authorId == accountId;
+  bool own(SuperTabMessage m) =>
+      !m.fromAgent && !m.postedForAuthor && m.authorId == accountId;
   var read = mark;
   for (final m in messages) {
     if (own(m) && m.inMainStream && m.sequence > read) read = m.sequence;
