@@ -726,7 +726,7 @@ void main() {
       expect(within('MACs-Mac-Studio'), findsOneWidget);
       expect(within('5 shipped · 31 h for others'), findsOneWidget);
       expect(within('Claude'), findsOneWidget);
-      expect(within('38% used, resets in 3d'), findsOneWidget);
+      expect(within('38% used · resets in 3d'), findsOneWidget);
       expect(within('Codex'), findsOneWidget);
       expect(within('not read yet'), findsOneWidget);
       expect(within('build-box'), findsOneWidget);
@@ -747,8 +747,9 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('from a server with Brought and nothing brought, it says so',
-        (tester) async {
+    testWidgets('from a server with Brought and nothing brought, it says so', (
+      tester,
+    ) async {
       await pump(tester, detailed(brought: <Object>[]));
       await tester.pumpAndSettle();
       await tester.tap(key('swarm-leaderboard-person-ken'));
@@ -780,7 +781,7 @@ void main() {
       final sheet = tester.getRect(key('swarm-leaderboard-details'));
       for (final text in [
         '5 shipped · 31 h for others',
-        '38% used, resets in 3d',
+        '38% used · resets in 3d',
       ]) {
         final line = tester.getRect(
           inside('swarm-leaderboard-details-brought', find.text(text)),
@@ -789,7 +790,10 @@ void main() {
       }
       // The machine's name keeps its room beside its measure.
       final name = tester.getRect(
-        inside('swarm-leaderboard-details-brought', find.text('MACs-Mac-Studio')),
+        inside(
+          'swarm-leaderboard-details-brought',
+          find.text('MACs-Mac-Studio'),
+        ),
       );
       expect(name.width, greaterThan(0));
       expect(

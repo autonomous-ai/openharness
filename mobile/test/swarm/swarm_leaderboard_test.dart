@@ -536,10 +536,8 @@ void main() {
       'details': {'brought': ?brought},
     });
 
-    test('puts a line per machine in place of Lent: what shipped, hours for others and each subscription\'s week', () {
-      final resets = now
-          .add(const Duration(days: 3, hours: 2))
-          .millisecondsSinceEpoch;
+    test('the week lines keep Lent and never Brought: Brought comes only '
+        'with the details, and the details sheet shows it', () {
       final lines = swarmPersonWeek(
         score([
           {
@@ -547,36 +545,38 @@ void main() {
             'machineName': 'Mac Studio',
             'shipped': 5,
             'busyHours': 31,
-            'subscriptions': [
-              {'engine': 'claude', 'usedPercent': 38, 'resetsAt': resets},
-              {'engine': 'codex', 'usedPercent': null, 'resetsAt': null},
-            ],
-          },
-          {
-            'machineId': 'mbp',
-            'machineName': 'MacBook Pro',
-            'shipped': 0,
-            'busyHours': 0,
             'subscriptions': <Object>[],
           },
         ]),
         now: now,
       );
-      expect(
-        lines,
-        contains((
-          'Mac Studio',
-          '5 shipped · 31 h for others\nClaude 38% used, resets in 3d\nCodex not read yet',
-        )),
-      );
-      expect(lines, contains(('MacBook Pro', '0 shipped · 0 h for others')));
-      expect(lines.map((l) => l.$1), isNot(contains('Lent')));
+      expect(lines.map((l) => l.$1), contains('Lent'));
+      expect(lines.map((l) => l.$1), isNot(contains('Mac Studio')));
+      expect(lines.map((l) => l.$1), isNot(contains('Brought')));
     });
 
-    test('says so when the person brought nothing', () {
-      final lines = swarmPersonWeek(score(<Object>[]), now: now);
-      expect(lines, contains(('Brought', 'No machines brought yet')));
-      expect(lines.map((l) => l.$1), isNot(contains('Lent')));
+    test("a subscription's week in the desktop's words: used · resets in", () {
+      final resets = now
+          .add(const Duration(days: 3, hours: 2))
+          .millisecondsSinceEpoch;
+      final read = score([
+        {
+          'machineId': 'studio',
+          'machineName': 'Mac Studio',
+          'shipped': 5,
+          'busyHours': 31,
+          'subscriptions': [
+            {'engine': 'claude', 'usedPercent': 38, 'resetsAt': resets},
+            {'engine': 'codex', 'usedPercent': 12, 'resetsAt': null},
+            {'engine': 'codex', 'usedPercent': null, 'resetsAt': null},
+          ],
+        },
+      ]);
+      expect(swarmBroughtSubscriptions(read.brought!.single, now), [
+        ('Claude', '38% used · resets in 3d'),
+        ('Codex', '12% used'),
+        ('Codex', 'not read yet'),
+      ]);
     });
 
     test('names a machine without .local and leaves out one with no name, '
