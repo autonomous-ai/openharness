@@ -164,12 +164,21 @@ static __attribute__((noinline)) void send_supertabs(void)
     const int n = pod_ui_take_supertab(&s_pod, q, POD_SUPERTAB_OUT_MAX);
     if (s_pod.model.revision != rev) change();   // asking for a recap puts it LOADING: a change no feed announced (the flag is the model's revision: not consumed here)
     pro_app_unlock();
-    bool lost[POD_SUPERTAB_OUT_MAX] = {0};
+    bool lost[POD_SUPERTAB_OUT_MAX] = {0}, side_lost[POD_SUPERTAB_OUT_MAX] = {0};
     bool any = false;
-    for (int i = 0; i < n; i++) any |= lost[i] = !pro_cable_supertab_send(q[i].t, q[i].tab, q[i].lead);
+    for (int i = 0; i < n; i++) {
+        if (!strcmp(q[i].t, "supertab.side")) {   // not owed again: the next supertab frame shows the true side
+            if (!pro_cable_supertab_side(q[i].tab, q[i].side)) { lost[i] = false; side_lost[i] = true; any = true; }
+            continue;
+        }
+        any |= lost[i] = !pro_cable_supertab_send(q[i].t, q[i].tab, q[i].lead);
+    }
     if (!any) return;
     pro_app_lock();   // a frame the link dropped is owed again (open / recap.get are retried)
-    for (int i = 0; i < n; i++) if (lost[i]) pod_ui_supertab_unsent(&s_pod, &q[i]);
+    for (int i = 0; i < n; i++) {
+        if (lost[i]) pod_ui_supertab_unsent(&s_pod, &q[i]);
+        if (side_lost[i]) { pod_ui_side_unsent(&s_pod, q[i].tab); change(); }   // the tapped segment would never be answered
+    }
     pro_app_unlock();
 }
 
@@ -404,9 +413,8 @@ void pro_app_supertab_focus(const char *tab, const char *lead)
 
 void pro_app_supertab_notice(const char *tab, const char *lead, const char *chat, const char *chat_id, const char *text)
 {
-    if (chat && !strcmp(chat, "buddy")) return;   // the Buddy's quiet notice is a dot on its button, not a row or a toast
     pro_app_lock();
-    if (pod_ui_swarm_notice(&s_pod, tab, lead, chat_id, text, !pro_app_asleep(), ms())) alert_locked();
+    if (pod_ui_swarm_notice(&s_pod, tab, lead, chat, chat_id, text, !pro_app_asleep(), ms())) alert_locked();
     settle((pod_out_t){0});
     leave();
 }

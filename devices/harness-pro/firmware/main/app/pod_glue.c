@@ -31,6 +31,12 @@ void pod_ui_render(pod_ui_t *u, ht_scene_t *scene, uint32_t now_ms)
         u->dirty = false;
         return;
     }
+    {   // drawing means the glass is lit: the Buddy chat on the face of a Lead has been seen, its dot goes
+        const pod_frame_t *t = top(u);
+        const pod_swarm_t *sw = NULL;
+        const pod_lead_t *l = t && t->view == POD_V_LEAD ? pod_nav_lead(&u->nav, &u->model, &sw) : NULL;
+        if (l && l->chat == POD_CHAT_BUDDY && pod_model_buddy_mark(&u->model, sw->id, l->id, false)) u->dirty = true;
+    }
     pod_nav_flip_recaps(&u->nav, &u->model);   // the clock alone can end a stale Working: show the recap it opens on
     // The banner shows while its entry is still unread, the time has not run out, the cable is up and nobody is recording.
     const pod_unread_t *ban = NULL;
@@ -286,9 +292,14 @@ static const char *talk_target(const pod_ui_t *u)
     const pod_frame_t *f = top(u);
     if (!f || u->ban_touch) return NULL;
     if (u->start_y < POD_BAR_H) return NULL;   // nothing in the top band talks
-    if (u->hit_valid && (u->hit.action == POD_A_BACK || u->hit.action == POD_A_INBOX)) return NULL;
+    if (u->hit_valid && (u->hit.action == POD_A_BACK || u->hit.action == POD_A_INBOX || u->hit.action == POD_A_SIDE)) return NULL;
     const char *id = f->view == POD_V_AGENT || f->view == POD_V_RECAP || f->view == POD_V_LEAD ? f->agent : NULL;   // a Lead view's agent is its local harness (empty for a remote Lead: no talk)
     const pod_agent_t *a = id ? pod_model_find(&u->model, id) : NULL;
+    if (f->view == POD_V_LEAD) {   // nothing on the Buddy side talks, nor a Lead whose face is the Buddy chat: a Pro's words post in the Lead's shared chat
+        const pod_swarm_t *sw = NULL;   // until voice comes to the face chat (Swarm parity part 3; review of #2299)
+        const pod_lead_t *l = pod_nav_lead(&u->nav, &u->model, &sw);
+        if (l && sw && (pod_model_side_shown(&u->model, sw) == POD_SIDE_BUDDY || l->chat == POD_CHAT_BUDDY)) return NULL;
+    }
     return a && !asks_here(&u->model, a) ? id : NULL;
 }
 static bool wide(int dx, int dy) { return iabs(dx) * 2 > iabs(dy) * 3; }
@@ -364,15 +375,17 @@ static pod_out_t talk_fire(pod_ui_t *u, uint32_t now_ms)
 }
 
 // ---- the Lead view's frames for the daemon ----
-static bool sup_push(pod_ui_t *u, const char *t, const char *tab, const char *lead)
+static bool sup_push_side(pod_ui_t *u, const char *t, const char *tab, const char *lead, const char *side)
 {
     if (u->sup_qn >= POD_SUPERTAB_OUT_MAX) return false;   // a burst past the queue is lost, like any frame on a busy link: the caller counts it as not sent
     pod_supertab_out_t *o = &u->sup_q[u->sup_qn++];
     o->t = t;
     pod_copy_str(o->tab, sizeof o->tab, tab);
     pod_copy_str(o->lead, sizeof o->lead, lead);
+    pod_copy_str(o->side, sizeof o->side, side);
     return true;
 }
+static bool sup_push(pod_ui_t *u, const char *t, const char *tab, const char *lead) { return sup_push_side(u, t, tab, lead, ""); }
 
 // A tap on a Swarm chat's notice (its toast or its Notices row): read the entry and open that Lead's view, the desktop told to select it. Not Notices.
 static void swarm_entry_open(pod_ui_t *u, const pod_unread_t *e)
@@ -625,6 +638,19 @@ pod_out_t pod_ui_touch(pod_ui_t *u, bool down, int x, int y, uint32_t now_ms, bo
             *changed = true;
             return none;
         }
+    }
+    // The Lead view's pill (POD_A_SIDE: arg = the side, id = the Swarm's id): the side is asked of the daemon, the tapped segment shows at once (until the Swarm's
+    // next frame) and the Buddy's dot goes with the tap. The Swarm must still be held; nothing else happens.
+    if (u->hit.id[0] && u->hit.action == POD_A_SIDE) {
+        const pod_swarm_t *sw = pod_model_swarm(&u->model, u->hit.id);
+        if (sw) {
+            const pod_side_t side = arg == POD_SIDE_BUDDY ? POD_SIDE_BUDDY : POD_SIDE_PM;
+            if (pod_ui_supertab_side(u, sw->id, side)) pod_model_side_press(&u->model, sw->id, side, now_ms);
+            const int j = top(u) ? pod_model_lead_index(sw, top(u)->lead_id) : -1;   // the Lead on screen
+            if (side == POD_SIDE_BUDDY && j >= 0) pod_model_buddy_mark(&u->model, sw->id, sw->leads[j].id, false);
+        }
+        *changed = true;
+        return none;
     }
     if (arg == -1 && u->hit.id[0]) { *changed = true; return none; }   // what it named is gone: redraw, open nothing
     if (u->hit.action == POD_A_OPEN_NOTIF && arg >= 0 && arg < u->model.unread_count && u->model.unread[arg].tab[0]) { swarm_entry_open(u, &u->model.unread[arg]); *changed = true; return none; }
@@ -951,12 +977,18 @@ bool pod_ui_notify_text(pod_ui_t *u, const char *agent_id, pod_tier_t tier, cons
     return tier == POD_TIER_ALERT;
 }
 
-bool pod_ui_swarm_notice(pod_ui_t *u, const char *tab, const char *lead, const char *chat_id, const char *text, bool awake, uint32_t now_ms)
+bool pod_ui_swarm_notice(pod_ui_t *u, const char *tab, const char *lead, const char *chat, const char *chat_id, const char *text, bool awake, uint32_t now_ms)
 {
     pod_model_clock(&u->model, now_ms);
     const pod_swarm_t *sw = pod_model_swarm(&u->model, tab);
     if (!sw || pod_model_lead_index(sw, lead) < 0) return false;
     const pod_frame_t *t = top(u);
+    if (chat && !strcmp(chat, "buddy")) {   // the Buddy's quiet notice: a dot on its segment, no row, no toast, no beep
+        pod_lead_t *bl = &((pod_swarm_t *)sw)->leads[pod_model_lead_index(sw, lead)];
+        const bool seen = awake && t && t->view == POD_V_LEAD && !strcmp(t->swarm, sw->id) && !strcmp(t->lead_id, lead) && bl->chat == POD_CHAT_BUDDY;   // its chat is the one on screen
+        if (!seen && pod_model_buddy_mark(&u->model, sw->id, lead, true)) u->dirty = true;
+        return false;
+    }
     pod_model_swarm_notice(&u->model, sw->id, lead, chat_id, text, now_ms);   // filed first, so a seen one also replaces this Lead's older row
     const pod_lead_t *face = awake && t && t->view == POD_V_LEAD && !strcmp(t->swarm, sw->id) && !strcmp(t->lead_id, lead) ? &sw->leads[pod_model_lead_index(sw, lead)] : NULL;
     if (face && !strcmp(face->chat_id, chat_id ? chat_id : "")) {   // the face shows that very chat: seen at once
@@ -976,6 +1008,9 @@ bool pod_ui_swarm_notice(pod_ui_t *u, const char *tab, const char *lead, const c
 
 void pod_ui_swarm_notice_read(pod_ui_t *u, const char *tab, const char *lead, const char *chat_id)
 {
+    const pod_swarm_t *bs = pod_model_swarm(&u->model, tab);   // the Buddy chat became the open one: its dot goes
+    const int bj = pod_model_lead_index(bs, lead);
+    if (bj >= 0 && chat_id && !strcmp(chat_id, bs->leads[bj].buddy.chat_id) && pod_model_buddy_mark(&u->model, tab, lead, false)) u->dirty = true;
     if (!pod_model_swarm_notice_read(&u->model, tab, lead, chat_id)) return;
     if (u->ban_on && !strcmp(u->ban_tab, tab) && !strcmp(u->ban_agent, lead)) u->ban_on = false;
     u->dirty = true;
@@ -1127,6 +1162,20 @@ int pod_ui_take_supertab(pod_ui_t *u, pod_supertab_out_t out[], int max)
     if (n < u->sup_qn) memmove(u->sup_q, u->sup_q + n, (size_t)(u->sup_qn - n) * sizeof u->sup_q[0]);
     u->sup_qn = (uint8_t)(u->sup_qn - n);
     return n;
+}
+
+// The side frame could not be sent: the tapped segment would never be answered, so it is not kept.
+void pod_ui_side_unsent(pod_ui_t *u, const char *tab)
+{
+    if (u->model.side_press == POD_SIDE_NONE || strcmp(u->model.side_press_swarm, tab)) return;
+    pod_model_side_press(&u->model, tab, POD_SIDE_NONE, u->model.clock_ms);
+    u->dirty = true;
+}
+
+bool pod_ui_supertab_side(pod_ui_t *u, const char *tab, pod_side_t side)
+{
+    if (!tab || !tab[0] || (side != POD_SIDE_PM && side != POD_SIDE_BUDDY)) return false;
+    return sup_push_side(u, "supertab.side", tab, "", side == POD_SIDE_BUDDY ? "buddy" : "pm");
 }
 
 void pod_ui_supertab_unsent(pod_ui_t *u, const pod_supertab_out_t *frame)

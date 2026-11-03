@@ -715,6 +715,10 @@ void pod_model_link(pod_model_t *m, bool up) {
         m->want_n = 0;
         m->swarm_ids = false;
         m->focus_pending = false;
+        m->side_press = POD_SIDE_NONE;
+        m->side_press_swarm[0] = 0;
+        for (int i = 0; i < SWARMS_CARD_MAX; i++)   // the Buddy's dot is the device's own: a new link starts without one
+            for (int j = 0; j < SWARM_LEADS_MAX; j++) m->swarms[i].leads[j].buddy_unread = false;
     }
     m->revision++;
 }
@@ -810,7 +814,7 @@ void pod_model_supertab(pod_model_t *m, const pod_swarm_t *s, uint32_t now_ms) {
         m->swarm_n++;
     }
     pod_swarm_t *d = &m->swarms[at];
-    struct { pod_recap_state_t recap; char *text; uint32_t text_at; } carry[SWARM_LEADS_MAX];
+    struct { pod_recap_state_t recap; char *text; uint32_t text_at; bool buddy_unread; } carry[SWARM_LEADS_MAX];
     memset(carry, 0, sizeof carry);
     const int ln = s->lead_n > SWARM_LEADS_MAX ? SWARM_LEADS_MAX : s->lead_n;
     for (int j = 0; j < ln; j++) {
@@ -818,6 +822,7 @@ void pod_model_supertab(pod_model_t *m, const pod_swarm_t *s, uint32_t now_ms) {
         if (k < 0) continue;
         pod_lead_t *ol = &d->leads[k];   // taken over: the old copy no longer owns the text
         carry[j].recap = ol->recap; carry[j].text = ol->text; carry[j].text_at = ol->text_at;
+        carry[j].buddy_unread = ol->buddy_unread;   // the device's own mark: no frame sets or clears it
         ol->text = NULL;
         if (strcmp(ol->chat_id, s->leads[j].chat_id)) {   // another chat: the old message is not its message
             free(carry[j].text);
@@ -834,11 +839,13 @@ void pod_model_supertab(pod_model_t *m, const pod_swarm_t *s, uint32_t now_ms) {
         l->text = carry[j].text;
         l->recap = carry[j].recap;
         l->text_at = carry[j].text_at;
+        l->buddy_unread = carry[j].buddy_unread;
         l->since_at_ms = now_ms;
     }
     // The same for a Lead that left this Swarm. The same id in another Swarm is another row's business.
     for (int i = m->unread_count - 1; i >= 0; i--)
         if (!strcmp(m->unread[i].tab, d->id) && pod_model_lead_index(d, m->unread[i].agent) < 0) unread_drop(m, i);
+    if (m->side_press != POD_SIDE_NONE && !strcmp(m->side_press_swarm, s->id)) { m->side_press = POD_SIDE_NONE; m->side_press_swarm[0] = 0; }   // the daemon has answered
     m->revision++;
 }
 
@@ -878,6 +885,35 @@ void pod_model_supertab_close(pod_model_t *m, const char *tab, const char *lead)
     lead_free_text(l);
     l->recap = POD_RECAP_NONE;
     m->revision++;
+}
+
+void pod_model_side_press(pod_model_t *m, const char *swarm_id, pod_side_t side, uint32_t now_ms) {
+    pod_model_clock(m, now_ms);
+    m->side_press = side;
+    m->side_press_ms = m->clock_ms;
+    pod_copy_str(m->side_press_swarm, sizeof m->side_press_swarm, side == POD_SIDE_NONE || !swarm_id ? "" : swarm_id);
+    m->revision++;
+}
+
+pod_side_t pod_model_side_shown(const pod_model_t *m, const pod_swarm_t *sw) {
+    pod_side_t side = sw->side;
+    if (m->side_press != POD_SIDE_NONE && !strcmp(m->side_press_swarm, sw->id) && (uint32_t)(m->clock_ms - m->side_press_ms) < POD_SIDE_PRESS_MS) side = m->side_press;
+    return side == POD_SIDE_BUDDY ? POD_SIDE_BUDDY : POD_SIDE_PM;
+}
+bool pod_model_no_buddy(const pod_model_t *m, const pod_swarm_t *sw, const pod_lead_t *l) {
+    return l->buddies && !l->has_buddy && pod_model_side_shown(m, sw) == POD_SIDE_BUDDY;
+}
+uint32_t pod_model_side_press_left_ms(const pod_model_t *m, const pod_swarm_t *sw) {
+    if (m->side_press == POD_SIDE_NONE || strcmp(m->side_press_swarm, sw->id)) return 0;
+    const uint32_t gone = m->clock_ms - m->side_press_ms;
+    return gone < POD_SIDE_PRESS_MS ? POD_SIDE_PRESS_MS - gone : 0;
+}
+bool pod_model_buddy_mark(pod_model_t *m, const char *tab, const char *lead, bool unread) {
+    pod_swarm_t *sw = (pod_swarm_t *)pod_model_swarm(m, tab);
+    const int j = sw ? pod_model_lead_index(sw, lead) : -1;
+    if (j < 0 || sw->leads[j].buddy_unread == unread) return false;
+    sw->leads[j].buddy_unread = unread;
+    return true;
 }
 
 void pod_model_supertab_focus(pod_model_t *m, const char *tab, const char *lead) {
