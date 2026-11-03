@@ -4987,7 +4987,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
     // Paint hints only; the keymap still owns every shortcut and input event.
     _tabShortcutHints.value = showsTabShortcutHints(HardwareKeyboard.instance);
     // Off, this is not here at all: every key goes where it went before.
-    if (event is! KeyDownEvent || _zoo.daemons == DaemonsSwitch.off) {
+    // Nor while the Harness Team account's setup holds the window
+    // (TeamAccountSetupLock): this handler hears keys whatever has focus.
+    if (event is! KeyDownEvent ||
+        _zoo.daemons == DaemonsSwitch.off ||
+        app.teamSetupLocked) {
       return false;
     }
     _noteWindowInput();
