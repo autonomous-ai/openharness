@@ -225,7 +225,7 @@ void main() {
           'configuration': {'engine': 'claude'},
         },
       ];
-      server.state['pool'] = [
+      server.state['machines'] = [
         {'machineId': 'studio', 'name': 'Mac Studio'},
       ];
       final conversations = server.state['conversations'] as List;
@@ -326,7 +326,11 @@ void main() {
               builder: (context, _) => SuperTabBacklogView(
                 controller: c,
                 onOpenConversation: opened.add,
-                now: () => at.add(const Duration(minutes: 5)),
+                // Five minutes after #11 last changed (the fixture's own
+                // clock), for its row's age.
+                now: () => (c.groupChangedAt('working') ?? at).add(
+                  const Duration(minutes: 5),
+                ),
               ),
             ),
           ),
@@ -410,13 +414,24 @@ void main() {
       expect(rowText(tester, 'shipped'), contains('PR #2713'));
     });
 
-    testWidgets('a task the reader cannot read is absent', (tester) async {
-      final server = swarm();
-      // The server sends no group the reader may not read: one more task in
-      // the server's state, not sent, and a private chat, never a task.
+    testWidgets('a task the reader cannot read is absent, even when a server '
+        'sends it', (tester) async {
+      final server = swarm()..parts.leaksHiddenGroups = true;
+      (server.state['conversations'] as List).add({
+        ...conversationFixture('secret', 'Pilot only'),
+        'projectId': 'lead',
+        'number': 17,
+        'audience': {
+          'people': [
+            {'id': 'pilot'},
+          ],
+        },
+      });
       await show(tester, server);
+      expect(shown.snapshot!.conversation('secret'), isNotNull);
+      expect(row('secret'), findsNothing);
       expect(row('private'), findsNothing);
-      expect(listed(tester), isNot(contains('private')));
+      expect(listed(tester), hasLength(6));
     });
 
     testWidgets('Mine shows only the tasks the reader asked for', (
