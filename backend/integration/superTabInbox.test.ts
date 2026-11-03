@@ -124,6 +124,8 @@ async function insert(tabId: string, conversationId: string, rows: Array<{ id?: 
   await swarmTransaction(db, async tx => {
     const current = (await parts.loadActive(tx, tabId, { groupIds: [conversationId] })).groups.find(g => g.key === conversationId)!
     const data = structuredClone(current.data!) as Conversation
+    const messages: Array<{ id: string; tabId: string; conversationId: string; sequence: number; author: never; text: string;
+      thread: string | null; recipientIds: string[]; mentions: string[]; source?: never; createdAt: Date }> = []
     for (const row of rows) {
       const sequence = (data.messageSeq ?? 0) + 1
       const id = row.id ?? `m-${randomUUID()}`
@@ -135,9 +137,12 @@ async function insert(tabId: string, conversationId: string, rows: Array<{ id?: 
         data.lastActivityAt = new Date().toISOString()
         if (!row.thread || row.thread === id) data.lastMainSequence = sequence
       }
-      await tx.superTabMessage.create({ data: { id, tabId, conversationId, sequence, author: row.author as never, text: row.text,
+      messages.push({ id, tabId, conversationId, sequence, author: row.author as never, text: row.text,
         thread: row.thread === undefined ? id : row.thread, recipientIds: row.recipientIds ?? [], mentions: row.mentions ?? [],
-        ...(row.source ? { source: row.source as never } : {}), createdAt: new Date() } })
+        ...(row.source ? { source: row.source as never } : {}), createdAt: new Date() })
+    }
+    for (let offset = 0; offset < messages.length; offset += 500) {
+      await tx.superTabMessage.createMany({ data: messages.slice(offset, offset + 500) })
     }
     await guardedWrite(tx, tabId, { op: 'update', kind: 'group', key: conversationId, seen: current.version, data }, Date.now())
   })
