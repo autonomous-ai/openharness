@@ -72,7 +72,7 @@ describe('pullRequestEvents', () => {
     const busy = watch({ mergeable: false, checkRuns: [run('build', 'failure')], reviews: [{ id: 7, login: 'huy', association: 'MEMBER', state: 'COMMENTED', body: 'ok', url: URL }] })
     const first = pullRequestEvents(busy, [], 'harness[bot]', NOW)
     expect(first.events.map(e => e.key)).toEqual([`conflict:${HEAD}`])
-    expect(first.keys).toEqual(expect.arrayContaining([`ci-red:${HEAD}`, 'review:7', `conflict:${HEAD}`]))
+    expect(first.keys).toEqual(expect.arrayContaining([`ci-red:${HEAD}`, 'review>:7', `conflict:${HEAD}`]))
     expect(pullRequestEvents(busy, first.keys, 'harness[bot]', NOW + 60_000).events).toEqual([])
   })
 
@@ -130,11 +130,13 @@ describe('pullRequestEvents', () => {
     expect(seen.length).toBeLessThanOrEqual(SEEN_KEPT)
   })
 
-  it('keeps the newest 50 keys', () => {
-    const old = Array.from({ length: 60 }, (_, i) => `comment:${i}`)
-    const { keys } = events(watch({ comments: [{ id: 100, login: 'dee', association: 'MEMBER', body: 'hi', url: URL }] }), [...SEEN, ...old])
+  it('keeps the newest 50 keys, and its marks always', () => {
+    const old = Array.from({ length: 60 }, (_, i) => `ci-red:head${i}`)
+    const { keys } = events(watch({ comments: [{ id: 100, login: 'dee', association: 'MEMBER', body: 'hi', url: URL }] }), [...SEEN, 'review>:4', ...old])
     expect(keys).toHaveLength(50)
-    expect(keys).toContain('comment:100')
+    expect(keys).toEqual(expect.arrayContaining(['comment>:100', 'review>:4']))
     expect(keys.some(k => k.startsWith('ready:'))).toBe(true)
+    expect(keys).toContain('ci-red:head0')
+    expect(keys).not.toContain('ci-red:head59')
   })
 })

@@ -141,7 +141,7 @@ export class GitHubApp {
   /** When each repository's "not installed" was last forgotten on request ([forget]). */
   private readonly forgotten = new Map<string, number>()
   /** The watch's last answer and its ETag, by path ([watchPullRequest]). */
-  private readonly watched = new Map<string, { etag: string; body: Record<string, unknown> | unknown[] }>()
+  private readonly watched = new Map<string, { etag: string; body: Record<string, unknown> | unknown[]; link: string | null }>()
 
   constructor(readonly config: GitHubAppConfig, options: GitHubAppOptions = {}) {
     this.fetch = options.fetch ?? fetch
@@ -484,21 +484,33 @@ export class GitHubApp {
   /**
    * What a task's Engineer is told of its pull request [number] (superTabs/pullRequestEvents.ts): the pull request, its head's
    * latest check runs and its check suites, its reviews and its conversation comments, read with a [PULL_WATCH_PERMISSIONS]
-   * token. Each read names the last answer's ETag, and a 304 reuses that answer. Null when GitHub cannot say.
+   * token. Each read names the last answer's ETag, and a 304 reuses that answer. Reviews and comments come oldest first, so
+   * their last page is read too when there is more than one (review of #2750). Null when GitHub cannot say.
    */
   async watchPullRequest(repository: GitHubRepository, number: number, token: string): Promise<PullRequestWatch | null> {
     const base = `/repos/${repository.owner}/${repository.name}`
-    const read = async (path: string): Promise<Record<string, unknown> | unknown[] | null> => {
+    const answerOf = async (path: string, fresh = false): Promise<{ body: Record<string, unknown> | unknown[]; link: string | null } | null> => {
       const kept = this.watched.get(path)
-      const answer = await this.call('GET', path, `Bearer ${token}`, undefined, kept ? { 'If-None-Match': kept.etag } : {})
-      if (answer.status === 304 && kept) return kept.body
+      const answer = await this.call('GET', path, `Bearer ${token}`, undefined, kept && !fresh ? { 'If-None-Match': kept.etag } : {})
+      if (answer.status === 304 && kept) return kept
       if (answer.status !== 200) return null
       this.watched.delete(path)
       if (answer.etag) {
         if (this.watched.size >= WATCH_KEPT) this.watched.delete(this.watched.keys().next().value!)
-        this.watched.set(path, { etag: answer.etag, body: answer.body })
+        this.watched.set(path, { etag: answer.etag, body: answer.body, link: answer.link ?? null })
       }
-      return answer.body
+      return { body: answer.body, link: answer.link ?? null }
+    }
+    const read = async (path: string) => (await answerOf(path))?.body ?? null
+    // A full first page is read afresh: a new last page changes its Link, not its body.
+    const pages = async (path: string): Promise<unknown[] | null> => {
+      const first = await answerOf(path, (this.watched.get(path)?.body as unknown[] | undefined)?.length === 100)
+      if (!first || !Array.isArray(first.body)) return null
+      const last = /<([^>]+)>;\s*rel="last"/.exec(first.link ?? '')?.[1]
+      const lastPath = last?.startsWith(this.apiUrl) ? last.slice(this.apiUrl.length) : null
+      if (!lastPath) return first.body
+      const tail = await read(lastPath)
+      return Array.isArray(tail) ? [...first.body, ...tail] : null
     }
     const text = (value: unknown) => typeof value === 'string' ? value : ''
     const login = (value: unknown) => text((value as { login?: unknown } | null)?.login)
@@ -507,9 +519,9 @@ export class GitHubApp {
       const pull = await read(`${base}/pulls/${number}`) as Record<string, unknown> | null
       const head = text((pull?.head as { sha?: unknown } | undefined)?.sha)
       if (!pull || (pull.state !== 'open' && pull.state !== 'closed') || !/^[0-9a-f]{7,64}$/.test(head)) return null
-      const [runs, suites, reviews, comments] = await Promise.all([`${base}/commits/${head}/check-runs?per_page=100`,
-        `${base}/commits/${head}/check-suites?per_page=100`, `${base}/pulls/${number}/reviews?per_page=100`,
-        `${base}/issues/${number}/comments?per_page=100`].map(read))
+      const [runs, suites, reviews, comments] = await Promise.all([read(`${base}/commits/${head}/check-runs?per_page=100`),
+        read(`${base}/commits/${head}/check-suites?per_page=100`), pages(`${base}/pulls/${number}/reviews?per_page=100`),
+        pages(`${base}/issues/${number}/comments?per_page=100`)])
       if (!runs || !suites || !Array.isArray(reviews) || !Array.isArray(comments)) return null
       const list = (value: unknown) => Array.isArray(value) ? value as Array<Record<string, unknown>> : []
       return {

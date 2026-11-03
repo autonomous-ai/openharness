@@ -34,7 +34,7 @@ export interface PullRequestEvent { key: string; text: string }
 
 const FAILED = new Set(['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure'])
 const PASSED = new Set(['success', 'neutral', 'skipped'])
-/** The keys a group keeps per pull request: enough for its open heads, reviews and comments. */
+/** The keys a group keeps per pull request: its marks, and its newest heads' CI and conflict keys. */
 export const SEEN_KEPT = 50
 const QUOTE = 300
 
@@ -48,8 +48,8 @@ const REVIEWED: Record<string, string> = { CHANGES_REQUESTED: 'asked for changes
  *  reaches an agent as its Lead's, so anyone else's text stays on GitHub behind the link (ENGINEERING.md 7, review of #2750). */
 const QUOTED = new Set(['OWNER', 'MEMBER', 'COLLABORATOR'])
 const said = (association: string, body: string, url: string) => {
-  const text = QUOTED.has(association) ? quoted(body) : ''
-  return text ? `: "${text}" ${url}` : `: ${url}`
+  if (!body.trim()) return `. ${url}`
+  return QUOTED.has(association) ? `: "${quoted(body)}" ${url}` : `: ${url}`
 }
 
 /**
@@ -58,7 +58,8 @@ const said = (association: string, body: string, url: string) => {
  * [botLogin], the app's own account, which the Engineer's own comments go out as. While a draft, no CI: a pull request read
  * as a draft (`draft`), whatever its head, is marked when next read as ready (`ready:<ms>`), and a failure finished before
  * that was a draft's own run, still the latest of its name until the ready run starts (review of #2750: a push and Ready
- * in the same minute leave the new head never read as a draft).
+ * in the same minute leave the new head never read as a draft). Reviews and comments are told by their ids: one newer than
+ * the highest seen of its kind (`review>:<id>`, `comment>:<id>`) is new, however many came before (review of #2750).
  */
 export function pullRequestEvents(watch: PullRequestWatch, seen: readonly string[], botLogin: string | null, now: number): { events: PullRequestEvent[]; keys: string[] } {
   const first = seen.length === 0, known = new Set(seen), events: PullRequestEvent[] = [], found: string[] = []
@@ -87,19 +88,22 @@ export function pullRequestEvents(watch: PullRequestWatch, seen: readonly string
   if (watch.mergeable === false) {
     add(`conflict:${head}`, `Your pull request #${number} has a merge conflict with ${watch.base} (head ${short(head)}): merge ${watch.base} into its branch and push. ${url}`, true)
   }
+  const highest = (kind: string) => Math.max(0, ...seen.filter(key => key.startsWith(`${kind}>:`)).map(key => Number(key.slice(kind.length + 2))))
+  const reviewed = highest('review'), commented = highest('comment')
   for (const review of watch.reviews) {
-    if (review.login === botLogin) continue
+    if (review.login === botLogin || review.id <= reviewed) continue
     add(`review:${review.id}`, `${review.login} ${REVIEWED[review.state] ?? 'reviewed'} your pull request #${number}${said(review.association, review.body, review.url)}`)
   }
   for (const comment of watch.comments) {
-    if (comment.login === botLogin) continue
+    if (comment.login === botLogin || comment.id <= commented) continue
     add(`comment:${comment.id}`, `${comment.login} commented on your pull request #${number}${said(comment.association, comment.body, comment.url)}`)
   }
-  // The newest first: what this read found, then what was seen before. The draft and ready marks stand for the pull request
-  // as it is now: a stale one goes, and the current one always stays.
-  const state = (key: string) => key === 'draft' || key.startsWith('ready:')
-  const marks = found.filter(state).length ? found.filter(state) : seen.filter(state).slice(0, 1)
-  const kept = [...new Set([...found, ...seen])].filter(key => !state(key)).slice(0, SEEN_KEPT - marks.length)
+  // The marks stand for the pull request as it is now and always stay; then its newest CI and conflict keys. A review's or
+  // comment's own key is only its message's: the marks say it was told.
+  const marks = [...found.filter(key => key === 'draft' || key.startsWith('ready:')),
+    `review>:${Math.max(reviewed, ...watch.reviews.map(r => r.id))}`, `comment>:${Math.max(commented, ...watch.comments.map(c => c.id))}`]
+  const told = (key: string) => /^(ci-red|ci-green|conflict):/.test(key)
+  const kept = [...new Set([...found, ...seen])].filter(told).slice(0, SEEN_KEPT - marks.length)
   return { events, keys: [...marks, ...kept] }
 }
 
