@@ -44,14 +44,16 @@ function resetMs(value: string | number | null | undefined): number | null {
   return null
 }
 
-/** Each contributed engine's weekly window from the machine's last reading; unknown as nulls. */
-function subscriptions(pool: ContributedMachine): BroughtMachine['subscriptions'] {
-  return pool.engines.map(engine => {
-    const quota = pool.observation?.quotas?.find(q => q.engine === engine)
-    const weekly = quota?.known ? quota.windows.find(w => w.name === 'weekly') : undefined
-    return { engine, usedPercent: weekly ? weekly.usedPercent : null, resetsAt: weekly ? resetMs(weekly.resetsAt) : null }
-  })
+/** [engine]'s weekly window from the machine's last reading: percent used and its reset (epoch ms), null when unknown. */
+export function weeklyUse(pool: ContributedMachine, engine: string): { usedPercent: number | null; resetsAt: number | null } {
+  const quota = pool.observation?.quotas?.find(q => q.engine === engine)
+  const weekly = quota?.known ? quota.windows.find(w => w.name === 'weekly') : undefined
+  return { usedPercent: weekly ? weekly.usedPercent : null, resetsAt: weekly ? resetMs(weekly.resetsAt) : null }
 }
+
+/** Each contributed engine's weekly window. */
+const subscriptions = (pool: ContributedMachine): BroughtMachine['subscriptions'] =>
+  pool.engines.map(engine => ({ engine, ...weeklyUse(pool, engine) }))
 
 /**
  * The machines [mine] (one person's, the reader's visible ones) as Brought rows: [shipped] the verified requests whose

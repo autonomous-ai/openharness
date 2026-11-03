@@ -366,7 +366,7 @@ export const accountOf = (agent: Pick<Agent, 'machineId' | 'machineOwnerId'>, on
 
 /** Notices the server writes in its own words under an agent's name (security reviews of #2570): they quote no agent, task
  *  titles and names aside. */
-const SERVER_WORDS: ReadonlySet<unknown> = new Set(['work-stalled', 'work-resumed', 'idle', 'review-capacity', 'overlap', 'pm-switch-notice'])
+const SERVER_WORDS: ReadonlySet<unknown> = new Set(['work-stalled', 'work-resumed', 'idle', 'review-capacity', 'overlap', 'pm-switch-notice', 'others-work-notice'])
 /** Whose words a row carries, for the mark of another account's (audit M3): its author's (a post, a status row, a brief, a
  *  route's reason); a lost task's notice, its worker's last result; none, a notice in the server's own words. A review's
  *  failed findings name no reviewer: they count as unknown, which is marked. */

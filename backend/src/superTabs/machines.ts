@@ -48,6 +48,9 @@ export interface ContributedMachine {
   lent?: import('./leaderboard/lent.js').LentWeek[]
   /** The same by day, for the board's rolling periods. Only the leaderboard read gets it (model.ts visibleState). */
   lentDays?: import('./leaderboard/lent.js').LentDay[]
+  /** The leaderboard week (Monday 00:00 UTC) its owner was last told someone else's work started here (othersWork.ts): once
+   *  a week. On a Mac, for its Harness Team account too. Kept when the contribution is saved again. */
+  othersToldWeek?: number
   /** Per engine, its failed starts here in a row, until one runs or they suspend it (engineHealth.ts). */
   engineFailures?: Record<string, number>
   /** Per engine, a suspension after failed starts: when, and whether its reading already said signed in with quota then. */
