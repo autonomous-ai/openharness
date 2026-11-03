@@ -32,6 +32,7 @@ import { cloneData } from './cloneData.js'
 import { workspaceCan, type WorkspaceRole } from './workspaces.js'
 import { fixedOriginal, LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordFix, recordDecision, recordMerged, recordPost, recordProposal, recordReview, recordRun, recordStatus,
   recordReportedModel, recordVerdict } from './leaderboard/record.js'
+import { othersWorkNotice } from './othersWork.js'
 import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
 import { githubRepository } from '../github/repository.js'
@@ -863,8 +864,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       brief: group.brief, checks: group.checks, assignment: group.assignment }))
   }
   const message = (conversationId: string, body: string, recipients: string[] = [], replyTo: string | null = null, source?: Record<string, unknown>,
-    attachments?: Attachment[], mentions?: string[], holdMentions?: true) => {
-    effects.messages.push({ id: operationId, conversationId, author: sender, text: body, replyTo, recipients, ...(source ? { source } : {}),
+    attachments?: Attachment[], mentions?: string[], holdMentions?: true, id = operationId) => {
+    effects.messages.push({ id, conversationId, author: sender, text: body, replyTo, recipients, ...(source ? { source } : {}),
       ...(attachments?.length ? { attachments } : {}), ...(mentions?.length ? { mentions } : {}), ...(holdMentions ? { holdMentions } : {}) })
     result.messageId = operationId
   }
@@ -1741,6 +1742,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Added as its person joined (Desktop's join): teammates' work only through its Harness Team account, for as long as
       // it stays contributed. Saving its settings sends the contribution without the field, and must not drop the rule.
       const teamAccountOnly = command.teamAccountOnly || state.machines.find(m => m.machineId === command.machineId)?.teamAccountOnly
+      // The week its owner was told of others' work here: saving settings again does not tell them twice (othersWork.ts).
+      const othersToldWeek = state.machines.find(m => m.machineId === command.machineId)?.othersToldWeek
       // Its owner's choice of projects is its own command's (machine.projects): saving the settings keeps it.
       const projects = state.machines.find(m => m.machineId === command.machineId && !m.buddyOnly)?.projects
       state.machines = state.machines.filter(m => m.machineId !== command.machineId)
@@ -1750,7 +1753,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       state.machines.push({ machineId: command.machineId, name: mac?.name ?? context.contribution?.machineName ?? command.name, cwd: command.cwd, engines: [...new Set(command.engines)],
         maxAgents: mac?.maxAgents ?? command.maxAgents, ...(command.scope ? { scope: command.scope } : {}),
         contributorId: actor.userId, membershipGeneration: contributor.generation, generation: operationId, paused,
-        ...(host ? { hostMachineId: host } : {}), ...(teamAccountOnly ? { teamAccountOnly: true as const } : {}), ...(projects && !host ? { projects } : {}) })
+        ...(host ? { hostMachineId: host } : {}), ...(teamAccountOnly ? { teamAccountOnly: true as const } : {}), ...(projects && !host ? { projects } : {}),
+        ...(othersToldWeek != null ? { othersToldWeek } : {}) })
       // A Mac given other slots or a new name gives its team account the same, and its pause; its own folder, engines and grant stay.
       const added = state.machines.at(-1)!
       for (const team of teamPoolsOf(state, added)) if (!team.removal) Object.assign(team, { name: added.name, maxAgents: added.maxAgents, paused: added.paused })
@@ -2109,7 +2113,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (existing && (existing.hostGrant ?? null) !== (grant.hostGrant ?? null)) {
         fail('CONTRIBUTION_REVOKED', 'Reconcile and remove this old contribution before adding it under the new machine share.', 403)
       }
-      if (sharedHere && !existing) message(group.id, `${who} added ${quotedName(command.name)} to the project. The project chat holds only its coordinator among agents, so ${quotedName(command.name)} works in its tasks.`, [], null, SYSTEM_ROW)
+      if (sharedHere && !existing) message(group.id, `${who} added ${quotedName(command.name)} to the project. The project chat holds only its coordinator among agents, so ${quotedName(command.name)} works in its tasks.`, [], null, SYSTEM_ROW,
+        undefined, undefined, undefined, stableId(operationId, 'shared-to-project'))
       else if (!group.agentIds.includes(agentId)) group.agentIds.push(agentId)
       if (command.lead) {
         keepLead(group, agentId)
@@ -2126,7 +2131,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       // A Product Manager started on its person's own Mac says, as one the Swarm starts does (leadJoined), when it does not
       // run the model its role asked for.
-      if (command.lead && command.launchRefused) message(group.id, launchRefusedLine(command.launchRefused, coordinatorNameOf(project)), [], null, SYSTEM_ROW)
+      if (command.lead && command.launchRefused) message(group.id, launchRefusedLine(command.launchRefused, coordinatorNameOf(project)), [], null, SYSTEM_ROW,
+        undefined, undefined, undefined, stableId(operationId, 'launch-refused'))
       break
     }
     case 'agent.start': {
@@ -3098,6 +3104,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       renewLease(group.assignment, context.now)
       leadActed(group.id, 'assign')
       recordRun(state, group, group.assignment, worker, context.now)
+      const others = othersWorkNotice(state, group, worker, context.now, ENGINE_NAMES[worker.configuration.engine] ?? worker.configuration.engine)
+      if (others) effects.messages.push({ id: stableId(operationId, 'others-work-notice'), conversationId: others.conversationId, author: sender,
+        replyTo: null, recipients: [], source: { kind: 'others-work-notice', machineId: others.machineId }, text: others.text })
       group.checks.forEach(c => { c.evidence = null; c.passedBy = null; delete c.verdicts })
       result.assignmentId = operationId
       let routeNote: { decisionId: string; text: string } | null = null

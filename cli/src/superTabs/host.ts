@@ -1927,8 +1927,14 @@ export class SuperTabHost {
     const attached = [files.text, sent?.links.length ? ARTIFACT_LINKS(sent.links) : '', elsewhere.length ? LINKS_ELSEWHERE(elsewhere) : '',
       approving ? APPROVALS(approving.judged) : '']
       .filter(Boolean).join('\n\n')
+    // A person's message closes the question it answers, only the one of this machine's own signed-in account, and only a
+    // question opened after it was written (core/input.ts `beforeTeamWrite`).
+    const answers = fromPerson && !['agent-only', 'native'].includes(String(object(message.source).kind))
+      && !!object(message.author).id && (await this.core.account.identity().catch(() => null))?.accountId === String(object(message.author).id)
+    const writtenAt = typeof message.createdAt === 'string' ? Date.parse(message.createdAt) : NaN
     this.core.turns.deliver(entry.harnessId, this.prompt(entry, message, attached, command, quote ?? '', result.buddyNews === true, context,
-      result.otherAccount === true), id)
+      result.otherAccount === true), id,
+      ...(answers ? [{ answersQuestion: true as const, ...(Number.isFinite(writtenAt) ? { writtenAt } : {}) }] : []))
     return false
   }
 
