@@ -22,7 +22,6 @@ import {
   resolveBudgetMs,
   resetRouteRateLimits,
   AGENT_ROUTE_PATH,
-  type AgentRouteOptions,
   type RouteBody,
 } from './agentRoute.js'
 import { errorHandler } from '../middlewares/errorHandler.js'
@@ -30,6 +29,7 @@ import { registerAuthMiddleware, shouldSkipAuth } from '../middlewares/authMiddl
 import { SsoAuthError } from '../lib/ssoAuth.js'
 import { env } from '../config/env.js'
 import { logger } from '../utils/logger.js'
+import { useSharedRateCounter, windowKey } from '../lib/rateLimit.js'
 
 const body = (over: Partial<RouteBody> = {}): RouteBody => ({
   task: 'so sanh iphone vs samsung',
@@ -41,11 +41,11 @@ const body = (over: Partial<RouteBody> = {}): RouteBody => ({
 })
 
 /** The app as the server builds it: the global SSO gate in front, then the route. */
-async function build(options?: AgentRouteOptions): Promise<FastifyInstance> {
+async function build(): Promise<FastifyInstance> {
   const app = Fastify()
   app.setErrorHandler(errorHandler)
   registerAuthMiddleware(app, authenticateAccessToken)
-  await app.register(agentRouteRoutes, options ?? {})
+  await app.register(agentRouteRoutes)
   await app.ready()
   return app
 }
@@ -219,50 +219,73 @@ describe('POST /api/route/agents: what one account may spend', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('refuses an account past its daily count with 429, in plain words, and counts each account on its own', async () => {
+  /**
+   * The shared count every pod uses (Redis in production), in memory: lets a test start an account or the
+   * whole day near its real limit instead of making a thousand calls.
+   */
+  const DAY_MS = 24 * 60 * 60_000
+  function sharedCounts(): Map<string, number> {
+    const counts = new Map<string, number>()
+    useSharedRateCounter(async (entries) => entries.map(({ key }) => {
+      const next = (counts.get(key) ?? 0) + 1
+      counts.set(key, next)
+      return next
+    }))
+    return counts
+  }
+  const accountDay = (user: string) => windowKey('agent-route-day', user, DAY_MS, Date.now())
+  const everyoneDay = () => windowKey('agent-route-all', 'all', DAY_MS, Date.now())
+  afterEach(() => { useSharedRateCounter(null) })
+
+  it('refuses an account past 1,000 routes a day with 429, in plain words, and counts each account on its own', async () => {
+    const counts = sharedCounts()
     const fetchMock = llmSays(ranked)
     vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock)
-    const app = await build({ perAccountPerDay: 3 })
-    for (let i = 0; i < 3; i++) expect((await post(app, body(), { user: 'u1' })).statusCode).toBe(200)
+    const app = await build()
+    counts.set(accountDay('u1'), 999)
+    expect((await post(app, body(), { user: 'u1' })).statusCode).toBe(200) // the 1,000th
     const refused = await post(app, body(), { user: 'u1' })
     expect(refused.statusCode).toBe(429)
     expect(refused.json().error.message).toMatch(/today/i)
-    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
     expect((await post(app, body(), { user: 'u2' })).statusCode).toBe(200)
   })
 
   it('gives an account its daily count back the next UTC day', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-11-03T23:59:00Z'))
+    const counts = sharedCounts()
     vi.spyOn(globalThis, 'fetch').mockImplementation(llmSays(ranked))
-    const app = await build({ perAccountPerDay: 1 })
-    expect((await post(app, body(), { user: 'u1' })).statusCode).toBe(200)
+    const app = await build()
+    counts.set(accountDay('u1'), 1_000)
     expect((await post(app, body(), { user: 'u1' })).statusCode).toBe(429)
     vi.setSystemTime(new Date('2026-11-04T00:01:00Z'))
     expect((await post(app, body(), { user: 'u1' })).statusCode).toBe(200)
   })
 
-  it('holds the all-accounts daily ceiling, and an account refused on its own count does not spend it', async () => {
+  it('holds the all-accounts ceiling of 100,000 a day, and an account refused on its own count does not spend it', async () => {
+    const counts = sharedCounts()
     const fetchMock = llmSays(ranked)
     vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock)
-    const app = await build({ perAccountPerDay: 2, dailyCeiling: 4 })
-    expect((await post(app, body(), { user: 'u1' })).statusCode).toBe(200)
-    expect((await post(app, body(), { user: 'u1' })).statusCode).toBe(200)
-    expect((await post(app, body(), { user: 'u1' })).statusCode).toBe(429) // its own count, not the ceiling's
-    expect((await post(app, body(), { user: 'u2' })).statusCode).toBe(200)
-    expect((await post(app, body(), { user: 'u3' })).statusCode).toBe(200)
-    const over = await post(app, body(), { user: 'u4' })
+    const app = await build()
+    counts.set(everyoneDay(), 99_999)
+    counts.set(accountDay('u9'), 1_000)
+    expect((await post(app, body(), { user: 'u9' })).statusCode).toBe(429) // its own count
+    expect(counts.get(everyoneDay())).toBe(99_999)
+    expect((await post(app, body(), { user: 'u1' })).statusCode).toBe(200) // the 100,000th
+    const over = await post(app, body(), { user: 'u2' })
     expect(over.statusCode).toBe(503)
     expect(over.json().error.message).toMatch(/today/i)
-    expect(fetchMock).toHaveBeenCalledTimes(4)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('does not count the single-agent answer, which spends no call', async () => {
-    const app = await build({ perAccountPerDay: 1 })
-    vi.spyOn(globalThis, 'fetch').mockImplementation(llmSays(ranked))
+    const counts = sharedCounts()
+    const app = await build()
+    counts.set(accountDay('u1'), 1_000)
     const one = body({ agents: [{ id: 'a1', name: 'Phones', prompts: [] }] })
-    for (let i = 0; i < 3; i++) expect((await post(app, one, { user: 'u1' })).statusCode).toBe(200)
-    expect((await post(app, body(), { user: 'u1' })).statusCode).toBe(200)
+    expect((await post(app, one, { user: 'u1' })).statusCode).toBe(200)
+    expect(counts.get(accountDay('u1'))).toBe(1_000)
   })
 
   it('logs the length of the prompt it sent, not only the task', async () => {
