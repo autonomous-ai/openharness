@@ -33,7 +33,8 @@ const personName = (state: SuperTabState, id: string) =>
 function servers(state: SuperTabState, gridModel: string, now: number) {
   return servedLocalModels(state, now).filter(l => l.model === gridModel).map(l => {
     const pool = state.machines!.find(m => m.machineId === l.machineId)!
-    return { reading: l, machine: pool.name ?? 'a machine', personId: pool.contributorId, api: l.kind === 'api' }
+    // As Desktop names it (identity.dart superTabMachineName), so the picker and the chat line agree.
+    return { reading: l, machine: (pool.name ?? 'a machine').replace(/(.)\.local$/i, '$1'), personId: pool.contributorId, api: l.kind === 'api' }
   })
 }
 
