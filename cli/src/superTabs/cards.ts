@@ -133,7 +133,7 @@ function buddyOf(agents: Json[], chat: Json, me: string | undefined, local: (a: 
  * harness and whether it is in a turn (null: not here); `me` is the signed-in person's id, so a Lead on someone else's
  * machine names that owner (people[] has an email, which is the name a Swarm shows a person by).
  */
-export function leadsOf(state: Json, machineId: string, live: (harnessId: string) => { inTurn: boolean; since?: number } | null, me?: string, focus?: string, side?: CardSide, thread?: (conversationId: string) => SwarmChat['thread']): { count: number; leads: SwarmLead[] } {
+export function leadsOf(state: Json, machineId: string, live: (harnessId: string) => { inTurn: boolean; since?: number } | null, me?: string, focus?: string, side?: CardSide, thread?: (conversationId: string, leadId: string) => SwarmChat['thread']): { count: number; leads: SwarmLead[] } {
   const agents = list(state.agents), conversations = list(state.conversations), people = list(state.people)
   const buddies = state.buddies === true
   // An old tab has no `projects`: its one project is the tab itself, `lead`, led by the conversation `lead`.
@@ -177,7 +177,7 @@ export function leadsOf(state: Json, machineId: string, live: (harnessId: string
     const projectId = projectKey(project)
     const chatOf = (face: Face | null): SwarmChat | undefined => {
       if (!face) return undefined
-      const inThread = thread?.(face.conversation.id as string)
+      const inThread = thread?.(face.conversation.id as string, String(agent.id))
       return { ...faceChat(face, String(agent.id), agents, me, turnHere), ...(inThread ? { thread: inThread } : {}) }
     }
     const chat = chatOf(faceOf(conversations, projectId, lead, focus, me, buddies))
@@ -308,8 +308,9 @@ export class SwarmCards {
   private inChat = new WeakSet<LeadNotice>()
   /** The side a swarmBuddy dial swiped to, per Swarm; cleared by the window's next focus change (the newest wins). */
   private sides = new Map<string, CardSide>()
-  /** The thread the dial's own words started, per Swarm (spec 2026-11-03-dial-thread-face); cleared like `sides`. */
-  private threads = new Map<string, { conversationId: string; root: string; title: string; at: number; opened?: true }>()
+  /** The thread the dial's own words started, per Swarm (spec 2026-11-03-dial-thread-face), and the Lead whose face it was
+   *  started from; cleared like `sides`. */
+  private threads = new Map<string, { conversationId: string; root: string; title: string; at: number; leadId: string; opened?: true }>()
   /** Title and reply count of the app's threads, as the recap reads gave them (`${tab}/${root}`). */
   private titles = new Map<string, { title: string; replies?: number; looked?: true; failures?: number; retryAt?: number }>()
   /** The thread the dial last left, per Swarm: an older Desktop that announces it again does not pull the dial back into it. */
@@ -416,16 +417,27 @@ export class SwarmCards {
     if (this.timer && this.live) { this.emit(); void this.pushOpen() }
   }
 
-  /** The root of the thread on the face whose conversation is `conversationId`: the one open in the window beside it, else the
-   *  one the dial's words started there. */
-  private threadOn(tabId: string, conversationId: string): string | undefined {
+  /** The root of the thread on Lead `leadId`'s face, whose conversation is `conversationId`: the one open in the window beside
+   *  it, else the one the dial's words started there. One chat can be on many Leads' faces (the Swarm chat is every project's
+   *  Buddy face), and its thread is on one Lead's alone: the dial's own on the Lead it was started from, the window's on the
+   *  Lead the dial has open (on each while it has none open). Matched by conversation alone, it went on every Lead, and 12
+   *  projects took the round dial's frame past the firmware's 512-token guard (task #2525). */
+  private threadOn(tabId: string, conversationId: string, leadId: string): string | undefined {
     const open = this.focus?.tabId === tabId && this.focus.conversationId === conversationId ? this.focus.threadRoot : undefined
     const own = this.threads.get(tabId)
-    return open ?? (own?.conversationId === conversationId ? own.root : undefined)
+    const mine = own?.conversationId === conversationId ? own : undefined
+    if (open !== undefined && open !== mine?.root) return this.dialOpens(tabId, leadId) ? open : undefined
+    return mine?.leadId === leadId ? mine.root : undefined
   }
 
-  private threadInfo(tabId: string, conversationId: string): SwarmChat['thread'] {
-    const root = this.threadOn(tabId, conversationId)
+  /** Whether the dial has Lead `leadId`'s chat open in this Swarm, or no Lead's chat at all. */
+  private dialOpens(tabId: string, leadId: string): boolean {
+    const open = [...this.opened.values()].filter(o => o.tabId === tabId && o.chat)
+    return !open.length || open.some(o => o.leadId === leadId)
+  }
+
+  private threadInfo(tabId: string, conversationId: string, leadId: string): SwarmChat['thread'] {
+    const root = this.threadOn(tabId, conversationId, leadId)
     if (root === undefined) return undefined
     const own = this.threads.get(tabId), read = this.titles.get(`${tabId}/${root}`)
     return { root, title: own?.root === root ? own.title : read?.title ?? '', ...(read?.replies !== undefined ? { replies: read.replies } : {}) }
@@ -573,7 +585,7 @@ export class SwarmCards {
       if (!tab) continue
       const focus = this.focus?.tabId === row.id ? this.focus.conversationId : undefined
       const side = this.sideOf(row.id, tab.state)
-      const { count, leads } = leadsOf(tab.state, this.machineId, live, this.me, focus, side, id => this.threadInfo(row.id, id))
+      const { count, leads } = leadsOf(tab.state, this.machineId, live, this.me, focus, side, (id, lead) => this.threadInfo(row.id, id, lead))
       const noticed = leads.map(lead => {
         const notice = this.notices.get(recapKey(row.id, lead.id)), buddyNotice = this.buddyNotices.get(recapKey(row.id, lead.id))
         return { ...lead, ...(notice ? { notice } : {}), ...(buddyNotice ? { buddyNotice } : {}) }
@@ -721,7 +733,7 @@ export class SwarmCards {
     const id = face.conversation.id as string
     // The thread open beside the window's conversation, while that conversation is the one on the face: any agent's reply
     // there is its recap (a worker answering in the Lead's thread, the Buddy's thread session).
-    const thread = this.threadOn(tabId, id)
+    const thread = this.threadOn(tabId, id, leadId)
     const voices = thread === undefined ? voicesOf(face, leadId, list(state.agents), this.me)
       : new Set(list(state.agents).map(a => a.id).filter((a): a is string => typeof a === 'string'))
     return { id, sequence: sequenceOf(face.conversation), voices, chatId: id,
@@ -895,7 +907,7 @@ export class SwarmCards {
       // Only if the person, the face and the window are where the call began: a post out while any moved starts no thread.
       const now = this.target(tabId, agent!.id as string, chat)
       if (this.me !== reader || gen !== this.focusGen || now?.id !== to || now.thread !== undefined) return { said: true }
-      this.threads.set(tabId, { conversationId: to, root, title: titleOf(text), at: this.now() })
+      this.threads.set(tabId, { conversationId: to, root, title: titleOf(text), at: this.now(), leadId: agent!.id as string })
       if (this.timer && this.live) { this.emit(); void this.pushOpen() }
       return { said: true, thread: { tabId, conversationId: to, root } }
     }
