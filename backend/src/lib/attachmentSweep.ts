@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises'
 import type { PrismaClient } from '@prisma/client'
-import { AVATAR_PURPOSE, EXPIRED_UPLOAD, UNSENT_LIFE_MS, type AttachmentStore, type Attachments } from '../superTabs/attachments.js'
+import { AVATAR_PURPOSE, EXPIRED_UPLOAD, PENDING_UPLOAD_PURPOSE, REMOVING_UPLOAD_PURPOSE, UNSENT_LIFE_MS, type AttachmentStore, type Attachments } from '../superTabs/attachments.js'
 import { logger } from '../utils/logger.js'
 
 /**
@@ -38,9 +38,10 @@ const written = (answer: Written, what: string) => {
   return answer.n ?? 0
 }
 
-/** Takes up to [chunk] uploads that are a day old and unused; answers how many it took. `null` also matches a missing field. */
+/** Takes up to [chunk] uploads that are a day old and unused; answers how many it took. `null` also matches a missing field.
+ *  An upload still on its link, or being removed after it, is the pending-upload sweep's (lib/pendingUploadSweep.ts). */
 async function claim(db: PrismaClient, cutoff: Date, chunk: number): Promise<number> {
-  const due = { createdAt: { $lt: date(cutoff) }, usedBy: null, proposedBy: null }
+  const due = { createdAt: { $lt: date(cutoff) }, usedBy: null, proposedBy: null, purpose: { $nin: [PENDING_UPLOAD_PURPOSE, REMOVING_UPLOAD_PURPOSE] } }
   const found = await db.$runCommandRaw({ find: COLLECTION, filter: due, projection: { _id: 1 }, limit: chunk, singleBatch: true } as never) as Found<{ _id: string }>
   const ids = found.cursor.firstBatch.map(row => row._id)
   if (!ids.length) return 0
