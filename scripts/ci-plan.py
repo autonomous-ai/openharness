@@ -54,6 +54,16 @@ ALSO = {"cli/src/lib/ptyHost/": "pty", "cli/src/lib/ptyHostBackend": "pty",
 # Any other file in scripts/ui-style-allowlist/ stays a shared input.
 STYLE_ALLOWLISTS = {"scripts/ui-style-allowlist/desktop.json": "desktop", "scripts/ui-style-allowlist/mobile.json": "mobile"}
 ALSO.update(STYLE_ALLOWLISTS)
+# The desktop files the phone's tests read (mobile/test): the Swarm models the phone carries as copies or must parse alike
+# (swarm/desktop_parity_test.dart), the words and helpers its other tests compare. A desktop-only change to one runs
+# mobile-checks too; it once failed only in a batch, two batches later (River, 2026-11-03). test_ci_plan's
+# test_every_desktop_file_the_phone_tests_read_selects_mobile scans mobile/test and fails on one missing here.
+ALSO.update({f"desktop/{path}": "mobile" for path in (
+    "lib/super_tabs/model.dart", "lib/super_tabs/controller.dart", "lib/super_tabs/buddies.dart",
+    "lib/super_tabs/parts.dart", "lib/super_tabs/profile_model.dart", "lib/super_tabs/live_card_model.dart",
+    "lib/super_tabs/linked_tasks.dart", "lib/super_tabs/task_steps.dart", "lib/super_tabs/instructions_model.dart",
+    "lib/super_tabs/live_card.dart", "lib/super_tabs/task_status.dart", "lib/widgets/engine_identity.dart",
+    "test/support/real_fonts.dart")})
 # Narrower directories that add a suite on top of their component's (the ESP32-P4 build and golden screens).
 SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
 
