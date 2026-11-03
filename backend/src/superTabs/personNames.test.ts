@@ -87,7 +87,9 @@ describe('member.name', () => {
 
   it('changes only the person’s own name: an agent, or someone outside the Swarm, is refused', () => {
     const f = fixture()
-    expect(() => f.setName('Bot', { kind: 'agent', agentId: 'a1', machineOwnerId: 'owner' })).toThrow(expect.objectContaining({ code: 'HUMAN_REQUIRED' }))
+    const lead = f.run({ type: 'agent.add', conversationId: 'lead', harnessId: 'pm', machineId: 'machine', name: 'River', configuration, lead: true },
+      owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }).result.agentId as string
+    expect(() => f.setName('Bot', { kind: 'agent', agentId: lead, machineOwnerId: 'owner' })).toThrow(expect.objectContaining({ code: 'HUMAN_REQUIRED' }))
     expect(() => f.setName('Stranger', person('stranger', 'stranger@example.com'))).toThrow()
     // The command names no one: it sets the actor's own, and nobody else's.
     expect(() => f.run({ type: 'member.name', name: 'Minh', userId: 'relay' } as unknown as Command, owner)).toThrow()
