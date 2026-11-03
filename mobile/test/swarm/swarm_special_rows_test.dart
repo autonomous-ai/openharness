@@ -4,7 +4,6 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
-import 'package:harness_mobile/swarm/swarm_thread_page.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../voice_fakes.dart';

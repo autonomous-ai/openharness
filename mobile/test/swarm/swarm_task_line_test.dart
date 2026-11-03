@@ -296,7 +296,8 @@ void main() {
         };
         final fake = taskLineBackend([root]);
         await pumpTaskChat(tester, fake);
-        expect(find.text('Dee'), findsOneWidget);
+        // A person is named by their username (dee@example.com).
+        expect(find.text('dee'), findsOneWidget);
         expect(
           find.byKey(const ValueKey('swarm-author-line-1')),
           findsOneWidget,

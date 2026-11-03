@@ -1964,9 +1964,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                   ? () => _openThread(c, root)
                   : () => _reply(c, m),
               inThread: root != null,
-              onOpenProposal: m.proposalOwnerId == null
-                  ? null
-                  : () => _openThread(c, m.id),
               card: card == null
                   ? null
                   : SwarmLiveCard(
@@ -2806,7 +2803,6 @@ Set<String> swarmGroupedMessages(List<SuperTabMessage> messages) {
         m.source['kind'] != 'ship' &&
         m.route == null &&
         !m.terminalEvent &&
-        m.proposalOwnerId == null &&
         m.replyTo == null &&
         m.text.length <= 280 &&
         !m.text.contains('\n') &&

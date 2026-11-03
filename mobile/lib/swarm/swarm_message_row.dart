@@ -274,7 +274,6 @@ class SwarmMessageRow extends StatelessWidget {
     this.receipt,
     this.card,
     this.onLongPress,
-    this.onOpenProposal,
     this.references = const {},
     this.onOpenConversation,
   });
@@ -309,10 +308,6 @@ class SwarmMessageRow extends StatelessWidget {
   final bool followed;
   final Widget? quote;
   final VoidCallback onTap;
-
-  /// Opens a Buddy's proposal's thread: given in the chat, where a proposal is
-  /// one line; none in its thread, where it reads whole.
-  final VoidCallback? onOpenProposal;
 
   /// The numbered conversations `#N` links in a message can open.
   final Map<int, String> references;
@@ -380,13 +375,6 @@ class SwarmMessageRow extends StatelessWidget {
     }
     // Notes that are not chat from their author, as Desktop draws them.
     final special = ValueKey('swarm-message-${message.id}');
-    if (message.proposalOwnerId != null && onOpenProposal != null) {
-      return SwarmProposalLine(
-        key: special,
-        message: message,
-        onOpen: onOpenProposal!,
-      );
-    }
     if (message.terminalEvent) {
       return SwarmTerminalRow(key: special, message: message);
     }
@@ -428,8 +416,6 @@ class SwarmMessageRow extends StatelessWidget {
       body: [
         if (lit) SizedBox(key: ValueKey('swarm-lit-${message.id}')),
         ?quote,
-        if (message.proposalOwnerId != null)
-          SwarmProposalLabel(owner: swarmProposalOwner(context, message)),
         ?swarmTerminalNote(message),
         for (final part in swarmTextParts(message.text))
           if (part.code)
