@@ -9,11 +9,11 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_chat_notify.dart';
 import 'package:harness_mobile/swarm/swarm_home_rows.dart';
+import 'package:harness_mobile/swarm/swarm_home_view_sheet.dart';
 import 'package:harness_mobile/swarm/swarm_mark_all.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
-import 'package:harness_mobile/swarm/swarm_style.dart';
 
 import '../voice_fakes.dart' show MemoryKeyValueStore;
 import 'swarm_fixture.dart';
@@ -484,8 +484,34 @@ void main() {
     Finder row(String projectId) => key('swarm-project-$tab-$projectId');
     bool bold(WidgetTester tester, String projectId) =>
         tester.widget<SwarmHomeProjectRow>(row(projectId)).project.news.bold;
-    SwarmIconButton button(WidgetTester tester, String k) =>
-        tester.widget<SwarmIconButton>(key(k));
+
+    /// Opens Sort and filter, where Mark all read is (2026-11-03).
+    Future<void> openView(WidgetTester tester) async {
+      await tester.tap(key('swarm-home-view'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+    }
+
+    /// Mark all read, from Sort and filter: the sheet closes, then it marks.
+    Future<void> markAll(WidgetTester tester) async {
+      await openView(tester);
+      await tester.tap(key('swarm-mark-all-read'));
+    }
+
+    /// Whether Mark all read has something to mark, as its row in Sort and
+    /// filter says; the sheet then closes.
+    Future<bool> markable(WidgetTester tester) async {
+      await openView(tester);
+      final on =
+          tester
+              .widget<SwarmHomeViewAction>(key('swarm-mark-all-read'))
+              .onTap !=
+          null;
+      Navigator.of(tester.element(key('swarm-mark-all-read'))).pop();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      return on;
+    }
 
     testWidgets('Mark all read tells how many with Undo; Undo puts the bold '
         'back and sends nothing, and with nothing unread it is greyed', (
@@ -494,15 +520,15 @@ void main() {
       final fake = backend();
       await pump(tester, fake);
       expect(bold(tester, project), isTrue);
-      expect(button(tester, 'swarm-mark-all-read').onPressed, isNotNull);
+      expect(await markable(tester), isTrue);
 
-      await tester.tap(key('swarm-mark-all-read'));
+      await markAll(tester);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 500));
 
       expect(find.text('Marked 2 chats read'), findsOneWidget);
       expect(bold(tester, project), isFalse);
-      expect(button(tester, 'swarm-mark-all-read').onPressed, isNull);
+      expect(await markable(tester), isFalse);
 
       await tester.tap(find.text('Undo'));
       await tester.pump();
@@ -512,12 +538,12 @@ void main() {
       expect(marksSent(fake), isEmpty);
       expect(bold(tester, project), isTrue);
 
-      await tester.tap(key('swarm-mark-all-read'));
+      await markAll(tester);
       await tester.pump();
       await tester.pump(const Duration(seconds: 7));
       await tester.pumpAndSettle();
       expect(marksSent(fake), [('g1', 5), ('g2', 4)]);
-      expect(button(tester, 'swarm-mark-all-read').onPressed, isNull);
+      expect(await markable(tester), isFalse);
     });
 
     testWidgets('a chat muted on this phone a moment ago is not marked: the '
@@ -539,7 +565,7 @@ void main() {
 
       reader.setNotify('g1', SwarmNotify.muted);
       await tester.pump();
-      await tester.tap(key('swarm-mark-all-read'));
+      await markAll(tester);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 500));
       expect(find.text('Marked 1 chat read'), findsOneWidget);
@@ -550,7 +576,7 @@ void main() {
 
       reader.setNotify('g2', SwarmNotify.muted);
       await tester.pump();
-      expect(button(tester, 'swarm-mark-all-read').onPressed, isNull);
+      expect(await markable(tester), isFalse);
       expect(marksSent(fake), isEmpty);
       for (final answer in answers) {
         answer.complete({'notify': 'muted'});
@@ -562,7 +588,7 @@ void main() {
         'with them', (tester) async {
       final fake = backend();
       await pump(tester, fake);
-      await tester.tap(key('swarm-mark-all-read'));
+      await markAll(tester);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 500));
       expect(find.text('Undo'), findsOneWidget);
@@ -587,7 +613,7 @@ void main() {
       );
       final fake = backend();
       final host = await pump(tester, fake);
-      await tester.tap(key('swarm-mark-all-read'));
+      await markAll(tester);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 500));
       expect(find.text('Marked 2 chats read'), findsOneWidget);
@@ -605,7 +631,7 @@ void main() {
       );
       await host.session!.inbox.reader(tab)!.refresh();
       await tester.pump();
-      await tester.tap(key('swarm-mark-all-read'));
+      await markAll(tester);
       for (var i = 0; i < 10; i++) {
         await tester.pump(const Duration(milliseconds: 100));
       }
@@ -625,7 +651,7 @@ void main() {
       final fake = backend();
       final host = await pump(tester, fake);
       host.foreground = true;
-      await tester.tap(key('swarm-mark-all-read'));
+      await markAll(tester);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 500));
       expect(find.text('Undo'), findsOneWidget);
@@ -644,7 +670,7 @@ void main() {
       final fake = backend();
       final account = ValueNotifier<String?>(me);
       await pump(tester, fake, signedIn: account);
-      await tester.tap(key('swarm-mark-all-read'));
+      await markAll(tester);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 500));
       expect(find.text('Undo'), findsOneWidget);
@@ -661,7 +687,7 @@ void main() {
         'sent, and nothing is left to mark', (tester) async {
       final fake = backend();
       final host = await pump(tester, fake);
-      await tester.tap(key('swarm-mark-all-read'));
+      await markAll(tester);
       await tester.pump();
 
       host.session!.inbox.reader(tab)!.revoke();

@@ -620,6 +620,31 @@ void main() {
       expect(host.session!.home.buddySwarmId, tab);
     });
 
+    testWidgets('a tap on the title opens the same switcher, as Home\'s '
+        'title does, said as Switch Swarm', (tester) async {
+      final semantics = tester.ensureSemantics();
+      final host = await pump(tester, two(mineMoved: 10, otherMoved: 20));
+      await openTab(tester);
+      expect(find.text('In the second Swarm'), findsOneWidget);
+      expect(
+        tester.getSize(key('swarm-buddy-title-switch')).height,
+        greaterThanOrEqualTo(44),
+      );
+      expect(
+        find.bySemanticsLabel(RegExp(r'\. Switch Swarm$')),
+        findsOneWidget,
+      );
+
+      await tester.tap(key('swarm-buddy-title-switch'));
+      await settle(tester);
+      await tester.tap(find.text('Swarm $tab'));
+      await settle(tester);
+
+      expect(find.text('In the first Swarm'), findsOneWidget);
+      expect(host.session!.home.buddySwarmId, tab);
+      semantics.dispose();
+    });
+
     testWidgets('a chat moving elsewhere does not take the tab there', (
       tester,
     ) async {
@@ -685,6 +710,12 @@ void main() {
       await openTab(tester);
       await openMenu(tester);
       expect(find.text('Swarm'), findsNothing);
+    });
+
+    testWidgets('with one Swarm the title is no button', (tester) async {
+      await pump(tester, backend());
+      await openTab(tester);
+      expect(key('swarm-buddy-title-switch'), findsNothing);
     });
 
     testWidgets('losing the Swarm shown moves to the other, and nothing of it '

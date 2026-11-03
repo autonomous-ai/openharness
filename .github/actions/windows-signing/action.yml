@@ -1,0 +1,109 @@
+name: Windows Authenticode signing
+description: >-
+  Sign every .exe and .dll under a folder that carries no signature yet, through Azure Artifact Signing, then check
+  every one of them: a valid signature, a timestamp, and ours naming the expected publisher. Files that already carry
+  a valid signature (Microsoft's ConPTY) are left as they are. Windows x64 runners only: the Artifact Signing action
+  does not run on Windows Arm, so arm64 builds are signed here too (Authenticode does not depend on the CPU).
+  docs/windows-code-signing.md has the Azure and GitHub setup this needs.
+
+inputs:
+  path:
+    description: The folder whose .exe and .dll files are signed, searched recursively
+    required: true
+  publisher:
+    description: The certificate's common name every signature we add must carry (the validated identity)
+    required: true
+  azure-client-id:
+    description: The Entra app registration that holds the Certificate Profile Signer role
+    required: true
+  azure-tenant-id:
+    description: The Entra tenant
+    required: true
+  azure-subscription-id:
+    description: The subscription that holds the Artifact Signing account
+    required: true
+  endpoint:
+    description: The Artifact Signing account's regional endpoint, such as https://eus.codesigning.azure.net/
+    required: true
+  account:
+    description: The Artifact Signing account name
+    required: true
+  profile:
+    description: The certificate profile name
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # Get-AuthenticodeSignature reads, it never runs the file, so arm64 binaries are listed here on x64 too.
+    - name: List the files to sign
+      id: list
+      shell: pwsh
+      env:
+        SIGN_PATH: ${{ inputs.path }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $files = @(Get-ChildItem -LiteralPath $env:SIGN_PATH -Recurse -File | Where-Object { $_.Extension -in '.exe', '.dll' })
+        if ($files.Count -eq 0) { throw "no .exe or .dll under $env:SIGN_PATH" }
+        $unsigned = @()
+        foreach ($file in $files) {
+          $status = (Get-AuthenticodeSignature -LiteralPath $file.FullName).Status
+          if ($status -eq 'NotSigned') { $unsigned += $file.FullName }
+          elseif ($status -eq 'Valid') { Write-Host "already signed  $($file.FullName)" }
+          else { throw "$($file.FullName) has a $status signature: it was changed after it was signed" }
+        }
+        if ($unsigned.Count -eq 0) { throw "nothing under $env:SIGN_PATH needs signing: is this the unsigned build?" }
+        $list = Join-Path $env:RUNNER_TEMP 'windows-signing-files.txt'
+        Set-Content -LiteralPath $list -Value $unsigned -Encoding utf8
+        $unsigned | ForEach-Object { Write-Host "to sign  $_" }
+        $delimiter = 'EOF_' + [guid]::NewGuid().ToString('N')
+        "files<<$delimiter`n$($unsigned -join "`n")`n$delimiter" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+        "list=$list" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+    # A short-lived token from this job's OIDC identity: no client secret exists to leak or rotate. The Entra federated
+    # credential trusts only the release environment of this repository.
+    - name: Sign in to Azure (OIDC)
+      uses: azure/login@v3
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        subscription-id: ${{ inputs.azure-subscription-id }}
+
+    # The certificate lives about three days, so the RFC 3161 timestamp is what keeps a release valid afterwards.
+    - name: Sign
+      uses: azure/artifact-signing-action@v2
+      with:
+        endpoint: ${{ inputs.endpoint }}
+        signing-account-name: ${{ inputs.account }}
+        certificate-profile-name: ${{ inputs.profile }}
+        files: ${{ steps.list.outputs.files }}
+        file-digest: SHA256
+        timestamp-rfc3161: http://timestamp.acs.microsoft.com
+        timestamp-digest: SHA256
+        # Only the Azure CLI session from the login above: never a stray credential from the runner's environment.
+        exclude-environment-credential: true
+        exclude-workload-identity-credential: true
+        exclude-managed-identity-credential: true
+        exclude-azure-cli-credential: false
+
+    # The publisher, not the thumbprint: Artifact Signing issues a new certificate every few days.
+    - name: Verify every signature
+      shell: pwsh
+      env:
+        SIGN_PATH: ${{ inputs.path }}
+        SIGN_LIST: ${{ steps.list.outputs.list }}
+        PUBLISHER: ${{ inputs.publisher }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $ours = @(Get-Content -LiteralPath $env:SIGN_LIST -Encoding utf8)
+        $failed = @()
+        foreach ($file in (Get-ChildItem -LiteralPath $env:SIGN_PATH -Recurse -File | Where-Object { $_.Extension -in '.exe', '.dll' })) {
+          $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+          $signer = if ($signature.SignerCertificate) { $signature.SignerCertificate.GetNameInfo('SimpleName', $false) } else { '' }
+          $problem = if ($signature.Status -ne 'Valid') { "status $($signature.Status)" }
+            elseif (-not $signature.TimeStamperCertificate) { 'no timestamp' }
+            elseif ($ours -contains $file.FullName -and $signer -ne $env:PUBLISHER) { "signed by '$signer', not '$env:PUBLISHER'" }
+          if ($problem) { $failed += "$($file.FullName): $problem" } else { Write-Host "valid  $signer  $($file.FullName)" }
+        }
+        if ($failed.Count -gt 0) { $failed | ForEach-Object { Write-Host "::error::$_" }; throw "$($failed.Count) file(s) failed signature verification" }
+        "Signed $($ours.Count) file(s) under ``$env:SIGN_PATH`` as **$env:PUBLISHER**" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

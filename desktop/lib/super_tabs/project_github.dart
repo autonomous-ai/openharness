@@ -79,7 +79,8 @@ String _names(List<String> names) => names.length < 2
     : '${names.sublist(0, names.length - 1).join(', ')} and ${names.last}';
 
 /// The project's GitHub access in full, with what to do about it: Project details' row, and the dialog the sidebar line
-/// opens ([dialog]). Read when shown; [SuperTabController.readGitHubAccess] keeps it at most 5 minutes.
+/// opens ([dialog]). Asks GitHub again when shown, so a setup done on GitHub's own site is picked up by whoever opens
+/// it, and through the project's GitHub revision by everyone else (task #2316).
 class ProjectGitHubAccess extends StatefulWidget {
   const ProjectGitHubAccess({
     super.key,
@@ -128,7 +129,7 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    widget.controller.readGitHubAccess(widget.projectId);
+    widget.controller.readGitHubAccess(widget.projectId, refresh: true);
   }
 
   @override

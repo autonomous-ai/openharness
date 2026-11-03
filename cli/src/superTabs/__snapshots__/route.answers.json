@@ -2084,6 +2084,144 @@
      "id": "c11",
      "title": "New agent · Claude sonnet medium · m08",
      "label": "New agent · Claude sonnet medium · strength 2, cost 2 · fits: needs about 30% of the 5-hour window (62% left, resets in 3h); weekly 4% of 90% · m08 · new · quota 5-hour 62% left (resets in 3h), weekly 90% left (resets in 5 days)"
+    },
+    {
+     "kind": "new",
+     "machineId": "m10",
+     "machineName": "m10",
+     "engine": "claude",
+     "model": "sonnet",
+     "effort": "medium",
+     "quality": 2,
+     "cost": 2,
+     "quota": {
+      "known": true,
+      "leftPercent": 70,
+      "resetsAt": null,
+      "windows": [
+       {
+        "name": "5-hour",
+        "leftPercent": 70,
+        "resetsAt": 1010800000
+       },
+       {
+        "name": "weekly",
+        "leftPercent": 90,
+        "resetsAt": 1432000000
+       }
+      ],
+      "account": "acct10"
+     },
+     "activity": "new",
+     "known": true,
+     "refusals": [],
+     "notes": [],
+     "fit": {
+      "status": "fits",
+      "coverage": 2.33,
+      "effectiveCost": 2,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 30,
+       "weekly": 4
+      },
+      "account": "acct10"
+     },
+     "id": "c12",
+     "title": "New agent · Claude sonnet medium · m10",
+     "label": "New agent · Claude sonnet medium · strength 2, cost 2 · fits: needs about 30% of the 5-hour window (70% left, resets in 3h); weekly 4% of 90% · m10 · new · quota 5-hour 70% left (resets in 3h), weekly 90% left (resets in 5 days)"
+    },
+    {
+     "kind": "new",
+     "machineId": "m12",
+     "machineName": "m12",
+     "engine": "claude",
+     "model": "sonnet",
+     "effort": "medium",
+     "quality": 2,
+     "cost": 2,
+     "quota": {
+      "known": true,
+      "leftPercent": 78,
+      "resetsAt": null,
+      "windows": [
+       {
+        "name": "5-hour",
+        "leftPercent": 78,
+        "resetsAt": 1010800000
+       },
+       {
+        "name": "weekly",
+        "leftPercent": 90,
+        "resetsAt": 1432000000
+       }
+      ],
+      "account": "acct12"
+     },
+     "activity": "new",
+     "known": true,
+     "refusals": [],
+     "notes": [],
+     "fit": {
+      "status": "fits",
+      "coverage": 2.6,
+      "effectiveCost": 2,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 30,
+       "weekly": 4
+      },
+      "account": "acct12"
+     },
+     "id": "c13",
+     "title": "New agent · Claude sonnet medium · m12",
+     "label": "New agent · Claude sonnet medium · strength 2, cost 2 · fits: needs about 30% of the 5-hour window (78% left, resets in 3h); weekly 4% of 90% · m12 · new · quota 5-hour 78% left (resets in 3h), weekly 90% left (resets in 5 days)"
+    },
+    {
+     "kind": "new",
+     "machineId": "m14",
+     "machineName": "m14",
+     "engine": "claude",
+     "model": "sonnet",
+     "effort": "medium",
+     "quality": 2,
+     "cost": 2,
+     "quota": {
+      "known": true,
+      "leftPercent": 86,
+      "resetsAt": null,
+      "windows": [
+       {
+        "name": "5-hour",
+        "leftPercent": 86,
+        "resetsAt": 1010800000
+       },
+       {
+        "name": "weekly",
+        "leftPercent": 90,
+        "resetsAt": 1432000000
+       }
+      ],
+      "account": "acct14"
+     },
+     "activity": "new",
+     "known": true,
+     "refusals": [],
+     "notes": [],
+     "fit": {
+      "status": "fits",
+      "coverage": 2.87,
+      "effectiveCost": 2,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 30,
+       "weekly": 4
+      },
+      "account": "acct14"
+     },
+     "id": "c14",
+     "title": "New agent · Claude sonnet medium · m14",
+     "label": "New agent · Claude sonnet medium · strength 2, cost 2 · fits: needs about 30% of the 5-hour window (86% left, resets in 3h); weekly 4% of 90% · m14 · new · quota 5-hour 86% left (resets in 3h), weekly 90% left (resets in 5 days)"
     }
    ],
    "excluded": [],
@@ -2423,6 +2561,75 @@
        "weekly": 4
       },
       "account": "acct8"
+     }
+    },
+    {
+     "id": "c12",
+     "kind": "new",
+     "machineId": "m10",
+     "engine": "claude",
+     "model": "sonnet",
+     "effort": "medium",
+     "quality": 2,
+     "cost": 2,
+     "title": "New agent · Claude sonnet medium · m10",
+     "label": "New agent · Claude sonnet medium · strength 2, cost 2 · fits: needs about 30% of the 5-hour window (70% left, resets in 3h); weekly 4% of 90% · m10 · new · quota 5-hour 70% left (resets in 3h), weekly 90% left (resets in 5 days)",
+     "fit": {
+      "status": "fits",
+      "coverage": 2.33,
+      "effectiveCost": 2,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 30,
+       "weekly": 4
+      },
+      "account": "acct10"
+     }
+    },
+    {
+     "id": "c13",
+     "kind": "new",
+     "machineId": "m12",
+     "engine": "claude",
+     "model": "sonnet",
+     "effort": "medium",
+     "quality": 2,
+     "cost": 2,
+     "title": "New agent · Claude sonnet medium · m12",
+     "label": "New agent · Claude sonnet medium · strength 2, cost 2 · fits: needs about 30% of the 5-hour window (78% left, resets in 3h); weekly 4% of 90% · m12 · new · quota 5-hour 78% left (resets in 3h), weekly 90% left (resets in 5 days)",
+     "fit": {
+      "status": "fits",
+      "coverage": 2.6,
+      "effectiveCost": 2,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 30,
+       "weekly": 4
+      },
+      "account": "acct12"
+     }
+    },
+    {
+     "id": "c14",
+     "kind": "new",
+     "machineId": "m14",
+     "engine": "claude",
+     "model": "sonnet",
+     "effort": "medium",
+     "quality": 2,
+     "cost": 2,
+     "title": "New agent · Claude sonnet medium · m14",
+     "label": "New agent · Claude sonnet medium · strength 2, cost 2 · fits: needs about 30% of the 5-hour window (86% left, resets in 3h); weekly 4% of 90% · m14 · new · quota 5-hour 86% left (resets in 3h), weekly 90% left (resets in 5 days)",
+     "fit": {
+      "status": "fits",
+      "coverage": 2.87,
+      "effectiveCost": 2,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 30,
+       "weekly": 4
+      },
+      "account": "acct14"
      }
     }
    ],

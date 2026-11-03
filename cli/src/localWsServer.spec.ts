@@ -811,6 +811,32 @@ describe('local CLI WebSocket', () => {
     ws.close()
   })
 
+  it('app_swarms keeps the open thread\'s root beside its conversation, and drops one that is not an id', async () => {
+    const backend = new FakeBackend()
+    const seen: unknown[] = []
+    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
+    local = attachLocalWsServer(server, { machineId, backend, onAppSwarms: (swarms) => seen.push(swarms) })
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
+    const ws = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`)
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    await connected
+    ws.send(JSON.stringify({ type: 'app_swarms', payload: { active: 's1', swarms: [
+      { id: 's1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st_1', conversationId: 'pm-1', threadRoot: 'm-1' },
+      { id: 's2', name: 'Bad', agentIds: [], panes: 1, superTabId: 'st_1', conversationId: 'pm-1', threadRoot: 'no spaces' },
+      { id: 's3', name: 'Alone', agentIds: [], panes: 1, superTabId: 'st_1', threadRoot: 'm-1' },
+    ] } }))
+    await vi.waitFor(() => expect(seen).toHaveLength(1))
+    expect(seen[0]).toEqual({ active: 's1', tiles: [], swarms: [
+      { id: 's1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st_1', conversationId: 'pm-1', threadRoot: 'm-1' },
+      { id: 's2', name: 'Bad', agentIds: [], panes: 1, superTabId: 'st_1', conversationId: 'pm-1' },
+      // A thread is of a conversation: with none named, there is none.
+      { id: 's3', name: 'Alone', agentIds: [], panes: 1, superTabId: 'st_1' },
+    ] })
+    ws.close()
+  })
+
   it('app_swarms keeps a Swarm tab\'s conversationId, and drops one that is not an id', async () => {
     const backend = new FakeBackend()
     const seen: unknown[] = []

@@ -873,7 +873,11 @@ export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[];
   memory: { requests: MEMORY_REQUESTS, state: [] },
   // Request-only too: it keeps nothing, and asks Jev only when a client asks it.
   router: { requests: ROUTER_REQUESTS, state: [] },
-  superTabs: { requests: SUPER_TAB_REQUESTS, state: ['super-tabs/host-*.json'] },
+  // A Swarm host here, or the Harness Team account's relay grant (team/relay.ts TEAM_RELAY_GRANT_FILE), kept while a Team
+  // account exists on this Mac: the relay runs in this service, and running Team agents need it back at once after an
+  // update. Woken by the journal alone, a Mac that only lent its Team account restarted it at the first request that
+  // happened to come, and its Team agents got "Connection refused" for four hours (Pro-9 and Pro-10, 2026-11-03).
+  superTabs: { requests: SUPER_TAB_REQUESTS, state: ['super-tabs/host-*.json', 'team-relay-grant.json'] },
   // Cloud agents. Its harnesses: one was started here, and is watched again as the daemon starts. A New Harness
   // for one, an answer or a message to one wakes it too (its port's calls, core/agents/cloud.ts).
   cloud: { requests: CLOUD_REQUESTS, state: ['cloud/harnesses.json'] },
