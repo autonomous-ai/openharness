@@ -237,6 +237,8 @@ function fitText(full: string, make: (text: string) => Message): Message {
 let nextCardSession = 0
 const SWARM_IDS_MAX = 24
 const SWARM_TOKENS_MAX = 480
+/** The models a dial's picker holds (ui_habitat.c): more are never sent. */
+const MODELS_MAX = 48
 
 /** Tokens as `cable_json_guard.c` counts them: every object, array, string (keys too) and bare value. */
 function jsonTokens(value: unknown): number {
@@ -1487,10 +1489,22 @@ export class CableSession {
         const serial = msg.request
         const request = typeof serial === 'number' && Number.isInteger(serial)
           && serial > 0 && serial <= 0x7fffffff ? serial : undefined
-        await this.send({
-          t: 'models', agentId, ...(request === undefined ? {} : { request }),
-          items: items.map((id) => ({ id })),
-        })
+        // One frame, as the dial keeps it: the model it has selected first, then the catalog in order, up to the 48 its
+        // picker holds and only while the frame stays within the cap (bytes, and tokens as cable_json_guard.c counts
+        // them). A Kilo agent lists about 325 ids, about 32 KB against the 8 KB cap (Diego, 2026-11-03).
+        const selected = str('selected')
+        const ordered = selected && items.includes(selected) ? [selected, ...items.filter((id) => id !== selected)] : items
+        const reply: Message = { t: 'models', agentId, ...(request === undefined ? {} : { request }), items: [] as Array<{ id: string }> }
+        const kept = reply.items as Array<{ id: string }>
+        const fits = () => Buffer.byteLength(JSON.stringify(reply), 'utf8') <= CABLE_MAX_PAYLOAD - 256 && jsonTokens(reply) <= SWARM_TOKENS_MAX
+        for (const id of ordered) {
+          if (kept.length >= MODELS_MAX) break
+          kept.push({ id })
+          // An id that does not fit is left out; a shorter one after it may still.
+          if (!fits()) kept.pop()
+        }
+        if (kept.length < ordered.length) this.log(`cable: models for ${agentId}: ${kept.length} of ${ordered.length} fit one frame`)
+        await this.send(reply)
         return
       }
       case 'focus':
