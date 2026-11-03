@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/shared/theme/app_theme.dart' show buildAppTheme;
 import 'package:harness_mobile/swarm/swarm_agents.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
@@ -200,6 +201,7 @@ void main() {
     SwarmComputers? computers,
     bool search = false,
     bool settle = true,
+    ThemeData? theme,
   }) async {
     tester.view.physicalSize = const Size(390, 844) * 3;
     tester.view.devicePixelRatio = 3;
@@ -219,6 +221,7 @@ void main() {
     addTearDown(host.dispose);
     await tester.pumpWidget(
       MaterialApp(
+        theme: theme,
         builder: (context, child) => SwarmScope(notifier: host, child: child!),
         onGenerateRoute: (_) => CupertinoPageRoute<void>(
           builder: (_) => search ? const SwarmSearchPage() : const SwarmPage(),
@@ -238,7 +241,7 @@ void main() {
   final field = inside(key('swarm-search-field'), find.byType(EditableText));
 
   Future<void> openSearch(WidgetTester tester) async {
-    await tester.tap(key('swarm-search-pill'));
+    await tester.tap(key('swarm-home-search'));
     await tester.pumpAndSettle();
   }
 
@@ -292,7 +295,7 @@ void main() {
   }
 
   group('the ways in', () {
-    testWidgets("Home's search field opens it, its field focused for typing, "
+    testWidgets("the top bar's Search opens it, its field focused for typing, "
         'with Recent, Projects and Chats; no Agents without the agents', (
       tester,
     ) async {
@@ -337,7 +340,71 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(SwarmSearchPage), findsNothing);
-      expect(key('swarm-search-pill'), findsOneWidget);
+      expect(key('swarm-home-search'), findsOneWidget);
+    });
+
+    testWidgets('Home has no search field: Search is a button on its top bar, '
+        'before the avatar, heard as Search (Tony, 2026-11-03)', (
+      tester,
+    ) async {
+      final handle = tester.ensureSemantics();
+      await pump(tester, backend());
+
+      expect(key('swarm-search-pill'), findsNothing);
+      expect(find.text('Search chats, projects, agents'), findsNothing);
+      expect(
+        tester.getSemantics(key('swarm-home-search')),
+        isSemantics(label: 'Search', isButton: true, hasTapAction: true),
+      );
+      expect(
+        tester.getCenter(key('swarm-home-search')).dy,
+        closeTo(tester.getCenter(key('swarm-you-button')).dy, .01),
+        reason: 'on the top bar',
+      );
+      expect(
+        tester.getTopLeft(key('swarm-home-search')).dx,
+        lessThan(tester.getTopLeft(key('swarm-you-button')).dx),
+        reason: 'the avatar last',
+      );
+      expect(
+        tester.getBottomLeft(key('swarm-home-search')).dy,
+        lessThanOrEqualTo(tester.getTopLeft(key('swarm-home-list')).dy),
+        reason: 'over the list, not in it',
+      );
+      handle.dispose();
+    });
+  });
+
+  group('its field', () {
+    testWidgets("takes none of the app's field look, focused or not: no "
+        'outline, which the pill cut to two blue arcs, and no fill of its '
+        'own', (tester) async {
+      for (final brightness in Brightness.values) {
+        await pump(
+          tester,
+          backend(),
+          search: true,
+          theme: buildAppTheme(brightness: brightness),
+        );
+        final decorator = tester.widget<InputDecorator>(
+          inside(key('swarm-search-field'), find.byType(InputDecorator)),
+        );
+
+        expect(decorator.isFocused, isTrue, reason: 'it opens focused');
+        final decoration = decorator.decoration;
+        expect(
+          decoration.focusedBorder,
+          InputBorder.none,
+          reason: '$brightness',
+        );
+        expect(
+          decoration.enabledBorder,
+          InputBorder.none,
+          reason: '$brightness',
+        );
+        expect(decoration.border, InputBorder.none, reason: '$brightness');
+        expect(decoration.filled, isFalse, reason: '$brightness');
+      }
     });
   });
 

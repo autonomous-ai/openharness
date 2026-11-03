@@ -305,7 +305,7 @@ void main() {
           'swarm-new-message',
           'swarm-away',
           'swarm-you-button',
-          'swarm-search-pill',
+          'swarm-home-search',
           'swarm-project-$tab-p-oh',
         ])
           rect(key),

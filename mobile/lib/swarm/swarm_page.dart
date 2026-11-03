@@ -65,14 +65,14 @@ bool swarmHomeListed(SwarmInbox inbox, String swarmId, String projectId) {
 /// Swarm Home, direction C (Tony's prototype C1, 2026-10-30) tuned as
 /// Slack's (2026-11-03), the Home tab: its title the Swarm shown, with a
 /// switcher to every Swarm, All Swarms and Join or create
-/// ([showSwarmSwitcher]), then Sort and filter and the person's avatar, which
-/// opens You ([SwarmYouButton]); a search field that folds away as the list
-/// scrolls ([SwarmSearchPill]), and a pull down at the top that opens Search
-/// too ([SwarmPullToSearch]); a row of tiles ([SwarmHomeTiles]): While you
-/// were away whenever there is a Swarm to report on, Threads, and the agents
-/// on the person's computers; then the projects they pinned on this phone,
-/// one line each, then the others by their latest activity, those quiet for
-/// a day folded under "Other projects" ([swarmHomeLists]). Every Swarm's, or
+/// ([showSwarmSwitcher]), then Search ([openSwarmSearch]) and the person's
+/// avatar, which opens You ([SwarmYouButton]); a pull down at the top opens
+/// Search too ([SwarmPullToSearch]); a row of tiles ([SwarmHomeTiles]): While
+/// you were away whenever there is a Swarm to report on, Threads, and the
+/// agents on the person's computers; then the projects they pinned on this
+/// phone, one line each, then the others by their latest activity, those
+/// quiet for a day folded under "Other projects" ([swarmHomeLists]), Sort and
+/// filter at the right of their first caption. Every Swarm's, or
 /// the one picked ([SwarmHomePrefs.swarmId]). A round + floats at its bottom
 /// right over them: New message (Tony, 10-30: Slack Mobile's;
 /// [showSwarmNewMessage]). What needs the person, and the invitations to a
@@ -104,9 +104,6 @@ class _SwarmPageState extends State<SwarmPage> {
   /// The Threads tile's threads, over the Swarms Home shows, while it is in
   /// sight: out of sight, it asks for none.
   SwarmThreadsMerge? _threads;
-
-  /// Home's list is scrolled from its top: the search field folds away.
-  final _scrolled = ValueNotifier(false);
 
   /// Kept out of sight under Harness ([OutOfSight]), as it was left: it is no
   /// Swarm screen meanwhile — a notice still tells what arrives — and draws
@@ -195,7 +192,6 @@ class _SwarmPageState extends State<SwarmPage> {
   @override
   void dispose() {
     _lifecycle.dispose();
-    _scrolled.dispose();
     _tick?.cancel();
     _threads?.dispose();
     if (!_hidden) _session?.leave();
@@ -337,8 +333,8 @@ class _SwarmPageState extends State<SwarmPage> {
     );
   }
 
-  /// Home's list: at the root, under the search field, which folds away as
-  /// it scrolls, and pulled down at its top, Search; pushed, the list alone.
+  /// Home's list: at the root, pulled down at its top, Search; pushed, the
+  /// list alone, with no Sort and filter.
   Widget _list(
     BuildContext context,
     SwarmSession session, {
@@ -348,39 +344,14 @@ class _SwarmPageState extends State<SwarmPage> {
       key: const ValueKey('swarm-home-list'),
       physics: const AlwaysScrollableScrollPhysics(),
       padding: _listPadding(context),
-      children: _body(context, session),
+      children: _body(context, session, pushed: pushed),
     );
     if (pushed) return list;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        ValueListenableBuilder(
-          valueListenable: _scrolled,
-          builder: (context, scrolled, _) => SwarmSearchPill(
-            collapsed: scrolled,
-            onTap: () => openSwarmSearch(context),
-          ),
-        ),
-        Expanded(
-          child: NotificationListener<ScrollUpdateNotification>(
-            onNotification: (note) {
-              if (note.depth == 0 && note.metrics.axis == Axis.vertical) {
-                _scrolled.value = note.metrics.pixels > _foldAfter;
-              }
-              return false;
-            },
-            child: SwarmPullToSearch(
-              onPull: () => openSwarmSearch(context),
-              child: list,
-            ),
-          ),
-        ),
-      ],
+    return SwarmPullToSearch(
+      onPull: () => openSwarmSearch(context),
+      child: list,
     );
   }
-
-  /// Scrolled further, the search field folds away.
-  static const _foldAfter = 12.0;
 
   /// Around Home's rows: the last clears the floating +.
   EdgeInsets _listPadding(BuildContext context) => EdgeInsets.fromLTRB(
@@ -431,9 +402,7 @@ class _SwarmPageState extends State<SwarmPage> {
       title,
       trailing: _trailing(
         context,
-        session,
-        shown,
-        view: !listing && session.inbox.swarms.isNotEmpty,
+        search: swarmStartView(context, session) == null,
       ),
       loading: listing,
       leading: listing
@@ -448,45 +417,50 @@ class _SwarmPageState extends State<SwarmPage> {
     );
   }
 
-  /// Sort and filter, with a Swarm to sort ([view]), then the person's
-  /// avatar, at the end of the top bar (Slack's two, Tony 2026-11-03): a dot
-  /// on the first with anything but the defaults on. Mark all read and
-  /// Refresh are in its sheet, Mark all read greyed with nothing unread in the
-  /// Swarms [shown].
-  Widget _trailing(
-    BuildContext context,
-    SwarmSession session,
-    List<SwarmListing> shown, {
-    required bool view,
-  }) {
+  /// Search, where Home has a list to search ([search]), then the person's
+  /// avatar, at the end of the top bar (Slack's two, Tony 2026-11-03): Search
+  /// in place of Home's search field, and of Sort and filter, which went to
+  /// the projects it sorts ([_viewButton]).
+  Widget _trailing(BuildContext context, {required bool search}) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      if (search)
+        SwarmIconButton(
+          key: const ValueKey('swarm-home-search'),
+          icon: LucideIcons.search300,
+          label: 'Search',
+          onPressed: () => openSwarmSearch(context),
+        ),
+      const SwarmYouButton(),
+    ],
+  );
+
+  /// Sort and filter, at the right of the projects' first caption (Tony,
+  /// 2026-11-03): a dot with anything but the defaults on, said in words too.
+  /// Mark all read and Refresh are in its sheet, Mark all read greyed with
+  /// nothing unread in the Swarms shown.
+  Widget _viewButton(BuildContext context, SwarmSession session) {
     final home = session.home;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (view)
-          SwarmIconButton(
-            key: const ValueKey('swarm-home-view'),
-            icon: LucideIcons.listFilter300,
-            label:
-                'Sort and filter: ${swarmHomeSortLabel(home)}, '
-                '${swarmHomeFilterLabel(home.filter)}',
-            dot: home.viewChanged,
-            onPressed: () => unawaited(
-              showSwarmHomeViewSheet(
-                context,
-                session,
-                unread: () => swarmAnyUnread([
-                  for (final swarm in _shown(session))
-                    ?session.inbox.reader(swarm.id),
-                ]),
-                onMarkAllRead: () =>
-                    _markAllRead(context, session, _shown(session)),
-                onRefresh: () => unawaited(_refresh(context, session)),
-              ),
-            ),
-          ),
-        const SwarmYouButton(),
-      ],
+    return SwarmIconButton(
+      key: const ValueKey('swarm-home-view'),
+      icon: LucideIcons.listFilter300,
+      size: 20,
+      label:
+          'Sort and filter: ${swarmHomeSortLabel(home)}, '
+          '${swarmHomeFilterLabel(home.filter)}',
+      dot: home.viewChanged,
+      onPressed: () => unawaited(
+        showSwarmHomeViewSheet(
+          context,
+          session,
+          unread: () => swarmAnyUnread([
+            for (final swarm in _shown(session))
+              ?session.inbox.reader(swarm.id),
+          ]),
+          onMarkAllRead: () => _markAllRead(context, session, _shown(session)),
+          onRefresh: () => unawaited(_refresh(context, session)),
+        ),
+      ),
     );
   }
 
@@ -526,7 +500,13 @@ class _SwarmPageState extends State<SwarmPage> {
     ];
   }
 
-  List<Widget> _body(BuildContext context, SwarmSession session) {
+  /// Pushed over another page ([pushed]), its projects have no Sort and
+  /// filter.
+  List<Widget> _body(
+    BuildContext context,
+    SwarmSession session, {
+    required bool pushed,
+  }) {
     final inbox = session.inbox;
     // A list that could not be read, no computer answering included, says
     // nothing here: it is in the app's log and read again soon, Home as it
@@ -564,7 +544,14 @@ class _SwarmPageState extends State<SwarmPage> {
     final tiles = _tiles(context, session, shown, picked, now);
     return [
       ?tiles,
-      ..._projects(context, session, shown, now, first: tiles == null),
+      ..._projects(
+        context,
+        session,
+        shown,
+        now,
+        first: tiles == null,
+        view: pushed ? null : _viewButton(context, session),
+      ),
     ];
   }
 
@@ -656,13 +643,14 @@ class _SwarmPageState extends State<SwarmPage> {
   /// [swarmHomeLists]; a Swarm still to be read has rows on their way, a
   /// failed read still trying too, as it is in the log. One no read will bring
   /// says so. The first caption is the screen's [first] thing, with nothing
-  /// over it.
+  /// over it, and Sort and filter ([view]) at its right.
   List<Widget> _projects(
     BuildContext context,
     SwarmSession session,
     List<SwarmListing> shown,
     DateTime now, {
     required bool first,
+    Widget? view,
   }) {
     final inbox = session.inbox;
     if (inbox.swarms.isEmpty) {
@@ -757,7 +745,7 @@ class _SwarmPageState extends State<SwarmPage> {
         : null;
     return [
       if (lists.pinned.isNotEmpty) ...[
-        SwarmCaption('Pinned', first: first),
+        SwarmCaption('Pinned', first: first, trailing: view),
         SwarmGroup(children: [for (final p in lists.pinned) row(p)]),
       ],
       if (lists.recent.isNotEmpty ||
@@ -766,7 +754,11 @@ class _SwarmPageState extends State<SwarmPage> {
           nothingListed ||
           mentionsFailed ||
           create != null) ...[
-        SwarmCaption('Projects', first: first && lists.pinned.isEmpty),
+        SwarmCaption(
+          'Projects',
+          first: first && lists.pinned.isEmpty,
+          trailing: lists.pinned.isEmpty ? view : null,
+        ),
         SwarmGroup(
           children: [
             if (empty) const SwarmRow(title: 'No project yet', onTap: null),
@@ -804,7 +796,11 @@ class _SwarmPageState extends State<SwarmPage> {
           ],
         ),
       ] else if (reading.isNotEmpty || failed.isNotEmpty)
-        SwarmCaption('Projects', first: first && lists.pinned.isEmpty),
+        SwarmCaption(
+          'Projects',
+          first: first && lists.pinned.isEmpty,
+          trailing: lists.pinned.isEmpty ? view : null,
+        ),
       // A Swarm still to be read has its skeleton below: one is enough.
       if (mentionsComing && reading.isEmpty) ...[
         const SizedBox(height: 8),

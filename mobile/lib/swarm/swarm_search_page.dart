@@ -380,9 +380,15 @@ class _SwarmSearchPageState extends State<SwarmSearchPage> {
               textInputAction: TextInputAction.search,
               style: AppType.label(color: AppPalette.textPrimary),
               cursorColor: AppPalette.swarmAccent,
+              // None of the app's field look: its fill and its outline,
+              // accent once focused, would be cut by the pill to two blue
+              // arcs at its ends.
               decoration: InputDecoration(
                 isDense: true,
+                filled: false,
                 border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
                 hintText: 'Search chats, projects, agents',
                 hintStyle: AppType.label(color: AppPalette.textFaint),
                 prefixIcon: Icon(

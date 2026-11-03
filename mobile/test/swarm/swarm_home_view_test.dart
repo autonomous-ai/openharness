@@ -585,21 +585,43 @@ void main() {
       await tester.pump(const Duration(seconds: 7));
     });
 
-    testWidgets('the top bar has Sort and filter and the avatar, no Mark all '
-        'read: that is in the sheet, under its options, with Refresh', (
-      tester,
-    ) async {
+    /// The caption Sort and filter is at the right of.
+    Finder captionOf(Finder button) =>
+        find.ancestor(of: button, matching: find.byType(SwarmCaption));
+
+    testWidgets('Sort and filter is at the right of the Projects caption, '
+        'not on the top bar (Tony, 2026-11-03); no Mark all read: that is in '
+        'the sheet, under its options, with Refresh', (tester) async {
       await pump(tester, backend());
+      final view = key('swarm-home-view');
       expect(
         key('swarm-mark-all-read'),
         findsNothing,
-        reason: 'not on the bar',
+        reason: 'not on the screen',
       );
-      expect(key('swarm-you-button'), findsOneWidget);
+      expect(tester.widget<SwarmCaption>(captionOf(view)).text, 'Projects');
       expect(
-        tester.getTopLeft(key('swarm-home-view')).dx,
-        lessThan(tester.getTopLeft(key('swarm-you-button')).dx),
-        reason: 'the avatar last',
+        tester.getTopLeft(view).dy,
+        greaterThanOrEqualTo(tester.getBottomLeft(key('swarm-you-button')).dy),
+        reason: 'under the top bar',
+      );
+      final card = find
+          .ancestor(of: project_(project), matching: find.byType(SwarmGroup))
+          .first;
+      expect(
+        tester.getTopRight(view).dx,
+        closeTo(tester.getTopRight(card).dx, .01),
+        reason: "its target's end on the card's",
+      );
+      expect(
+        tester.getBottomLeft(view).dy,
+        lessThanOrEqualTo(tester.getTopLeft(card).dy),
+        reason: 'over the card',
+      );
+      expect(
+        tester.getCenter(find.text('Projects')).dy,
+        closeTo(tester.getCenter(view).dy, 1),
+        reason: 'on the words',
       );
 
       await open(tester);
@@ -614,6 +636,20 @@ void main() {
         tester.getTopLeft(key('swarm-mark-all-read')).dy,
         lessThan(tester.getTopLeft(key('swarm-home-refresh')).dy),
       );
+    });
+
+    testWidgets('with a project pinned, Sort and filter is on the Pinned '
+        'caption, the first: once, over every project it sorts', (
+      tester,
+    ) async {
+      final host = await pump(tester, backend());
+      host.session!.home.pin(tab, project, true);
+      await tester.pumpAndSettle();
+
+      final view = key('swarm-home-view');
+      expect(view, findsOneWidget);
+      expect(tester.widget<SwarmCaption>(captionOf(view)).text, 'Pinned');
+      expect(find.text('Projects'), findsOneWidget, reason: 'web is unpinned');
     });
 
     testWidgets('Mark all read in the sheet closes it and marks, with its '

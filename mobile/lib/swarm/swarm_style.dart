@@ -274,7 +274,7 @@ class SwarmTabHeader extends StatelessWidget {
 }
 
 /// A caption over a card, in sentence case, with maybe a count, or a
-/// [note], at its right.
+/// [note], or a control ([trailing]), at its right.
 class SwarmCaption extends StatelessWidget {
   const SwarmCaption(
     this.text, {
@@ -284,6 +284,7 @@ class SwarmCaption extends StatelessWidget {
     this.countKey = const ValueKey('swarm-needs-count'),
     this.note,
     this.first = false,
+    this.trailing,
   });
 
   final String text;
@@ -301,6 +302,12 @@ class SwarmCaption extends StatelessWidget {
   /// The first thing on the screen: less room above it.
   final bool first;
 
+  /// A control at its right end, a thumb's touch tall (44 points): Home's
+  /// Sort and filter on its projects (Tony, 2026-11-03). Centred on the
+  /// words, it takes the room above and under them, so they stay about where
+  /// they are without it.
+  final Widget? trailing;
+
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
@@ -308,6 +315,22 @@ class SwarmCaption extends StatelessWidget {
     final quiet = AppType.caption(
       color: Color.lerp(AppPalette.textFaint, AppPalette.textSecondary, .5),
     );
+    if (trailing case final trailing?) {
+      return Padding(
+        padding: EdgeInsets.fromLTRB(
+          AppSpace.xs,
+          first ? 0 : AppSpace.s + 2,
+          0,
+          0,
+        ),
+        child: Row(
+          children: [
+            Expanded(child: Text(text, style: quiet)),
+            trailing,
+          ],
+        ),
+      );
+    }
     return Padding(
       padding: EdgeInsets.fromLTRB(
         AppSpace.xs,

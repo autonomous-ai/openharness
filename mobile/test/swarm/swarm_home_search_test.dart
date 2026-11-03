@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/swarm_home_search.dart';
 
-/// Home's way into Search (Slack's, 2026-11-03): a pull down at the top of
-/// the list, on Android's clamping list and iOS's bouncing one alike, and a
-/// search field that folds away as the list scrolls.
+/// A way into Search from Home (Slack's, 2026-11-03): a pull down at the top
+/// of the list, on Android's clamping list and iOS's bouncing one alike. The
+/// other is the top bar's Search.
 void main() {
   Finder key(String value) => find.byKey(ValueKey(value));
   final hint = key('swarm-pull-search-hint');
@@ -117,85 +117,4 @@ void main() {
       });
     });
   }
-
-  group('the search field', () {
-    Future<void> pumpPill(
-      WidgetTester tester, {
-      required bool collapsed,
-      VoidCallback? onTap,
-      bool still = false,
-    }) => tester.pumpWidget(
-      MaterialApp(
-        home: MediaQuery(
-          data: MediaQueryData(disableAnimations: still),
-          child: Scaffold(
-            body: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                SwarmSearchPill(collapsed: collapsed, onTap: onTap ?? () {}),
-                const Expanded(child: Text('the list')),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-
-    double height(WidgetTester tester) =>
-        tester.getSize(find.byType(SwarmSearchPill)).height;
-
-    testWidgets('open, it says what it finds, is a thumb wide button, and a '
-        'tap opens Search', (tester) async {
-      final semantics = tester.ensureSemantics();
-      var taps = 0;
-      await pumpPill(tester, collapsed: false, onTap: () => taps++);
-
-      expect(find.text('Search chats, projects, agents'), findsOneWidget);
-      expect(height(tester), SwarmSearchPill.height);
-      expect(
-        tester.getSize(key('swarm-search-pill')).height,
-        greaterThanOrEqualTo(40),
-      );
-      expect(
-        tester.getSemantics(key('swarm-search-pill')),
-        matchesSemantics(label: 'Search', isButton: true, hasTapAction: true),
-      );
-      await tester.tap(key('swarm-search-pill'));
-      expect(taps, 1);
-      semantics.dispose();
-    });
-
-    testWidgets('folded as the list scrolls: no room, no tap, nothing heard; '
-        'back at the top it opens again', (tester) async {
-      final semantics = tester.ensureSemantics();
-      var taps = 0;
-      await pumpPill(tester, collapsed: false, onTap: () => taps++);
-
-      await pumpPill(tester, collapsed: true, onTap: () => taps++);
-      await tester.pump(const Duration(milliseconds: 90));
-      final midway = height(tester);
-      expect(midway, lessThan(SwarmSearchPill.height));
-      expect(midway, greaterThan(0), reason: 'it folds, not jumps');
-      await tester.pumpAndSettle();
-
-      expect(height(tester), 0);
-      expect(find.semantics.byLabel('Search'), findsNothing);
-      await tester.tap(find.byType(SwarmSearchPill), warnIfMissed: false);
-      expect(taps, 0);
-
-      await pumpPill(tester, collapsed: false, onTap: () => taps++);
-      await tester.pumpAndSettle();
-      expect(height(tester), SwarmSearchPill.height);
-      expect(find.semantics.byLabel('Search'), findsOne);
-      semantics.dispose();
-    });
-
-    testWidgets('with animations off it folds at once', (tester) async {
-      await pumpPill(tester, collapsed: false, still: true);
-      await pumpPill(tester, collapsed: true, still: true);
-      await tester.pump();
-
-      expect(height(tester), 0);
-    });
-  });
 }
