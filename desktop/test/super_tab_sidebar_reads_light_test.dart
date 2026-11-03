@@ -192,7 +192,7 @@ void main() {
       expect(tester.getSize(g1).height, tester.getSize(project).height);
       expect(
         tester.getSize(g1).height,
-        lessThanOrEqualTo(SwarmType.sidebarRowHeight(compact: false) + 1),
+        lessThanOrEqualTo(SwarmType.sidebarRowHeight(compact: false) + 5),
       );
       expect(
         tester.getSemantics(g1).getSemanticsData().label,
@@ -319,4 +319,24 @@ void main() {
     await controller.flush();
     controller.dispose();
   });
+
+  // Huy, 11-03, on the first after-shots: "a little more height on the
+  // projects, it will look cleaner". The rows under Projects (a project and
+  // its tasks) are 4 points taller; the rest of the sidebar keeps Slack's pitch.
+  testWidgets(
+    'a project\'s and a task\'s rows are 4 points taller than other sidebar rows',
+    (tester) async {
+      final server = humansSwarm();
+      addNumberedWorkgroups(server, 1);
+      final controller = await show(tester, server);
+      final other = SwarmType.sidebarRowHeight(compact: false);
+      expect(
+        tester.getSize(find.byKey(const ValueKey('super-activity'))).height,
+        other,
+      );
+      expect(tester.getSize(project).height, other + 4);
+      expect(tester.getSize(g1).height, other + 4);
+      await close(tester, controller);
+    },
+  );
 }
