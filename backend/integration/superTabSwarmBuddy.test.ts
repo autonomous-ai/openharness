@@ -152,9 +152,12 @@ describe('the one Buddy sends a proposal to a project its person reads (Scholes,
     const { chat, main } = await buddy(f)
     const sent = String((await propose(f, chat, await ask(f, chat), f.web.projectId, main)).result.messageId)
     const row = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, id: sent } })
-    expect(row).toMatchObject({ conversationId: f.web.conversationId, recipientIds: [f.pms.web], source: { kind: 'buddy-proposal', personId: peer.sub } })
-    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: sent, agentId: f.pms.web } })).toBe(1)
-    expect(row.text).toBe('Proposal from peer\'s Buddy, on peer\'s behalf.\n\nGoal: Offline sync\nScope: Web only\nPriority: normal')
+    expect(row).toMatchObject({ conversationId: f.web.conversationId, recipientIds: [], author: { kind: 'person', id: peer.sub },
+      source: { kind: 'buddy-proposal', personId: peer.sub }, text: "Let's build: Offline sync" })
+    // The full proposal is the root's first reply, from the Buddy: the one row the PM is woken for.
+    const details = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, thread: sent, replyTo: sent } })
+    expect(details).toMatchObject({ conversationId: f.web.conversationId, recipientIds: [f.pms.web], text: 'Goal: Offline sync\nScope: Web only\nPriority: normal' })
+    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: details.id, agentId: f.pms.web } })).toBe(1)
     for (const elsewhere of ['lead', f.secret.conversationId]) expect(await texts(f, elsewhere, owner)).not.toContain(row.text)
     const group = String((await f.execute({ type: 'conversation.create', title: 'Offline sync', brief: '', checks: [], proposalMessageId: sent }, owner, f.pms.web)).result.conversationId)
     expect((await f.store.read(owner, f.tab)).state.conversations.find(c => c.id === group)?.requesterId).toBe(peer.sub)
@@ -255,7 +258,8 @@ describe('the one Buddy sends a proposal to a project its person reads (Scholes,
     await send(f, chat, 'A secret file', { replyTo: thread, attachmentIds: [secretFile] })
     await expect(propose(f, chat, await ask(f, chat), f.web.projectId, main, { attachmentIds: [secretFile] })).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
     const sent = String((await propose(f, chat, await ask(f, chat), f.web.projectId, main, { attachmentIds: [plan, log] })).result.messageId)
-    const read = (await f.store.messages(owner, f.tab, f.web.conversationId, {})).messages.find(m => m.id === sent)
+    // The files go with the full proposal, the root's first reply (plain chat, task #2294).
+    const read = (await f.store.messages(owner, f.tab, f.web.conversationId, { thread: sent })).messages.find(m => m.replyTo === sent)
     expect(read?.attachments?.map(a => a.name).sort()).toEqual(['main.log', 'plan.md'])
   })
 })
@@ -395,7 +399,8 @@ describe('a project session', () => {
     const sentId = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, goal: 'Offline sync', scope: 'Web only',
       priority: 'normal' }, peer, agentId)).result.messageId)
     const row = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, id: sentId } })
-    expect(row).toMatchObject({ conversationId: f.web.conversationId, recipientIds: [f.pms.web], source: { kind: 'buddy-proposal', personId: peer.sub } })
+    expect(row).toMatchObject({ conversationId: f.web.conversationId, recipientIds: [], source: { kind: 'buddy-proposal', personId: peer.sub } })
+    expect(await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, replyTo: sentId } })).toMatchObject({ recipientIds: [f.pms.web] })
   })
 
   /** peer's session proposes in web, the PM opens the group from it and the group's PR merges; the session then ends. */
@@ -495,7 +500,7 @@ describe('a project session', () => {
     await expect(f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: mainAsk, projectId: f.web.projectId, goal: 'G', scope: 'S', priority: 'normal' }, peer, agentId))
       .rejects.toMatchObject({ code: 'PROPOSAL_UNASKED' })
     const sent = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, projectId: f.web.projectId, goal: 'G', scope: 'S', priority: 'normal' }, peer, agentId)).result.messageId)
-    expect(await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, id: sent } })).toMatchObject({ conversationId: f.web.conversationId, recipientIds: [f.pms.web] })
+    expect(await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, replyTo: sent } })).toMatchObject({ conversationId: f.web.conversationId, recipientIds: [f.pms.web] })
     // Credited to the person's one Buddy, as a project session's is: a session ends.
     const group = String((await f.execute({ type: 'conversation.create', title: 'From the session', brief: '', checks: [], proposalMessageId: sent }, owner, f.pms.web)).result.conversationId)
     const row = (await f.store.read(owner, f.tab)).state.conversations.find(c => c.id === group)

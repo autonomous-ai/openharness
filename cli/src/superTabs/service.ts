@@ -82,7 +82,7 @@ const HELP = {
   release: 'agent.release records keep, or requests stop, for an agent whose work ended; assigning it new work reuses it. Wait for the execution host to confirm a stop. A person can withdraw a stuck stop; the session cannot receive new work in that Swarm. Its native capacity stays reserved until its host confirms stopping. Other Swarms wait up to two minutes for an in-flight close, then may reuse it.',
   resume: 'resume START_ID: finish a pending start without creating another agent.',
   // Buddies (backend superTabs/buddies.ts): a person adds and removes their own; the Buddy proposes only when they ask.
-  buddies: 'Buddies, in every Swarm: each person has one Buddy chat for the whole Swarm that only they and their Buddy read (buddy.chat opens it before any Buddy; with projectId, their older chat in that project), may add their one Buddy (buddy.create with machineId of their own machine, engine claude), remove it (buddy.remove), and name it (buddy.rename with conversationId of their Buddy chat and name, or null for the default name). It reads every project they read and brainstorms with them in that chat, and the PM\'s private lines to them land there too, marked with their project. A proposal is the only thing it sends into a project. propose OPERATION_ID JSON [--attach PATH]...: when its owner asks (a New session in one project, in its thread, for that project): {"conversationId":"its chat","ownerMessageId":"their message asking","projectId":"the project they read to send it to; a session of one project leaves it out","goal":"...","scope":"...","priority":"low|normal|high","attachmentIds":["a file its owner sent in its chat"]}. --attach adds a file inside its own folder (in that project\'s folder, for their one Buddy); up to 5 files in all, 10 MB each. The Swarm posts it in the project chat to the PM, marked as on the owner\'s behalf. A Buddy is never assigned work.',
+  buddies: 'Buddies, in every Swarm: each person has one Buddy chat for the whole Swarm that only they and their Buddy read (buddy.chat opens it before any Buddy; with projectId, their older chat in that project), may add their one Buddy (buddy.create with machineId of their own machine, engine claude), remove it (buddy.remove), and name it (buddy.rename with conversationId of their Buddy chat and name, or null for the default name). It reads every project they read and brainstorms with them in that chat, and the PM\'s private lines to them land there too, marked with their project. A proposal is the only thing it sends into a project. propose OPERATION_ID JSON [--attach PATH]...: when its owner asks (a New session in one project, in its thread, for that project): {"conversationId":"its chat","ownerMessageId":"their message asking","projectId":"the project they read to send it to; a session of one project leaves it out","title":"Short name (at most 80 characters)","goal":"...","scope":"...","priority":"low|normal|high","attachmentIds":["a file its owner sent in its chat"]}. --attach adds a file inside its own folder (in that project\'s folder, for their one Buddy); up to 5 files in all, 10 MB each. The Swarm posts it in the project chat as "Let\'s build: <title>" from its owner, with the full proposal as the first reply in its thread, for the PM. A Buddy is never assigned work.',
   // A person's own command, for the machines they added; an agent's terminal is refused (command.ts), so no agent raises its
   // own machine's room (Lead, 2026-10-28).
   setAgents: 'set-agents MACHINE_ID COUNT: for a machine\'s owner, from their own terminal, not an agent\'s: how many Swarm agents may run on that machine at once. Each agent still needs free memory when it starts. A machine may offer one agent for every 2 GB of its memory, and at least 4; a larger number is refused.',
@@ -493,7 +493,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // The devices' (core/devicesLink.ts): a Harness Pro that shows the Swarm cards is attached or gone, wants a Lead's recap, or
         // has one open. They read the account's Swarms as the person, and need no agent.
         // Only this computer's own devices ask: an account owner on another machine does not make this one read the Swarms.
-        if (payload.action === 'cardsWanted' || payload.action === 'cardRecap' || payload.action === 'cardOpen' || payload.action === 'cardSay' || payload.action === 'cardWorker' || payload.action === 'cardSide') {
+        if (payload.action === 'cardsWanted' || payload.action === 'cardRecap' || payload.action === 'cardOpen' || payload.action === 'cardSay' || payload.action === 'cardWorker' || payload.action === 'cardSide' || payload.action === 'cardThreadLeave') {
           if (!asker.local) return { error: 'OWNER_REQUIRED' }
           // A round dial that speaks swarmChat asks for the chat on its face (design 2026-10-28-round-dial-swarm-chat), and one
           // that speaks swarmBuddy for the face on the side it keeps ('buddy', spec 2026-10-29-round-dial-pm-buddy).
@@ -509,15 +509,25 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           }
           if (payload.action === 'cardRecap' && cardId(payload.tabId) && cardId(payload.leadId)) return { ok: true, ...await cards().recap(payload.tabId, payload.leadId, chat) }
           if (payload.action === 'cardSay' && cardId(payload.harnessId) && typeof payload.text === 'string' && payload.text.trim() && payload.text.length <= 32_000) {
+            // `threaded`: the dial speaks swarmThread and the words came from its face; `thread`: the root of the thread on the face
+            // then (null: none), which the words are held to.
+            const options = { ...(payload.threaded === true ? { threaded: true } : {}),
+              ...(payload.thread === null || cardId(payload.thread) ? { thread: payload.thread } : {}) }
             const pinned: [chatId?: string, reviewed?: boolean] = !cardId(payload.chatId) ? []
               : payload.reviewed === true ? [payload.chatId, true] : [payload.chatId]
-            const result = await cards().say(payload.harnessId, payload.text.trim(), chat, ...pinned)
+            const result = Object.keys(options).length
+              ? await cards().say(payload.harnessId, payload.text.trim(), chat, cardId(payload.chatId) ? payload.chatId : undefined, cardId(payload.chatId) && payload.reviewed === true, options)
+              : await cards().say(payload.harnessId, payload.text.trim(), chat, ...pinned)
             // A refusal travels with its code and message, which the dial shows instead of typing the words anywhere.
-            return { ok: true, said: result.said, ...(!result.said && result.refused ? { refused: result.refused } : {}) }
+            return { ok: true, said: result.said, ...(!result.said && result.refused ? { refused: result.refused } : {}), ...(result.said && result.thread ? { thread: result.thread } : {}) }
           }
           // A card's failure from another computer: whether its agent is a Swarm's Builder or Reviewer, from the Swarms read last.
           if (payload.action === 'cardWorker' && identifier(payload.machineId) && identifier(payload.harnessId)) {
             return { ok: true, worker: cards().worker(payload.machineId, payload.harnessId) }
+          }
+          if (payload.action === 'cardThreadLeave' && cardId(payload.tabId) && cardId(payload.leadId)) {
+            const left = cards().threadLeave(payload.tabId, payload.leadId, chat)
+            return { ok: true, ...(left ? { conversationId: left.conversationId } : {}) }
           }
           if (payload.action === 'cardSide' && cardId(payload.tabId) && (payload.side === 'pm' || payload.side === 'buddy')) {
             cards().side(payload.tabId, payload.side)

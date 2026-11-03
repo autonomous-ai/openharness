@@ -121,11 +121,12 @@ const personAuthor = (u: AuthUser): Author => ({ kind: 'person', id: u.sub, name
 async function insert(tabId: string, conversationId: string, rows: Array<{ id?: string; text: string; author: Author; thread?: string | null;
   source?: Record<string, unknown>; recipientIds?: string[]; mentions?: string[] }>) {
   const ids: string[] = []
+  // One createMany, not a create per row: 5,001 creates outlasted Prisma's 5-second transaction limit on a CI runner
+  // ("Transaction not found", task #2459), so the test's outcome depended on the machine's speed.
   await swarmTransaction(db, async tx => {
     const current = (await parts.loadActive(tx, tabId, { groupIds: [conversationId] })).groups.find(g => g.key === conversationId)!
     const data = structuredClone(current.data!) as Conversation
-    const messages: Array<{ id: string; tabId: string; conversationId: string; sequence: number; author: never; text: string;
-      thread: string | null; recipientIds: string[]; mentions: string[]; source?: never; createdAt: Date }> = []
+    const created: Prisma.SuperTabMessageCreateManyInput[] = []
     for (const row of rows) {
       const sequence = (data.messageSeq ?? 0) + 1
       const id = row.id ?? `m-${randomUUID()}`
@@ -137,13 +138,11 @@ async function insert(tabId: string, conversationId: string, rows: Array<{ id?: 
         data.lastActivityAt = new Date().toISOString()
         if (!row.thread || row.thread === id) data.lastMainSequence = sequence
       }
-      messages.push({ id, tabId, conversationId, sequence, author: row.author as never, text: row.text,
+      created.push({ id, tabId, conversationId, sequence, author: row.author as never, text: row.text,
         thread: row.thread === undefined ? id : row.thread, recipientIds: row.recipientIds ?? [], mentions: row.mentions ?? [],
         ...(row.source ? { source: row.source as never } : {}), createdAt: new Date() })
     }
-    for (let offset = 0; offset < messages.length; offset += 500) {
-      await tx.superTabMessage.createMany({ data: messages.slice(offset, offset + 500) })
-    }
+    await tx.superTabMessage.createMany({ data: created })
     await guardedWrite(tx, tabId, { op: 'update', kind: 'group', key: conversationId, seen: current.version, data }, Date.now())
   })
   return ids

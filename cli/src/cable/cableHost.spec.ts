@@ -1029,7 +1029,7 @@ describe('Swarm cards', () => {
 
   it('hands the wiring what a device asks, and answers nothing when the wiring has none', async () => {
     const w = wiring({
-      swarmCardsWanted: vi.fn(), swarmCardOpen: vi.fn(), swarmCardSide: vi.fn(), superTabSelected: vi.fn(), swarmSay: vi.fn(async () => ({ said: true as const })),
+      swarmCardsWanted: vi.fn(), swarmCardOpen: vi.fn(), swarmCardSide: vi.fn(), superTabSelected: vi.fn(), superTabThread: vi.fn(), swarmSay: vi.fn(async () => ({ said: true as const })),
       swarmCardRecap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'hi', at: 1, none: false })),
     })
     const host = new DaemonCableHost(w)
@@ -1056,8 +1056,21 @@ describe('Swarm cards', () => {
     expect(w.swarmCardSide).toHaveBeenLastCalledWith('st1', 'buddy')
     await host.swarmSay('h1', 'ship it', 'buddy', 'pm1')
     expect(w.swarmSay).toHaveBeenLastCalledWith('h1', 'ship it', 'buddy', 'pm1')
+    // A swarmThread dial leaves the thread on its face (with its chat flag), and the window closes (null) or opens (a root) a
+    // thread beside a conversation, with no project pick.
+    const left = vi.fn(async () => ({ tabId: 'st1', conversationId: 'c1' }))
+    const threaded = new DaemonCableHost(wiring({ swarmThreadLeave: left, superTabThread: w.superTabThread }))
+    expect(await threaded.swarmThreadLeave('st1', 'l1', 'buddy')).toEqual({ tabId: 'st1', conversationId: 'c1' })
+    expect(left).toHaveBeenLastCalledWith('st1', 'l1', 'buddy')
+    threaded.superTabThread('st1', 'c1', null)
+    expect(w.superTabThread).toHaveBeenLastCalledWith('st1', 'c1', null)
+    threaded.superTabThread('st1', 'c1', 'm9')
+    expect(w.superTabThread).toHaveBeenLastCalledWith('st1', 'c1', 'm9')
+    await host.swarmSay('h1', 'ship it', 'buddy', 'pm1', false, { thread: null, threaded: true })
+    expect(w.swarmSay).toHaveBeenLastCalledWith('h1', 'ship it', 'buddy', 'pm1', false, { thread: null, threaded: true })
     const bare = new DaemonCableHost(wiring())
-    bare.swarmCardsWanted(false); bare.swarmCardOpen('c1', 'st1', null); bare.swarmCardSide('st1', 'pm'); bare.superTabSelected('st1', 'p1')
+    expect(await bare.swarmThreadLeave('st1', 'l1')).toBeNull()
+    bare.swarmCardsWanted(false); bare.swarmCardOpen('c1', 'st1', null); bare.swarmCardSide('st1', 'pm'); bare.superTabSelected('st1', 'p1'); bare.superTabThread('st1', 'c1', null)
     expect(await bare.swarmCardRecap('st1', 'l1')).toBeNull()
     expect(await bare.swarmSay('h1', 'ship it')).toEqual({ said: false })
   })
