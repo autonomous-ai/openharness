@@ -32,6 +32,8 @@ export type { CardChat, CardFocus, CardSide, LeadNotice, LeadRecap, LeadState, S
 const MAX_CARDS = 16, MAX_LEADS = 12, NAME_BYTES = 48, RECAP_BYTES = 1500, MAX_LIST_PAGES = 10, MAX_RECAPS_IN_FLIGHT = 2
 /** The longest a dial's recap read waits on the one before it. */
 const ASK_WAIT_MS = 10_000
+/** A failed read of a dial thread's first message is tried again after this, doubling, at most ROOT_READ_TRIES times in all. */
+const ROOT_READ_WAIT_MS = 10_000, ROOT_READ_TRIES = 5
 /** The Pro keeps an id in 48 bytes with its NUL: 47 characters at most reach it. */
 const ID_BYTES = 47
 export const cardId = (v: unknown): v is string => identifier(v) && v.length <= ID_BYTES
@@ -309,7 +311,7 @@ export class SwarmCards {
   /** The thread the dial's own words started, per Swarm (spec 2026-11-03-dial-thread-face); cleared like `sides`. */
   private threads = new Map<string, { conversationId: string; root: string; title: string; at: number; opened?: true }>()
   /** Title and reply count of the app's threads, as the recap reads gave them (`${tab}/${root}`). */
-  private titles = new Map<string, { title: string; replies?: number; looked?: true }>()
+  private titles = new Map<string, { title: string; replies?: number; looked?: true; failures?: number; retryAt?: number }>()
   /** The thread the dial last left, per Swarm: an older Desktop that announces it again does not pull the dial back into it. */
   private left = new Map<string, { conversationId: string; root: string }>()
   /** Bumped at each refocus of the window, so a post that was out while it moved knows it did (spec 2026-11-03-dial-thread-face). */
@@ -819,19 +821,35 @@ export class SwarmCards {
   }
 
   /** The title (the root's first line) and reply count of a thread read for the face, said again to the dial when they changed.
-   *  A page that lacks the root (an app thread's root is further back) has it read once by its id; the last title is kept. */
+   *  A page that lacks the root (an app thread's root is further back) has it read once by its id; the last title is kept. A
+   *  failed read is logged and tried again after a wait that doubles, at most ROOT_READ_TRIES times (review of #2756). */
   private async learnThread(tabId: string, conversationId: string, root: string, page: Json): Promise<void> {
     const key = `${tabId}/${root}`, was = this.titles.get(key)
     let text = list(page.messages).find(m => m.id === root)?.text
-    let looked = was?.looked
-    if (typeof text !== 'string' && !was?.title && !looked) {
-      looked = true
-      const one = await backend(this.core, 'GET', `/api/super-tabs/${tabId}/conversations/${conversationId}/messages?messageId=${encodeURIComponent(root)}`).catch(() => null)
-      text = list(object(one).messages).find(m => m.id === root)?.text
+    let looked = was?.looked, failures = was?.failures, retryAt = was?.retryAt
+    if (typeof text !== 'string' && !was?.title && !looked && (retryAt === undefined || this.now() >= retryAt)) {
+      try {
+        const one = await backend(this.core, 'GET', `/api/super-tabs/${tabId}/conversations/${conversationId}/messages?messageId=${encodeURIComponent(root)}`)
+        text = list(object(one).messages).find(m => m.id === root)?.text
+        looked = true
+      } catch (error) {
+        failures = (failures ?? 0) + 1
+        // Nothing of the thread in the line: its id and title are the reader's.
+        const code = String(object(error).code ?? (error instanceof Error ? error.name : 'error'))
+        if (failures >= ROOT_READ_TRIES) {
+          looked = true
+          this.log(`[super-tabs] a dial thread's first message was not read (${code}); its title stays as it is`)
+        } else {
+          const wait = Math.min(ROOT_READ_WAIT_MS * 2 ** (failures - 1), 5 * 60_000)
+          retryAt = this.now() + wait
+          this.log(`[super-tabs] a dial thread's first message was not read (${code}); read again in ${Math.round(wait / 1000)} s`)
+        }
+      }
     }
     const replies = list(page.threads).find(t => t.id === root)?.replies
-    const next = { title: (typeof text === 'string' ? titleOf(text) : '') || was?.title || '', ...(typeof replies === 'number' ? { replies } : {}), ...(looked ? { looked: true as const } : {}) }
-    if (was?.title === next.title && was.replies === next.replies && was.looked === next.looked) return
+    const next = { title: (typeof text === 'string' ? titleOf(text) : '') || was?.title || '', ...(typeof replies === 'number' ? { replies } : {}),
+      ...(looked ? { looked: true as const } : {}), ...(failures && !looked ? { failures, retryAt } : {}) }
+    if (was?.title === next.title && was.replies === next.replies && was.looked === next.looked && was.failures === next.failures && was.retryAt === next.retryAt) return
     this.titles.set(key, next)
     if (this.titles.size > 32) this.titles.delete(this.titles.keys().next().value!)
     if (was?.title !== next.title || was.replies !== next.replies) { if (this.timer && this.live) this.emit() }
