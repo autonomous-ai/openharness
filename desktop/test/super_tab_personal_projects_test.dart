@@ -254,14 +254,34 @@ void main() {
       );
     });
 
+    test('a remote through an SSH host alias is a repo too (task #2476)', () {
+      // A second GitHub account's clone (`git@gh-work:acme/api.git`, #2525):
+      // the daemon reports its alias as the host, with no dot in it.
+      expect(normalizedRemote('gh-work/acme/api'), 'gh-work/acme/api');
+      expect(normalizedRemote('GH-Work/Acme/Api'), 'gh-work/acme/api');
+      expect(normalizedRemote('gitserver:2222/team/api'), 'gitserver/team/api');
+      // `Host github.com-work` is the other common way to name one.
+      expect(
+        normalizedRemote('github.com-work/acme/api'),
+        'github.com-work/acme/api',
+      );
+      expect(normalizedRemote('git@gh-work:Acme/Api.git'), 'gh-work/acme/api');
+    });
+
     test('a folder or nothing is no repo', () {
       for (final form in [
         null,
         '',
         '/srv/git/api.git',
+        '/srv/api',
         './api',
+        '../api',
+        '.hidden/api',
         'file:///srv/git/api.git',
         r'C:\repos\api',
+        r'C:\api',
+        'C:/repos/api',
+        'c/api',
       ]) {
         expect(normalizedRemote(form), isNull, reason: form);
       }
@@ -761,6 +781,43 @@ void main() {
       expect(keys[p.web], 'github.com/acme/web');
       expect(keys[p.folder], personalTabKey('one'));
     });
+
+    test(
+      'a pane on an SSH alias clone joins its repo, not its tab (task #2476)',
+      () async {
+        final f = SuperTabLaunchFixture();
+        f.app.machineStates['m']!.agents = [
+          _agent('a1', remote: 'gh-work/acme/api', cwd: '/w/api'),
+          _agent('f1', cwd: '/w/notes'),
+        ];
+        _machine(f.app, 'laptop').agents = [
+          _agent('a2', remote: 'gh-work/acme/api', cwd: '/x/api'),
+        ];
+        _tab(f.app, 'one', [_pane('m', 'a1'), _pane('m', 'f1')]);
+        _tab(f.app, 'two', [_pane('laptop', 'a2')]);
+        expect(
+          [for (final e in personalPanes(f.app)) e.repo],
+          ['gh-work/acme/api', personalTabKey('one'), 'gh-work/acme/api'],
+        );
+        final c = await _personal(f);
+        await PersonalProjects.of(f.app).sync(c);
+        expect(
+          [for (final p in _commands(f)) p['command']['name']],
+          ['api', kTabProjectName],
+        );
+        final api = c.snapshot!.projects
+            .firstWhere((p) => p.name == 'api')
+            .leadConversationId;
+        // Both panes, in two tabs on two computers, are the one project's.
+        expect(
+          [
+            for (final p in PersonalProjects.of(f.app).panesFor(c, api))
+              p.agentId,
+          ],
+          ['a1', 'a2'],
+        );
+      },
+    );
 
     test('a renamed tab keeps its project and its name', () async {
       final f = SuperTabLaunchFixture();
