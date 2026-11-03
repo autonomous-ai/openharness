@@ -76,7 +76,11 @@ class SuperTabLaunch {
             'newProject': newProject,
             // It leads a project already there: its and the Swarm's names
             // and visibility stay as they are.
-            if (coordinator) ...{'coordinator': true, 'title': unled.name},
+            if (coordinator) ...{
+              'coordinator': true,
+              'title': unled.name,
+              'coordinatorName': snapshot.coordinatorNameOf(unled.id),
+            },
             'visibility': 'public',
             if (!newProject) 'projectId': 'lead',
           }
@@ -299,7 +303,12 @@ class SuperTabLaunch {
   /// A native start was asked for, so the journal must outlive this form.
   bool get started =>
       saved['phase'] == 'starting' || saved['phase'] == 'joining';
-  String get who => saved['lead'] == true ? 'Lead' : 'harness';
+
+  /// The coordinator as the project calls it: never "Lead" on screen (Naming
+  /// System; River, #2458).
+  String get who => saved['lead'] == true
+      ? saved['coordinatorName'] as String? ?? kDefaultCoordinatorName
+      : 'harness';
   String get machineName {
     final machine = saved['machineId'] as String?;
     if (machine == null) return 'the machine';
@@ -316,7 +325,7 @@ class SuperTabLaunch {
         saved['title'] ??
         (saved['newProject'] == true ? 'New project' : 'Swarm');
     return saved['lead'] == true
-        ? 'Waiting for $machineName to start the Lead for “$title”.'
+        ? 'Waiting for $machineName to start the $who for “$title”.'
         : 'Waiting for $machineName to start the harness.';
   }
 
@@ -1099,11 +1108,26 @@ class SuperTabLaunch {
     }
   }
 
-  SuperTabFailure _joinFailed(Object failure) => SuperTabFailure(
-    'JOIN_FAILED',
-    'The $who started on $machineName. Joining it to the project failed: '
-        '${'$failure'.replaceFirst(RegExp(r'\.$'), '')}. Check status to try again.',
-  );
+  /// The join's failure in the person's words: what happened, and what to do.
+  /// A server's own error is never a reason to give up on the harness, and a
+  /// refusal names the server's reason (Tony, #2458: "An internal server error
+  /// occurred" told him neither).
+  SuperTabFailure _joinFailed(Object failure) {
+    final reason = '$failure'.replaceFirst(RegExp(r'\.$'), '');
+    return SuperTabFailure('JOIN_FAILED', switch (failure) {
+      SuperTabFailure(statusCode: >= 500) =>
+        'The $who started on $machineName and keeps running there, but the '
+            'Harness server had an error adding it to the project. Check '
+            'status to try again.',
+      SuperTabFailure(statusCode: >= 400) when reason.isNotEmpty =>
+        'The $who started on $machineName and keeps running there, but the '
+            'project did not take it: $reason. Discard request, or Check '
+            'status once that changes.',
+      _ =>
+        'The $who started on $machineName. Joining it to the project failed: '
+            '$reason. Check status to try again.',
+    });
+  }
 
   Future<void> resume() async {
     checkAccount();
