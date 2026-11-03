@@ -598,6 +598,7 @@ static EXT_RAM_BSS_ATTR struct {
     char desk[ID_MAX];                // the desk tab that Swarm is listed at, "" when none (entered from the inbox)
     int at;                           // that Lead's place, where the face lands when the Lead goes
     bool retried;                     // its recap was asked for a second time
+    struct { char tab[ID_MAX], lead[ID_MAX], root[ID_MAX]; uint32_t until; } left;   // the thread just swiped out of: a card still in flight naming it is refused
     struct { char tab[ID_MAX], lead[ID_MAX]; } focus[HT_SUPERTABS_MAX];   // the Lead the desktop last showed, per Swarm
     char pending[ID_MAX];             // a Swarm the desktop opened before its `swarms` frame said so (ui_supertab_focus)
     // The Swarm, Lead and side a session down or an emptied list took off the face, not the person: stale until that
@@ -763,6 +764,7 @@ static bool swarm_thread_swipe(void)
 {
     const ht_lead_t *l = swarm_lead();
     if (!l || !l->thread_root[0] || !s.connected) return false;
+    COPY(sw.left.tab, sw.tab); COPY(sw.left.lead, sw.lead); COPY(sw.left.root, l->thread_root); sw.left.until = ms() + 3000;
     swarm_send(SUPERTAB_THREAD_LEAVE, sw.tab, sw.lead);
     ht_supertabs_thread_leave(&swarm, sw.tab, sw.lead);
     sw.retried = false;
@@ -1462,7 +1464,10 @@ static void thread_line(const char **cursor, const ht_font_t *font, int w, char 
 {
     const char *start = *cursor, *end = focus_take(cursor, font, w);
     size_t n = (size_t)(end - start);
-    if (n >= HT_TEXT_BYTES) n = HT_TEXT_BYTES - 1;
+    if (n >= HT_TEXT_BYTES) {
+        n = HT_TEXT_BYTES - 1;
+        while (n && ((unsigned char)start[n] & 0xC0) == 0x80) n--;   // on a character boundary
+    }
     memcpy(out, start, n);
     out[n] = 0;
 }
@@ -1477,8 +1482,10 @@ static void thread_rest(const char *cursor, char out[HT_TEXT_BYTES])
     for (size_t i = 0; i < n; i++) out[i] = cursor[i] == '\n' ? ' ' : cursor[i];
     out[n] = 0;
 }
-static void face_thread(ht_scene_t *f, const ht_lead_t *l, bool buddy, const char *recap)
+static void face_thread(ht_scene_t *f, const ht_lead_t *l, bool buddy, const char *recap, const char *wait)
 {
+    // A Lead waiting on the person stays visible: the wait's text in the card, in the accent the main face writes it in.
+    if (wait) recap = wait;
     ht_arc_title_face(f, FG, l->project[0] ? l->project : "Untitled", &ht_arc_inter_prop);
     const unsigned TEAL = 0x2dd4bfu;
     ht_ring_arc(f, 233 * 16, 233 * 16, 229 * 16, 5 * 16, 90, 180, color(mix_black(TEAL, 55)));
@@ -1501,7 +1508,7 @@ static void face_thread(ht_scene_t *f, const ht_lead_t *l, bool buddy, const cha
     // The card, lower by a title line: the meta line (who, how many replies) above up to three lines, else what it waits for.
     int top = 172 + (two ? 29 : 0);
     char meta[40] = "";
-    if (recap && l->thread_replies >= 0)
+    if (recap && !wait && l->thread_replies >= 0)
         snprintf(meta, sizeof meta, "%s · %ld repl%s", buddy ? "Buddy" : "PM", (long)l->thread_replies, l->thread_replies == 1 ? "y" : "ies");
     int rows = recap ? 0 : 1;
     char text[3][HT_TEXT_BYTES] = {{0}};
@@ -1517,7 +1524,7 @@ static void face_thread(ht_scene_t *f, const ht_lead_t *l, bool buddy, const cha
     ht_box(f, 63, top + 18, 7, h - 36, 3, teal, teal);
     if (meta[0]) focus_put(f, 75, top + 13, 316, small, teal, card, meta, true);
     if (!recap) focus_put(f, 75, top + 17, 316, body, DIM, card, buddy ? "Waiting for your Buddy…" : "Waiting for the PM…", true);
-    else for (int i = 0; i < rows; i++) focus_put(f, 75, top + (meta[0] ? 45 : 17) + i * 38, 316, body, FG, card, text[i], true);
+    else for (int i = 0; i < rows; i++) focus_put(f, 75, top + (meta[0] ? 45 : 17) + i * 38, 316, body, wait ? ACCENT : FG, card, text[i], true);
     // The way out: a chevron at the left edge, small "chat" under it.
     uint16_t out = color(mix_black(TEAL, 85));
     // At the screen's vertical centre, where the glass is widest: "‹" just above y 233, "chat" just below, 15 px in from the
@@ -1578,7 +1585,7 @@ static void render_swarm_face(ht_scene_t *f)
         s.notice_ms = (clock - ht_focus_alert_pop_ms(&f_)) | 1;
         f_.notice_ms = bell ? s.notice_ms : 0;
     }
-    if (thread) face_thread(f, l, buddy, recap);
+    if (thread) face_thread(f, l, buddy, recap, wait);
     else ht_character_face(f, &character, &f_, ACCENT, recap);
     s.pet_next_ms = focus_face && !thread ? ht_focus_pet_next_ms(&f_, recap) : 0;
     ht_rect_t bubble = {0};
@@ -5365,6 +5372,15 @@ bool ui_supertab(const ht_supertab_t *in)
         else if (before && !now && !turn) turn = -1;
     }
     int n = ht_supertabs_put(&swarm, in, ms(), ev, (int)(sizeof ev / sizeof ev[0]));
+    // A card made before the swipe out still names the thread left: it does not bring the face back, until a card without it
+    // comes or 3 s pass.
+    if (sw.left.root[0] && !strcmp(sw.left.tab, in->id)) {
+        const ht_supertab_t *now = ht_supertabs_find(&swarm, in->id);
+        int j = now ? swarm_lead_index(now, sw.left.lead) : -1;
+        if (j >= 0 && !strcmp(now->leads[j].thread_root, sw.left.root) && (int32_t)(ms() - sw.left.until) < 0)
+            ht_supertabs_thread_leave(&swarm, in->id, sw.left.lead);
+        else sw.left.root[0] = 0;
+    }
     // A daemon that says the side is the truth: a face alone cannot tell it where no project has a Buddy chat (review of
     // #2218). An older one says none, and the faces' turns tell it.
     if (in->side != HT_SIDE_NONE) swarm_side_put(in->id, buddies && in->side == HT_SIDE_BUDDY);

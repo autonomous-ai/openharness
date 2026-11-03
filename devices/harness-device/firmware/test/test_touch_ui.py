@@ -2230,6 +2230,16 @@ static void swarm_thread_checks(const char *dir) {
     thread_lead("T0", "web-api", "m9", "Fix the login bug on Safari when the session expires", 1); thread_lead("T1", "firmware", "", "", -1); assert(!card_send());
     ui_supertab_recap("s1", "T0", "pm1", "m9", "Taken: Milo fixes it now.", 1792560000u, false); scene_take();
     assert(scene_says("Taken: Milo") && scene_says("PM \xc2\xb7 1 reply") && !scene_says("Waiting"));
+    // A Lead that starts waiting on the person stays visible on the thread face: the wait takes the card, the chrome stays.
+    card_begin("s1", "t1", "openharness");
+    thread_lead("T0", "web-api", "m9", "Fix the login bug on Safari when the session expires", 1); thread_lead("T1", "firmware", "", "", -1);
+    strcpy(card.leads[0].local, "h5"); assert(!card_send());
+    assert(!ui_supertab_wait("h5", "supertab:w1", "openharness", false, "Publish the docs today?")); scene_take();
+    assert(scene_says("Publish the docs today?") && !scene_says("Taken: Milo") && !scene_says("1 reply") && scene_says("Thread") && teal_ring());
+    thread_chrome_checks();
+    portrait(dir, "thread-e-waiting-lead");
+    ui_supertab_wait_close("h5", "supertab:w1"); scene_take();
+    assert(scene_says("Taken: Milo") && !scene_says("Publish the docs"));
     // The swipe sideways leaves the thread: the daemon is told, the main chat's recap is asked for, nothing is selected, and the
     // face stays on the same project.
     swarm_sent = 0; swipe_next();
@@ -2239,6 +2249,15 @@ static void swarm_thread_checks(const char *dir) {
     // The thread's recap arriving late is refused; the main chat's lands.
     ui_supertab_recap("s1", "T0", "pm1", "m9", "Late.", 1792560000u, false); scene_take(); assert(!scene_says("Late."));
     ui_supertab_recap("s1", "T0", "pm1", "", "Merged #2704.", 1792560000u, false); scene_take(); assert(scene_says("Merged #2704."));
+    // A card made before the swipe still names the thread left: it does not bring the face back. One without it, or 3 s, ends that.
+    swarm_sent = 0; card_begin("s1", "t1", "openharness");
+    thread_lead("T0", "web-api", "m9", "Fix the login bug on Safari when the session expires", 1); thread_lead("T1", "firmware", "", "", -1); assert(!card_send());
+    scene_take(); assert(!scene_says("Thread") && !teal_ring() && swarm_sent == 0 && swarm.recap.state == HT_RECAP_LOADED);
+    card_begin("s1", "t1", "openharness"); thread_lead("T0", "web-api", "", "", -1); thread_lead("T1", "firmware", "", "", -1); assert(!card_send());
+    card_begin("s1", "t1", "openharness");
+    thread_lead("T0", "web-api", "m9", "Fix the login bug on Safari when the session expires", 1); thread_lead("T1", "firmware", "", "", -1); assert(!card_send());
+    scene_take(); assert(scene_says("Thread") && teal_ring());   // a thread entered again after the mask ended
+    ui_supertab_recap("s1", "T0", "pm1", "m9", "Back.", 1792560000u, false);
     // A frame that puts the face in a thread (the app opened one, or the dial's words started it) asks for that thread's recap.
     swarm_sent = 0; card_begin("s1", "t1", "openharness");
     thread_lead("T0", "web-api", "m10", "Plan the release", 0); thread_lead("T1", "firmware", "", "", -1); assert(!card_send());
