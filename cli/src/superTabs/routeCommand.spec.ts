@@ -1079,24 +1079,35 @@ describe('routing contributed capacity', () => {
       { id: 's4', request: req(8 * GiB, 8 * GiB), requestedAt: now - 60_000, error: 'Cloning took too long.' },
       { id: 's5', request: req(8 * GiB, 8 * GiB), requestedAt: now - 20 * 60_000, harnessId: 'h8', dispatchedAt: now - 10 * 60_000, error: null },
       { id: 's6', request: { ...req(8 * GiB, 8 * GiB), machineId: 'm2' }, requestedAt: now - 60_000, error: null },
+      // Waited 20 minutes in the Swarm, handed to its host a minute ago: the host reserved it then (review).
+      { id: 's7', request: req(1 * GiB, 1 * GiB), requestedAt: now - 20 * 60_000, dispatchedAt: now - 60_000, error: null },
     ]
   }
   it('counts what starts still starting on a machine hold of its memory and disk, as its host does', () => {
     const now = Date.now()
-    expect(heldByStarts(starting(now), 'm1', now)).toEqual({ memoryBytes: 4 * GiB, diskBytes: 2 * GiB })
-    expect(heldByStarts([], 'm1', now)).toEqual({ memoryBytes: 0, diskBytes: 0 })
+    expect(heldByStarts(starting(now), 'm1', now)).toEqual({ memoryBytes: 5 * GiB, diskBytes: 3 * GiB, heavyMemoryBytes: 0, heavyDiskBytes: 0 })
+    expect(heldByStarts([], 'm1', now)).toEqual({ memoryBytes: 0, diskBytes: 0, heavyMemoryBytes: 0, heavyDiskBytes: 0 })
+    // A heavy start's hold is told apart: the machine fit counts heavy work placed there itself (machineFit.ts placedHeavyWork).
+    const heavy = { id: 'h', request: { machineId: 'm1', heavy: ['build'], requirements: { memoryBytes: 4 * GiB, diskBytes: 15 * GiB } }, requestedAt: now - 60_000, error: null }
+    expect(heldByStarts([heavy], 'm1', now)).toEqual({ memoryBytes: 4 * GiB, diskBytes: 15 * GiB, heavyMemoryBytes: 4 * GiB, heavyDiskBytes: 15 * GiB })
   })
   it('leaves out new agents on a machine whose free memory is set aside for agents still starting', async () => {
     const pool = healthy(); Object.assign(pool.observation.resources, { memoryUsedBytes: 26e9 })
     expect((await runPool(pool)).answer.ok).toBe(true)
     const { answer } = await runPool(pool, false, {}, undefined, { state: { starts: starting(Date.now()) } })
     expect(answer.ok).not.toBe(true)
-    expect(JSON.stringify(answer)).toContain('Insufficient measured free memory, with 4.3 GB set aside for agents still starting.')
+    expect(JSON.stringify(answer)).toContain('Insufficient measured free memory, with 5.4 GB set aside for agents still starting.')
+  })
+  it('counts a heavy start once for heavy work: the machine fit holds it, the route\'s reading does not hold it again', async () => {
+    const now = Date.now(), pool = healthy(); Object.assign(pool.observation.resources, { projectDiskFreeBytes: 70e9 })
+    const heavy = { id: 'h', request: { machineId: 'm1', heavy: ['build'], requirements: { memoryBytes: 4 * GiB, diskBytes: 15 * GiB } }, requestedAt: now - 60_000, error: null }
+    const { answer } = await runPool(pool, false, { heavy: ['build'] }, undefined, { state: { starts: [heavy] } })
+    expect((answer.pick as { notes?: string[] }).notes ?? []).not.toEqual(expect.arrayContaining([expect.stringContaining('Machine fit')]))
   })
   it('says on each row what its machine has: free slots, free memory less what starts hold, and free disk', async () => {
     const pool = { ...healthy(), availableSlots: 3 }
     const { answer } = await runPool(pool, false, {}, undefined, { state: { starts: starting(Date.now()) } })
-    expect((answer.pick as { machine: string }).machine).toBe('3 slots free · 25.7 GB memory free (4.3 GB held by starts) · 197.9 GB disk free')
+    expect((answer.pick as { machine: string }).machine).toBe('3 slots free · 24.6 GB memory free (5.4 GB held by starts) · 196.8 GB disk free')
     const plain = await runPool({ ...healthy(), availableSlots: 1 })
     expect((plain.answer.pick as { machine: string }).machine).toBe('1 slot free · 30.0 GB memory free · 200.0 GB disk free')
   })
