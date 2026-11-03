@@ -13,6 +13,8 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:xterm/xterm.dart' show TerminalTheme;
 
+import '../core/web_build_version.dart' show webPageVersion;
+import '../ws/ws_conn.dart' show declaredAppVersion;
 import '../agent_messages/agent_messages_view.dart';
 import '../agent_messages/shared_tab_dialogs.dart';
 import '../agent_messages/shared_tab_placement.dart' show plainSharedText;
@@ -3463,6 +3465,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
         topInset: _native ? 0 : _tabBarHeight,
         // Pairing a phone is for a computer; a phone is already here.
         forPhone: _compact(context),
+        // The browser says which release this page runs; Desktop's menu
+        // stays as it was.
+        version: kIsWeb ? webPageVersion(declared: declaredAppVersion) : null,
         devices: app.devicesEnabled,
         onOpen: onOpen,
         ownsPointer: (position) => _owns(_accountButtonKey, position),

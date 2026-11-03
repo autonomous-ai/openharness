@@ -34,6 +34,7 @@ import 'task_status.dart';
 import 'workgroup_name.dart';
 import 'project_github.dart';
 import '../widgets/laid_out_list.dart';
+import 'swarm_type.dart';
 
 /// The reader's one Buddy for the whole Swarm, listed first among the projects
 /// as a channel (Dee, 10-31).
@@ -68,8 +69,12 @@ class ProjectSidebar extends StatelessWidget {
     this.attention,
     this.activity,
     this.onOpenBuddyChat,
+    this.compact = false,
   });
   final SuperTabController controller;
+
+  /// A phone's layout: its rows keep the app's sizes, not Slack desktop's ([SwarmType]).
+  final bool compact;
   final ValueChanged<String> onSelect;
   final int Function(SuperTabConversation group) needsHuman;
   final AppNotifier? app;
@@ -115,6 +120,16 @@ class ProjectSidebar extends StatelessWidget {
   static const _iconColumn = SuperTabSectionHeading.actionWidth;
   static const _rowEnd = 10.0;
 
+  /// A sidebar section's heading, as Slack's "Channels": the row's size, medium and muted. A phone keeps the
+  /// heading's own.
+  TextStyle? get _headingStyle => compact
+      ? null
+      : SwarmType.sidebar(
+          compact: false,
+          color: DesktopChrome.muted,
+          medium: true,
+        );
+
   Widget _navigationRow({
     required String key,
     required String label,
@@ -154,9 +169,16 @@ class ProjectSidebar extends StatelessWidget {
               ),
               Expanded(
                 child: ConstrainedBox(
-                  constraints: const BoxConstraints(minHeight: 36),
+                  constraints: BoxConstraints(
+                    minHeight: SwarmType.sidebarRowHeight(compact: compact),
+                  ),
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(0, 8, 12, 8),
+                    padding: EdgeInsets.fromLTRB(
+                      0,
+                      SwarmType.sidebarRowPadding(compact: compact),
+                      12,
+                      SwarmType.sidebarRowPadding(compact: compact),
+                    ),
                     child: Text(
                       label,
                       maxLines: 1,
@@ -165,7 +187,8 @@ class ProjectSidebar extends StatelessWidget {
                       // conversations are: muted when read, full strength
                       // and bold when not.
                       style:
-                          DesktopChrome.control(
+                          SwarmType.sidebar(
+                            compact: compact,
                             medium: selected,
                             color:
                                 onTap == null || (unread == false && !selected)
@@ -194,7 +217,11 @@ class ProjectSidebar extends StatelessWidget {
   Widget _channelMark() => Text(
     '#',
     textAlign: TextAlign.center,
-    style: DesktopChrome.control(color: DesktopChrome.muted, medium: true),
+    style: SwarmType.sidebar(
+      compact: compact,
+      color: DesktopChrome.muted,
+      medium: true,
+    ),
   );
 
   void _openBuddyChat(String projectId) => onOpenBuddyChat != null
@@ -301,7 +328,8 @@ class ProjectSidebar extends StatelessWidget {
     // A muted chat stays listed, greyed, never bold (Slack); the open one
     // keeps its highlight.
     final muted = controller.notifyOf(group.id) == SuperTabNotify.muted;
-    final style = DesktopChrome.control(
+    final style = SwarmType.sidebar(
+      compact: compact,
       medium: highlighted,
       color: highlighted || (unread && !muted)
           ? DesktopChrome.foreground
@@ -370,12 +398,16 @@ class ProjectSidebar extends StatelessWidget {
                                       superTabTaskStatusText(status),
                                   ].join('\n'),
                               child: ConstrainedBox(
-                                constraints: const BoxConstraints(
-                                  minHeight: 36,
+                                constraints: BoxConstraints(
+                                  minHeight: SwarmType.sidebarRowHeight(
+                                    compact: compact,
+                                  ),
                                 ),
                                 child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 8,
+                                  padding: EdgeInsets.symmetric(
+                                    vertical: SwarmType.sidebarRowPadding(
+                                      compact: compact,
+                                    ),
                                   ),
                                   child: Row(
                                     children: [
@@ -583,14 +615,17 @@ class ProjectSidebar extends StatelessWidget {
                   const SizedBox(width: _iconColumn),
                   Expanded(
                     child: ConstrainedBox(
-                      constraints: const BoxConstraints(minHeight: 36),
+                      constraints: BoxConstraints(
+                        minHeight: SwarmType.sidebarRowHeight(compact: compact),
+                      ),
                       child: Align(
                         alignment: Alignment.centerLeft,
                         child: Text(
                           'Closed (${groups.length})',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: DesktopChrome.control(
+                          style: SwarmType.sidebar(
+                            compact: compact,
                             color: DesktopChrome.muted,
                           ),
                         ),
@@ -765,7 +800,10 @@ class ProjectSidebar extends StatelessWidget {
     int count,
   ) {
     final folded = controller.taskGroupFolded(project.id, group);
-    final style = DesktopChrome.control(color: DesktopChrome.muted);
+    final style = SwarmType.sidebar(
+      compact: compact,
+      color: DesktopChrome.muted,
+    );
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
       child: Material(
@@ -794,7 +832,9 @@ class ProjectSidebar extends StatelessWidget {
                 ),
                 Flexible(
                   child: ConstrainedBox(
-                    constraints: const BoxConstraints(minHeight: 36),
+                    constraints: BoxConstraints(
+                      minHeight: SwarmType.sidebarRowHeight(compact: compact),
+                    ),
                     child: Align(
                       alignment: Alignment.centerLeft,
                       child: Text(
@@ -973,6 +1013,7 @@ class ProjectSidebar extends StatelessWidget {
                 SuperTabSectionHeading(
                   key: const ValueKey('project-sidebar-projects'),
                   'Projects',
+                  titleStyle: _headingStyle,
                   // Slack's unread filter: only chats with something unread.
                   actions: [
                     AppIconButton(
@@ -1001,6 +1042,7 @@ class ProjectSidebar extends StatelessWidget {
                 if (!controller.oneBuddy) ...[
                   SuperTabSectionHeading(
                     'Buddies',
+                    titleStyle: _headingStyle,
                     onAdd:
                         controller.canWrite &&
                             !controller.saving &&

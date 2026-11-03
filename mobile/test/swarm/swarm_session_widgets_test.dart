@@ -143,10 +143,26 @@ void main() {
       expect(key('swarm-session-project'), findsNothing);
     });
 
+    for (final swarmChat in [true, false]) {
+      testWidgets('no @ in the ${swarmChat ? 'Swarm\'s' : 'project\'s'} '
+          'Buddy chat (Tony, 11-03): the person talks to their one Buddy '
+          'there', (tester) async {
+        await pump(
+          tester,
+          sessionBackend(swarmChat: swarmChat, swarmBuddy: swarmChat),
+        );
+        expect(key('swarm-field'), findsOneWidget);
+        expect(key('swarm-attach'), findsOneWidget);
+        expect(key('swarm-new-session'), findsOneWidget);
+        expect(key('swarm-tag'), findsNothing);
+        expect(find.text('Tag'), findsNothing);
+      });
+    }
+
     testWidgets('the chip shows its whole label when the row has room for it '
         '(the test font is wider than the phone\'s)', (tester) async {
       await pump(tester, sessionBackend());
-      // Room for the label beside + and Tag, but not for twice its width:
+      // Room for the label beside +, but not for twice its width:
       // the chip is not squeezed to half of what is left.
       tester.view.physicalSize = const Size(1680, 2532);
       await tester.pumpAndSettle();
@@ -156,16 +172,16 @@ void main() {
       expect(label.didExceedMaxLines, isFalse);
     });
 
-    testWidgets('the chip sits right after Tag, not in the middle of the '
+    testWidgets('the chip sits right after +, not in the middle of the '
         'row', (tester) async {
       await pump(tester, sessionBackend());
-      // Room to spare beside + and Tag: the chip is not centred in it.
+      // Room to spare beside +: the chip is not centred in it.
       tester.view.physicalSize = const Size(2100, 2532);
       await tester.pumpAndSettle();
-      final tag = tester.getTopRight(key('swarm-tag'));
+      final attach = tester.getTopRight(key('swarm-attach'));
       // Its label, past the chip's own icon and padding.
       final label = tester.getTopLeft(find.text('New session'));
-      expect(label.dx - tag.dx, lessThan(60));
+      expect(label.dx - attach.dx, lessThan(60));
     });
 
     testWidgets('a chat that cannot start one says why when the chip is '

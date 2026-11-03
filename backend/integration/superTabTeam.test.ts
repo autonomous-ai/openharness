@@ -1214,3 +1214,20 @@ describe('a message from an agent of another account (audit M3)', () => {
     expect(await store.delivery(owner, f.tab, f.lead, delivery.id, { type: 'claim', claimId: randomUUID() })).toMatchObject({ otherAccount: true })
   })
 })
+
+// Task #2390 (Tony, 11-03): a machine's owner keeps it for some projects; every other project's work is refused there.
+describe('a machine its owner keeps for some projects', () => {
+  it('is kept for them across reads, set by its owner alone, and takes no start for another project', async () => {
+    const f = await fixture()
+    const limit = (projectIds: string[] | null, user: AuthUser) => run(f.tab, { type: 'machine.projects', machineId: 'team-mac', projectIds } as Command, user)
+    await expect(limit([f.own], owner)).rejects.toMatchObject({ code: 'OWNER_REQUIRED' })
+    // Its Harness Team account session cannot change what its owner chose.
+    await expect(limit(['lead'], team)).rejects.toMatchObject({ code: 'TEAM_SESSION_LIMITED' })
+    await limit([f.own], person)
+    expect((await store.read(owner, f.tab)).state.machines!.find(m => m.machineId === 'team-mac')!.projects).toEqual([f.own])
+    await expect(run(f.tab, { type: 'agent.start', request: { conversationId: f.teamGroup, machineId: 'team-mac', engine: 'codex',
+      name: 'Second', cwd: '/team', worktree: false, requirements } })).rejects.toMatchObject({ code: 'MACHINE_PROJECTS', message: 'MacBook Pro · Team runs only Own.' })
+    await limit(null, person)
+    expect((await store.read(owner, f.tab)).state.machines!.find(m => m.machineId === 'team-mac')!.projects).toBeUndefined()
+  })
+})
