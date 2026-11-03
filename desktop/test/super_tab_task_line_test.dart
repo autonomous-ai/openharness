@@ -4,7 +4,9 @@ import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/message_text.dart';
 import 'package:harness/super_tabs/ship_row.dart';
+import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/thread_panel.dart';
+import 'package:harness/super_tabs/unread_line.dart';
 
 import 'box_render_preview_test.dart' show loadPreviewFonts;
 import 'super_tab_mentions_test.dart' show showView, shot;
@@ -274,5 +276,44 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('Scope: Desktop and phone'), findsOneWidget);
     await shot(tester, 'desktop-plain-chat-thread');
+  });
+
+  test("a root the server posted in the reader's name is not their own "
+      'writing, so it reads nothing before it (plain chat, #2294)', () {
+    final c = ConversationServer().controller();
+    addTearDown(c.dispose);
+    SuperTabMessage row(
+      int sequence,
+      Map<String, Object> author, [
+      String? kind,
+    ]) => SuperTabMessage.fromJson({
+      'id': 'm$sequence',
+      'conversationId': 'lead',
+      'sequence': sequence,
+      'text': 'Message $sequence',
+      'createdAt': '2026-11-03T09:00:00Z',
+      'author': author,
+      'source': ?(kind == null ? null : {'kind': kind}),
+    });
+    final reader = {
+      'kind': 'person',
+      'id': c.accountId,
+      'name': 'owner@example.com',
+    };
+    final river = {'kind': 'agent', 'id': 'lead-agent', 'name': 'River'};
+    for (final kind in ['task-line', 'buddy-proposal']) {
+      final root = row(3, reader, kind);
+      expect(root.postedForAuthor, isTrue);
+      expect(c.isOwn(root), isFalse);
+      expect(
+        superTabFirstUnread(
+          [row(1, river), row(2, river), root],
+          1,
+          own: c.isOwn,
+        ),
+        'm2',
+      );
+    }
+    expect(c.isOwn(row(4, reader)), isTrue);
   });
 }
