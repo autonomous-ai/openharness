@@ -4763,6 +4763,40 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// A thread the dial opened ([root] a string) or closed (null) in
+  /// [conversationId] of the Swarm tab [tabId], without any navigation.
+  Future<void> _dialThreadOnly(
+    String tabId,
+    String conversationId,
+    Object? root,
+  ) async {
+    if (!_superTabNames.containsKey(tabId) &&
+        !swarms.any((s) => s.superTabId == tabId)) {
+      return;
+    }
+    try {
+      final controller = await superTabs.open(tabId);
+      if (_disposed) return;
+      if (root is String) {
+        if (controller.snapshot == null) await controller.refresh();
+        if (_disposed ||
+            controller.snapshot?.conversation(conversationId) == null) {
+          return;
+        }
+        if (controller.selectedId != conversationId) {
+          await controller.select(conversationId);
+        }
+        if (_disposed || controller.selectedId != conversationId) return;
+        // Not a new pick: a later pick bumps [_devicePick] and drops this.
+        await _openDialThread(controller, root, _devicePick);
+      } else if (controller.openedThread?.conversationId == conversationId) {
+        controller.closeThread();
+      }
+    } catch (error) {
+      appLog.warn('super-tab', 'Could not open the dial\'s thread: $error');
+    }
+  }
+
   /// Opens [root] beside the selected chat once the chat holds it. The dial
   /// names a thread right after its post made the root, so the app often has
   /// not read it: read once, then wait for a later read, until another pick,
@@ -6124,8 +6158,8 @@ class AppNotifier extends ChangeNotifier {
     return controller.snapshot?.conversation(id) == null ? null : id;
   }
 
-  /// The thread whose pane is on screen beside that conversation, by its
-  /// root: the round dial shows and answers it while it stays open.
+  /// The thread open beside that conversation, by its root, shown or hidden:
+  /// the round dial shows and answers it while it stays open.
   String? _dialThread(String tabId) => _dialConversation(tabId) == null
       ? null
       : superTabs.peek(tabId)?.threadOnScreen;
@@ -22512,7 +22546,18 @@ class AppNotifier extends ChangeNotifier {
         // Buddy chat there; anything else is the Lead chat.
         final tabId = payload['superTabId'];
         final projectId = payload['projectId'];
-        if (tabId is String && projectId is String) {
+        if (payload['threadOnly'] == true) {
+          // The dial opened or closed a thread of a chat the app already
+          // shows: no window raised, no Swarm switched, no chat re-selected.
+          final conversationId = payload['conversationId'];
+          if (tabId is String && conversationId is String) {
+            await _dialThreadOnly(
+              tabId,
+              conversationId,
+              payload['threadRoot'] as Object?,
+            );
+          }
+        } else if (tabId is String && projectId is String) {
           await _openSuperTabProject(
             machine,
             tabId,

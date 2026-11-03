@@ -484,6 +484,97 @@ void main() {
     expect(row(announces(f).last).containsKey('threadRoot'), isFalse);
   });
 
+  test('a hidden thread pane still names its root to the dial', () async {
+    final (f, c) = await openChats();
+    c.select('design-fix');
+    c.openThread('m-root');
+    await settle();
+    final before = announces(f).length;
+    c.threadPaneHidden();
+    await settle();
+    // Hiding the pane re-announces nothing and keeps the root in the row.
+    expect(announces(f).length, before);
+    expect(row(announces(f).last)['threadRoot'], 'm-root');
+    f.app.announceWindowForeground();
+    await settle();
+    expect(row(announces(f).last)['threadRoot'], 'm-root');
+  });
+
+  test('closing the pane drops the root from the announce', () async {
+    final (f, c) = await openChats();
+    c.select('design-fix');
+    c.openThread('m-root');
+    c.threadPaneHidden();
+    await settle();
+    c.closeThread();
+    await settle();
+    expect(row(announces(f).last).containsKey('threadRoot'), isFalse);
+  });
+
+  Future<void> threadOnly(
+    SuperTabLaunchFixture f,
+    String conversation,
+    Object? root,
+  ) => f.app.handleEventForTest('m', {
+    'type': 'dial_super_tab',
+    'payload': {
+      'superTabId': tabId,
+      'conversationId': conversation,
+      'threadRoot': root,
+      'threadOnly': true,
+    },
+  });
+
+  test('a threadOnly open does not raise the window or change the active Swarm', () async {
+    final (f, c) = await openChats();
+    final tab = f.app.activeSwarmId;
+    f.app.newSwarm(newTabPage: true);
+    final other = f.app.activeSwarmId;
+    var raised = 0;
+    final sub = f.app.deviceWindowRequests.listen((_) => raised++);
+    f.connection.server.append('Fix it', conversationId: 'design-lead');
+    final root = 'message-${f.connection.server.revision}';
+    await threadOnly(f, 'design-lead', root);
+    await settle();
+    await sub.cancel();
+    expect(raised, 0);
+    expect(f.app.activeSwarmId, other);
+    expect(f.app.activeSwarmId, isNot(tab));
+    expect(c.openedThread?.conversationId, 'design-lead');
+    expect(c.openedThread?.root, root);
+  });
+
+  test('a threadOnly open in a group chat opens the group\'s thread', () async {
+    final (f, c) = await openChats();
+    f.connection.server.append('Fix it', conversationId: 'design-fix');
+    final root = 'message-${f.connection.server.revision}';
+    await threadOnly(f, 'design-fix', root);
+    await settle();
+    expect(c.selectedId, 'design-fix');
+    expect(c.openedThread?.conversationId, 'design-fix');
+    expect(c.openedThread?.root, root);
+  });
+
+  test('a threadOnly close closes only that conversation\'s thread', () async {
+    final (f, c) = await openChats();
+    c.select('design-fix');
+    c.openThread('m-root');
+    await threadOnly(f, 'design-fix', null);
+    await settle();
+    expect(c.openedThread, isNull);
+    expect(c.selectedId, 'design-fix');
+  });
+
+  test('a threadOnly close for another conversation changes nothing', () async {
+    final (f, c) = await openChats();
+    c.select('design-fix');
+    c.openThread('m-root');
+    await threadOnly(f, 'design-lead', null);
+    await settle();
+    expect(c.openedThread?.root, 'm-root');
+    expect(c.selectedId, 'design-fix');
+  });
+
   Future<void> pickThread(
     SuperTabLaunchFixture f,
     String project,
