@@ -50,15 +50,37 @@ class SuperTabLaunch {
     if (app.currentUser?.id != account) {
       throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
     }
+    // A project with no coordinator gets its Product Manager from New Harness
+    // in its chat, the person's first message going to it (River, 11-03,
+    // #2458: Tony's Personal project had none and joined a worker instead).
+    SuperTabSnapshot? snapshot;
+    if (raw == null && tab.superTabId != null && !newProject) {
+      snapshot = await app.superTabs.readSnapshot(tab.superTabId!);
+      if (app.currentUser?.id != account) {
+        throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+      }
+    }
+    final unled = snapshot?.projectFor(conversationId);
+    final coordinator =
+        unled != null &&
+        unled.leadConversationId == conversationId &&
+        snapshot!.leadOf(unled.id) == null;
     final saved = raw == null
         ? <String, dynamic>{
             'operationId': superTabOperationId(),
             'joinId': superTabOperationId(),
             'tabId': tab.superTabId,
             'conversationId': conversationId,
-            'lead': tab.superTabId == null || newProject,
+            'lead': tab.superTabId == null || newProject || coordinator,
             'newSwarm': tab.superTabId == null,
             'newProject': newProject,
+            // It leads a project already there: its and the Swarm's names
+            // and visibility stay as they are.
+            if (coordinator) ...{
+              'coordinator': true,
+              'title': unled.name,
+              'coordinatorName': snapshot.coordinatorNameOf(unled.id),
+            },
             'visibility': 'public',
             if (!newProject) 'projectId': 'lead',
           }
@@ -70,8 +92,9 @@ class SuperTabLaunch {
     // Swarm (no coordinator name on the project) has no such field.
     List<String>? roleSuggestions;
     if (saved['lead'] != true && tab.superTabId != null) {
-      final snapshot = await app.superTabs.readSnapshot(tab.superTabId!);
-      final project = snapshot.projectFor(conversationId);
+      final project =
+          (snapshot ?? await app.superTabs.readSnapshot(tab.superTabId!))
+              .projectFor(conversationId);
       if (project != null && project.hasInstructions) {
         roleSuggestions = await launch.readRoleSuggestions(
           tab.superTabId!,
@@ -144,13 +167,14 @@ class SuperTabLaunch {
                 : saved['roleName'] as String?,
             actionLabel: saved['newProject'] == true
                 ? 'New Project'
-                : saved['lead'] == true
+                : saved['lead'] == true && saved['coordinator'] != true
                 ? 'New Swarm'
                 : 'New Harness',
             // Routing reads quota for Claude Code and Codex only, so a Lead is one
             // of them; the agents it starts may be anything.
             engines: saved['lead'] == true ? const ['claude', 'codex'] : null,
-            projectVisibility: saved['lead'] == true
+            projectVisibility:
+                saved['lead'] == true && saved['coordinator'] != true
                 ? saved['visibility'] as String? ?? 'public'
                 : null,
             projectVisibilityLocked:
@@ -279,7 +303,12 @@ class SuperTabLaunch {
   /// A native start was asked for, so the journal must outlive this form.
   bool get started =>
       saved['phase'] == 'starting' || saved['phase'] == 'joining';
-  String get who => saved['lead'] == true ? 'Lead' : 'harness';
+
+  /// The coordinator as the project calls it: never "Lead" on screen (Naming
+  /// System; River, #2458).
+  String get who => saved['lead'] == true
+      ? saved['coordinatorName'] as String? ?? kDefaultCoordinatorName
+      : 'harness';
   String get machineName {
     final machine = saved['machineId'] as String?;
     if (machine == null) return 'the machine';
@@ -296,7 +325,7 @@ class SuperTabLaunch {
         saved['title'] ??
         (saved['newProject'] == true ? 'New project' : 'Swarm');
     return saved['lead'] == true
-        ? 'Waiting for $machineName to start the Lead for “$title”.'
+        ? 'Waiting for $machineName to start the $who for “$title”.'
         : 'Waiting for $machineName to start the harness.';
   }
 
@@ -918,6 +947,25 @@ class SuperTabLaunch {
         'Waiting for the new harness to appear on its machine.',
       );
     }
+    // Whether it leads was read when the box opened. A project that got its
+    // Product Manager since keeps it: agent.add would make this one its lead
+    // (Hollis, review of #2803). This one was started as a PM, so it does not
+    // join as a worker either; it keeps running, and its person decides.
+    if (saved['coordinator'] == true) {
+      final fresh = await app.superTabs.readSnapshot(saved['tabId'] as String);
+      checkAccount();
+      final project = fresh.projectFor(saved['conversationId'] as String);
+      final lead = project == null ? null : fresh.leadOf(project.id);
+      if (lead != null &&
+          (lead.machineId != machine || lead.harnessId != harnessId)) {
+        throw SuperTabFailure(
+          'COORDINATOR_TAKEN',
+          'Another $who joined this project while this one was starting. '
+              'This one keeps running on $machineName: Discard request to '
+              'leave it out of the project.',
+        );
+      }
+    }
     final project = native.project ?? app.stateOf(machine)?.projectOf(native);
     saved['command'] ??= {
       'type': 'agent.add',
@@ -975,7 +1023,8 @@ class SuperTabLaunch {
     // Waking the exact host starts only its authorized contributions. It is
     // safe to retry, and never grants machine access to the tab's members.
     await app.wakeSuperTabHost(machine);
-    if (saved['lead'] == true) {
+    // A new Swarm or project takes its Lead's name; one already there keeps its own.
+    if (saved['lead'] == true && saved['coordinator'] != true) {
       final name = Swarm.titleFor(native);
       final title =
           saved['title'] as String? ??
@@ -1040,7 +1089,9 @@ class SuperTabLaunch {
       saved.remove('files');
       await persist();
     }
-    if (saved['lead'] == true && saved['newProject'] != true) {
+    if (saved['lead'] == true &&
+        saved['newProject'] != true &&
+        saved['coordinator'] != true) {
       app.bindSuperTab(
         swarmId,
         tabId,
@@ -1066,6 +1117,7 @@ class SuperTabLaunch {
       if (const {
         'ACCOUNT_CHANGED',
         'AGENT_UNAVAILABLE',
+        'COORDINATOR_TAKEN',
         'FILES_UNCONFIRMED',
       }.contains(failure.code)) {
         rethrow;
@@ -1076,11 +1128,26 @@ class SuperTabLaunch {
     }
   }
 
-  SuperTabFailure _joinFailed(Object failure) => SuperTabFailure(
-    'JOIN_FAILED',
-    'The $who started on $machineName. Joining it to the project failed: '
-        '${'$failure'.replaceFirst(RegExp(r'\.$'), '')}. Check status to try again.',
-  );
+  /// The join's failure in the person's words: what happened, and what to do.
+  /// A server's own error is never a reason to give up on the harness, and a
+  /// refusal names the server's reason (Tony, #2458: "An internal server error
+  /// occurred" told him neither).
+  SuperTabFailure _joinFailed(Object failure) {
+    final reason = '$failure'.replaceFirst(RegExp(r'\.$'), '');
+    return SuperTabFailure('JOIN_FAILED', switch (failure) {
+      SuperTabFailure(statusCode: >= 500) =>
+        'The $who started on $machineName and keeps running there, but the '
+            'Harness server had an error adding it to the project. Check '
+            'status to try again.',
+      SuperTabFailure(statusCode: >= 400) when reason.isNotEmpty =>
+        'The $who started on $machineName and keeps running there, but the '
+            'project did not take it: $reason. Discard request, or Check '
+            'status once that changes.',
+      _ =>
+        'The $who started on $machineName. Joining it to the project failed: '
+            '$reason. Check status to try again.',
+    });
+  }
 
   Future<void> resume() async {
     checkAccount();

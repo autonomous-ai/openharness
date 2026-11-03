@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import { checkMentions, MAX_MENTIONS, tagTokens } from './mentions.js'
+import { answeredAgents, checkMentions, MAX_MENTIONS, tagTokens } from './mentions.js'
+import { openSwarmBuddyChat } from './buddies.js'
 import { createSuperTab, type Actor } from './model.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -95,6 +96,39 @@ describe('people tagging people', () => {
     const group = f.state.conversations.find(c => c.id === f.group)!
     expect(() => checkMentions(f.state, outsider, group, ['peer'])).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
     expect(() => f.send(f.group, ['peer'], outsider)).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
+  })
+})
+
+describe('answeredAgents', () => {
+  const post = (f: ReturnType<typeof fixture>, conversationId: string, recipientIds: string[], actor: Extract<Actor, { kind: 'person' }> = owner) => {
+    const draft = f.run({ type: 'message.send', conversationId, text: 'Done.', replyTo: null, recipientIds, mentions: [] }, actor).messages.find(m => !m.source)!
+    return answeredAgents(f.state, actor, f.state.conversations.find(c => c.id === conversationId)!, draft.recipients)
+  }
+
+  it('a plain post in a project chat answers its coordinator', () => {
+    const f = fixture()
+    expect(post(f, f.app.conversationId, [])).toEqual([f.lead])
+  })
+
+  it('a post addressed to another agent leaves the PM\'s tags', () => {
+    const f = fixture()
+    expect(answeredAgents(f.state, owner, f.state.conversations.find(c => c.id === f.app.conversationId)!, [f.worker])).toEqual([f.worker])
+  })
+
+  it('the Swarm Buddy chat clears coordinators of readable projects only', () => {
+    const f = fixture()
+    const secret = f.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).result as { projectId: string; conversationId: string }
+    const secretLead = f.run({ type: 'agent.add', conversationId: secret.conversationId, harnessId: 'secret-lead', machineId: 'machine', name: 'Secret Lead', lead: true,
+      configuration }).result.agentId as string
+    const chat = openSwarmBuddyChat(f.state, f.state.people.find(p => p.id === 'peer')!)
+    const answered = answeredAgents(f.state, peer, chat, [])
+    expect(answered).toContain(f.lead)
+    expect(answered).not.toContain(secretLead)
+  })
+
+  it('a project Buddy chat answers its Buddy and that project\'s coordinator', () => {
+    const f = fixture()
+    expect(answeredAgents(f.state, peer, f.state.conversations.find(c => c.id === f.pmChat)!, [f.worker])).toEqual([f.worker, f.lead])
   })
 })
 

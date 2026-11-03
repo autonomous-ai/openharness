@@ -76,6 +76,9 @@ class SuperTabFixtureConnection extends WsConn {
   /// What starting the account's setup answers (`teamSetup`, `manual`).
   Map<String, dynamic> teamRun = {'state': 'started'};
   bool loseCreate = false, loseJoin = false;
+
+  /// Refuses the next join as the backend would, before anything is written.
+  SuperTabFailure? failJoin;
   bool failNative = false;
   WsRequestFailure? backendFailure;
 
@@ -262,6 +265,10 @@ class SuperTabFixtureConnection extends WsConn {
       if (body?['command'] case final Map command
           when command['type'] == 'agent.add') {
         joins.add(Map<String, dynamic>.from(body!));
+        if (failJoin case final failure?) {
+          failJoin = null;
+          throw failure;
+        }
         // As the backend: a deleted project's conversation is not found.
         if (!(server.state['conversations'] as List).cast<Map>().any(
           (g) => g['id'] == command['conversationId'],
@@ -414,6 +421,25 @@ class SuperTabFixtureConnection extends WsConn {
   }
 }
 
+/// Gives the fixture Swarm's project chat a Product Manager, as a project that
+/// has one: New Harness there then joins a worker (#2458).
+void withCoordinator(SuperTabLaunchFixture f) {
+  (f.connection.server.state['agents'] as List).add({
+    'id': 'pm',
+    'machineId': 'pm-host',
+    'harnessId': 'pm-harness',
+    'name': 'Lead',
+    'contributorId': 'owner',
+    'projectId': 'lead',
+    'configuration': {'engine': 'claude', 'model': 'opus', 'effort': 'high'},
+  });
+  final chat = (f.connection.server.state['conversations'] as List)
+      .cast<Map<String, dynamic>>()
+      .firstWhere((c) => c['id'] == 'lead');
+  chat['leadId'] = 'pm';
+  (chat['agentIds'] as List).add('pm');
+}
+
 class SuperTabLaunchFixture {
   SuperTabLaunchFixture({
     bool local = false,
@@ -507,6 +533,7 @@ void main() {
       for (final engine in ['opencode', 'hermes']) {
         final f = SuperTabLaunchFixture();
         f.connection.extraEngines.add(engine);
+        withCoordinator(f);
         f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
         final box = await f.box(engine: engine);
         expect(
@@ -538,6 +565,7 @@ void main() {
             engine,
             setup: LaunchSetup(engine: engine, permissionMode: 'ask'),
           );
+          if (kind == 'member') withCoordinator(f);
           if (kind != 'new Swarm') {
             f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
           }
@@ -2399,6 +2427,7 @@ void main() {
   for (final engine in ['claude', 'codex']) {
     test('a Desktop $engine Swarm worker gets the DEV role', () async {
       final f = SuperTabLaunchFixture();
+      withCoordinator(f);
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
       final box = await f.box(engine: engine);
       expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
@@ -2418,6 +2447,7 @@ void main() {
       f.connection.server.state['projects'] = [
         {...projectFixture('lead', 'Company', 'lead'), 'skillMode': 'default'},
       ];
+      withCoordinator(f);
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
       final box = await f.box();
       expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
@@ -2454,6 +2484,7 @@ void main() {
       'notesRevision': 0,
       'notes': <dynamic>[],
     };
+    withCoordinator(f);
     f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
     return f;
   }
@@ -2645,6 +2676,98 @@ void main() {
     expect(box.integration!.swarmRole, 'lead');
   });
 
+  // Tony, 11-03 (#2458): his Personal project had no Product Manager, and New
+  // Harness in its chat joined a worker. River: a project with no coordinator
+  // gets its PM from New Harness in its chat, the first message going to it.
+  test('New Harness in a project chat with no coordinator starts its '
+      'Product Manager, keeping the project and Swarm names', () async {
+    final f = SuperTabLaunchFixture();
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Personal');
+    final box = await f.box(engine: 'claude', task: 'Hi New PM Personal');
+    expect(box.integration!.swarmRole, 'lead');
+    expect(box.integration!.roleSuggestions, isNull);
+    // The project and its visibility exist already.
+    expect(box.integration!.projectVisibility, isNull);
+    expect(box.integration!.actionLabel, 'New Harness');
+    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+    final create = f.connection.calls
+        .firstWhere((c) => c.$1 == 'agent_create')
+        .$2;
+    expect(create['swarmRole'], 'lead');
+    final join = f.connection.joins.single['command'] as Map;
+    expect(join['lead'], isTrue);
+    expect(join['conversationId'], 'lead');
+    expect(join['initialMessage'], 'Hi New PM Personal');
+    expect(
+      f.connection.server.posts.map((p) => (p['command'] as Map)['type']),
+      isNot(anyOf(contains('project.rename'), contains('tab.rename'))),
+    );
+  });
+
+  // Hollis's review of #2803: a PM start decided when the box opened, retried
+  // after another PM joined, must not take the project from that one.
+  test(
+    'a PM start retried after another PM joined leaves that one the PM',
+    () async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Personal');
+      f.connection.failJoin = const SuperTabFailure(
+        'INTERNAL_ERROR',
+        'An internal server error occurred',
+        statusCode: 500,
+      );
+      final box = await f.box(engine: 'claude', task: 'Hi New PM Personal');
+      expect(box.integration!.swarmRole, 'lead');
+      expect(await box.create(), NewHarnessOutcome.failed);
+      // Meanwhile the project got its Product Manager.
+      withCoordinator(f);
+      expect(await box.create(), NewHarnessOutcome.failed);
+      expect(
+        box.error,
+        'Another Product Manager joined this project while this one was '
+        'starting. This one keeps running on Test host: Discard request to '
+        'leave it out of the project.',
+      );
+      expect(f.connection.joins, hasLength(1));
+      final chat = (f.connection.server.state['conversations'] as List)
+          .cast<Map<String, dynamic>>()
+          .firstWhere((c) => c['id'] == 'lead');
+      expect(chat['leadId'], 'pm');
+      expect(box.canDiscardPending, isTrue);
+    },
+  );
+
+  test(
+    'a PM start retried while the project still has none joins as its PM',
+    () async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Personal');
+      f.connection.failJoin = const SuperTabFailure(
+        'INTERNAL_ERROR',
+        'An internal server error occurred',
+        statusCode: 500,
+      );
+      final box = await f.box(engine: 'claude', task: 'Hi New PM Personal');
+      expect(await box.create(), NewHarnessOutcome.failed);
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      expect(f.connection.joins, hasLength(2));
+      expect((f.connection.joins.last['command'] as Map)['lead'], isTrue);
+    },
+  );
+
+  test(
+    'New Harness in a project chat with a coordinator joins a worker',
+    () async {
+      final f = SuperTabLaunchFixture();
+      withCoordinator(f);
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Personal');
+      final box = await f.box(engine: 'claude');
+      expect(box.integration!.swarmRole, 'dev');
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      expect((f.connection.joins.single['command'] as Map)['lead'], isFalse);
+    },
+  );
+
   test('account switch during role lookup closes the old launch', () async {
     final f = SuperTabLaunchFixture()
       ..connection.changeAccountOnProjectRead = true;
@@ -2698,6 +2821,7 @@ void main() {
     );
     expect(inherited.engine, isIn(['claude', 'codex']));
 
+    withCoordinator(f);
     f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
     final member = NewHarnessController(
       f.app,

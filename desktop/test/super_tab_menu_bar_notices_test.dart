@@ -173,6 +173,22 @@ void main() {
     expect(rows.last['id'], 'mention-1');
   });
 
+  test('a tag read past leaves the menu bar\'s Swarm rows', () async {
+    final f = SuperTabLaunchFixture(local: true);
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+    final c = await f.app.superTabs.open(tabId);
+    f.connection.server.tag('message-1', messageSequence: 5);
+    Future<List<Object?>> kinds(int mark) async {
+      f.connection.server.markReadElsewhere('lead', mark);
+      await c.refresh();
+      await SuperTabMentions.of(c).load();
+      return [for (final r in statusMenuSwarmEntries(f.app)) r['kind']];
+    }
+
+    expect(await kinds(4), ['mention']);
+    expect(await kinds(5), isEmpty);
+  });
+
   group('a conversation the person can no longer read', () {
     /// A tag and a decision in "Offline editing", then that conversation
     /// leaves what this account reads.
