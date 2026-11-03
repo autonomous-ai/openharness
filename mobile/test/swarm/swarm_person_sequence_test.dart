@@ -22,7 +22,8 @@ void main() {
 
   test('reads a conversation\'s newest message from a person, 0 when the server sent none', () {
     expect(
-      SuperTabConversation.fromJson(row({'lastPersonSequence': 7})).lastPersonSequence,
+      SuperTabConversation.fromJson(row({'lastPersonSequence': 7}))
+          .lastPersonSequence,
       7,
     );
     expect(SuperTabConversation.fromJson(row()).lastPersonSequence, 0);
