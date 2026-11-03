@@ -122,7 +122,12 @@ FakeSwarm taskLineBackend(
   return fake;
 }
 
-Future<SwarmHost> pumpTaskChat(WidgetTester tester, FakeSwarm fake) async {
+Future<SwarmHost> pumpTaskChat(
+  WidgetTester tester,
+  FakeSwarm fake, {
+  ThemeData? theme,
+  GlobalKey? boundary,
+}) async {
   await tester.binding.setSurfaceSize(const Size(390, 844));
   addTearDown(() => tester.binding.setSurfaceSize(null));
   final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
@@ -138,9 +143,17 @@ Future<SwarmHost> pumpTaskChat(WidgetTester tester, FakeSwarm fake) async {
   )..foreground = false;
   addTearDown(host.dispose);
   await tester.pumpWidget(
-    MaterialApp(
-      builder: (context, child) => SwarmScope(notifier: host, child: child!),
-      home: const SwarmConversationPage(swarmId: tab, conversationId: leadChat),
+    RepaintBoundary(
+      key: boundary,
+      child: MaterialApp(
+        debugShowCheckedModeBanner: false,
+        theme: theme,
+        builder: (context, child) => SwarmScope(notifier: host, child: child!),
+        home: const SwarmConversationPage(
+          swarmId: tab,
+          conversationId: leadChat,
+        ),
+      ),
     ),
   );
   await tester.pumpAndSettle();
