@@ -139,13 +139,16 @@ export function toldEngineer(state: SuperTabState, group: Conversation, agentId:
 }
 
 /** The Engineer [agentId] wrote to a step's agent waiting for its revision, in the step's chat or the build's: a "fixed at abc,
- *  please re-check" is a Ready by post, so that wait ends and its 30 minutes run from now (review of #2659). A step not waiting
- *  gets no time from it: an Engineer's posts keep no idle Reviewer (review of #2487). */
+ *  please re-check" is a Ready by post, so that wait ends and its 30 minutes run from now (review of #2659), whether a post or
+ *  a failed check began it, as revisionReady ends both (#2301: a failed check's wait held a hung Reviewer for hours). A step
+ *  not waiting gets no time from it: an Engineer's posts keep no idle Reviewer (review of #2487). */
 export function engineerAnswered(state: SuperTabState, group: Conversation, agentId: string, recipients: string[], now: number): void {
   const steps = group.reviewOf ? [group] : state.conversations.filter(c => c.reviewOf === group.id)
   for (const step of steps) {
-    if (!activeWork(step) || step.assignment!.toldEngineerAt === undefined || !recipients.includes(step.assignment!.agentId)) continue
+    if (!activeWork(step) || !recipients.includes(step.assignment!.agentId)) continue
+    if (step.assignment!.toldEngineerAt === undefined && step.assignment!.changesRequestedAt === undefined) continue
     if (reviewedBuild(state, step)?.assignment!.agentId !== agentId) continue
+    delete step.assignment!.changesRequestedAt
     delete step.assignment!.toldEngineerAt
     restartQuietTime(step.assignment!, now)
     recordTaskState(state, step, now)
