@@ -1223,6 +1223,7 @@ class AgentProject {
     required this.cwd,
     this.root,
     this.remote,
+    this.repository,
     this.branch,
     this.worktree = false,
     this.branchPending = false,
@@ -1231,6 +1232,12 @@ class AgentProject {
   final String cwd;
   final String? root;
   final String? remote;
+
+  /// The repository [remote] stands for when its host is an SSH alias
+  /// (`gh-work/acme/api` is `github.com/acme/api`, cli agentProject.ts
+  /// `aliasRepository`). Null when [remote] names its real host, and from an
+  /// older daemon.
+  final String? repository;
   final String? branch;
 
   /// In a linked worktree rather than the repository's own checkout.
@@ -1289,12 +1296,21 @@ class AgentProject {
       cwd == other.cwd &&
       root == other.root &&
       remote == other.remote &&
+      repository == other.repository &&
       branch == other.branch &&
       worktree == other.worktree &&
       branchPending == other.branchPending;
   @override
-  int get hashCode =>
-      Object.hash(name, cwd, root, remote, branch, worktree, branchPending);
+  int get hashCode => Object.hash(
+    name,
+    cwd,
+    root,
+    remote,
+    repository,
+    branch,
+    worktree,
+    branchPending,
+  );
 
   static AgentProject? fromJson(Object? raw) {
     if (raw is! Map) return null;
@@ -1316,6 +1332,7 @@ class AgentProject {
       cwd: cwd,
       root: field('root'),
       remote: field('remote'),
+      repository: field('repository'),
       branch: field('branch', 256),
       worktree: raw['worktree'] == true,
       branchPending: raw['branchPending'] == true,

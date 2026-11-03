@@ -149,12 +149,19 @@ List<PersonalPane> personalPanes(AppNotifier app) {
         continue;
       }
       if (!seen.add((pane.machineId, agentId))) continue;
-      final agent = machine.agents.where((a) => a.id == agentId).firstOrNull;
+      final project = machine.agents
+          .where((a) => a.id == agentId)
+          .firstOrNull
+          ?.project;
       out.add((
         tab: tab,
         pane: pane,
+        // The repo an SSH alias stands for first, so a clone through
+        // `Host gh-work` and one straight from GitHub are one (task #2476).
         repo:
-            normalizedRemote(agent?.project?.remote) ?? personalTabKey(tab.id),
+            normalizedRemote(project?.repository) ??
+            normalizedRemote(project?.remote) ??
+            personalTabKey(tab.id),
       ));
     }
   }
