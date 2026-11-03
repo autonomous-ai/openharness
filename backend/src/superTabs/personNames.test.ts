@@ -168,8 +168,8 @@ describe('member.name', () => {
 
   it('writes a name into server-written text as plain words, never Markdown (review 1 of #2794)', () => {
     const f = fixture()
-    f.setName('[Ken](https://ev.il) *x*')
-    expect(writtenNameOf(f.state, 'relay')).toBe('\\[Ken\\]\\(https://ev.il\\) \\*x\\*')
+    f.setName('[Ken](ev.il/x) *x*')
+    expect(writtenNameOf(f.state, 'relay')).toBe('\\[Ken\\]\\(ev.il/x\\) \\*x\\*')
     f.setName('1. Minh')
     expect(writtenNameOf(f.state, 'relay')).toBe('1\\. Minh')
     // A username is written as it is today.

@@ -22,8 +22,12 @@ export function setName(state: SuperTabState, actor: Actor, input: string | null
   if (!name || [...name].length > MAX_NAME_LENGTH || !printable(name)) {
     fail('INVALID_NAME', `Use 1 to ${MAX_NAME_LENGTH} characters, with no hidden ones.`, 400)
   }
+  // Read as every compare here reads it: width variants folded (NFKC), so `ＰＭ` is `PM` (review 2 of #2794).
+  const folded = name.normalize('NFKC')
+  // A web address would show as a link in the lines the server writes (review 2 of #2794).
+  if (/:\/\/|^www\./i.test(folded)) fail('INVALID_NAME', 'Use a name, not a web address.', 400)
   // A role's or the Swarm's own voice, as a Buddy may not take (buddies.ts), and the words readers put in place of a name.
-  if (isRoleName(name) || reserved(name) || /^(?:tester|you|someone)(?:[\s#-]+\d+)?$/i.test(name)) {
+  if (isRoleName(folded) || reserved(folded) || /^(?:tester|you|someone)(?:[\s#-]+\d+)?$/i.test(folded)) {
     fail('NAME_RESERVED', `${name} is a role's name. Choose another.`, 400)
   }
   const key = nameKey(name)
