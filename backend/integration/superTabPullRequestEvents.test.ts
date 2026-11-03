@@ -82,7 +82,7 @@ async function swarm() {
   /** The rows this feature wrote in [conversationId], oldest first. */
   const told = async (conversationId = task) => (await db.superTabMessage.findMany({ where: { tabId: tab, conversationId }, orderBy: { sequence: 'asc' } }))
     .filter(m => m.recipientIds.length > 0 && m.text.includes(PR))
-  return { PR, number, pull, store, tab, execute, add, lead, task, worker, assignment, pulls, asked, reader, pass, told, clock: { get now() { return now } } }
+  return { PR, number, pull, store, tab, execute, add, lead, task, worker, assignment, pulls, asked, reader, pass, told, clock: { get now() { return now }, advance(ms: number) { now += ms } } }
 }
 
 describe('pull request events', () => {
@@ -154,6 +154,9 @@ describe('pull request events', () => {
   it('reads at most its cap of tasks a pass, the most recently active first', async () => {
     const f = await swarm()
     f.pulls.set(f.PR, f.pull())
+    // Other tests' tasks are in this database too: this one is made the most recently active.
+    f.clock.advance(60 * MINUTE)
+    await f.execute({ type: 'work.status', conversationId: f.task, assignmentId: f.assignment, status: 'working', result: `Still on ${f.PR}` }, host, f.worker)
     await watchPullRequests(db, f.store, f.reader, f.clock.now + MINUTE, 1)
     expect(f.asked).toEqual([f.PR])
   })
