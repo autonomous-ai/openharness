@@ -1605,7 +1605,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   Future<_RemovalPreview> _removalPreview(String machineId) async {
     final reply = await c.request(
       'GET',
-      '/api/super-tabs/${Uri.encodeComponent(c.tabId)}/machines/${Uri.encodeComponent(machineId)}/removal',
+      '/api/super-tabs/${Uri.encodeComponent(c.tabId)}/machines/${Uri.encodeComponent(machineId)}/removal/v2',
     );
     return _RemovalPreview.fromMap(reply);
   }
@@ -2521,7 +2521,9 @@ class _RemovalPreview {
   });
 
   factory _RemovalPreview.fromMap(Map<String, dynamic> value) {
-    if (value['agents'] is! List || value['soleSourceProjects'] is! List) {
+    if (value['previewVersion'] != 2 ||
+        value['agents'] is! List ||
+        value['soleSourceProjects'] is! List) {
       throw const FormatException('Invalid machine removal preview');
     }
     final blocked = value['blockedBy'];

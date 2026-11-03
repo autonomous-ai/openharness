@@ -2131,8 +2131,12 @@ void main() {
 
       expect(find.text('Could not check this machine.'), findsOneWidget);
       expect(
-        find.byKey(const ValueKey('super-machine-remove-confirm')),
-        findsNothing,
+        tester
+            .widget<FilledButton>(
+              find.byKey(const ValueKey('super-machine-remove-confirm')),
+            )
+            .onPressed,
+        isNull,
       );
       expect(server.posts, isEmpty);
       await tester.pumpWidget(const SizedBox());
