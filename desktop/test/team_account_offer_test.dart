@@ -605,7 +605,7 @@ void main() {
       expect(await f.app.removeLockedMachine(), isNull);
       expect(
         f.connection.server.posts.map((p) => p['command']),
-        contains({'type': 'machine.remove', 'machineId': 'm'}),
+        contains(equals({'type': 'machine.remove', 'machineId': 'm'})),
       );
       expect(f.app.teamSetupLocked, isFalse);
       f.app.superTabs.dispose();
