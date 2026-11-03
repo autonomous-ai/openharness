@@ -463,6 +463,15 @@ class Agent {
   /// Why the agent's model will not answer right now (`grid.note`), or null when nothing is wrong.
   final GridNote? gridNote;
   final String? parentAgentId;
+
+  /// `agent` when another agent started this harness, wherever that agent
+  /// runs; null when the person did (cli lib/agentFrame.ts `startedBy`).
+  final String? startedBy;
+
+  /// Started by the Swarm: by an agent, from no harness on this machine, as
+  /// the CLI tells one (superTabs/inCore/adoption.ts `swarmStarted`). Every
+  /// Buddy is one.
+  bool get startedBySwarm => startedBy == 'agent' && parentAgentId == null;
   final AgentProject? project;
   final AgentGitContext? gitContext;
   AgentProject? get displayProject =>
@@ -575,6 +584,7 @@ class Agent {
     this.gridState,
     this.gridNote,
     this.parentAgentId,
+    this.startedBy,
     this.project,
     this.gitContext,
     this.lastActivityAt,
@@ -743,6 +753,7 @@ class Agent {
       gridState: GridSectionState.parse(grid?['state']),
       gridNote: GridNote.fromWire(grid?['note']),
       parentAgentId: _safeLabel(j['parentAgentId'] ?? j['parentId']),
+      startedBy: j['startedBy'] == 'agent' ? 'agent' : null,
       project: AgentProject.fromJson(j['project']),
       gitContext: AgentGitContext.fromJson(j['gitContext']),
       lastActivityAt: j['updatedAt'] is String
@@ -824,6 +835,7 @@ class Agent {
     gridState: gridState,
     gridNote: gridNote,
     parentAgentId: parentAgentId,
+    startedBy: startedBy,
     project: project,
     gitContext: gitContext ?? this.gitContext,
     lastActivityAt: lastActivityAt,
