@@ -77,7 +77,8 @@ void Function(String tabId, SuperTabMention mention)? superTabMentionNotice(
 
 /// What tells the person about a new message in a chat they set to All new
 /// messages: the operating system, on Desktop only, as tags are. The notice
-/// names the chat, not its newest message.
+/// names the chat, not its newest message, and a click opens that chat in its
+/// Swarm [tabId] (Diego, 2026-11-03: it carried neither, so a click did nothing).
 void Function(String tabId, SuperTabConversation group, int sequence)?
 superTabChatNotice(SystemNotifications system, {bool web = kIsWeb}) => web
     ? null
@@ -85,6 +86,7 @@ superTabChatNotice(SystemNotifications system, {bool web = kIsWeb}) => web
         id: 'harness-chat:$tabId:${group.id}:$sequence',
         title: group.title,
         body: 'New messages',
+        chat: (tabId: tabId, conversationId: group.id),
       );
 
 /// The reader's tags in one Swarm: Waiting and Earlier, read from the backend
