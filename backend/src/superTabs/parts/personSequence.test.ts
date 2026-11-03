@@ -5,8 +5,8 @@ import { numberMessages } from './commit.js'
 // Task #2427 (Huy, 11-03): a task row in the sidebar is bold only for what is for a person, so each conversation records its
 // newest main message from a person, beside lastMainSequence.
 describe('a conversation\'s newest message from a person', () => {
-  const person = { kind: 'person', id: 'owner', generation: 'g' } as MessageDraft['author']
-  const agent = { kind: 'agent', id: 'builder', name: 'Builder', machineId: 'm', harnessId: 'h' } as unknown as MessageDraft['author']
+  const person: MessageDraft['author'] = { kind: 'person', id: 'owner', name: 'owner', membershipGeneration: 'g' }
+  const agent: MessageDraft['author'] = { kind: 'agent', id: 'builder', name: 'Builder', membershipGeneration: 'g' }
   const draft = (id: string, author: MessageDraft['author'], extra: Partial<MessageDraft> = {}): MessageDraft =>
     ({ id, conversationId: 'lead', author, text: id, replyTo: null, recipients: [], ...extra })
 
