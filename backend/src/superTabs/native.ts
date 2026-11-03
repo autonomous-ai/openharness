@@ -5,7 +5,7 @@ import type { AuthUser } from '../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import { activeWork, agent, appendPullRequestUrls, author, conversation, fail, stableId, SuperTabError,
   type Actor, type Agent, type Author, type Conversation, type SuperTabState } from './model.js'
-import { accessInputs, canReadGroup, readConversation, watchersLost } from './projects.js'
+import { accessInputs, canReadGroup, groupRepositoryUrl, readConversation, watchersLost } from './projects.js'
 import { mayDrive } from './terminal.js'
 import { CANCELLABLE_DELIVERY } from './pageReads.js'
 import { cloneData } from './cloneData.js'
@@ -231,7 +231,7 @@ export class SuperTabNativeStore {
       const text = recovery?.source.required ? recovery.text : event.kind === 'gap'
         ? 'Some terminal activity could not be recorded. Check the native session for the full conversation.' : redactCredentials(event.text).text
       // Leave a legacy group's list absent so the next read can recover its older links too.
-      if (group.pullRequestUrls !== undefined) appendPullRequestUrls(group, [text])
+      if (group.pullRequestUrls !== undefined) appendPullRequestUrls(group, [text], groupRepositoryUrl(state, group))
       // A required recovery reaches the coordinator; a typed prompt, its answer or any other gap names no one (phase 1).
       const recipients = turnRecipients(group, target, !!recovery?.source.required)
       const draft = { id: eventId, conversationId: group.id, author: observedBy, text, replyTo: null, recipients }
