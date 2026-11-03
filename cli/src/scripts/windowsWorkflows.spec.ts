@@ -145,6 +145,11 @@ describe('the Windows release workflows', () => {
       expect(sign.match(/overwrite: true/g)).toHaveLength(2)
       expect(job(workflow, next)).toContain(gate(signing))
     }
+    // A skipped sign-windows is an ancestor of `candidate`: an implicit success() there would skip every candidate
+    // prepared while signing is off.
+    expect(job(read('release-desktop.yml'), 'candidate')).toContain(
+      "if: ${{ !cancelled() && inputs.prepare_only && needs.version.result == 'success' && needs.build-macos.result == 'success' && needs.build-linux.result == 'success' && needs.upload-windows.result == 'success' }}",
+    )
     const action = readFileSync(join(workflows, '..', 'actions', 'windows-signing', 'action.yml'), 'utf8')
     expect(action).toContain('uses: azure/login@v3')
     expect(action).toContain('uses: azure/artifact-signing-action@v2')

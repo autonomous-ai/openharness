@@ -798,7 +798,9 @@ jobs:
   # its full producer source tree, Desktop build inputs, version, run and attempt.
   candidate:
     needs: [version, build-macos, build-linux, upload-windows]
-    if: ${{ inputs.prepare_only }}
+    # Explicit results: an implicit success() also inspects skipped ancestors, and sign-windows is skipped while
+    # WINDOWS_SIGNING is off.
+    if: ${{ !cancelled() && inputs.prepare_only && needs.version.result == 'success' && needs.build-macos.result == 'success' && needs.build-linux.result == 'success' && needs.upload-windows.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:

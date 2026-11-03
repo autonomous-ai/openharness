@@ -218,7 +218,9 @@ or use `--deleted-branch NAME`; `--apply` performs the selected cleanup.
 ### Package Desktop while final checks run
 
 When the final implementation is pushed, start `make release-desktop ARGS="--prepare"`
-on that PR branch alongside its required tests and review. This chooses the next
+on that PR branch alongside its required tests and review. While Windows signing is required, the
+`release` environment must allow that branch, or `sign-windows` fails and no candidate is made
+([Windows code signing](windows-code-signing.md#2-github-repository-admin)). This chooses the next
 version using the same tags/live-manifest rules as a release, then dispatches a
 candidate build. Use an explicit version with `--prepare` when preparing a minor
 bump. The candidate uses the release's normal macOS, Linux and Windows build, signing and
