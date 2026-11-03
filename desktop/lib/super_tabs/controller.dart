@@ -1258,8 +1258,9 @@ class SuperTabController extends ChangeNotifier {
 
   /// Reads [projectId]'s GitHub access, at most every 5 minutes unless the project's GitHub revision moved since the
   /// last read (someone allowed its repository or installed the app: read again at once); [refresh]: a person checks
-  /// again (the server asks GitHub at once, at most every 15 seconds per repository). A moved revision asks GitHub
-  /// again too: another server may still keep "not installed". An older server has no such read: nothing is shown.
+  /// again (the server asks GitHub at once, at most every 15 seconds per repository, and records the answer). A moved
+  /// revision asks GitHub again too, since another server may still keep "not installed", but records nothing. An
+  /// older server has no such read: nothing is shown.
   Future<void> readGitHubAccess(
     String projectId, {
     bool refresh = false,
@@ -1271,11 +1272,14 @@ class SuperTabController extends ChangeNotifier {
             ?.githubRevision ??
         0;
     final readAt = _githubRevisionAsked[projectId];
-    if (readAt != null && readAt != revision) refresh = true;
+    // Read again because the revision moved: asks GitHub again, but records nothing (`record=0`), so servers whose caches
+    // differ cannot move it back and forth (review of #2713). A person's own check records.
+    final moved = !refresh && readAt != null && readAt != revision;
     final asked = _githubAsked[projectId];
     if (_disposed ||
         accessRevoked ||
         (!refresh &&
+            !moved &&
             asked != null &&
             clock.now().difference(asked) < const Duration(minutes: 5))) {
       return;
@@ -1287,7 +1291,11 @@ class SuperTabController extends ChangeNotifier {
     try {
       final answer = await request(
         'GET',
-        '$_path/projects/${Uri.encodeComponent(projectId)}/github${refresh ? '?refresh=1' : ''}',
+        '$_path/projects/${Uri.encodeComponent(projectId)}/github${refresh
+            ? '?refresh=1'
+            : moved
+            ? '?refresh=1&record=0'
+            : ''}',
       );
       _github[projectId] = (
         value: SuperTabProjectGitHub.fromJson(answer),

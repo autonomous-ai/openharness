@@ -114,7 +114,8 @@ const hostParams = z.object({ machineId: id })
 const hostStartParams = hostParams.extend({ tabId: id, startId: id })
 const machineParams = hostParams.extend({ tabId: id })
 const projectParams = tabParams.extend({ projectId: id })
-const refreshQuery = z.object({ refresh: z.literal('1').optional() })
+// `record=0`: an app reading again because the project's GitHub revision moved, not a person checking; it records nothing.
+const refreshQuery = z.object({ refresh: z.literal('1').optional(), record: z.literal('0').optional() })
 const approveBody = z.object({ scope: z.enum(['project', 'swarm']) }).strict()
 // What GitHub sends back: a sign-in's code and our state, and after an installation its id and action.
 const callbackQuery = z.object({ code: z.string().max(512).optional(), state: z.string().max(4096).optional(), error: z.string().max(128).optional(),
@@ -330,8 +331,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
         },
         you: repository => approvals.reader(req.user!.autonomousEnv, req.params.tabId, req.params.projectId, repository, req.user!.sub) },
         req.query.refresh === '1')
-      // Only a check that asked GitHub again records what it found: another server's cache may be older than this one's.
-      if (req.query.refresh === '1') await recorded(req.params.tabId, () => store.githubSeen(req.params.tabId, req.params.projectId, access.state))
+      // Only a person's check records what it found (opening GitHub access, Check again): every app reads again when the
+      // revision moves, on servers whose caches differ, and recording those reads would move it back and forth (review of
+      // #2713). A read without `refresh` may answer from an older cache, so it records nothing either.
+      if (req.query.refresh === '1' && req.query.record !== '0') await recorded(req.params.tabId, () => store.githubSeen(req.params.tabId, req.params.projectId, access.state))
       return access
     }))
   // The jobs running and waiting on a project's GitHub Actions, for the route (github/ciLoad.ts): counts only, read through
