@@ -220,19 +220,11 @@ export async function originDefaultRef(path: string): Promise<string | null> {
 }
 
 /**
- * Brings the remote's default branch up to date in [source], with [env]'s git setup instead of the daemon's: a Swarm
- * host's fetch with the Harness GitHub App's token (lib/swarmGitHub.ts `swarmGitPrepareEnv`), before the worktree starts
- * from it. True when it fetched. Offline, slow or refused, the worktree starts from what is here, as `prepareGitProject`'s
- * own fetch does; a repository with no `origin` default branch has nothing to fetch.
- */
-export function fetchDefaultBranch(source: string, env: NodeJS.ProcessEnv): Promise<boolean> {
-  return fetchStartBase(source, env)
-}
-
-/**
- * `fetchDefaultBranch` for the branch a start names ([branchRef], `refs/remotes/origin/X`), or the default branch when it
- * names none or a local one. A project clone is single-branch (projectFolder.ts), so X is fetched here or not at all: the
- * start that follows is offline. In a blob-less clone the files of that branch's tip come too, with the same [env], so the
+ * Brings the branch a start names ([branchRef], `refs/remotes/origin/X`), or the remote's default branch when it names none
+ * or a local one, up to date in [source], with [env]'s git setup instead of the daemon's: a Swarm host's fetch with the
+ * Harness GitHub App's token (lib/swarmGitHub.ts `swarmGitPrepareEnv`), before the worktree starts from it. Offline, slow or
+ * refused, the worktree starts from what is here; a repository with no `origin` default branch has nothing to fetch. A
+ * project clone is single-branch (projectFolder.ts), so X is fetched here or not at all: the start that follows is offline. In a blob-less clone the files of that branch's tip come too, with the same [env], so the
  * offline worktree needs nothing fetched lazily (it may not: `prepareGitProject` `offline`). False when nothing was fetched;
  * files that could not come leave the branch fetched and the start to fail offline, never to use another login.
  */
@@ -276,7 +268,7 @@ export type GitProjectOptions = {
    *  behind. Only a Swarm start asks for it; a repository with no `origin` default branch starts from `HEAD`. */
   fromDefaultBranch?: boolean
   /** Fetch nothing: start from what the checkout already has. A Swarm start doing another person's work: its host
-   *  fetched with the Harness GitHub App's token just before (`fetchDefaultBranch`), and this machine's own git
+   *  fetched with the Harness GitHub App's token just before (`fetchStartBase`), and this machine's own git
    *  login must not be used for it. */
   offline?: boolean
   /** The worktree's branch: created from `ref`, or with `existingBranch` checked out as it is. */

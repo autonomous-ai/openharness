@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { encryptDownFrame, encryptRpcResult } from './e2ee/applicationFrames.js'
 import { placeholderBranch, sessionBranchNames, worktreeFolderName } from './agentNames.js'
 import { nameBranchAfterSession } from './branchNaming.js'
-import { fetchDefaultBranch, fetchStartBase, harnessMadeWorktree, prepareGitProject, readGitProject, validGitPath } from './gitProject.js'
+import { fetchStartBase, harnessMadeWorktree, prepareGitProject, readGitProject, validGitPath } from './gitProject.js'
 import { cloneRepository, parseProjectFolder, prepareProjectFolder } from './projectFolder.js'
 import { engineSessionTitle, namingTitle } from './sessionTitle.js'
 
@@ -445,22 +445,22 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
       expect(parseProjectFolder({ projectSource: 'worktree', gitSource: managed, branchBase: 'default', offline: true })).not.toHaveProperty('offline')
       // The host's fetch, with the environment it is given in place of the daemon's.
       const env = { ...process.env, GIT_CONFIG_PARAMETERS: `'harness.fixture'='yes'` }
-      expect(await fetchDefaultBranch(managed, env)).toBe(true)
+      expect(await fetchStartBase(managed, env)).toBe(true)
       expect(await inClone('rev-parse', 'refs/remotes/origin/main')).not.toBe(before)
       const folder = await prepareProjectFolder({ source: 'worktree', gitSource: managed, branchName: 'super-tab/start-2', fromDefaultBranch: true, offline: true }, options())
       expect(await readFile(join(folder, 'src', 'value'), 'utf8')).toBe('pushed')
     })
 
     it('a host\'s fetch does nothing outside a checkout or without a default branch, and says when it could not fetch', async () => {
-      expect(await fetchDefaultBranch('relative/path', process.env)).toBe(false)
-      expect(await fetchDefaultBranch(join(root, 'nowhere'), process.env)).toBe(false)
+      expect(await fetchStartBase('relative/path', process.env)).toBe(false)
+      expect(await fetchStartBase(join(root, 'nowhere'), process.env)).toBe(false)
       const local = join(root, 'no-remote')
       await mkdir(local)
       await exec('git', ['-C', local, 'init', '-q', '-b', 'trunk'])
       await exec('git', ['-C', local, ...identity, 'commit', '-q', '--allow-empty', '-m', 'initial'])
-      expect(await fetchDefaultBranch(local, process.env)).toBe(false)
+      expect(await fetchStartBase(local, process.env)).toBe(false)
       await inClone('remote', 'set-url', 'origin', join(root, 'gone.git'))
-      expect(await fetchDefaultBranch(managed, process.env)).toBe(false)
+      expect(await fetchStartBase(managed, process.env)).toBe(false)
     })
 
     it('starts from the branch it is given, not the default one', async () => {
