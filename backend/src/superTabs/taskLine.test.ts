@@ -74,6 +74,17 @@ describe('a task\'s one line in its project chat', () => {
     expect(f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR }).edits ?? []).toEqual([])
   })
 
+  it('says who it waits on by the name they set', () => {
+    const f = fixture()
+    f.run({ type: 'member.name', name: 'Dee Tran' })
+    const id = f.group()
+    const builder = f.add('Kai', id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: builder })
+    const effects = f.status(id, builder, 'needs_human', 'Keep drafts after a restart?', {
+      ask: { personId: 'owner', options: ['Keep', 'Drop'], recommended: 0, unblocks: 'The release' } })
+    expect(effects.edits).toEqual([expect.objectContaining({ text: 'Offline drafts · waiting on Dee Tran' })])
+  })
+
   it('reads done, never shipped, for work Done with no pull request', () => {
     const f = fixture()
     const id = f.group('Review: PR #2632')
