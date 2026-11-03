@@ -7,7 +7,8 @@ import 'package:harness/state/new_harness.dart';
 import 'package:harness/super_tabs/launch.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 
-import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
+import 'super_tab_launch_test.dart'
+    show SuperTabLaunchFixture, tabId, withCoordinator;
 
 Map<String, dynamic>? journal(SuperTabLaunchFixture f) => f.store.values.entries
     .where((e) => e.key.startsWith('super_tab.launch.'))
@@ -88,7 +89,9 @@ void main() {
     );
     await tester.pump();
     expect(
-      find.text('Waiting for Test host to start the Lead for “New project”.'),
+      find.text(
+        'Waiting for Test host to start the Product Manager for “New project”.',
+      ),
       findsOneWidget,
     );
     await tester.tap(find.text('Discard request'));
@@ -135,7 +138,7 @@ void main() {
     expect(box.discarded, isFalse);
     expect(
       box.error,
-      'The Lead started on Test host. Check status to add it to the project.',
+      'The Product Manager started on Test host. Check status to add it to the project.',
     );
     expect(journal(f)!['phase'], 'starting');
     expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
@@ -145,20 +148,24 @@ void main() {
   test('Discard after a failed join leaves the Lead running', () async {
     final f = await stuckProject();
     final box = await reopen(f);
-    f.connection.server.refuse = {
-      'code': 'INTERNAL',
-      'message': 'An internal server error occurred',
-    };
+    // The backend's answer to an error of its own (errorHandler.ts).
+    f.connection.server
+      ..refuse = {
+        'code': 'INTERNAL_ERROR',
+        'message': 'An internal server error occurred',
+      }
+      ..refuseStatus = 500;
     expect(await box.create(), NewHarnessOutcome.failed);
+    // It says what failed and what to do, not the server's bare words (#2458).
     expect(
       box.error,
-      'The Lead started on Test host. Joining it to the project failed: '
-      'An internal server error occurred. Check status to try again.',
+      'The Product Manager started on Test host and keeps running there, but the Harness '
+      'server had an error adding it to the project. Check status to try again.',
     );
     expect(journal(f)!['phase'], 'joining');
     expect(
       await box.discardPending(),
-      'The Lead keeps running on Test host. Remove this request?',
+      'The Product Manager keeps running on Test host. Remove this request?',
     );
     expect(journal(f), isNotNull);
     final projectId = journal(f)!['projectId'];
@@ -174,6 +181,33 @@ void main() {
       (f.connection.server.state['projects'] as List).map((p) => p['id']),
       contains(projectId),
     );
+  });
+
+  test('a refused join says why, and that the Lead keeps running', () async {
+    final f = await stuckProject();
+    final box = await reopen(f);
+    f.connection.server
+      ..refuse = {
+        'code': 'TEAM_ACCOUNT_HELD',
+        'message':
+            'This machine\'s Harness Team account runs another project\'s '
+            'Product Manager, so it takes only that project\'s work for now.',
+      }
+      ..refuseStatus = 403;
+    expect(await box.create(), NewHarnessOutcome.failed);
+    expect(
+      box.error,
+      'The Product Manager started on Test host and keeps running there, but the project '
+      'did not take it: This machine\'s Harness Team account runs another '
+      'project\'s Product Manager, so it takes only that project\'s work for '
+      'now. Discard request, or Check status once that changes.',
+    );
+    expect(journal(f)!['phase'], 'joining');
+    expect(box.canDiscardPending, isTrue);
+    // Once the server takes it, Check status joins the same harness.
+    f.connection.server.refuse = null;
+    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+    expect(journal(f), isNull);
   });
 
   test('a failed creation gives the form back without Discard', () async {
@@ -202,7 +236,7 @@ void main() {
           throw StateError('Connection lost');
       expect(
         await box.discardPending(),
-        'Could not reach Test host, so it may still start the Lead. Discard anyway?',
+        'Could not reach Test host, so it may still start the Product Manager. Discard anyway?',
       );
       expect(journal(f), isNotNull);
       expect(await box.discardPending(anyway: true), isNull);
@@ -243,7 +277,7 @@ void main() {
     );
     await tester.pump();
     const question =
-        'Could not reach Test host, so it may still start the Lead. '
+        'Could not reach Test host, so it may still start the Product Manager. '
         'Discard anyway?';
 
     await tester.tap(find.text('Discard request'));
@@ -360,6 +394,7 @@ void main() {
     () async {
       // A new Lead cannot choose a terminal at all; an agent joining it can.
       final f = SuperTabLaunchFixture();
+      withCoordinator(f);
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
       final box = await f.box(engine: 'terminal');
       expect(await box.create(), NewHarnessOutcome.failed);

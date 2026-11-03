@@ -103,7 +103,10 @@ export function numberMessages(state: SuperTabState, messages: MessageDraft[], n
     sequences.set(message.id, sequence)
     if (agentOnly(message.source, message.recipients)) continue
     group.lastMessageSequence = sequence
-    if (!message.thread || message.alsoInChat) group.lastMainSequence = sequence
+    if (!message.thread || message.alsoInChat) {
+      group.lastMainSequence = sequence
+      if (message.author.kind === 'person' && !message.source) group.lastPersonSequence = sequence
+    }
     group.lastActivityAt = new Date(now).toISOString()
     delete group.dormant
   }

@@ -392,3 +392,13 @@ it('accepts every returning-offer skip and pairing-source counter', async () => 
     expect(methods.ingestProductUsage).toHaveBeenLastCalledWith('account', report)
   }
 })
+
+it('accepts every Import agent outcome from a Desktop (task #2379), and keeps it in the report', async () => {
+  for (const measure of ['started', 'ok', 'failed', 'cancelled', 'unknown', 'under_1s', 'over_1m']) {
+    const metric = `ui_desktop_agent_import_${measure}`
+    const report = { ...good, context: { surface: 'desktop', release: '1.3.0', platform: 'macos', channel: 'production' },
+      counters: { [metric]: 1 } }
+    expect((await submit(report)).statusCode, metric).toBe(200)
+    expect(methods.ingestProductUsage).toHaveBeenLastCalledWith('account', report)
+  }
+})

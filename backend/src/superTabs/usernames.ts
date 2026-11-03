@@ -24,8 +24,10 @@ function base(email: string): string {
  * `@River` beside the Product Manager. [people] are in join order (the state's own order). Readers get these names from
  * the server (read/views.ts, model.ts visibleState); Desktop works out the same defaults only for an older server.
  */
-export function usernames(people: ReadonlyArray<Pick<Person, 'id' | 'email' | 'username'>>, agentNames: Iterable<string> = []): Map<string, string> {
+export function usernames(people: ReadonlyArray<Pick<Person, 'id' | 'email' | 'username' | 'name'>>, agentNames: Iterable<string> = []): Map<string, string> {
   const taken = new Set([...people.flatMap(p => p.username ? [p.username] : []), ...[...agentNames].map(name => name.toLowerCase())])
+  // Another person's display name (personNames.ts) too, so a later joiner never reads like them; never one's own.
+  const shown = people.flatMap(p => p.name ? [{ id: p.id, key: nameKey(p.name) }] : [])
   const names = new Map<string, string>()
   for (const member of people) {
     if (member.username) {
@@ -33,8 +35,9 @@ export function usernames(people: ReadonlyArray<Pick<Person, 'id' | 'email' | 'u
       continue
     }
     const root = base(member.email)
+    const free = (name: string) => !taken.has(name) && !shown.some(s => s.id !== member.id && s.key === name)
     let name = root
-    for (let n = 2; taken.has(name); n++) name = `${root}${n}`
+    for (let n = 2; !free(name); n++) name = `${root}${n}`
     taken.add(name)
     names.set(member.id, name)
   }
@@ -61,6 +64,14 @@ const sharedAgentNames = (state: SuperTabState): string[] => agentNames(state, a
 export const swarmUsernames = (state: SuperTabState): Map<string, string> => usernames(state.people, sharedAgentNames(state))
 export const usernameOf = (state: SuperTabState, id: string): string | undefined => swarmUsernames(state).get(id)
 
+/** The names of agents [actor] can see, the scope their reads use: refusing another's name would tell them it exists. */
+export const agentNamesSeenBy = (state: SuperTabState, actor: Actor): string[] =>
+  agentNames(state, agent => projectsOf(state).some(p => p.id === agentProjectId(state, agent)) && canReadAgent(state, actor, agent))
+
+/** What makes two names the same person to a reader: width variants (NFKC), case, spaces and a leading `@` aside, so
+ *  `Ｄｅｅ`, `@dee` and `D E E` all read as `dee` (personNames.ts). */
+export const nameKey = (text: string): string => text.normalize('NFKC').toLowerCase().replace(/[\s\p{Zs}]+/gu, '').replace(/^@+/, '')
+
 /** `member.username`: a person chooses their own name, or clears it to go back to their default. Unique in the Swarm. */
 export function setUsername(state: SuperTabState, actor: Actor, input: string | null): void {
   if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'Only a person has a username.', 403)
@@ -69,13 +80,15 @@ export function setUsername(state: SuperTabState, actor: Actor, input: string | 
   if (input === null) return void delete member.username
   const name = input.trim().toLowerCase()
   if (!SHAPE.test(name)) fail('INVALID_USERNAME', 'Use 2 to 32 letters, digits, dots, dashes or underscores, starting with a letter or digit, with no dot at the end or two in a row.', 400)
-  // Only agents this person can see, the scope their reads use: refusing another's name would tell them it exists.
-  const sees = (agent: Agent) => projectsOf(state).some(p => p.id === agentProjectId(state, agent)) && canReadAgent(state, actor, agent)
-  if (agentNames(state, sees).some(agent => agent.toLowerCase() === name)) {
+  if (agentNamesSeenBy(state, actor).some(agent => agent.toLowerCase() === name)) {
     fail('USERNAME_TAKEN', `${name} is an agent’s name here.`, 409)
   }
   for (const [id, other] of swarmUsernames(state)) {
     if (id !== member.id && other === name) fail('USERNAME_TAKEN', `${name} is taken.`, 409)
+  }
+  // Nor another person's display name (personNames.ts), which would make the two read alike.
+  if (state.people.some(p => p.id !== member.id && p.name && nameKey(p.name) === nameKey(name))) {
+    fail('USERNAME_TAKEN', `${name} is someone’s name here.`, 409)
   }
   member.username = name
 }

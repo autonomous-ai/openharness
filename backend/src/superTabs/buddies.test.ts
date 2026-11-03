@@ -546,12 +546,35 @@ describe('a Buddy\'s proposal to the PM', () => {
     return { f, propose }
   }
 
-  it('posts one message in the project chat, to the PM, written by the server as on its owner\'s behalf', () => {
+  it('posts an ordinary root as its owner and delivers the full first reply from the Buddy', () => {
     const { f, propose } = asked()
-    const posted = propose().messages
-    expect(posted).toEqual([expect.objectContaining({ conversationId: f.app.conversationId, recipients: [f.pm],
-      author: expect.objectContaining({ kind: 'agent', id: 'buddy' }), source: { kind: 'buddy-proposal', personId: 'peer', ownerMessageId: 'ask' },
-      text: 'Proposal from peer\'s Buddy, on peer\'s behalf.\n\nGoal: Sync edits made offline\nScope: Desktop drafts only; no phone yet\nPriority: high' })])
+    const [root, details] = propose().messages
+    expect(root).toMatchObject({ conversationId: f.app.conversationId, recipients: [], replyTo: null,
+      author: { kind: 'person', id: 'peer', name: 'peer@example.com', membershipGeneration: 'first' },
+      source: { kind: 'buddy-proposal', personId: 'peer', buddyId: 'buddy', ownerMessageId: 'ask' },
+      text: "Let's build: Sync edits made offline" })
+    expect(details).toMatchObject({ conversationId: f.app.conversationId, recipients: [f.pm], replyTo: root!.id, thread: root!.id,
+      author: { kind: 'agent', id: 'buddy' },
+      text: 'Goal: Sync edits made offline\nScope: Desktop drafts only; no phone yet\nPriority: high' })
+  })
+
+  it.each([
+    ['  Offline drafts  ', 'Requested by Dee. Save drafts. Keep them.', 'Offline drafts'],
+    [undefined, 'Requested by Dee. Save drafts. Keep them.', 'Save drafts'],
+    [undefined, 'Requested by dee@autonomous.ai through Harness. Hub reports hide an item from everyone.', 'Hub reports hide an item from everyone'],
+    [undefined, 'Save drafts! Keep them.', 'Save drafts!'],
+    [undefined, 'A'.repeat(100), 'A'.repeat(80)],
+  ])('uses a bounded short name for the root (%s)', (title, goal, name) => {
+    const { f } = asked()
+    const command = commandSchema.parse({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal, goal, ...(title ? { title } : {}) })
+    const posted = f.run(command, buddy, { proposalAsk: { id: 'ask', conversationId: f.chat, source: false, createdAt: 900,
+      author: { kind: 'person', id: 'peer', name: 'peer', membershipGeneration: 'first' } } })
+    expect(posted.messages[0]!.text).toBe(`Let's build: ${name}`)
+  })
+
+  it('refuses empty and overlong explicit names before posting', () => {
+    for (const title of [' ', 'A'.repeat(81)]) expect(commandSchema.safeParse({ type: 'buddy.propose', conversationId: 'chat',
+      ownerMessageId: 'ask', ...proposal, title }).success).toBe(false)
   })
 
   it('is one per ask: the same message never asks twice', () => {
@@ -577,11 +600,11 @@ describe('a Buddy\'s proposal to the PM', () => {
       { now: 2 * 3_600_000, proposalAsk: { id: 'ask', conversationId: f.chat, source: false, createdAt, newestOwnerMessageId,
         author: { kind: 'person', id: 'peer', name: 'peer', membershipGeneration: 'first' } } })
     expect(() => send('later', 900)).toThrow('your owner\'s newest message')
-    expect(send('ask', 900).messages).toHaveLength(1)
+    expect(send('ask', 900).messages).toHaveLength(2)
     const { f: g } = asked()
     expect(g.run({ type: 'buddy.propose', conversationId: g.chat, ownerMessageId: 'ask', ...proposal }, buddy,
       { now: 2 * 3_600_000, proposalAsk: { id: 'ask', conversationId: g.chat, source: false, createdAt: 2 * 3_600_000 - 59 * 60_000, newestOwnerMessageId: 'later',
-        author: { kind: 'person', id: 'peer', name: 'peer', membershipGeneration: 'first' } } }).messages).toHaveLength(1)
+        author: { kind: 'person', id: 'peer', name: 'peer', membershipGeneration: 'first' } } }).messages).toHaveLength(2)
   })
 
   it('carries the files the store found it may send, on the proposal message in the project chat', () => {
@@ -591,8 +614,8 @@ describe('a Buddy\'s proposal to the PM', () => {
     const posted = f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal, attachmentIds: ['plan', 'shot', 'plan'] }, buddy,
       { proposalAsk: { id: 'ask', conversationId: f.chat, source: false, createdAt: 900,
         author: { kind: 'person', id: 'peer', name: 'peer', membershipGeneration: 'first' } }, attachments: files }).messages
-    expect(posted).toEqual([expect.objectContaining({ conversationId: f.app.conversationId, attachments: files,
-      source: { kind: 'buddy-proposal', personId: 'peer', ownerMessageId: 'ask' } })])
+    expect(posted[0]).not.toHaveProperty('attachments')
+    expect(posted[1]).toMatchObject({ conversationId: f.app.conversationId, attachments: files, replyTo: posted[0]!.id, thread: posted[0]!.id })
     expect(propose('ask2').messages[0]).not.toHaveProperty('attachments')
   })
 
@@ -660,7 +683,7 @@ describe('a Swarm-wide Buddy', () => {
     expect(() => f.run({ ...named, projectId: 'made-up' }, self, { proposalAsk: ask } as never)).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
     expect(() => f.run(named, self, { proposalAsk: { ...ask, session: true } } as never)).toThrow(expect.objectContaining({ code: 'PROPOSAL_UNASKED' }))
     const rows = f.run(named, self, { proposalAsk: ask } as never).messages
-    expect(rows.at(-2)).toMatchObject({ conversationId: f.web.conversationId, source: { kind: 'buddy-proposal', personId: 'peer' } })
+    expect(rows[0]).toMatchObject({ conversationId: f.web.conversationId, source: { kind: 'buddy-proposal', personId: 'peer' } })
     expect(rows.at(-1)).toMatchObject({ conversationId: chat, recipients: [], source: { kind: 'buddy-proposal-sent', projectId: f.web.projectId } })
     expect(rows.at(-1)!.id).not.toBe(rows.at(-2)!.id)
   })

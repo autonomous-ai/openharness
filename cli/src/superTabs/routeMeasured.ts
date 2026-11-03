@@ -59,11 +59,23 @@ export function measuredFrom(answer: unknown): Measured | null {
   return { rows, truncated: value.truncated === true }
 }
 
+/** Each reason a read failed, said once per process: the route runs about 30 times an hour, and a refusal that lasts (a Team
+ *  account refused the costs route until 2026-11-03) would otherwise fill the log or, as before, say nothing at all. */
+const saidWhy = new Set<string>()
+function sayOnce(why: string): void {
+  if (saidWhy.has(why)) return
+  saidWhy.add(why)
+  console.warn(`[super-tabs] the route could not read cost results: ${why}; it ranks without them`)
+}
+const reasonOf = (answer: Record<string, unknown>) =>
+  `${String(answer.error)}${Number.isInteger(answer.status) ? ` (${answer.status as number})` : ''}`
+
 /** The project's measures, read through the route's own backend request: null when refused, failed, slower than [ms] or
- *  unreadable, so the route ranks as today. The route runs about 30 times an hour; the read is the costs command's, about
- *  0.1 to 0.3 s beyond a plain request on the openharness Swarm (2026-10-31). */
+ *  unreadable, so the route ranks as today. A refusal is logged by its code, never its detail. The read is the costs
+ *  command's, about 0.1 to 0.3 s beyond a plain request on the openharness Swarm (2026-10-31). */
 export async function readMeasured(request: ScopedRequest, ms = READ_MS): Promise<Measured | null> {
-  const answer = await within(request({ action: 'costs', days: DAYS }).catch(() => null), ms)
+  const answer = await within(request({ action: 'costs', days: DAYS }).catch(() => { sayOnce('the request failed'); return null }), ms)
+  if (answer && typeof answer.error === 'string') sayOnce(reasonOf(answer))
   return answer ? measuredFrom(answer) : null
 }
 

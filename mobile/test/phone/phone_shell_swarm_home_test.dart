@@ -16,8 +16,8 @@ import 'package:harness_mobile/swarm/swarm_you_page.dart';
 import 'devices_fixture.dart';
 
 /// With Swarm on, the app opens on Swarm Home, full screen, with Settings in
-/// the You tab and no way to Harness there: Settings ▸ Swarm off is the way
-/// back to it. With it off, the app opens on the terminal, as it always has.
+/// You — opened from the avatar on Home since 2026-11-03, no longer a tab —
+/// and no way to Harness there: Settings ▸ Swarm off is the way back to it. With it off, the app opens on the terminal, as it always has.
 void main() {
   late DevicesApp app;
 
@@ -50,10 +50,19 @@ void main() {
     await frames(tester);
   }
 
-  /// Row [row] of the You tab, tapped.
-  Future<void> youTo(WidgetTester tester, String row) async {
-    await tester.tap(key('swarm-tab-you'));
+  /// You, from the avatar at the top of Home.
+  Future<void> openYou(WidgetTester tester) async {
+    expect(key('swarm-tab-you'), findsNothing, reason: 'no You tab');
+    await tester.tap(key('swarm-you-button'));
     await frames(tester);
+  }
+
+  /// Row [row] of You, tapped.
+  Future<void> youTo(WidgetTester tester, String row) async {
+    await openYou(tester);
+    // You scrolls: on the test's short screen its last rows sit below.
+    await tester.ensureVisible(key(row));
+    await tester.pump();
     await tester.tap(key(row));
     await frames(tester);
   }
@@ -124,8 +133,7 @@ void main() {
   testWidgets('with Swarm on, You has no Harness: its models, then '
       'Settings at its foot', (tester) async {
     await open(tester);
-    await tester.tap(key('swarm-tab-you'));
-    await frames(tester);
+    await openYou(tester);
 
     final you = find.byType(SwarmYouPage);
     expect(key('swarm-you-models'), findsOneWidget);
@@ -170,6 +178,11 @@ void main() {
 
     await youTo(tester, 'swarm-you-settings');
     expect(find.byType(SettingsPage), findsOneWidget);
+    expect(
+      tester.widget<SettingsPage>(find.byType(SettingsPage)).swarm,
+      isTrue,
+      reason: "drawn as Swarm's pages are",
+    );
 
     await tester.binding.handlePopRoute();
     await frames(tester);
@@ -239,6 +252,11 @@ void main() {
     // The terminal's Settings (its menu, Find), as the person reaches it.
     openPhoneSettings(tester.element(find.byType(AgentHome)), app);
     await frames(tester);
+    expect(
+      tester.widget<SettingsPage>(find.byType(SettingsPage)).swarm,
+      isFalse,
+      reason: "the terminal's Settings keeps the phone's own look",
+    );
     await tapSwarmSwitch(tester);
     await tester.tap(find.text('Turn on Swarm'));
     await frames(tester);

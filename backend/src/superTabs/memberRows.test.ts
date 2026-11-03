@@ -66,6 +66,14 @@ describe('the row that says so', () => {
     expect(actorLabel(state, 'agent:gone')).toBeUndefined()
     expect(actorLabel(state, 'person:gone')).toBeUndefined()
   })
+
+  it('names a person by the name they set, when they set one, as plain words', () => {
+    const state = swarm([], [])
+    state.people[0]!.name = 'Ken Nguyen'
+    expect(actorLabel(state, 'person:ken')).toBe('Ken Nguyen')
+    state.people[0]!.name = '[Ken](https://ev.il)'
+    expect(actorLabel(state, 'person:ken')).toBe('\\[Ken\\]\\(https://ev.il\\)')
+  })
 })
 
 // Cleo, Orion, Luna and Echo: a machine's report closes sessions and reopens them outside any command, and those changes left no

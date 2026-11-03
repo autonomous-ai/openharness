@@ -28,6 +28,12 @@ extension SuperTabProfileActions on SuperTabController {
     'username': username?.trim(),
   }, viewer: true);
 
+  /// The name the Swarm shows for the reader, trimmed (the server keeps one
+  /// space between words), or back to their username when null. A taken name
+  /// comes back in words. A viewer may change theirs too.
+  Future<String?> setName(String? name) =>
+      _profile({'type': 'member.name', 'name': name?.trim()}, viewer: true);
+
   /// [agentId]'s avatar when given (its contributor's or Lead's to change),
   /// else the reader's own: [preset], or back to the default when null.
   /// An upload goes through [uploadAvatar].

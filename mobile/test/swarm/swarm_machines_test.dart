@@ -392,14 +392,19 @@ void main() {
       List<Map<String, dynamic>> agents = const [],
       List<Map<String, dynamic>> projects = const [],
       Map<String, dynamic>? blockedBy,
+      int hiddenAgentCount = 0,
+      int hiddenSoleSourceProjectCount = 0,
     }) => {
+      'previewVersion': 2,
       'blockedBy': blockedBy,
       'agents': agents,
+      'hiddenAgentCount': hiddenAgentCount,
       'soleSourceProjects': projects,
+      'hiddenSoleSourceProjectCount': hiddenSoleSourceProjectCount,
     };
 
     int removalReads() => fake.calls
-        .where((c) => c.path.endsWith('/machines/mac-1/removal'))
+        .where((c) => c.path.contains('/machines/mac-1/removal'))
         .length;
 
     testWidgets(
@@ -561,6 +566,10 @@ void main() {
         await press(tester);
         await tester.tap(find.text('Remove from Swarm'));
         await tester.pumpAndSettle();
+        expect(
+          fake.calls.singleWhere((c) => c.path.contains('/removal')).path,
+          '/api/super-tabs/$tab/machines/mac-1/removal/v2',
+        );
         expect(find.text('Remove Tony’s Mac from this Swarm?'), findsOneWidget);
         expect(find.textContaining('Nova · Mobile'), findsOneWidget);
         expect(
@@ -580,6 +589,54 @@ void main() {
         expect(fake.commands, [
           {'type': 'machine.remove', 'machineId': 'mac-1'},
         ]);
+      },
+    );
+
+    testWidgets(
+      'Remove counts hidden agents and projects without naming them',
+      (tester) async {
+        await open(
+          tester,
+          agents: plain,
+          routes: (f) =>
+              f.routes['/api/super-tabs/$tab/machines/mac-1/removal'] = (_) =>
+                  preview(
+                    agents: [
+                      {
+                        'name': 'Nova',
+                        'projectName': 'Mobile',
+                        'task': 'Fix sync',
+                      },
+                    ],
+                    projects: [
+                      {'name': 'Beacon'},
+                    ],
+                    hiddenAgentCount: 2,
+                    hiddenSoleSourceProjectCount: 1,
+                  ),
+        );
+        await press(tester);
+        await tester.tap(find.text('Remove from Swarm'));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('Nova · Mobile'), findsOneWidget);
+        expect(
+          find.textContaining('“Fix sync” loses its agent'),
+          findsOneWidget,
+        );
+        expect(find.textContaining('Beacon'), findsOneWidget);
+        expect(
+          find.textContaining("2 agents of projects you can't see"),
+          findsOneWidget,
+        );
+        expect(
+          find.textContaining(
+            "1 project you can't see has code only on this machine",
+          ),
+          findsOneWidget,
+        );
+        expect(find.textContaining('Secret'), findsNothing);
+        expect(fake.commands, isEmpty);
       },
     );
 
@@ -648,6 +705,57 @@ void main() {
         expect(find.textContaining('Delete the project first'), findsOneWidget);
         expect(
           find.textContaining('Remove Tony’s Mac from this Swarm?'),
+          findsNothing,
+        );
+        expect(fake.commands, isEmpty);
+      },
+    );
+
+    testWidgets(
+      'an unreadable Product Manager blocks with the generic reason',
+      (tester) async {
+        const reason = "A Product Manager of a project you can't see runs on this machine.";
+        await open(
+          tester,
+          agents: plain,
+          routes: (f) =>
+              f.routes['/api/super-tabs/$tab/machines/mac-1/removal'] = (_) =>
+                  preview(blockedBy: {'reason': reason}),
+        );
+        await press(tester);
+        await tester.tap(find.text('Remove from Swarm'));
+        await tester.pumpAndSettle();
+
+        expect(find.text(reason), findsOneWidget);
+        expect(find.text('Could not check this machine.'), findsNothing);
+        expect(
+          find.textContaining('Remove Tony’s Mac from this Swarm?'),
+          findsNothing,
+        );
+        expect(fake.commands, isEmpty);
+      },
+    );
+
+    testWidgets(
+      'fails closed when the backend lacks the versioned preview',
+      (tester) async {
+        await open(
+          tester,
+          agents: plain,
+          routes: (f) =>
+              f.routes['/api/super-tabs/$tab/machines/mac-1/removal'] = (_) => {
+                'blockedBy': null,
+                'agents': <Object>[],
+                'soleSourceProjects': <Object>[],
+              },
+        );
+        await press(tester);
+        await tester.tap(find.text('Remove from Swarm'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Could not check this machine.'), findsOneWidget);
+        expect(
+          find.text('Remove Tony’s Mac from this Swarm?'),
           findsNothing,
         );
         expect(fake.commands, isEmpty);
