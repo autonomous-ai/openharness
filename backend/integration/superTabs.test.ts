@@ -2573,6 +2573,8 @@ describe('Super Tab chat attachments', () => {
   const signed = (path: string) => new RegExp(`^https://storage\\.memory\\.test/${path}\\?expires=\\d+&signature=[0-9a-f]{64}$`)
   /** A file as two reads hand it: the same object, each with a link of its own read. */
   const sameFile = (file: Uploaded) => ({ ...file, link: expect.stringMatching(signed(objectKey(file.url).replaceAll('.', '\\.'))), expiresAt: expect.any(Number) })
+  /** A file as a message keeps it: a read signs a fresh link for it (fileLinks.ts), so the upload answer's link is not part of it. */
+  const keptFile = ({ link: _link, expiresAt: _expiresAt, ...file }: Uploaded) => file
 
   it('keeps a credential out of a file\'s name, which the chat shows like the message', async () => {
     const { tab } = await fixture()
@@ -3030,7 +3032,7 @@ describe('Super Tab chat attachments', () => {
       expect(await row(young.id)).toMatchObject({ usedBy: null })
       expect([stored(sent.url), stored(young.url)]).toEqual([true, true])
       // The sent message still links its file.
-      expect((await store.messages(owner, tab, 'lead', {})).messages.find(m => m.id === messageId)?.attachments).toEqual([sent])
+      expect((await store.messages(owner, tab, 'lead', {})).messages.find(m => m.id === messageId)?.attachments).toEqual([keptFile(sent)])
       // Pictures alike: one never used is removed from the avatar store, the one in use stays.
       expect([await row(unusedPicture.id), pictures.objects.has(unusedPicture.key)]).toEqual([null, false])
       expect([(await row(usedPicture.id))?.id, pictures.objects.has(usedPicture.key)]).toEqual([usedPicture.id, true])
@@ -3181,7 +3183,7 @@ describe('Super Tab chat attachments', () => {
       await sweep(sentBeforeClaim)
       expect(messageId).not.toBe('')
       expect([(await row(onTime.id))?.usedBy, stored(onTime.url)]).toEqual([messageId, true])
-      expect((await store.messages(owner, tab, 'lead', {})).messages.find(m => m.id === messageId)?.attachments).toEqual([onTime])
+      expect((await store.messages(owner, tab, 'lead', {})).messages.find(m => m.id === messageId)?.attachments).toEqual([keptFile(onTime)])
     })
   })
 })
