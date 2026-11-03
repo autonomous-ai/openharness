@@ -1606,7 +1606,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   Future<_RemovalPreview> _removalPreview(String machineId) async {
     final reply = await c.request(
       'GET',
-      '/api/super-tabs/${Uri.encodeComponent(c.tabId)}/machines/${Uri.encodeComponent(machineId)}/removal',
+      '/api/super-tabs/${Uri.encodeComponent(c.tabId)}/machines/${Uri.encodeComponent(machineId)}/removal/v2',
     );
     return _RemovalPreview.fromMap(reply);
   }
@@ -1638,10 +1638,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   final permitted = _canRemove(id) || checking;
                   final reason = _removeReason(id);
                   final preview = previewState.data;
-                  final blockedReason = preview?.blockedProjectName == null
-                      ? null
-                      : 'This machine runs the ${c.snapshot?.coordinatorNameOf(preview!.blockedProjectId ?? '') ?? kDefaultCoordinatorName} of project ${preview!.blockedProjectName}. Delete the project first.';
-                  final refusal = reason ?? blockedReason;
+                  final blockedReason =
+                      preview?.blockedReason ??
+                      (preview?.blockedProjectName == null
+                          ? null
+                          : 'This machine runs the ${c.snapshot?.coordinatorNameOf(preview!.blockedProjectId ?? '') ?? kDefaultCoordinatorName} of project ${preview!.blockedProjectName}. Delete the project first.');
                   final enabled =
                       permitted &&
                       reason == null &&
@@ -1665,8 +1666,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                             mainAxisSize: MainAxisSize.min,
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              if (refusal != null)
-                                Text(refusal)
+                              if (reason != null)
+                                Text(reason)
                               else if (!available || !permitted)
                                 const Text(
                                   'This action is no longer available.',
@@ -1679,6 +1680,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                               else if (preview == null)
                                 const Text('Checking what will happen…')
                               else ...[
+                                if (blockedReason != null) Text(blockedReason),
                                 const Text(
                                   'The Swarm stops using this machine for new work.',
                                 ),
@@ -1698,6 +1700,14 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                                       ),
                                   ],
                                 ],
+                                if (preview.hiddenAgentCount > 0) ...[
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    preview.hiddenAgentCount == 1
+                                        ? '1 agent of a project you can\'t see will stop.'
+                                        : '${preview.hiddenAgentCount} agents of projects you can\'t see will stop.',
+                                  ),
+                                ],
                                 if (preview.soleSourceProjects.isNotEmpty) ...[
                                   const SizedBox(height: 12),
                                   const Text(
@@ -1706,6 +1716,15 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                                   for (final project
                                       in preview.soleSourceProjects)
                                     Text(project),
+                                ],
+                                if (preview.hiddenSoleSourceProjectCount >
+                                    0) ...[
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    preview.hiddenSoleSourceProjectCount == 1
+                                        ? '1 project you can\'t see has code only on this machine.'
+                                        : '${preview.hiddenSoleSourceProjectCount} projects you can\'t see have code only on this machine.',
+                                  ),
                                 ],
                                 const SizedBox(height: 12),
                                 const Text(
@@ -2502,22 +2521,38 @@ class _RemovalPreview {
   const _RemovalPreview({
     required this.blockedProjectName,
     this.blockedProjectId,
+    this.blockedReason,
     required this.agents,
+    required this.hiddenAgentCount,
     required this.soleSourceProjects,
+    required this.hiddenSoleSourceProjectCount,
   });
 
   factory _RemovalPreview.fromMap(Map<String, dynamic> value) {
-    if (value['agents'] is! List || value['soleSourceProjects'] is! List) {
+    if (value['previewVersion'] != 2 ||
+        value['agents'] is! List ||
+        value['soleSourceProjects'] is! List) {
       throw const FormatException('Invalid machine removal preview');
     }
     final blocked = value['blockedBy'];
     if (blocked != null && blocked is! Map) {
       throw const FormatException('Invalid machine removal preview');
     }
-    final blockedName = blocked == null
-        ? null
-        : superTabMap(blocked)['projectName'];
-    if (blocked != null && (blockedName is! String || blockedName.isEmpty)) {
+    final blockedMap = blocked == null ? null : superTabMap(blocked);
+    final blockedName = blockedMap?['projectName'];
+    final blockedReason = blockedMap?['reason'];
+    if (blocked != null &&
+        !((blockedName is String && blockedName.isNotEmpty) ||
+            (blockedReason is String && blockedReason.isNotEmpty))) {
+      throw const FormatException('Invalid machine removal preview');
+    }
+    final hiddenAgentCount = value['hiddenAgentCount'] ?? 0;
+    final hiddenSoleSourceProjectCount =
+        value['hiddenSoleSourceProjectCount'] ?? 0;
+    if (hiddenAgentCount is! int ||
+        hiddenAgentCount < 0 ||
+        hiddenSoleSourceProjectCount is! int ||
+        hiddenSoleSourceProjectCount < 0) {
       throw const FormatException('Invalid machine removal preview');
     }
     final agents = <_RemovalAgent>[];
@@ -2544,12 +2579,15 @@ class _RemovalPreview {
     }
     return _RemovalPreview(
       blockedProjectName: blockedName as String?,
-      blockedProjectId: switch (blocked) {
+      blockedProjectId: switch (blockedMap) {
         {'projectId': final String id} => id,
         _ => null,
       },
+      blockedReason: blockedReason as String?,
       agents: agents,
+      hiddenAgentCount: hiddenAgentCount,
       soleSourceProjects: projects,
+      hiddenSoleSourceProjectCount: hiddenSoleSourceProjectCount,
     );
   }
 
@@ -2557,8 +2595,11 @@ class _RemovalPreview {
 
   /// The project whose coordinator runs there, to call it what that project calls it.
   final String? blockedProjectId;
+  final String? blockedReason;
   final List<_RemovalAgent> agents;
+  final int hiddenAgentCount;
   final List<String> soleSourceProjects;
+  final int hiddenSoleSourceProjectCount;
 }
 
 class _RemovalAgent {

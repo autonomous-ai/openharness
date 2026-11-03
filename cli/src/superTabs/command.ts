@@ -255,7 +255,7 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     Object.assign(payload, second === '--yes'
       ? { action: 'backend', method: 'POST', path: `/api/super-tabs/${tabId}/commands`,
         body: { operationId: `machine-remove-${randomUUID()}`, command: { type: 'machine.remove', machineId: first } } }
-      : { action: 'backend', method: 'GET', path: `/api/super-tabs/${tabId}/machines/${first}/removal` })
+      : { action: 'backend', method: 'GET', path: `/api/super-tabs/${tabId}/machines/${first}/removal/v2` })
   } else if (action === 'set-agents' && identifier(first) && /^[1-9][0-9]{0,3}$/.test(second ?? '') && positional.length === 3) {
     // The machine's owner, as the person: how many Swarm agents may run on it at once (contribution.ts setMachineAgents).
     Object.assign(payload, { action: 'setMachineAgents', machineId: first, maxAgents: Number(second) })

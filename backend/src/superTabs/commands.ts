@@ -42,7 +42,7 @@ import { assignedNotice, tellBuddies } from './buddyNews.js'
 import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged } from './cards.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { cancelledTags, cancelReason, switchExpired, unfinishedWork } from './tidy.js'
-import { BUILT_IN_ROLE_DEFAULTS, agentProjectId, audienceOf, groupRepositoryUrl, canReadProject, deleteProject, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
+import { BUILT_IN_ROLE_DEFAULTS, agentProjectId, audienceOf, groupRepositoryUrl, canReadAgent, canReadProject, deleteProject, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { recordClosing } from './closedAgents.js'
 import { declinedWith, declinedWithout } from './sharing.js'
 import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRows.js'
@@ -573,10 +573,13 @@ function ownedPath(entry: string): string | null {
 const pathsOverlap = (a: string, b: string) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`)
 
 /** A project's Lead (Product Manager) leaves only with its project: every other removal path refuses it. */
-function protectLead(state: SuperTabState, agentId: string): void {
+function protectLead(state: SuperTabState, agentId: string, actor: Actor): void {
   const project = ledProject(state, agentId), target = state.agents.find(a => a.id === agentId)
   if (project && target) {
-    fail('LEAD_PROTECTED', `${target.displayName ?? target.name} is the ${coordinatorNameOf(project)} of project ${project.name}. Delete the project first.`)
+    const reason = canReadProject(state, actor, project)
+      ? `${target.displayName ?? target.name} is the ${coordinatorNameOf(project)} of project ${project.name}. Delete the project first.`
+      : "A Product Manager of a project you can't see prevents this action."
+    fail('LEAD_PROTECTED', reason)
   }
 }
 
@@ -1310,7 +1313,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         }
       }
     }
-    if (!lead) protectLead(state, target.id)
+    if (!lead) protectLead(state, target.id, actor)
     if (close) recordClosing(state, target, context.now)
     state.agents = state.agents.filter(a => a.id !== target.id)
     effects.cancelledAgents.push(target.id)
@@ -1428,7 +1431,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
 
   /** Changing or clearing the Lead of a project's Lead conversation would let it be stopped next. */
   const keepLead = (group: Conversation, next: string | null) => {
-    if (group.leadId && group.leadId !== next && group.id === groupProject(state, group).leadConversationId) protectLead(state, group.leadId)
+    if (group.leadId && group.leadId !== next && group.id === groupProject(state, group).leadConversationId) protectLead(state, group.leadId, actor)
   }
 
   // An agent reporting its work is working: a usage-limit mark on it is stale (terminal.ts workedAgain). Not a post: its host
@@ -1834,11 +1837,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // The Mac leaves with its Harness Team account and the agents there, told once as the Mac; that account's host cleans
       // its own folders.
       const moving = pool ? teamPoolsOf(state, pool).filter(m => !m.removal) : []
-      const removed = removeMachine(command.machineId, pool, [...members, ...state.agents.filter(a => moving.some(m => m.machineId === a.machineId))],
+      const removingAgents = [...members, ...state.agents.filter(a => moving.some(m => m.machineId === a.machineId))]
+      const readableAgentIds = new Set(removingAgents.filter(a => canReadAgent(state, actor, a)).map(a => a.id))
+      const removed = removeMachine(command.machineId, pool, removingAgents,
         machine => `${who} removed ${machine} from the Swarm`)
       for (const team of moving) removeMachine(team.machineId, team, [], machine => `${who} removed ${machine} from the Swarm`)
       if (pool) result.removalId = operationId
-      result.removedAgents = [...removed]
+      result.removedAgents = [...removed].filter(id => readableAgentIds.has(id))
       // So a Personal Swarm's sync, on any computer, never adds it back by itself (#2181). What deletes it: adding it again, the
       // Swarm's deletion, and the cap (the oldest goes: that one could come back once).
       if (pool) {
@@ -2668,7 +2673,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const project = projectOf(state, agentProjectId(state, target))
       const isOwner = actor.kind === 'person' && [state.ownerId, target.contributorId].includes(actor.userId)
       if (!projectAgent(state, actor, project.id) && !isOwner) fail('FORBIDDEN', 'Only an agent of this project, the contributor or tab owner can release a worker.', 403)
-      protectLead(state, target.id)
+      protectLead(state, target.id, actor)
       // Only its own active work holds a decision back, not the active work of a task it sits in.
       if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id)) fail('WORK_ACTIVE', 'Finish active work before releasing this worker.')
       // A Buddy is its owner's to stop (buddies.ts); it never had work, which was all that kept it from here before.
