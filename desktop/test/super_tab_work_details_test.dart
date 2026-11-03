@@ -175,4 +175,62 @@ void main() {
     );
     expect(tester.takeException(), isNull);
   });
+
+  // Diego, 2026-11-03 (#2311): the Tester's failure and its evidence stay
+  // shown after the Reviewer passes the same check.
+  testWidgets('work details show a check one checker failed as not verified', (
+    tester,
+  ) async {
+    final server = ConversationServer();
+    final row =
+        (server.state['conversations'] as List)[1] as Map<String, dynamic>;
+    row['checks'] = [
+      {
+        'id': 'check',
+        'description': 'Signs in offline',
+        'independent': true,
+        'evidence': 'Crashes offline',
+        'passedBy': null,
+        'verdicts': [
+          {
+            'by': 'agent:tester',
+            'passed': false,
+            'evidence': 'Crashes offline',
+            'at': 1,
+          },
+          {
+            'by': 'agent:reviewer',
+            'passed': true,
+            'evidence': 'Diff reads right',
+            'at': 2,
+          },
+        ],
+      },
+    ];
+    final controller = server.controller();
+    addTearDown(controller.dispose);
+    await controller.refresh();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => showSuperTabWork(context, controller, 'offline'),
+              child: const Text('Open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    expect(find.text('Not verified'), findsOneWidget);
+    expect(find.text('Verified'), findsNothing);
+    expect(
+      find.byWidgetPredicate(
+        (w) => w is SuperTabMessageText && w.text == 'Crashes offline',
+      ),
+      findsOneWidget,
+    );
+  });
 }
