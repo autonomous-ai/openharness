@@ -163,7 +163,9 @@ A repository with no commit yet — or a folder inside one, as `git init` in the
 home folder makes `~/Downloads` — starts in the folder itself, as Claude Code's
 app does: Branch and Worktree are hidden (the row form says "No commits yet"),
 nothing blocks Start, and the remembered Worktree choice is left for the next
-repository (`hasNoCommits`). Folders without Git keep both rows disabled. Discovery runs on the selected machine
+repository (`hasNoCommits`). A Swarm's Product Manager is the exception: it
+never works in the person's checkout, so such a project is refused for it.
+Folders without Git keep both rows disabled. Discovery runs on the selected machine
 without fetching, switching branches, or creating a worktree. A failed
 discovery offers Retry and blocks starting until the result is known.
 

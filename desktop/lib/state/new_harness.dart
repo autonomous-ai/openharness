@@ -1976,7 +1976,15 @@ class NewHarnessController extends ChangeNotifier {
         message: 'This project is unavailable. Choose a project.',
       );
     }
-    // A project with no commit starts in its folder ([noCommitsYet]).
+    // A harness starts in the folder of a project with no commit
+    // ([noCommitsYet]), but a Product Manager never works in the person's
+    // checkout, and its worktree needs a commit to start from.
+    if (!checkingGit && placesLead && noCommitsYet) {
+      return (
+        field: NewHarnessField.projectMenu,
+        message: 'This project has no commits, and a Product Manager works in its own worktree. Choose a project with a commit.',
+      );
+    }
     if (!checkingGit &&
         choosesBranch &&
         (worktree || _startsOnDefault) &&
