@@ -54,13 +54,13 @@ it already loads. `work.assign` posts a once-a-week notice in the machine owner'
 **Interfaces:**
 - Produces: `Run.machineId?: string` (absent on runs recorded before); `GroupLedger.shippedBy` carries it.
 
-- [ ] **Step 1: Write the failing test** `records the machine each attempt ran on, and the shipping attempt keeps it`:
+- [x] **Step 1: Write the failing test** `records the machine each attempt ran on, and the shipping attempt keeps it`:
   assign a worker on machine `m1`, mark done; expect `ledger.runs.at(-1).machineId === 'm1'` and
   `ledger.shippedBy.machineId === 'm1'`.
-- [ ] **Step 2: Run** `cd backend && npm test -- src/superTabs/leaderboard/record.test.ts`; expect FAIL (undefined).
-- [ ] **Step 3: Implement**: `recordRun` adds `machineId: assignment.execution.machineId`.
-- [ ] **Step 4: Run** the same; expect PASS.
-- [ ] **Step 5: Commit** test then code.
+- [x] **Step 2: Run** `cd backend && npm test -- src/superTabs/leaderboard/record.test.ts`; expect FAIL (undefined).
+- [x] **Step 3: Implement**: `recordRun` adds `machineId: assignment.execution.machineId`.
+- [x] **Step 4: Run** the same; expect PASS.
+- [x] **Step 5: Commit** test then code.
 
 ### Task 2: The leaderboard says what each person brought, and counts contributors
 
@@ -82,7 +82,7 @@ it already loads. `work.assign` posts a once-a-week notice in the machine owner'
   before shipping); `homeOf(machines: ContributedMachine[], machineId: string): ContributedMachine | undefined` (a Team
   pool's Mac); `contributorsIn(state, groups, machines, span): Set<string>`.
 
-- [ ] **Step 1: Write the failing tests** in `brought.test.ts`:
+- [x] **Step 1: Write the failing tests** in `brought.test.ts`:
   - `lists each machine a person brought with what shipped on it`: two machines of `ken`, three shipped requests (any
     requester) whose runs ran on `m1`, one on `m2` with `fixedAfterMergeAt` → `[{machineId:'m1', shipped:3, …}, {machineId:'m2', shipped:0, …}]`.
   - `folds a Team account into its Mac`: a run on the Team pool `t1` (`hostMachineId: 'm1'`) → counted on `m1`, one row.
@@ -92,11 +92,11 @@ it already loads. `work.assign` posts a once-a-week notice in the machine owner'
   - `never lists a machine the reader cannot see`: a machine not in `machines` input is absent.
   - `counts contributors this period, last period and kept`: runs on ken's machine both periods, diego's last only →
     `{ thisWeek: 1, lastWeek: 2, kept: 1 }`.
-- [ ] **Step 2: Run** `npm test -- src/superTabs/leaderboard/brought.test.ts`; expect FAIL (module missing).
-- [ ] **Step 3: Implement** `brought.ts`; `stats.ts` sets `details.brought` from `machinesBy.get(personId)` (busyHours
+- [x] **Step 2: Run** `npm test -- src/superTabs/leaderboard/brought.test.ts`; expect FAIL (module missing).
+- [x] **Step 3: Implement** `brought.ts`; `stats.ts` sets `details.brought` from `machinesBy.get(personId)` (busyHours
   from the `lentIn` it already computes) and `contributors` from `contributorsIn` over `shared` groups.
-- [ ] **Step 4: Run** brought and stats tests; expect PASS. Run `npm test -- src/superTabs/leaderboard` for regressions.
-- [ ] **Step 5: Commit** test then code.
+- [x] **Step 4: Run** brought and stats tests; expect PASS. Run `npm test -- src/superTabs/leaderboard` for regressions.
+- [x] **Step 5: Commit** test then code.
 
 ### Task 3: The owner hears when others' work starts on their machine
 
@@ -115,51 +115,51 @@ it already loads. `work.assign` posts a once-a-week notice in the machine owner'
 - Text: `${who}'s work${title ? ` "${title}"` : ''} started on your ${machine} (${engine}${quota ? `, ${quota}` : ''}). Members › your card shows what it runs and ships; Manage › Machines can pause new work.`
   where `quota` is `${P}% of this week used, resets in ${d}`, absent when unknown.
 
-- [ ] **Step 1: Write the failing tests**: `tells the owner once a week when someone else's task starts on their machine`
+- [x] **Step 1: Write the failing tests**: `tells the owner once a week when someone else's task starts on their machine`
   (second assign same week: none; next week: one), `says nothing for the owner's own request, a PM or a private chat`,
   `names the task only when the owner may read its project`, and in `commands.test.ts`
   `work.assign posts the others-work notice in the machine owner's Buddy chat` (message source kind, conversation is the
   owner's Buddy chat, machine part has `othersToldWeek`).
-- [ ] **Step 2: Run** `npm test -- src/superTabs/othersWork.test.ts src/superTabs/commands.test.ts -t others`; expect FAIL.
-- [ ] **Step 3: Implement** `othersWork.ts`; in `work.assign` push the message with id `stableId(operationId, 'others-work-notice')`,
+- [x] **Step 2: Run** `npm test -- src/superTabs/othersWork.test.ts src/superTabs/commands.test.ts -t others`; expect FAIL.
+- [x] **Step 3: Implement** `othersWork.ts`; in `work.assign` push the message with id `stableId(operationId, 'others-work-notice')`,
   author `sender`, source `{ kind: 'others-work-notice', machineId }`.
-- [ ] **Step 4: Run** the same; expect PASS; then the full Super Tab integration suite
+- [x] **Step 4: Run** the same; expect PASS; then the full Super Tab integration suite
   (`npm run test:integration:super-tabs` or the repo's documented command) under the shared suite lock.
-- [ ] **Step 5: Commit** test then code.
+- [x] **Step 5: Commit** test then code.
 
 ### Task 4: Desktop and web show Brought in the person card
 
 **Files:**
 - Modify: `desktop/lib/super_tabs/leaderboard/model.dart` (`SuperTabPersonDetails.brought`, nullable for an older server)
 - Modify: `desktop/lib/super_tabs/leaderboard/person_row.dart` (`_LeaderboardPersonDetails`: Brought replaces Lent when present)
-- Test: `desktop/test/super_tab_person_brought_test.dart` (new); screenshots via `super_tab_leaderboard_shots_test.dart` fixture
+- Test: `desktop/test/super_tab_humans_test.dart` (group "Brought", beside the card's other tests); screenshots in `super_tab_leaderboard_shots_test.dart`
 
 **Interfaces:**
 - Consumes: the `brought` contract (Task 2).
 - Produces: `SuperTabBrought { machineId, machineName, shipped, busyHours, subscriptions: List<({String engine, int? usedPercent, int? resetsAt})> }`.
 
-- [ ] **Step 1: Write the failing tests**: `the card lists each machine brought with what it shipped and its weekly use`
-  (finds `Brought 2`, `Mac Studio`, `5 shipped · 31 h for others`, `Claude Code`, `38% used · resets in 3d`, `not read yet`);
+- [x] **Step 1: Write the failing tests**: `the card lists each machine brought with what it shipped and its weekly use`
+  (finds `Brought`, `Mac Studio`, `5 shipped · 31 h for others`, `Claude`, `38% used · resets in 3d`, `not read yet`);
   `with nothing brought it says so` (`No machines brought yet`); `from an older server it keeps Lent` (no `brought` key → `Lent`).
-- [ ] **Step 2: Run** `flutter test test/super_tab_person_brought_test.dart`; expect FAIL.
-- [ ] **Step 3: Implement** parsing and the section, reusing the card's `section`/`item`/`line` helpers and `superTabMachineName`.
-- [ ] **Step 4: Run** it and `flutter test test/super_tab_leaderboard*_test.dart test/super_tab_roster*_test.dart`; expect PASS.
+- [x] **Step 2: Run** `flutter test test/super_tab_humans_test.dart --plain-name Brought`; expect FAIL.
+- [x] **Step 3: Implement** parsing and the section, reusing the card's `section`/`item`/`line` helpers and `superTabMachineName`.
+- [x] **Step 4: Run** it and `flutter test test/super_tab_leaderboard*_test.dart test/super_tab_roster*_test.dart`; expect PASS.
   Run the style check. Capture light and dark card screenshots.
-- [ ] **Step 5: Commit** test then code.
+- [x] **Step 5: Commit** test then code.
 
 ### Task 5: The phone shows Brought in the person sheet
 
 **Files:**
 - Modify: `mobile/lib/swarm/swarm_leaderboard_reader.dart` (`SwarmScore.brought`, `swarmPersonWeek`)
-- Test: `mobile/test/swarm/swarm_person_brought_test.dart` (new); screenshot via `swarm_leaderboard_shots_test.dart`
+- Test: `mobile/test/swarm/swarm_leaderboard_test.dart` (group "Brought")
 
 **Interfaces:**
 - Consumes: the `brought` contract (Task 2).
 
-- [ ] **Step 1: Write the failing test** `the person sheet has a line per machine brought`: `swarmPersonWeek(score)`
-  contains `('Mac Studio', '5 shipped · 31 h for others\nClaude 38% used, resets in 3d')` and no `Lent` line; from a
+- [x] **Step 1: Write the failing test** `the person sheet has a line per machine brought`: `swarmPersonWeek(score)`
+  contains `('Mac Studio', '5 shipped · 31 h for others\nClaude 38% used, resets in 3d\nCodex not read yet')` and no `Lent` line; from a
   score without `brought` it keeps `Lent`.
-- [ ] **Step 2: Run** `flutter test test/swarm/swarm_person_brought_test.dart` in mobile/; expect FAIL.
-- [ ] **Step 3: Implement** parsing and the lines.
-- [ ] **Step 4: Run** it and `flutter test test/swarm/swarm_leaderboard*_test.dart`; expect PASS. Capture a screenshot.
-- [ ] **Step 5: Commit** test then code.
+- [x] **Step 2: Run** `flutter test test/swarm/swarm_leaderboard_test.dart --plain-name Brought` in mobile/; expect FAIL.
+- [x] **Step 3: Implement** parsing and the lines.
+- [x] **Step 4: Run** it and `flutter test test/swarm/swarm_leaderboard*_test.dart`; expect PASS. Capture a screenshot.
+- [x] **Step 5: Commit** test then code.

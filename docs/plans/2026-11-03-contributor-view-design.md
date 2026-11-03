@@ -69,10 +69,10 @@ Unblocked unchanged):
 │                                                             │
 │ Brought 2                                                   │
 │ Mac Studio                    5 shipped · 31 h for others   │
-│   Claude Code                38% used · resets in 3d        │
+│   Claude                     38% used · resets in 3d        │
 │   Codex                      not read yet                   │
 │ MacBook Pro                    0 shipped · 0 h for others   │
-│   Claude Code                71% used · resets in 6d        │
+│   Claude                     71% used · resets in 6d        │
 │                                                             │
 │                                 Manage people  Edit profile │
 └─────────────────────────────────────────────────────────────┘
@@ -89,7 +89,8 @@ Phone, Leaderboard › a person (today's sheet of lines; the `Lent` line becomes
  Unblocked    4 answered · 2 h of agent time freed
  Mac Studio   5 shipped · 31 h for others
               Claude 38% used, resets in 3d
- MacBook Pro  0 shipped · Claude 71% used, resets in 6d
+ MacBook Pro  0 shipped · 0 h for others
+              Claude 71% used, resets in 6d
  Streak       3 days shipping
 ```
 
@@ -98,13 +99,14 @@ The owner's Buddy chat (Desktop, web, phone), once per machine per week:
 ```
  Wren · Your Buddy
  ─────────────────────────────────────────────────────────────
- Swarm   diego's work started on your Mac Studio (Claude Code,
-         38% of this week used, resets in 3d). Members › your
-         card shows what it runs and ships; Manage › Machines
+ Swarm   diego's work "Fix login" started on your Mac Studio
+         (Claude, 38% of this week used, resets in 3d). Members ›
+         your card shows what it runs and ships; Manage › Machines
          can pause new work.
 ```
 
-The line names the task's title only when the owner may read its project; otherwise it says "diego's work".
+The line names the task's title only when the owner may read its project; otherwise it says "diego's work". Engines
+are named as the Swarm's other lines name them ("Claude", "Codex").
 
 ## Checked against PRODUCT.md
 
