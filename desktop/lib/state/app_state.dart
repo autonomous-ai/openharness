@@ -2263,8 +2263,9 @@ class AppNotifier extends ChangeNotifier {
   ///
   /// A join or a contribution with the account missing locks the app until it
   /// exists ([teamSetupLocked]; Scholes, 2026-11-03: Macs that joined stayed
-  /// "not set up" until someone found their row in Machines). A cancel or a
-  /// failure the daemon remembers from before locks too: this is a new join.
+  /// "not set up" until someone found their row in Machines). For a join, a
+  /// cancel or a failure the daemon remembers from before locks too: this is
+  /// a new join. A contribution locks only while it is wanted or running.
   /// At start the daemon decides (no account, not declined, in a Swarm with
   /// other people), and it is explained once a launch ([teamSetupAsks]),
   /// never behind the lock.
@@ -2294,7 +2295,9 @@ class AppNotifier extends ChangeNotifier {
           _teamSetupAsks.add(reason);
         }
         if (state == 'wanted') _teamStartExplained = true;
-      } else if (tabId != null && _teamLockStates.contains(state)) {
+      } else if (tabId != null &&
+          (reason == 'join' ? _teamLockStates : _teamContributeLockStates)
+              .contains(state)) {
         await _lockForTeamSetup(tabId);
       }
       return true;
@@ -2315,6 +2318,12 @@ class AppNotifier extends ChangeNotifier {
     'running',
     'no-prompt',
   };
+
+  /// A contribution locks only while the account is to be made now: wanted,
+  /// or already running. A cancel or failure the daemon remembers was the
+  /// person's answer, and a contribution (settings saved, this Mac added
+  /// again) is no new Swarm to ask it again for (Diego, 2026-11-03).
+  static const _teamContributeLockStates = {'wanted', 'running'};
 
   /// The Swarms this computer joined, or was added to, while its Harness Team
   /// account was missing, for [_teamLockAccount]. Kept on this computer so a
@@ -2505,6 +2514,19 @@ class AppNotifier extends ChangeNotifier {
       await _saveTeamLock(account);
     }
     return null;
+  }
+
+  /// The lock's last way out, once Remove was refused (the Mac runs a
+  /// project's PM, say): "Not now", recorded with the daemon so it is not
+  /// offered again on its own, and the app opens. The machine row keeps its
+  /// Set up button.
+  Future<void> declineTeamSetupLock() async {
+    await declineTeamAccount();
+    final account = _teamLockAccount;
+    if (account == null || _teamLockTabs.isEmpty) return;
+    _teamLockTabs.clear();
+    notifyListeners();
+    await _saveTeamLock(account);
   }
 
   /// The start offer, once for each process of this Mac's daemon: Macs
@@ -6966,7 +6988,8 @@ class AppNotifier extends ChangeNotifier {
   final _startupTimings = <String, int>{};
   final _startupClock = Stopwatch();
   void _markStartup(String step) {
-    if (_startupClock.isRunning) _startupTimings[step] = _startupClock.elapsedMilliseconds;
+    if (_startupClock.isRunning)
+      _startupTimings[step] = _startupClock.elapsedMilliseconds;
   }
 
   /// Set by any install during this boot: what the CLI said before it is out of date.
@@ -7015,10 +7038,13 @@ class AppNotifier extends ChangeNotifier {
         // Beside the tool probe, as neither waits on the other (task #2169). A fresh computer has no CLI yet: a check that
         // fails is asked again after. One from before a sign-out or an install says nothing about now.
         final askedAt = _authRevision;
-        final early = cliLogin.checkStatus().then<CliAuthStatus?>((status) {
-          _markStartup('signed-in check');
-          return status;
-        }).catchError((Object _) => null);
+        final early = cliLogin
+            .checkStatus()
+            .then<CliAuthStatus?>((status) {
+              _markStartup('signed-in check');
+              return status;
+            })
+            .catchError((Object _) => null);
         final environmentReady = await _prepareEnvironment();
         _markStartup('tools');
         if (!environmentReady) return;
@@ -7240,7 +7266,9 @@ class AppNotifier extends ChangeNotifier {
   /// What `bootstrap()` does right after the environment is confirmed ready — pulled out so
   /// [recheckEnvironmentStep] can reach the same destination without repeating `bootstrap()`'s config
   /// load and update-check startup, which already ran on the launch that got stuck here.
-  Future<void> _continueAfterEnvironmentReady({Future<CliAuthStatus?>? early}) async {
+  Future<void> _continueAfterEnvironmentReady({
+    Future<CliAuthStatus?>? early,
+  }) async {
     agentPrefetch?.setupRunning = false;
     final revision = _authRevision;
     if (!_authWorkCurrent(revision)) return;
@@ -7532,10 +7560,12 @@ class AppNotifier extends ChangeNotifier {
     // have answered, so the tiles are there for it, as before.
     Object? daemonFailure;
     var daemonFailed = false;
-    final daemon = ensureCliDaemonReady().then<void>((_) => _markStartup('daemon')).catchError((Object error) {
-      daemonFailed = true;
-      daemonFailure = error;
-    });
+    final daemon = ensureCliDaemonReady()
+        .then<void>((_) => _markStartup('daemon'))
+        .catchError((Object error) {
+          daemonFailed = true;
+          daemonFailure = error;
+        });
     await _restorePaneLayout(claimOnAttach: true);
     _armLaunchClaimExpiry();
     if (!_authWorkCurrent(revision)) {
@@ -7951,7 +7981,10 @@ class AppNotifier extends ChangeNotifier {
       } catch (_) {
         return;
       }
-      if (!_authWorkCurrent(revision) || !still.loggedIn || still.machineId != machineId) return;
+      if (!_authWorkCurrent(revision) ||
+          !still.loggedIn ||
+          still.machineId != machineId)
+        return;
       _keptProfileId = profile.id;
     }
     await _profileCache.write(machineId, profile);
@@ -7966,7 +7999,8 @@ class AppNotifier extends ChangeNotifier {
       if (me != null) {
         currentUser = CurrentUserProfile.fromMe(me);
         _profileConfirmed = true;
-        if (currentUser case final profile?) unawaited(_keepProfile(profile, revision));
+        if (currentUser case final profile?)
+          unawaited(_keepProfile(profile, revision));
         // A sign-in by hand: the device log keeps which account it was made to.
         if (currentUser!.id case final id?)
           unawaited(_deviceLog?.signedInAs(id));
@@ -18169,6 +18203,27 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// Asks [machineId]'s daemon for the Change agent handoff of [agentId]
+  /// (`agent_handoff_prepare`, owner only): the record and transcript it
+  /// writes in the agent's folder under change [changeId], for an agent of
+  /// [targetEngine]. Answers the daemon's reply, an explicit refusal included;
+  /// throws when it gives none in time.
+  Future<Map<String, dynamic>> prepareAgentHandoff(
+    String machineId, {
+    required String agentId,
+    required String changeId,
+    required String targetEngine,
+  }) => _agentHandoffRequest(
+    machineId,
+    'agent_handoff_prepare',
+    payload: {
+      'agentId': agentId,
+      'changeId': changeId,
+      'targetEngine': targetEngine,
+    },
+    timeout: const Duration(seconds: 6),
+  );
+
   /// Fill [change].handoff for the new agent, or return why the switch must not go on.
   ///
   /// First choice: the machine writes a record of the whole conversation into the project and the
@@ -18185,15 +18240,11 @@ class AppNotifier extends ChangeNotifier {
   ) async {
     change.handoffHeld = true;
     try {
-      final reply = await _agentHandoffRequest(
+      final reply = await prepareAgentHandoff(
         machineId,
-        'agent_handoff_prepare',
-        payload: {
-          'agentId': source.id,
-          'changeId': change.creation._id,
-          'targetEngine': change.engine,
-        },
-        timeout: const Duration(seconds: 6),
+        agentId: source.id,
+        changeId: change.creation._id,
+        targetEngine: change.engine,
       );
       final accepted = acceptAgentHandoffReply(
         reply,

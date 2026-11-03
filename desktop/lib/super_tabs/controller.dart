@@ -3107,6 +3107,13 @@ class SuperTabController extends ChangeNotifier {
         null;
   }
 
+  /// Moves the reader's one Buddy onto [gridModel], a model shared in the
+  /// Swarm, or back to their own subscription when null (backend
+  /// buddyModel.ts). Its machine carries it out; the Buddy's `modelRequest`
+  /// shows it under way. False when refused: [operationError] says why.
+  Future<bool> switchBuddyModel(String? gridModel) async =>
+      await command({'type': 'buddy.model', 'gridModel': gridModel}) != null;
+
   /// Whether [group] is out of the app: there is no private channel to the
   /// PM (Ken, 10-29), so no private chat but a Buddy chat is listed or opened,
   /// the reader's old Chat with PM that an older server still sends included.
@@ -3418,6 +3425,15 @@ class SuperTabController extends ChangeNotifier {
   /// A muted chat stays listed, greyed, and never counts (Slack).
   bool unreadShown(SuperTabConversation group) =>
       notifyOf(group.id) != SuperTabNotify.muted && unread(group);
+
+  /// A person wrote in [group]'s main stream since the reader's mark, and it
+  /// is not muted: what makes a project's or a task's sidebar row bold, with
+  /// a tag of the reader or a wait on a person (Huy, 11-03, #2427). Agents'
+  /// progress messages and system rows leave it, so a busy Swarm's sidebar
+  /// does not read all bold.
+  bool unreadForPeople(SuperTabConversation group) =>
+      notifyOf(group.id) != SuperTabNotify.muted &&
+      group.lastPersonSequence > readMark(group.id);
 
   /// Keeps [level] for [id] on every device of the reader. Shown at once;
   /// false, and the old setting back, when the server did not keep it. A
@@ -5000,7 +5016,7 @@ class SuperTabController extends ChangeNotifier {
       for (final file in files) {
         var id = _uploaded[file];
         if (id == null) {
-          final answer = await _uploadFile(conversationId, file);
+          final answer = await uploadFile(conversationId, file);
           if (run != _uploadRun) return null;
           id = superTabMap(answer['attachment'])['id'] as String;
           _uploaded[file] = id;
@@ -5030,7 +5046,7 @@ class SuperTabController extends ChangeNotifier {
 
   /// Sends [file] to the backend and returns its attachment. Gives up when no
   /// byte has moved for [uploadTimeout], or when the upload is cancelled.
-  Future<Map<String, dynamic>> _uploadFile(
+  Future<Map<String, dynamic>> uploadFile(
     String conversationId,
     HarnessAttachment file,
   ) async {

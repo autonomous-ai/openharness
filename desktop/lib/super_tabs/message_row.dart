@@ -44,6 +44,7 @@ class SuperTabMessageRow extends StatefulWidget {
     this.onOpenGroup,
     this.mentions = const [],
     this.mentionAddresses = const {},
+    this.mentionLabels = const {},
     this.readerId = '',
     this.reactorName,
     this.onReact,
@@ -94,6 +95,10 @@ class SuperTabMessageRow extends StatefulWidget {
   /// Their addresses, by name: a tag by full address is theirs only when it
   /// is this one.
   final Map<String, String> mentionAddresses;
+
+  /// The name each tagged person shows as, by the name they are tagged by
+  /// ([SuperTabMessageText.labels]).
+  final Map<String, String> mentionLabels;
   final Map<int, String> references;
   final ValueChanged<String>? onOpenGroup;
   final String author;
@@ -538,6 +543,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                       onOpenGroup: widget.onOpenGroup,
                                       mentions: widget.mentions,
                                       addresses: widget.mentionAddresses,
+                                      labels: widget.mentionLabels,
                                       taggedYou: taggedYou,
                                     ),
                                   ),

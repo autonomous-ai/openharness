@@ -24,6 +24,7 @@ import { startDeliverySettle } from './superTabs/deliverySettle.js'
 import { startDeliveryCompaction } from './superTabs/deliveryCompaction.js'
 import { startThreadBackfill } from './superTabs/threadBackfill.js'
 import { appPullRequests, markFinishedGroups, startSwarmArchive, unknownPullRequests } from './superTabs/archive.js'
+import { appPullRequestWatch, startPullRequestWatch } from './superTabs/pullRequestEvents.js'
 import { SuperTabStore } from './superTabs/store.js'
 import { announceSwarmDeliveries, announceSwarmTerminal } from './lib/swarmDeliveryPushes.js'
 import { announceSwarmHostChanges } from './lib/swarmHostPushes.js'
@@ -72,6 +73,7 @@ async function start(): Promise<void> {
   let stopSweeps = (): void => {}
   let stopLegacyDrop = (): void => {}
   let stopArchive = (): void => {}
+  let stopPullRequestWatch = (): void => {}
   let stopDeliveries = (): void => {}
   let stopCompaction = (): void => {}
   let stopThreadBackfill = (): void => {}
@@ -89,6 +91,7 @@ async function start(): Promise<void> {
     stopSweeps()
     stopLegacyDrop()
     stopArchive()
+    stopPullRequestWatch()
     stopDeliveries()
     stopCompaction()
     stopReceiptSweep()
@@ -137,6 +140,9 @@ async function start(): Promise<void> {
   // link none do (superTabs/archive.ts).
   const githubConfig = githubAppConfig(env), githubApp = githubConfig ? new GitHubApp(githubConfig) : null
   stopArchive = startSwarmArchive(prisma, swarms, () => githubApp ? appPullRequests(githubApp) : unknownPullRequests)
+  // GitHub events on an open task's pull request reach its Engineer within a minute (superTabs/pullRequestEvents.ts): only
+  // with the app, which reads them.
+  if (githubApp) stopPullRequestWatch = startPullRequestWatch(prisma, swarms, () => appPullRequestWatch(githubApp))
   // A delivery that can no longer move ends as Not sent, instead of waiting for good (superTabs/deliverySettle.ts).
   stopDeliveries = startDeliverySettle(prisma, swarms)
   // Every hour, finished deliveries 14 days old move into their messages' receipts, kept forever (superTabs/deliveryCompaction.ts).

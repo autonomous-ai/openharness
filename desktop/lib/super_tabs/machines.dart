@@ -44,6 +44,7 @@ import 'join_machine.dart' show superTabSuggestedAgentSlots;
 import 'personal_machine_rows.dart';
 import 'team_account_setup.dart';
 import 'section_heading.dart';
+import 'swarm_switcher.dart' show PersonalSwarm;
 import '../widgets/laid_out_list.dart';
 
 export 'machine_status.dart';
@@ -412,8 +413,11 @@ Future<bool> _sendContribution(
   }
   await app.wakeSuperTabHost(machineId);
   // This Mac, added while its person is here: macOS asks once for the Harness
-  // Team account (cli/src/team/autoSetup.ts).
-  if (offerTeamAccount && app.stateOf(machineId)?.isLocalMachine == true) {
+  // Team account (cli/src/team/autoSetup.ts). Never for the Personal Swarm,
+  // which has no teammates to run work for (Diego, 2026-11-03).
+  if (offerTeamAccount &&
+      app.stateOf(machineId)?.isLocalMachine == true &&
+      PersonalSwarm.of(app).id != c.tabId) {
     unawaited(app.offerTeamAccount('contribute', tabId: c.tabId));
   }
   return true;
@@ -709,6 +713,10 @@ Future<void> _machineSettingsDialog(
                   engines,
                   maxAgents: atMost ?? memoryLimit(prepared),
                   alive: () => context.mounted,
+                  // The machine is in the Swarm already: changing its
+                  // settings is no moment to ask for the Team account, and
+                  // asking locked the app (Diego, 2026-11-03).
+                  offerTeamAccount: false,
                 )) {
                   return;
                 }
@@ -1417,7 +1425,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         app?.stateOf(id)?.machine.displayName ??
         // The Swarm knows no name for it, and sharing its own would be new data: it is named by its owner.
         (agentsOnly && person != null
-            ? "${person.username}'s computer"
+            ? "${person.shownName}'s computer"
             : 'Unavailable machine');
     final subscriptions = _subscriptions(
       id,
@@ -1539,7 +1547,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       // after its state when that is not online. Never an age. Only current readings are included.
       tip: [
         if (cleaning) 'Cleaning up' else ?superTabMachineTip(status),
-        if (person != null) 'Owned by ${person.username}',
+        if (person != null) 'Owned by ${person.shownName}',
         if (paused) 'New work paused',
         if (!dim && value?.cpuPercent != null)
           'CPU ${available(value!.cpuPercent!)} free',
@@ -1606,7 +1614,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   Future<_RemovalPreview> _removalPreview(String machineId) async {
     final reply = await c.request(
       'GET',
-      '/api/super-tabs/${Uri.encodeComponent(c.tabId)}/machines/${Uri.encodeComponent(machineId)}/removal',
+      '/api/super-tabs/${Uri.encodeComponent(c.tabId)}/machines/${Uri.encodeComponent(machineId)}/removal/v2',
     );
     return _RemovalPreview.fromMap(reply);
   }
@@ -1638,10 +1646,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   final permitted = _canRemove(id) || checking;
                   final reason = _removeReason(id);
                   final preview = previewState.data;
-                  final blockedReason = preview?.blockedProjectName == null
-                      ? null
-                      : 'This machine runs the ${c.snapshot?.coordinatorNameOf(preview!.blockedProjectId ?? '') ?? kDefaultCoordinatorName} of project ${preview!.blockedProjectName}. Delete the project first.';
-                  final refusal = reason ?? blockedReason;
+                  final blockedReason =
+                      preview?.blockedReason ??
+                      (preview?.blockedProjectName == null
+                          ? null
+                          : 'This machine runs the ${c.snapshot?.coordinatorNameOf(preview!.blockedProjectId ?? '') ?? kDefaultCoordinatorName} of project ${preview!.blockedProjectName}. Delete the project first.');
                   final enabled =
                       permitted &&
                       reason == null &&
@@ -1665,8 +1674,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                             mainAxisSize: MainAxisSize.min,
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              if (refusal != null)
-                                Text(refusal)
+                              if (reason != null)
+                                Text(reason)
                               else if (!available || !permitted)
                                 const Text(
                                   'This action is no longer available.',
@@ -1679,6 +1688,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                               else if (preview == null)
                                 const Text('Checking what will happen…')
                               else ...[
+                                if (blockedReason != null) Text(blockedReason),
                                 const Text(
                                   'The Swarm stops using this machine for new work.',
                                 ),
@@ -1698,6 +1708,14 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                                       ),
                                   ],
                                 ],
+                                if (preview.hiddenAgentCount > 0) ...[
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    preview.hiddenAgentCount == 1
+                                        ? '1 agent of a project you can\'t see will stop.'
+                                        : '${preview.hiddenAgentCount} agents of projects you can\'t see will stop.',
+                                  ),
+                                ],
                                 if (preview.soleSourceProjects.isNotEmpty) ...[
                                   const SizedBox(height: 12),
                                   const Text(
@@ -1706,6 +1724,15 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                                   for (final project
                                       in preview.soleSourceProjects)
                                     Text(project),
+                                ],
+                                if (preview.hiddenSoleSourceProjectCount >
+                                    0) ...[
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    preview.hiddenSoleSourceProjectCount == 1
+                                        ? '1 project you can\'t see has code only on this machine.'
+                                        : '${preview.hiddenSoleSourceProjectCount} projects you can\'t see have code only on this machine.',
+                                  ),
                                 ],
                                 const SizedBox(height: 12),
                                 const Text(
@@ -1869,7 +1896,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               ],
               body: SuperTabMachineDetails(
                 name: name,
-                owner: person?.username,
+                owner: person?.shownName,
                 status: details,
                 // Details follow the same freshness rule as the row and its disclosure.
                 resources: dim ? null : value,
@@ -2502,22 +2529,38 @@ class _RemovalPreview {
   const _RemovalPreview({
     required this.blockedProjectName,
     this.blockedProjectId,
+    this.blockedReason,
     required this.agents,
+    required this.hiddenAgentCount,
     required this.soleSourceProjects,
+    required this.hiddenSoleSourceProjectCount,
   });
 
   factory _RemovalPreview.fromMap(Map<String, dynamic> value) {
-    if (value['agents'] is! List || value['soleSourceProjects'] is! List) {
+    if (value['previewVersion'] != 2 ||
+        value['agents'] is! List ||
+        value['soleSourceProjects'] is! List) {
       throw const FormatException('Invalid machine removal preview');
     }
     final blocked = value['blockedBy'];
     if (blocked != null && blocked is! Map) {
       throw const FormatException('Invalid machine removal preview');
     }
-    final blockedName = blocked == null
-        ? null
-        : superTabMap(blocked)['projectName'];
-    if (blocked != null && (blockedName is! String || blockedName.isEmpty)) {
+    final blockedMap = blocked == null ? null : superTabMap(blocked);
+    final blockedName = blockedMap?['projectName'];
+    final blockedReason = blockedMap?['reason'];
+    if (blocked != null &&
+        !((blockedName is String && blockedName.isNotEmpty) ||
+            (blockedReason is String && blockedReason.isNotEmpty))) {
+      throw const FormatException('Invalid machine removal preview');
+    }
+    final hiddenAgentCount = value['hiddenAgentCount'] ?? 0;
+    final hiddenSoleSourceProjectCount =
+        value['hiddenSoleSourceProjectCount'] ?? 0;
+    if (hiddenAgentCount is! int ||
+        hiddenAgentCount < 0 ||
+        hiddenSoleSourceProjectCount is! int ||
+        hiddenSoleSourceProjectCount < 0) {
       throw const FormatException('Invalid machine removal preview');
     }
     final agents = <_RemovalAgent>[];
@@ -2544,12 +2587,15 @@ class _RemovalPreview {
     }
     return _RemovalPreview(
       blockedProjectName: blockedName as String?,
-      blockedProjectId: switch (blocked) {
+      blockedProjectId: switch (blockedMap) {
         {'projectId': final String id} => id,
         _ => null,
       },
+      blockedReason: blockedReason as String?,
       agents: agents,
+      hiddenAgentCount: hiddenAgentCount,
       soleSourceProjects: projects,
+      hiddenSoleSourceProjectCount: hiddenSoleSourceProjectCount,
     );
   }
 
@@ -2557,8 +2603,11 @@ class _RemovalPreview {
 
   /// The project whose coordinator runs there, to call it what that project calls it.
   final String? blockedProjectId;
+  final String? blockedReason;
   final List<_RemovalAgent> agents;
+  final int hiddenAgentCount;
   final List<String> soleSourceProjects;
+  final int hiddenSoleSourceProjectCount;
 }
 
 class _RemovalAgent {
@@ -2925,7 +2974,7 @@ class _MachineLine extends StatelessWidget {
                   left: grid.AppDesktop.controlGap,
                 ),
                 child: Text(
-                  owner.username,
+                  owner.shownName,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: DesktopChrome.metadata(),
@@ -2944,7 +2993,7 @@ class _MachineLine extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(left: 6),
               child: Tooltip(
-                message: 'Owned by ${owner.username}',
+                message: 'Owned by ${owner.shownName}',
                 child: SuperTabAvatar.person(owner, size: 20),
               ),
             ),

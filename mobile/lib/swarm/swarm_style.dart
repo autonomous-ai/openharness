@@ -395,6 +395,22 @@ class SwarmGroup extends StatelessWidget {
   }
 }
 
+/// A row's glyph ([SwarmRow.leading]): You's rows, Settings' when opened from
+/// Swarm. In a 32-point box so the titles of a card line up.
+class SwarmRowGlyph extends StatelessWidget {
+  const SwarmRowGlyph(this.icon, {super.key});
+
+  static const double width = 32;
+
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: width,
+    child: Icon(icon, size: 22, color: AppPalette.textSecondary),
+  );
+}
+
 /// A row on its way, in the shape of the row it stands for: a mark at its
 /// left, a bar for its title and a longer one for the line under it, each as
 /// tall as the line it stands for ([SkeletonText]), so nothing moves when the

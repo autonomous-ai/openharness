@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { storeOldLeads } from './leads.test-support.js'
-import { applyCommand, commandSchema, LOOP_NOTICE_AT, PAIR_CHAIN_LIMIT, swarmGridName, withoutCredentials, type Command, type CommandContext } from './commands.js'
+import { applyCommand, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, PAIR_CHAIN_LIMIT, swarmGridName, withoutCredentials, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
 import { sweepLiveness } from './liveness.js'
 import { SWITCH_UNCLAIMED_MS } from './tidy.js'
@@ -12,7 +12,7 @@ import { modelMatches } from './rules.js'
 import { appendRouting, instructionsHash } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy } from './routingPolicy.js'
-import { NOW, owner as richOwner, richSwarm } from './read/fixture.test-support.js'
+import { NOW, owner as richOwner, peer as richPeer, richSwarm } from './read/fixture.test-support.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 /** What an older client's routing, policy, skill-set or role save answers (project instructions, phase 4). */
@@ -378,6 +378,30 @@ describe('Super Tab collaboration policy', () => {
       expect(send(f, as(engineer), third, [reviewer]).recipients).toEqual([reviewer])
       expect(f.state.conversations.find(c => c.id === third)!.agentIds).toEqual(expect.arrayContaining([engineer, reviewer]))
       expect([sent, answer].some(m => m.recipients.includes(lead))).toBe(false)
+    })
+
+    // The PM's digest gathers its own skills notices (docs/plans/2026-11-02-pm-digest-more-kinds-design.md).
+    it('marks an agent\'s own skills notice', () => {
+      const f = fixture()
+      f.add('lead', 'owner', 'lead', true)
+      const build = f.group(), engineer = f.add('engineer', 'owner', build)
+      const sent = f.run(commandSchema.parse({ type: 'message.send', conversationId: build, text: 'The project\'s instructions changed.', replyTo: null,
+        recipientIds: [engineer], agentOnly: true, notice: 'skills' }), as(engineer)).messages[0]!
+      expect(sent.source).toEqual({ kind: 'agent-only', notice: 'skills' })
+      expect(sent.recipients).toEqual([engineer])
+    })
+
+    it('refuses the skills mark anywhere but an agent\'s own agent-only notice', () => {
+      const f = fixture()
+      f.add('lead', 'owner', 'lead', true)
+      const build = f.group(), engineer = f.add('engineer', 'owner', build), other = f.add('other', 'owner', build)
+      const mark = (actor: Actor, recipientIds: string[], agentOnly?: true) => () => f.run(commandSchema.parse({ type: 'message.send', conversationId: build,
+        text: 'Hidden.', replyTo: null, recipientIds, ...(agentOnly ? { agentOnly } : {}), notice: 'skills' }), actor)
+      expect(mark(as(engineer), [engineer])).toThrow('A skills notice is an agent-only notice to the agent itself.')
+      expect(mark({ kind: 'person', userId: 'owner', email: 'owner@example.com' }, [engineer], true)).toThrow('An agent sends an agent-only notice to itself alone.')
+      expect(mark(as(engineer), [other], true)).toThrow('An agent sends an agent-only notice to itself alone.')
+      expect(() => commandSchema.parse({ type: 'message.send', conversationId: build, text: 'x', replyTo: null, recipientIds: [engineer],
+        agentOnly: true, notice: 'other' })).toThrow()
     })
 
     it('keeps recipients and posts inside the project and out of Buddy chats and the Leads conversation', () => {
@@ -1473,6 +1497,22 @@ it('says in the project chat when a Product Manager on its person\'s own Mac cou
   expect(commandSchema.safeParse({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'pm', name: 'Lead', configuration: config, lead: true,
     launchRefused: { model: 'claude-opus-5[1m]', effort: 'xhigh' } }).success).toBe(true)
 })
+it('joins a lead and records its first message when its requested launch was refused', () => {
+  const f = fixture(), project = { cwd: '/repo', repositoryUrl: 'https://github.com/example/project' }
+  const joined = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'pm', name: 'Lead', configuration: config,
+    lead: true, project, initialMessage: 'Fix the bug', launchRefused: { model: 'opus', effort: 'xhigh' } }, owner,
+  { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
+  const initial = joined.messages.find(message => message.text === 'Fix the bug')!
+  const refusal = joined.messages.find(message => message.text.includes('could not launch'))!
+  expect(f.state.conversations.find(conversation => conversation.id === 'lead')!.leadId).toBe(joined.result.agentId)
+  expect(initial.id).toBe(joined.result.messageId)
+  expect(refusal.id).not.toBe(initial.id)
+})
+it('returns a client error when one command produces duplicate message IDs', () => {
+  expect(() => assertUniqueMessageIds('agent.add', [{ id: 'same' }, { id: 'same' }]))
+    .toThrow(expect.objectContaining({ name: 'SuperTabError', code: 'DUPLICATE_MESSAGE_ID', status: 400,
+      message: expect.stringContaining('duplicate message IDs') }))
+})
 it('accepts POSIX, Windows drive and UNC folders and refuses relative, drive-relative and control-character ones', () => {
   const contribute = (cwd: string) => commandSchema.safeParse({ type: 'machine.contribute', machineId: 'host', name: 'PC', cwd, engines: ['claude'], maxAgents: 1 })
   for (const cwd of ['/repo', 'C:\\Users\\dev\\data', 'c:/Users/dev/data', 'D:\\', '\\\\server\\share\\x']) expect(contribute(cwd).success, cwd).toBe(true)
@@ -1724,6 +1764,17 @@ describe('any agent of the project', () => {
     // A task's members are any agent's to add.
     f.run({ type: 'conversation.agent', conversationId: group, agentId: engineer, present: true, lead: false }, E)
     expect(f.state.conversations.find(c => c.id === group)!.agentIds).toContain(engineer)
+  })
+
+  it('joins a shared agent and records its first message with distinct stable rows', () => {
+    const { f } = project()
+    const joined = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'shared-with-first-message', name: 'Shared',
+      configuration: config, lead: false, initialMessage: 'Fix the bug' }, owner, { contribution: f.contribution })
+    const initial = joined.messages.find(message => message.text === 'Fix the bug')!
+    const notice = joined.messages.find(message => message.text.includes('added "Shared" to the project'))!
+    expect(f.state.agents.map(agent => agent.id)).toContain(joined.result.agentId)
+    expect(initial.id).toBe(joined.result.messageId)
+    expect(notice.id).not.toBe(initial.id)
   })
 
   // Ken, 2026-11-02: a Reviewer was a member of the project chat next to the PM, so Desktop opened two terminals there and the
@@ -3029,6 +3080,24 @@ describe('machine.remove', () => {
     expect(new Set(effects.messages.map(m => m.id)).size).toBe(effects.messages.length)
   })
 
+  it('does not return IDs for agents the machine owner cannot read', () => {
+    const s = richSwarm(NOW)
+    s.contribute('host')
+    const hiddenTask = s.group('Secret task', s.secret)
+    const hidden = s.add('hidden-harness', hiddenTask)
+    s.edit(state => {
+      state.agents.find(agent => agent.id === s.lead)!.machineId = 'elsewhere'
+      const machine = state.machines!.find(item => item.machineId === 'host')!
+      machine.contributorId = richPeer.userId
+      machine.membershipGeneration = state.people.find(person => person.id === richPeer.userId)!.generation
+    })
+
+    const result = s.run({ type: 'machine.remove', machineId: 'host' }, richPeer)
+
+    expect(result.removedAgents).not.toContain(hidden)
+    expect(JSON.stringify(result)).not.toContain(hidden)
+  })
+
   it('removes a machine that only runs agents, so nothing lists it any more', () => {
     const f = fixture(), worker = f.add('worker')
     f.run({ type: 'machine.remove', machineId: 'host' })
@@ -3363,7 +3432,7 @@ describe('machine.remove', () => {
     const named = (id: string) => { const a = f.state.agents.find(x => x.id === id)!; return a.displayName ?? a.name }
     expect(removalPreview(f.state, owner, 'host')).toEqual({ blockedBy: { projectId: 'lead', projectName: 'Pilot' },
       agents: [{ id: lead, name: named(lead), projectName: 'Pilot' }, { id: worker, name: named(worker), projectName: 'Pilot', task: 'Offline editing' }],
-      soleSourceProjects: [{ id: 'lead', name: 'Pilot' }] })
+      hiddenAgentCount: 0, soleSourceProjects: [{ id: 'lead', name: 'Pilot' }], hiddenSoleSourceProjectCount: 0 })
     f.state.agents.find(a => a.id === lead)!.machineId = 'elsewhere'
     expect(removalPreview(f.state, owner, 'host').blockedBy).toBeNull()
     f.invite()
@@ -4807,6 +4876,134 @@ describe('lead.switch', () => {
     s.f.state.paused = true
     s.f.run(s.request)
     expect(s.agent().switchRequest).toBeDefined()
+  })
+
+  it('starts a destination candidate with the chosen model while the source remains the project lead', () => {
+    const s = setup()
+    const destination = structuredClone(s.f.state.machines![0]!)
+    destination.machineId = 'destination'
+    destination.name = 'Destination Mac'
+    destination.generation = 'g2'
+    destination.observation!.generation = 'g2'
+    destination.observation!.capabilities = ['leadSwitch', 'leadStart']
+    s.f.state.machines!.push(destination)
+
+    s.f.run({ ...s.request, machineId: 'destination', model: 'gpt-5.1' })
+
+    expect(s.agent().switchRequest).toMatchObject({ targetMachineId: 'destination', model: 'gpt-5.1' })
+    expect(s.f.state.conversations.find(c => c.id === 'lead')!.leadId).toBe(s.pm)
+    expect(s.f.state.starts).toContainEqual(expect.objectContaining({ request: expect.objectContaining({
+      machineId: 'destination', model: 'gpt-5.1', leadFor: expect.objectContaining({ switchId: s.sid() }) }) }))
+  })
+
+  it('rechecks the selected account and host capability when the target claims its candidate', () => {
+    const s = setup()
+    const destination = structuredClone(s.f.state.machines![0]!)
+    destination.machineId = 'destination'
+    destination.generation = 'g2'
+    destination.observation!.generation = 'g2'
+    destination.observation!.capabilities = ['leadSwitch', 'leadStart']
+    s.f.state.machines!.push(destination)
+    s.f.run({ ...s.request, machineId: 'destination', model: 'gpt-5.1' })
+    const start = s.f.state.starts!.find(candidate => candidate.request.leadFor?.switchId === s.sid())!
+    s.f.run({ type: 'agent.switchClaim', agentId: s.pm, switchId: s.sid() }, s.as)
+    s.f.run({ type: 'agent.switchHandoff', agentId: s.pm, switchId: s.sid(), handoffChangeId: 'e'.repeat(32), note: 'Handoff' }, s.as)
+    s.f.state.machines!.find(machine => machine.machineId === 'destination')!.observation!.profiles = []
+
+    expect(code(() => s.f.run({ type: 'agent.startDispatch', startId: start.id }, owner,
+      { contribution: { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null } }))).toBe('PROFILE_UNKNOWN')
+    expect(start.dispatched).toBe(false)
+    expect(s.f.state.conversations.find(c => c.id === 'lead')!.leadId).toBe(s.pm)
+  })
+
+  it('publishes the prepared handoff only to the destination host start after the source claims the switch', () => {
+    const s = setup()
+    const destination = structuredClone(s.f.state.machines![0]!)
+    destination.machineId = 'destination'
+    destination.generation = 'g2'
+    destination.observation!.generation = 'g2'
+    destination.observation!.capabilities = ['leadSwitch', 'leadStart']
+    s.f.state.machines!.push(destination)
+    s.f.run({ ...s.request, machineId: 'destination', model: 'gpt-5.1' })
+    const switchId = s.sid()
+    const start = s.f.state.starts!.find(candidate => candidate.request.leadFor?.switchId === switchId)!
+    s.f.run({ type: 'agent.switchClaim', agentId: s.pm, switchId }, s.as)
+
+    s.f.run({ type: 'agent.switchHandoff', agentId: s.pm, switchId, handoffChangeId: 'f'.repeat(32), note: 'Prior work summary.' }, s.as)
+
+    expect(s.f.state.starts!.find(candidate => candidate.request.leadFor?.switchId === switchId)!.request)
+      .toMatchObject({ handoffChangeId: 'f'.repeat(32), handoffSourceAgentId: s.agent().harnessId, handoffNote: 'Prior work summary.' })
+  })
+
+  it('requires the source claim before dispatch and keeps the handoff out of ordinary reads', () => {
+    const s = setup()
+    const destination = structuredClone(s.f.state.machines![0]!)
+    destination.machineId = 'destination'
+    destination.generation = 'g2'
+    destination.observation!.generation = 'g2'
+    destination.observation!.capabilities = ['leadSwitch', 'leadStart']
+    s.f.state.machines!.push(destination)
+    s.f.run({ ...s.request, machineId: 'destination', model: 'gpt-5.1' })
+    const switchId = s.sid()
+    const start = s.f.state.starts!.find(candidate => candidate.request.leadFor?.switchId === switchId)!
+    const contribution = { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }
+
+    expect(code(() => s.f.run({ type: 'agent.startDispatch', startId: start.id }, owner, { contribution }))).toBe('HANDOFF_PENDING')
+    expect(visibleState(s.f.state, owner).starts![0]!.request).not.toHaveProperty('handoffNote')
+    expect(code(() => s.f.run({ type: 'agent.switchHandoff', agentId: s.pm, switchId, handoffChangeId: 'f'.repeat(32), note: 'private' }, s.as)))
+      .toBe('STALE_SWITCH')
+
+    s.f.run({ type: 'agent.switchClaim', agentId: s.pm, switchId }, s.as)
+    s.f.run({ type: 'agent.switchHandoff', agentId: s.pm, switchId, handoffChangeId: 'f'.repeat(32), note: 'private' }, s.as)
+    expect(visibleState(s.f.state, owner).starts![0]!.request).not.toHaveProperty('handoffNote')
+    expect(s.f.state.starts!.find(candidate => candidate.request.leadFor?.switchId === switchId)!.request.handoffNote).toBe('private')
+  })
+
+  it('promotes a running destination candidate to the same lead conversation exactly when it starts', () => {
+    const s = setup()
+    s.agent().configuration.engine = 'claude'
+    const destination = structuredClone(s.f.state.machines![0]!)
+    destination.machineId = 'destination'
+    destination.name = 'Destination Mac'
+    destination.generation = 'g2'
+    destination.observation!.generation = 'g2'
+    destination.observation!.capabilities = ['leadSwitch', 'leadStart']
+    s.f.state.machines!.push(destination)
+    s.f.run({ ...s.request, machineId: 'destination', model: 'gpt-5.1' })
+    const switchId = s.sid()
+    const start = s.f.state.starts!.find(candidate => candidate.request.leadFor?.switchId === switchId)!
+    const contribution = { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }
+    s.f.run({ type: 'agent.switchClaim', agentId: s.pm, switchId }, s.as)
+    s.f.run({ type: 'agent.switchHandoff', agentId: s.pm, switchId, handoffChangeId: 'f'.repeat(32), note: 'Prior work' }, s.as)
+
+    const started = s.f.run({ type: 'agent.started', startId: start.id, harnessId: 'destination-pm',
+      configuration: { ...config, engine: 'codex', model: 'gpt-5.1' } }, owner, { contribution })
+
+    const candidateId = started.result.agentId as string
+    expect(s.f.state.conversations.find(c => c.id === 'lead')!.leadId).toBe(candidateId)
+    expect(s.f.state.agents.find(a => a.id === s.pm)!.switchLanded).toMatchObject({ id: switchId, candidateAgentId: candidateId })
+    const result = s.f.run({ type: 'agent.switchResult', agentId: s.pm, switchId, ok: true }, s.as)
+    expect(result.messages.at(-1)!.text).toContain('PM moved to Codex')
+  })
+
+  it('keeps the source lead and posts one safe line when the destination candidate fails', () => {
+    const s = setup()
+    const destination = structuredClone(s.f.state.machines![0]!)
+    destination.machineId = 'destination'
+    destination.generation = 'g2'
+    destination.observation!.generation = 'g2'
+    destination.observation!.capabilities = ['leadSwitch', 'leadStart']
+    s.f.state.machines!.push(destination)
+    s.f.run({ ...s.request, machineId: 'destination', model: 'gpt-5.1' })
+    const startId = s.f.state.starts!.find(candidate => candidate.request.leadFor?.switchId === s.sid())!.id
+
+    const failed = s.f.run({ type: 'agent.startFailed', startId, error: '/private/path: sign in failed' }, owner)
+
+    expect(s.f.state.conversations.find(c => c.id === 'lead')!.leadId).toBe(s.pm)
+    expect(s.agent().switchRequest).toBeUndefined()
+    expect(failed.messages).toHaveLength(1)
+    expect(failed.messages[0]!.text).toBe("Couldn't switch the PM: its machine could not prepare or launch it. It is back on Codex.")
+    expect(s.f.run({ type: 'agent.startFailed', startId, error: '/private/path: sign in failed' }, owner).messages).toEqual([])
   })
 
   it('lets only the PM itself claim, with a 15 minute lease', () => {

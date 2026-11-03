@@ -14,6 +14,27 @@ String leaderboardDuration(int ms) {
       : '${rounded.toStringAsFixed(1)} h';
 }
 
+/// "31 h", "12.5 h", "0 h": a machine's hours for others in Brought.
+String broughtHours(double hours) {
+  final rounded = (hours * 10).round() / 10;
+  return rounded == rounded.roundToDouble()
+      ? '${rounded.round()} h'
+      : '${rounded.toStringAsFixed(1)} h';
+}
+
+/// "3d", "5h 10m", "20m", "now": how long until a subscription's week
+/// resets, as Machines says it.
+String resetsIn(DateTime when, DateTime now) {
+  final minutes = when.difference(now).inMinutes;
+  return minutes <= 0
+      ? 'now'
+      : minutes < 60
+      ? '${minutes}m'
+      : minutes < 1440
+      ? '${minutes ~/ 60}h ${minutes % 60}m'
+      : '${minutes ~/ 1440}d';
+}
+
 /// Whole agent-hours, as the points count them.
 String leaderboardHours(int ms) => '${(ms / _hour).round()}';
 

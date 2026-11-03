@@ -24,6 +24,9 @@ import { RebindSender, replacementObservations } from './replacements.js'
 import { TerminalHost } from './terminal.js'
 import { LimitResume } from './limitResume.js'
 import { LeadSwitchRequests, type SwitchRow } from './leadSwitchRequest.js'
+import { BuddyModelRequests, type BuddyModelRow } from './buddyModel.js'
+import { openDaemon } from '../agentClient/daemon.js'
+import { conversationTokens } from '../lib/conversationSize.js'
 import { isTeamDaemon } from './teamDaemon.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
@@ -96,6 +99,17 @@ export async function swarmRoleFor(sources: SwarmSources, harnessId: string): Pr
   // agent, and last an agent that was a Reviewer.
   return (['buddy', 'lead', 'dev', 'review'] as const).map(role => grants.find(grant => grant && wireRole(grant) === role)).find(Boolean) ?? null
 }
+/** Whether any Swarm's roster lists [harnessId] on this machine, whatever its chats or stop: Import agent never brings in a
+ *  session a Swarm lists, as its transcript may hold that Swarm's private project (re-review of #2783). Its restart role
+ *  above is none for one whose chats are archived or whose stop was asked, and it is listed still. */
+export async function swarmListedFor(sources: SwarmSources, harnessId: string): Promise<boolean> {
+  const machineId = sources.feed.machineId
+  if (!identifier(machineId) || !identifier(harnessId)) return false
+  return (await sources.feed.refresh()).roster.map(object).some(row => {
+    const agent = object(row.agent)
+    return identifier(row.tabId) && agent.machineId === machineId && agent.harnessId === harnessId
+  })
+}
 /** A Buddy names its owner (backend buddies.ts); its role field stays a builder's for older readers. */
 const isBuddy = (agent: Record<string, unknown>) => !!agent.buddyOf && typeof agent.buddyOf === 'object'
 
@@ -164,7 +178,7 @@ interface Entry {
 interface Journal { version: 1; machineId: string; entries: Record<string, Entry>; scrubs?: Record<string, PurgeTarget> }
 /** `skillMode` is the agent's project's skills; a row without it (an older backend, a project from before modes) is orchestration.
  *  `roleName` and `instructions` name its project's instructions (backend read/hostRows.ts); an older backend sends neither. */
-interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string; releaseId?: string }; skillMode?: unknown; lead?: unknown; role?: unknown
+interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string; releaseId?: string; switchLanded?: { id?: unknown; candidateAgentId?: unknown } }; skillMode?: unknown; lead?: unknown; role?: unknown
   leadsConversationId?: unknown; roleName?: unknown; instructions?: unknown }
 export interface SuperTabHostOptions {
   now?: () => number
@@ -192,6 +206,8 @@ export interface SuperTabHostOptions {
   sources?: SwarmSources
   /** What the contributed-machine executor reaches the local daemon with (superTabs/machines.ts), for a spec. */
   machines?: Partial<MachineDeps>
+  /** What carries out a Buddy's model switch here (superTabs/buddyModel.ts), for a spec. */
+  buddyModels?: Pick<BuddyModelRequests, 'serve'>
 }
 
 const defaultAgentCommand = (core: CoreApi, machineId: string) => agentCommandPrefix(core.daemon, machineId,
@@ -498,6 +514,8 @@ export class SuperTabHost {
   private readonly releases = new Set<string>()
   /** The switches the Swarm asked of this machine's PMs (leadSwitchRequest.ts). */
   private readonly leadSwitches: LeadSwitchRequests
+  /** The model switches the Swarm asked of this machine's Buddies (buddyModel.ts). */
+  private readonly buddyModels: Pick<BuddyModelRequests, 'serve'>
   private readonly rebinds: RebindSender
   /** Eligibility and failures belong to this stop and native runtime; a new runtime or stop gets a fresh decision. */
   /** `failures` counts final answers toward the five tries; `waits` the transient ones behind the current backoff. */
@@ -589,6 +607,11 @@ export class SuperTabHost {
         .some(a => a.tabId === tabId && a.assignmentId === assignmentId && a.harnessId === harnessId) })
     this.rebinds = new RebindSender((path, body) => backend(this.core, 'POST', path, body), this.now)
     this.leadSwitches = new LeadSwitchRequests(core, machineId, { now: this.now, log: this.log, team: isTeamDaemon })
+    // Over this machine's own daemon socket, which answers as the machine owner: the Buddy runs only on its owner's machine.
+    this.buddyModels = options.buddyModels ?? new BuddyModelRequests({ dataDir: core.dataDir, now: this.now, log: this.log,
+      open: () => openDaemon({ dataDir: core.dataDir, port: core.daemon.port, machineId }),
+      post: (tabId, agentId, operationId, command) => backend(core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId, asAgentId: agentId, command }),
+      transcript: harnessId => core.agents.byAgent(harnessId)?.transcriptPath, tokens: conversationTokens })
     this.sources = options.sources ?? { feed: new HostFeed(core, machineId, { now: this.now }), reads: new SwarmReads(core) }
     this.journal = { version: 1, machineId, entries: {} }
     if (existsSync(this.file)) {
@@ -768,6 +791,21 @@ export class SuperTabHost {
   }
 
   /** Re-read stop intent and native launch authority; require core evidence before confirming removal. */
+  /** A Buddy's model switch (buddyModel.ts): its main row carries the request, and its thread sessions on this machine move with
+   *  it. Not awaited: a move relaunches Claude Code and must not hold up this poll's deliveries. */
+  private serveBuddyModels(data: readonly unknown[]): void {
+    const rows = data.map(object).filter(row => identifier(row.tabId) && object(row.agent).machineId === this.machineId
+      && identifier(object(row.agent).harnessId) && object(row.agent).buddyOf)
+    const ownerOf = (row: Record<string, unknown>) => { const of = object(object(row.agent).buddyOf); return `${row.tabId}\0${of.personId}\0${of.generation}` }
+    for (const row of rows) {
+      const agent = object(row.agent)
+      if (agent.buddySession || !agent.modelRequest) continue
+      const sessions = rows.filter(other => object(other.agent).buddySession && ownerOf(other) === ownerOf(row))
+      void this.buddyModels.serve(row as unknown as BuddyModelRow, sessions as unknown as BuddyModelRow[])
+        .catch(error => this.log(`Buddy model: ${error instanceof Error ? error.name : typeof error}`))
+    }
+  }
+
   private async releaseWorker(target: HostAgent): Promise<void> {
     const { tabId, agent } = target
     const key = `${tabId}:${agent.id}`
@@ -1072,6 +1110,7 @@ export class SuperTabHost {
     const listed = new Set<string>()
     const running: HostAgent[] = []
     const leads = new Set<string>(), ended = new Set<string>()
+    this.serveBuddyModels(data)
     for (const item of data) {
       const row = object(item), agent = object(row.agent)
       if (!identifier(row.tabId) || !identifier(agent.id) || !identifier(agent.harnessId) || agent.machineId !== this.machineId) continue
@@ -1087,8 +1126,8 @@ export class SuperTabHost {
         void this.releaseWorker(target)
         continue
       }
-      if (row.lead === true) {
-        leads.add(target.agent.harnessId)
+      if (row.lead === true || target.agent.switchLanded) {
+        if (row.lead === true) leads.add(target.agent.harnessId)
         this.keepAlive(target.agent.harnessId)
         void this.leadSwitches.serve(target as unknown as SwitchRow).catch(error => this.log(`PM switch: ${error instanceof Error ? error.name : typeof error}`))
       }
@@ -1631,16 +1670,24 @@ export class SuperTabHost {
       .filter(group => group.archived !== true && identifier(group.id) && Array.isArray(group.agentIds) && group.agentIds.includes(id))
     const group = groups.find(g => g.leadId === id) ?? groups.find(g => object(g.assignment).agentId === id) ?? groups[0]
     if (!group || !current()) return false
-    const send = (agentOnly: boolean) => backend(this.core, 'POST', `/api/super-tabs/${target.tabId}/commands`, {
+    const send = (agentOnly: boolean, notice: boolean) => backend(this.core, 'POST', `/api/super-tabs/${target.tabId}/commands`, {
       // A switch back to an earlier mode's text is a new rewrite, so its count keeps it from reusing that text's id.
       operationId: `skill-${id}-${refresh.version.slice(0, 32)}${refresh.change ? `-${refresh.change}` : ''}`, asAgentId: id,
-      command: { type: 'message.send', conversationId: group.id, replyTo: null, recipientIds: [id], text: refresh.notice, ...(agentOnly ? { agentOnly } : {}) },
+      command: { type: 'message.send', conversationId: group.id, replyTo: null, recipientIds: [id], text: refresh.notice,
+        ...(agentOnly ? { agentOnly } : {}), ...(notice ? { notice: 'skills' } : {}) },
     })
+    const refused = (error: unknown, key: string) => error instanceof SuperTabHostError && error.code === 'VALIDATION_ERROR' && error.message.includes(`"${key}"`)
     try {
-      // Only the agent sees its notice. A backend from before the mark refuses it before recording anything, so the same
-      // id sends it the old way, visible in the group (2026-10-24: the owner found it confusing in the project chat).
-      await send(true).catch(error => {
-        if (error instanceof SuperTabHostError && error.code === 'VALIDATION_ERROR' && error.message.includes('"agentOnly"')) return send(false)
+      // Only the agent sees its notice, marked as a skills notice: its coordinator's waits for its digest (backend
+      // noticeDigest.ts). A backend from before a mark refuses it before recording anything, so the same id goes again
+      // without it: without the skills mark, or, before agent-only notices, the old way, visible in the group (2026-10-24:
+      // the owner found it confusing in the project chat).
+      await send(true, true).catch(error => {
+        if (refused(error, 'agentOnly')) return send(false, false)
+        if (refused(error, 'notice')) return send(true, false).catch(again => {
+          if (refused(again, 'agentOnly')) return send(false, false)
+          throw again
+        })
         throw error
       })
     } catch (error) {
@@ -1888,7 +1935,7 @@ export class SuperTabHost {
     }
     let context = this.contexts.get(deliveryId)
     if (context === undefined) {
-      context = await this.contextLines(entry, message, command, quotedOther)
+      context = await this.contextLines(entry, message, command, quotedOther, result.buddyNews === true)
       this.contexts.set(deliveryId, context)
     }
     if (this.stopped || this.journal.entries[deliveryId] !== entry) return false
@@ -2130,14 +2177,16 @@ export class SuperTabHost {
   /** The lines that say where a delivery is (agent context design, section 2): the conversation, the agent's own work, and
    *  the thread it is in. Read fresh for each delivery, as the agent: a 60 s cache could build the delivery announcing a
    *  work.assign from a read taken before it. Anything that cannot be read leaves its line out; the delivery always goes. */
-  private async contextLines(entry: Entry, message: Json, prefix: string, quotedOther: ReadonlySet<string>): Promise<string> {
+  private async contextLines(entry: Entry, message: Json, prefix: string, quotedOther: ReadonlySet<string>, buddyNews = false): Promise<string> {
     // A Buddy reads its own person's chat and holds no task, and each read it makes is judged for its grants (security
-    // reviews of #2310): it gets no context lines, so a delivery costs it no read beyond those (design call).
-    if (object(message.source).kind === 'agent-only' || this.isBuddy(entry)) return ''
+    // reviews of #2310): it gets no place or work line, so a delivery costs it no read of the Swarm (design call). Its news
+    // comes from a chat outside its own and gets no line at all, so nothing is read there for it.
+    const buddy = this.isBuddy(entry)
+    if (object(message.source).kind === 'agent-only' || (buddy && buddyNews)) return ''
     const group = String(message.conversationId)
     const lines: string[] = []
     const wait = this.contextWaitMs
-    try {
+    if (!buddy) try {
       // Bounded: a delivery never waits on its context (final review, finding 3). A read that does not answer in time
       // leaves its lines out, and the read goes on for the next delivery.
       const read = await within(this.sources.reads.read(entry.tabId, entry.agentId), wait)
@@ -2149,12 +2198,15 @@ export class SuperTabHost {
     } catch (error) {
       this.log(`context for delivery ${entry.deliveryId} unreadable: ${error instanceof Error ? error.message : String(error)}`)
     }
+    // A reply inside a thread gets the thread line, a Buddy's in its own chat too: Ken 11-03 (#2492) answered "ok để thử" in a
+    // thread of his Buddy chat, the delivery quoted only the thread's root, and the Buddy guessed. Its root is in the page
+    // repliedTo() read, or one read of that root in this same chat; the command is in the Buddy's prefix, with no --agent.
     const root = message.thread
     if (identifier(root) && root !== message.id) {
       const thread = await within(this.threadOf(entry, group, root), wait)
       if (thread && (thread.replies === null || thread.replies > 1)) {
         lines.push(threadLine(thread.root, thread.replies, thread.authors,
-          `${agentCommandOf(entry, prefix)} messages ${shellQuote(group)} --thread ${shellQuote(root)}`, quotedOther.has(root)))
+          `${agentCommandOf(entry, prefix, buddy)} messages ${shellQuote(group)} --thread ${shellQuote(root)}`, quotedOther.has(root)))
       }
     }
     return lines.length ? `${lines.join('\n')}\n\n` : ''

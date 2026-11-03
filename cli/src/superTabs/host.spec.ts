@@ -23,7 +23,7 @@ vi.mock('../lib/buddyGuard.js', async original => {
 import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { attachedFiles as attachedFilesType } from './attachments.js'
-import { backend, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
+import { backend, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmListedFor, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
 import { SWITCH_ADOPT_MS, SWITCH_HOLD_MS } from './leadSwitch.js'
 import { TerminalHost } from './terminal.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
@@ -91,6 +91,27 @@ function setup(messageFields: Record<string, unknown> = {}, claimFields: Record<
     idle: () => { status = 'delivered' }, send: () => { status = 'queued'; claimId = null },
     revoke: (value = true) => { revoked = value }, foreignClaim: () => { claimId = 'another-process' }, from: (id: string) => { from = id } }
 }
+
+// Import an agent (task #2379; security review of #2783): an agent any Swarm still lists on this machine is in a Swarm,
+// its chats archived or its stop asked, though it has no role to restart with.
+describe('whether a Swarm lists a session on this machine', () => {
+  it('names a session any roster row of this machine lists, whatever its chats or stop', async () => {
+    const t = setup()
+    const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }
+    let rows: Record<string, unknown>[] = [{ tabId: 'tab', agent, stopRequested: true }]
+    vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
+      path.includes('/hosts/') ? hostForm(rows) : swarmReply(path, { agents: [{ ...agent, workDecision: 'stop' }],
+        conversations: [{ id: 'task', archived: true, agentIds: ['agent'] }] }) } }))
+    const sources = sourcesOf(t.core)
+    // The restart role says none: its chats are archived and its stop asked.
+    expect(await swarmRoleFor(sources, 'harness')).toBeNull()
+    expect(await swarmListedFor(sources, 'harness')).toBe(true)
+    expect(await swarmListedFor(sources, 'personal')).toBe(false)
+    // Another machine's row of the same session id is not this machine's.
+    rows = [{ tabId: 'tab', agent: { ...agent, machineId: 'machine-2' } }]
+    expect(await swarmListedFor(sources, 'harness')).toBe(false)
+  })
+})
 
 describe('current Swarm role lookup', () => {
   // Project instructions, phase 4 (decision 1): the role's name is the project's document's; the session is a coordinator,
@@ -923,6 +944,31 @@ describe('Super Tab native delivery handoff', () => {
     it('a thread\'s only reply has no thread line', async () => {
       const { t } = wired({ thread: 'root', replyTo: 'root' }, { root: page([ROOT], [{ id: 'root', replies: 1, authors: [{ name: 'Collaborator' }] }]) })
       expect(await delivered(t)).not.toContain('In a thread')
+    })
+    // Ken 11-03 (#2492): in a thread of his Buddy chat he answered "ok để thử"; the delivery quoted only the thread's root,
+    // so the Buddy guessed at the reply. A Buddy reads no Swarm state (no place or work line), but it gets the thread line,
+    // with the read command in its own prefix (no --agent: its guard refuses one).
+    const asBuddy = (t: ReturnType<typeof setup>) =>
+      vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', swarmSkill: { role: 'buddy', key: 'k' } } as never)
+    it('a Buddy gets the thread line with its own --thread command, and no place or work line', async () => {
+      const { t, reads } = wired({ thread: 'root', replyTo: 'root' }, { root: page([ROOT], [{ id: 'root', replies: 3, authors: [{ name: 'Buddy' }, { name: 'Ken' }] }]) })
+      asBuddy(t)
+      const prompt = await delivered(t)
+      expect(prompt).toContain('In a thread Ken started (2026-11-02 09:15 UTC): "Should we ship today?" — 3 replies so far, from Buddy, Ken. '
+        + "Read the whole thread before acting on it: harness super-tab --port 18473 --machine 'machine-1' --tab 'tab' messages 'g12' --thread 'root'")
+      expect(prompt).not.toContain('--agent')
+      expect(prompt).not.toContain('In task #12')
+      expect(prompt).not.toContain('You are assigned')
+      // The root is in the page the quoted reply was read from: no read beyond it.
+      expect(reads).toEqual(['root'])
+    })
+    it('a Buddy\'s news from a thread elsewhere reads nothing for a thread line (its read boundary)', async () => {
+      const { t, reads } = wired({ thread: 'root' }, { root: page([ROOT], [{ id: 'root', replies: 3, authors: [{ name: 'Dev1' }] }]) }, undefined, { buddyNews: true })
+      asBuddy(t)
+      const prompt = await delivered(t)
+      expect(prompt.startsWith('News for your owner')).toBe(true)
+      expect(prompt).not.toContain('In a thread')
+      expect(reads).toEqual([])
     })
     it('a work.assign delivered right after it names the new task', async () => {
       let swarm: Record<string, unknown> = { ...SWARM, conversations: [SWARM.conversations[0]] }
@@ -3410,12 +3456,25 @@ describe('built-in skill text after a CLI update', () => {
     expect(f.sent.map(s => [s.asAgentId, s.command.recipientIds, s.command.conversationId]).sort()).toEqual([
       ['a-builder', ['a-builder'], 'work'], ['a-lead', ['a-lead'], 'lead-group'], ['a-reviewer', ['a-reviewer'], 'lead-group']])
     for (const s of f.sent) expect(s.command.text).toContain(f.files[s.asAgentId.slice(2)]!)
-    // Only the agent sees its notice; no person reads it in a chat.
+    // Only the agent sees its notice; no person reads it in a chat. Marked as a skills notice, its coordinator's goes in its digest.
     for (const s of f.sent) expect(s.command.agentOnly).toBe(true)
+    for (const s of f.sent) expect(s.command.notice).toBe('skills')
     expect(f.sent.find(s => s.asAgentId === 'a-reviewer')!.command.text).toContain('swarm-review skill')
     // A second pass and a restarted host find the files current and say nothing more.
     await f.pass(host, 5_000)
     await f.pass()
+    expect(f.sent).toHaveLength(3)
+  })
+
+  it('drops the skills mark, once, when a backend refuses it, and keeps the notice agent-only', async () => {
+    const f = syncFixture()
+    f.setRefuse(request => 'notice' in request.command ? { status: 400, body: { success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "notice"' } } } : undefined)
+    const host = await f.pass()
+    expect(f.refused).toHaveLength(3)
+    expect(f.sent.map(s => [s.asAgentId, s.command.agentOnly, 'notice' in s.command]).sort()).toEqual([
+      ['a-builder', true, false], ['a-lead', true, false], ['a-reviewer', true, false]])
+    await f.pass(host, 120_000)
     expect(f.sent).toHaveLength(3)
   })
 
@@ -3425,8 +3484,8 @@ describe('built-in skill text after a CLI update', () => {
       error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "agentOnly"' } } } : undefined)
     const host = await f.pass()
     expect(f.refused.map(r => r.operationId).sort()).toEqual(f.sent.map(s => s.operationId).sort())
-    expect(f.sent.map(s => [s.asAgentId, s.command.recipientIds, 'agentOnly' in s.command]).sort()).toEqual([
-      ['a-builder', ['a-builder'], false], ['a-lead', ['a-lead'], false], ['a-reviewer', ['a-reviewer'], false]])
+    expect(f.sent.map(s => [s.asAgentId, s.command.recipientIds, 'agentOnly' in s.command, 'notice' in s.command]).sort()).toEqual([
+      ['a-builder', ['a-builder'], false, false], ['a-lead', ['a-lead'], false, false], ['a-reviewer', ['a-reviewer'], false, false]])
     await f.pass(host, 120_000)
     expect(f.sent).toHaveLength(3)
     expect(f.refused).toHaveLength(3)
@@ -3908,6 +3967,26 @@ function lifeFixture(rows: Record<string, unknown>[], options: SuperTabHostOptio
 }
 const leadRow = (extra: Record<string, unknown> = {}) => ({ tabId: 'tab', lead: true, active: true, agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }, ...extra })
 
+// Task #2354: the switch its owner asked for reaches the Buddy's machine on its row, and is carried out there with the Buddy's
+// thread sessions on this machine (superTabs/buddyModel.ts).
+describe('a Buddy\'s model request', () => {
+  const BUDDY_OF = { personId: 'peer', generation: 'g' }
+  const buddyRow = (agent: Record<string, unknown>) => ({ tabId: 'tab', active: true, agent: { machineId: 'machine-1', buddyOf: BUDDY_OF, ...agent } })
+
+  it('is handed to the Buddy model runner with the Buddy\'s own thread sessions, and no one else\'s', async () => {
+    const serve = vi.fn(async () => {})
+    const main = buddyRow({ id: 'buddy', harnessId: 'h-main', modelRequest: { id: 'req1', gridModel: 'm' } })
+    const session = buddyRow({ id: 'session', harnessId: 'h-session', buddySession: { thread: 't', from: 0 } })
+    const other = { tabId: 'tab', active: true, agent: { id: 'other', harnessId: 'h-other', machineId: 'machine-1',
+      buddyOf: { personId: 'someone', generation: 'g' }, buddySession: { thread: 'u', from: 0 } } }
+    const t = lifeFixture([main, session, other], { buddyModels: { serve } })
+    await t.poll()
+    await vi.waitFor(() => expect(serve).toHaveBeenCalledTimes(1))
+    expect(serve).toHaveBeenCalledWith(expect.objectContaining({ agent: expect.objectContaining({ id: 'buddy' }) }),
+      [expect.objectContaining({ agent: expect.objectContaining({ id: 'session' }) })])
+  })
+})
+
 // Spec 2026-10-30-buddy-thread-sessions: a Buddy's thread session never stays on its person's machine once its thread is done
 // with it. Its host asks the backend to end it, as the machine's owner, when idle or when its terminal is gone.
 describe('ending a Buddy\'s thread sessions', () => {
@@ -4149,6 +4228,14 @@ describe('ending a Buddy\'s thread sessions', () => {
 })
 
 describe('keeping a Swarm Lead alive', () => {
+  it('services a landed PM switch after the source is no longer marked as Lead', async () => {
+    const t = lifeFixture([leadRow({ lead: false, agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1',
+      switchLanded: { id: 'landed-switch', candidateAgentId: 'destination-agent' } } })])
+    await t.poll()
+    const results = t.commands.map(command => command.command as Record<string, unknown>).filter(command => command.type === 'agent.switchResult')
+    expect(results).toContainEqual({ type: 'agent.switchResult', agentId: 'agent', switchId: 'landed-switch', ok: true })
+  })
+
   // The owner, 2026-10-23: a Lead whose session died (a machine restart, a kill) stalls its whole project until someone
   // reopens it by hand. Its host reopens it on its own conversation; a crash loop must not spin.
   it('reopens a Lead whose session is gone, backing off while it cannot, and leaves a live one alone', async () => {

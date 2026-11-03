@@ -25,6 +25,52 @@ class SelectionTests(unittest.TestCase):
         self.assertNotIn("backend-integration", others)
         self.assertNotIn("backend", planner.NOT_READ)
 
+    def test_a_desktop_file_the_phone_tests_read_runs_mobile_checks(self):
+        # mobile/test/swarm/desktop_parity_test.dart compares the phone's Swarm models with these; a desktop-only PR that
+        # changed one passed its own CI and failed two batches later (River, 2026-11-03).
+        for path in ["desktop/lib/super_tabs/model.dart", "desktop/lib/super_tabs/controller.dart",
+                     "desktop/lib/super_tabs/buddies.dart", "desktop/lib/super_tabs/parts.dart",
+                     "desktop/lib/super_tabs/live_card.dart", "desktop/lib/widgets/engine_identity.dart",
+                     "desktop/test/support/real_fonts.dart"]:
+            with self.subTest(path=path):
+                self.assertEqual(planner.select([path])[0], {"desktop", "mobile"})
+        self.assertEqual(planner.select(["desktop/lib/super_tabs/roster.dart"])[0], {"desktop"})
+
+    def test_every_desktop_file_the_phone_tests_read_selects_mobile(self):
+        # The phone's tests name what they read as '../desktop/<path>', an import of '../../desktop/<path>', or (the parity
+        # test's copies and model) the desktop side 'lib/super_tabs/<file>.dart', which only Desktop has.
+        root = Path(__file__).resolve().parents[2]
+        tests = sorted((root / "mobile/test").rglob("*.dart"))
+        if not tests:
+            self.skipTest("mobile/test is not in this checkout (CI's process checks are sparse)")
+        named = set()
+        for test in tests:
+            text = test.read_text()
+            named |= {"desktop/" + m for m in re.findall(r"'(?:\.\./)+desktop/([\w/.-]+\.dart)'", text)}
+            named |= {"desktop/" + m for m in re.findall(r"'(lib/super_tabs/[\w/.-]+\.dart)'", text)}
+        self.assertIn("desktop/lib/super_tabs/model.dart", named)
+        for path in sorted(named):
+            with self.subTest(path=path):
+                self.assertTrue((root / path).exists(), path)
+                self.assertIn("mobile", planner.select([path])[0])
+
+    def test_pr_integration_shards_restore_a_mongod_cache_that_main_saves(self):
+        # A cache a PR saves is visible to that PR only; one saved on main is visible to every PR (review of #2804).
+        workflows = Path(__file__).resolve().parents[2] / ".github/workflows"
+        ci = (workflows / "ci.yml").read_text()
+        job = re.search(r"(?m)^  backend-integration:\n((?:(?:    .*)?\n)+)", ci).group(1)
+        self.assertIn("actions/cache/restore@", job)
+        self.assertNotRegex(job, r"actions/cache(/save)?@")
+        key = re.search(r"(?m)^\s+key: (super-tab-mongod-.+)$", job).group(1)
+        saver = (workflows / "backend-cache.yml").read_text()
+        self.assertRegex(saver, r"(?ms)^on:.*^  push:\n    branches: \[main\]")
+        self.assertIn("actions/cache/save@", saver)
+        # A manual run from another branch would save a cache only that branch reads (review of #2822).
+        self.assertRegex(saver, r"(?m)^  mongod:\n    if: github\.ref == 'refs/heads/main'$")
+        self.assertIn(f"key: {key}", saver)
+        self.assertIn("path: /tmp/harness-super-tab-mongodb-binaries", job)
+        self.assertIn("path: /tmp/harness-super-tab-mongodb-binaries", saver)
+
     def test_docs_workflows_scripts_and_unknown_paths_need_only_process_checks(self):
         for path in ["docs/guide.md", "README.md", "docs/images/poster.png", "scripts/ci-plan.py",
                      ".github/workflows/ci.yml", "Makefile", "store/tools/runtimes.sh", "surprise.py"]:
@@ -970,6 +1016,14 @@ class GitHubEvidenceTests(unittest.TestCase):
         receipt["results"]["backend-new-shards"] = "failure"
         with self.assertRaisesRegex(ValueError, "inconsistent"):
             self.evidence.passed_gate(self.head)
+        # A duplicate or unsorted list is refused: the subset check alone would let one through (review of #2817).
+        for index, edit in enumerate([lambda jobs: sorted(jobs + [jobs[0]]), lambda jobs: list(reversed(jobs))]):
+            with self.subTest(index=index):
+                self.github.add_run(14 + index, self.head, self.tree, ["mobile", "backend"])
+                receipt = self.github.receipts[14 + index]
+                receipt["required_jobs"] = edit(receipt["required_jobs"])
+                with self.assertRaisesRegex(ValueError, "does not run every suite"):
+                    self.evidence.passed_gate(self.head)
 
     def test_a_failed_latest_check_is_not_rescued_by_an_older_pass(self):
         self.github.add_run(12, self.head, self.tree, ["mobile"], conclusion="failure")

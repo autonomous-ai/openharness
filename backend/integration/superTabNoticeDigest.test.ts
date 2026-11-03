@@ -713,3 +713,95 @@ describe('with the update request', () => {
     expect((await deliveryOf(id, f.lead)).status).toBe('digested')
   })
 })
+
+// Two more kinds (docs/plans/2026-11-02-pm-digest-more-kinds-design.md): the coordinator's own skills notices, and usage-limit or
+// failing-model alerts. Each was delivered at once until then. A step's Stuck still is: a person must act on it (review of #2797).
+describe('a step\'s Stuck, skills notices and quiet alerts', () => {
+  /** A review step of the task, assigned to a Reviewer on the worker's machine. */
+  async function stepOf(f: Awaited<ReturnType<typeof swarm>>) {
+    const step = String((await f.execute({ type: 'conversation.create', title: 'Review: Ship the parser', brief: 'Review it', checks: [],
+      reviewOf: f.group })).result.conversationId)
+    const reviewer = await f.add(step, 'test-host', 'Reviewer')
+    const assignmentId = String((await f.execute({ type: 'work.assign', conversationId: step, agentId: reviewer })).result.assignmentId)
+    const status = (s: 'blocked' | 'needs_human') => f.execute({ type: 'work.status', conversationId: step, assignmentId, status: s, result: 'Changes needed' }, host, reviewer)
+    return { step, reviewer, status }
+  }
+  /** The alert rows about [agentId] the coordinator was sent, oldest first. */
+  const alertsTo = async (f: Awaited<ReturnType<typeof swarm>>, alert: string) => {
+    const rows = (await db.superTabMessage.findMany({ where: { tabId: f.tab }, orderBy: { sequence: 'asc' } }))
+      .filter(m => kindOf(m) === 'terminal-alert' && (m.source as { alert?: string }).alert === alert)
+    const sent = []
+    for (const m of rows) if (await db.superTabDelivery.findUnique({ where: { id: stableId(m.id, f.lead) } })) sent.push(m.id)
+    return sent
+  }
+  const alert = (f: Awaited<ReturnType<typeof swarm>>, active: boolean) =>
+    f.execute({ type: 'agent.alert', agentId: f.worker, alert: 'limit', active }, host, f.worker)
+
+  it('a step\'s Stuck goes at once to the coordinator and to the task\'s owner: a person must act on it (review of #2797)', async () => {
+    const f = await swarm()
+    const s = await stepOf(f)
+    await s.status('blocked')
+    const row = await statusRow(f.tab, s.step, 'Stuck')
+    expect((await deliveryOf(row.id, f.lead)).status).toBe('queued')
+    expect((await deliveryOf(row.id, f.worker)).status).toBe('queued')
+  })
+
+  it('a step\'s Stuck goes at once to the coordinator when no owner of its task is told (review of the more-kinds branch)', async () => {
+    const f = await swarm()
+    const orphan = String((await f.execute({ type: 'conversation.create', title: 'Nobody holds this', brief: 'Unassigned', checks: [] })).result.conversationId)
+    const step = String((await f.execute({ type: 'conversation.create', title: 'Review: Nobody holds this', brief: 'Review it', checks: [],
+      reviewOf: orphan })).result.conversationId)
+    const reviewer = await f.add(step, 'test-host', 'Reviewer')
+    const assignmentId = String((await f.execute({ type: 'work.assign', conversationId: step, agentId: reviewer })).result.assignmentId)
+    await f.execute({ type: 'work.status', conversationId: step, assignmentId, status: 'blocked', result: 'Needs the owner\'s account' }, host, reviewer)
+    const row = await statusRow(f.tab, step, 'Stuck')
+    expect(row.recipientIds).toEqual([f.lead])
+    expect((await deliveryOf(row.id, f.lead)).status).toBe('queued')
+  })
+
+  it('a step\'s Needs a human goes at once to the coordinator', async () => {
+    const f = await swarm()
+    const s = await stepOf(f)
+    await s.status('needs_human')
+    const row = await statusRow(f.tab, s.step, 'Needs a human')
+    expect((await deliveryOf(row.id, f.lead)).status).toBe('queued')
+  })
+
+  it('the coordinator\'s skills notice is gathered; its other agent-only notices are not', async () => {
+    const f = await swarm()
+    const skills = await f.write({ kind: 'agent-only', notice: 'skills' }, f.lead, f.group, 'The project\'s instructions changed.', f.lead)
+    expect((await deliveryOf(skills, f.lead)).status).toBe('gathered')
+    const decision = await f.write({ kind: 'agent-only', decisionId: 'd1' }, f.lead, f.group, 'Ken answered your question.', f.lead)
+    expect((await deliveryOf(decision, f.lead)).status).toBe('queued')
+  })
+
+  it.each([['limit', 'gathered'], ['model', 'gathered'], ['prompt', 'queued']])('a %s alert is %s', async (kind, expected) => {
+    const f = await swarm()
+    const id = await f.write({ kind: 'terminal-alert', agentId: f.worker, alert: kind }, f.lead)
+    expect((await deliveryOf(id, f.lead)).status).toBe(expected)
+  })
+
+  it('an alert that ended before the release is cancelled and left out', async () => {
+    const f = await swarm()
+    await alert(f, true)
+    const [id] = await alertsTo(f, 'limit')
+    expect((await deliveryOf(id!, f.lead)).status).toBe('gathered')
+    await alert(f, false)
+    f.clock.now += DUE + 1_000
+    await f.poll()
+    expect((await deliveryOf(id!, f.lead)).status).toBe('cancelled')
+    expect((await digests(f.tab)).some(d => d.text.includes(id!))).toBe(false)
+  })
+
+  it('an alert raised again before the release is delivered', async () => {
+    const f = await swarm()
+    await alert(f, true)
+    const [id] = await alertsTo(f, 'limit')
+    await alert(f, false)
+    await alert(f, true)
+    f.clock.now += DUE + 1_000
+    await f.poll()
+    expect((await deliveryOf(id!, f.lead)).status).not.toBe('cancelled')
+    expect((await digests(f.tab)).some(d => d.text.includes(id!))).toBe(true)
+  })
+})
