@@ -96,11 +96,11 @@ async function limitForUser(userId: string, autonomousEnv: string, db: DbClient 
   const planIds = [...new Set(machines
     .filter((m) => m.planId && (m.billingStatus !== 'pending' || m.billingActivatedAt))
     .map((m) => m.planId as string))]
-  const plans = planIds.length
-    ? await db.subscriptionPlan.findMany({ where: { id: { in: planIds } }, select: { dailyVoiceLimitSeconds: true } })
-    : []
+  // By id, one read each: an account has a machine or a few, and an `in` filter is sent as $expr.
+  const plans = await Promise.all(planIds.map((id) =>
+    db.subscriptionPlan.findUnique({ where: { id }, select: { dailyVoiceLimitSeconds: true } })))
   const limits = plans
-    .map((p) => p.dailyVoiceLimitSeconds)
+    .map((p) => p?.dailyVoiceLimitSeconds)
     .filter((s): s is number => typeof s === 'number')
     .map((s) => Math.max(0, s))
   if (limits.length) return limits.includes(0) ? 0 : Math.max(...limits)

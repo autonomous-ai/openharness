@@ -44,7 +44,6 @@ vi.mock('../lib/prisma.js', () => {
     },
     subscriptionPlan: {
       findUnique: async ({ where }: { where: { id: string } }) => store.plans.find((p) => p.id === where.id) ?? null,
-      findMany: async ({ where }: { where: { id: { in: string[] } } }) => store.plans.filter((p) => where.id.in.includes(p.id)),
       findFirst: async ({ where }: { where: { autonomousEnv: string; isDefault: boolean } }) =>
         store.plans.find((p) => p.autonomousEnv === where.autonomousEnv && p.isDefault === where.isDefault) ?? null,
     },
