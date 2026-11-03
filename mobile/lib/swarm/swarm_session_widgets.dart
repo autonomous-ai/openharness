@@ -19,8 +19,8 @@ import 'swarm_thread.dart';
 // the chat's composer and the thread page put together. What each shows is
 // worked out by SwarmConversation and SwarmThread; these only draw it.
 
-/// New session in the chat composer's toolbar, beside @ Tag: on in the
-/// accent. Disabled while the chat [blocked] it, a tap saying why through
+/// New session in the Buddy chat composer's toolbar, right after +: on in
+/// the accent. Disabled while the chat [blocked] it, a tap saying why through
 /// [onBlocked] (a phone has no hover).
 class SwarmNewSessionChip extends StatelessWidget {
   const SwarmNewSessionChip({
@@ -70,12 +70,12 @@ class SwarmNewSessionChip extends StatelessWidget {
             widthFactor: 1,
             child: Container(
               height: 36,
-              padding: SwarmComposer.tagPadding,
+              padding: SwarmComposer.pillPadding,
               decoration: BoxDecoration(
                 color: on && !disabled
                     ? AppPalette.accentOnSurface.withValues(alpha: 0.16)
                     : tty.text.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(SwarmComposer.tagRadius),
+                borderRadius: BorderRadius.circular(SwarmComposer.pillRadius),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
