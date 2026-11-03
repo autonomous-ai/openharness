@@ -12,6 +12,7 @@ import {
 } from './model.js'
 import { jobKindOf } from './evidence/jobKind.js'
 import { endSteps, stepEndedRows, holdsStepOf, isStep, ownerOf, taskOwner } from './steps.js'
+import { recordCheckVerdict } from './checkVerdicts.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
 import { askedInSchema, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema } from './rules.js'
@@ -3028,7 +3029,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       renewLease(group.assignment, context.now)
       leadActed(group.id, 'assign')
       recordRun(state, group, group.assignment, worker, context.now)
-      group.checks.forEach(c => { c.evidence = null; c.passedBy = null })
+      group.checks.forEach(c => { c.evidence = null; c.passedBy = null; delete c.verdicts })
       result.assignmentId = operationId
       let routeNote: { decisionId: string; text: string } | null = null
       if (command.routeDecisionId) {
@@ -3217,13 +3218,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Checks are information (project instructions, phase 4): who passes one is the project's workflow, so anyone in the task
       // records a verdict, its assignee too, and a failed one leaves the work's status as its agent set it. A verdict counts as a
       // review only from someone other than the assignee (leaderboard/record.ts).
-      check.evidence = command.evidence
-      check.passedBy = command.passed ? actorKey(actor) : null
+      const by = actorKey(actor)
+      const first = !recordCheckVerdict(check, { by, passed: command.passed, evidence: command.evidence, at: context.now })
       const run = group.ledger?.runs?.find(r => r.assignmentId === group.assignment!.id), reviewed = run?.firstReview
       const byAssignee = actor.kind === 'agent' && actor.agentId === group.assignment.agentId
-      // Before the review's first verdict is kept: a check's verdict counts once per attempt.
-      if (actor.kind === 'agent') recordVerdict(state, group, check, agent(state, actor.agentId), context.now)
-      recordReview(group, check, command.passed, byAssignee)
+      // A checker's verdict on a check counts once per attempt.
+      if (actor.kind === 'agent') recordVerdict(state, group, check, agent(state, actor.agentId), context.now, first)
+      recordReview(group, check, by, command.passed, byAssignee, first)
       // A grid attempt whose first review just failed is told to the coordinator (decision 8); a subscription attempt's is not.
       if (reviewed !== false && run?.firstReview === false && run.grid) reviewFailed(group, run.model ?? 'its grid model', command.evidence)
       // An older skill's working hand-off stops waiting once someone else's verdict finds problems in it: its quiet time counts

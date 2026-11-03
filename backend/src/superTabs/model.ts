@@ -208,7 +208,12 @@ export interface Check {
   independent: boolean
   evidence: string | null
   passedBy: string | null
+  /** Each checker's latest verdict during this attempt (checkVerdicts.ts); `evidence` and `passedBy` are derived from them.
+   *  Absent until the first verdict recorded since verdicts were kept. */
+  verdicts?: CheckVerdict[]
 }
+/** One checker's verdict on a check: its actor key (`agent:ID` or `person:ID`), what it found and when. */
+export interface CheckVerdict { by: string; passed: boolean; evidence: string; at: number }
 export interface Assignment {
   id: string
   agentId: string

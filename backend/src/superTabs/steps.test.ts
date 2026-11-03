@@ -508,3 +508,74 @@ describe("the row a step's ended work leaves", () => {
     expect(stepEndedRows(state, [step('gone')], 'Fix was archived.', null, s => s.id)).toEqual([])
   })
 })
+
+// Diego, 2026-11-03 (#2311): Review and Test record the same checks in parallel, and a Reviewer's pass used to erase the
+// Tester's failure and its crash log, so the check read passed on a pull request whose test failed.
+describe('checks with several checkers', () => {
+  const checkers = () => {
+    const f = stepsFixture()
+    const tester = f.add('tester', f.task), reviewer = f.add('reviewer', f.task)
+    const check = (actor: string, passed: boolean, evidence: string) => f.run({ type: 'work.check', conversationId: f.task,
+      assignmentId: f.group(f.task).assignment!.id, checkId: f.group(f.task).checks[0]!.id, passed, evidence } as Command, f.as(actor))
+    return { f, tester, reviewer, check, read: () => f.group(f.task).checks[0]! }
+  }
+
+  it('Tester fails, Reviewer passes: the check reads failed and keeps the Tester\'s evidence', () => {
+    const { f, tester, reviewer, check, read } = checkers()
+    check(tester, false, 'Crashes offline\nlog')
+    f.tick(1000)
+    check(reviewer, true, 'Diff reads right')
+    expect(read()).toMatchObject({ passedBy: null, evidence: 'Crashes offline\nlog' })
+    expect(read().verdicts).toEqual([
+      { by: `agent:${tester}`, passed: false, evidence: 'Crashes offline\nlog', at: f.now - 1000 },
+      { by: `agent:${reviewer}`, passed: true, evidence: 'Diff reads right', at: f.now },
+    ])
+  })
+
+  it('the same Tester passing it then passes the check', () => {
+    const { tester, reviewer, check, read } = checkers()
+    check(tester, false, 'Crashes offline')
+    check(reviewer, true, 'Diff reads right')
+    check(tester, true, 'Signs in offline now')
+    expect(read()).toMatchObject({ passedBy: `agent:${tester}`, evidence: 'Signs in offline now' })
+    expect(read().verdicts!.map(v => [v.by, v.passed])).toEqual([[`agent:${reviewer}`, true], [`agent:${tester}`, true]])
+  })
+
+  it('the assignee passing a check the Reviewer failed leaves it failed', () => {
+    const { f, reviewer, check, read } = checkers()
+    check(reviewer, false, 'Drops the session')
+    check(f.dev, true, 'Fixed it')
+    expect(read()).toMatchObject({ passedBy: null, evidence: 'Drops the session' })
+  })
+
+  it('two failures: failed until both pass, the latest failure\'s evidence shown', () => {
+    const { tester, reviewer, check, read } = checkers()
+    check(tester, false, 'Crashes offline')
+    check(reviewer, false, 'Leaks the token')
+    expect(read()).toMatchObject({ passedBy: null, evidence: 'Leaks the token' })
+    check(reviewer, true, 'Token kept')
+    expect(read()).toMatchObject({ passedBy: null, evidence: 'Crashes offline' })
+    check(tester, true, 'Works offline')
+    expect(read()).toMatchObject({ passedBy: `agent:${tester}`, evidence: 'Works offline' })
+  })
+
+  it('a pass kept from before verdicts counts as its checker\'s verdict', () => {
+    const { tester, reviewer, check, read } = checkers()
+    // As a check recorded before verdicts were kept: its pass and evidence only.
+    Object.assign(read(), { passedBy: `agent:${reviewer}`, evidence: 'Diff reads right' })
+    check(tester, false, 'Crashes offline')
+    expect(read()).toMatchObject({ passedBy: null, evidence: 'Crashes offline' })
+    check(reviewer, true, 'Still right')
+    expect(read().verdicts!.map(v => [v.by, v.passed, v.evidence])).toEqual([
+      [`agent:${tester}`, false, 'Crashes offline'], [`agent:${reviewer}`, true, 'Still right']])
+  })
+
+  it('a new attempt starts with no verdicts', () => {
+    const { f, tester, check, read } = checkers()
+    check(tester, false, 'Crashes offline')
+    f.run({ type: 'work.cancel', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, reason: 'Again.' } as Command, f.as(f.lead))
+    f.run({ type: 'work.assign', conversationId: f.task, agentId: f.dev }, f.as(f.lead))
+    expect(read()).toMatchObject({ passedBy: null, evidence: null })
+    expect(read()).not.toHaveProperty('verdicts')
+  })
+})
