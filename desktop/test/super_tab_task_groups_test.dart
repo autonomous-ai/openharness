@@ -183,6 +183,18 @@ void main() {
       );
     });
 
+    test('a question left unanswered past quiet still needs the reader', () {
+      // An agent at a question makes no progress: after 30 minutes the
+      // backend marks its task quiet (liveness.ts TASK_QUIET_MS).
+      expect(
+        of(
+          task(status: 'working', liveness: {'state': 'quiet', 'since': 1}),
+          needsHuman: 1,
+        ),
+        SuperTabTaskGroup.needsYou,
+      );
+    });
+
     test('a question in a working task\'s terminal needs the reader', () {
       expect(
         of(task(status: 'working'), needsHuman: 1),
