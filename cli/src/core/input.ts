@@ -67,6 +67,8 @@ export interface InputDeps {
   /** Whether a typed delivery's maker queues it in the engine's own input while the agent works (the Swarm's chat,
    *  superTabs/inCore/deliveries.ts), where the engine takes that; absent, every typed delivery waits for idle. */
   typesWhileBusy?: (deliveryId: string) => boolean
+  /** Whether a delivery is a person's Swarm message, which closes a question open in a Claude pane (core/deliveries.ts). */
+  answersQuestion?: (deliveryId: string) => boolean
   /** An agent whose turns keep ending at once has its automatic writes held a while (turns/shortTurnGuard.ts). */
   shortTurns?: Pick<ShortTurnGuard, 'holding'>
 }
@@ -172,7 +174,15 @@ export function sessionInputDeps(
       if (deps.shortTurns?.holding(session.sessionId)) return 'team_waiting_control'
       const capture = await captureTerminal(session.agentId)
       const screen = await deps.readScreen(session, capture)
-      return deliveryHold(session, screen, capture, deliveryId)
+      const hold = deliveryHold(session, screen, capture, deliveryId)
+      // A person's answer closes the question it answers: one Escape, then the pane is read again and held as ever if
+      // the question stays. Never a permission prompt, an agent's message or another engine.
+      if (screen?.messageHold !== 'question_open' || session.engine !== 'claude' || !deliveryId || !deps.answersQuestion?.(deliveryId)) return hold
+      const pressed = await deviceInput().legacyWrite(session.agentId, () => keyTerminalAction(session.agentId, 'Escape'))
+      if (pressed.state !== 'succeeded') return hold
+      console.warn(`[inject] ${sid(session.sessionId)} question closed for a person's message`)
+      const after = await captureTerminal(session.agentId)
+      return deliveryHold(session, await deps.readScreen(session, after), after, deliveryId)
     },
     validateRuntime: validateTerminal,
     // Typed into the pane as it stands, a draft or a running turn included, under the pane's write lock.

@@ -80,7 +80,10 @@ export function createDeliveries(deps: DeliveriesDeps) {
     settled({ deliveryId, sessionId: taken.agentId, state: 'rejected', reason: 'cancelled' })
     return true
   }
+  /** Deliveries from a person's message, which close a question open on the pane, until they settle. */
+  const answering = new Set<string>()
   const settled = (event: TurnDelivery): void => {
+    if (event.state !== 'queued') answering.delete(event.deliveryId)
     for (const listener of listeners) {
       try { listener(event) } catch (error) {
         log(`[deliveries] a listener failed on ${event.deliveryId.slice(0, 40)} · ${error instanceof Error ? error.message : String(error)}`)
@@ -91,7 +94,10 @@ export function createDeliveries(deps: DeliveriesDeps) {
   }
 
   const turns: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery' | 'leaseDeliveries'> = {
-    deliver: (agentId, content, deliveryId) => submit(agentId, content, deliveryId),
+    deliver: (agentId, content, deliveryId, options) => {
+      if (options?.answersQuestion) answering.add(deliveryId)
+      submit(agentId, content, deliveryId)
+    },
     cancelDelivery: (deliveryId) => cancel(deliveryId),
     onDelivery: (listener) => {
       listeners.add(listener)
@@ -111,6 +117,9 @@ export function createDeliveries(deps: DeliveriesDeps) {
       const service = deliveryId.split(':')[2]
       return (leases.get(service)?.get(deliveryId) ?? 0) > now()
     },
+
+    /** Whether the delivery is unsettled and came from a person's message (`DeliveryOptions.answersQuestion`). */
+    answersQuestion: (deliveryId: string): boolean => answering.has(deliveryId),
 
     /** The core's input says what became of a delivery: every listener here hears it, each guarded, and the
      *  process that made it is told. A listener that throws costs that listener the event, never the input
@@ -140,6 +149,7 @@ export function createDeliveries(deps: DeliveriesDeps) {
       makers.delete(deliveryId)
       makers.set(deliveryId, service)
       if (makers.size > KEPT_DELIVERERS) makers.delete(makers.keys().next().value!)
+      if (payload.answersQuestion === true) answering.add(deliveryId)
       submit(agentId, payload.text, deliveryId)
       return {}
     },

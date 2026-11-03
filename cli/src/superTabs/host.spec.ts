@@ -820,6 +820,14 @@ describe('Super Tab native delivery handoff', () => {
     expect(prompt).not.toContain('email addresses')
     expect(prompt).not.toContain('Report exact revisions')
   })
+  it('delivers a person\'s message as answering a question, an agent\'s is not', async () => {
+    const person = setup({ author: { kind: 'person', id: 'p1', name: 'sam@example.com' }, text: 'Yes' })
+    await person.open().tick()
+    expect(vi.mocked(person.core.turns.deliver).mock.calls[0]![3]).toEqual({ answersQuestion: true })
+    const agent = setup({ author: { kind: 'agent', id: 'w', name: 'Builder' }, text: 'Done' })
+    await agent.open().tick()
+    expect(vi.mocked(agent.core.turns.deliver).mock.calls[0]![3]).toBeUndefined()
+  })
   // Final review: with no --to a reply reaches the coordinator (or, from the coordinator, the task's assignee), so an Engineer
   // answering a Reviewer reached the PM, and the PM answering an agent that was not the assignee reached no one.
   it('names an agent author with --to in the reply line, and no one for a person', async () => {

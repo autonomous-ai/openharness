@@ -234,7 +234,7 @@ export interface CoreApi {
     /** Deliver text into a live agent under a delivery id of the caller's own, as the Wi-Fi device, Agent
      *  Messages and the orchestrator deliver their turns: one path for the three. What becomes of it is heard through
      *  `onDelivery`, under the same id. */
-    deliver(agentId: string, text: string, deliveryId: string): void
+    deliver(agentId: string, text: string, deliveryId: string, options?: DeliveryOptions): void
     /** Take back a delivery not yet being written: true when it was, and it never will be; false for one
      *  the agent's pane is already taking. Answered at once, as the orchestrator reads it in
      *  line: in a service's own process the core is asked and the answer cannot wait, so it is false there,
@@ -566,6 +566,10 @@ export const ACCOUNT_BACKEND_OFF: Pick<CoreApi['account'], 'backend' | 'identity
 
 /** Where a service that was never told runs this daemon from: the installed CLI, on no port it knows. */
 export const DAEMON_UNKNOWN: DaemonAddress = { command: 'harness', port: 0, machineId: () => '', autonomousEnv: 'prod' }
+
+/** How a delivery is told apart: `answersQuestion` marks a person's Swarm message, which closes the question it answers
+ *  in a Claude pane (core/input.ts `beforeTeamWrite`). */
+export interface DeliveryOptions { answersQuestion?: true }
 
 /** What became of a delivered turn (`turns.deliver`), as the core's input says it: `queued`, written
  *  (`delivered`), its turn `started`, `rejected` with why, or `unknown`. `sessionId` is the agent it was

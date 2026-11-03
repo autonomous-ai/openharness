@@ -1371,6 +1371,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     shortTurns,
     // The Swarm's chat is queued in the engine's own input while an agent works (superTabs/inCore/deliveries.ts).
     ...(swarm ? { typesWhileBusy: swarm.typesWhileBusy } : {}),
+    answersQuestion: deliveries.answersQuestion,
     readScreen: screens.read,
     submission: submissions,
     resolve: (id) => registry.resolve(id),

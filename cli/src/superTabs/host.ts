@@ -1917,7 +1917,8 @@ export class SuperTabHost {
       approving ? APPROVALS(approving.judged) : '']
       .filter(Boolean).join('\n\n')
     this.core.turns.deliver(entry.harnessId, this.prompt(entry, message, attached, command, quote ?? '', result.buddyNews === true, context,
-      result.otherAccount === true), id)
+      result.otherAccount === true), id,
+      ...(fromPerson && !['agent-only', 'native'].includes(String(object(message.source).kind)) ? [{ answersQuestion: true as const }] : []))
     return false
   }
 

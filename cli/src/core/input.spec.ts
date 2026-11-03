@@ -157,6 +157,55 @@ describe('the session input controller\'s dependencies', () => {
     expect(sessionInputDeps({ ...given, moveGate }, () => lock([])).moveGate).toBe(moveGate)
   })
 
+  describe('a person\'s Swarm message closes the question it answers', () => {
+    const QUESTION = fixture('question-tabs.txt')
+    const ID = 'team:service:superTabs:answer'
+    /** The pane shows `first` until a key is pressed, then `after`. */
+    const asking = (first: string, after: string, answers: boolean, engine: 'a1' | 'cx' = 'a1') => {
+      const t = deps({ answersQuestion: () => answers }), wired = sessionInputDeps(t.deps, () => lock(t.calls))
+      t.setPane(first)
+      vi.mocked(t.deps.terminal.keyTerminalAction).mockImplementation(async (id, key) => { t.calls.push(`key ${id} ${key}`); t.setPane(after); return ok })
+      return { t, wired, session: agents.get(engine)! }
+    }
+    const keys = (calls: string[]) => calls.filter((c) => c.startsWith('key '))
+
+    it('presses Escape once and delivers when the question closes', async () => {
+      const { t, wired, session } = asking(QUESTION, READY_PANE, true)
+      expect(await wired.beforeTeamWrite!(session, ID)).toBeNull()
+      expect(keys(t.calls)).toEqual(['key a1 Escape'])
+      expect(t.calls).toContain('lock a1')
+    })
+    it('never presses Escape on a permission prompt', async () => {
+      const { t, wired, session } = asking(CLAUDE_PERMISSION, READY_PANE, true)
+      expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
+      expect(keys(t.calls)).toEqual([])
+    })
+    it('leaves an agent\'s message waiting', async () => {
+      const { t, wired, session } = asking(QUESTION, READY_PANE, false)
+      expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
+      expect(keys(t.calls)).toEqual([])
+    })
+    it('leaves another engine waiting', async () => {
+      const { t, wired, session } = asking(fixture('question-codex.txt'), READY_PANE, true, 'cx')
+      expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
+      expect(keys(t.calls)).toEqual([])
+    })
+    it('holds when Escape was not sent, or the delivery or the pane is unknown', async () => {
+      const { t, wired, session } = asking(QUESTION, READY_PANE, true)
+      vi.mocked(t.deps.terminal.keyTerminalAction).mockResolvedValueOnce({ state: 'failed', dispatch: 'not_started', reason: 'gone' })
+      expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
+      expect(await wired.beforeTeamWrite!(session)).toBe('team_waiting_user')
+      t.setPane(null)
+      expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_unavailable')
+      expect(keys(t.calls)).toEqual([])
+    })
+    it('still holds when the question stays after Escape', async () => {
+      const { t, wired, session } = asking(QUESTION, QUESTION, true)
+      expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
+      expect(keys(t.calls)).toEqual(['key a1 Escape'])
+    })
+  })
+
   it('tells the device of a delivery first, then its caller; its caller alone without a device', () => {
     const one = deps()
     sessionInputDeps(one.deps, () => lock([])).onDelivery!(delivery('d1'))
