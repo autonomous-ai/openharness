@@ -1,0 +1,415 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/models.dart';
+import 'package:harness/state/app_state.dart';
+import 'package:harness/super_tabs/team_account_setup.dart';
+
+import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
+import 'support/rename_connection.dart';
+import 'swarm_state_test.dart' show createApp;
+
+/// This Mac's daemon for the Harness Team account's actions; no socket is
+/// opened, and nothing is set up or signed out.
+class _Daemon extends RenameConnection {
+  final asked = <String>[];
+
+  /// `teamSetupCheck`: whether the account is wanted here.
+  Map<String, dynamic> check = {'ok': true, 'state': 'wanted'};
+
+  /// `teamSetup` (`manual`): what starting it answers.
+  Map<String, dynamic> run = {'ok': true, 'state': 'started'};
+
+  /// `teamSetupStatus`, in turn; the last one repeats.
+  final statuses = <Map<String, dynamic>>[
+    {'ok': true, 'state': 'running'},
+  ];
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    final action = '${payload['action']}';
+    if (type == 'super_tabs' && action.startsWith('teamSetup')) {
+      asked.add(action);
+      return switch (action) {
+        'teamSetupCheck' => check,
+        'teamSetup' => run,
+        'teamSetupStatus' =>
+          statuses.length > 1 ? statuses.removeAt(0) : statuses.single,
+        _ => {'ok': true},
+      };
+    }
+    return super.request(type, payload: payload, timeout: timeout);
+  }
+}
+
+const _wrongPassword =
+    'The Harness Team account was not finished: The administrator user name or '
+    'password was incorrect. (-60005). Run `harness team setup` again; it repairs what is there.';
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  late _Daemon daemon;
+  late AppNotifier app;
+
+  setUp(() {
+    daemon = _Daemon();
+    app = createApp(connectionForTest: (_) => daemon, connected: true);
+    app.currentUser = const CurrentUserProfile(
+      id: 'owner',
+      email: 'owner@example.com',
+    );
+    app.machineStates['m']!.localOnly = true;
+    app.teamAccountHereForTest = true;
+  });
+  tearDown(() => app.dispose());
+
+  final navigator = GlobalKey<NavigatorState>();
+  var taps = 0, shortcuts = 0;
+
+  /// The app's window as app_shell.dart builds it: the lock above the
+  /// Navigator, so it covers every route and dialog too.
+  Future<void> window(WidgetTester tester, AppNotifier app) async {
+    taps = 0;
+    shortcuts = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        navigatorKey: navigator,
+        builder: (context, child) => TeamAccountSetupLock(
+          app: app,
+          operatingSystem: 'macos',
+          child: child!,
+        ),
+        home: Scaffold(
+          body: CallbackShortcuts(
+            bindings: {
+              const SingleActivator(LogicalKeyboardKey.keyK, meta: true): () =>
+                  shortcuts++,
+            },
+            child: Column(
+              children: [
+                TextButton(
+                  key: const Key('behind-button'),
+                  autofocus: true,
+                  onPressed: () => taps++,
+                  child: const Text('Behind'),
+                ),
+                const TextField(key: Key('behind-field')),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+  }
+
+  Future<void> lock(WidgetTester tester) async {
+    await app.offerTeamAccount('join', tabId: 'tab-1');
+    await tester.pump();
+    expect(find.byKey(const Key('team-account-lock')), findsOneWidget);
+  }
+
+  /// Whether the focused widget sits under [finder].
+  bool focusedIn(Finder finder) {
+    final focused = FocusManager.instance.primaryFocus?.context;
+    if (focused == null) return false;
+    return finder.evaluate().any(
+      (element) =>
+          element == focused ||
+          (focused as Element).debugGetDiagnosticChain().contains(element),
+    );
+  }
+
+  String outcome(WidgetTester tester) => tester
+      .widget<Text>(find.byKey(const Key('team-account-lock-outcome')))
+      .data!;
+
+  testWidgets('unlocked, it is not there and the app takes input', (
+    tester,
+  ) async {
+    await window(tester, app);
+    expect(find.byKey(const Key('team-account-lock')), findsNothing);
+    await tester.tap(find.byKey(const Key('behind-button')));
+    expect(taps, 1);
+  });
+
+  testWidgets(
+    'locked, nothing behind it takes a click, a key or focus, a dialog included',
+    (tester) async {
+      final semantics = tester.ensureSemantics();
+      await window(tester, app);
+      // A dialog open before the join, as a menu item's would be.
+      var dialogTaps = 0;
+      navigator.currentState!.push(
+        DialogRoute<void>(
+          context: navigator.currentContext!,
+          builder: (_) => Dialog(
+            child: TextButton(
+              key: const Key('dialog-button'),
+              onPressed: () => dialogTaps++,
+              child: const Text('In a dialog'),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await lock(tester);
+
+      await tester.tap(
+        find.byKey(const Key('behind-button')),
+        warnIfMissed: false,
+      );
+      await tester.tap(
+        find.byKey(const Key('dialog-button')),
+        warnIfMissed: false,
+      );
+      await tester.tap(
+        find.byKey(const Key('behind-field')),
+        warnIfMissed: false,
+      );
+      await tester.pump();
+      expect(taps, 0);
+      expect(dialogTaps, 0);
+
+      for (var i = 0; i < 8; i++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.pump();
+        expect(focusedIn(find.byKey(const Key('team-account-lock'))), isTrue);
+      }
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyK);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      expect(shortcuts, 0);
+      expect(taps, 0);
+      expect(dialogTaps, 0);
+
+      // A screen reader reads only the lock.
+      expect(find.bySemanticsLabel('Behind'), findsNothing);
+      expect(find.bySemanticsLabel('In a dialog'), findsNothing);
+      expect(find.text('Set up Harness Team on this Mac'), findsOneWidget);
+      semantics.dispose();
+
+      // Set up: the app is as it was, the dialog still open over it.
+      await app.teamAccountMade();
+      await tester.pump();
+      expect(find.byKey(const Key('team-account-lock')), findsNothing);
+      await tester.tap(find.byKey(const Key('dialog-button')));
+      expect(dialogTaps, 1);
+    },
+  );
+
+  testWidgets('there is no way to close it', (tester) async {
+    await window(tester, app);
+    await lock(tester);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump();
+    await tester.tapAt(const Offset(4, 4));
+    await tester.pump();
+    expect(find.byKey(const Key('team-account-lock')), findsOneWidget);
+    for (final label in ['Cancel', 'Not now', 'Close', 'OK']) {
+      expect(find.text(label), findsNothing, reason: label);
+    }
+    expect(find.byKey(const Key('team-account-lock-remove')), findsNothing);
+    expect(
+      find.textContaining('This Mac joined a Swarm, so it needs Harness Team'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('Continue starts setup, and success opens the app', (
+    tester,
+  ) async {
+    daemon.statuses
+      ..clear()
+      ..addAll([
+        {'ok': true, 'state': 'running'},
+        {'ok': true, 'state': 'exists'},
+      ]);
+    await window(tester, app);
+    await lock(tester);
+    await tester.tap(find.byKey(const Key('team-account-lock-continue')));
+    await tester.pump();
+    expect(daemon.asked, ['teamSetupCheck', 'teamSetup']);
+    expect(
+      outcome(tester),
+      'macOS is asking for your password in a window titled “osascript”. '
+      'Setup then takes a minute or two, and Harness opens when it is done.',
+    );
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    await tester.pump(const Duration(seconds: 2));
+    expect(find.byKey(const Key('team-account-lock')), findsOneWidget);
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pump();
+    expect(find.byKey(const Key('team-account-lock')), findsNothing);
+    expect(app.teamSetupLocked, isFalse);
+    await tester.tap(find.byKey(const Key('behind-button')));
+    expect(taps, 1);
+  });
+
+  testWidgets('a Mac with the account already opens the app at Continue', (
+    tester,
+  ) async {
+    daemon.run = {'ok': true, 'state': 'exists'};
+    await window(tester, app);
+    await lock(tester);
+    await tester.tap(find.byKey(const Key('team-account-lock-continue')));
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const Key('team-account-lock')), findsNothing);
+  });
+
+  testWidgets('a wrong password says so, and Try again asks again', (
+    tester,
+  ) async {
+    daemon.statuses
+      ..clear()
+      ..add({'ok': true, 'state': 'failed', 'detail': _wrongPassword});
+    await window(tester, app);
+    await lock(tester);
+    await tester.tap(find.byKey(const Key('team-account-lock-continue')));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 2));
+    expect(outcome(tester), 'macOS did not accept that password. Try again.');
+    expect(find.byKey(const Key('team-account-lock-remove')), findsNothing);
+    daemon.statuses
+      ..clear()
+      ..add({'ok': true, 'state': 'running'});
+    await tester.tap(find.byKey(const Key('team-account-lock-retry')));
+    await tester.pump();
+    expect(daemon.asked.where((a) => a == 'teamSetup'), hasLength(2));
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+  });
+
+  testWidgets('another failure says the daemon\'s sentence, with Try again', (
+    tester,
+  ) async {
+    daemon.statuses
+      ..clear()
+      ..add({'ok': true, 'state': 'failed', 'detail': 'dscl exited 64.'});
+    await window(tester, app);
+    await lock(tester);
+    await tester.tap(find.byKey(const Key('team-account-lock-continue')));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 2));
+    expect(outcome(tester), 'Setup did not finish: dscl exited 64.');
+    expect(find.byKey(const Key('team-account-lock-retry')), findsOneWidget);
+  });
+
+  testWidgets(
+    'a closed password window offers Try again and, for a Mac without an administrator, the way out',
+    (tester) async {
+      daemon.statuses
+        ..clear()
+        ..add({'ok': true, 'state': 'declined'});
+      await window(tester, app);
+      await lock(tester);
+      await tester.tap(find.byKey(const Key('team-account-lock-continue')));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 2));
+      expect(
+        outcome(tester),
+        'The password window was closed before setup finished.',
+      );
+      expect(find.byKey(const Key('team-account-lock-retry')), findsOneWidget);
+      expect(
+        find.text(
+          'No administrator password for this Mac? Remove it from the Swarm. '
+          'You can add it again from Machines.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('Remove this Mac from the Swarm'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'where setup can never finish, it says why and offers only the way out',
+    (tester) async {
+      daemon.run = {'error': 'INVALID_REQUEST'};
+      await window(tester, app);
+      await lock(tester);
+      await tester.tap(find.byKey(const Key('team-account-lock-continue')));
+      await tester.pump();
+      await tester.pump();
+      expect(
+        outcome(tester),
+        'This Mac\'s Harness is too old to set it up from here. Update Harness, '
+        'or run harness team setup in Terminal.',
+      );
+      expect(find.byKey(const Key('team-account-lock-retry')), findsNothing);
+      expect(find.byKey(const Key('team-account-lock-remove')), findsOneWidget);
+    },
+  );
+
+  testWidgets('Harness unreachable says so, with Try again', (tester) async {
+    daemon.run = {'error': 'SERVICE_UNAVAILABLE'};
+    await window(tester, app);
+    await lock(tester);
+    await tester.tap(find.byKey(const Key('team-account-lock-continue')));
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const Key('team-account-lock-retry')), findsOneWidget);
+    expect(find.byKey(const Key('team-account-lock')), findsOneWidget);
+  });
+
+  testWidgets('Remove this Mac from the Swarm removes it and opens the app', (
+    tester,
+  ) async {
+    final f = SuperTabLaunchFixture();
+    f.app.teamAccountHereForTest = true;
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+    f.connection.teamCheck = {'state': 'wanted'};
+    f.connection.teamRun = {'state': 'unsupported'};
+    await f.app.offerTeamAccount('join', tabId: tabId);
+    await window(tester, f.app);
+    await tester.tap(find.byKey(const Key('team-account-lock-continue')));
+    await tester.pumpAndSettle();
+    expect(
+      outcome(tester),
+      'Harness Team cannot be set up on this Mac right now.',
+    );
+    await tester.tap(find.byKey(const Key('team-account-lock-remove')));
+    await tester.pumpAndSettle();
+    expect(
+      f.connection.server.posts.map((p) => p['command']),
+      contains(equals({'type': 'machine.remove', 'machineId': 'm'})),
+    );
+    expect(find.byKey(const Key('team-account-lock')), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    f.app.superTabs.dispose();
+    f.dispose();
+    await tester.pump();
+  });
+
+  testWidgets('a removal the Swarm refuses says why, and the lock stays', (
+    tester,
+  ) async {
+    final f = SuperTabLaunchFixture();
+    f.app.teamAccountHereForTest = true;
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+    f.connection.teamCheck = {'state': 'wanted'};
+    f.connection.teamRun = {'state': 'unsupported'};
+    await f.app.offerTeamAccount('join', tabId: tabId);
+    f.connection.server.refuse = {
+      'code': 'FORBIDDEN',
+      'message': 'Only the Swarm owner can do that.',
+    };
+    await window(tester, f.app);
+    await tester.tap(find.byKey(const Key('team-account-lock-continue')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('team-account-lock-remove')));
+    await tester.pumpAndSettle();
+    expect(find.text('Only the Swarm owner can do that.'), findsOneWidget);
+    expect(find.byKey(const Key('team-account-lock')), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    f.app.superTabs.dispose();
+    f.dispose();
+    await tester.pump();
+  });
+}

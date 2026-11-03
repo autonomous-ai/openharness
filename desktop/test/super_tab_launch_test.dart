@@ -72,6 +72,9 @@ class SuperTabFixtureConnection extends WsConn {
   /// What this Mac's daemon answers whether its Harness Team account is wanted
   /// (`teamSetupCheck`); null answers as a daemon too old to say.
   Map<String, dynamic>? teamCheck;
+
+  /// What starting the account's setup answers (`teamSetup`, `manual`).
+  Map<String, dynamic> teamRun = {'state': 'started'};
   bool loseCreate = false, loseJoin = false;
   bool failNative = false;
   WsRequestFailure? backendFailure;
@@ -195,6 +198,7 @@ class SuperTabFixtureConnection extends WsConn {
         if (teamSetup case final setup?) return {'ok': true, ...setup};
         throw const SuperTabFailure('INVALID_REQUEST', 'Unknown action.');
       }
+      if (payload['action'] == 'teamSetup') return {'ok': true, ...teamRun};
       if (payload['action'] == 'teamSetupCheck') {
         if (teamCheck case final check?) return {'ok': true, ...check};
         throw const SuperTabFailure('INVALID_REQUEST', 'Unknown action.');
