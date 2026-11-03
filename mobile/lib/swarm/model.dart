@@ -607,6 +607,15 @@ class SuperTabSnapshot {
         row['invitations'],
         (row) => Map<String, dynamic>.unmodifiable(row),
       ),
+      _starts = Map.unmodifiable({
+        for (final start
+            in row['starts'] is List ? row['starts'] as List : const [])
+          if (start case {'id': final String id})
+            id: (
+              harnessId: start['harnessId'] as String?,
+              error: start['error'] as String?,
+            ),
+      }),
       startEfforts = Map.unmodifiable({
         for (final start
             in row['starts'] is List ? row['starts'] as List : const [])
@@ -694,6 +703,12 @@ class SuperTabSnapshot {
   final List<SuperTabConversation> conversations;
   late final List<SuperTabProject> projects;
   final List<Map<String, dynamic>> invitations;
+
+  /// Each agent start's outcome so far, by its id: the harness it made, or
+  /// why it failed (backend AgentStart); null for a start this read does not
+  /// hold. Read as the desktop reads it (desktop_parity_test.dart).
+  ({String? harnessId, String? error})? startOf(String id) => _starts[id];
+  final Map<String, ({String? harnessId, String? error})> _starts;
 
   /// The effort each started agent's start asked for, by harness id. Empty where the starts are not read (a view
   /// kept on this device leaves them out).
