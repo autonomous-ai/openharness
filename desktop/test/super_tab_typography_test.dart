@@ -171,4 +171,26 @@ void main() {
     expect(styleOf(tester, 'Shipped the search field')!.fontSize, 14);
     await unmountPhoneSuperTab(tester, controller);
   });
+
+  testWidgets('a phone\'s sidebar keeps the app\'s 13 px on 36 px rows', (
+    tester,
+  ) async {
+    final (_, controller) = await mountPhoneSuperTab(
+      tester,
+      const Size(390, 844),
+    );
+    await tester.tap(find.byTooltip('Conversations'));
+    await tester.pumpAndSettle();
+    final project = find.byKey(const ValueKey('super-group-lead'));
+    final name = tester.widget<Text>(
+      find.descendant(of: project, matching: find.text('Pilot')),
+    );
+    expect(name.style!.fontSize, 13);
+    expect(tester.getSize(project).height, 36);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('super-activity'))).height,
+      36,
+    );
+    await unmountPhoneSuperTab(tester, controller);
+  });
 }
