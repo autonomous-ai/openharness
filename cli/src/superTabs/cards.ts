@@ -20,7 +20,7 @@
 import { randomUUID } from 'node:crypto'
 import type { BackendNotice, CoreApi } from '../core/api.js'
 import { backend, SuperTabHostError } from './host.js'
-import { identifier, object } from './wire.js'
+import { identifier, object, within } from './wire.js'
 import { SwarmReads, type SwarmRead } from './swarmReads.js'
 import { buddyAvatar } from './buddyAvatar.js'
 
@@ -30,6 +30,8 @@ import type { CardChat, CardFocus, CardSide, ChatKind, LeadNotice, LeadRecap, Le
 export type { CardChat, CardFocus, CardSide, LeadNotice, LeadRecap, LeadState, SaidOnCard, SwarmBuddy, SwarmCard, SwarmChat, SwarmLead } from '../core/api.js'
 
 const MAX_CARDS = 16, MAX_LEADS = 12, NAME_BYTES = 48, RECAP_BYTES = 1500, MAX_LIST_PAGES = 10, MAX_RECAPS_IN_FLIGHT = 2
+/** The longest a dial's recap read waits on the one before it. */
+const ASK_WAIT_MS = 10_000
 /** The Pro keeps an id in 48 bytes with its NUL: 47 characters at most reach it. */
 const ID_BYTES = 47
 export const cardId = (v: unknown): v is string => identifier(v) && v.length <= ID_BYTES
@@ -217,8 +219,9 @@ interface Cached { sequence: number; recap: LeadRecap }
  *  that speaks `swarmChat`, or 'buddy' for one that speaks swarmBuddy), the recap is that dial's face chat's, and `chatId`
  *  the chat it was last told of. */
 interface Opened { tabId: string; leadId: string; chat: CardChat; chatId: string | null; sequence: number | null; sessions: Set<string> }
-/** Where a recap is read, or talk is posted: a conversation, how far it has gone, and whose messages are its recap. */
-interface Target { id: string; sequence: number; voices: Set<string>; chatId?: string }
+/** Where a recap is read, or talk is posted: a conversation, how far it has gone, and whose messages are its recap; `buddy`
+ *  when it is a swarmBuddy dial's Buddy face, whose notice is the Buddy's. */
+interface Target { id: string; sequence: number; voices: Set<string>; chatId?: string; buddy?: true }
 const recapKey = (tabId: string, leadId: string, chatId?: string) => chatId === undefined ? `${tabId}:${leadId}` : `${tabId}:${leadId}:${chatId}`
 /** A recap's cache key: an older dial's and a swarmBuddy dial's recap of one Buddy chat hear different voices. */
 const cachedKey = (tabId: string, leadId: string, chatId: string | undefined, chat: CardChat) => `${recapKey(tabId, leadId, chatId)}${chat === 'buddy' ? ':buddy' : ''}`
@@ -262,7 +265,10 @@ export class SwarmCards {
   private focus: CardFocus | null = null
   private opened = new Map<string, Opened>()
   private openBy = new Map<string, string>()
+  /** Background reads of recaps and notices in flight, at most MAX_RECAPS_IN_FLIGHT. */
   private recapsRunning = 0
+  /** The dial's own recap reads, one at a time and apart from the background's: a dial is never refused its recap. */
+  private asking: Promise<unknown> | null = null
   /** One push of open recaps at a time: a focus change and a poll that both see a new face push it once. */
   private pushing: Promise<void> = Promise.resolve()
   /** The alert baseline: per watched conversation (`${tab}:${conversation}`), the last sequence whose messages were seen. */
@@ -609,44 +615,93 @@ export class SwarmCards {
       : faceOf(conversations, projectId, found.lead, focus, this.me, buddies)
     if (!face) return null
     const id = face.conversation.id as string
-    return { id, sequence: sequenceOf(face.conversation), voices: voicesOf(face, leadId, list(state.agents), this.me), chatId: id }
+    return { id, sequence: sequenceOf(face.conversation), voices: voicesOf(face, leadId, list(state.agents), this.me), chatId: id,
+      ...(face.kind === 'buddy' ? { buddy: true as const } : {}) }
   }
 
   /** What the Lead last said: the newest page of its conversation, then one page back; `none` when neither holds a row of its own.
-   *  With `chat`, what the chat on its face last heard from its agents, naming that chat. */
+   *  With `chat`, what the chat on its face last heard from its agents, naming that chat. The dial's own read: never refused,
+   *  and answered at once from the recap held for that chat or the notice from it, read again after when the chat moved on. */
   async recap(tabId: string, leadId: string, chat: CardChat = false): Promise<LeadRecap> {
     if (!cardId(tabId) || !cardId(leadId)) return { tabId, leadId, text: '', at: 0, none: true }
-    let found = this.target(tabId, leadId, chat)
-    if (!found) {
+    const quick = this.held(tabId, leadId, chat)
+    if (quick) {
+      if (quick.stale) this.refresh(tabId, leadId, chat, quick.recap)
+      return quick.recap
+    }
+    return this.asked(() => this.read(tabId, leadId, chat, 'device'))
+  }
+
+  /** The dial's reads, one after another; one asked while none runs starts at once, and one never waits on a read that
+   *  hangs for longer than ASK_WAIT_MS. */
+  private asked<T>(read: () => Promise<T>): Promise<T> {
+    const run = this.asking ? within(this.asking, ASK_WAIT_MS).then(read) : read()
+    const done: Promise<unknown> = run.catch(() => {}).then(() => { if (this.asking === done) this.asking = null })
+    this.asking = done
+    return run
+  }
+
+  /** What can be answered for the chat on the face with no read: the recap held for it, or the newer notice from it, with the
+   *  sequence it was read at (-1 for a notice); `stale` when the chat has moved on since, so it is read again. */
+  private held(tabId: string, leadId: string, chat: CardChat): { recap: LeadRecap; sequence: number; stale: boolean } | null {
+    const found = this.target(tabId, leadId, chat)
+    if (!found) return null
+    const kept = this.recaps.get(cachedKey(tabId, leadId, found.chatId, chat))
+    const notice = (found.buddy ? this.buddyNotices : this.notices).get(recapKey(tabId, leadId))
+    const heard = notice && notice.chatId === found.id ? notice : undefined
+    if (kept && (!heard || heard.at <= kept.recap.at)) return { recap: kept.recap, sequence: kept.sequence, stale: kept.sequence !== found.sequence }
+    if (!heard) return null
+    return { recap: { tabId, leadId, text: heard.text, at: heard.at, none: false, ...namedFor(found, chat) }, sequence: -1, stale: true }
+  }
+
+  /** The chat moved on since what the dial was answered: read again, on the dial's lane, and pushed when it says otherwise. */
+  private refresh(tabId: string, leadId: string, chat: CardChat, shown: LeadRecap): void {
+    void this.asked(() => this.read(tabId, leadId, chat, 'device')).then(recap => {
+      // Its open sessions are told this one: their next push is for the chat's next move.
+      const target = this.target(tabId, leadId, chat), kept = target && this.recaps.get(cachedKey(tabId, leadId, target.chatId, chat))
+      for (const open of this.opened.values()) {
+        if (kept && open.tabId === tabId && open.leadId === leadId && open.chat === chat && open.chatId === (target.chatId ?? null)) open.sequence = kept.sequence
+      }
+      if (recap.text !== shown.text || recap.at !== shown.at || recap.none !== shown.none || recap.chatId !== shown.chatId) this.onRecap?.(recap)
+    }, () => { /* read again at the next push or ask */ })
+  }
+
+  /** The backend read of a recap. `background` (a push) takes one of the two background slots or is refused; `device` (the
+   *  dial asked) runs on the dial's own lane. */
+  private async read(tabId: string, leadId: string, chat: CardChat, lane: 'device' | 'background'): Promise<LeadRecap> {
+    // At most two background reads run at once, so a loop of pushes cannot flood the backend; the dial's run one by one.
+    const slot = async <T>(run: () => Promise<T>): Promise<T> => {
+      if (lane === 'device') return run()
       if (this.recapsRunning >= MAX_RECAPS_IN_FLIGHT) throw new Error('too many recap reads at once')
       this.recapsRunning++
-      try { this.tabs.set(tabId, tabOf(await this.reads.read(tabId))) } finally { this.recapsRunning-- }
+      try { return await run() } finally { this.recapsRunning-- }
+    }
+    let found = this.target(tabId, leadId, chat)
+    if (!found) {
+      await slot(async () => { this.tabs.set(tabId, tabOf(await this.reads.read(tabId))) })
       found = this.target(tabId, leadId, chat)
     }
     if (!found) return { tabId, leadId, text: '', at: 0, none: true }
-    const named = found.chatId === undefined ? {} : { chatId: found.chatId, ...(chat === 'buddy' ? { buddy: true as const } : {}) }
-    const key = cachedKey(tabId, leadId, found.chatId, chat), held = this.recaps.get(key)
-    if (held && held.sequence === found.sequence) return held.recap
-    // At most two backend reads of recaps run at once: a Pro that asks in a loop cannot flood the backend.
-    if (this.recapsRunning >= MAX_RECAPS_IN_FLIGHT) throw new Error('too many recap reads at once')
-    this.recapsRunning++
+    const target = found, named = namedFor(target, chat)
+    const key = cachedKey(tabId, leadId, target.chatId, chat), held = this.recaps.get(key)
+    if (held && held.sequence === target.sequence) return held.recap
     const reader = this.me
-    try {
-      const path = `/api/super-tabs/${tabId}/conversations/${found.id}/messages`
+    return slot(async () => {
+      const path = `/api/super-tabs/${tabId}/conversations/${target.id}/messages`
       const newest = object(await backend(this.core, 'GET', path))
-      let said = lastAgentMessage(list(newest.messages), found.voices)
+      let said = lastAgentMessage(list(newest.messages), target.voices)
       // The page before, from the page's own (sequence, id) cursor: a page edge inside equal sequences skips nothing (design 4.6).
       const before = object(newest.next)
       if (!said && typeof before.sequence === 'number' && identifier(before.id)) {
-        said = lastAgentMessage(list(object(await backend(this.core, 'GET', `${path}?before=${before.sequence}&beforeId=${before.id}`)).messages), found.voices)
+        said = lastAgentMessage(list(object(await backend(this.core, 'GET', `${path}?before=${before.sequence}&beforeId=${before.id}`)).messages), target.voices)
       }
       // Access to the Swarm ended, another person signed in, or the face moved on while the read was out: the answer is not
       // this reader's to have now (a Buddy chat is its owner's alone), so it is neither given nor kept.
-      if (this.me !== reader || this.target(tabId, leadId, chat)?.id !== found.id) return { tabId, leadId, text: '', at: 0, none: true }
+      if (this.me !== reader || this.target(tabId, leadId, chat)?.id !== target.id) return { tabId, leadId, text: '', at: 0, none: true }
       const recap: LeadRecap = said ? { tabId, leadId, text: cut(said.text, RECAP_BYTES), at: said.at, none: false, ...named } : { tabId, leadId, text: '', at: 0, none: true, ...named }
-      this.recaps.set(key, { sequence: found.sequence, recap })
+      this.recaps.set(key, { sequence: target.sequence, recap })
       return recap
-    } finally { this.recapsRunning-- }
+    })
   }
 
   /** Words spoken on a Pro to a Lead that runs here (its harness): posted as the person in that Lead's conversation, as typed in
@@ -690,12 +745,13 @@ export class SwarmCards {
       : inProject(c, projectKey(found.project)) && (!isBuddyChat(c) || isReadersBuddyChat(c, this.me)))
   }
 
-  /** Remembered recaps are kept only for Leads that are still in a tab, and a chat's only while it is on the face. */
+  /** Remembered recaps are kept only for Leads that are still in a tab, and a chat's only while it could be on the Lead's
+   *  face: a swipe back to the other side, or the window back on a chat, is answered from it at once. */
   private prune(): void {
     for (const [key, held] of this.recaps) {
-      const { tabId, leadId, chatId, buddy } = held.recap
-      const now = this.target(tabId, leadId, buddy ? 'buddy' : chatId !== undefined)
-      if (!now || now.chatId !== chatId) this.recaps.delete(key)
+      const { tabId, leadId, chatId } = held.recap
+      const state = this.tabs.get(tabId)?.state
+      if (!state || !leadProjects(state).some(p => p.leadId === leadId) || (chatId !== undefined && !this.chatOfLead(state, leadId, chatId))) this.recaps.delete(key)
     }
   }
 
@@ -712,13 +768,21 @@ export class SwarmCards {
       if (!target) continue
       if (open.sequence === null) { open.sequence = target.sequence; open.chatId = target.chatId ?? null; continue }
       if (open.sequence === target.sequence && open.chatId === (target.chatId ?? null)) continue
-      const recap = await this.recap(open.tabId, open.leadId, open.chat).catch(() => null)
+      // Another chat on the face (a swipe, the window's move): what is held for it is pushed at once, and read again after.
+      const quick = open.chatId !== (target.chatId ?? null) ? this.held(open.tabId, open.leadId, open.chat) : null
+      const recap = quick?.recap ?? await this.read(open.tabId, open.leadId, open.chat, 'background').catch(() => null)
       if (!recap) continue
-      open.sequence = target.sequence
+      open.sequence = quick ? quick.sequence : target.sequence
       open.chatId = target.chatId ?? null
       this.onRecap?.(recap)
+      if (quick?.stale) this.refresh(open.tabId, open.leadId, open.chat, recap)
     }
   }
+}
+
+/** How a chat's recap names it: by its id, and as a swarmBuddy dial's when asked for one. */
+function namedFor(target: Target, chat: CardChat): { chatId?: string; buddy?: true } {
+  return target.chatId === undefined ? {} : { chatId: target.chatId, ...(chat === 'buddy' ? { buddy: true as const } : {}) }
 }
 
 /** The newest message said becomes the held notice at `key`, unless one held is newer. */

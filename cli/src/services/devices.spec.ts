@@ -734,7 +734,10 @@ describe('what the windows say, reaching the dial', () => {
       expect(got).toMatchObject({ tabId: 'st1', leadId: 'lead1', at: 1792560000, none: false })
       expect(got!.text).toBe('é'.repeat(750))
       expect(await seen.host.swarmCardRecap!('st1', 'lead2')).toEqual({ tabId: 'st1', leadId: 'lead2', text: 'none', at: 0, none: true })
-      for (let i = 0; i < 6; i++) expect(await seen.host.swarmCardRecap!('st1', 'lead1')).toBeNull()
+      // A refusal fails with its code; anything else unusable is null.
+      await expect(seen.host.swarmCardRecap!('st1', 'lead1')).rejects.toThrow('NOT_FOUND')
+      for (let i = 0; i < 4; i++) expect(await seen.host.swarmCardRecap!('st1', 'lead1')).toBeNull()
+      await expect(seen.host.swarmCardRecap!('st1', 'lead1')).rejects.toThrow('SERVICE_UNAVAILABLE')
     })
 
     it('posts words for a Lead through the service; anything but said: true sends the turn instead', async () => {
@@ -763,7 +766,7 @@ describe('what the windows say, reaching the dial', () => {
 
     it('answers no recap when the core has no service to ask', async () => {
       start()
-      expect(await seen.host.swarmCardRecap!('st1', 'lead1')).toBeNull()
+      await expect(seen.host.swarmCardRecap!('st1', 'lead1')).rejects.toThrow('SERVICE_UNAVAILABLE')
       seen.host.swarmCardOpen!('c1', 'st1', 'lead1')   // nothing to tell, and nothing thrown
     })
 

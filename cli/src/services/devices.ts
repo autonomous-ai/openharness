@@ -254,6 +254,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // name that chat by an id: a dial never shows it for another one.
     swarmCardRecap: async (tabId, leadId, chat) => {
       const r = await askCards({ action: 'cardRecap', tabId, leadId, ...chatFlag(chat) })
+      // A refusal fails with its code, which the dial's log names; null was silent (Diego, 2026-11-03).
+      if (r.ok !== true && typeof r.error === 'string') throw new Error(r.error)
       if (r.ok !== true || typeof r.text !== 'string' || typeof r.at !== 'number' || !Number.isInteger(r.at) || r.at < 0 || typeof r.none !== 'boolean') return null
       if (chat && !(typeof r.chatId === 'string' && CHAT_ID.test(r.chatId))) return null
       return { tabId, leadId, text: truncateUtf8(r.text, 1500), at: r.at, none: r.none, ...(chat ? { chatId: r.chatId as string } : {}),
