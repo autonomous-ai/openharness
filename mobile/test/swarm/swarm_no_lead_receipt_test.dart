@@ -52,6 +52,7 @@ void main() {
     bool delivered = false,
     String? kind,
     String role = 'owner',
+    bool machines = true,
     FutureOr<Object?> Function(Map<String, dynamic>? body)? command,
   }) {
     final fake = FakeSwarm();
@@ -65,8 +66,10 @@ void main() {
             {...groupData(chat, agentIds: const []), 'kind': ?kind},
         ],
         machines: [
-          machine('mac-1', 'Mac Studio'),
-          machine('mac-2', 'MacBook Pro', online: false),
+          if (machines) ...[
+            machine('mac-1', 'Mac Studio'),
+            machine('mac-2', 'MacBook Pro', online: false),
+          ],
         ],
       );
       (load['groups'] as List).first['data'] = groupData(
@@ -211,6 +214,73 @@ void main() {
         'engine': 'claude',
         'repositoryUrl': harnessRepo,
       });
+    });
+
+    Future<void> pick(WidgetTester tester) async {
+      await tester.tap(addLead());
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Mac Studio'));
+      await tester.runAsync(pumpEventQueue);
+      await tester.pumpAndSettle();
+    }
+
+    List<String> receipts(FakeSwarm swarm) => [
+      for (final start in starts(swarm)) start['operationId'] as String,
+    ];
+
+    testWidgets('a lost answer, tried again, is the same start', (
+      tester,
+    ) async {
+      var lost = true;
+      final r = rig(
+        command: (_) => lost
+            ? throw const SuperTabFailure(
+                'MACHINE_UNAVAILABLE',
+                'No computer answered.',
+                statusCode: 503,
+              )
+            : {'result': <String, Object>{}},
+      );
+      await show(tester, r);
+      await pick(tester);
+      expect(find.text('No computer answered.'), findsOneWidget);
+      lost = false;
+      await pick(tester);
+      final [first, again] = receipts(r.swarm);
+      expect(again, first);
+      expect(find.text('No computer answered.'), findsNothing);
+    });
+
+    testWidgets('after a refusal, the next try is a new start', (tester) async {
+      final r = rig(
+        command: (_) => throw const SuperTabFailure(
+          'MACHINE_BUSY',
+          'Mac Studio has no room for another agent.',
+          statusCode: 409,
+        ),
+      );
+      await show(tester, r);
+      await pick(tester);
+      await pick(tester);
+      final [first, again] = receipts(r.swarm);
+      expect(again, isNot(first));
+    });
+
+    testWidgets('with no machine, it says so and opens no empty sheet', (
+      tester,
+    ) async {
+      final r = rig(machines: false);
+      await show(tester, r);
+      await tester.tap(addLead());
+      await tester.pumpAndSettle();
+      expect(
+        find.text(
+          'No machine in this Swarm can run a Lead. Add one on Desktop.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('Machine'), findsNothing);
+      expect(starts(r.swarm), isEmpty);
     });
 
     testWidgets('a refusal says why, in its own words', (tester) async {
