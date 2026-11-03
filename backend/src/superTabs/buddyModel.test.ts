@@ -136,6 +136,17 @@ describe('the Buddy\'s machine reporting the switch', () => {
       'Your Buddy now runs on DeepSeek 4.1 Flash, served by Mac Studio.'])
   })
 
+  it('records the move on the Buddy\'s thread sessions too, which its machine moved with it', () => {
+    const { f, requestId } = asked()
+    f.state.agents.push({ ...structuredClone(f.agent()), id: 'session', harnessId: 'h-session', buddySession: { thread: 't', from: 0 } })
+    delete f.state.agents.at(-1)!.modelRequest
+    f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId, ok: true }, f.buddy())
+    expect(f.state.agents.find(a => a.id === 'session')!.gridModel).toBe(MODEL)
+    f.run({ type: 'buddy.model', gridModel: null })
+    f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId: f.agent().modelRequest!.id, ok: true }, f.buddy())
+    expect(f.state.agents.find(a => a.id === 'session')!.gridModel).toBeUndefined()
+  })
+
   it('names no machine to a Buddy reading these lines: a Buddy reads no machines', () => {
     const { f, requestId } = asked()
     const effects = f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId, ok: true }, f.buddy())
