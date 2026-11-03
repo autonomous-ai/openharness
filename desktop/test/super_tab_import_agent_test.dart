@@ -119,6 +119,8 @@ class _Server extends ConversationServer {
     if (body?['command']
         case {'type': 'agent.start', 'request': final Map request}
         when !starts.any((s) => (s as Map)['id'] == id)) {
+      // As the backend: the start's id is its command's operation id.
+      (answer['result'] as Map)['startId'] = id;
       revision++;
       final started = hostStarts && hostFails == null;
       starts.add({

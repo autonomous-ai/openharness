@@ -439,6 +439,9 @@ class Agent {
   /// Effort reported with [modelName], never inferred from a model default.
   final String? modelEffort;
 
+  /// [modelName] as the engine names it (`claude-opus-5-5`), for a launch.
+  final String? modelId;
+
   /// The grid model this agent is CURRENTLY running on, or null for its own vendor login.
   ///
   /// Read by the daemon off the live process on every discovery, never bookkept — so it is the
@@ -578,6 +581,7 @@ class Agent {
     this.claudeHome,
     this.modelName,
     this.modelEffort,
+    this.modelId,
     this.gridModel,
     this.gridWebSearch,
     this.gridBaseUrl,
@@ -747,6 +751,7 @@ class Agent {
           : null,
       modelName: model?.name,
       modelEffort: model?.effort,
+      modelId: model?.id,
       gridModel: _safeLabel(grid?['model']),
       gridWebSearch: GridWebSearch.fromWire(grid?['webSearch']),
       gridBaseUrl: _safeUrl(grid?['baseUrl']),
@@ -829,6 +834,7 @@ class Agent {
     claudeHome: claudeHome,
     modelName: modelName,
     modelEffort: modelEffort,
+    modelId: modelId,
     gridModel: gridModel,
     gridWebSearch: gridWebSearch,
     gridBaseUrl: gridBaseUrl,
