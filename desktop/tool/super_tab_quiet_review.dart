@@ -152,8 +152,14 @@ ConversationServer _seed() {
             'name': name,
             'ownerId': 'ken15',
             'leadConversationId': 'lead-$name',
-            'visibility': 'public',
-            'members': <Object>[],
+            // computer is private to Dee and Tony, for Members' This project.
+            'visibility': name == 'computer' ? 'private' : 'public',
+            'members': name == 'computer'
+                ? [
+                    {'id': 'dee'},
+                    {'id': 'tony'},
+                  ]
+                : <Object>[],
             'updateMinutes': 30,
           },
       ],
@@ -197,6 +203,48 @@ ConversationServer _seed() {
       ],
     });
   server.revision = 200;
+  // Members' This project (#2319) reads each project's own board: openharness
+  // busy as in Dee's mockup, computer private with one active member, the rest
+  // quiet (nobody with points, so everyone folds under Others).
+  server.leaderboardAnswer = (path) {
+    final board = server.leaderboard!;
+    final query = Uri.parse(path).queryParameters;
+    final projectId = query['projectId'] ?? 'oh';
+    if (query['scope'] == 'all') return {...board, 'projectId': projectId};
+    final points = switch (projectId) {
+      'oh' => {
+        'ken15': 38,
+        'dee': 30,
+        'diego': 3,
+        'tony': 3,
+        'phamngochuy.1989': 2,
+        'scholes': 0,
+      },
+      'computer' => {'ken15': 0, 'dee': 5, 'tony': 0},
+      _ => {
+        for (final id in [
+          'ken15',
+          'diego',
+          'dee',
+          'tony',
+          'scholes',
+          'phamngochuy.1989',
+        ])
+          id: 0,
+      },
+    };
+    final ranked = points.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return {
+      ...board,
+      'projectId': projectId,
+      'allProjects': false,
+      'people': [
+        for (final (i, MapEntry(:key, :value)) in ranked.indexed)
+          _score(key, value, i + 1, value ~/ 10, value ~/ 20, 0),
+      ],
+    };
+  };
   server.leaderboard = {
     'projectId': 'oh',
     'week': DateTime.utc(2026, 10, 26).millisecondsSinceEpoch,
