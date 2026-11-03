@@ -310,7 +310,7 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     await t.switches.serve(cross)
     const changeId = switchChangeId('sw1')
     expect(t.posted.map(c => c.type)).toEqual(['agent.switchClaim', 'agent.switchHandoff'])
-    expect(t.posted.at(-1)).toMatchObject({ agentId: 'h1', switchId: 'sw1', handoffChangeId: changeId, note: 'Earlier project state.' })
+    expect(t.posted.at(-1)).toMatchObject({ agentId: 'a1', switchId: 'sw1', handoffChangeId: changeId, note: 'Earlier project state.' })
     expect(t.calls.map(c => c[0])).toEqual(['agent_handoff_prepare'])
     expect(t.calls.some(c => c[0] === 'agent_close' || c[0] === 'agent_create')).toBe(false)
 
@@ -318,6 +318,14 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     expect(t.calls.map(c => c[0])).toEqual(['agent_handoff_prepare', 'agent_close'])
     expect(t.calls.at(-1)![1]).toEqual({ agentId: 'h1', mode: 'now', changeId })
     expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: true })
+  })
+
+  it('keeps the source running when the backend clears a failed destination switch', async () => {
+    const t = setup()
+    await t.switches.serve(row({ switchRequest: { ...request, targetMachineId: 'm2' } }))
+    await t.switches.serve(row({ switchRequest: undefined }))
+    expect(t.calls.map(c => c[0])).toEqual(['agent_handoff_prepare'])
+    expect(t.posted.map(c => c.type)).toEqual(['agent.switchClaim', 'agent.switchHandoff'])
   })
 
   it('treats a result the Swarm already settled as done', async () => {

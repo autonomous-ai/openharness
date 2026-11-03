@@ -4819,6 +4819,7 @@ describe('lead.switch', () => {
 
   it('promotes a running destination candidate to the same lead conversation exactly when it starts', () => {
     const s = setup()
+    s.agent().configuration.engine = 'claude'
     const destination = structuredClone(s.f.state.machines![0]!)
     destination.machineId = 'destination'
     destination.name = 'Destination Mac'
@@ -4839,6 +4840,8 @@ describe('lead.switch', () => {
     const candidateId = started.result.agentId as string
     expect(s.f.state.conversations.find(c => c.id === 'lead')!.leadId).toBe(candidateId)
     expect(s.f.state.agents.find(a => a.id === s.pm)!.switchLanded).toMatchObject({ id: switchId, candidateAgentId: candidateId })
+    const result = s.f.run({ type: 'agent.switchResult', agentId: s.pm, switchId, ok: true }, s.as)
+    expect(result.messages.at(-1)!.text).toContain('PM moved to Codex')
   })
 
   it('keeps the source lead and posts one safe line when the destination candidate fails', () => {
