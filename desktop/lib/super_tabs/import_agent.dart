@@ -111,12 +111,15 @@ enum ImportStep {
 
 /// Why a step of an import did not happen, in words the person reads.
 class ImportFailure implements Exception {
-  ImportFailure(this.step, this.message, {String code = 'refused'}) {
+  ImportFailure(this.step, this.message, {this.code = 'refused'}) {
     // Named, without names, paths or content.
     appLog.warn('super-tabs', 'agent import failed at ${step.name}: $code');
   }
   final ImportStep step;
   final String message;
+
+  /// What refused, for the log and tests: no names, paths or content.
+  final String code;
 
   @override
   String toString() => '${step.label}: $message';

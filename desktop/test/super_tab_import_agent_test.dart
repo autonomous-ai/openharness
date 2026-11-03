@@ -41,10 +41,10 @@ class _Daemon extends WsConn {
   /// Thrown instead of an answer: a daemon that does not answer in time.
   Object? fails;
 
-  /// The daemon's answer to which Swarm role an agent has, from the backend
-  /// (cli superTabs/service.ts `swarmRole`): none here unless a test says.
-  Map<String, dynamic> Function(Map<String, dynamic> payload) swarmRole = (_) =>
-      {'ok': true, 'role': null};
+  /// The daemon's answer to whether any Swarm lists an agent, from the backend
+  /// (cli superTabs/service.ts `swarmListed`): none here unless a test says.
+  Map<String, dynamic> Function(Map<String, dynamic> payload) swarmListed =
+      (_) => {'ok': true, 'listed': false};
 
   @override
   Future<Map<String, dynamic>> request(
@@ -53,8 +53,8 @@ class _Daemon extends WsConn {
     Duration timeout = const Duration(seconds: 20),
   }) async {
     calls.add((asked, type, Map.of(payload)));
-    if (type == 'super_tabs' && payload['action'] == 'swarmRole') {
-      return swarmRole(payload);
+    if (type == 'super_tabs' && payload['action'] == 'swarmListed') {
+      return swarmListed(payload);
     }
     if (type == 'agent_handoff_prepare') {
       if (fails case final failure?) throw failure;
@@ -389,7 +389,7 @@ void main() {
       // First whether a Swarm lists it (any Swarm, open here or not), then the
       // handoff.
       expect(f.daemon.calls.map((c) => (c.$1, c.$2, c.$3['action'])), [
-        ('m', 'super_tabs', 'swarmRole'),
+        ('m', 'super_tabs', 'swarmListed'),
         ('m', 'agent_handoff_prepare', null),
       ]);
       expect(f.daemon.calls.first.$3['harnessId'], 'fix');
@@ -451,11 +451,7 @@ void main() {
       final f = await fixture();
       f.agents = [_agent('fix', engine: 'codex', cwd: folder.path)];
       f.daemon.writes(folder, record: '# Handoff\n');
-      f.daemon.swarmRole = (_) => {
-        'ok': true,
-        'role': 'dev',
-        'mode': 'default',
-      };
+      f.daemon.swarmListed = (_) => {'ok': true, 'listed': true};
       final agent = importableAgents(f.app, f.c).single;
       await expectLater(
         prepareImportHandoff(f.app, agent),
@@ -479,8 +475,8 @@ void main() {
         final f = await fixture();
         f.agents = [_agent('fix', engine: 'codex', cwd: folder.path)];
         f.daemon.writes(folder, record: '# Handoff\n');
-        // The backend did not answer: the daemon knows no role either way.
-        f.daemon.swarmRole = (_) => {'ok': true};
+        // The backend did not answer: the daemon knows neither way.
+        f.daemon.swarmListed = (_) => {'ok': true};
         final agent = importableAgents(f.app, f.c).single;
         await expectLater(
           prepareImportHandoff(f.app, agent),
@@ -495,6 +491,50 @@ void main() {
         expect(f.daemon.calls.map((c) => c.$2), ['super_tabs']);
       },
     );
+
+    // Re-review of #2783 (Alder3): a Swarm that still lists the agent with its
+    // chats archived or its stop asked gives it no role, and is a Swarm still.
+    test('an agent a Swarm lists with no role is refused too', () async {
+      final f = await fixture();
+      f.agents = [_agent('fix', engine: 'codex', cwd: folder.path)];
+      f.daemon.writes(folder, record: '# Handoff\n');
+      f.daemon.swarmListed = (_) => {'ok': true, 'role': null, 'listed': true};
+      final agent = importableAgents(f.app, f.c).single;
+      await expectLater(
+        prepareImportHandoff(f.app, agent),
+        throwsA(
+          isA<ImportFailure>().having(
+            (e) => e.message,
+            'message',
+            contains('already in a Swarm'),
+          ),
+        ),
+      );
+      expect(f.daemon.calls.map((c) => c.$2), ['super_tabs']);
+    });
+
+    test('a daemon too old to say whether a Swarm lists the agent asks for an '
+        'update of Harness on this Mac', () async {
+      final f = await fixture();
+      f.agents = [_agent('fix', engine: 'codex', cwd: folder.path)];
+      f.daemon.writes(folder, record: '# Handoff\n');
+      // An older daemon takes an unknown action for an agent's own request.
+      f.daemon.swarmListed = (_) => {'error': 'INVALID_REQUEST'};
+      final agent = importableAgents(f.app, f.c).single;
+      await expectLater(
+        prepareImportHandoff(f.app, agent),
+        throwsA(
+          isA<ImportFailure>()
+              .having((e) => e.code, 'code', 'daemon-old')
+              .having(
+                (e) => e.message,
+                'message',
+                contains('Update Harness on this Mac'),
+              ),
+        ),
+      );
+      expect(f.daemon.calls.map((c) => c.$2), ['super_tabs']);
+    });
 
     test('a reply naming another file is refused', () async {
       final f = await fixture();
@@ -663,8 +703,8 @@ void main() {
         'super_tabs',
         'agent_handoff_prepare',
       ]);
-      // That first ask is only a read of which Swarm role it has.
-      expect(f.daemon.calls.first.$3['action'], 'swarmRole');
+      // That first ask is only a read of whether a Swarm lists it.
+      expect(f.daemon.calls.first.$3['action'], 'swarmListed');
     });
 
     test('a project whose repository is the Team account\'s own folder starts '
