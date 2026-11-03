@@ -43,6 +43,28 @@ abstract final class SwarmType {
   static TextStyle composer(BuildContext context, {Color? color}) =>
       body(context, color: color);
 
+  /// A sidebar row's text: 15 px on 22 px lines, as Slack lists its channels; a phone's ([compact]) the app's 13 px.
+  static TextStyle sidebar({
+    required bool compact,
+    Color? color,
+    bool medium = false,
+  }) => compact
+      ? DesktopChrome.control(color: color, medium: medium)
+      : DesktopChrome.text(
+          color: color,
+          size: sidebarSize,
+          height: bodyLine / sidebarSize,
+          medium: medium,
+        ).copyWith(letterSpacing: grid.AppType.trackingFor(sidebarSize));
+
+  /// A sidebar row's least height: 26 px and the 2 px gap under it make Slack's 28 px pitch. A phone keeps 36.
+  static double sidebarRowHeight({required bool compact}) =>
+      compact ? 36 : sidebarRow - 2;
+
+  /// The room above and below a sidebar row's line.
+  static double sidebarRowPadding({required bool compact}) =>
+      compact ? 8 : (sidebarRow - 2 - bodyLine) / 2;
+
   static TextStyle _body(Color? color) => DesktopChrome.text(
     color: color,
     size: bodySize,

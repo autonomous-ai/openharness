@@ -1616,6 +1616,7 @@ class _SuperTabViewState extends State<SuperTabView>
 
   Widget _sidebar() => ProjectSidebar(
     controller: c,
+    compact: _phone,
     app: widget.app,
     onNewProject: widget.onNewProject,
     onNewSwarm: widget.onNewSwarm,
