@@ -23,7 +23,10 @@ function setup() {
     run({ type: 'project.create', name: 'Other project', visibility, brief: 'Its own outcome' }, actor) as { projectId: string; conversationId: string }
   const add = (conversationId: string, harnessId: string, lead = true) =>
     run({ type: 'agent.add', conversationId, harnessId, machineId: 'machine', name: harnessId, configuration, lead }).agentId as string
-  return { run, project, add, get state() { return state }, get messages() { return messages } }
+  /** A task of [projectId]: work starts and is assigned there, as the project chat holds only its coordinator (#2207). */
+  const task = (projectId: string, actor = owner) =>
+    run({ type: 'conversation.create', projectId, title: 'Work', brief: 'Do it', checks: [] }, actor).conversationId as string
+  return { run, project, add, task, get state() { return state }, get messages() { return messages } }
 }
 
 describe('projects inside an invite-only swarm', () => {
@@ -192,7 +195,7 @@ describe('projects inside an invite-only swarm', () => {
 
   it.each(['queued', 'dispatched', 'settling'] as const)('refuses %s starts and removes only settled project history', phase => {
     const f = setup(), p = f.project()
-    const request = { conversationId: p.conversationId, machineId: 'machine', engine: 'codex', name: 'Builder',
+    const request = { conversationId: f.task(p.projectId), machineId: 'machine', engine: 'codex', name: 'Builder',
       cwd: '/work', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const startId = String(f.run({ type: 'agent.start', request }).startId)
@@ -236,13 +239,13 @@ describe('projects inside an invite-only swarm', () => {
   })
 
   it('keeps active work visible after its contributed agent is removed', () => {
-    const f = setup(), p = f.project(), agentId = f.add(p.conversationId, 'worker', false)
-    f.run({ type: 'work.define', conversationId: p.conversationId, brief: 'Finish the task',
+    const f = setup(), p = f.project(), agentId = f.add(p.conversationId, 'worker', false), work = f.task(p.projectId)
+    f.run({ type: 'work.define', conversationId: work, brief: 'Finish the task',
       checks: [{ description: 'Verified', independent: false }] })
-    f.run({ type: 'work.assign', conversationId: p.conversationId, agentId })
+    f.run({ type: 'work.assign', conversationId: work, agentId })
     f.run({ type: 'agent.remove', agentId })
     expect(() => f.run({ type: 'project.delete', projectId: p.projectId })).toThrow('active work')
-    expect(readConversation(f.state, owner, p.conversationId).assignment?.status).toBe('reconciling')
+    expect(readConversation(f.state, owner, work).assignment?.status).toBe('reconciling')
   })
 })
 
@@ -335,9 +338,10 @@ describe('custom role sets', () => {
     const writer = { ...role('abcdefabcdef', 'Docs writer', 'builder'), defaults: { engine: 'codex' as const, model: 'gpt-6.1-sol', effort: 'medium' } }
     const { f, p, roles } = custom([...defaults(), writer])
     Object.assign(projectOf(f.state, p.projectId), { skillSet: 'custom' })
+    const work = f.task(p.projectId, peer)
     expect(roles()!.find(r => r.id === 'abcdefabcdef')).toMatchObject({ defaults: { engine: 'codex', model: 'gpt-6.1-sol', effort: 'medium' } })
     const startWith = (extra: Record<string, unknown>) => {
-      const startId = String(f.run({ type: 'agent.start', request: request(p.conversationId, extra) } as Command, peer).startId)
+      const startId = String(f.run({ type: 'agent.start', request: request(work, extra) } as Command, peer).startId)
       return f.state.starts!.find(s => s.id === startId)!.request
     }
     expect(startWith({ roleId: 'abcdefabcdef' })).not.toHaveProperty('model')
@@ -357,7 +361,8 @@ describe('custom role sets', () => {
   it('starts and assigns in any role id an older client sends, keeping it and naming the agent by it', () => {
     const { f, p } = custom([...defaults(), role('abcdefabcdef', 'Docs writer', 'builder')])
     // The project's owner starts it: a teammate's project runs only on a Team machine (machines.ts teamWorkCheck).
-    const start = (extra: Record<string, unknown>) => String(f.run({ type: 'agent.start', request: request(p.conversationId, extra) } as Command, peer).startId)
+    const work = f.task(p.projectId, peer)
+    const start = (extra: Record<string, unknown>) => String(f.run({ type: 'agent.start', request: request(work, extra) } as Command, peer).startId)
     for (const extra of [{ roleId: 'review' }, { roleId: 'lead' }, { roleId: 'eeeeeeeeeeee' }, { role: 'reviewer', roleId: 'dev' }]) {
       const id = start(extra)
       expect(f.state.starts!.find(s => s.id === id)!.request).toMatchObject(extra)
@@ -370,7 +375,7 @@ describe('custom role sets', () => {
     // Its role name stays the one it started in.
     expect(f.state.agents.find(a => a.id === worker)).toMatchObject({ roleId: 'review', roleName: 'Docs writer' })
     const plain = f.project('public', peer)
-    expect(f.run({ type: 'agent.start', request: request(plain.conversationId, { roleId: 'dev' }) } as Command).startId).toEqual(expect.any(String))
+    expect(f.run({ type: 'agent.start', request: request(f.task(plain.projectId), { roleId: 'dev' }) } as Command).startId).toEqual(expect.any(String))
   })
 
   it('joins an agent with the role the New Harness form sends, kept with a reviewer role\'s kind for older readers and naming it', () => {
@@ -412,7 +417,7 @@ describe('custom role sets', () => {
     Object.assign(projectOf(f.state, p.projectId), { skillSet: 'custom' })
     // A role set decides nothing (project instructions, phase 4): a review group, a Reviewer's start and its assignment are accepted.
     const review = String(f.run({ type: 'conversation.create', projectId: p.projectId, title: 'Review', brief: 'Check it', reviewOf: build, checks: [{ description: 'Read', independent: true }] }, peer).conversationId)
-    expect(f.run({ type: 'agent.start', request: request(p.conversationId, { role: 'reviewer' }) } as Command).startId).toEqual(expect.any(String))
+    expect(f.run({ type: 'agent.start', request: request(build, { role: 'reviewer' }) } as Command).startId).toEqual(expect.any(String))
     f.run({ type: 'work.assign', conversationId: review, agentId: reviewer }, peer)
     expect(f.state.conversations.find(c => c.id === review)!.assignment).toMatchObject({ agentId: reviewer })
   })

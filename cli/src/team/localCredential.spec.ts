@@ -156,9 +156,9 @@ describe('audit H1: whoever holds the daemon\'s port hears nothing it can use', 
     expect(localCredentialHeaders(data)).toEqual({})
   })
 
-  it('keeps the credential for the one case with no socket, and for Windows', () => {
+  it('keeps the credential for the one case with no socket, and never on Windows, which has its pipe (audit W1)', () => {
     expect(localCredentialHeaders(dataFolder(true).data)).toEqual({ 'X-Harness-Local': CREDENTIAL })
-    expect(localCredentialHeaders(dataFolder().data, 'win32')).toEqual({ 'X-Harness-Local': CREDENTIAL })
+    expect(localCredentialHeaders(dataFolder(true).data, 'win32')).toEqual({})
   })
 
   it('agentClient: with the socket gone, the port hears nothing and the caller is told', async () => {

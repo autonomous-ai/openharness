@@ -285,10 +285,17 @@ describe('hot reads read only what they return (roadmap 2.7)', () => {
   })
 
   it('the Lead\'s poll reads only the Swarm\'s open deliveries, not each agent\'s closed ones', () => {
-    const rows = reads(entries, 'SuperTabDelivery', ['tabId', 'status'], ['agentId', 'messageId', 'assignmentId', 'conversationId'])
+    // Prisma sends the open statuses as an $or; the claimed-only read ending deliveries makes is the next test's.
+    const rows = reads(entries, 'SuperTabDelivery', ['tabId', 'status', 'or'], ['agentId', 'messageId', 'assignmentId', 'conversationId'])
     expect(rows).toHaveLength(1)
     // One key past the last of each open status at most: never one per agent.
     expect(rows[0]!.keysExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(rows[0]!.nreturned! + 3)
+  })
+
+  it('ending deliveries finds the machines to tell from the Swarm\'s claimed ones alone', () => {
+    const rows = reads(entries, 'SuperTabDelivery', ['tabId', 'status'], ['or', 'agentId', 'messageId', 'assignmentId', 'conversationId'])
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) expect(row.keysExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(row.nreturned! + 1)
   })
 
   it('ending work reads only its own open deliveries, never the Swarm\'s others', () => {

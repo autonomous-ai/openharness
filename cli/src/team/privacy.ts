@@ -136,6 +136,8 @@ export interface TeamStatus {
   privacy?: PrivacyResult
   /** Claude Code and Codex in the team account (./engines.ts). */
   engines?: TeamEngines
+  /** The data of ended sessions not deleted yet (superTabs/inCore/teamPurge.ts): a count, never a name. */
+  purges?: { pending: number; unreadable: boolean; at: number }
 }
 
 /** The `engines` field of the status file, or undefined when it is not one. */
@@ -275,6 +277,11 @@ export function readTeamStatus(path: string, read: (path: string) => string = (a
   if (privacy) status.privacy = privacy
   const engines = enginesOf(value.engines)
   if (engines) status.engines = engines
+  const purges = value.purges as Record<string, unknown> | undefined
+  if (purges && typeof purges === 'object' && Number.isSafeInteger(purges.pending) && (purges.pending as number) >= 0
+    && typeof purges.unreadable === 'boolean' && typeof purges.at === 'number' && Number.isFinite(purges.at)) {
+    status.purges = { pending: purges.pending as number, unreadable: purges.unreadable, at: purges.at }
+  }
   return status
 }
 

@@ -130,6 +130,7 @@ import 'harness_share_status.dart';
 import 'desk_sync.dart';
 import 'machine_profile.dart';
 import 'pane_layout_store.dart';
+import 'profile_cache.dart';
 import 'terminal_pane.dart';
 import 'device_visit.dart';
 import 'started_children.dart';
@@ -6083,6 +6084,12 @@ class AppNotifier extends ChangeNotifier {
     return controller.snapshot?.conversation(id) == null ? null : id;
   }
 
+  /// The thread whose pane is on screen beside that conversation, by its
+  /// root: the round dial shows and answers it while it stays open.
+  String? _dialThread(String tabId) => _dialConversation(tabId) == null
+      ? null
+      : superTabs.peek(tabId)?.threadOnScreen;
+
   /// The tile roster and the tabs, to every daemon this window reaches over
   /// its loopback ([_deskConnection]) — never a relayed machine's.
   void _announceOpenPanesToDial() {
@@ -6151,6 +6158,7 @@ class AppNotifier extends ChangeNotifier {
             'superTabId': tabId,
             'projectId': ?_rememberDialProject(tabId),
             'conversationId': ?_dialConversation(tabId),
+            'threadRoot': ?_dialThread(tabId),
           },
           'agentIds': [
             for (final pane in swarm.panes)
@@ -6650,7 +6658,24 @@ class AppNotifier extends ChangeNotifier {
     await _store?.saveEnvironment(value);
   }
 
+  /// How long into startup each step finished, in ms, for the log line and for tests. Task #2169.
+  @visibleForTesting
+  Map<String, int> get startupTimings => Map.unmodifiable(_startupTimings);
+  final _startupTimings = <String, int>{};
+  final _startupClock = Stopwatch();
+  void _markStartup(String step) {
+    if (_startupClock.isRunning) _startupTimings[step] = _startupClock.elapsedMilliseconds;
+  }
+
+  /// Set by any install during this boot: what the CLI said before it is out of date.
+  bool _installedThisBoot = false;
+
   Future<void> bootstrap() async {
+    _startupTimings.clear();
+    _startupClock
+      ..reset()
+      ..start();
+    _installedThisBoot = false;
     final localFixture = localManualFixture;
     if (localFixture != null) {
       _bootstrapLocalManual(localFixture);
@@ -6685,8 +6710,20 @@ class AppNotifier extends ChangeNotifier {
         if (!_selfInstallUnavailable) {
           _startUpdateChecking();
         }
+        // Beside the tool probe, as neither waits on the other (task #2169). A fresh computer has no CLI yet: a check that
+        // fails is asked again after. One from before a sign-out or an install says nothing about now.
+        final askedAt = _authRevision;
+        final early = cliLogin.checkStatus().then<CliAuthStatus?>((status) {
+          _markStartup('signed-in check');
+          return status;
+        }).catchError((Object _) => null);
         final environmentReady = await _prepareEnvironment();
+        _markStartup('tools');
         if (!environmentReady) return;
+        await _continueAfterEnvironmentReady(
+          early: _installedThisBoot || askedAt != _authRevision ? null : early,
+        );
+        return;
       }
       await _continueAfterEnvironmentReady();
     } catch (error, stack) {
@@ -6862,6 +6899,7 @@ class AppNotifier extends ChangeNotifier {
     bool quiet = false,
   }) async {
     final provisioner = environmentProvisioner ?? EnvironmentProvisioner();
+    if (install) _installedThisBoot = true;
     final result = await provisioner.ensureReady(
       onProgress: (value) {
         _measureSetup(value);
@@ -6900,7 +6938,7 @@ class AppNotifier extends ChangeNotifier {
   /// What `bootstrap()` does right after the environment is confirmed ready — pulled out so
   /// [recheckEnvironmentStep] can reach the same destination without repeating `bootstrap()`'s config
   /// load and update-check startup, which already ran on the launch that got stuck here.
-  Future<void> _continueAfterEnvironmentReady() async {
+  Future<void> _continueAfterEnvironmentReady({Future<CliAuthStatus?>? early}) async {
     agentPrefetch?.setupRunning = false;
     final revision = _authRevision;
     if (!_authWorkCurrent(revision)) return;
@@ -6916,9 +6954,12 @@ class AppNotifier extends ChangeNotifier {
     // refreshes it itself. This app never reads, stores, or refreshes a token of its own; it just
     // asks the CLI whether this computer is currently signed in.
     try {
-      final authStatus = await cliLogin.checkStatus();
+      final authStatus = await early ?? await cliLogin.checkStatus();
+      _markStartup('signed-in check');
       if (!_authWorkCurrent(revision)) return;
       signedIn = authStatus.loggedIn;
+      await _useKeptProfile(authStatus, revision);
+      if (!_authWorkCurrent(revision)) return;
       if (!authStatus.loggedIn) {
         currentUser = null;
         // Viewers keep their own login screen. Desktop can prepare the saved
@@ -7184,6 +7225,15 @@ class AppNotifier extends ChangeNotifier {
     // `_authWorkCurrent` returns) used to leave "Starting local service…" on a screen nothing would
     // ever repaint.
     await _identifyBeforeLayout(revision);
+    _ensurePool();
+    // The daemon check starts beside the restores, as neither waits on the other (task #2169). The window opens once both
+    // have answered, so the tiles are there for it, as before.
+    Object? daemonFailure;
+    var daemonFailed = false;
+    final daemon = ensureCliDaemonReady().then<void>((_) => _markStartup('daemon')).catchError((Object error) {
+      daemonFailed = true;
+      daemonFailure = error;
+    });
     await _restorePaneLayout(claimOnAttach: true);
     _armLaunchClaimExpiry();
     if (!_authWorkCurrent(revision)) {
@@ -7192,14 +7242,14 @@ class AppNotifier extends ChangeNotifier {
     }
     await dial.restore();
     await firstArrival.restore();
+    _markStartup('saved tabs');
     if (!_authWorkCurrent(revision)) {
       _bootStatusMessage = null;
       return;
     }
-    _ensurePool();
-    try {
-      await ensureCliDaemonReady();
-    } catch (error) {
+    await daemon;
+    if (daemonFailed) {
+      final error = daemonFailure;
       _bootStatusMessage = null;
       if (!_authWorkCurrent(revision)) return;
       status = AppStatus.authenticated;
@@ -7214,6 +7264,9 @@ class AppNotifier extends ChangeNotifier {
     // the saved session gone) — that already routed to the login screen, so don't clobber it.
     if (status == AppStatus.unauthenticated) return;
     status = AppStatus.authenticated;
+    _markStartup('window');
+    appLog.info('startup', startupLogLine(_startupTimings));
+    _startupClock.stop();
     notifyListeners();
     // The CLI has confirmed daemon readiness. Display-name/avatar metadata is
     // independent of machine discovery and must not delay work — and a guest
@@ -7359,6 +7412,10 @@ class AppNotifier extends ChangeNotifier {
     signedIn = false;
     _signInStep = true;
     currentUser = null;
+    _provenMachineId = null;
+    _keptProfileId = null;
+    _profileConfirmed = false;
+    unawaited(_profileCache.clear());
     if (banner != null) {
       _lastError = banner;
       _lastErrorRetryable = true;
@@ -7535,10 +7592,67 @@ class AppNotifier extends ChangeNotifier {
       final me = await api.me();
       if (me != null && _authWorkCurrent(revision)) {
         currentUser = CurrentUserProfile.fromMe(me);
+        _profileConfirmed = true;
       }
     } catch (_) {
       /* Unknown: the profile load after boot tries again. */
     }
+  }
+
+  /// The machine id `harness auth status` named at this boot: what a kept profile is checked against ([ProfileCache]).
+  String? _provenMachineId;
+  late final _profileCache = ProfileCache(_paneLayout?.storage);
+
+  /// The account the kept profile showing now names, if one is: a server answer for another account clears it.
+  String? _keptProfileId;
+
+  /// Whether the server has answered who is signed in during this run. A kept profile shows until it has, and it is asked again
+  /// when the backend returns, as a person with no profile at all is. Security review of #2617.
+  bool _profileConfirmed = false;
+
+  /// The last profile, when the CLI's session is the one it was read under; otherwise it goes (task #2169). A viewer has no CLI
+  /// session to prove it, and reads its profile before the layout instead ([_identifyBeforeLayout]).
+  Future<void> _useKeptProfile(CliAuthStatus authStatus, int revision) async {
+    if (viewer != null) return;
+    final machineId = authStatus.loggedIn ? authStatus.machineId : null;
+    _provenMachineId = machineId;
+    _keptProfileId = null;
+    _profileConfirmed = false;
+    final kept = machineId == null ? null : await _profileCache.read(machineId);
+    if (!_authWorkCurrent(revision)) return;
+    if (kept == null) {
+      await _profileCache.clear();
+      return;
+    }
+    _keptProfileId = kept.id;
+    currentUser = kept;
+    notifyListeners();
+  }
+
+  /// Keeps what the server just answered, only where it can't name another account later: a machine id proves the account only
+  /// while everything under it is that account's. Someone can sign in as another in a terminal while the answer is on its way,
+  /// so an answer naming another account than the record goes, and a first record waits for the CLI to name the machine still.
+  Future<void> _keepProfile(CurrentUserProfile profile, int revision) async {
+    final machineId = _provenMachineId;
+    if (machineId == null) return;
+    final kept = _keptProfileId;
+    if (kept != null && kept != profile.id) {
+      _provenMachineId = null;
+      _keptProfileId = null;
+      await _profileCache.clear();
+      return;
+    }
+    if (kept == null) {
+      final CliAuthStatus still;
+      try {
+        still = await cliLogin.checkStatus();
+      } catch (_) {
+        return;
+      }
+      if (!_authWorkCurrent(revision) || !still.loggedIn || still.machineId != machineId) return;
+      _keptProfileId = profile.id;
+    }
+    await _profileCache.write(machineId, profile);
   }
 
   Future<void> _readProfile(int revision) async {
@@ -7549,6 +7663,8 @@ class AppNotifier extends ChangeNotifier {
       }
       if (me != null) {
         currentUser = CurrentUserProfile.fromMe(me);
+        _profileConfirmed = true;
+        if (currentUser case final profile?) unawaited(_keepProfile(profile, revision));
         // A sign-in by hand: the device log keeps which account it was made to.
         if (currentUser!.id case final id?)
           unawaited(_deviceLog?.signedInAs(id));
@@ -7655,7 +7771,7 @@ class AppNotifier extends ChangeNotifier {
     appLog.info('daemon', 'backend ${online ? 'online' : 'offline'}');
     if (online && wasOffline && status == AppStatus.authenticated) {
       if (refetch && !machinesRefreshing) unawaited(retryMachines());
-      if (currentUser == null) unawaited(_loadProfile());
+      if (!_profileConfirmed) unawaited(_loadProfile());
       _deskEnsure(_authRevision);
       // A daemon whose backend was away answered the last read with an error.
       if (_desk.enabled) unawaited(agentMessages.refresh());
@@ -7888,6 +8004,10 @@ class AppNotifier extends ChangeNotifier {
     cliLogin.cancel();
     _sessionExpired = true;
     currentUser = null;
+    _provenMachineId = null;
+    _keptProfileId = null;
+    _profileConfirmed = false;
+    unawaited(_profileCache.clear());
     signingIn = false;
     pendingAuthorizeUrl = null;
     final previousMachineId = localMachineState?.machine.machineId;
@@ -9285,6 +9405,10 @@ class AppNotifier extends ChangeNotifier {
     final becomesGuest = viewer == null && localManualFixture == null;
     if (!becomesGuest) status = AppStatus.unauthenticated;
     currentUser = null;
+    _provenMachineId = null;
+    _keptProfileId = null;
+    _profileConfirmed = false;
+    unawaited(_profileCache.clear());
     notifyListeners();
     // Clear saved credentials alongside connection cleanup. A new login must
     // wait for both, otherwise the old logout can delete its fresh session.
@@ -12077,7 +12201,7 @@ class AppNotifier extends ChangeNotifier {
     if (!_authWorkCurrent(revision) || status == AppStatus.unauthenticated) {
       return;
     }
-    if (signedIn && currentUser == null) unawaited(_loadProfile());
+    if (signedIn && !_profileConfirmed) unawaited(_loadProfile());
     // A boot that found the daemon still connecting finishes THROUGH here (see
     // `_loadProfile`), so the local id is followed and the desk joined here as
     // well — once, after the list, as the boot does.
@@ -23065,3 +23189,8 @@ String machineSelectErrorText(String code, String machine) => switch (code) {
     'The subscription for $machine has ended. Renew it to use it again.',
   _ => 'Could not connect to $machine. Try again in a moment.',
 };
+
+/// The startup stopwatch as its log line: each step, in the order it finished.
+String startupLogLine(Map<String, int> timings) => timings.entries
+    .map((step) => '${step.key} after ${step.value} ms')
+    .join(', ');

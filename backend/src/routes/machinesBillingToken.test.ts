@@ -27,6 +27,7 @@ import { machineRoutes } from './machines.js'
 import { errorHandler } from '../middlewares/errorHandler.js'
 import { SsoAuthError, type AuthUser } from '../lib/ssoAuth.js'
 import { HARNESS_ACCESS_PREFIX, newHarnessToken } from '../lib/harnessTokenFormat.js'
+import { AppError } from '../errors/index.js'
 
 const MACHINE = 'a'.repeat(32)
 const SSO_USER: AuthUser = { sub: 'u1', email: 'dee@example.com', role: 'user', autonomousEnv: 'prod' }
@@ -87,5 +88,31 @@ describe('the SSO token billing forwards', () => {
       headers: { authorization: `Bearer ${newHarnessToken(HARNESS_ACCESS_PREFIX)}` } })
     expect(res.statusCode).toBe(200)
     expect(m.destroy).toHaveBeenCalledWith(MACHINE, HARNESS_USER, 'kept-sso-access')
+  })
+
+  const remove = () => app.inject({ method: 'DELETE', url: `/api/machines/${MACHINE}`,
+    headers: { authorization: `Bearer ${newHarnessToken(HARNESS_ACCESS_PREFIX)}` } })
+
+  it('is not needed to remove a machine with no billing, from a session nothing backs', async () => {
+    caller = HARNESS_USER
+    const res = await remove()
+    expect(res.statusCode).toBe(200)
+    expect(m.destroy).toHaveBeenCalledWith(MACHINE, HARNESS_USER, undefined)
+  })
+
+  it('is still asked for by a billed machine: sign in with Google or Apple', async () => {
+    caller = HARNESS_USER
+    m.destroy.mockRejectedValueOnce(new AppError('SSO access token required to cancel machine billing', 401, 'UNAUTHORIZED'))
+    const res = await remove()
+    expect(res.statusCode).toBe(403)
+    expect(res.json().error.code).toBe('NEEDS_AUTONOMOUS_SIGN_IN')
+  })
+
+  it('does not hide another refusal of the removal', async () => {
+    caller = HARNESS_USER
+    m.destroy.mockRejectedValueOnce(new AppError('Not your machine', 403, 'FORBIDDEN'))
+    const res = await remove()
+    expect(res.statusCode).toBe(403)
+    expect(res.json().error.code).toBe('FORBIDDEN')
   })
 })

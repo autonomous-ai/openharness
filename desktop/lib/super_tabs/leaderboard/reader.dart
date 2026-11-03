@@ -22,6 +22,9 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
   SuperTabLeaderboard? board;
   String? error;
   String? _projectId;
+
+  /// The project this reader asks about; null while none.
+  String? get projectId => _projectId;
   int? _week;
   String _period = leaderboardDefaultPeriod;
   bool _weeksOnly = false;
@@ -78,7 +81,7 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
       board = null;
       error = null;
     }
-    _timer ??= Timer.periodic(every, (_) => unawaited(refresh()));
+    _timer ??= Timer.periodic(every, (_) => unawaited(tick()));
     return refresh();
   }
 
@@ -98,6 +101,10 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
     _timer?.cancel();
     _timer = null;
   }
+
+  /// A timed read. A reader that is off screen skips it.
+  @protected
+  Future<void> tick() => refresh();
 
   Future<void> refresh() async {
     final projectId = _projectId;
@@ -167,19 +174,26 @@ class SuperTabProjectBoard extends SuperTabLeaderboardReader {
     super.every = const Duration(minutes: 5),
   }) : super(tabId: controller.tabId, request: controller.request) {
     controller.addListener(_follow);
+    controller.machinesChanged.addListener(_returned);
     _follow();
   }
 
   final SuperTabController controller;
   String? _following;
+  bool _missed = false;
 
   /// The project whose board this is; null while none is open.
+  @override
   String? get projectId => _following;
 
   void _follow() {
-    final projectId = controller.snapshot
-        ?.projectFor(controller.selectedId)
-        ?.id;
+    // A chat of no project (the one Buddy) still has models to show in Manage:
+    // the read needs some project. It sums them all unless Members has been
+    // set to one project, a choice this shared board keeps.
+    final snapshot = controller.snapshot;
+    final projectId =
+        snapshot?.projectFor(controller.selectedId)?.id ??
+        snapshot?.projects.firstOrNull?.id;
     if (projectId == _following) return;
     _following = projectId;
     if (projectId == null) {
@@ -189,9 +203,24 @@ class SuperTabProjectBoard extends SuperTabLeaderboardReader {
     }
   }
 
+  /// A Swarm that isn't showing reads no board. One that missed a read takes it as it returns.
+  @override
+  Future<void> tick() {
+    if (!controller.away) return refresh();
+    _missed = true;
+    return Future.value();
+  }
+
+  void _returned() {
+    if (!_missed || controller.away) return;
+    _missed = false;
+    unawaited(refresh());
+  }
+
   @override
   void dispose() {
     controller.removeListener(_follow);
+    controller.machinesChanged.removeListener(_returned);
     super.dispose();
   }
 }

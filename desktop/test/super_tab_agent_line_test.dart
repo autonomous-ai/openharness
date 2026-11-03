@@ -10,6 +10,7 @@ import 'package:harness/super_tabs/roster.dart';
 import 'package:harness/super_tabs/agent_line.dart';
 
 import 'support/super_tab_fixture.dart';
+import 'support/super_tab_members.dart';
 
 Map<String, dynamic> _machine(
   String id,
@@ -114,6 +115,7 @@ Future<ConversationServer> _swarm(
     ),
   );
   await tester.pumpAndSettle();
+  await unfoldSuperTabIdle(tester);
   return server;
 }
 

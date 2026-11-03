@@ -17,6 +17,7 @@ class SuperTabReading {
     this.messagesWithState = false,
     this.drawsSaved = false,
     this.confirmsSaved = false,
+    this.drawsSavedAtOnce = false,
   });
 
   /// Desktop's: a first open asks for the state and the open conversation at
@@ -31,6 +32,7 @@ class SuperTabReading {
     messagesWithState: true,
     drawsSaved: true,
     confirmsSaved: true,
+    drawsSavedAtOnce: true,
   );
 
   /// Null keeps a full read every poll. Otherwise, once the open conversation
@@ -52,10 +54,11 @@ class SuperTabReading {
   /// from the Swarms it is not showing.
   final Duration? awayPoll;
 
-  /// True reads the open conversation's messages only when something may
-  /// have happened: a first read, a push, a state that moved since they were
-  /// read, a message waiting for its receipt. A poll whose state read finds
-  /// nothing new then asks for the state alone.
+  /// True reads the open conversation's messages only when its own counters
+  /// say something happened there: a first read, a saved view, a message
+  /// after those read, a changed reaction (spec 2026-11-02-poll-cost, Part
+  /// 2). A poll whose state read moves neither then asks for the state alone,
+  /// whatever else in the Swarm changed.
   final bool messagesWhenChanged;
 
   /// True reads at once when a machine able to serve Swarm reads connects,
@@ -84,7 +87,8 @@ class SuperTabReading {
   ];
 
   /// True starts the saved conversation's messages read beside the first
-  /// state read, instead of after it.
+  /// state read, instead of after it. Only the first: later reads wait for
+  /// the state to say the conversation moved ([messagesWhenChanged]).
   final bool messagesWithState;
 
   /// True keeps the last view of each Swarm as read on this device and draws
@@ -92,10 +96,16 @@ class SuperTabReading {
   /// (`SuperTabSavedViews`).
   final bool drawsSaved;
 
-  /// With [drawsSaved], true holds a saved view's parts for the first read
-  /// to start from but draws them only once that read has answered, so a
-  /// conversation the reader lost since is never on screen.
+  /// With [drawsSaved], true is Desktop's way with saved views: read before the
+  /// first read, for it to start from, and forgetting only another account's.
   final bool confirmsSaved;
+
+  /// With [confirmsSaved], true draws the saved view as soon as it is read,
+  /// and false holds it until the first read has answered. Views are kept per
+  /// account and another account's is forgotten at sign-in, so what draws is
+  /// this account's own. A conversation it lost since shows until that first
+  /// read answers, as on the web (Dee, task #2169).
+  final bool drawsSavedAtOnce;
 
   /// Whether the poll adapts at all; false is Desktop's fixed period.
   bool get adapts => quietPoll != null || pausesAway;

@@ -502,7 +502,14 @@ export class ContributedMachines {
         for (const id of ids) {
           if (await this.core.agents.stopped?.(id) || (!this.core.agents.byAgent(id) && await this.core.agents.gone?.(id))) stopped.push(id)
         }
-        const running = ids.filter(id => !!this.core.agents.byAgent(id) && !stopped.includes(id))
+        // A session whose agent left as closed, reopened here: listed running, and that report brings its agent back (backend
+        // closedAgents.ts restoreSessions). The backend names them, so nothing else on this machine is ever reported.
+        const removed = Array.isArray(row.removedHarnessIds) ? row.removedHarnessIds.filter(identifier) : []
+        const reopened: string[] = []
+        for (const id of removed) {
+          if (!ids.includes(id) && this.core.agents.byAgent(id) && !await this.core.agents.stopped?.(id)) reopened.push(id)
+        }
+        const running = [...ids.filter(id => !!this.core.agents.byAgent(id) && !stopped.includes(id)), ...reopened]
         const pending = startsOf(row)
         looked.push({ row, pool, pending })
         const preparing = began >= this.preparingRefusedUntil ? pending.flatMap(start => this.preparing.has(String(start.id)) ? [String(start.id)] : []) : []
@@ -673,8 +680,10 @@ export class ContributedMachines {
               // Launched, and its creation still under way on the daemon: anything else is not preparing.
               if (result.error === 'START_PENDING' && result.state === 'pending') this.preparing.add(String(start.id))
               else this.preparing.delete(String(start.id))
-              // Launched, its engine yet to record its session: if the Swarm fails this start meanwhile, [abandoned] stops it.
-              if (result.error === 'START_PENDING' && identifier(result.harnessId) && identifier(result.creationId)) {
+              // Launched, its engine yet to record its session: if the Swarm fails this start meanwhile, [abandoned] stops it. So
+              // with a join the server refused (backend leadStart.ts leadOvertaken): the start's own close deletes nothing, and
+              // this close runs a Team account's confidential purge, and tries again until it has (security review 1 of #2668).
+              if ((result.error === 'START_PENDING' || typeof result.refused === 'string') && identifier(result.harnessId) && identifier(result.creationId)) {
                 this.remember(String(start.id), { path, harnessId: result.harnessId, creationId: result.creationId, tries: 0, checking: false })
               } else this.forget(String(start.id))
               if (!refused) this.refusedSince.delete(start.id)

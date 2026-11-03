@@ -2,12 +2,15 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { apisOn, ContributedMachines, createQuietGit, liveOn, localModelsStamp, offered, READINGS_RETRY_MS, refusedOn, servedOn, sharedWith, swarmUnconfirmedFile, swarmWorktreesFile } from './machines.js'
 import { SuperTabHostError } from './host.js'
+import { createSwarmAgents } from './inCore/agents.js'
+import { createConfidentialPurge, purgeRecord } from './inCore/teamPurge.js'
+import { PM_HOMES } from './teamDaemon.js'
 import { startAgent } from './start.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { HostFeed } from './hostFeed.js'
@@ -868,6 +871,42 @@ describe('contributed machine executor', () => {
       }
       const settle = () => new Promise(resolve => setTimeout(resolve, 0))
 
+      // Task #2261, security review 1 of #2668: another coordinator was set while this one started, so the server refused its
+      // join. The start's own close deletes nothing, so the agent's data has to go the way a failed start's does.
+      describe('because another coordinator was set', () => {
+        const REASON = 'This project already has Mine as its Product Manager.'
+        const refusedStart = { ok: false, error: REASON, refused: REASON, startId: 'start', machineId: 'host', creationId: 'creation', harnessId: 'launched' }
+
+        it('removes a Team account\'s engine home for it, through the Swarm\'s own close', async () => {
+          const home = mkdtempSync(join(tmpdir(), 'refused-start-'))
+          onTestFinished(() => rmSync(home, { recursive: true, force: true }))
+          const own = join(home, PM_HOMES, 'super-start', 'codex')
+          mkdirSync(own, { recursive: true })
+          const purge = async (request: Record<string, unknown>) => request.mode === 'inspect' ? { reviewId: 'review' } : { ok: true }
+          const ended = createConfidentialPurge({ confidential: () => true, home, record: purgeRecord(join(home, 'purges.json')), purge,
+            session: agentId => ({ agentId, sessionId: 'session', registeredAt: 1, engine: 'codex', cwd: null, codexHome: own }) })
+          const { f, fail } = failedLater(() => ({ error: REASON }))
+          f.core.agents.closeMember = createSwarmAgents({ byAgent: () => null, stoppedIds: () => ['launched'], closeAgent: async () => ({ closed: true }), purgeEnded: ended,
+            members: { leads: () => new Set(), harnesses: () => new Set() } } as never).closeMember as never
+          f.start.mockResolvedValue(refusedStart as never)
+          await f.machine.tick()
+          fail(); f.advance(); await f.machine.tick(); await settle(); await vi.waitFor(() => expect(existsSync(dirname(own))).toBe(false))
+        })
+
+        it('tries again when the purge fails, and stops once it has gone', async () => {
+          const { f, closeMember, fail } = failedLater(() => ({ error: REASON }))
+          closeMember.mockResolvedValueOnce({ error: 'PURGE_FAILED', detail: 'Something still names the session' })
+          f.start.mockResolvedValue(refusedStart as never)
+          await f.machine.tick()
+          fail(); f.advance(); await f.machine.tick(); await settle()
+          expect(closeMember).toHaveBeenCalledWith('launched', 'creation')
+          f.advance(); await f.machine.tick(); await settle()
+          expect(closeMember).toHaveBeenCalledTimes(2)
+          f.advance(); await f.machine.tick(); await settle()
+          expect(closeMember).toHaveBeenCalledTimes(2)
+        })
+      })
+
       it('stops the agent it launched for it, by the start\'s own creation receipt', async () => {
         const { f, closeMember, fail } = failedLater(() => ({ error: 'Mac Auto did not start it within 3 minutes' }))
         await f.machine.tick()
@@ -1429,6 +1468,23 @@ describe('contributed machine executor', () => {
     /** The next host tick, `ms` later. */
     const after = async (f: ReturnType<typeof fixture>, ms: number) => { f.step(ms); await f.machine.tick() }
     const quiet = (f: ReturnType<typeof fixture>) => { f.pool.starts.length = 0 }
+
+    // Task #2131: a session whose agent left as closed comes back by this report. Only one the backend names, and only one running.
+    it('lists a recorded session that runs again, and no stopped, gone or unnamed one', async () => {
+      const f = fixture(); quiet(f)
+      Object.assign(f.pool, { removedHarnessIds: ['reopened', 'still-stopped', 'gone', 'not an id!'] })
+      vi.mocked(f.core.agents.byAgent).mockImplementation(id => ['running', 'reopened', 'still-stopped', 'unnamed'].includes(id) ? { agentId: id } as never : undefined)
+      vi.mocked(f.core.agents.stopped!).mockImplementation(async id => id === 'stopped' || id === 'still-stopped')
+      await f.machine.tick()
+      expect(lastBody(f)).toMatchObject({ runningHarnessIds: ['running', 'reopened'], stoppedHarnessIds: ['stopped'] })
+    })
+
+    it('reports nothing new from a backend that names no recorded session', async () => {
+      const f = fixture(); quiet(f)
+      vi.mocked(f.core.agents.byAgent).mockImplementation(id => ['running', 'reopened'].includes(id) ? { agentId: id } as never : undefined)
+      await f.machine.tick()
+      expect(lastBody(f).runningHarnessIds).toEqual(['running'])
+    })
 
     it('publishes at once when a harness starts or stops running', async () => {
       const f = fixture(); quiet(f)

@@ -14,7 +14,7 @@
  * team work does not run as the owner instead.
  */
 import type { AgentTmpState } from '../lib/agentTmp.js'
-import type { AuthSession } from '../lib/authSession.js'
+import { sameSignIn, type AuthSession } from '../lib/authSession.js'
 import { SIGN_OUT_BUTTON_FLAG, type SignOutAsked } from '../lib/signOut.js'
 import type { AdminVia, RunAdmin } from './admin.js'
 import { teamConfigJson, type TeamConfig } from './config.js'
@@ -482,7 +482,7 @@ async function status(deps: TeamCommandDeps, json: boolean): Promise<number> {
       account: exists, user, realName: config?.realName ?? TEAM_REAL_NAME, home, homePresent: deps.exists(home),
       label, plist: serviceFile, plistPresent, job, port: config?.port ?? TEAM_PORT,
       config: config ? layout.configFile : null, ownerHomeMode: homeMode === null ? null : homeMode.toString(8),
-      signIn: report?.signIn ?? null, privacy: report?.privacy ?? null, engines: report?.engines ?? null, dedicated,
+      signIn: report?.signIn ?? null, privacy: report?.privacy ?? null, engines: report?.engines ?? null, purges: report?.purges ?? null, dedicated,
       agentTmp: agentTmp && { ...agentTmp, mode: agentTmp.mode === null ? null : agentTmp.mode.toString(8) },
     }))
     return 0
@@ -509,6 +509,7 @@ async function status(deps: TeamCommandDeps, json: boolean): Promise<number> {
       : `${agentTmp.mode === null ? 'not a private folder' : `mode ${agentTmp.mode.toString(8)}`} ✗ your agents may use the shared /tmp: your next agent makes it private, or says why not in the daemon's log`}`)
   }
   for (const line of engineLines(report?.engines, (at) => ago(now, at), deps.platform)) deps.out(line)
+  for (const line of purgeLines(report?.purges, (at) => ago(now, at))) deps.out(line)
   deps.out('')
   deps.out('  What setup made:')
   for (const line of madeLines(here, owner, ownerHome)) deps.out(`  ${line}`)
@@ -516,6 +517,19 @@ async function status(deps: TeamCommandDeps, json: boolean): Promise<number> {
   deps.out('  undo: harness team remove')
   for (const line of byHandLines(here, owner, ownerHome)) deps.out(line)
   return 0
+}
+
+/** What `harness team status` says of ended sessions' data not deleted yet (superTabs/inCore/teamPurge.ts): nothing when none
+ *  waits. It holds the account, so this says why it takes no other project's work. */
+function purgeLines(purges: TeamStatus['purges'], ago: (at: number) => string): string[] {
+  if (purges?.unreadable) {
+    return ['  purges      ✗ the record of what is still to delete can\'t be read: the Team daemon\'s log says where it was kept.',
+      '              Until its owner clears it, this account takes no other project\'s work.']
+  }
+  if (!purges?.pending) return []
+  const count = purges.pending === 1 ? '1 ended session\'s' : `${purges.pending} ended sessions'`
+  return [`  purges      ◍ ${count} data not deleted yet (checked ${ago(purges.at)}). The daemon keeps trying by itself;`,
+    '              this account takes no other project\'s work until it has.']
 }
 
 /** A terminal app's bundle id as macOS gives it to what the app starts, for the one command that asks again. */
@@ -731,10 +745,11 @@ async function recordTeamMachine(deps: TeamCommandDeps, label: string, log: (lin
       { computerId: session.computerId, label }, headers)
     const machineId = answer?.machine?.machineId
     if (typeof machineId !== 'string' || !machineId) throw new Error('Harness answered without a machine id')
-    // A refresh may have rewritten the session meanwhile: the machine id goes into the newest one.
+    // A refresh may have rewritten the session meanwhile: the machine id goes into the newest one, while it is still the sign-in
+    // this asked for. A new owner's sign-in drops it, and its own start looks up its own.
     const kept = await deps.updateSession((latest) => latest.kind !== 'team' || latest.computerId !== session.computerId
-      || latest.machineId === machineId ? null : { ...latest, machineId, updatedAt: deps.now() })
-    if (kept?.kind !== 'team' || kept.computerId !== session.computerId) return
+      || !sameSignIn(latest, session.signInEpoch) || latest.machineId === machineId ? null : { ...latest, machineId, updatedAt: deps.now() })
+    if (kept?.machineId !== machineId) return
     log(`runs as machine ${machineId}`)
   } catch (error) {
     log(`could not look up this account's machine yet (${(error as Error).message}); the next start tries again`)

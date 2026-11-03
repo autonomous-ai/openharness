@@ -1809,7 +1809,8 @@ void main() {
         reason: 'tabs stop growing at the shared maximum in a roomy window',
       );
       expect(find.byKey(const ValueKey('swarm-search-button')), findsOneWidget);
-      expect(find.byKey(const ValueKey('swarm-store-button')), findsOneWidget);
+      // In the avatar's menu (Quiet Swarm, screen 0).
+      expect(find.byKey(const ValueKey('swarm-store-button')), findsNothing);
       for (final old in ['harnesses', 'machines', 'models', 'help']) {
         expect(find.byKey(ValueKey('swarm-$old-button')), findsNothing);
       }
@@ -1858,18 +1859,12 @@ void main() {
           ),
         );
         await tester.pump(const Duration(milliseconds: 100));
-        final store = find.byKey(const ValueKey('swarm-store-button'));
+        // The row's one word is Sign in, which follows the window's text size.
+        final signIn = find.byKey(const ValueKey('swarm-sign-in-button'));
         expect(
-          MediaQuery.textScalerOf(tester.element(store)).scale(13),
+          MediaQuery.textScalerOf(tester.element(signIn)).scale(13),
           13 * scale,
         );
-        // Store is its mark alone (2026-10-11); the row's one word is Sign
-        // in, which follows the window's text size as Store's name did.
-        expect(
-          find.descendant(of: store, matching: find.byType(Text)),
-          findsNothing,
-        );
-        final signIn = find.byKey(const ValueKey('swarm-sign-in-button'));
         final label = find.descendant(
           of: signIn,
           matching: find.text('Sign in'),

@@ -40,8 +40,8 @@ export type DeviceLogAppendAnswer = { head: DevLogHead } | { error: string; head
 export interface DevLogSignIn {
   /** Which sign-in it is. */
   epoch: string
-  /** Given to a session from before sign-ins were recorded: nobody saw it being made here, so it never
-   *  starts the log over (it may take a file over). */
+  /** Given to a session from before sign-ins were recorded, or a Team sign-in's (authSession `teamSignInEpoch`):
+   *  nobody saw it being made by hand here, so it never starts the log over (it may take a file over). */
   adopted: boolean
   /** When it was made (ms); null when not known — then it never starts the log over either. */
   at: number | null

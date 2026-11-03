@@ -357,6 +357,26 @@ export function teamPoolsOf(state: SuperTabState, pool: ContributedMachine): Con
   return state.machines?.filter(m => m.hostMachineId === pool.machineId && m.contributorId === pool.contributorId) ?? []
 }
 
+/** The name a machine's owner gave it in Machines (its account row, routes/machines.ts rename), which every Swarm list shows
+ *  (Dee, #2308): seeded from its computer's hostname, so a machine never renamed keeps that. Null when the row has none. */
+export function accountMachineName(row: { name: string | null } | null | undefined): string | null {
+  return row?.name?.trim() || null
+}
+
+/** Whether [pool] shows another name than [name], its owner's (accountMachineName). A Team account's pool goes by its Mac's
+ *  name, never its own account's "<Mac> · Team": it follows its Mac (followAccountName). */
+export function renamedBy(pool: ContributedMachine, name: string | null): name is string {
+  return !!name && !pool.hostMachineId && pool.name !== name
+}
+
+/** Renames [pool], and its Mac's Team account pools, to [name] when its owner renamed it (renamedBy); whether it did. Its
+ *  host's readings call it, so a rename shows in every Swarm the machine is in by its next heartbeat. */
+export function followAccountName(state: SuperTabState, pool: ContributedMachine, name: string | null): boolean {
+  if (!renamedBy(pool, name)) return false
+  for (const each of [pool, ...teamPoolsOf(state, pool)]) each.name = name
+  return true
+}
+
 /** The one of them that runs teammates' work on the Mac: not being removed, and the last to report. Undefined when none. */
 export function teamPoolOf(state: SuperTabState, pool: ContributedMachine, live?: readonly string[]): ContributedMachine | undefined {
   // [live]: the account rows still signed in as team accounts (store.ts teamMachines). One removed since (`harness team
@@ -503,6 +523,7 @@ export function dropIdleBuddyMachines(state: SuperTabState, now: number): void {
       machineOwnerId: pool.contributorId, requestedAt: new Date(now).toISOString(), buddyOnly: true })
     state.harnessReservations = state.harnessReservations?.filter(r => r.machineId !== pool.machineId)
     state.releasedHarnesses = state.releasedHarnesses?.filter(r => r.machineId !== pool.machineId)
+    state.removedSessions = state.removedSessions?.filter(r => r.machineId !== pool.machineId)
   }
 }
 

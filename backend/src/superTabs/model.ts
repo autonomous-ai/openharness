@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { cloneData } from './cloneData.js'
+import { autoJoinOn } from './autoJoinDomain.js'
 import { lostReasonWithoutMachine } from './lostReason.js'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
@@ -22,6 +23,8 @@ export interface Person {
   avatar?: import('./profile.js').Avatar
   /** The name they chose (usernames.ts), or one kept for them; absent, readers work out their default. Only members read it. */
   username?: string
+  /** `domain`: joined by themselves as someone at the owner's email domain (autoJoin.ts), so the people list says so. */
+  joinedVia?: 'domain'
 }
 export interface AgentConfiguration {
   engine: string
@@ -208,7 +211,12 @@ export interface Check {
   independent: boolean
   evidence: string | null
   passedBy: string | null
+  /** Each checker's latest verdict during this attempt (checkVerdicts.ts); `evidence` and `passedBy` are derived from them.
+   *  Absent until the first verdict recorded since verdicts were kept. */
+  verdicts?: CheckVerdict[]
 }
+/** One checker's verdict on a check: its actor key (`agent:ID` or `person:ID`), what it found and when. */
+export interface CheckVerdict { by: string; passed: boolean; evidence: string; at: number }
 export interface Assignment {
   id: string
   agentId: string
@@ -230,6 +238,9 @@ export interface Assignment {
   /** On a linked task (reviewOf): when its own Reviewer's verdict in the build asked for changes. Its quiet time does not count
    *  until the build's next Ready clears it (liveness.ts waitingForRevision). */
   changesRequestedAt?: number
+  /** On a linked task: when its agent last wrote to the build's Engineer, as a verdict usually is. It holds the quiet time while
+   *  the Engineer isn't waiting on a review, until the build's next Ready clears it (liveness.ts waitingForRevision). */
+  toldEngineerAt?: number
   /** A two-review task's hand-overs and reviewers' verdicts, from the automatic reviews (#2382) before project instructions;
    *  never written since (phase 4: the server opens and counts no review), kept on older rows. */
   handoffs?: number
@@ -391,6 +402,16 @@ export interface Invitation {
   conversationId: string
   expiresAt: number
 }
+/** An agent a machine's report removed as closed: as it was, and where it was (closedAgents.ts). */
+export interface RemovedSession {
+  machineId: string
+  harnessId: string
+  agent: Agent
+  groupIds: string[]
+  leadOf: string[]
+  removedAt: number
+}
+
 export interface SuperTabState {
   version: 1
   id: string
@@ -415,6 +436,11 @@ export interface SuperTabState {
   rules?: import('./rules.js').SwarmRule[]
   /** Owner-only sharing configuration; visibleState always removes it. */
   sharing?: import('./sharing.js').SwarmSharing
+  /** People who left or were removed, whom auto-join never adds again (autoJoin.ts); visibleState always removes it. */
+  autoJoinDeclined?: string[]
+  /** Only in what a reader gets (visibleState), never stored: people at the owner's domain join by themselves, so the leave
+   *  dialog says someone who leaves is not added back. */
+  autoJoin?: true
   paused: boolean
   /** Its owner deleted it (deletion.ts): nobody reads or writes it, its row lists no member, and its owner may restore it until
    *  `purgeAt` (ISO times). Absent on a live Swarm. */
@@ -441,10 +467,16 @@ export interface SuperTabState {
    *  host confirms the close, which it does once its saved session there is deleted (machines.ts productManagerOn); `since`
    *  when it was removed, and `noticed` once the Swarm said it lasts (liveness.ts). */
   /** `buddyOnly`: a Buddy's session on a Buddy-only machine, kept from every reader as its machine is (read/changes.ts). */
+  /** What a report's removal of a closed agent must restore if its session reopens (closedAgents.ts): only its machine's host hears
+   *  of it (read/hostRows.ts), and no reader gets it, as it names private chats. */
+  removedSessions?: RemovedSession[]
   closingSessions?: Array<{ agentId: string; machineId: string; harnessId: string; machineOwnerId: string; heldFor?: string; since?: number; noticed?: true
     buddyOnly?: true }>
   /** Removed machines whose host still has to clean up (machines.ts expireRemovals), listed only to that host. */
   machineCleanups?: import('./machines.js').MachineCleanup[]
+  /** The machines their person took out of this Swarm, so a sync that adds machines by itself leaves them out; a reader gets only
+   *  the ids of their own (visibleState). */
+  removedMachines?: Array<{ machineId: string; contributorId: string }>
   /** Conversations of a kind a later release added, set aside unchanged by a release that does not know it (parkLaterConversations). */
   parkedConversations?: Conversation[]
   /** The Local models add-on (docs/plans/2026-10-23-swarm-local-models.md): off until the owner turns it on, and only
@@ -535,6 +567,8 @@ export const NOTICE_READERS = {
   'note-removed': 'recipients',
   'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people', 'buddy-proposal-sent': 'people', 'buddy-session-ended': 'people',
   'decision-delegated': 'people', 'machine-removed': 'people', 'machine-left': 'people', ship: 'people',
+  // A task's one line in its project chat, edited as it moves (taskLine.ts): people read a task's state there.
+  'task-line': 'people',
   // A project PM's private line in a person's one Buddy chat, marked with its project (commands.ts person.tell): its person
   // reads it, as they read the line in their older project chat.
   'pm-line': 'people',
@@ -621,6 +655,8 @@ export interface CommandEffects {
   instructions?: import('./instructions.js').InstructionsWrite
   /** A coordinator's note kept or a note removed, written outside the tab state by the store (instructions.ts). */
   notes?: import('./instructions.js').NotesWrite
+  /** Stored messages given new words: a task's line as the task moves (taskLine.ts). */
+  edits?: import('./taskLine.js').MessageEdit[]
 }
 /** `details` go to the caller with the code: what it needs to act on the refusal (a stale save's current text). */
 export class SuperTabError extends Error {
@@ -786,12 +822,17 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // and closing sessions (only that machine's host roster lists them: read/hostRows.ts; a removed private agent's session is
   // not every member's), and overlap alerts. Nor a dormant conversation: it is read on demand, never in a whole-Swarm read
   // (spec, Archive); a command may still load one.
-  const { sharing: _sharing, harnessReservations: _reservations, releasedHarnesses: _released, overlapAlerts: _alerts, closingSessions: _closing,
-    ...kept } = state
+  const { sharing: _sharing, autoJoinDeclined: _declined, harnessReservations: _reservations, releasedHarnesses: _released, overlapAlerts: _alerts, closingSessions: _closing,
+    removedSessions: _removed, ...kept } = state
   const visible = cloneData({ ...kept, conversations: state.conversations.filter(c => !c.dormant) })
+  if (autoJoinOn(state)) visible.autoJoin = true
   // A Buddy-only machine is no machine of the Swarm to anyone, its own person included (machines.ts buddyOnly): their Buddy
   // shows as a Buddy, and their machine stays theirs. Machines, status and the leaderboard's lent hours all read this.
   if (visible.machines) visible.machines = visible.machines.filter(m => !m.buddyOnly)
+  // A machine taken out says who owned it: a reader gets the ids of their own, which is all their sync asks.
+  const ownRemoved = actor.kind === 'person' ? (visible.removedMachines ?? []).filter(r => r.contributorId === actor.userId).map(r => r.machineId) : []
+  if (ownRemoved.length) (visible as { removedMachines?: unknown }).removedMachines = ownRemoved
+  else delete visible.removedMachines
   // Rows by day and project that only the leaderboard read uses, and it takes them from the Swarm itself.
   for (const pool of visible.machines ?? []) delete pool.lentDays
   // Nor its id, which a Buddy's row carries (machineHiddenFrom).

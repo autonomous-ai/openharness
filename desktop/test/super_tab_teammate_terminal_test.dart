@@ -110,7 +110,8 @@ Future<(SuperTabLaunchFixture, _Machines, SuperTabController)> _swarm({
       'configuration': {'engine': 'claude'},
     },
   ];
-  (state['conversations'] as List)[0]['agentIds'] = ['river'];
+  // A workgroup: the project chat shows its coordinator's terminal alone (#2207).
+  (state['conversations'] as List)[1]['agentIds'] = ['river'];
   final c = await f.app.superTabs.open(tabId);
   await c.refresh();
   return (f, api, c);
@@ -371,7 +372,9 @@ void main() {
     (tester) async {
       final (f, api, c) = await _swarm();
       await _show(tester, f);
-      c.selectTerminal('lead', 'river');
+      c
+        ..select('offline')
+        ..selectTerminal('offline', 'river');
       await _settle(tester);
       await _shoot(tester, 'teammate-without-invitation');
       expect(find.textContaining('must be online'), findsNothing);
@@ -407,7 +410,9 @@ void main() {
       final (f, api, c) = await _swarm(confidential: true);
       await _show(tester, f);
       final reads = api.reads;
-      c.selectTerminal('lead', 'river');
+      c
+        ..select('offline')
+        ..selectTerminal('offline', 'river');
       await _settle(tester);
       expect(find.textContaining('only scholes can watch'), findsOneWidget);
       expect(find.textContaining('update and restart'), findsNothing);
@@ -425,7 +430,9 @@ void main() {
       api.list = [_own, _teammate(21)];
       await f.app.refreshMachines();
       await _show(tester, f);
-      c.selectTerminal('lead', 'river');
+      c
+        ..select('offline')
+        ..selectTerminal('offline', 'river');
       await _settle(tester);
       final panel = tester.state(find.byType(SharedHarnessPanel));
       final pane = f.app.panes.single;
@@ -456,7 +463,9 @@ void main() {
         ..['machineOwnerId'] = 'owner';
       await c.refresh();
       await _show(tester, f);
-      c.selectTerminal('lead', 'river');
+      c
+        ..select('offline')
+        ..selectTerminal('offline', 'river');
       await _settle(tester);
       expect(find.text(superTabTerminalOffline), findsOneWidget);
       expect(find.text('Retry'), findsOneWidget);

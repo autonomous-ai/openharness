@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { baseRule, cacheDigest, dormantAgentRule, dormantProjectRule, dormantRule, finishedStartsRule, groupRule, machinesRule } from './cachePatch.js'
+import { stableId } from './model.js'
+import { baseRule, cacheDigest, dormantAgentRule, feedRule, startsOfRule, dormantProjectRule, dormantRule, finishedStartsRule, groupRule, machinesRule } from './cachePatch.js'
 import type { Part, PartKind, SwarmParts } from './parts/index.js'
 import type { SwarmDelta } from './parts/load.js'
 
@@ -136,5 +137,43 @@ describe('dormant selections', () => {
     expect((dormantProjectRule('lead').apply([], delta([sleep])) as Part[]).map(g => g.key)).toEqual(['g5'])
     expect(dormantProjectRule('p1').apply([], delta([sleep]))).toEqual([])
     expect(dormantAgentRule('a8').apply([], delta([sleep]))).toEqual([])
+  })
+})
+
+describe('feedRule (spec 2026-11-02 poll cost, Part 1.1)', () => {
+  it('keeps tombstones, dormant groups and readAt, takes the newer version', () => {
+    const held = { from: 500, parts: [part('group', 'g1', 1, { a: 1 }), part('machine', 'm1', 1, {}, { readAt: 900 })] }
+    const next = feedRule.apply(held, delta([
+      part('group', 'g1', 2, { a: 2 }),
+      part('group', 'g2', 3, {}, { dormant: true }),
+      part('agent', 'a9', 4, {}, { deleted: true }),
+      part('machine', 'm1', 2, {}, { readAt: 2_000 }),
+      part('group', 'g1', 1, { stale: true }),
+    ])) as { from: number; parts: Part[] }
+    expect(next.from).toBe(500)
+    expect(next.parts.map(p => [p.kind, p.key, p.version]).sort()).toEqual([['agent', 'a9', 4], ['group', 'g1', 2], ['group', 'g2', 3], ['machine', 'm1', 2]])
+    expect(next.parts.find(p => p.key === 'a9')!.deleted).toBe(true)
+    expect(next.parts.find(p => p.key === 'g2')!.dormant).toBe(true)
+    expect(next.parts.find(p => p.key === 'm1')!.readAt).toBe(2_000)
+  })
+
+  it('returns what it holds when nothing is newer', () => {
+    const held = { from: 0, parts: [part('group', 'g1', 5, {})] }
+    expect(feedRule.apply(held, delta([part('group', 'g1', 5, {})]))).toBe(held)
+  })
+})
+
+describe('startsOfRule (spec 2026-11-02 poll cost, Part 1.4)', () => {
+  const start = (key: string, version: number, harnessId: string | null, extra: Partial<Part> = {}) =>
+    part('start', key, version, { id: key, harnessId, request: { machineId: 'm1', conversationId: 'c' } }, extra)
+  const agentOf = (harness: string) => stableId('m1', harness)
+
+  it('follows starts in and out of the agent list', () => {
+    const rule = startsOfRule([agentOf('h1')])
+    const held = [start('s1', 1, 'h1')]
+    expect((rule.apply(held, delta([start('s2', 1, 'h1')])) as Part[]).map(s => s.key)).toEqual(['s1', 's2'])
+    expect(rule.apply(held, delta([start('s1', 2, 'h1', { deleted: true })]))).toEqual([])
+    expect(rule.apply(held, delta([start('s1', 2, 'h9')]))).toEqual([])
+    expect(rule.apply(held, delta([start('s3', 1, 'h7')]))).toBe(held)
   })
 })

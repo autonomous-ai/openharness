@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/activity.dart';
-import 'package:harness/super_tabs/activity_view.dart';
 import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
@@ -17,45 +16,9 @@ import 'package:harness/super_tabs/workgroup_name.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 
 import 'super_tab_attention_test.dart'
-    show
-        close,
-        conversation,
-        fromLead,
-        inRow,
-        openHere,
-        projectServer,
-        rowText,
-        unreadThread;
+    show close, fromLead, inRow, openHere, projectServer, unreadThread;
 import 'support/buddy_fixture.dart';
 import 'support/super_tab_fixture.dart';
-
-Map<String, dynamic> reply(
-  String id, {
-  String conversationId = 'lead',
-  bool read = false,
-  String createdAt = '2026-10-31T03:00:00.000Z',
-}) => {
-  'id': id,
-  'kind': 'reply',
-  'conversationId': conversationId,
-  'conversationTitle': 'Chat $conversationId',
-  'projectName': 'web-project',
-  'messageId': 'm-$id',
-  'messageSequence': 4,
-  'threadId': 'root',
-  'actor': {'kind': 'person', 'id': 'peer', 'name': 'peer'},
-  'emoji': null,
-  'text': 'Reply $id',
-  'createdAt': createdAt,
-  'read': read,
-};
-
-Map<String, dynamic> reaction(String id, {bool read = false}) => {
-  ...reply(id, read: read),
-  'kind': 'reaction',
-  'emoji': 'check',
-  'text': 'My message',
-};
 
 Future<SuperTabController> open(ConversationServer server) async {
   final c = server.controller();
@@ -88,13 +51,11 @@ Future<void> pumpSidebar(
           listenable: c,
           builder: (context, _) => ProjectSidebar(
             controller: c,
-            onAddAgent: (_) {},
             needsHuman: (_) => 0,
             onSelect: c.select,
             attention: SuperTabAttention.of(c),
             activity: SuperTabActivity.of(c),
             onNotifications: () {},
-            onThreads: () {},
           ),
         ),
       ),
@@ -398,160 +359,6 @@ void main() {
     });
   });
 
-  group('Activity: replies and reactions to the reader', () {
-    test('reads when its digest moves, not again for the same digest, and '
-        'keeps only chats this Swarm lists', () async {
-      final server = projectServer();
-      server.state['activityDigest'] = 'd1';
-      server.activity = {
-        'items': [reply('r1'), reply('r2', conversationId: 'other-swarm-chat')],
-        'more': false,
-      };
-      final c = await open(server);
-      final activity = SuperTabActivity.of(c);
-      await settle();
-      expect(server.activityReads, hasLength(1));
-      expect(activity.items.map((i) => i.id), ['r1']);
-      expect(activity.count, 1);
-      await c.refresh();
-      await settle();
-      expect(server.activityReads, hasLength(1));
-      server.state['activityDigest'] = 'd2';
-      server.revision++;
-      await c.refresh();
-      await settle();
-      expect(server.activityReads, hasLength(2));
-    });
-
-    test('a server before Activity (404) asks once; tags and decisions still '
-        'count', () async {
-      final server = projectServer();
-      server.state['activityDigest'] = 'd1';
-      server.state['mentionsWaiting'] = 2;
-      server.activity = null;
-      final c = await open(server);
-      final activity = SuperTabActivity.of(c);
-      await settle();
-      expect(activity.supported, isFalse);
-      expect(activity.count, 2);
-      server.state['activityDigest'] = 'd2';
-      server.revision++;
-      await c.refresh();
-      await settle();
-      expect(server.activityReads, hasLength(1));
-    });
-
-    test(
-      'a failed first read says so, and a later digest recovers it',
-      () async {
-        final server = projectServer();
-        server.state['activityDigest'] = 'd1';
-        server.activityStatus = 503;
-        server.activity = {
-          'items': [reply('r1')],
-          'more': false,
-        };
-        final c = await open(server);
-        final activity = SuperTabActivity.of(c);
-        await settle();
-        expect(activity.error, isNotNull);
-        expect(activity.items, isEmpty);
-        server.activityStatus = 0;
-        // The next change of the Swarm reads it again, though its digest
-        // did not move.
-        fromLead(server, 'Something else changed');
-        await c.refresh();
-        await settle();
-        expect(activity.error, isNull);
-        expect(activity.items.map((i) => i.id), ['r1']);
-      },
-    );
-
-    test(
-      'access lost: rows go at once and an answer on its way is dropped',
-      () async {
-        final server = projectServer();
-        server.state['activityDigest'] = 'd1';
-        server.activity = {
-          'items': [reply('r1')],
-          'more': false,
-        };
-        final c = await open(server);
-        final activity = SuperTabActivity.of(c);
-        await settle();
-        expect(activity.items, hasLength(1));
-        server.holdActivity = Completer();
-        unawaited(activity.load());
-        await pumpEventQueue();
-        c.revokeAccess('Removed from this Swarm.');
-        expect(activity.items, isEmpty);
-        expect(activity.count, 0);
-        server.holdActivity!.complete();
-        await settle();
-        expect(activity.items, isEmpty);
-      },
-    );
-
-    test(
-      'a read that answers after the Swarm\'s audience moved is dropped',
-      () async {
-        final server = projectServer();
-        server.state['activityDigest'] = 'd1';
-        server.activity = {
-          'items': [reply('r1')],
-          'more': false,
-        };
-        final c = await open(server);
-        final activity = SuperTabActivity.of(c);
-        await settle();
-        server.holdActivity = Completer();
-        unawaited(activity.load());
-        await pumpEventQueue();
-        server.parts.epoch++;
-        server.revision++;
-        server.activity = {'items': <dynamic>[], 'more': false};
-        await c.refresh();
-        // Every state shown from here: the old answer must never show.
-        final shown = <List<String>>[];
-        activity.addListener(
-          () => shown.add([for (final i in activity.items) i.id]),
-        );
-        server.holdActivity!.complete();
-        await settle();
-        expect(activity.items, isEmpty);
-        expect(shown.where((ids) => ids.contains('r1')), isEmpty);
-      },
-    );
-
-    test(
-      'leaving the view marks what it showed read, bold until then',
-      () async {
-        final server = projectServer();
-        server.state['activityDigest'] = 'd1';
-        server.activity = {
-          'items': [reply('r1'), reaction('x1', read: true)],
-          'more': false,
-        };
-        final c = await open(server);
-        final activity = SuperTabActivity.of(c);
-        await settle();
-        activity.opened();
-        await settle();
-        final r1 = activity.items.firstWhere((i) => i.id == 'r1');
-        expect(activity.isUnread(r1), isTrue);
-        expect(activity.unread, isTrue);
-        activity.closed();
-        await settle();
-        expect(
-          server.activityReadPosts.single['through'],
-          '2026-10-31T03:00:00.000Z',
-        );
-        expect(activity.items.every((i) => i.read), isTrue);
-        expect(activity.count, 0);
-      },
-    );
-  });
-
   group('All new messages tells the system about each new message', () {
     test('only for a chat set to all, not on the first look, not the open '
         'chat', () async {
@@ -561,14 +368,181 @@ void main() {
       SuperTabChatNotices.of(c).onMessage = (g, s) => told.add((g.id, s));
       fromLead(server, 'Before', conversationId: 'offline');
       await c.refresh();
+      await settle();
       expect(told, isEmpty);
       await c.setNotify('offline', SuperTabNotify.all);
       fromLead(server, 'After', conversationId: 'offline');
       await c.refresh();
+      await settle();
       expect(told.map((t) => t.$1), ['offline']);
       fromLead(server, 'In the project chat');
       await c.refresh();
+      await settle();
       expect(told.map((t) => t.$1), ['offline']);
+    });
+
+    Future<(SuperTabController, ConversationServer, List<int>)>
+    openChatSetToAll() async {
+      final binding = TestWidgetsFlutterBinding.ensureInitialized();
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      final server = projectServer();
+      final c = await open(server);
+      final told = <int>[];
+      SuperTabChatNotices.of(c).onMessage = (_, s) => told.add(s);
+      await c.setNotify(c.selectedId, SuperTabNotify.all);
+      return (c, server, told);
+    }
+
+    test('the open chat is told while its Swarm is away', () async {
+      final (c, server, told) = await openChatSetToAll();
+      c.away = true;
+      fromLead(server, 'While on another Swarm');
+      await c.refresh();
+      await settle();
+      expect(told, hasLength(1));
+    });
+
+    test('the open chat is told while another app is in front', () async {
+      final (c, server, told) = await openChatSetToAll();
+      final binding = TestWidgetsFlutterBinding.instance;
+      addTearDown(
+        () => binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed),
+      );
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      fromLead(server, 'While in another app');
+      await c.refresh();
+      await settle();
+      expect(told, hasLength(1));
+    });
+
+    // Task #2224: what a person sent from their phone, the web or another Mac tells them nothing.
+    Future<(SuperTabController, ConversationServer, List<int>)>
+    chatSetToAll() async {
+      final server = projectServer();
+      final c = await open(server);
+      final told = <int>[];
+      SuperTabChatNotices.of(c).onMessage = (_, s) => told.add(s);
+      await c.setNotify('offline', SuperTabNotify.all);
+      return (c, server, told);
+    }
+
+    test('their own message from another device tells them nothing', () async {
+      final (c, server, told) = await chatSetToAll();
+      server.append('From my phone', conversationId: 'offline');
+      await c.refresh();
+      await settle();
+      expect(told, isEmpty);
+    });
+
+    // Task #2265: the server moves its author's mark in the commit that wrote it.
+    test('their own message, with the mark the server moved, is no news: no '
+        'notice, not bold, and no read to find out whose it was', () async {
+      final (c, server, told) = await chatSetToAll();
+      server.append('From my phone', conversationId: 'offline');
+      ((server.state['readMarks'] ??= <String, dynamic>{}) as Map).update(
+        'owner',
+        (marks) => {...marks as Map, 'offline': server.revision},
+        ifAbsent: () => {'offline': server.revision},
+      );
+      final reads = <String>[];
+      server.onRead = reads.add;
+      await c.refresh();
+      await settle();
+      expect(told, isEmpty);
+      expect(c.unread(c.snapshot!.conversation('offline')!), isFalse);
+      expect(reads.where((p) => p.contains('offline/messages')), isEmpty);
+    });
+
+    test(
+      'a message whose author can\'t be read is told about, never lost',
+      () async {
+        final server = projectServer();
+        final c = SuperTabController(
+          tabId: 'tab',
+          accountId: 'owner',
+          save: server.save,
+          request: (method, path, {body}) async {
+            if (path.contains('offline/messages?after=')) {
+              throw StateError('Offline');
+            }
+            return server.request(method, path, body: body);
+          },
+        );
+        addTearDown(c.dispose);
+        await c.refresh();
+        final told = <int>[];
+        SuperTabChatNotices.of(c).onMessage = (_, s) => told.add(s);
+        await c.setNotify('offline', SuperTabNotify.all);
+        fromLead(server, 'From the Lead', conversationId: 'offline');
+        await c.refresh();
+        await settle();
+        expect(told, hasLength(1));
+      },
+    );
+
+    // Review of #2646: a chat's top is its main stream, and agents answer in threads.
+    test(
+      'a teammate\'s thread reply before their own message tells nothing',
+      () async {
+        final (c, server, told) = await chatSetToAll();
+        fromLead(server, 'In a thread', conversationId: 'offline');
+        server.messages.last['thread'] = 'a-root';
+        server.append('From my phone', conversationId: 'offline');
+        await c.refresh();
+        await settle();
+        expect(told, isEmpty);
+      },
+    );
+
+    test('a page with more behind it is unsure, so it tells', () async {
+      final server = projectServer();
+      final c = SuperTabController(
+        tabId: 'tab',
+        accountId: 'owner',
+        save: server.save,
+        request: (method, path, {body}) async {
+          final answer = await server.request(method, path, body: body);
+          return path.contains('offline/messages?after=')
+              ? {
+                  ...answer,
+                  'next': {'sequence': 1, 'id': 'more'},
+                }
+              : answer;
+        },
+      );
+      addTearDown(c.dispose);
+      await c.refresh();
+      final told = <int>[];
+      SuperTabChatNotices.of(c).onMessage = (_, s) => told.add(s);
+      await c.setNotify('offline', SuperTabNotify.all);
+      server.append('From my phone', conversationId: 'offline');
+      await c.refresh();
+      await settle();
+      expect(told, hasLength(1));
+    });
+
+    test('a teammate\'s message still does', () async {
+      final (c, server, told) = await chatSetToAll();
+      fromLead(server, 'From the Lead', conversationId: 'offline');
+      await c.refresh();
+      await settle();
+      expect(told, hasLength(1));
+    });
+
+    test('a teammate\'s message among their own still does', () async {
+      final (c, server, told) = await chatSetToAll();
+      fromLead(server, 'From the Lead', conversationId: 'offline');
+      server.append('From my phone', conversationId: 'offline');
+      await c.refresh();
+      await settle();
+      expect(told, hasLength(1));
+    });
+
+    test('the open chat on screen in a focused app is not told', () async {
+      final (c, server, told) = await openChatSetToAll();
+      fromLead(server, 'While reading it');
+      await c.refresh();
+      expect(told, isEmpty);
     });
   });
 
@@ -641,55 +615,7 @@ void main() {
     });
   });
 
-  group('Activity view', () {
-    testWidgets('lists tags, replies and reactions newest first, filters one '
-        'kind, and opens a row at its message', (tester) async {
-      final server = projectServer();
-      server.state['activityDigest'] = 'd1';
-      server.activity = {
-        'items': [
-          reply('r1', createdAt: '2026-10-31T05:00:00.000Z'),
-          reaction('x1', read: true),
-        ],
-        'more': false,
-      };
-      final c = await openHere(server);
-      final activity = SuperTabActivity.of(c);
-      await tester.runAsync(settle);
-      final opened = <(String, String)>[];
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: grid.buildAppTheme(brightness: Brightness.dark),
-          home: Scaffold(
-            body: SuperTabActivityView(
-              activity: activity,
-              onOpenMention: (_) {},
-              onOpenMessage: (id, m) => opened.add((id, m)),
-              now: () => DateTime.utc(2026, 10, 31, 6),
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('peer replied to your message'), findsOneWidget);
-      expect(find.text('peer reacted ✅ to your message'), findsOneWidget);
-      await tester.tap(
-        find.byKey(const ValueKey('super-activity-filter-reactions')),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('peer replied to your message'), findsNothing);
-      await tester.tap(
-        find.byKey(const ValueKey('super-activity-filter-replies')),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-activity-r1')));
-      expect(opened, [('lead', 'm-r1')]);
-      await close(tester, c);
-      expect(server.activityReadPosts, isNotEmpty);
-    });
-  });
-
-  group('the one # buddy row (#2447) follows the same rules', () {
+  group('the one Buddy row (#2447) follows the same rules', () {
     Future<SuperTabController> show(
       WidgetTester tester,
       ConversationServer server,
@@ -718,7 +644,7 @@ void main() {
 
     final buddyRow = find.byKey(const ValueKey('super-swarm-buddy'));
     Text buddyName(WidgetTester tester) => tester.widget<Text>(
-      find.descendant(of: buddyRow, matching: find.text('buddy')),
+      find.descendant(of: buddyRow, matching: find.text('Buddy')),
     );
 
     testWidgets('muted: greyed with its mark, never bold; first in the next '

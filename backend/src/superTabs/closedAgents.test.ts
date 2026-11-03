@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand } from './commands.js'
-import { closedAgents, DOWN_REMOVE_MS, removeClosedAgents, STOPPED_REMOVE_MS } from './closedAgents.js'
+import { closedAgents, DOWN_REMOVE_MS, REMOVED_KEEP_MS, REMOVED_KEPT, removeClosedAgents, reopened, restoreRefusal, restoreSessions, STOPPED_REMOVE_MS } from './closedAgents.js'
 import { MACHINE_FRESH_MS } from './machines.js'
-import { createSuperTab, type Actor, type Agent, type SuperTabState } from './model.js'
+import { createSuperTab, type Actor, type Agent, type Conversation, type RemovedSession, type SuperTabState } from './model.js'
 import { projectsOf } from './projects.js'
 
 const config = { engine: 'codex', model: 'm', effort: 'high', contextWindow: null, engineVersion: null }
@@ -106,5 +106,121 @@ describe('removeClosedAgents: what a removal leaves for the host', () => {
       execution: { machineId: 'mac', machineOwnerId: 'owner', harnessId: 'worker' }, result: null } as never
     expect(removeClosedAgents(f.state, [f.worker], NOW)).toEqual([])
     expect(f.state.closingSessions).toBeUndefined()
+  })
+})
+
+// A person's choice stands over an older record (security review 1 of #2601).
+describe('a person\'s add or remove of the session', () => {
+  const recordOf = (target: Agent) => ({ machineId: 'mac', harnessId: target.harnessId, agent: target, groupIds: ['lead'], leadOf: [], removedAt: NOW })
+
+  it('takes its record with it when they add it back', () => {
+    const f = fixture()
+    // No machine listed, as a person may add a session on any machine of theirs.
+    const state = { ...f.state, machines: undefined, agents: f.state.agents.filter(a => a.id !== f.worker.id), removedSessions: [recordOf(f.worker)] }
+    const added = applyCommand(state, person, { type: 'agent.add', conversationId: 'lead', machineId: 'mac', harnessId: 'worker', name: 'worker', lead: false, configuration: config },
+      { now: NOW, operationId: 'add-again', contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }).state
+    expect(added.removedSessions ?? []).toEqual([])
+  })
+
+  it('takes its record with it when they remove it, so a reopen does not undo that', () => {
+    const f = fixture()
+    f.worker.workDecision = 'stop'
+    const state = { ...f.state, removedSessions: [recordOf(f.worker), { ...recordOf(f.worker), harnessId: 'another' }] }
+    const removed = applyCommand(state, person, { type: 'agent.remove', agentId: f.worker.id }, { now: NOW, operationId: 'remove-it' }).state
+    expect(removed.agents.map(a => a.id)).not.toContain(f.worker.id)
+    expect((removed.removedSessions ?? []).map(r => r.harnessId)).toEqual(['another'])
+  })
+
+  it('an expired record is not reopened, so it writes no session record', () => {
+    const f = fixture()
+    const state = { ...f.state, removedSessions: [{ ...recordOf(f.worker), removedAt: NOW - REMOVED_KEEP_MS }] }
+    expect(reopened(state, 'mac', ['worker'], NOW)).toEqual([])
+    expect(reopened(state, 'mac', ['worker'], NOW - 1)).toHaveLength(1)
+  })
+})
+
+// What a removal keeps, and a reopened session coming back from it (task #2131).
+const AT = Date.parse('2026-11-02T08:00:00.000Z')
+const removedAgent = (patch: Partial<Agent> = {}): Agent => ({ id: 'a1', machineId: 'mac', harnessId: 'h1', projectId: 'p', machineOwnerId: 'owner', contributorId: 'owner',
+  membershipGeneration: 'g1', hostGrant: null, name: 'Agent', configuration: { engine: 'codex', model: 'm', effort: 'high', contextWindow: null, engineVersion: null },
+  configurationVersion: 'v1', ...patch }) as Agent
+const removedGroup = (patch: Partial<Conversation> = {}): Conversation => ({ id: 'g1', title: 'Task', projectId: 'p', leadId: null, agentIds: [], archived: false, ...patch }) as Conversation
+const record = (patch: Partial<RemovedSession> = {}): RemovedSession => ({ machineId: 'mac', harnessId: 'h1', agent: removedAgent(), groupIds: ['g1'], leadOf: [], removedAt: AT - 60_000, ...patch })
+function restoring(patch: Partial<SuperTabState> = {}, pool: Record<string, unknown> = {}): SuperTabState {
+  return { id: 'tab', environment: 'prod', people: [{ id: 'owner', email: 'o@x', role: 'owner', generation: 'g1' }, { id: 'mate', email: 'm@x', role: 'collaborator', generation: 'g2' }],
+    agents: [], conversations: [removedGroup()], projects: [{ id: 'p', name: 'P', ownerId: 'owner', leadConversationId: 'lead-p', visibility: 'public', members: [] }, { id: 'other', name: 'O', ownerId: 'owner', leadConversationId: 'lead-o', visibility: 'public', members: [] }],
+    machines: [{ machineId: 'mac', contributorId: 'owner', name: 'Mac', generation: 'gen', ...pool }], removedSessions: [record()], ...patch } as unknown as SuperTabState
+}
+const facts = { elsewhere: new Set<string>(), teamMachines: [] as string[], otherWorkspaceMachines: [] as string[] }
+
+// Security review 1 of #2601: a restore takes the rules a person's add takes (commands.ts agent.add).
+describe('what may come back', () => {
+  it('comes back on an ordinary machine', () => {
+    expect(restoreRefusal(restoring(), record(), 'owner', AT, facts)).toBeNull()
+  })
+
+  it('never onto a Team account that serves another project', () => {
+    const team = { hostMachineId: 'host-mac', teamAccountOnly: true }
+    const onTeam = record({ agent: removedAgent({ teamAccount: true }) })
+    const held = [{ agentId: 'b', machineId: 'mac', harnessId: 'b', machineOwnerId: 'owner', heldFor: 'other', since: AT }]
+    expect(restoreRefusal(restoring({ closingSessions: held } as Partial<SuperTabState>, team), onTeam, 'owner', AT, { ...facts, teamMachines: ['mac'] })).toBe('team-other-project')
+    const mine = [{ agentId: 'b', machineId: 'mac', harnessId: 'b', machineOwnerId: 'owner', heldFor: 'p', since: AT }]
+    expect(restoreRefusal(restoring({ closingSessions: mine } as Partial<SuperTabState>, team), onTeam, 'owner', AT, { ...facts, teamMachines: ['mac'] })).toBeNull()
+  })
+
+  it('never a teammate\'s project on a machine that can no longer take it', () => {
+    // The Team account was removed: its owner's own project may come back there, and nobody else's.
+    expect(restoreRefusal(restoring({}, { hostMachineId: 'host-mac' }), record(), 'owner', AT, facts)).toBeNull()
+    const theirs = restoring({ projects: [{ id: 'p', name: 'P', ownerId: 'mate', leadConversationId: 'lead-p', visibility: 'public', members: [] }] } as unknown as Partial<SuperTabState>, { hostMachineId: 'host-mac' })
+    expect(restoreRefusal(theirs, record(), 'owner', AT, facts)).toBe('team-work')
+  })
+
+  it('leaves out a task marked Team-written while it was away, and keeps the rest', () => {
+    const state = restoring({ conversations: [removedGroup({ teamWritten: true }), removedGroup({ id: 'g2' })], removedSessions: [record({ groupIds: ['g1', 'g2'] })] })
+    restoreSessions(state, 'mac', ['h1'], AT, new Set(['h1']), () => {})
+    expect(state.conversations.find(c => c.id === 'g1')!.agentIds).toEqual([])
+    expect(state.conversations.find(c => c.id === 'g2')!.agentIds).toEqual(['a1'])
+  })
+
+  // #2207 (Ken): the project chat holds only its coordinator among agents, so a session that was a member there comes back to
+  // its tasks alone, unless it comes back as the project chat's coordinator.
+  it('comes back to the project chat only as its coordinator', () => {
+    const chat = removedGroup({ id: 'lead-p' })
+    const member = restoring({ conversations: [chat, removedGroup()], removedSessions: [record({ groupIds: ['lead-p', 'g1'] })] })
+    restoreSessions(member, 'mac', ['h1'], AT, new Set(['h1']), () => {})
+    expect(member.conversations.map(c => c.agentIds)).toEqual([[], ['a1']])
+    const coordinator = restoring({ conversations: [{ ...chat }], removedSessions: [record({ groupIds: ['lead-p'], leadOf: ['lead-p'] })] })
+    restoreSessions(coordinator, 'mac', ['h1'], AT, new Set(['h1']), () => {})
+    expect(coordinator.conversations[0]).toMatchObject({ leadId: 'a1', agentIds: ['a1'] })
+  })
+})
+
+describe('what a removal keeps', () => {
+  const removal = (target: Agent, patch: Partial<SuperTabState> = {}) => {
+    const state = restoring({ agents: [target], conversations: [removedGroup({ agentIds: [target.id] })], removedSessions: [], ...patch })
+    removeClosedAgents(state, [target], AT)
+    return state
+  }
+
+  it('keeps no pending switch or alert of the session it was', () => {
+    const kept = removal(removedAgent({ switchRequest: { id: 's' }, switchLanded: { id: 's', requestedBy: 'x' }, alerting: ['prompt'] } as unknown as Partial<Agent>)).removedSessions![0]!.agent
+    expect(kept).not.toHaveProperty('switchRequest')
+    expect(kept).not.toHaveProperty('switchLanded')
+    expect(kept).not.toHaveProperty('alerting')
+  })
+
+  it('a later removal that keeps no record takes the older one with it', () => {
+    const state = removal(removedAgent({ confidential: true }), { removedSessions: [record()] })
+    expect(state.removedSessions ?? []).toEqual([])
+  })
+
+  it('keeps at most REMOVED_KEPT for a machine, the oldest going first, and leaves another machine\'s', () => {
+    const old = Array.from({ length: REMOVED_KEPT }, (_, i) => record({ harnessId: `h-${i}`, removedAt: AT - 1000 + i, agent: removedAgent({ id: `x-${i}`, harnessId: `h-${i}` }) }))
+    const other = record({ machineId: 'other-mac', harnessId: 'o' })
+    const left = removal(removedAgent(), { removedSessions: [...old, other] }).removedSessions!
+    expect(left.filter(r => r.machineId === 'mac')).toHaveLength(REMOVED_KEPT)
+    expect(left.some(r => r.harnessId === 'h-0')).toBe(false)
+    expect(left.some(r => r.harnessId === 'h1')).toBe(true)
+    expect(left).toContainEqual(other)
   })
 })

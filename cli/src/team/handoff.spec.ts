@@ -1,3 +1,4 @@
+import { signInOf } from '../lib/authSession.js'
 import { chmodSync, existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -173,9 +174,18 @@ describe('redeemTeamHandoff', () => {
 })
 
 describe('team session and revoke', () => {
+  // A lookup checks this before it writes a machine id. Adopted, so the device key log treats a Team sign-in as it always has:
+  // it gets an adopted epoch at its first read today, and an adopted one can never start the log over for another account.
+  it('gives each team sign-in its own adopted epoch', () => {
+    const one = teamSession({ token: 'hna_t' }, 'id', 'stag', 1_000), two = teamSession({ token: 'hna_t' }, 'id', 'stag', 1_000)
+    expect(one.signInEpoch).toBeTruthy()
+    expect(one.signInEpoch).not.toBe(two.signInEpoch)
+    expect(signInOf(one.signInEpoch)).toMatchObject({ adopted: true, at: 1_000 })
+  })
+
   it('marks the stored session as a team one, keeping what it is given', () => {
     expect(teamSession({ token: 'hna_t', refreshToken: 'hnr_r', expiresIn: 10 }, 'id', 'stag', 1_000, { machineId: 'm' })).toEqual({
-      version: 1, accessToken: 'hna_t', refreshToken: 'hnr_r', expiresAt: 11_000, autonomousEnv: 'stag', computerId: 'id', machineId: 'm', kind: 'team', updatedAt: 1_000,
+      version: 1, accessToken: 'hna_t', refreshToken: 'hnr_r', expiresAt: 11_000, autonomousEnv: 'stag', computerId: 'id', machineId: 'm', signInEpoch: expect.any(String), kind: 'team', updatedAt: 1_000,
     })
     expect(teamSession({ token: 'hna_t', autonomousEnv: 'prod' }, 'id', 'stag', 1)).toMatchObject({ autonomousEnv: 'prod', kind: 'team' })
   })

@@ -6,7 +6,6 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   LoopbackClient, LoopbackError, handoffTerminal, openRemoteTerminal, orderForPicker, pickMachine, remoteCommand, remoteFailureLine,
   type LoopbackSocket, type RemoteCommandDeps, type RemoteMachineChoice,
-  loopbackUrl,
 } from './remoteCommand.js'
 
 const machines: RemoteMachineChoice[] = [
@@ -171,7 +170,7 @@ describe('the loopback calls', () => {
 
   it('a daemon that never answers is a TIMEOUT, not a hang', async () => {
     const silent = new FakeDaemon(() => {})
-    const client = new LoopbackClient(loopbackUrl(18473), silent.connect)
+    const client = new LoopbackClient(18473, silent.connect)
     await expect(client.select('box-1', 30)).rejects.toMatchObject({ code: 'TIMEOUT' })
     client.close()
   })

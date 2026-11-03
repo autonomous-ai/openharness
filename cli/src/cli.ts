@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import './lib/connectWait.js'
 import './config/startHome.js'
 import './config/loadEnv.js'
 import { runDevicesCommand } from './devices/client.js'
@@ -50,7 +51,7 @@ import { infoBlockFooter } from './lib/infoBlockFooter.js'
 import { flashCommand } from './lib/flash.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
 import { ancestorsOnce, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
-import { AUTH_DIR, AuthSessionError, AuthSessionManager, harnessSessionRequest, knownSsoClientId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
+import { AUTH_DIR, AuthSessionError, AuthSessionManager, harnessSessionRequest, knownSsoClientId, recordMachineId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
 import { revokeHarnessRefresh } from './team/handoff.js'
 import { TEAM_RELAY_GRANT_FILE } from './team/relay.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
@@ -72,7 +73,6 @@ import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { machineChoices, newCommand, type MachineRow, type NewMachine } from './lib/newCommand.js'
 import { gridSetupCommand } from './lib/gridSetupCommand.js'
-import { localCredentialHeaders } from './lib/localCredential.js'
 import { WebSocket as NewCommandSocket } from 'ws'
 import { describeMasterStatus, readStatusFile } from './harnessd/master.js'
 import { namedNode } from './harnessd/processName.js'
@@ -218,6 +218,14 @@ Machine:
   harness flash [flags]        re-flash a plugged-in circle device over USB. Flags go straight to the
                                flasher: --detect-only, --port, --version, --yes, --erase-nvs
 
+Team account (the separate "harnessteam" user that runs Swarm work on this computer):
+  harness team setup           make the account, its daemon and its engines, so teammates' agents cannot read
+                               your files; run again to repair (--sign-in-again: a new sign-in)
+  harness team status          whether it exists and runs, its sign-in, privacy check and engines
+  harness team on | off        a computer used only for agents runs Swarm work only (on), or signs back in as
+                               your own computer (off)
+  harness team remove          delete the account, its home folder and its daemon
+
 Grid (the fleet of AI engines the \`grid\` CLI serves — needs \`grid\` on PATH):
   harness grid login           sign in to your grid reusing THIS computer's Autonomous account —
                                no second browser, no second approval
@@ -320,8 +328,8 @@ async function resolveComputerMachine(signal?: AbortSignal): Promise<AuthSession
   if (!machineId) throw new Error('Backend did not return a machine id for this computer')
   // Refresh can atomically replace the session while this request is in flight. Always merge the
   // machine id into the newest file, under the lock, so a stale caller never rolls its rotated refresh
-  // token back nor writes over a signed-out mark.
-  const next = await updateAuthSession((latest) => latest.machineId === machineId ? null : { ...latest, machineId, updatedAt: Date.now() })
+  // token back nor writes over a signed-out mark; and only into the sign-in it was asked for.
+  const next = await recordMachineId(machineId, current.signInEpoch)
   if (!next) throw new Error('SSO session disappeared while resolving this computer')
   return next
 }
@@ -2955,7 +2963,7 @@ switch (cmd) {
         port: daemonPort(),
         localMachineId: wantedDaemonIdentity(),
         daemonRunning: isDaemonRunning, unreachable: () => daemonUnreachableText(),
-        connect: (url) => new NewCommandSocket(url, { headers: localCredentialHeaders(env.ADAPTER_DATA_DIR) }),
+        connect: (url, headers) => new NewCommandSocket(url, { headers }),
         output: (line) => console.log(line),
         error: (line) => console.error(line),
       }).then((code) => { process.exitCode = code }).catch(onError)
@@ -2990,7 +2998,7 @@ switch (cmd) {
       localMachineId: wantedDaemonIdentity(),
       daemonRunning: isDaemonRunning, unreachable: () => daemonUnreachableText(),
       listMachines: usableMachines,
-      connect: (url) => new NewCommandSocket(url, { headers: localCredentialHeaders(env.ADAPTER_DATA_DIR) }),
+      connect: (url, headers) => new NewCommandSocket(url, { headers }),
       output: (line) => console.log(line),
       error: (line) => console.error(line),
       origin: () => agentOrigin(),

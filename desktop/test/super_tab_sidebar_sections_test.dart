@@ -63,9 +63,10 @@ void main() {
       List<String> body(String title) {
         final all = sections();
         final i = all.indexWhere((s) => s.title == title);
+        // Manage stands at the foot, under the sections.
         final end = i + 1 < all.length
             ? all[i + 1].top
-            : tester.getBottomLeft(sidebar).dy;
+            : tester.getTopLeft(find.byKey(const ValueKey('super-manage'))).dy;
         return [
           for (final element
               in find
@@ -79,10 +80,7 @@ void main() {
 
       final titles = [for (final s in sections()) s.title];
       // Not a vacuous walk: the sections people asked about are all here.
-      expect(
-        titles,
-        containsAllInOrder(['Projects', 'Buddies', 'Machines', 'Models']),
-      );
+      expect(titles, ['Projects', 'Buddies']);
       for (final title in titles) {
         final heading = find.descendant(
           of: sidebar,

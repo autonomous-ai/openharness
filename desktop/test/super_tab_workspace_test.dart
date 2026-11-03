@@ -90,9 +90,9 @@ void main() {
           'configuration': {'engine': 'claude'},
         },
       ];
-      (f.connection.server.state['conversations'] as List)[0]['agentIds'] = [
-        'lead-agent',
-      ];
+      (f.connection.server.state['conversations'] as List)[0]
+        ..['agentIds'] = ['lead-agent']
+        ..['leadId'] = 'lead-agent';
       f.app.machineStates['m']!.agents = [Agent.fromJson(f.connection.native!)];
       final c = await f.app.superTabs.open(tabId);
       await c.refresh();
@@ -167,9 +167,9 @@ void main() {
         'configuration': {'engine': 'codex'},
       };
       f.connection.server.state['agents'] = [member];
-      (f.connection.server.state['conversations'] as List)[0]['agentIds'] = [
-        'stable-member',
-      ];
+      (f.connection.server.state['conversations'] as List)[0]
+        ..['agentIds'] = ['stable-member']
+        ..['leadId'] = 'stable-member';
       f.app.machineStates['m']!.agents = const [
         Agent(
           id: 'native-original',
@@ -249,7 +249,9 @@ void main() {
           },
       ];
       (state['conversations'] as List)[1]['agentIds'] = ['a', 'b', 'c', 'd'];
-      (state['conversations'] as List)[0]['agentIds'] = ['b'];
+      (state['conversations'] as List)[0]
+        ..['agentIds'] = ['b']
+        ..['leadId'] = 'b';
       f.app.machineStates['m']!.agents = [
         for (final id in ['a', 'b', 'c', 'd'])
           Agent.fromJson({
@@ -514,7 +516,9 @@ void main() {
             'configuration': {'engine': 'codex'},
           },
       ];
-      (state['conversations'] as List)[0]['agentIds'] = ['a'];
+      (state['conversations'] as List)[0]
+        ..['agentIds'] = ['a']
+        ..['leadId'] = 'a';
       (state['conversations'] as List)[1]['agentIds'] = ['b'];
       f.app.machineStates['m']!.agents = [
         for (final id in ['a', 'b'])
@@ -625,7 +629,9 @@ void main() {
           'configuration': {'engine': 'codex'},
         },
       ];
-      (state['conversations'] as List)[0]['agentIds'] = ['a'];
+      (state['conversations'] as List)[0]
+        ..['agentIds'] = ['a']
+        ..['leadId'] = 'a';
       f.app.machineStates['m']!.agents = [
         Agent.fromJson({'id': 'native-a', 'name': 'Lead', 'engine': 'codex'}),
       ];

@@ -43,6 +43,10 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
       _saving = false,
       _peopleExpanded = false,
       _copied = false;
+
+  /// With `domain`: the owner's own domain rather than a typed one, and
+  /// whether people there are added automatically.
+  bool _own = false, _autoJoin = false;
   String? _sharingError, _emailError;
   Map<String, dynamic>? _settings, _pending;
   Timer? _copyFeedback;
@@ -51,23 +55,42 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
   bool get _current => mounted && !c.accessRevoked && c.isOwner;
   bool get _busy =>
       _saving || c.saving || c.hasPendingAction || _pending != null;
+
+  /// The owner's own email domain, as the server read it; null from an older
+  /// server, which takes only a typed domain and knows no automatic joins.
+  String? get _ownDomain => switch (_settings?['ownDomain']) {
+    final String domain when domain.isNotEmpty => domain,
+    _ => null,
+  };
+
+  /// The owner's domain is one anyone can make an address at (gmail.com):
+  /// nobody is let in by it.
+  bool get _ownPublic => _settings?['ownDomainPublic'] == true;
+  bool get _ownUsable => _ownDomain != null && !_ownPublic;
+  String get _typedDomain => _domain.text.trim().toLowerCase();
   Map<String, dynamic> get _access => {
     'mode': _mode,
     'role': _role,
-    if (_mode == 'domain') 'domain': _domain.text.trim().toLowerCase(),
+    if (_mode == 'domain') 'domain': _own ? _ownDomain : _typedDomain,
+    // Sent every time, so turning it off is never left to the saved value.
+    if (_mode == 'domain' && _ownDomain != null) 'autoJoin': _own && _autoJoin,
   };
   bool get _changed {
     if (_settings == null) return false;
     final saved = superTabMap(_settings!['access']);
     return _mode != saved['mode'] ||
         _role != saved['role'] ||
-        (_mode == 'domain' && _access['domain'] != saved['domain']);
+        (_mode == 'domain' && _access['domain'] != saved['domain']) ||
+        (_mode == 'domain' &&
+            _ownDomain != null &&
+            _access['autoJoin'] != (saved['autoJoin'] == true));
   }
 
   bool get _domainValid =>
       _mode != 'domain' ||
+      _own ||
       RegExp(r'^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$')
-          .hasMatch(_domain.text.trim().toLowerCase());
+          .hasMatch(_typedDomain);
   String? get _joinUrl {
     final value = _settings?['joinUrl'];
     if (value is! String) return null;
@@ -111,7 +134,10 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
     _settings = reply;
     _mode = access['mode'] as String;
     _role = access['role'] as String;
-    _domain.text = access['domain'] as String? ?? '';
+    final domain = access['domain'] as String? ?? '';
+    _own = _mode == 'domain' && _ownUsable && domain == _ownDomain;
+    _autoJoin = _own && access['autoJoin'] == true;
+    _domain.text = _own ? '' : domain;
     _copied = false;
   }
 
@@ -245,8 +271,9 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
         requireWrite: false,
         child: AlertDialog(
           title: Text(leaving ? 'Leave Swarm?' : 'Remove ${person.email}?'),
-          content: const Text(
+          content: superTabLeaveWords(
             'Swarm access and agent contributions will be withdrawn. Running harnesses stay on their machines.',
+            autoJoin: leaving && c.snapshot?.autoJoin == true,
           ),
           actions: [
             TextButton(
@@ -382,6 +409,12 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
                           : 'Can collaborate',
                       style: DesktopChrome.metadata(),
                     ),
+                    if (person.joinedVia == 'domain' &&
+                        person.email.contains('@'))
+                      Text(
+                        'Joined with @${person.email.split('@').last}',
+                        style: DesktopChrome.metadata(),
+                      ),
                   ],
                 ),
               ),
@@ -439,6 +472,69 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
     ],
   );
 
+  /// Under Invited people: a share the server turned off, and Everyone at a
+  /// public domain shown unavailable.
+  List<Widget> _invitedNotes() => [
+    if (_settings?['turnedOffDomain'] case final String domain) ...[
+      const SizedBox(height: 8),
+      Text(
+        'Sharing with @$domain was turned off: anyone can make an address there.',
+        style: DesktopChrome.metadata(),
+      ),
+    ],
+    if (_ownPublic && _ownDomain != null) ...[
+      const SizedBox(height: 8),
+      Text(
+        'Everyone at @$_ownDomain',
+        style: DesktopChrome.control(color: DesktopChrome.muted),
+      ),
+      Text(
+        'Not available for @$_ownDomain: anyone can make an address there. Invite people or share a link.',
+        style: DesktopChrome.metadata(),
+      ),
+    ],
+  ];
+
+  /// Add them automatically: only at the owner's own domain.
+  List<Widget> _autoJoinChoice() {
+    final own = _ownDomain!, typed = _typedDomain;
+    return [
+      const SizedBox(height: 8),
+      CheckboxListTile(
+        key: const Key('swarm-sharing-auto-join'),
+        dense: true,
+        contentPadding: EdgeInsets.zero,
+        controlAffinity: ListTileControlAffinity.leading,
+        title: Text(
+          'Add them automatically',
+          style: DesktopChrome.control(
+            color: _own ? null : DesktopChrome.muted,
+          ),
+        ),
+        subtitle: _own
+            ? Text(
+                'Anyone who signs in with an @$own email joins this Swarm. You can remove anyone.',
+                style: DesktopChrome.metadata(),
+              )
+            : typed.isEmpty
+            ? null
+            : Text(
+                'Automatic joins work only for @$own, your own domain. People at $typed join with the link.',
+                style: DesktopChrome.metadata(),
+              ),
+        value: _own && _autoJoin,
+        onChanged: !_own || _busy
+            ? null
+            : (value) => setState(() => _autoJoin = value == true),
+      ),
+      if (_own && _autoJoin && _settings?['autoJoinFull'] == true)
+        Text(
+          'Automatic joins stopped: this Swarm has 200 people.',
+          style: DesktopChrome.metadata(),
+        ),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: c,
@@ -488,30 +584,65 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
             if (_loading)
               const LinearProgressIndicator()
             else if (_settings != null) ...[
-              _select(
-                key: const Key('swarm-general-access'),
-                value: _mode,
-                label: 'General access',
-                options: const [
-                  SelectOption(value: 'invited', label: 'Invited people'),
-                  SelectOption(value: 'domain', label: 'Anyone at a domain'),
-                  SelectOption(value: 'link', label: 'Anyone with the link'),
-                ],
-                onChanged: (value) => setState(() {
-                  _mode = value;
-                  _copied = false;
-                  if (value == 'domain' && _domain.text.isEmpty) {
-                    final email = c.snapshot!.people
-                        .where((p) => p.id == c.accountId)
-                        .firstOrNull
-                        ?.email;
-                    if (email != null && email.contains('@')) {
-                      _domain.text = email.split('@').last;
+              if (_ownDomain case final own?)
+                _select(
+                  key: const Key('swarm-general-access'),
+                  value: _mode != 'domain'
+                      ? _mode
+                      : _own
+                      ? 'own'
+                      : 'other',
+                  label: 'General access',
+                  options: [
+                    const SelectOption(
+                      value: 'invited',
+                      label: 'Invited people',
+                    ),
+                    // No row that does nothing: at a public domain the
+                    // choice is shown unavailable below instead.
+                    if (!_ownPublic)
+                      SelectOption(value: 'own', label: 'Everyone at @$own'),
+                    const SelectOption(value: 'other', label: 'Other domain…'),
+                    const SelectOption(
+                      value: 'link',
+                      label: 'Anyone with the link',
+                    ),
+                  ],
+                  onChanged: (value) => setState(() {
+                    _mode = const {'own', 'other'}.contains(value)
+                        ? 'domain'
+                        : value;
+                    _own = value == 'own';
+                    if (!_own) _autoJoin = false;
+                    _copied = false;
+                  }),
+                )
+              else
+                _select(
+                  key: const Key('swarm-general-access'),
+                  value: _mode,
+                  label: 'General access',
+                  options: const [
+                    SelectOption(value: 'invited', label: 'Invited people'),
+                    SelectOption(value: 'domain', label: 'Anyone at a domain'),
+                    SelectOption(value: 'link', label: 'Anyone with the link'),
+                  ],
+                  onChanged: (value) => setState(() {
+                    _mode = value;
+                    _copied = false;
+                    if (value == 'domain' && _domain.text.isEmpty) {
+                      final email = c.snapshot!.people
+                          .where((p) => p.id == c.accountId)
+                          .firstOrNull
+                          ?.email;
+                      if (email != null && email.contains('@')) {
+                        _domain.text = email.split('@').last;
+                      }
                     }
-                  }
-                }),
-              ),
-              if (_mode == 'domain') ...[
+                  }),
+                ),
+              if (_mode == 'invited') ..._invitedNotes(),
+              if (_mode == 'domain' && !_own) ...[
                 const SizedBox(height: 8),
                 TextField(
                   key: const Key('swarm-sharing-domain'),
@@ -534,6 +665,7 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
                     onChanged: (value) => setState(() => _role = value),
                   ),
                 ),
+                if (_mode == 'domain' && _ownUsable) ..._autoJoinChoice(),
                 const SizedBox(height: 8),
                 Text(
                   'Private projects stay private.',
@@ -633,3 +765,19 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
     ),
   );
 }
+
+/// A leave or remove confirmation's words. Leaving a Swarm that adds people
+/// at its owner's domain automatically also says the person is not added back.
+Widget superTabLeaveWords(String words, {required bool autoJoin}) => autoJoin
+    ? Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(words),
+          const SizedBox(height: 8),
+          const Text(
+            "You won't be added back automatically. Ask the owner to invite you if you want to return.",
+          ),
+        ],
+      )
+    : Text(words);

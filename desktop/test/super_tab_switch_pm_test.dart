@@ -5,6 +5,7 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
+import 'support/super_tab_members.dart';
 
 /// Switch PM (spec 2026-11-02-pm-switch-engine-account-design.md, section 8):
 /// who is offered it, what its dialog lists and what Confirm sends.
@@ -108,9 +109,11 @@ void main() {
   Future<void> openMenu(WidgetTester tester) async {
     await tester.tap(find.byTooltip('Project options'));
     await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(MenuItemButton, 'Project settings…'));
+    await tester.pumpAndSettle();
   }
 
-  final item = find.widgetWithText(MenuItemButton, 'Switch PM…');
+  final item = find.text('Switch PM…');
 
   Future<void> finish(WidgetTester tester) async {
     await tester.pump(const Duration(milliseconds: 250));
@@ -299,7 +302,9 @@ void main() {
       },
     );
     await mount(tester, server, 'owner');
-    expect(find.textContaining('Switching…'), findsWidgets);
+    await openSuperTabMembers(tester);
+    // The row's state word (Quiet Swarm).
+    expect(find.text('switching…'), findsWidgets);
     await finish(tester);
   });
 }

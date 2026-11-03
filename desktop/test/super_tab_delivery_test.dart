@@ -182,8 +182,8 @@ void main() {
         }
 
         await shot('conversation');
-        if (find.byTooltip('Members and machines').evaluate().isNotEmpty) {
-          await tester.tap(find.byTooltip('Members and machines'));
+        if (find.byTooltip('Members').evaluate().isNotEmpty) {
+          await tester.tap(find.byTooltip('Members'));
           await tester.pumpAndSettle();
         }
         await tester.tap(find.byTooltip('Invite people'));
@@ -205,7 +205,7 @@ void main() {
         await shot('people');
         await tester.tap(find.byTooltip('Close'));
         await tester.pumpAndSettle();
-        if (find.byTooltip('Members and machines').evaluate().isNotEmpty) {
+        if (find.byTooltip('Members').evaluate().isNotEmpty) {
           await tester.sendKeyEvent(LogicalKeyboardKey.escape);
           await tester.pumpAndSettle();
         }
