@@ -1,10 +1,14 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/import_agent.dart';
+import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/roster.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -801,5 +805,261 @@ void main() {
       expect(f.server.posts, isEmpty);
       expect(f.server.uploads, isEmpty);
     });
+  });
+
+  group('the entry and the dialog', () {
+    late Directory folder;
+    setUp(() async {
+      folder = await Directory.systemTemp.createTemp('import-agent-');
+      addTearDown(() => folder.delete(recursive: true));
+    });
+    final mac = TargetPlatformVariant.only(TargetPlatform.macOS);
+
+    /// A handoff of about 2 KB and a transcript of about 5 KB.
+    final record = '# Handoff\n${'r' * 2038}';
+    final transcript = '## Turn 1\nFix the login.\n${'t' * 5095}';
+
+    Future<ImportFixture> roster(
+      WidgetTester tester, {
+      void Function(SuperTabConversation group)? onAddAgent,
+      Brightness brightness = Brightness.light,
+    }) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final f = ImportFixture();
+      addTearDown(f.dispose);
+      await tester.runAsync(f.start);
+      f.agents = [
+        _agent('fix', engine: 'codex', cwd: folder.path),
+        _agent('docs', cwd: folder.path, updatedAt: '2026-11-03T07:00:00Z'),
+      ];
+      f.daemon.writes(folder, record: record, transcript: transcript);
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: grid.buildAppTheme(brightness: brightness),
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.topRight,
+              child: SizedBox(
+                width: 280,
+                child: SuperTabRoster(
+                  controller: f.c,
+                  app: f.app,
+                  onInvite: () {},
+                  onAddAgent: onAddAgent ?? (_) {},
+                  onAnswer: (_) {},
+                  onOpenAgent: (_) {},
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      return f;
+    }
+
+    /// Lets this Mac's files be read, then draws what follows, until [done].
+    Future<void> settle(WidgetTester tester, bool Function() done) async {
+      for (var i = 0; i < 100 && !done(); i++) {
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+      }
+      await tester.pumpAndSettle();
+      expect(done(), isTrue);
+    }
+
+    Future<void> openImport(WidgetTester tester) async {
+      await tester.tap(find.byTooltip('Add agent'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Import an agent running on this Mac'));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> preview(WidgetTester tester, ImportFixture f) async {
+      await openImport(tester);
+      await tester.tap(find.textContaining('Codex · fix-fix'));
+      await settle(
+        tester,
+        () => find
+            .text("What openharness's members will read")
+            .evaluate()
+            .isNotEmpty,
+      );
+    }
+
+    testWidgets('the + offers Import first, then Start a new agent, which '
+        'opens today\'s picker', (tester) async {
+      SuperTabConversation? added;
+      await roster(tester, onAddAgent: (group) => added = group);
+      await tester.tap(find.byTooltip('Add agent'));
+      await tester.pumpAndSettle();
+      final import = find.text('Import an agent running on this Mac');
+      final start = find.text('Start a new agent');
+      expect(
+        tester.getTopLeft(import).dy,
+        lessThan(tester.getTopLeft(start).dy),
+      );
+      await tester.tap(start);
+      await tester.pumpAndSettle();
+      expect(added?.id, 'lead');
+      expect(find.text('Import an agent running on this Mac'), findsNothing);
+    }, variant: mac);
+
+    testWidgets('elsewhere the + opens today\'s picker at once', (
+      tester,
+    ) async {
+      SuperTabConversation? added;
+      await roster(tester, onAddAgent: (group) => added = group);
+      await tester.tap(find.byTooltip('Add agent'));
+      await tester.pumpAndSettle();
+      expect(added?.id, 'lead');
+      expect(find.text('Import an agent running on this Mac'), findsNothing);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+    testWidgets('Import lists this Mac\'s agents and what is not offered', (
+      tester,
+    ) async {
+      await roster(tester);
+      await openImport(tester);
+      expect(find.text('Import an agent into openharness'), findsOneWidget);
+      expect(find.text('Codex · fix-fix · ${folder.path}'), findsOneWidget);
+      expect(
+        find.text('Claude Code · fix-docs · ${folder.path}'),
+        findsOneWidget,
+      );
+      expect(
+        find.text(
+          'Not offered: agents already in a Swarm, Buddies and '
+          'Swarm-started agents.',
+        ),
+        findsOneWidget,
+      );
+    }, variant: mac);
+
+    testWidgets('the preview shows both files whole, with their sizes, and '
+        'what is shared; Cancel sends nothing', (tester) async {
+      final f = await roster(tester);
+      await preview(tester, f);
+      expect(find.text('Handoff (redacted)'), findsOneWidget);
+      expect(find.text('Conversation and tool calls'), findsOneWidget);
+      expect(find.text('2 KB'), findsOneWidget);
+      expect(find.text('5 KB'), findsOneWidget);
+      expect(
+        find.text(
+          'Secrets (keys, tokens, passwords in URLs) are removed. Tool '
+          'output is never included.',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.text(
+          'The agent on this Mac keeps running; nothing about it changes.',
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Full text').first);
+      await tester.pumpAndSettle();
+      expect(find.text('# Handoff'), findsOneWidget);
+      expect(find.text('r' * 2038), findsOneWidget);
+      await tester.tap(find.text('Full text'));
+      await tester.pumpAndSettle();
+      expect(find.text('Fix the login.'), findsOneWidget);
+
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(find.text('Import an agent into openharness'), findsNothing);
+      expect(f.server.posts, isEmpty);
+      expect(f.server.uploads, isEmpty);
+    }, variant: mac);
+
+    testWidgets('Import starts the new agent and opens its conversation', (
+      tester,
+    ) async {
+      final f = await roster(tester);
+      await preview(tester, f);
+      await tester.tap(find.widgetWithText(FilledButton, 'Import'));
+      await settle(
+        tester,
+        () => find.text('Import an agent into openharness').evaluate().isEmpty,
+      );
+      final sent = f.server.commands.last.$2;
+      expect(sent['type'], 'message.send');
+      expect(sent['recipientIds'], ['agent-new']);
+      expect(f.c.selectedId, sent['conversationId']);
+      expect(
+        f.c.snapshot!.conversation(f.c.selectedId)!.title,
+        "Continue fix-fix's work",
+      );
+    }, variant: mac);
+
+    testWidgets('a failed step says which, keeps what was done in view, and '
+        'Start again goes on from there', (tester) async {
+      final f = await roster(tester);
+      await preview(tester, f);
+      f.server.unknownCommand = (command) => command['type'] == 'agent.start';
+      await tester.tap(find.widgetWithText(FilledButton, 'Import'));
+      await settle(
+        tester,
+        () => find.text('Start again').evaluate().isNotEmpty,
+      );
+      for (final done in ['Opening the conversation', 'Sharing the files']) {
+        expect(
+          find.descendant(
+            of: find
+                .ancestor(of: find.text(done), matching: find.byType(Row))
+                .first,
+            matching: find.bySemanticsLabel('Done'),
+          ),
+          findsOneWidget,
+          reason: done,
+        );
+      }
+      expect(find.text('Starting the agent'), findsOneWidget);
+      expect(find.text('Invalid request.'), findsOneWidget);
+      f.server.unknownCommand = null;
+      await tester.tap(find.text('Start again'));
+      await settle(
+        tester,
+        () => find.text('Import an agent into openharness').evaluate().isEmpty,
+      );
+      expect(
+        [for (final (_, c) in f.server.commands) c['type']],
+        ['conversation.create', 'agent.start', 'agent.start', 'message.send'],
+      );
+    }, variant: mac);
+
+    testWidgets('a held handoff says why in the picker', (tester) async {
+      final f = await roster(tester);
+      f.daemon.handoff = (_) => {'error': 'IDENTITY_UNAVAILABLE', 'held': true};
+      await openImport(tester);
+      await tester.tap(find.textContaining('Codex · fix-fix'));
+      await settle(
+        tester,
+        () => find.textContaining('not confirmed yet').evaluate().isNotEmpty,
+      );
+      expect(find.text("What openharness's members will read"), findsNothing);
+    }, variant: mac);
+
+    testWidgets('no Team account for this Mac says how to set one up', (
+      tester,
+    ) async {
+      final f = await roster(tester);
+      f.app.teamAccountHereForTest = true;
+      f.server.state['machines'] = <dynamic>[f.macPool];
+      await tester.runAsync(f.c.refresh);
+      await tester.pumpAndSettle();
+      await openImport(tester);
+      expect(find.text(kImportNeedsTeamAccount), findsOneWidget);
+      expect(find.textContaining('fix-fix'), findsNothing);
+      await tester.tap(find.text('Set up Harness Team'));
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('Set up Harness Team on this'),
+        findsOneWidget,
+      );
+      expect(f.server.posts, isEmpty);
+    }, variant: mac);
   });
 }
