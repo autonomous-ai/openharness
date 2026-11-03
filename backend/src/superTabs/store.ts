@@ -54,7 +54,8 @@ import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './part
 import { autoJoinSwarms, memberSwarms } from './swarmRows.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts, ms } from './parts/light.js'
-import { endSteps, stepEndedRows, stepsOf } from './steps.js'
+import { endSteps, ownerOf, stepEndedRows, stepsOf } from './steps.js'
+import { pullRequestEvents, type PullRequestWatch } from './pullRequestEvents.js'
 import { guardedWrite, partId } from './parts/write.js'
 import { retryable } from './retry.js'
 import { touchesFor } from './parts/touches.js'
@@ -3855,6 +3856,39 @@ export class SuperTabStore {
    *  needs `reviewOf`, the group the pass read as its task, which this write reads again: it stays open unless that task is
    *  done or cancelled and that task's pull requests are settled too. A review nobody is reviewing closes the same way
    *  (tidy.ts reviewClosable). True when it archived. */
+  /**
+   * What GitHub says of [watch], a pull request linked to the task [groupId] (pullRequestEvents.ts): each event its Engineer
+   * was not told yet goes to it as a message in the task, and every event is recorded there, in one write, so a retry or a
+   * second pass posts none twice. A task with no Engineer in the Swarm records them and posts nothing. A step, an archived or
+   * a finished task, or a pull request it no longer links, is left alone. The messages posted.
+   */
+  async pullRequestSeen(tabId: string, groupId: string, watch: PullRequestWatch, botLogin: string | null): Promise<number> {
+    return transaction(this.db, async tx => {
+      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+      if (!row || row.deletedAt) return 0
+      const loaded = await loadRow(tx, requireParts(row), { groupIds: [groupId] }), state = cloneData(loaded.state)
+      const group = state.conversations.find(c => c.id === groupId)
+      // A task its agent left (no assignment) records what happens, so its next Engineer hears only what is new.
+      if (!group || group.archived || group.reviewOf || !group.pullRequestUrls?.includes(watch.url)
+        || ['done', 'cancelled'].includes(group.assignment?.status ?? '')) return 0
+      const now = this.now(), seen = group.pullRequestEvents?.[watch.url] ?? []
+      const { events, keys } = pullRequestEvents(watch, seen, botLogin, now)
+      if (keys.length === seen.length && keys.every((key, i) => key === seen[i])) return 0
+      group.pullRequestEvents = { ...group.pullRequestEvents, [watch.url]: keys }
+      const ownerId = ownerOf(state, group), owner = ownerId ? state.agents.find(a => a.id === ownerId) : undefined
+      // Written as its project's Lead, as the Swarm's own lines are (tidy.ts archiveLine); as the Engineer itself without one.
+      const leadId = state.conversations.find(c => c.id === groupProject(state, group).leadConversationId)?.leadId
+      const by = state.agents.find(a => a.id === leadId) ?? owner
+      const rows: MessageDraft[] = owner && by ? events.map(event => ({ id: stableId('pull-request-event', group.id, watch.url, event.key), conversationId: group.id,
+        author: { kind: 'agent', id: by.id, name: by.name, displayName: agentDisplayName(state.agents, by.id), membershipGeneration: by.membershipGeneration },
+        text: event.text, replyTo: null, recipients: [owner.id], source: { kind: 'system' } })) : []
+      const sequences = numberMessages(state, rows, now)
+      await this.save(tx, loaded, state, clock.next())
+      await this.writeMessages(tx, tabId, state, rows, sequences)
+      return rows.length
+    })
+  }
+
   async archiveFinished(tabId: string, groupId: string, checked: Readonly<Record<string, 'merged' | 'closed'>>, reviewOf?: string): Promise<boolean> {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })

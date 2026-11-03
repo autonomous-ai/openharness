@@ -329,6 +329,8 @@ export interface Conversation {
   lastMainSequence?: number
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
+  /** What its Engineer was already told of each linked pull request, newest first (pullRequestEvents.ts): absent until read. */
+  pullRequestEvents?: Record<string, string[]>
   /** Its messages drawn as live cards: its task and each linked pull request (cards.ts). Absent until its first card. */
   cards?: import('./cards.js').GroupCards
   /** The last sequence given to a message here. Each conversation numbers its own messages (store by parts). */

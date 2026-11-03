@@ -2,6 +2,11 @@
 // CI failed or passed, a review or comment, a merge conflict, each once, without waiting for the PM's 30-minute sync. No
 // webhook reaches the backend, so the singleton worker reads them every minute with the Harness GitHub App
 // (docs/plans/2026-11-03-pr-events-to-engineer-plan.md).
+import type { PrismaClient } from '@prisma/client'
+import { PULL_WATCH_PERMISSIONS, type GitHubApp } from '../github/app.js'
+import { githubRepository, type GitHubRepository } from '../github/repository.js'
+import type { SuperTabStore } from './store.js'
+import { logger } from '../utils/logger.js'
 
 /** What GitHub says of one pull request, as the watch reads it (github/app.ts watchPullRequest). */
 export interface PullRequestWatch {
@@ -88,3 +93,87 @@ export function pullRequestEvents(watch: PullRequestWatch, seen: readonly string
   return { events, keys: mark ? [mark, ...kept] : kept }
 }
 
+/** What a pass asks GitHub: a pull request's watch (null: it cannot say), the app's own login, and `done` once it is over. */
+export interface PullRequestReader { watch(url: string): Promise<PullRequestWatch | null>; botLogin(): Promise<string | null>; done(): Promise<void> }
+
+const PULL = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([1-9][0-9]*)$/
+/** A task quiet this long is not watched: its Engineer is not waiting on its pull request. */
+export const WATCH_QUIET_MS = 7 * 24 * 3_600_000
+
+/** Reads with the Harness GitHub App: one read-only token per repository for the whole pass, revoked when it is done (as the
+ *  archive pass's, archive.ts). A repository the app is not installed on, or any GitHub failure, reads as null. */
+export function appPullRequestWatch(app: GitHubApp): PullRequestReader {
+  const tokens = new Map<string, Promise<string | null>>()
+  const token = (repository: GitHubRepository) => {
+    const key = repository.fullName.toLowerCase()
+    if (!tokens.has(key)) tokens.set(key, (async () => {
+      const installation = await app.installation(repository)
+      return installation === null ? null : (await app.createToken(installation, repository, PULL_WATCH_PERMISSIONS)).token
+    })().catch(() => null))
+    return tokens.get(key)!
+  }
+  return {
+    async watch(url) {
+      const match = PULL.exec(url), repository = match ? githubRepository(`https://github.com/${match[1]}`) : null
+      const granted = repository ? await token(repository) : null
+      return granted ? app.watchPullRequest(repository!, Number(match![2]), granted) : null
+    },
+    botLogin: () => app.botLogin(),
+    async done() {
+      for (const granted of tokens.values()) {
+        const value = await granted
+        if (value) await app.revoke(value).catch(() => {})
+      }
+      tokens.clear()
+    },
+  }
+}
+
+/**
+ * One pass: every open task (not a step) active in the last [WATCH_QUIET_MS] that links a pull request has each open one
+ * read once, and what is new goes to its Engineer (store.ts pullRequestSeen). One group's failure is logged and skips that
+ * group alone. The messages posted.
+ */
+export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabStore, 'pullRequestSeen'>, reader: PullRequestReader, now: number): Promise<number> {
+  try {
+    // On the finished mark's index ([workFinished, archived, lastActivityAt]); only the few fields the pass needs.
+    const rows = await db.swarmGroup.aggregateRaw({ pipeline: [
+      { $match: { workFinished: false, archived: false, deleted: false, kind: null, lastActivityAt: { $gte: { $date: new Date(now - WATCH_QUIET_MS).toISOString() } },
+        'data.reviewOf': { $not: { $type: 'string' } }, 'data.pullRequestUrls.0': { $exists: true } } },
+      { $project: { _id: 0, tabId: 1, key: 1, urls: '$data.pullRequestUrls' } },
+    ] }) as unknown as Array<{ tabId: string; key: string; urls: string[] }>
+    if (!rows.length) return 0
+    const bot = await reader.botLogin()
+    // One read per pull request a pass, however many tasks link it.
+    const reads = new Map<string, Promise<PullRequestWatch | null>>()
+    const watchOf = (url: string) => { if (!reads.has(url)) reads.set(url, reader.watch(url).catch(() => null)); return reads.get(url)! }
+    let posted = 0
+    for (const row of rows) {
+      for (const url of row.urls) {
+        try {
+          const watch = await watchOf(url)
+          if (watch?.state === 'open') posted += await store.pullRequestSeen(row.tabId, row.key, watch, bot)
+        } catch (error) {
+          logger.warn('[swarm-pr-events] group skipped', { tabId: row.tabId, group: row.key, error: error instanceof Error ? error.message : String(error) })
+        }
+      }
+    }
+    return posted
+  } finally { await reader.done() }
+}
+
+/** Runs the pass every minute in the singleton worker, one at a time. */
+export function startPullRequestWatch(db: PrismaClient, store: Pick<SuperTabStore, 'pullRequestSeen'>, reader: () => PullRequestReader, everyMs = 60_000): () => void {
+  let running = false
+  const run = () => {
+    if (running) return
+    running = true
+    void watchPullRequests(db, store, reader(), Date.now()).then(count => { if (count) logger.info('[swarm-pr-events] posted', { count }) })
+      .catch(error => logger.warn('[swarm-pr-events] failed', { error: error instanceof Error ? error.message : String(error) }))
+      .finally(() => { running = false })
+  }
+  run()
+  const timer = setInterval(run, everyMs)
+  timer.unref()
+  return () => clearInterval(timer)
+}
