@@ -348,8 +348,13 @@ void main() {
   });
 
   /// The text style of the one [text] on screen.
-  TextStyle styleOf(WidgetTester tester, String text) =>
-      tester.widget<Text>(find.text(text)).style!;
+  TextStyle styleOf(WidgetTester tester, String text) => tester
+      .widget<Text>(
+        find.byWidgetPredicate(
+          (widget) => widget is Text && widget.data == text,
+        ),
+      )
+      .style!;
 
   /// The padding nearest around [finder].
   EdgeInsetsGeometry paddingAround(WidgetTester tester, Finder finder) => tester
@@ -394,10 +399,10 @@ void main() {
 
     testWidgets('the title and the name are headings of 17; the status under '
         'the name is a caption of 13', (tester) async {
-      // A username of its own: the field holding it is not the name.
+      // A chosen username is the name and also appears in its field.
       await open(tester, extra: {'username': 'pm'});
 
-      for (final text in ['Your profile', 'person-me']) {
+      for (final text in ['Your profile', 'pm']) {
         expect(styleOf(tester, text).fontSize, 17, reason: text);
         expect(styleOf(tester, text).fontWeight, FontWeight.w600, reason: text);
       }

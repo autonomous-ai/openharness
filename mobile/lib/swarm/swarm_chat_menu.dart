@@ -13,6 +13,7 @@ import 'swarm_chat_manage.dart';
 import 'swarm_chat_notify.dart';
 import 'swarm_buddy.dart' show swarmIsOldBuddyChat;
 import 'swarm_reader.dart';
+import 'swarm_work_details_page.dart';
 
 /// The chat menu's Notifications rows (the desktop's chat menu, Slack's
 /// channel notifications): one per [SwarmNotify], the reader's own setting
@@ -191,9 +192,21 @@ class _SwarmChatMenuButtonState extends State<SwarmChatMenuButton> {
     widget.reader,
     widget.chatId,
     onShown: (route) => _sheet = route,
-    // Rename and Archive where the desktop's chat menu has them.
-    actions: () =>
-        swarmChatManageActions(context, widget.reader, widget.chatId),
+    // Work details, Rename and Archive where the desktop's chat menu has
+    // them.
+    actions: () => [
+      if (swarmHasWorkDetails(widget.reader, widget.chatId))
+        PhoneSheetAction(
+          icon: LucideIcons.info300,
+          label: 'Work details',
+          onTap: () => openSwarmWorkDetails(
+            context,
+            reader: widget.reader,
+            chatId: widget.chatId,
+          ),
+        ),
+      ...swarmChatManageActions(context, widget.reader, widget.chatId),
+    ],
   ).whenComplete(() => _sheet = null);
 
   @override

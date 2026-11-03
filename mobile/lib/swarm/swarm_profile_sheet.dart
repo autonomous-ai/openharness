@@ -13,7 +13,6 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
-import 'identity.dart';
 import 'model.dart';
 import 'swarm_face.dart';
 import 'swarm_profile.dart';
@@ -280,7 +279,7 @@ class _SwarmProfileSheetState extends State<SwarmProfileSheet> {
     SuperTabPersonStatus? status,
     SwarmProfile profile,
   ) {
-    final name = superTabPersonName(me.email);
+    final name = me.username;
     final edit = profile.canEdit && !_busy;
     final current = me.avatar;
     final text = _text.text.trim();
@@ -702,7 +701,7 @@ class SwarmPersonSheet extends StatelessWidget {
   Widget _sheet(BuildContext context, SwarmReader reader) {
     final person = reader.snapshot?.person(personId);
     final mine = personId == reader.accountId;
-    final name = person == null ? 'Someone' : superTabPersonName(person.email);
+    final name = person == null ? 'Someone' : person.username;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
