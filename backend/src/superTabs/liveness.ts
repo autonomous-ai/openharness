@@ -12,6 +12,7 @@ import { staleSwitches } from './tidy.js'
 import { ledProject, projectsOf } from './projects.js'
 import { coordinatorNameOf } from './instructions.js'
 import { waitedOn } from './leaderboard/record.js'
+import { isStep, stepsOf } from './steps.js'
 
 // Work never sits with a dead owner (design: "A Swarm that never stops", 2026-10-26). A worker's active assignment is held
 // by a lease that its progress renews. A dead, stalled or limited worker loses it within minutes: the assignment becomes
@@ -84,6 +85,23 @@ export function waitingForReview(assignment: Assignment): boolean {
   if (assignment.status === 'review') return true
   return assignment.status === 'working' && assignment.reviewFoundAt === undefined && !!assignment.result
     && READY_FOR_REVIEW.test(assignment.result) && REVISION.test(assignment.result)
+}
+
+/** A task's Engineer waits on one of its own steps while that step's agent is at work on it (Diego, 2026-11-03, #2323: the
+ *  instructions never ask the Engineer to set review while its Review and Test run, so it lost its task 35 minutes in). A
+ *  step in Ready has handed its verdict over: then it is the Engineer's turn, else the two would wait on each other. */
+export function waitingOnSteps(state: SuperTabState, group: Conversation): boolean {
+  return !isStep(group) && stepsOf(state, group.id).some(step => !step.archived && activeWork(step) && step.assignment!.status !== 'review')
+}
+
+/** [task]'s Engineer waited on its steps, as its record says, and none is at work now: its quiet time runs from now, as
+ *  revisionReady's does, so it has 30 minutes to act on what they found and a hung Engineer is still found. The record it
+ *  writes ends that wait, so this runs once per wait. */
+function stepsEnded(state: SuperTabState, task: Conversation, now: number): void {
+  if (!activeWork(task) || task.assignment!.status !== 'working' || task.liveness?.state !== 'waiting' || task.liveness.why !== 'review') return
+  if (waitingOnSteps(state, task)) return
+  restartQuietTime(task.assignment!, now)
+  recordTaskState(state, task, now)
 }
 
 /** Work that stopped waiting for its review counts its quiet time from now: its agent keeps it QUIET_RUNNING_MS without
@@ -230,7 +248,8 @@ function limitReason(worker: Agent, now: number): string | null {
  *  or undefined when none can. Reports that keep its session running with progress no older can only move it later. */
 export function nextLossAt(state: SuperTabState, machineId: string): number | undefined {
   const ends = workerTasks(state)
-    .filter(({ group, worker, assignment }) => worker.machineId === machineId && !waitingForReview(assignment) && !waitingForRevision(state, group))
+    .filter(({ group, worker, assignment }) => worker.machineId === machineId && !waitingForReview(assignment) && !waitingForRevision(state, group)
+      && !waitingOnSteps(state, group))
     .map(({ group, assignment, worker }) => leaseEnd(group, assignment, reportRenewedAt(state, worker)))
     .filter((end): end is number => end !== undefined)
   return ends.length ? Math.min(...ends) : undefined
@@ -246,7 +265,7 @@ function lostReason(state: SuperTabState, group: Conversation, worker: Agent, as
   // Its host alerts only after ten minutes of retries without an answer (cli superTabs/terminal.ts MODEL_WAIT_MS), so a
   // short burst of failures that recovers never gets here.
   if (worker.alerting?.includes('model')) return 'its model keeps failing'
-  if (waitingForReview(assignment) || waitingForRevision(state, group)) return null
+  if (waitingForReview(assignment) || waitingForRevision(state, group) || waitingOnSteps(state, group)) return null
   const end = leaseEnd(group, assignment, reportRenewedAt(state, worker))
   if (end !== undefined && now > end) {
     const progress = lastProgress(state, worker, assignment)
@@ -287,6 +306,8 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
  *  limit resets (the host types into the same session then, cli superTabs/limitResume.ts). */
 export function loseTasks(state: SuperTabState, now: number, which: (worker: Agent) => boolean = () => true, resumeAt?: string): MessageDraft[] {
   return workerTasks(state).filter(t => which(t.worker)).flatMap(({ group, assignment, worker }) => {
+    // A step that ended with no write to its task, or was lost earlier in this same pass, ends its Engineer's wait first.
+    stepsEnded(state, group, now)
     const reason = lostReason(state, group, worker, assignment, now)
     return reason ? loseTask(state, group, worker, reason, now, resumeAt && reason === limitReason(worker, now) ? resumeAt : undefined) : []
   })
@@ -402,11 +423,14 @@ export function taskLiveness(state: SuperTabState, group: Conversation, now: num
       const asked = assignment.askedOf && state.people.some(p => p.id === assignment.askedOf) ? assignment.askedOf : undefined
       return { state: 'waiting', why: 'person', personId: asked ?? waitedOn(state, group), since: group.ledger?.waiting?.since ?? progress }
     }
+    // A step in Ready is the review itself: it waits on its task's owner to act on its verdict, never on a review of its own.
+    if (assignment.status === 'review' && isStep(group)) return { state: 'waiting', why: 'review', since: progress }
     if (assignment.status === 'review') return reviewWait(state, group, progress, now)
     if (assignment.status === 'blocked') return { state: 'waiting', why: 'blocked', since: progress }
     // A review whose verdict asked for changes waits for the new revision; once it is ready, its quiet time runs from then
     // (revisionReady restarts its progress).
     if (waitingForRevision(state, group)) return { state: 'waiting', why: 'revision', since: progress }
+    if (waitingOnSteps(state, group)) return { state: 'waiting', why: 'review', since: progress }
     return now - progress >= TASK_QUIET_MS ? { state: 'quiet', why: 'silent', since: progress } : null
   }
   // Only unfinished starts are loaded, with those that ended in this same write.
@@ -436,6 +460,12 @@ const nextState = (state: SuperTabState, group: Conversation, now: number) => ta
  *  (a machine's reading must write no group, read/host.ts). A stall is left to the time checks, which wake the Lead for it;
  *  a failed start is not, since its own notice told the Lead and the next sweep no longer loads it. */
 export function recordTaskState(state: SuperTabState, group: Conversation, now: number): void {
+  // A step's change is its task's too: the Engineer waits on it from its start and gets its time back when it ends.
+  const task = isStep(group) ? state.conversations.find(c => c.id === group.reviewOf) : undefined
+  if (task) {
+    stepsEnded(state, task, now)
+    recordTaskState(state, task, now)
+  }
   const next = nextState(state, group, now)
   if (sameState(group.liveness, next) || (next && next.state !== 'waiting' && next.why !== 'start-failed')) return
   if (next) group.liveness = next
