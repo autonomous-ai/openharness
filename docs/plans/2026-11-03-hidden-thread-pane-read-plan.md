@@ -22,7 +22,7 @@
 
 1. A poll landing while the pane is hidden: the flag must be set at the moment the view goes away, not on its next frame, since the poll runs in the controller with no frame in between.
 2. A Swarm switched away: the view is disposed (the workspace builds only the active Swarm), while the controller keeps reading every 15 s. Dispose must hide.
-3. The app sent to the background with the window unchanged: lifecycle and `app.foreground` change without a build of the view.
+3. The app sent to the background with the window unchanged: the lifecycle changes without a build of the view. (`app.foreground` is fed by the workspace from the same lifecycle event, so the view's own lifecycle observer covers it.)
 4. Shown again with no new message: the pane must still be marked through its newest reply, once.
 5. A thread opened by hand stays read as before (`openThread` clears the flag); a thread whose conversation is not the selected one has no pane and counts as hidden.
 
@@ -46,18 +46,17 @@
 ### Task 2: The view says when the pane leaves the screen
 
 **Files:**
-- Modify: `desktop/lib/super_tabs/view.dart` (`initState`, `didChangeAppLifecycleState`, `didUpdateWidget`, `dispose`, `_readVisibleTailAfterFrame`, `build`)
+- Modify: `desktop/lib/super_tabs/view.dart` (`didChangeAppLifecycleState`, `didUpdateWidget`, `dispose`, `_readVisibleTailAfterFrame`, `build`)
 - Test: `desktop/test/super_tab_thread_composer_test.dart`
 
 **Interfaces:**
 - Consumes: `threadPaneHidden()`, `threadPaneShown()`.
 
-- [ ] **Step 1: Write the failing widget tests**, each mounting the real view with the thread open and shown (one mark), clearing the marks, hiding, then appending a reply and refreshing:
-  - 'a pane sent to the background marks no new reply, and marks once it is back': lifecycle → `inactive`; no mark; `resumed` → one mark.
-  - 'a pane put offstage marks no new reply, and marks once it is shown': remount with `hidden: true`; no mark; `hidden: false` → one mark.
-  - 'a view let go marks no new reply': unmount the view; no mark.
-  - 'an app no longer in front marks no new reply': with an `AppNotifier`, `foreground.value = false`; no mark; `true` → one mark.
+- [ ] **Step 1: Write the failing widget tests**, in a group 'a pane seen, then hidden', each mounting the real view with the thread open and shown (one mark), clearing the marks, hiding, then appending a reply and refreshing:
+  - 'sent to the background marks no new reply, and marks once it is back': lifecycle → `inactive`; no mark; `resumed` → one mark.
+  - 'put offstage marks no new reply, and marks once it is shown': remount with `hidden: true`; no mark; `hidden: false` → one mark.
+  - 'let go of, as for another Swarm, marks no new reply': unmount the view; no mark; mount it again → one mark.
 - [ ] **Step 2: Run them and watch them fail** (a mark is sent while hidden).
-- [ ] **Step 3: Implement `_syncThreadPane()`** in the view: with a thread open, when the pane is not on screen (`openedThread.conversationId != selectedId` or `!_viewIsVisible`) call `threadPaneHidden()` at once; otherwise call `threadPaneShown()` after the frame, if still visible. Call it from `build`, from `didChangeAppLifecycleState` (every state), from a listener on `widget.app?.foreground` (moved with the app in `didUpdateWidget`) and from `_readVisibleTailAfterFrame` in place of its own `threadPaneShown` call. `dispose` and a controller replaced in `didUpdateWidget` call `threadPaneHidden()` on the controller being left.
+- [ ] **Step 3: Implement `_syncThreadPane()`** in the view: with a thread open, when the pane is not on screen (`openedThread.conversationId != selectedId` or `!_viewIsVisible`) call `threadPaneHidden()` at once; otherwise call `threadPaneShown()` after the frame, if still visible. Call it from `build`, from `didChangeAppLifecycleState` (every state) and from `_readVisibleTailAfterFrame` in place of its own `threadPaneShown` call. `dispose` and a controller replaced in `didUpdateWidget` call `threadPaneHidden()` on the controller being left.
 - [ ] **Step 4: Run the new tests, the thread composer suite and the Super Tab view suites**: all pass.
 - [ ] **Step 5: Commit.**
