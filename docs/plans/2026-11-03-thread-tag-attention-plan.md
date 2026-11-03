@@ -50,12 +50,12 @@ Hover badge: 1 tag, 1 decision waiting for you
 - Consumes: `SuperTabMentions.waiting`, `SuperTabDecisions.open`, `SuperTabController.readMark`, `threadReadMark`, and the thread list Activity uses to distinguish New replies from Needs you.
 - Produces: `tagsIn(String conversationId)`, `decisionsIn(String conversationId)`, and `mentionsIn(String conversationId)` whose total matches the tags and decisions Activity shows as Needs you for that conversation; `hasUnreadTagInThread(String conversationId, String threadId)` for the reply-line marker.
 
-- [ ] **Step 1: Add a failing attention test** named `counts_an_unread_tag_in_a_project_chat_thread_as_needs_you`. Use a waiting mention with a thread id and sequence after the thread read mark, on a thread not currently listed as New replies; expect one tag in the conversation and one Needs you item, while a different conversation remains at zero.
-- [ ] **Step 2: Run the focused test and confirm it fails** because `mentionsIn` currently filters for `threadId == null`.
-- [ ] **Step 3: Commit the failing test** as `test(desktop): cover unread thread tags in sidebar attention`.
-- [ ] **Step 4: Implement per-conversation tag and decision counts** in `attention.dart`, sharing the Activity unread and New replies exclusion rules so a thread mention is counted once.
-- [ ] **Step 5: Verify read clearing** with a test that advancing the thread read mark removes the tag from the conversation count and Activity; after #2721 is merged, also verify its reply action clears the mention.
-- [ ] **Step 6: Run the focused attention and Activity tests and commit the passing implementation** as `fix(desktop): count unread thread tags in sidebar attention`.
+- [x] **Step 1: Add a failing attention test** named `counts_an_unread_tag_in_a_project_chat_thread_as_needs_you`. Use a waiting mention with a thread id and sequence after the thread read mark, on a thread not currently listed as New replies; expect one tag in the conversation and one Needs you item, while a different conversation remains at zero.
+- [x] **Step 2: Run the focused test and confirm it fails** because `mentionsIn` currently filters for `threadId == null`.
+- [x] **Step 3: Commit the failing test** as `test(desktop): cover unread thread tags in sidebar attention`.
+- [x] **Step 4: Implement per-conversation tag and decision counts** in `attention.dart`, sharing the Activity unread and New replies exclusion rules so a thread mention is counted once.
+- [x] **Step 5: Verify read clearing** with a test that advancing the thread read mark removes the tag from the conversation count and Activity; after #2721 is merged, also verify its reply action clears the mention.
+- [x] **Step 6: Run the focused attention and Activity tests and commit the passing implementation** as `fix(desktop): count unread thread tags in sidebar attention`.
 
 ### Task 2: Mark a tagged thread on its replies line
 
@@ -68,11 +68,11 @@ Hover badge: 1 tag, 1 decision waiting for you
 - Consumes: `SuperTabAttention.hasUnreadTagInThread(conversationId, threadId)` from Task 1.
 - Produces: a `tagged` state on `SuperTabThreadLine`; when true, the line shows `@ you` beside its reply count and includes it in the accessible label.
 
-- [ ] **Step 1: Add a failing widget test** named `shows_you_on_a_thread_line_with_an_unread_tag` using a real thread line and unread mention; also prove the marker is absent after its read mark advances.
-- [ ] **Step 2: Run the focused widget test and confirm the marker is missing.**
-- [ ] **Step 3: Commit the failing test** as `test(desktop): specify tagged thread reply line`.
-- [ ] **Step 4: Pass the unread-tag state from `view.dart` to `SuperTabThreadLine` and render `@ you` in `message_row.dart`.**
-- [ ] **Step 5: Run the focused thread-tag widget test and commit the implementation** as `feat(desktop): mark tagged thread replies in the chat`.
+- [x] **Step 1: Add a failing widget test** named `shows_you_on_a_thread_line_with_an_unread_tag` using a real thread line and unread mention; also prove the marker is absent after its read mark advances.
+- [x] **Step 2: Run the focused widget test and confirm the marker is missing.**
+- [x] **Step 3: Commit the failing test** as `test(desktop): specify tagged thread reply line`.
+- [x] **Step 4: Pass the unread-tag state from `view.dart` to `SuperTabThreadLine` and render `@ you` in `message_row.dart`.**
+- [x] **Step 5: Run the focused thread-tag widget test and commit the implementation** as `feat(desktop): mark tagged thread replies in the chat`.
 
 ### Task 3: Explain badge counts and verify the collapsed project view
 
@@ -84,18 +84,18 @@ Hover badge: 1 tag, 1 decision waiting for you
 - Consumes: Task 1's per-conversation tag and decision counts.
 - Produces: A tooltip for each sidebar attention badge that names its tag and decision counts, for example `1 tag, 1 decision waiting for you`; the badge number remains the sum of those waiting rows.
 
-- [ ] **Step 1: Add failing widget tests** for a collapsed project badge that includes a thread tag, the exact mixed tag/decision tooltip, singular/plural labels, and zero after all relevant rows clear.
-- [ ] **Step 2: Run the focused sidebar tests and confirm the thread-tag count and tooltip are missing.**
-- [ ] **Step 3: Commit the failing tests** as `test(desktop): specify sidebar attention badge details`.
-- [ ] **Step 4: Add the tooltip to each attention count badge and keep the row count equal to its visible Activity Needs you tags and decisions.**
-- [ ] **Step 5: Capture the updated screenshot, run the focused sidebar widget tests, and commit** as `feat(desktop): explain project attention badge counts`.
+- [x] **Step 1: Add failing widget tests** for a collapsed project badge that includes a thread tag, the exact mixed tag/decision tooltip, singular/plural labels, and zero after all relevant rows clear.
+- [x] **Step 2: Run the focused sidebar tests and confirm the thread-tag count and tooltip are missing.**
+- [x] **Step 3: Commit the failing tests** as `test(desktop): specify sidebar attention badge details`.
+- [x] **Step 4: Add the tooltip to each attention count badge and keep the row count equal to its visible Activity Needs you tags and decisions.**
+- [x] **Step 5: Capture the updated screenshot, run the focused sidebar widget tests, and commit** as `feat(desktop): explain project attention badge counts`.
 
 ### Task 4: Validate and prepare review
 
 **Files:**
 - Update: this PR's validation comment and screenshots; no other product files unless a focused check fails.
 
-- [ ] Wait for #2721 to merge; merge the new `origin/main` into this branch before implementing clearing behavior.
-- [ ] Run affected Desktop tests and analyzer checks on macOS; use PR CI for the four Super Tab integration shards and other required Linux component checks.
+- [x] Wait for #2721 to merge; merge the new `origin/main` into this branch before implementing clearing behavior.
+- [x] Run affected Desktop tests and analyzer checks on macOS; use PR CI for the four Super Tab integration shards and other required Linux component checks (PR CI remains pending until Ready).
 - [ ] Record red/green evidence for the attention count, read/reply clearing, reply-line marker, and tooltip/count parity tests in a PR comment.
 - [ ] Attach screenshots from the widget tests, keep the head stable, and request the required review and Desktop test steps.

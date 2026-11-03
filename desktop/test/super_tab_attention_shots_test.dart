@@ -200,10 +200,11 @@ void main() {
           await mouse.addPointer(location: Offset.zero);
           await mouse.moveTo(
             tester.getCenter(
-              find.byKey(const ValueKey('super-group-web-lead')),
+              find.byKey(const ValueKey('super-mentions-web-lead')),
             ),
           );
           await tester.pumpAndSettle();
+          await tester.pump(const Duration(seconds: 1));
           addTearDown(mouse.removePointer);
         }
         await captureBoundary(
