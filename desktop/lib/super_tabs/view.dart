@@ -3645,9 +3645,28 @@ class _SuperTabViewState extends State<SuperTabView>
         if (group != null &&
             _isBuddyChat(group) &&
             !c.isEarlierBuddyChat(group))
-          SuperTabBuddyBar(controller: c, chat: group, app: widget.app),
-        // The reader's own Buddy chat shows what the PM asked them.
-        if (group != null && _isBuddyChat(group))
+          // The list stops at an edge under the Buddy's line, as it does under
+          // the header: without one, a message scrolled up to the line read as
+          // cut off under it (Huy, 11-03).
+          DecoratedBox(
+            key: const ValueKey('super-buddy-edge'),
+            decoration: BoxDecoration(
+              border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SuperTabBuddyBar(controller: c, chat: group, app: widget.app),
+                // The reader's own Buddy chat shows what the PM asked them.
+                SuperTabDecisionsPanel(
+                  decisions: SuperTabDecisions.of(c),
+                  projectId: group.projectId,
+                ),
+              ],
+            ),
+          )
+        else if (group != null && _isBuddyChat(group))
           SuperTabDecisionsPanel(
             decisions: SuperTabDecisions.of(c),
             projectId: group.projectId,

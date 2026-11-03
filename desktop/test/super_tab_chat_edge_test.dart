@@ -11,7 +11,6 @@ import 'package:harness/widgets/desktop_chrome.dart';
 
 import 'box_render_preview_test.dart' show loadPreviewFonts;
 import 'support/buddy_fixture.dart';
-import 'support/super_tab_fixture.dart';
 
 /// Set to a folder to write the PR's screenshots there.
 final shots = Platform.environment['SUPER_TAB_CHAT_EDGE_SHOTS'];
