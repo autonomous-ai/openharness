@@ -1218,6 +1218,8 @@ export class SuperTabStore {
         member = { id: user.sub, email: authenticatedEmail(user.email)!, role: sharing.access.role, generation: receiptId }
         state.people.push(member)
       }
+      // A join by link or domain link is coming back on purpose: it clears a decline (spec 2026-11-03, Leaving is final).
+      if (state.autoJoinDeclined?.includes(user.sub)) state.autoJoinDeclined = declinedWithout(state, user.sub)
       // Existing people retain their role and private-project grants. A general
       // access link does not promote a viewer or grant a private project.
       // The join relied on the sharing generation the head holds: a concurrent sharing change conflicts with it.

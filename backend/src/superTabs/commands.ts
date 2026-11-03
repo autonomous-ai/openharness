@@ -41,6 +41,7 @@ import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema,
 import { switchExpired } from './tidy.js'
 import { BUILT_IN_ROLE_DEFAULTS, agentProjectId, audienceOf, canReadProject, deleteProject, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { recordClosing } from './closedAgents.js'
+import { declinedWith, declinedWithout } from './sharing.js'
 import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRows.js'
 import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, entryProject, liveSessions, mainBuddyOf, MAX_SESSION_WAITING, requireChatOwner, SESSION_ENDED_KIND, sessionAgentsOf, sessionOf, setSessions, type SessionEndReason } from './buddySessions.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, PROPOSAL_SENT_KIND, proposalSentText, proposalText, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
@@ -781,6 +782,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       state.people.push({ id: actor.userId, email: invite.email, role: invite.role, generation: invite.id })
     }
     state.invitations = state.invitations.filter(i => i.id !== invite.id)
+    // Back on purpose: auto-join may add them again if they leave and the owner invites them once more (spec, Leaving is final).
+    if (state.autoJoinDeclined?.includes(actor.userId)) state.autoJoinDeclined = declinedWithout(state, actor.userId)
     result.conversationId = invite.conversationId
     // As a link join answers (store.ts joinSwarm): Desktop adds the accepting computer only when this made a member.
     result.alreadyMember = !!existing
@@ -2729,6 +2732,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       state.people = state.people.filter(p => p.id !== member.id)
       state.invitations = state.invitations.filter(i => i.email !== member.email)
+      // Leaving, or being removed, is final for auto-join: only an invitation or a link brings them back (spec 2026-11-03).
+      state.autoJoinDeclined = declinedWith(state, member.id)
       result.removedUserId = member.id
       break
     }
