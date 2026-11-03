@@ -472,7 +472,12 @@ export function deleteProject(state: SuperTabState, actor: Actor, projectId: str
   // A person's one Buddy chat belongs to no project and stays; that project's sessions in it go with their agents.
   const groups = state.conversations.filter(c => !isLeads(c) && !isSwarmBuddyChat(c) && groupProject(state, c).id === project.id)
   const groupIds = new Set(groups.map(c => c.id))
+  // A queued start in an archived conversation can never be dispatched (commands.ts open() refuses it), so it no longer
+  // blocks the delete; it goes with the project's other starts below. On 2026-11-03 one queued two days earlier kept an
+  // owner from deleting a cleaned-up project, and no command could settle it.
+  const archived = new Set(groups.filter(c => c.archived).map(c => c.id))
   if (state.starts?.some(s => groupIds.has(s.request.conversationId) && !s.error &&
+    !(!s.dispatched && !s.harnessId && archived.has(s.request.conversationId)) &&
     (!s.harnessId || s.poolGeneration && !s.poolSettled))) {
     fail('STARTS_PENDING', 'Resolve this project’s pending agent starts before deleting it.')
   }
