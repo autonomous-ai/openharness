@@ -362,7 +362,7 @@ void main() {
       );
       expect(
         [for (final p in creates) p['command']['name']],
-        ['api', 'one', 'web'],
+        ['api', kTabProjectName, 'web'],
       );
       expect(
         creates.every((p) => p['command']['visibility'] == 'private'),
@@ -708,6 +708,14 @@ void main() {
       await PersonalProjects.of(f.app).sync(c);
       expect(
         [for (final post in _commands(f)) post['command']['name']],
+        [kTabProjectName, kTabProjectName],
+      );
+      // Made under one name on every computer, then named after its tab.
+      expect(
+        [
+          for (final post in _commands(f, 'project.rename'))
+            post['command']['name'],
+        ],
         ['Harness Monitor', 'code'],
       );
       String lead(String name) => c.snapshot!.projects

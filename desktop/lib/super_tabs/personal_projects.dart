@@ -82,6 +82,20 @@ String? normalizedRemote(String? remote) {
 /// on each of the person's computers and through a rename (task #2376).
 String personalTabKey(String tabId) => 'tab:$tabId';
 
+/// The name a tab's project is made with on every computer, so that request is
+/// one request wherever it is sent (the server refuses a request id reused for
+/// another name: review of #2753). It is then renamed to its tab's name, and a
+/// tab with no usable name keeps it.
+const kTabProjectName = 'Tab';
+
+/// [name] as a project name the server takes: trimmed, at most 160
+/// characters (backend `project.create`), [kTabProjectName] for none.
+String tabProjectName(String name) {
+  final trimmed = name.trim();
+  if (trimmed.isEmpty) return kTabProjectName;
+  return trimmed.length > 160 ? trimmed.substring(0, 160).trimRight() : trimmed;
+}
+
 /// The repo's own name: `github.com/owner/api` is `api`.
 String repoName(String repo) => repo.split('/').last;
 
@@ -312,18 +326,25 @@ class PersonalProjects extends ChangeNotifier {
         _again.remove(scope);
         if (!eligible(c)) return;
         final projects = _projects(account, swarm);
-        // Each project's name when it is made: the repo's own, or its tab's
-        // name then (a later rename of the tab keeps the project, and its name).
+        // Each project's name: the repo's own, or its tab's name, given once its
+        // project is made (a later rename of the tab keeps the project, and its
+        // name).
         final wanted = <String, String>{
           for (final p in personalPanes(app))
-            p.repo: _isTab(p.repo) ? p.tab.name : repoName(p.repo),
+            p.repo: _isTab(p.repo)
+                ? tabProjectName(p.tab.name)
+                : repoName(p.repo),
         };
         var made = false;
         for (final MapEntry(key: repo, value: name) in wanted.entries) {
           if (projects.containsKey(repo)) continue;
           final retryAt = _retryAt['$scope/$repo'];
           if (retryAt != null && clock.now().isBefore(retryAt)) continue;
-          final answer = await _create(c, repo, name);
+          final answer = await _create(
+            c,
+            repo,
+            _isTab(repo) ? kTabProjectName : name,
+          );
           if (!eligible(c)) return;
           if (answer case (:final id)) {
             projects[repo] = id;
@@ -334,6 +355,8 @@ class PersonalProjects extends ChangeNotifier {
         }
         // The new projects read before two of one name are told apart.
         if (made && !await _reread(c)) return;
+        if (!eligible(c)) return;
+        if (await _nameTabs(c, wanted) && eligible(c)) await _reread(c);
         if (!eligible(c)) return;
         if (await _tellApart(c) && eligible(c)) await _reread(c);
       } while (_again.contains(scope));
@@ -402,6 +425,41 @@ class PersonalProjects extends ChangeNotifier {
     final count = _failures[key] = (_failures[key] ?? 0) + 1;
     final wait = Duration(seconds: 5 << count.clamp(1, 6));
     _retryAt[key] = clock.now().add(wait < maxRetryWait ? wait : maxRetryWait);
+  }
+
+  /// A tab's project still under the name every computer makes it with takes
+  /// its tab's name. Asked again on the next sync when it fails. A name the
+  /// person chose stays.
+  Future<bool> _nameTabs(
+    SuperTabController c,
+    Map<String, String> wanted,
+  ) async {
+    final projects = _projects(c.accountId, c.tabId);
+    var changed = false;
+    for (final MapEntry(key: repo, value: name) in wanted.entries) {
+      final id = projects[repo];
+      if (!_isTab(repo) || id == null || name == kTabProjectName) continue;
+      if (c.snapshot?.projectById(id)?.name != kTabProjectName) continue;
+      try {
+        await c.request(
+          'POST',
+          '/api/super-tabs/${Uri.encodeComponent(c.tabId)}/commands',
+          body: {
+            'operationId': 'personal-tab-name-${_hash('$repo\n$name')}',
+            'command': {
+              'type': 'project.rename',
+              'projectId': id,
+              'name': name,
+            },
+          },
+        );
+      } catch (_) {
+        continue;
+      }
+      if (!eligible(c)) return changed;
+      changed = true;
+    }
+    return changed;
   }
 
   /// Two repos of one name, both still under it: each is renamed to its long
