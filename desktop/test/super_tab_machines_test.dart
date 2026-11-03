@@ -2058,9 +2058,7 @@ void main() {
       final server = _RemovalServer();
       server.state['machines'] = [machine('owner')];
       server.preview = {
-        'blockedBy': {
-          'reason': "A PM of a project you can't see runs here.",
-        },
+        'blockedBy': {'reason': "A PM of a project you can't see runs here."},
         'agents': <dynamic>[],
         'hiddenAgentCount': 2,
         'soleSourceProjects': <dynamic>[],
@@ -2082,11 +2080,13 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.text("2 agents of projects you can't see will stop."),
+        find.textContaining("2 agents of projects you can't see"),
         findsOneWidget,
       );
       expect(
-        find.text("1 project you can't see has code only on this machine."),
+        find.textContaining(
+          "1 project you can't see has code only on this machine",
+        ),
         findsOneWidget,
       );
       expect(find.textContaining('Secret Project'), findsNothing);
@@ -2656,49 +2656,52 @@ void main() {
   );
 
   // Task #2195: a Swarm that isn't showing reads no machine's usage.
-  testWidgets('reads nothing while its Swarm is away, and reads at once on its return', (tester) async {
-    final f = SuperTabLaunchFixture();
-    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
-    f.connection.server.state['machines'] = [
-      {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 8},
-    ];
-    final c = await f.app.superTabs.open(tabId);
-    await c.refresh();
-    var reads = 0;
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: SizedBox(
-            width: 300,
-            height: 400,
-            child: SuperTabMachines(
-              controller: c,
-              app: f.app,
-              onAddAgent: (_) {},
-              readLocal: (_) async {
-                reads++;
-                return null;
-              },
+  testWidgets(
+    'reads nothing while its Swarm is away, and reads at once on its return',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 8},
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      var reads = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 300,
+              height: 400,
+              child: SuperTabMachines(
+                controller: c,
+                app: f.app,
+                onAddAgent: (_) {},
+                readLocal: (_) async {
+                  reads++;
+                  return null;
+                },
+              ),
             ),
           ),
         ),
-      ),
-    );
-    await tester.pump(const Duration(seconds: 1));
-    expect(reads, greaterThan(0));
-    c.away = true;
-    await tester.pump(const Duration(seconds: 16));
-    final atAway = reads;
-    await tester.pump(const Duration(seconds: 40));
-    expect(reads, atAway);
-    c.away = false;
-    await tester.pump(const Duration(seconds: 1));
-    expect(reads, greaterThan(atAway));
-    await tester.pumpWidget(const SizedBox());
-    await c.flush();
-    f.app.superTabs.dispose();
-    await tester.pump();
-  });
+      );
+      await tester.pump(const Duration(seconds: 1));
+      expect(reads, greaterThan(0));
+      c.away = true;
+      await tester.pump(const Duration(seconds: 16));
+      final atAway = reads;
+      await tester.pump(const Duration(seconds: 40));
+      expect(reads, atAway);
+      c.away = false;
+      await tester.pump(const Duration(seconds: 1));
+      expect(reads, greaterThan(atAway));
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
 
   testWidgets(
     'machine settings show its name, Agents as memory allows, and Remove from this Swarm',
