@@ -257,6 +257,32 @@ describe('the GitHub token endpoint', () => {
       message: 'The Harness GitHub App is not installed on example/app. Ask an owner of example to install it: https://github.com/apps/harness-fixture/installations/new.' })
   })
 
+  // Task #1694 (option B, 11-03): every Swarm needs a person's approval of a repository before its agents get tokens for it,
+  // as Team-account Swarms already did. Before, a Swarm without the switch got a token for any repository the app is on.
+  it('refuses an agent\'s token for a repository nobody approved for the project, in a Swarm without the team account, and gives it once approved', async () => {
+    const env = await fresh({ approveAll: false })
+    const { tab, worker } = await working(env)
+    const refused = await ask(env, tab, worker)
+    expect(refused.statusCode, refused.body).toBe(403)
+    expect(refused.json().error).toMatchObject({ code: 'GITHUB_REPOSITORY_NOT_APPROVED' })
+    expect(env.github.calls.some(c => c.path.endsWith('/access_tokens'))).toBe(false)
+    env.approved.push({ tabId: tab, projectId: 'lead', repository: 'example/app', scope: 'project', login: 'olive' })
+    const given = await ask(env, tab, worker)
+    expect(given.statusCode, given.body).toBe(200)
+    expect(given.json().data).toMatchObject({ token: 'ghs_fixture_1', repository: 'example/app' })
+  })
+
+  it('with the team account on, refuses an agent\'s token for an unapproved repository and gives an approved one its token, as before', async () => {
+    teamAccounts()
+    const env = await fresh({ approveAll: false })
+    const { tab, worker } = await working(env)
+    const refused = await ask(env, tab, worker)
+    expect(refused.statusCode, refused.body).toBe(403)
+    expect(refused.json().error).toMatchObject({ code: 'GITHUB_REPOSITORY_NOT_APPROVED' })
+    env.approved.push({ tabId: tab, projectId: 'lead', repository: 'example/app', scope: 'swarm', login: 'olive' })
+    expect((await ask(env, tab, worker)).json().data).toMatchObject({ token: 'ghs_fixture_1' })
+  })
+
   it('answers not configured when the server has no app, and says nothing about it on the tab', async () => {
     const env = await fresh({ github: false })
     const { tab, worker } = await working(env)
@@ -344,10 +370,9 @@ describe('a queued start\'s preparation token', () => {
     expect(env.github.calls.some(c => c.path.endsWith('/access_tokens'))).toBe(false)
   })
 
-  // Rolled out with the team account (machines.ts teamAccountRequired), so a bug in it cannot stop anyone else's Swarm.
-  // Every Swarm alike (2026-11-02): an owner list left in a deployment (SWARM_TEAM_ACCOUNT_OWNERS, read 10-27 to 11-02) no
-  // longer exempts a Swarm from approving its repositories.
-  it('asks approval in any Swarm with the switch on, whatever SWARM_TEAM_ACCOUNT_OWNERS says, and none with it off', async () => {
+  // Every Swarm alike, with the team account switch on or off (task #1694, option B, 11-03): before, a Swarm without the
+  // switch got a token for any repository the app is on and its status read `covered`.
+  it('asks approval in any Swarm, with the switch on or off, whatever SWARM_TEAM_ACCOUNT_OWNERS says', async () => {
     teamAccounts()
     vi.stubEnv('SWARM_TEAM_ACCOUNT_OWNERS', 'someone@example.com')
     const env = await fresh({ approveAll: false })
@@ -357,7 +382,12 @@ describe('a queued start\'s preparation token', () => {
     expect((await prepare(env, tab, startId)).statusCode).toBe(403)
     vi.unstubAllEnvs()
     const off = await queued(env)
-    expect((await prepare(env, off.tab, off.startId)).json().data).toMatchObject({ github: true })
+    const offStatus = await env.app.inject({ method: 'GET', url: `/api/super-tabs/${off.tab}/projects/lead/github`, headers: { authorization: `Bearer ${owner.sub}` } })
+    expect(offStatus.json().data).toMatchObject({ state: 'not-approved', repository: 'example/app' })
+    const refused = await prepare(env, off.tab, off.startId)
+    expect(refused.statusCode, refused.body).toBe(403)
+    expect(refused.json().error).toMatchObject({ code: 'GITHUB_REPOSITORY_NOT_APPROVED' })
+    expect(env.github.calls.some(c => c.path.endsWith('/access_tokens'))).toBe(false)
   })
 
   it('approves a repository through the app\'s sign-in, for someone who can push to it, and gives the token after', async () => {
