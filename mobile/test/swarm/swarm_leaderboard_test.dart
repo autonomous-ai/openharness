@@ -548,7 +548,6 @@ void main() {
             'subscriptions': <Object>[],
           },
         ]),
-        now: now,
       );
       expect(lines.map((l) => l.$1), contains('Lent'));
       expect(lines.map((l) => l.$1), isNot(contains('Mac Studio')));
@@ -611,7 +610,7 @@ void main() {
     });
 
     test('keeps Lent from a server before Brought', () {
-      final lines = swarmPersonWeek(score(null), now: now);
+      final lines = swarmPersonWeek(score(null));
       expect(lines.map((l) => l.$1), contains('Lent'));
     });
   });

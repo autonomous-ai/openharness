@@ -475,7 +475,7 @@ class SwarmLeaderboardReader extends ChangeNotifier {
 /// A person's week as the desktop's `LeaderboardPersonWeek` words it: the
 /// points and place, what landed, what they answered, what they lent, and
 /// their streak.
-List<(String, String)> swarmPersonWeek(SwarmScore score, {DateTime? now}) {
+List<(String, String)> swarmPersonWeek(SwarmScore score) {
   String median(int? ms, String what) =>
       ms == null ? '' : ' · median ${swarmDuration(ms)}$what';
   return [
