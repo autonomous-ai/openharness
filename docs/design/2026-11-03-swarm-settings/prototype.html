@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Swarm Settings Lean</title>
+<style>
+/* Shell: a quiet review frame (header, two toggles, notes) around two interactive phones.
+   The shell follows the viewer's theme; the phones keep the app's Graphite dark palette on purpose. */
+:root{
+  --bg:#f5f5f2; --fg:#1b1b19; --muted:#5d5c56; --line:#dad9d3; --chip:#ebebe6; --mark:#2f5bea; --frame:#0d0d0d;
+  --ui:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,"Roboto Mono",Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#111110;--fg:#ecebe7;--muted:#a3a29b;--line:#2d2d2a;--chip:#1f1f1d;--mark:#7d98ff;--frame:#000;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#111110;--fg:#ecebe7;--muted:#a3a29b;--line:#2d2d2a;--chip:#1f1f1d;--mark:#7d98ff;--frame:#000;color-scheme:dark}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 var(--ui);
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 56px}
+.wrap{max-width:1160px;margin:0 auto}
+.top h1{font:650 17px/1.3 var(--ui);margin:0}
+.top p{margin:4px 0 0;color:var(--muted);font-size:13px;max-width:84ch}
+.top a{color:var(--mark)}
+.ctl{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center;margin:16px 0 22px;padding-bottom:16px;border-bottom:1px solid var(--line)}
+.tg{appearance:none;border:1px solid var(--line);background:none;color:var(--fg);font:500 13px var(--ui);padding:6px 12px;border-radius:999px;cursor:pointer}
+.tg:hover{border-color:var(--muted)}
+.tg[aria-pressed=true]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.tg:focus-visible,.chg:focus-visible{outline:2px solid var(--mark);outline-offset:2px}
+.delta{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.delta b{color:var(--fg);font-weight:600}
+.duo{display:grid;grid-template-columns:auto auto minmax(0,1fr);gap:28px;align-items:start}
+.fig{margin:0;display:grid;grid-template-columns:minmax(0,1fr);gap:10px;justify-items:center;min-width:0}
+.fig figcaption{text-align:center}
+.fig .lb{display:block;font:650 14px/1.3 var(--ui)}
+.fig .st{display:block;font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.sw-key{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:0}
+.notes{min-width:0;display:grid;gap:20px;max-width:62ch}
+.notes h3{font:650 12px/1.3 var(--ui);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+.notes p{margin:0}
+.notes .try{font-size:13px;color:var(--muted)}
+.chgs{list-style:none;margin:0;padding:0;display:grid;gap:2px}
+.chg{appearance:none;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer;display:flex;gap:10px;align-items:flex-start;width:100%;padding:6px 8px;border-radius:8px}
+.chg:hover{background:var(--chip)}
+.chg[aria-pressed=true]{background:var(--chip);box-shadow:inset 0 0 0 1px var(--line)}
+.chg .n{flex:none;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font:700 11px/1 var(--ui);background:var(--fg);color:var(--bg);margin-top:1px}
+@media (max-width:1139px){.duo{grid-template-columns:auto auto;justify-content:center}.notes{grid-column:1/-1;max-width:none}}
+@media (max-width:819px){.duo{grid-template-columns:minmax(0,1fr)}}
+
+/* ───────── Phone frame + the Swarm primitives (Graphite, real sizes) ───────── */
+.phone{
+  --g:#181818; --card:#202020; --srf:#2c2c2c; --sheet:#1f1f1f; --hair:rgba(255,255,255,.1);
+  --t1:#f5f5f5; --t2:#a8a8a2; --t3:#6e6e68; --cap:#8b8b85; --blue:#2f5bea; --link:#8aa4ff;
+  --green:#3fb950; --red:#f2544b; --av:#1d5bd6;
+  width:375px;max-width:100%;height:780px;border:10px solid var(--frame);border-radius:50px;background:var(--g);color:var(--t1);
+  position:relative;overflow:hidden;display:flex;flex-direction:column;font:15px/1.35 var(--ui);box-sizing:border-box;
+  user-select:none;-webkit-user-select:none;box-shadow:0 1px 0 var(--line),0 24px 48px -24px rgba(0,0,0,.45)}
+/* Change markers: amber = the build (before), blue = the lean proposal (after) */
+#dir-a{--mk:#e3b341;--mkt:#2b1d00;--mkbg:rgba(227,179,65,.13)}
+#dir-n{--mk:#8aa4ff;--mkt:#0d1a40;--mkbg:rgba(138,164,255,.15)}
+.phone *{box-sizing:border-box}
+:where(.phone) button{appearance:none;background:none;border:0;color:inherit;font:inherit;padding:0;margin:0;cursor:pointer;text-align:left}
+.phone button:focus-visible{outline:2px solid var(--link);outline-offset:-2px;border-radius:10px}
+.phone .ic{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.phone .t2{color:var(--t2)}.phone .t3{color:var(--t3)}.phone .g{color:var(--green)}
+.sb{height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:6px 28px 0 34px;font:600 15px var(--ui);position:relative}
+.sb .island{position:absolute;left:50%;top:9px;width:108px;height:30px;margin-left:-54px;background:#000;border-radius:20px}
+.sb .sbr{display:flex;gap:6px;align-items:center}
+.scr{flex:1;min-height:0;position:relative;display:flex;flex-direction:column}
+.scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:none;position:relative}
+.scroll::-webkit-scrollbar{display:none}
+.hi{position:absolute;left:50%;bottom:8px;width:134px;height:5px;margin-left:-67px;border-radius:3px;background:rgba(255,255,255,.55);z-index:6;pointer-events:none}
+/* SwarmTopBar: back 4pt in, the title 4pt beside it in the terminal's face, 52pt tall */
+.bar{display:flex;align-items:center;gap:4px;min-height:52px;padding:4px 8px 4px 4px;flex:none}
+.bar .ttl{font:600 17px/1.25 var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ib{width:44px;height:44px;display:grid;place-items:center;border-radius:12px;color:var(--t1);flex:none}
+.ib:hover{background:rgba(255,255,255,.06)}.ib:active{background:rgba(255,255,255,.1)}
+.ib .ic{width:24px;height:24px}
+.av{border-radius:50%;display:grid;place-items:center;font:600 15px var(--ui);color:#fff;background:var(--av);flex:none;width:40px;height:40px}
+.stp{display:inline-flex;align-items:center;height:34px;border-radius:10px;background:var(--srf);flex:none}
+.stp button{width:40px;height:34px;display:grid;place-items:center;color:var(--t1);border-radius:10px}
+.stp button:hover:not(:disabled){background:rgba(255,255,255,.06)}
+.stp button:disabled{color:#4a4a46;cursor:default}
+.stp button .ic{width:16px;height:16px}
+.stp .v{min-width:26px;text-align:center;font:500 15px var(--ui);font-variant-numeric:tabular-nums}
+.sw{width:51px;height:31px;border-radius:16px;background:#3a3a38;position:relative;flex:none;transition:background .18s}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:27px;height:27px;border-radius:50%;background:#fff;transition:transform .18s;box-shadow:0 2px 4px rgba(0,0,0,.3)}
+.sw.on{background:var(--green)}.sw.on::after{transform:translateX(20px)}
+.pv{font-family:var(--mono);white-space:nowrap;overflow:hidden;line-height:1.2;color:var(--t1)}
+.toast{position:absolute;left:50%;bottom:44px;transform:translate(-50%,8px);background:#2c2c2c;color:var(--t1);font:500 13px var(--ui);padding:8px 14px;border-radius:999px;opacity:0;transition:opacity .15s,transform .15s;pointer-events:none;z-index:8;white-space:nowrap;max-width:92%;overflow:hidden;text-overflow:ellipsis;box-shadow:0 6px 16px rgba(0,0,0,.4)}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+.scrim{position:absolute;inset:0;background:rgba(0,0,0,.5);z-index:7;opacity:0;transition:opacity .18s;pointer-events:none}
+.scrim.show{opacity:1;pointer-events:auto}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:var(--sheet);border-radius:20px 20px 0 0;padding:8px 0 30px;z-index:7;transform:translateY(102%);visibility:hidden;transition:transform .22s ease,visibility 0s .22s;max-height:76%;overflow-y:auto;scrollbar-width:none}
+.sheet.show{transform:none;visibility:visible;transition:transform .22s ease,visibility 0s}
+.sheet .grab{width:36px;height:5px;border-radius:3px;background:#4a4a46;margin:0 auto 10px}
+.sheet .sh-t{font:600 13px var(--ui);color:var(--t2);padding:4px 20px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sheet .sh-c{font:400 13px var(--ui);color:var(--cap);padding:12px 20px 4px}
+.sheet .opt{display:flex;align-items:center;gap:14px;width:100%;min-height:50px;padding:0 20px;font-size:16px}
+.sheet button.opt:hover{background:rgba(255,255,255,.04)}.sheet button.opt:active{background:rgba(255,255,255,.08)}
+.sheet .opt .ic{color:var(--t2)}
+.sheet .opt[aria-pressed=true] .ic{color:var(--t1)}
+.sheet .opt .grow{flex:1;min-width:0}
+.sheet .opt.danger{color:var(--red)}.sheet .opt.danger .ic{color:var(--red)}
+
+/* Settings in Swarm's look: SwarmCaption, SwarmGroup, SwarmRow (both phones share it) */
+.phone .a-list{padding:0 12px 40px}
+.phone .a-cap{font:400 13px/1.3 var(--ui);color:var(--cap);padding:24px 4px 8px}
+.phone .a-card{background:var(--card);border-radius:14px;overflow:hidden}
+.phone .a-row{display:flex;align-items:center;gap:12px;width:100%;min-height:56px;padding:8px 16px;position:relative}
+.phone .a-row + .a-row,.phone .a-pv + .a-row,.phone .a-row + .a-pv{border-top:1px solid var(--hair)}
+.phone button.a-row:hover{background:rgba(255,255,255,.04)}
+.phone button.a-row:active{background:rgba(255,255,255,.08)}
+.phone .a-gl{width:32px;display:grid;place-items:center;color:var(--t2);flex:none}
+.phone .a-gl .ic{width:22px;height:22px}
+.phone .a-tx{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.phone .a-tt{font-size:15.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.phone .a-dt{font-size:13px;color:var(--t2)}
+.phone .a-val{font-size:15px;color:var(--t2);white-space:nowrap}
+.phone .a-chev{width:18px;height:18px;color:var(--t3)}
+.phone .a-me{min-height:68px}
+.phone .a-me .a-tt{font-weight:600;font-size:16px}
+.phone .a-pv{padding:15px 16px 15px 60px}
+/* Numbered change markers: shown for every change with "Mark changes", or for one picked change */
+.phone [data-chg]::after{content:attr(data-chg);display:none;place-items:center;width:16px;height:16px;border-radius:50%;font:700 10px/1 var(--ui);background:var(--mk);color:var(--mkt)}
+.phone .a-row[data-chg]::after{position:absolute;left:2px;top:50%;margin-top:-8px}
+.phone .a-cap[data-chg]::after{margin-left:6px;vertical-align:1px}
+.duo.diff .phone [data-chg]::after,.phone [data-chg].hot::after{display:inline-grid}
+.duo.diff .phone .a-row[data-chg],.phone .a-row[data-chg].hot{box-shadow:inset 0 0 0 1.5px var(--mk)}
+.phone .a-row[data-chg].hot{background:var(--mkbg)}
+.duo.diff .phone .a-cap[data-chg],.phone .a-cap[data-chg].hot{color:var(--mk)}
+/* Whole-page view: the phone grows to its full length at half size, with a line where each screen ends */
+.marks{position:absolute;left:0;right:0;top:0;height:0;pointer-events:none;display:none}
+.mk-line{position:absolute;left:0;right:0;border-top:2px dashed rgba(138,164,255,.75)}
+.mk-line span{position:absolute;right:12px;top:6px;font:600 22px var(--ui);color:#8aa4ff;background:var(--g);padding:0 8px;border-radius:6px}
+.duo.full .phone{height:auto;zoom:.5}
+.duo.full .scr,.duo.full .scroll{flex:none;overflow:visible}
+.duo.full .marks{display:block}
+@media (max-width:1139px){.duo.full{grid-template-columns:auto auto}}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+<defs>
+<symbol id="i-chev-l" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+<symbol id="i-chev-r" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+<symbol id="i-gauge" viewBox="0 0 24 24"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></symbol>
+<symbol id="i-bell" viewBox="0 0 24 24"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/></symbol>
+<symbol id="i-shield" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></symbol>
+<symbol id="i-laptop" viewBox="0 0 24 24"><path d="M18 5a2 2 0 0 1 2 2v8.526a2 2 0 0 0 .212.897l1.068 2.127a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45l1.068-2.127A2 2 0 0 0 4 15.526V7a2 2 0 0 1 2-2z"/><path d="M20.054 15.987H3.946"/></symbol>
+<symbol id="i-layers" viewBox="0 0 24 24"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"/><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"/><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"/></symbol>
+<symbol id="i-plug" viewBox="0 0 24 24"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></symbol>
+<symbol id="i-qr" viewBox="0 0 24 24"><rect width="5" height="5" x="3" y="3" rx="1"/><rect width="5" height="5" x="16" y="3" rx="1"/><rect width="5" height="5" x="3" y="16" rx="1"/><path d="M21 16h-3a2 2 0 0 0-2 2v3"/><path d="M21 21v.01"/><path d="M12 7v3a2 2 0 0 1-2 2H7"/><path d="M3 12h.01"/><path d="M12 3h.01"/><path d="M12 16v.01"/><path d="M16 12h1"/><path d="M21 12v.01"/><path d="M12 21v-1"/></symbol>
+<symbol id="i-server" viewBox="0 0 24 24"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 6h.01"/><path d="M6 18h.01"/></symbol>
+<symbol id="i-devices" viewBox="0 0 24 24"><path d="M18 8V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h8"/><path d="M10 19v-3.96 3.15"/><path d="M7 19h5"/><rect width="6" height="10" x="16" y="12" rx="2"/></symbol>
+<symbol id="i-phone" viewBox="0 0 24 24"><rect width="14" height="20" x="5" y="2" rx="2"/><path d="M12 18h.01"/></symbol>
+<symbol id="i-type" viewBox="0 0 24 24"><path d="M4 7V4h16v3"/><path d="M9 20h6"/><path d="M12 4v16"/></symbol>
+<symbol id="i-size" viewBox="0 0 24 24"><path d="M21 14h-5"/><path d="M16 16v-3.5a2.5 2.5 0 0 1 5 0V16"/><path d="M4.5 13h6"/><path d="m3 16 4.5-9 4.5 9"/></symbol>
+<symbol id="i-palette" viewBox="0 0 24 24"><circle cx="13.5" cy="6.5" r=".9" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".9" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".9" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".9" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></symbol>
+<symbol id="i-mic" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></symbol>
+<symbol id="i-contrast" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 18a6 6 0 0 0 0-12v12z"/></symbol>
+<symbol id="i-flask" viewBox="0 0 24 24"><path d="M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.069-10.127A2 2 0 0 1 14 9.527V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></symbol>
+<symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></symbol>
+<symbol id="i-play" viewBox="0 0 24 24"><path d="M6 3l14 9-14 9V3z"/></symbol>
+<symbol id="i-bulb" viewBox="0 0 24 24"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></symbol>
+<symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></symbol>
+<symbol id="i-file" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></symbol>
+<symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+<symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></symbol>
+</defs>
+</svg>
+
+<div class="wrap">
+  <header class="top">
+    <h1>Swarm · Settings — lean</h1>
+    <p>Settings opened from Swarm's You. Left: the lean list as built. Right: the first cut of direction A, before it was shortened. Both phones hold the same real content and can be tapped: change Size or Font on one and the other follows. Keys <b>1–6</b> mark one change, <b>D</b> marks them all, <b>F</b> shows each whole page. Spec: <a href="../2026-11-03-swarm-settings.md">2026-11-03-swarm-settings.md</a>.</p>
+  </header>
+
+  <div class="ctl">
+    <button class="tg" id="t-diff" aria-pressed="false">Mark changes</button>
+    <button class="tg" id="t-full" aria-pressed="false">Whole page</button>
+    <span class="delta" id="delta" aria-live="polite"></span>
+  </div>
+
+  <div class="duo" id="duo">
+    <figure class="fig">
+      <figcaption><span class="lb"><span class="sw-key" style="background:#8aa4ff"></span>A lean · as built</span><span class="st" id="st-n"></span></figcaption>
+      <div class="phone" id="dir-n"></div>
+    </figure>
+    <figure class="fig">
+      <figcaption><span class="lb"><span class="sw-key" style="background:#e3b341"></span>A · first cut</span><span class="st" id="st-a"></span></figcaption>
+      <div class="phone" id="dir-a"></div>
+    </figure>
+
+    <div class="notes">
+      <div>
+        <h3>6 changes</h3>
+        <ol class="chgs">
+          <li><button class="chg" data-chg="1" aria-pressed="false"><span class="n">1</span><span><b>Help</b>: 3 rows → 1 row that opens a sheet (How Harness works · Try the sample · Show the tips again).</span></button></li>
+          <li><button class="chg" data-chg="2" aria-pressed="false"><span class="n">2</span><span><b>About</b>: Version + Privacy Policy → 1 row "About 1.0.12 (80)"; its sheet holds the Privacy Policy.</span></button></li>
+          <li><button class="chg" data-chg="3" aria-pressed="false"><span class="n">3</span><span><b>Language</b> (the mic's) joins the Terminal card; no Voice caption.</span></button></li>
+          <li><button class="chg" data-chg="4" aria-pressed="false"><span class="n">4</span><span><b>Set up Intern 3</b> is left to Computers, which has the same button; Settings keeps it only while there is no computer.</span></button></li>
+          <li><button class="chg" data-chg="5" aria-pressed="false"><span class="n">5</span><span><b>Experimental</b>: no description line; Swarm and its switch stay.</span></button></li>
+          <li><button class="chg" data-chg="6" aria-pressed="false"><span class="n">6</span><span><b>Your name</b> joins the Usage · Notifications · Privacy card.</span></button></li>
+        </ol>
+      </div>
+      <p class="try">Tap a change to mark it on both phones: amber is where it was, blue is where it is now.</p>
+      <div>
+        <h3>Nothing lost</h3>
+        <p>Every setting and every fact is still reachable: 4 rows moved into sheets (Help's 3, the Privacy Policy); Set up Intern 3 is on Computers, and still in Settings while there is no computer (Computers is then an empty state with Add computer alone).</p>
+      </div>
+      <div>
+        <h3>Unchanged</h3>
+        <p>56pt rows, glyphs, the top bar, captions, every label. Only Settings opened from Swarm changes; Settings in the terminal keeps its own look and list.</p>
+      </div>
+      <p class="try">Try: Help and About (sheets), Size ±, the Swarm switch, your name (Sign out).</p>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+const ic = (n, c = '') => `<svg class="ic ${c}" aria-hidden="true" focusable="false"><use href="#i-${n}"/></svg>`;
+const esc = s => String(s).replace(/[&<>"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
+
+/* ───── Real content (from settings_page.dart and its stores) ───── */
+const ME = {name: 'Tony at Autonomous', email: 'tony@autonomous.ai', initial: 'T'};
+const S = {notif: 'Off', profile: 'All computers', phone: 'iPhone 16', font: 'SF Mono', size: 13,
+  colors: 'match', lang: 'English', palette: 'Graphite', text: 14, swarm: true};
+const BOUNDS = {size: [9, 22], text: [11, 19]};
+const FONTS = ['SF Mono', 'Ubuntu Sans Mono', 'Ubuntu Mono', 'Liberation Mono'];
+const TERM = [['match', null], ['Dark', 'Dark'], ['Light', 'Light'], ['Tango', 'Tango']];
+const LANGS = ['English', 'Tiếng Việt', 'Español', 'Français', '日本語', 'Italiano'];
+const PALETTES = {Dark: ['Graphite', 'Dusk', 'Midnight', 'Slate', 'Forest', 'Ember'], Light: ['Paper', 'Mist']};
+const colorsLabel = () => S.colors === 'match' ? S.palette : S.colors;
+const VERSION = '1.0.12 (80)';
+
+const R = {
+  usage:      {t: 'Usage', i: 'gauge', act: 'go:Usage'},
+  notif:      {t: 'Notifications', i: 'bell', v: () => S.notif, act: 'notif'},
+  privacy:    {t: 'Privacy', i: 'shield', act: 'go:Privacy'},
+  computers:  {t: 'Computers', i: 'laptop', act: 'go:Computers'},
+  profile:    {t: 'Profile', i: 'layers', v: () => S.profile, act: 'go:Profile picker'},
+  connectors: {t: 'Connectors', i: 'plug', act: 'go:Connectors'},
+  signin:     {t: 'Sign in a computer', i: 'qr', act: 'go:QR scanner'},
+  intern:     {t: 'Set up Intern 3', i: 'server', act: 'go:Set up Intern 3'},
+  devices:    {t: 'Your devices', i: 'devices', act: 'go:Your devices'},
+  phonename:  {t: 'Phone name', i: 'phone', v: () => S.phone, act: 'go:Phone name dialog'},
+  preview:    {preview: true},
+  font:       {t: 'Font', i: 'type', v: () => S.font, act: 'sheet:font'},
+  size:       {t: 'Size', i: 'size', stepper: 'size'},
+  colors:     {t: 'Colors', i: 'palette', v: colorsLabel, act: 'sheet:colors'},
+  lang:       {t: 'Language', i: 'mic', v: () => S.lang, act: 'sheet:lang'},
+  appcolors:  {t: 'App colors', i: 'contrast', v: () => S.palette, act: 'sheet:palette'},
+  text:       {t: 'Text size', i: 'size', stepper: 'text'},
+  swarm:      {t: 'Swarm', i: 'flask', d: 'Open your Swarms from Home or Find. Still taking shape.', sw: 'swarm'},
+  how:        {t: 'How Harness works', i: 'help', act: 'go:How Harness works'},
+  sample:     {t: 'Try the sample', i: 'play', act: 'go:the sample'},
+  tips:       {t: 'Show the tips again', i: 'bulb', act: 'toast:The tips come back on the next harness.'},
+  version:    {t: 'Version', i: 'info', v: () => VERSION, fixed: true},
+  policy:     {t: 'Privacy Policy', i: 'file', act: 'go:Privacy Policy'},
+  help:       {t: 'Help', i: 'help', act: 'sheet:help'},
+  about:      {t: 'About', i: 'info', v: () => VERSION, act: 'sheet:about'},
+};
+
+/* ───── Builders ───── */
+const mark = (o, k) => o.marks && o.marks[k] ? ` data-chg="${o.marks[k]}"` : '';
+const stepper = k => {
+  const [lo, hi] = BOUNDS[k], v = S[k];
+  return `<span class="stp" role="group" aria-label="${k === 'size' ? 'Terminal size' : 'Text size'}">` +
+    `<button data-act="dec:${k}" aria-label="Smaller" ${v <= lo ? 'disabled' : ''}>${ic('minus')}</button>` +
+    `<span class="v" aria-live="polite">${v}</span>` +
+    `<button data-act="inc:${k}" aria-label="Larger" ${v >= hi ? 'disabled' : ''}>${ic('plus')}</button></span>`;
+};
+const preview = () => `<div class="pv a-pv" aria-hidden="true" style="font-size:${S.size}px;font-family:${esc(S.font)},var(--mono)">` +
+  `<span class="t3">~/web </span><span class="g">❯ </span>claude "fix the login"</div>`;
+const meRow = o => `<button class="a-row a-me" data-act="sheet:account"${mark(o, 'me')}><span class="av">${ME.initial}</span>` +
+  `<span class="a-tx"><span class="a-tt">${esc(ME.name)}</span><span class="a-dt">${esc(ME.email)}</span></span>${ic('chev-r', 'a-chev')}</button>`;
+
+function row(k, o) {
+  if (k === 'me') return meRow(o);
+  const r = R[k];
+  if (r.preview) return preview();
+  const m = mark(o, k);
+  const lead = `<span class="a-gl">${ic(r.i)}</span>`;
+  const det = o.detail && r.d ? `<span class="a-dt">${esc(r.d)}</span>` : '';
+  const txt = `<span class="a-tx"><span class="a-tt">${esc(r.t)}</span>${det}</span>`;
+  if (r.stepper) return `<div class="a-row"${m}>${lead}${txt}${stepper(r.stepper)}</div>`;
+  if (r.sw) return `<button class="a-row" role="switch" aria-checked="${S[r.sw]}" data-act="sw:${r.sw}"${m}>${lead}${txt}<span class="sw ${S[r.sw] ? 'on' : ''}" aria-hidden="true"></span></button>`;
+  const val = r.v ? `<span class="a-val">${esc(r.v())}</span>` : '';
+  if (r.fixed) return `<div class="a-row"${m}>${lead}${txt}${val}</div>`;
+  const act = (o.acts && o.acts[k]) || r.act;
+  return `<button class="a-row" data-act="${esc(act)}"${m}>${lead}${txt}${val}${ic('chev-r', 'a-chev')}</button>`;
+}
+const gap = h => `<div style="height:${h}px"></div>`;
+const cap = (t, n) => `<div class="a-cap"${n ? ` data-chg="${n}"` : ''}>${esc(t)}</div>`;
+const card = (rows, o) => `<div class="a-card">${rows.map(k => row(k, o)).join('')}</div>`;
+
+/* ───── The build: SettingsPage(swarm: true) as it is in the worktree ───── */
+const BUILT = {
+  marks: {me: 6, intern: 4, lang: 3, swarm: 5, how: 1, sample: 1, tips: 1, version: 2, policy: 2},
+  html() {
+    const o = {detail: true, marks: this.marks};
+    return gap(8) + card(['me'], o) +
+      [['usage', 'notif', 'privacy'], ['computers', 'profile', 'connectors', 'signin', 'intern'], ['devices', 'phonename']]
+        .map(g => gap(16) + card(g, o)).join('') +
+      cap('Terminal') + card(['preview', 'font', 'size', 'colors'], o) +
+      cap('Voice', 3) + card(['lang'], o) +
+      cap('Appearance') + card(['appcolors', 'text'], o) +
+      cap('Experimental') + card(['swarm'], o) +
+      cap('Help', 1) + card(['how', 'sample', 'tips'], o) +
+      cap('About', 2) + card(['version', 'policy'], o);
+  },
+};
+
+/* ───── The lean proposal ───── */
+const LEAN = {
+  marks: {me: 6, computers: 4, lang: 3, swarm: 5, help: 1, about: 2},
+  acts: {computers: 'go:Computers · Add computer · Set up Intern 3'},
+  html() {
+    const o = {detail: false, marks: this.marks, acts: this.acts};
+    return gap(8) + card(['me', 'usage', 'notif', 'privacy'], o) +
+      gap(16) + card(['computers', 'profile', 'connectors', 'signin'], o) +
+      gap(16) + card(['devices', 'phonename'], o) +
+      cap('Terminal') + card(['preview', 'font', 'size', 'colors', 'lang'], o) +
+      cap('Appearance') + card(['appcolors', 'text'], o) +
+      cap('Experimental') + card(['swarm'], o) +
+      gap(24) + card(['help', 'about'], o);
+  },
+};
+
+const PHONES = [['dir-n', LEAN], ['dir-a', BUILT]].map(([id, d]) => ({el: document.getElementById(id), d}));
+let hot = null;      // the change number picked in the list, or null
+let full = false;    // whole-page view
+
+const statusBar = () => `<div class="sb"><span>16:07</span><span class="island"></span><span class="sbr">` +
+  `<svg width="17" height="12" viewBox="0 0 17 12" aria-hidden="true"><path fill="currentColor" d="M8.5 2.6c2.3 0 4.4.9 6 2.4l1.1-1.1A10 10 0 0 0 8.5 1 10 10 0 0 0 1.4 3.9L2.5 5a8.5 8.5 0 0 1 6-2.4zm0 3.3c1.4 0 2.6.5 3.6 1.4l1.1-1.1a6.6 6.6 0 0 0-9.4 0l1.1 1.1c1-.9 2.2-1.4 3.6-1.4zm0 3.3c.5 0 1 .2 1.3.5L8.5 11 7.2 9.7c.3-.3.8-.5 1.3-.5z"/></svg>` +
+  `<svg width="27" height="13" viewBox="0 0 27 13" aria-hidden="true"><rect x=".5" y=".5" width="23" height="12" rx="3.5" fill="none" stroke="currentColor" opacity=".4"/><rect x="2" y="2" width="20" height="9" rx="2" fill="currentColor"/><path d="M25 4.5v4c.8-.3 1.3-1.1 1.3-2s-.5-1.7-1.3-2z" fill="currentColor" opacity=".4"/></svg></span></div>`;
+const mount = el => {
+  el.innerHTML = `${statusBar()}<div class="scr"><div class="bar"><button class="ib" data-act="go:You" aria-label="Back">${ic('chev-l')}</button><span class="ttl">Settings</span></div>` +
+    `<div class="scroll"><div class="a-list"></div><div class="marks" aria-hidden="true"></div></div></div>` +
+    `<div class="toast" role="status"></div><div class="scrim" data-act="close"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Choices"></div><span class="hi"></span>`;
+};
+function render(p) {
+  p.el.querySelector('.a-list').innerHTML = p.d.html();
+  applyHot(p.el);
+}
+const renderAll = () => PHONES.forEach(render);
+function applyHot(el) {
+  for (const x of el.querySelectorAll('.a-list [data-chg]')) x.classList.toggle('hot', hot !== null && x.dataset.chg === String(hot));
+}
+
+/* ───── Counts and screen lines, measured from the rendered page ───── */
+const fmt = n => n.toFixed(1);
+function measure(p) {
+  const sc = p.el.querySelector('.scroll'), list = p.el.querySelector('.a-list');
+  const H = sc.clientHeight, L = list.offsetHeight;
+  p.m = {
+    rows: list.querySelectorAll('.a-row, .a-pv').length,
+    cards: list.querySelectorAll('.a-card').length,
+    caps: list.querySelectorAll('.a-cap').length,
+    screens: L / H,
+  };
+  let lines = '';
+  for (let k = 1; k * H < L - 8; k++) lines += `<div class="mk-line" style="top:${k * H}px"><span>screen ${k + 1}</span></div>`;
+  p.el.querySelector('.marks').innerHTML = lines;
+}
+function showStats() {
+  const [n, a] = PHONES.map(p => p.m);
+  const line = m => `${m.rows} rows · ${m.cards} cards · ${m.caps} captions · ≈${fmt(m.screens)} screens`;
+  document.getElementById('st-n').textContent = line(n);
+  document.getElementById('st-a').textContent = line(a);
+  document.getElementById('delta').innerHTML =
+    `Shorter: <b>${a.rows} → ${n.rows}</b> rows · <b>${a.cards} → ${n.cards}</b> cards · <b>${a.caps} → ${n.caps}</b> captions · <b>≈${fmt(a.screens)} → ≈${fmt(n.screens)}</b> screens`;
+}
+
+/* ───── Sheets, toasts ───── */
+function toast(el, msg) {
+  const t = el.querySelector('.toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 1600);
+}
+const opt = (act, label, checked, icon) =>
+  `<button class="opt" aria-pressed="${checked}" data-act="${esc(act)}">${ic(checked ? 'check' : icon)}<span>${esc(label)}</span></button>`;
+const action = k => `<button class="opt" data-act="${esc(R[k].act)}">${ic(R[k].i)}<span>${esc(R[k].t)}</span></button>`;
+function openSheet(el, kind, opener) {
+  let h = '<div class="grab"></div>';
+  if (kind === 'account') {
+    h += `<div class="sh-t">${esc(ME.email)}</div><button class="opt danger" data-act="toast:Sign out? (confirm)">${ic('logout')}<span>Sign out</span></button>`;
+  } else if (kind === 'font') {
+    h += `<div class="sh-t">Terminal font</div>` + FONTS.map(f => opt(`pick:font:${f}`, f, S.font === f, 'type')).join('');
+  } else if (kind === 'colors') {
+    h += `<div class="sh-t">Terminal colors</div>` + TERM.map(([v, l]) => opt(`pick:colors:${v}`, l ?? S.palette, S.colors === v, 'palette')).join('');
+  } else if (kind === 'lang') {
+    h += `<div class="sh-t">Language</div>` + LANGS.map(l => opt(`pick:lang:${l}`, l, S.lang === l, 'mic')).join('');
+  } else if (kind === 'palette') {
+    h += `<div class="sh-t">App colors</div>` + Object.entries(PALETTES).map(([c, list]) =>
+      `<div class="sh-c">${c}</div>` + list.map(p => opt(`pick:palette:${p}`, p, S.palette === p, 'contrast')).join('')).join('');
+  } else if (kind === 'help') {
+    h += `<div class="sh-t">Help</div>` + ['how', 'sample', 'tips'].map(action).join('');
+  } else if (kind === 'about') {
+    h += `<div class="sh-t">Version ${VERSION}</div>` + action('policy');
+  }
+  const sh = el.querySelector('.sheet');
+  sh.innerHTML = h; sh._opener = opener;
+  el.querySelector('.scrim').classList.add('show'); sh.classList.add('show');
+  setTimeout(() => (sh.querySelector('[aria-pressed=true]') || sh.querySelector('button.opt'))?.focus({preventScroll: true}), 40);
+}
+function closeSheet(el) {
+  const sh = el.querySelector('.sheet');
+  if (!sh.classList.contains('show')) return false;
+  sh.classList.remove('show'); el.querySelector('.scrim').classList.remove('show');
+  const op = sh._opener; sh._opener = null;
+  if (op && op.isConnected) op.focus({preventScroll: true});
+  return true;
+}
+
+/* ───── One click handler per phone ───── */
+const refocus = (el, a) => el.querySelector(`.a-list [data-act="${a}"]:not(:disabled)`)?.focus({preventScroll: true});
+function act(el, a, target) {
+  const [verb, ...rest] = a.split(':'); const arg = rest.join(':');
+  const fromSheet = !!target.closest('.sheet');
+  switch (verb) {
+    case 'go': if (fromSheet) closeSheet(el); return toast(el, `→ ${arg}`);
+    case 'toast': if (fromSheet) closeSheet(el); return toast(el, arg);
+    case 'notif': S.notif = S.notif === 'Off' ? 'On' : 'Off'; renderAll(); return refocus(el, a);
+    case 'sw': S[arg] = !S[arg]; renderAll(); return refocus(el, a);
+    case 'inc': case 'dec': {
+      const [lo, hi] = BOUNDS[arg];
+      S[arg] = Math.min(hi, Math.max(lo, S[arg] + (verb === 'inc' ? 1 : -1)));
+      renderAll(); return refocus(el, a);
+    }
+    case 'sheet': return openSheet(el, arg, target);
+    case 'pick': {
+      const [key, ...v] = arg.split(':'); S[key] = v.join(':');
+      const sh = el.querySelector('.sheet');
+      const sel = sh._opener?.dataset.act;
+      renderAll();
+      // The opener was re-rendered; find the new node so focus returns to it.
+      sh._opener = sel ? el.querySelector(`.a-list [data-act="${sel}"]`) : null;
+      return closeSheet(el);
+    }
+    case 'close': return closeSheet(el);
+  }
+}
+for (const p of PHONES) {
+  mount(p.el); render(p);
+  p.el.addEventListener('click', e => {
+    const t = e.target.closest('[data-act]');
+    if (!t || !p.el.contains(t) || t.disabled) return;
+    act(p.el, t.dataset.act, t);
+  });
+  p.el.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && closeSheet(p.el)) e.stopPropagation();
+  });
+}
+PHONES.forEach(measure);
+showStats();
+
+/* ───── Shell: the change list and the two toggles ───── */
+const duo = document.getElementById('duo');
+const chgs = [...document.querySelectorAll('.chg')];
+function pick(n) {
+  hot = hot === n ? null : n;
+  for (const b of chgs) b.setAttribute('aria-pressed', String(Number(b.dataset.chg) === hot));
+  for (const p of PHONES) {
+    applyHot(p.el);
+    if (hot === null || full) continue;
+    // Bring the first marked row of this phone into its own scroller, not the page.
+    const first = p.el.querySelector(`.a-list [data-chg="${hot}"]`);
+    const sc = p.el.querySelector('.scroll');
+    if (!first) continue;
+    const top = first.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop;
+    sc.scrollTo({top: Math.max(0, top - sc.clientHeight / 3), behavior: 'smooth'});
+  }
+}
+chgs.forEach(b => b.addEventListener('click', () => pick(Number(b.dataset.chg))));
+const tDiff = document.getElementById('t-diff'), tFull = document.getElementById('t-full');
+const setDiff = on => { duo.classList.toggle('diff', on); tDiff.setAttribute('aria-pressed', String(on)); };
+const setFull = on => {
+  full = on; duo.classList.toggle('full', on); tFull.setAttribute('aria-pressed', String(on));
+  if (on) for (const p of PHONES) p.el.querySelector('.scroll').scrollTop = 0;
+};
+tDiff.addEventListener('click', () => setDiff(!duo.classList.contains('diff')));
+tFull.addEventListener('click', () => setFull(!full));
+document.addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest('.sheet')) return;
+  if (/^[1-6]$/.test(e.key)) pick(Number(e.key));
+  else if (e.key === 'd' || e.key === 'D') setDiff(!duo.classList.contains('diff'));
+  else if (e.key === 'f' || e.key === 'F') setFull(!full);
+});
+})();
+</script>
+</body>
+</html>

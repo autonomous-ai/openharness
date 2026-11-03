@@ -82,6 +82,7 @@ assert pairs == [
     ("superTab", "wait-v1"),
     ("swarmCard", "v1"),
     ("swarmChat", "v1"),
+    ("swarmBuddy", "v1"),
     ("ota", "v1"),
     ("mac", "aa"),
     ("settings", "{"),

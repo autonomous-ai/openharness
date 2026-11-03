@@ -4,6 +4,7 @@
 The unprivileged screen may cache availability. Root independently fetches the
 official metadata and verifies a private download before changing the machine.
 TLS authenticates the release channel; SHA-256 verifies its published assets.
+The base image's OpenCode is not part of this update (installer.py IgnorePkg).
 """
 from __future__ import annotations
 import argparse

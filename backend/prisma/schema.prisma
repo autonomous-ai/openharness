@@ -556,7 +556,8 @@ model ProductUsageTotal {
   @@index([dayUtc], map: "product_usage_expiry")
 }
 
-/// Random report receipt, used only to prevent retries counting twice. No identity or report body.
+/// Random report receipt, used only to prevent retries counting twice. No identity or report body. Removed at expiresAt by a TTL index
+/// (product_usage_expiry); the old 36-day receipts go by 2026-12-04, sooner if the sweep may install its rule (lib/productUsageReceiptSweep.ts).
 model ProductUsageReceipt {
   id        String   @id @map("_id")
   expiresAt DateTime
@@ -879,6 +880,9 @@ model HarnessShare {
 
   @@unique([machineId, agentId, recipientEmail])
   @@index([recipientEmail, autonomousEnv, expiresAt])
+  /// The share list (routes/harnessShares.ts): one recipient's unrevoked shares by createdAt, read without a sort in memory and
+  /// without fetching the revoked ones. expiresAt last, so an expired share is dropped from its key before it is fetched.
+  @@index([recipientEmail, autonomousEnv, revokedAt, createdAt, expiresAt])
   @@index([ownerId, machineId])
   @@map("harness_shares")
 }
@@ -1355,6 +1359,7 @@ model SuperTabUploadAllowance {
   at DateTime
 }
 
+/// One command's receipt, so a repeat of the same request gets the same answer. Removed 30 days after createdAt by a TTL index.
 model SuperTabOperation {
   id           String   @id @map("_id")
   tabId        String
@@ -1367,6 +1372,9 @@ model SuperTabOperation {
   createdAt    DateTime @default(now())
 
   @@index([tabId])
+  /// A receipt goes 30 days after createdAt (superTabs/operations.ts ensureOperationExpiry). Declared so db push keeps the index; the
+  /// schema step makes it, with its expiry, before the push.
+  @@index([createdAt], map: "operation_expiry")
 }
 
 // A conversation-scoped provenance receipt. It grants no terminal access.
@@ -1482,7 +1490,8 @@ model SuperTabAttempt {
   @@index([tabId, conversationId, createdAt])
 }
 
-/// One `harness super-tab route` decision (superTabs/routeRecord.ts). Pruned after 90 days on write.
+/// One `harness super-tab route` decision (superTabs/routeRecord.ts). Deleted 90 days after createdAt on each write (routeDecisions.ts
+/// RETENTION_MS; the costs report reads 90 days). Stored trimmed (routeRecord.ts storedRecord).
 model SuperTabRouteDecision {
   id             String    @id @map("_id")
   tabId          String
@@ -1778,6 +1787,9 @@ model SwarmHead {
   visibilityEpoch Int       @default(1)
   /// The tab revision when it was split into parts (0 for a Swarm born in parts). Every later message sequence is above it.
   sequenceBase    Int       @default(0)
+  /// The highest version of any agent tombstone the sweep purged (superTabs/agentTombstones.ts): an agent added with no
+  /// tombstone starts above it, so its versions never go back. Missing until the first purge.
+  agentFloor      Int?
 
   @@unique([tabId, key])
   @@index([tabId, changedAt])
@@ -1868,6 +1880,9 @@ model SwarmAgent {
 
   @@unique([tabId, key])
   @@index([tabId, changedAt])
+  /// A Swarm's live agents (parts/light.ts, load.ts, read/host.ts): without it the read planned on [tabId, changedAt] and
+  /// examined every tombstone too (prod 2026-11-02: 1,070 examined for 40 returned).
+  @@index([tabId, deleted])
   @@index([machineId, deleted])
   @@index([tabId, contributorId])
   /// One agent's registrations in every Swarm (confidential.ts, sessionScope.ts): host rows read them on every changed tab.

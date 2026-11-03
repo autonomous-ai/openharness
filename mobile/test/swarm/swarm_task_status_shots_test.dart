@@ -254,9 +254,8 @@ void main() {
                     as RenderRepaintBoundary)
                 .toImage(pixelRatio: 3);
         final png = await image.toByteData(format: ui.ImageByteFormat.png);
-        await File(
-          '$shots/task-status-$name-${brightness.name}.png',
-        ).writeAsBytes(png!.buffer.asUint8List());
+        await File('$shots/task-status-$name-${brightness.name}.png')
+            .writeAsBytes(png!.buffer.asUint8List());
         image.dispose();
       });
       await tester.tap(find.byKey(const ValueKey('swarm-menu')));

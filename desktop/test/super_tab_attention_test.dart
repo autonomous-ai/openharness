@@ -12,6 +12,7 @@ import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
+import 'package:harness/super_tabs/task_groups.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -382,6 +383,8 @@ void main() {
         await attention.load();
         c.select('open');
         if (!c.expandedProjects.contains('lead')) c.toggleProject('lead');
+        // Workgroups with no work are in The rest, unfolded here (#2309).
+        c.toggleTaskGroup('lead', SuperTabTaskGroup.rest);
         await pumpSidebar(tester, c, attention, brightness: brightness);
         final read = rowText(tester, 'super-group-lead', 'web-project');
         expect(read.style?.color, DesktopChrome.muted);
@@ -890,8 +893,8 @@ void main() {
     });
   });
 
-  testWidgets('a read workgroup with a tag of the reader is never behind '
-      '"… N more"', (tester) async {
+  testWidgets('a read workgroup with a tag of the reader is listed under '
+      'Needs you while The rest is folded', (tester) async {
     final server = projectServer();
     server.followedThreads = {'unread': [], 'read': [], 'more': false};
     final groups = server.state['conversations'] as List;
@@ -915,9 +918,10 @@ void main() {
     c.toggleProject('lead');
     await pumpSidebar(tester, c, attention);
     expect(
-      find.byKey(const ValueKey('super-project-more-lead')),
+      find.byKey(const ValueKey('super-task-group-lead-needsYou')),
       findsOneWidget,
     );
+    expect(find.byKey(const ValueKey('super-group-g28')), findsNothing);
     expect(find.byKey(const ValueKey('super-group-offline')), findsOneWidget);
     expect(inRow('super-group-offline', find.text('1')), findsOneWidget);
     await close(tester, c);

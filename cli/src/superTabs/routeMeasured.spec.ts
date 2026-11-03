@@ -1,5 +1,5 @@
 // cli/src/superTabs/routeMeasured.spec.ts
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { choose, type Assessment, type Catalog, type Probe } from './route.js'
 import { MEASURED, MEASURED_MAKER, measuredFrom, measuredPlugin, readMeasured, type MeasuredRow } from './routeMeasured.js'
 import { ROUTE_PLUGIN_MAKERS, type PluginInput } from './routePlugins.js'
@@ -170,6 +170,24 @@ describe('reading the measures', () => {
     const read = await readMeasured(async payload => { asked.push(payload); return answer([{ ...row({}), tokens: { input: 1 }, outcomes: { done: 1 } }], { truncated: true }) })
     expect(asked).toEqual([{ action: 'costs', days: 7 }])
     expect(read).toEqual({ rows: [row({})], truncated: true })
+  })
+
+  it('logs a refused or failed read once per reason, never its detail, so a Team account\'s refusal is seen', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // A fresh module: what it already said is kept per process.
+    vi.resetModules()
+    const { readMeasured } = await import('./routeMeasured.js')
+    try {
+      const refused = async () => ({ error: 'TEAM_SESSION_LIMITED', detail: 'A team sign-in can only run Swarm agents on its own machine.', status: 403 })
+      expect(await readMeasured(refused)).toBeNull()
+      expect(await readMeasured(refused)).toBeNull()
+      expect(await readMeasured(async () => { throw new Error('socket closed') })).toBeNull()
+      expect(await readMeasured(async () => { throw new Error('socket closed again') })).toBeNull()
+      expect(warn.mock.calls.map(c => String(c[0]))).toEqual([
+        '[super-tabs] the route could not read cost results: TEAM_SESSION_LIMITED (403); it ranks without them',
+        '[super-tabs] the route could not read cost results: the request failed; it ranks without them',
+      ])
+    } finally { warn.mockRestore() }
   })
 
   it('a refusal, a failure, a slow read or an answer it cannot read gives no measures, so the route ranks as today', async () => {
