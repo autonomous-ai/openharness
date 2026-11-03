@@ -7,6 +7,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:flutter/gestures.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
+import 'package:harness/super_tabs/task_groups.dart';
 import 'package:harness/super_tabs/swarm_type.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
@@ -46,6 +47,8 @@ void main() {
     );
     await tester.pumpAndSettle();
     controller.toggleProject('lead');
+    // A task with no agent is in The rest, folded until opened (#2733).
+    controller.toggleTaskGroup('lead', SuperTabTaskGroup.rest);
     await tester.pumpAndSettle();
     return controller;
   }

@@ -25,6 +25,7 @@ import 'package:harness/super_tabs/buddy_chat_shortcut.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/super_tabs/task_groups.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 
 import 'box_render_preview_test.dart' show loadPreviewFonts;
@@ -524,6 +525,8 @@ void main() {
       (server.state['conversations'] as List).last['number'] = 196;
       final c = await show(tester, server);
       c.toggleProject('lead');
+      // Workgroups with no work are in The rest, unfolded here (#2309).
+      c.toggleTaskGroup('lead', SuperTabTaskGroup.rest);
       await tester.pumpAndSettle();
       final row = find.byKey(const ValueKey('super-group-offline'));
       final name = find.descendant(

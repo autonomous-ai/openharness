@@ -1046,17 +1046,31 @@ void main() {
       expect(opened, ['m1']);
     });
 
-    testWidgets('it is as wide as its content, within its maximum', (
-      tester,
-    ) async {
-      await pump(tester);
-      expect(tester.getSize(bar).width, lessThan(600));
+    // Huy, 2026-11-03 (#2373): as wide as Slack's, about 600 points, or the
+    // message column when the chat is narrower; its arrow at the right end.
+    testWidgets(
+      'it is 600 wide, or the column\'s width, its arrow at the end',
+      (tester) async {
+        final opened = await pump(tester);
+        final wide = tester.getRect(bar);
+        expect(wide.width, 600);
+        expect(wide.right - tester.getRect(chevron).right, lessThan(12));
+        // Its right end, far past the words, is still the bar.
+        await tester.tapAt(wide.centerRight - const Offset(3, 0));
+        await tester.pump();
+        expect(opened, ['m1']);
 
-      // Many repliers in a narrow chat: a few faces, and nothing overflows.
-      await pump(tester, width: 300, authors: 12);
-      expect(tester.takeException(), isNull);
-      expect(tester.getSize(bar).width, lessThanOrEqualTo(300));
-      expect(find.byType(SuperTabAvatar), findsNWidgets(5));
-    });
+        // Many repliers in a narrow chat: the column's width, a few faces, and
+        // nothing overflows.
+        await pump(tester, width: 300, authors: 12);
+        expect(tester.takeException(), isNull);
+        expect(tester.getSize(bar).width, 300);
+        expect(
+          tester.getRect(bar).right - tester.getRect(chevron).right,
+          lessThan(12),
+        );
+        expect(find.byType(SuperTabAvatar), findsNWidgets(5));
+      },
+    );
   });
 }

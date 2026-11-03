@@ -658,8 +658,6 @@ export interface CommandEffects {
   instructions?: import('./instructions.js').InstructionsWrite
   /** A coordinator's note kept or a note removed, written outside the tab state by the store (instructions.ts). */
   notes?: import('./instructions.js').NotesWrite
-  /** Stored messages given new words: a task's line as the task moves (taskLine.ts). */
-  edits?: import('./taskLine.js').MessageEdit[]
 }
 /** `details` go to the caller with the code: what it needs to act on the refusal (a stale save's current text). */
 export class SuperTabError extends Error {
@@ -838,6 +836,11 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   else delete visible.removedMachines
   // Rows by day and project that only the leaderboard read uses, and it takes them from the Swarm itself.
   for (const pool of visible.machines ?? []) delete pool.lentDays
+  // A machine kept for some projects names to each reader only those they may read (machines.ts projects): a private
+  // project's id is not another member's to see.
+  for (const pool of visible.machines ?? []) {
+    if (pool.projects) pool.projects = pool.projects.filter(id => projectsOf(state).some(p => p.id === id && canReadProject(state, actor, p)))
+  }
   // Nor its id, which a Buddy's row carries (machineHiddenFrom).
   visible.agents = visible.agents.map(a => machineHiddenFrom(state, actor, a) ? agentWithoutMachine(a) : a)
   // The removed Leads conversation reaches nobody (leadsRemoved), its id included.

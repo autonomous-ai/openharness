@@ -10,6 +10,7 @@ import 'p2p/web_terminal_p2p.dart';
 import 'parts/workspace_part.dart';
 import 'shell/web_focus_ring.dart';
 import 'shell/web_store_banner.dart';
+import 'update/web_update_host.dart';
 import 'web_console.dart';
 
 /// The signed-in screen of a browser build, chosen over
@@ -25,14 +26,18 @@ Widget authenticatedWorkspace(AppNotifier app) => P2pResumeRetry(
 void prepareConsole() => prepareWebConsole();
 
 /// What a browser build draws around every screen: on a phone, the bar that
-/// sends it to the Harness app in its store. Above the Navigator, so every
+/// sends it to the Harness app in its store, and the bar that says a newer
+/// release is out. Above the Navigator, so every
 /// screen and route under it shows no key hints: the web is mouse-first.
 /// Its first frame starts the workspace's download, and from the start it
 /// keeps (and forgets) the account's computers.
 Widget appFrame(Widget app) => WorkspacePrefetch(
   child: KeptComputers(
     child: WebFocusRing(
-      child: WebAppStoreFrame(child: KeyHints(visible: false, child: app)),
+      // The update bar sits under the store bar, above the app.
+      child: WebAppStoreFrame(
+        child: WebUpdateHost(child: KeyHints(visible: false, child: app)),
+      ),
     ),
   ),
 );
