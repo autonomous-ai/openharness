@@ -2349,7 +2349,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
             fail('PROFILE_UNKNOWN', `That account isn’t on ${destination.name} any more.`, 409)
           }
           if (start.request.profileId !== profileId) fail('STALE_SWITCH', 'This PM switch no longer names this account.')
-          if (start.request.machineId !== switchSource.machineId && (start.request.handoffSourceAgentId !== switchSource.id
+          if (start.request.machineId !== switchSource.machineId && (start.request.handoffSourceAgentId !== switchSource.harnessId
             || start.request.handoffNote === undefined || !start.request.handoffChangeId)) {
             fail('HANDOFF_PENDING', 'The source host has not prepared this PM’s handoff yet.', 409)
           }
@@ -2440,7 +2440,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           || conversation(state, project.leadConversationId).leadId !== switchSource.id) {
           fail('STALE_SWITCH', 'This PM switch is no longer current.')
         }
-        if (start.request.machineId !== switchSource.machineId && (start.request.handoffSourceAgentId !== switchSource.id
+        if (start.request.machineId !== switchSource.machineId && (start.request.handoffSourceAgentId !== switchSource.harnessId
           || start.request.handoffNote === undefined || !start.request.handoffChangeId)) {
           fail('HANDOFF_PENDING', 'The source host has not prepared this PM’s handoff yet.', 409)
         }
@@ -2652,7 +2652,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         break
       }
       start.request.handoffNote = command.note
-      start.request.handoffSourceAgentId = target.id
+      start.request.handoffSourceAgentId = target.harnessId
       start.request.handoffChangeId = command.handoffChangeId
       break
     }
@@ -2662,7 +2662,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (actor.kind !== 'agent' || actor.agentId !== target.id || ![target.switchRequest?.id, target.switchLanded?.id].includes(command.switchId)) {
         fail('STALE_SWITCH', 'Only the execution host can report the current switch.', 403)
       }
-      const project = ledProject(state, target.id), landed = target.switchLanded?.id === command.switchId ? target.switchLanded : undefined
+      const landed = target.switchLanded?.id === command.switchId ? target.switchLanded : undefined
+      const promoted = landed?.candidateAgentId ? state.agents.find(candidate => candidate.id === landed.candidateAgentId) : undefined
+      const project = ledProject(state, target.id) ?? (promoted ? ledProject(state, promoted.id) : undefined)
       const asked = (landed ?? target.switchRequest)?.requestedBy
       // A rebind already moved the PM: a failure the host reported as it landed is not what happened.
       const moved = command.ok || !!landed
@@ -2671,9 +2673,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       delete target.switchLanded
       if (!project) break
       const error = command.error?.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/[.\s]+$/, '')
-      const engine = ENGINE_NAMES[target.configuration?.engine ?? ''] ?? 'its engine'
-      const label = target.profileId && state.machines?.find(m => m.machineId === target.machineId)?.observation?.profiles
-        ?.find(p => p.engine === target.configuration?.engine && p.id === target.profileId)?.label
+      const running = moved && promoted ? promoted : target
+      const engine = ENGINE_NAMES[running.configuration?.engine ?? ''] ?? 'its engine'
+      const label = running.profileId && state.machines?.find(m => m.machineId === running.machineId)?.observation?.profiles
+        ?.find(p => p.engine === running.configuration?.engine && p.id === running.profileId)?.label
       effects.messages.push({ id: operationId, conversationId: project.leadConversationId, author: sender, replyTo: null, recipients: [], source: SYSTEM_ROW,
         text: moved ? `PM moved to ${engine}${label ? ` · ${label}` : ''}.`
           : `Couldn't switch the PM: ${error || 'it failed'}. ${command.down ? `It has not come back on ${engine} yet; its machine keeps trying.` : `It is back on ${engine}.`}` })
