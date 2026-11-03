@@ -119,8 +119,9 @@ describe('a rename after joining', () => {
     expect(await nameIn(tab, 'studio-2')).toBe('Mac 3')
     expect(await nameIn(tab, 'studio-2', huy)).toBe('Mac 3')
     // Its members' clients are told, so the next refresh reads it.
-    expect(pushes.find(p => p.tabId === tab)?.userIds).toEqual(expect.arrayContaining([dee.sub, huy.sub]))
-    expect(await report(tab, 'studio-2')).toBe('fast')
+    expect(pushes.find(p => p.tabId === tab)).toMatchObject({ userIds: expect.arrayContaining([dee.sub, huy.sub]), parts: expect.arrayContaining(['main']) })
+    // The rename moved the Swarm's main stamp, so the report after runs in full once more, then they are fast again.
+    expect([await report(tab, 'studio-2'), await report(tab, 'studio-2')]).toEqual(['full', 'fast'])
   })
 
   it('renames it in every Swarm it is in', async () => {
