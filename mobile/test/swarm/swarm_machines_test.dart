@@ -69,6 +69,7 @@ void main() {
     List<Map<String, dynamic>>? agents,
     String role = 'owner',
     Map<String, dynamic>? localModels,
+    String? memberName,
     void Function(FakeSwarm fake)? routes,
   }) async {
     tester.view.physicalSize = const Size(1170, 2532);
@@ -89,7 +90,9 @@ void main() {
             ? null
             : {...headData(), 'localModels': localModels},
       ),
-      'members': [part(me, 1, person(me, role: role))],
+      'members': [
+        part(me, 1, {...person(me, role: role), 'name': ?memberName}),
+      ],
       'machines': [for (final m in rows) part(m['machineId'] as String, 1, m)],
     };
     fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
@@ -426,14 +429,19 @@ void main() {
       List<Map<String, dynamic>> agents = const [],
       List<Map<String, dynamic>> projects = const [],
       Map<String, dynamic>? blockedBy,
+      int hiddenAgentCount = 0,
+      int hiddenSoleSourceProjectCount = 0,
     }) => {
+      'previewVersion': 2,
       'blockedBy': blockedBy,
       'agents': agents,
+      'hiddenAgentCount': hiddenAgentCount,
       'soleSourceProjects': projects,
+      'hiddenSoleSourceProjectCount': hiddenSoleSourceProjectCount,
     };
 
     int removalReads() => fake.calls
-        .where((c) => c.path.endsWith('/machines/mac-1/removal'))
+        .where((c) => c.path.contains('/machines/mac-1/removal'))
         .length;
 
     testWidgets(
@@ -595,6 +603,10 @@ void main() {
         await press(tester);
         await tester.tap(find.text('Remove from Swarm'));
         await tester.pumpAndSettle();
+        expect(
+          fake.calls.singleWhere((c) => c.path.contains('/removal')).path,
+          '/api/super-tabs/$tab/machines/mac-1/removal/v2',
+        );
         expect(find.text('Remove Tony’s Mac from this Swarm?'), findsOneWidget);
         expect(find.textContaining('Nova · Mobile'), findsOneWidget);
         expect(
@@ -614,6 +626,54 @@ void main() {
         expect(fake.commands, [
           {'type': 'machine.remove', 'machineId': 'mac-1'},
         ]);
+      },
+    );
+
+    testWidgets(
+      'Remove counts hidden agents and projects without naming them',
+      (tester) async {
+        await open(
+          tester,
+          agents: plain,
+          routes: (f) =>
+              f.routes['/api/super-tabs/$tab/machines/mac-1/removal'] = (_) =>
+                  preview(
+                    agents: [
+                      {
+                        'name': 'Nova',
+                        'projectName': 'Mobile',
+                        'task': 'Fix sync',
+                      },
+                    ],
+                    projects: [
+                      {'name': 'Beacon'},
+                    ],
+                    hiddenAgentCount: 2,
+                    hiddenSoleSourceProjectCount: 1,
+                  ),
+        );
+        await press(tester);
+        await tester.tap(find.text('Remove from Swarm'));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('Nova · Mobile'), findsOneWidget);
+        expect(
+          find.textContaining('“Fix sync” loses its agent'),
+          findsOneWidget,
+        );
+        expect(find.textContaining('Beacon'), findsOneWidget);
+        expect(
+          find.textContaining("2 agents of projects you can't see"),
+          findsOneWidget,
+        );
+        expect(
+          find.textContaining(
+            "1 project you can't see has code only on this machine",
+          ),
+          findsOneWidget,
+        );
+        expect(find.textContaining('Secret'), findsNothing);
+        expect(fake.commands, isEmpty);
       },
     );
 
@@ -682,6 +742,57 @@ void main() {
         expect(find.textContaining('Delete the project first'), findsOneWidget);
         expect(
           find.textContaining('Remove Tony’s Mac from this Swarm?'),
+          findsNothing,
+        );
+        expect(fake.commands, isEmpty);
+      },
+    );
+
+    testWidgets(
+      'an unreadable Product Manager blocks with the generic reason',
+      (tester) async {
+        const reason = "A Product Manager of a project you can't see runs on this machine.";
+        await open(
+          tester,
+          agents: plain,
+          routes: (f) =>
+              f.routes['/api/super-tabs/$tab/machines/mac-1/removal'] = (_) =>
+                  preview(blockedBy: {'reason': reason}),
+        );
+        await press(tester);
+        await tester.tap(find.text('Remove from Swarm'));
+        await tester.pumpAndSettle();
+
+        expect(find.text(reason), findsOneWidget);
+        expect(find.text('Could not check this machine.'), findsNothing);
+        expect(
+          find.textContaining('Remove Tony’s Mac from this Swarm?'),
+          findsNothing,
+        );
+        expect(fake.commands, isEmpty);
+      },
+    );
+
+    testWidgets(
+      'fails closed when the backend lacks the versioned preview',
+      (tester) async {
+        await open(
+          tester,
+          agents: plain,
+          routes: (f) =>
+              f.routes['/api/super-tabs/$tab/machines/mac-1/removal'] = (_) => {
+                'blockedBy': null,
+                'agents': <Object>[],
+                'soleSourceProjects': <Object>[],
+              },
+        );
+        await press(tester);
+        await tester.tap(find.text('Remove from Swarm'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Could not check this machine.'), findsOneWidget);
+        expect(
+          find.text('Remove Tony’s Mac from this Swarm?'),
           findsNothing,
         );
         expect(fake.commands, isEmpty);
@@ -1039,6 +1150,82 @@ void main() {
         expect(find.text('Qwen3 8B'), findsNothing);
       },
     );
+
+    testWidgets(
+      'each served model names whose Buddy runs on it, by the name they set',
+      (tester) async {
+        final pool = machinePool('mac-1', 'Mac');
+        (pool['observation'] as Map<String, dynamic>)['localModels'] = [
+          {
+            'grid': 'swarm-grid',
+            'model': 'deepseek/deepseek-v3',
+            'kind': 'api',
+          },
+          {
+            'grid': 'swarm-grid',
+            'model': 'qwen3:8b',
+            'kind': 'local',
+            'name': 'Qwen3 8B',
+          },
+        ];
+        await open(
+          tester,
+          machines: [pool],
+          memberName: 'Minh Nguyen',
+          localModels: const {
+            'grid': 'swarm-grid',
+            'enabled': true,
+            'ready': true,
+          },
+          agents: [
+            // Not a Buddy: it says nothing of whose it is.
+            {
+              ...agent('agent-builder', displayName: 'Nova'),
+              'gridModel': 'qwen3:8b',
+            },
+            {
+              ...agent('agent-buddy', name: 'Buddy'),
+              'buddyOf': {'personId': me},
+              'gridModel': 'qwen3:8b',
+            },
+          ],
+        );
+        await details(tester);
+        await tester.dragUntilVisible(
+          key('swarm-machine-local-models-mac-1'),
+          inSheet(find.byType(SingleChildScrollView)),
+          const Offset(0, -200),
+        );
+        final used = inSheet(find.text("Used by Minh Nguyen's Buddy"));
+        expect(used, findsOneWidget);
+        // One line, under the model the Buddy runs on alone.
+        expect(
+          tester.getTopLeft(used).dy,
+          greaterThan(tester.getTopLeft(inSheet(find.text('Qwen3 8B'))).dy),
+        );
+        expect(inSheet(find.text('deepseek-v3')), findsOneWidget);
+        expect(inSheet(find.textContaining('Used by')), findsOneWidget);
+      },
+    );
+
+    testWidgets('its owner by the name they set for the Swarm', (
+      tester,
+    ) async {
+      await open(tester, memberName: 'Minh Nguyen');
+      await details(tester);
+      expect(inSheet(find.text('Owner')), findsOneWidget);
+      expect(inSheet(find.text('Minh Nguyen')), findsOneWidget);
+      expect(inSheet(find.text(me)), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+
+      // A computer the Swarm knows only by its agents is named by its owner.
+      await open(tester, machines: [], memberName: 'Minh Nguyen');
+      await details(tester);
+      expect(
+        inSheet(find.text("Minh Nguyen's computer")),
+        findsNWidgets(2),
+      );
+    });
 
     testWidgets(
       'out-of-range readings are no readings, and the project disk wins',

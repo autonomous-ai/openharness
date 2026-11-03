@@ -439,6 +439,9 @@ class Agent {
   /// Effort reported with [modelName], never inferred from a model default.
   final String? modelEffort;
 
+  /// [modelName] as the engine names it (`claude-opus-5-5`), for a launch.
+  final String? modelId;
+
   /// The grid model this agent is CURRENTLY running on, or null for its own vendor login.
   ///
   /// Read by the daemon off the live process on every discovery, never bookkept — so it is the
@@ -463,6 +466,15 @@ class Agent {
   /// Why the agent's model will not answer right now (`grid.note`), or null when nothing is wrong.
   final GridNote? gridNote;
   final String? parentAgentId;
+
+  /// `agent` when another agent started this harness, wherever that agent
+  /// runs; null when the person did (cli lib/agentFrame.ts `startedBy`).
+  final String? startedBy;
+
+  /// Started by the Swarm: by an agent, from no harness on this machine, as
+  /// the CLI tells one (superTabs/inCore/adoption.ts `swarmStarted`). Every
+  /// Buddy is one.
+  bool get startedBySwarm => startedBy == 'agent' && parentAgentId == null;
   final AgentProject? project;
   final AgentGitContext? gitContext;
   AgentProject? get displayProject =>
@@ -569,12 +581,14 @@ class Agent {
     this.claudeHome,
     this.modelName,
     this.modelEffort,
+    this.modelId,
     this.gridModel,
     this.gridWebSearch,
     this.gridBaseUrl,
     this.gridState,
     this.gridNote,
     this.parentAgentId,
+    this.startedBy,
     this.project,
     this.gitContext,
     this.lastActivityAt,
@@ -737,12 +751,14 @@ class Agent {
           : null,
       modelName: model?.name,
       modelEffort: model?.effort,
+      modelId: model?.id,
       gridModel: _safeLabel(grid?['model']),
       gridWebSearch: GridWebSearch.fromWire(grid?['webSearch']),
       gridBaseUrl: _safeUrl(grid?['baseUrl']),
       gridState: GridSectionState.parse(grid?['state']),
       gridNote: GridNote.fromWire(grid?['note']),
       parentAgentId: _safeLabel(j['parentAgentId'] ?? j['parentId']),
+      startedBy: j['startedBy'] == 'agent' ? 'agent' : null,
       project: AgentProject.fromJson(j['project']),
       gitContext: AgentGitContext.fromJson(j['gitContext']),
       lastActivityAt: j['updatedAt'] is String
@@ -818,12 +834,14 @@ class Agent {
     claudeHome: claudeHome,
     modelName: modelName,
     modelEffort: modelEffort,
+    modelId: modelId,
     gridModel: gridModel,
     gridWebSearch: gridWebSearch,
     gridBaseUrl: gridBaseUrl,
     gridState: gridState,
     gridNote: gridNote,
     parentAgentId: parentAgentId,
+    startedBy: startedBy,
     project: project,
     gitContext: gitContext ?? this.gitContext,
     lastActivityAt: lastActivityAt,
@@ -1223,6 +1241,7 @@ class AgentProject {
     required this.cwd,
     this.root,
     this.remote,
+    this.repository,
     this.branch,
     this.worktree = false,
     this.branchPending = false,
@@ -1231,6 +1250,12 @@ class AgentProject {
   final String cwd;
   final String? root;
   final String? remote;
+
+  /// The repository [remote] stands for when its host is an SSH alias
+  /// (`gh-work/acme/api` is `github.com/acme/api`, cli agentProject.ts
+  /// `aliasRepository`). Null when [remote] names its real host, and from an
+  /// older daemon.
+  final String? repository;
   final String? branch;
 
   /// In a linked worktree rather than the repository's own checkout.
@@ -1289,12 +1314,21 @@ class AgentProject {
       cwd == other.cwd &&
       root == other.root &&
       remote == other.remote &&
+      repository == other.repository &&
       branch == other.branch &&
       worktree == other.worktree &&
       branchPending == other.branchPending;
   @override
-  int get hashCode =>
-      Object.hash(name, cwd, root, remote, branch, worktree, branchPending);
+  int get hashCode => Object.hash(
+    name,
+    cwd,
+    root,
+    remote,
+    repository,
+    branch,
+    worktree,
+    branchPending,
+  );
 
   static AgentProject? fromJson(Object? raw) {
     if (raw is! Map) return null;
@@ -1316,6 +1350,7 @@ class AgentProject {
       cwd: cwd,
       root: field('root'),
       remote: field('remote'),
+      repository: field('repository'),
       branch: field('branch', 256),
       worktree: raw['worktree'] == true,
       branchPending: raw['branchPending'] == true,

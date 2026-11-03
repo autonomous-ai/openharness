@@ -1,5 +1,7 @@
 # What we're building
 
+> **Superseded on 2026-11-03 by [PRODUCT.md](../../PRODUCT.md).** Kept as history.
+
 Strategy proposal, September 26, 2026. An opinion to argue with, not a decision. It builds on the
 [terminal tools market research](../research/2026-09-26-terminal-tools-market.md) and
 [who we're building for](../ideal-users.md).

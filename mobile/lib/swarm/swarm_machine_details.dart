@@ -5,6 +5,8 @@ import '../shared/theme/app_theme.dart';
 import '../shared/theme/app_type.dart';
 import '../widgets/engine_identity.dart';
 import 'model.dart';
+import 'swarm_buddy.dart';
+import 'swarm_reader.dart';
 
 /// The engines a machine's allowances are read for, Claude first (Desktop `machines.dart` `_chipEngines`).
 const _engines = ['claude', 'codex'];
@@ -239,7 +241,17 @@ Widget swarmMachineDetailRow(
   String text, {
   Color? color,
   bool narrow = false,
-}) => Padding(
+}) => _detailRow(
+  label,
+  Text(
+    text,
+    textAlign: TextAlign.right,
+    style: AppType.body(color: color ?? AppPalette.textPrimary),
+  ),
+  narrow: narrow,
+);
+
+Widget _detailRow(String label, Widget value, {bool narrow = false}) => Padding(
   padding: const EdgeInsets.symmetric(vertical: AppSpace.xs),
   child: Row(
     crossAxisAlignment: CrossAxisAlignment.start,
@@ -252,14 +264,7 @@ Widget swarmMachineDetailRow(
         ),
       ),
       const SizedBox(width: AppSpace.m),
-      Expanded(
-        flex: 3,
-        child: Text(
-          text,
-          textAlign: TextAlign.right,
-          style: AppType.body(color: color ?? AppPalette.textPrimary),
-        ),
-      ),
+      Expanded(flex: 3, child: value),
     ],
   ),
 );
@@ -392,23 +397,25 @@ class SwarmMachineDetails extends StatelessWidget {
 class SwarmMachineLocalModels extends StatelessWidget {
   const SwarmMachineLocalModels({
     super.key,
-    required this.snapshot,
+    required this.reader,
     required this.machineId,
     this.now = DateTime.now,
   });
 
-  final SuperTabSnapshot snapshot;
+  final SwarmReader reader;
   final String machineId;
   final DateTime Function() now;
 
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    final local = snapshot.localModels;
-    if (local == null || !local.enabled) return const SizedBox.shrink();
+    final snapshot = reader.snapshot, local = snapshot?.localModels;
+    if (snapshot == null || local == null || !local.enabled) {
+      return const SizedBox.shrink();
+    }
     final pool = snapshot.pool(machineId);
     final fresh = superTabServedModels(pool, local.grid, now: now());
-    final apis = <String>[], models = <String>[];
+    final apis = <SuperTabServedModel>[], models = <SuperTabServedModel>[];
     final observed = pool?['observation'];
     for (final m in _list(observed is Map ? observed['localModels'] : null)) {
       if (m is! Map || m['grid'] != local.grid || m['model'] is! String) {
@@ -418,15 +425,54 @@ class SwarmMachineLocalModels extends StatelessWidget {
       if (!fresh.any((f) => f.model == model)) continue;
       if (m['kind'] == 'api') {
         // An API's model without its provider's folder ("deepseek/…").
-        apis.add(model.substring(model.lastIndexOf('/') + 1));
+        apis.add((
+          model: model,
+          name: model.substring(model.lastIndexOf('/') + 1),
+        ));
       } else {
-        models.add(m['name'] is String ? m['name'] as String : model);
+        models.add((
+          model: model,
+          name: m['name'] is String ? m['name'] as String : model,
+        ));
       }
     }
-    Widget line(String label, List<String> names) => swarmMachineDetailRow(
+    // Whoever serves a model sees whose Buddy runs on it (Desktop `local_models.dart`; PRODUCT.md, Contribution:
+    // seen), from the Buddies every member's read carries.
+    String? usedBy(String model) {
+      final people = {
+        for (final a in snapshot.agents)
+          if (a.buddyOf case final person? when a.gridModel == model)
+            "${swarmBuddyPersonName(reader, person)}'s Buddy",
+      };
+      return people.isEmpty ? null : 'Used by ${people.join(', ')}';
+    }
+
+    Widget line(String label, List<SuperTabServedModel> served) => _detailRow(
       label,
-      names.isEmpty ? 'None' : names.join(', '),
-      color: names.isEmpty ? AppPalette.textSecondary : null,
+      served.isEmpty
+          ? Text(
+              'None',
+              textAlign: TextAlign.right,
+              style: AppType.body(color: AppPalette.textSecondary),
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                for (final s in served) ...[
+                  Text(
+                    s.name,
+                    textAlign: TextAlign.right,
+                    style: AppType.body(color: AppPalette.textPrimary),
+                  ),
+                  if (usedBy(s.model) case final used?)
+                    Text(
+                      used,
+                      textAlign: TextAlign.right,
+                      style: AppType.caption(color: AppPalette.textSecondary),
+                    ),
+                ],
+              ],
+            ),
     );
     return Column(
       key: ValueKey('swarm-machine-local-models-$machineId'),

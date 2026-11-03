@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
-import 'package:harness_mobile/swarm/swarm_home_rows.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/team_glance.dart';
@@ -11,7 +10,8 @@ import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
 /// A project's team line is counted once per Swarm read: the project's page
-/// draws the one glance of the read it shows.
+/// draws the one glance of the read it shows. Home's rows draw none since
+/// they lost their dot (2026-11-03).
 void main() {
   FakeSwarm backend() {
     final fake = FakeSwarm();
@@ -72,20 +72,16 @@ void main() {
 
   Finder key(String value) => find.byKey(ValueKey(value));
 
-  testWidgets("a project's row on Home draws the read's one glance", (
-    tester,
-  ) async {
+  testWidgets("a project's team is counted once per read: asked again, the "
+      'same glance', (tester) async {
     final host = await pump(tester);
     final reader = host.session!.inbox.reader(tab)!;
     final read = reader.snapshot!;
     final glance = swarmTeamGlance(read, projectId: project);
     expect(glance.line, '1 waiting');
-
-    final row = tester
-        .widget<SwarmHomeProjectRow>(key('swarm-project-$tab-$project'))
-        .glance;
+    expect(key('swarm-project-$tab-$project'), findsOneWidget);
 
     expect(reader.snapshot, same(read), reason: 'still the same read');
-    expect(row, same(glance));
+    expect(swarmTeamGlance(read, projectId: project), same(glance));
   });
 }

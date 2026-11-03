@@ -210,6 +210,29 @@ describe('projects inside an invite-only swarm', () => {
     expect(() => f.run({ type: 'agent.started', startId, harnessId: 'late', configuration })).toThrow('unavailable')
   })
 
+  it('deletes past a queued start whose task is archived, which can never launch', () => {
+    const f = setup(), p = f.project()
+    const conversationId = f.task(p.projectId)
+    const request = { conversationId, machineId: 'machine', engine: 'codex', name: 'Builder', cwd: '/work', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+    f.run({ type: 'agent.start', request })
+    f.state.conversations.find(c => c.id === conversationId)!.archived = true
+    f.run({ type: 'project.delete', projectId: p.projectId })
+    expect(projectsOf(f.state).map(p => p.id)).toEqual(['lead'])
+    expect(f.state.starts).toEqual([])
+  })
+
+  it('still refuses a dispatched start in an archived task: its machine may be starting the agent', () => {
+    const f = setup(), p = f.project()
+    const conversationId = f.task(p.projectId)
+    const request = { conversationId, machineId: 'machine', engine: 'codex', name: 'Builder', cwd: '/work', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+    const startId = String(f.run({ type: 'agent.start', request }).startId)
+    f.state.starts!.find(s => s.id === startId)!.dispatched = true
+    f.state.conversations.find(c => c.id === conversationId)!.archived = true
+    expect(() => f.run({ type: 'project.delete', projectId: p.projectId })).toThrow('pending agent starts')
+  })
+
   it('lets the owner or lead share a missing repository address once, without replacing it', () => {
     const f = setup(), p = f.project('public'), url = 'https://github.com/example/project'
     const share = (repositoryUrl: string): Command => ({ type: 'project.repository', projectId: p.projectId, repositoryUrl })

@@ -144,7 +144,7 @@ class _SwarmMachinesSectionState extends State<SwarmMachinesSection> {
           const SizedBox(width: AppSpace.s),
           SwarmAvatar(
             id: owner.id,
-            name: owner.username,
+            name: owner.shownName,
             picture: owner.avatar,
             size: AppIconSize.standalone,
           ),
@@ -270,7 +270,7 @@ class SwarmMachineSheet extends StatelessWidget {
               ),
               SwarmMachineDetails(
                 name: view.name,
-                owner: view.owner?.username,
+                owner: view.owner?.shownName,
                 status: view.details,
                 // Details follow the same freshness rule as the row: old readings are not shown as current.
                 resources: view.dim
@@ -279,7 +279,7 @@ class SwarmMachineSheet extends StatelessWidget {
                 engines: subscriptions.engines,
                 allowances: view.dim ? const [] : subscriptions.allowances,
                 footer: SwarmMachineLocalModels(
-                  snapshot: snapshot,
+                  reader: reader,
                   machineId: machineId,
                 ),
               ),
@@ -328,7 +328,7 @@ class _MachineView {
         // The Swarm knows no name for it, and sharing its own would be new data: it is named by its owner, as Desktop
         // names it.
         (pool == null && snapshot.teamPoolOf(id) == null && owner != null
-            ? "${owner!.username}'s computer"
+            ? "${owner!.shownName}'s computer"
             : 'Unavailable machine');
     reading = snapshot.readingPoolOf(id, reader.accountId);
     final observation = superTabMap(

@@ -80,7 +80,8 @@ List<SuperTabComposerChoice> superTabTagChoices(
     (person) =>
         person.id != c.accountId &&
         reads(person) &&
-        person.username.contains(query),
+        (person.username.contains(query) ||
+            (person.name?.toLowerCase().contains(query) ?? false)),
   );
   final offered = agents
       ? snapshot.agents.where(
@@ -96,8 +97,9 @@ List<SuperTabComposerChoice> superTabTagChoices(
   return [
     for (final person in people)
       (
-        label: person.username,
-        detail: null,
+        // Shown by the name they set, tagged by their username.
+        label: person.shownName,
+        detail: person.name == null ? null : '@${person.username}',
         choose: () => choose(person.id, person.username),
         leading: SuperTabAvatar.person(person, size: SuperTabAvatar.rowSize),
         kind: 'person',

@@ -1,5 +1,3 @@
-import 'dart:ui' show SemanticsAction;
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
@@ -8,7 +6,7 @@ import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_message_row.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:harness_mobile/swarm/swarm_thread_page.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
@@ -46,20 +44,62 @@ Map<String, dynamic> legacyShip(String target, int sequence) => {
 FakeSwarm taskLineBackend(
   List<Map<String, dynamic>> page, {
   bool target = true,
+  List<Map<String, dynamic>>? replies,
 }) {
   final fake = FakeSwarm();
+  final root = page.firstWhere(
+    (m) => m['thread'] == m['id'],
+    orElse: () => page.first,
+  );
+  final rootId = root['id'] as String;
+  final thread = [
+    for (final (i, reply)
+        in (replies ??
+                [
+                  {
+                    'text': 'Goal: Save edits while offline.',
+                    'source': {'kind': 'message'},
+                  },
+                ])
+            .indexed)
+      {
+        ...taskLine(id: i == 0 ? 'details' : 'reply-$i', sequence: 3 + i),
+        'thread': rootId,
+        'replyTo': rootId,
+        ...reply,
+      },
+  ];
+  final summary = {
+    'id': rootId,
+    'replies': thread.length,
+    'lastSequence': 3,
+    'authors': <Object>[],
+    'people': <Object>[],
+  };
   fake.routes['/api/super-tabs/list'] = (_) => {
     'tabs': [
       {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
     ],
     'next': null,
   };
-  fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
-    groups: [
-      groupData(leadChat, title: 'Project chat', lastMessageSequence: 10),
-      if (target) groupData('task-1', title: 'Fix login'),
+  fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
+    ...firstLoad(
+      groups: [
+        groupData(
+          leadChat,
+          title: 'Project chat',
+          lastMessageSequence: 10,
+          // Its PM, as a project chat has one.
+          leadId: 'agent-lead',
+          agentIds: ['agent-lead'],
+        ),
+        if (target) groupData('task-1', title: 'Fix login'),
+      ],
+    ),
+    'members': [
+      part(me, 1, {...person(me), 'email': 'dee@example.com'}),
     ],
-  );
+  };
   fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
   fake.routes['/api/super-tabs/$tab/decisions'] = (_) => {
     'decisions': <Object>[],
@@ -68,7 +108,17 @@ FakeSwarm taskLineBackend(
     'mentions': <Object>[],
   };
   fake.routes['/api/super-tabs/$tab/conversations/$leadChat/messages'] = (_) =>
-      {'messages': page.reversed.toList(), 'threads': <Object>[], 'next': null};
+      {
+        'messages': page.reversed.toList(),
+        'threads': [if (root['thread'] != null) summary],
+        'next': null,
+      };
+  fake.routes['/api/super-tabs/$tab/conversations/$leadChat/messages?thread=$rootId'] =
+      (_) => {
+        'messages': [root, ...thread],
+        'threads': [summary],
+        'next': null,
+      };
   fake.routes['/api/super-tabs/$tab/conversations/task-1/messages'] = (_) => {
     'messages': [
       {
@@ -88,7 +138,12 @@ FakeSwarm taskLineBackend(
   return fake;
 }
 
-Future<SwarmHost> pumpTaskChat(WidgetTester tester, FakeSwarm fake) async {
+Future<SwarmHost> pumpTaskChat(
+  WidgetTester tester,
+  FakeSwarm fake, {
+  ThemeData? theme,
+  GlobalKey? boundary,
+}) async {
   await tester.binding.setSurfaceSize(const Size(390, 844));
   addTearDown(() => tester.binding.setSurfaceSize(null));
   final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
@@ -104,9 +159,17 @@ Future<SwarmHost> pumpTaskChat(WidgetTester tester, FakeSwarm fake) async {
   )..foreground = false;
   addTearDown(host.dispose);
   await tester.pumpWidget(
-    MaterialApp(
-      builder: (context, child) => SwarmScope(notifier: host, child: child!),
-      home: const SwarmConversationPage(swarmId: tab, conversationId: leadChat),
+    RepaintBoundary(
+      key: boundary,
+      child: MaterialApp(
+        debugShowCheckedModeBanner: false,
+        theme: theme,
+        builder: (context, child) => SwarmScope(notifier: host, child: child!),
+        home: const SwarmConversationPage(
+          swarmId: tab,
+          conversationId: leadChat,
+        ),
+      ),
     ),
   );
   await tester.pumpAndSettle();
@@ -119,6 +182,7 @@ Future<void> pumpRow(
   String readerId = me,
   double width = 390,
   double scale = 1,
+  VoidCallback? onReply,
 }) async {
   await tester.binding.setSurfaceSize(Size(width, 844));
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -134,7 +198,11 @@ Future<void> pumpRow(
           children: [
             SwarmMessageRow(
               message: SuperTabMessage.fromJson(data),
-              name: 'River',
+              name:
+                  data['author'] is Map &&
+                      (data['author'] as Map)['kind'] == 'person'
+                  ? 'Dee'
+                  : 'River',
               look: (picture: null, status: null),
               role: 'PM',
               readerId: readerId,
@@ -142,9 +210,9 @@ Future<void> pumpRow(
               grouped: false,
               lit: false,
               quote: null,
-              actions: false,
+              actions: onReply != null,
               onTap: () {},
-              onReply: null,
+              onReply: onReply,
             ),
           ],
         ),
@@ -154,156 +222,158 @@ Future<void> pumpRow(
 }
 
 void main() {
-  // Removing dispatch, using fallback text, or mapping any state incorrectly
-  // breaks these consumer-visible widget assertions.
-  for (final (state, word, mark) in [
-    ('planned', 'planned', LucideIcons.circleDashed),
-    ('working', 'working', LucideIcons.circleDot),
-    ('waiting', 'working', LucideIcons.circleDot),
-    ('review', 'in review', LucideIcons.circleDot),
-    ('ready', 'ready', LucideIcons.circleDot),
-    ('shipped', 'shipped', LucideIcons.check),
-    ('done', 'done', LucideIcons.check),
-    ('stopped', 'stopped', LucideIcons.circleSlash),
-  ]) {
-    testWidgets('$state shows the task name, Desktop word and mark', (
+  // Intercepting source kinds before the ordinary row hides the author,
+  // actual text and normal message interactions this contract requires.
+  for (final kind in ['task-line', 'buddy-proposal']) {
+    testWidgets('$kind root keeps requester, actual text and Reply', (
       tester,
     ) async {
-      await pumpRow(tester, taskLine(state: state));
-      expect(find.text('Fix login'), findsOneWidget);
-      expect(find.text(word), findsOneWidget);
-      expect(find.byIcon(mark), findsOneWidget);
-      expect(find.text('River'), findsNothing);
-      expect(find.text('Fix login · $state'), findsNothing);
-    });
-  }
-
-  testWidgets('waiting asks only the named reader to Answer', (tester) async {
-    final semantics = tester.ensureSemantics();
-    final data = taskLine(state: 'waiting', answerFor: me);
-    await pumpRow(tester, data);
-    expect(find.text('Answer'), findsOneWidget);
-    expect(find.bySemanticsLabel('Fix login, Answer'), findsOneWidget);
-    expect(
-      tester.widget<Text>(find.text('Answer')).style?.fontWeight,
-      FontWeight.w600,
-    );
-    await pumpRow(tester, data, readerId: 'someone-else');
-    expect(find.text('Answer'), findsNothing);
-    expect(find.text('working'), findsOneWidget);
-    semantics.dispose();
-  });
-
-  testWidgets('unknown state keeps fallback text without inventing a word', (
-    tester,
-  ) async {
-    await pumpRow(tester, taskLine(state: 'future', title: null));
-    expect(find.text('Fix login · future'), findsOneWidget);
-    expect(find.byIcon(LucideIcons.circleDot), findsOneWidget);
-    expect(find.text('working'), findsNothing);
-    expect(find.text('River'), findsNothing);
-  });
-
-  testWidgets(
-    'long name keeps the word and thumb target on a narrow large-text phone',
-    (tester) async {
-      final name = List.filled(12, 'A long task name').join(' ');
-      await pumpRow(
-        tester,
-        taskLine(title: name, state: 'review'),
-        width: 320,
-        scale: 2,
+      final data = {
+        ...taskLine(),
+        'text': "Let's build: Offline drafts",
+        'author': {'kind': 'person', 'id': me, 'name': 'Dee'},
+        'source': {
+          'kind': kind,
+          'title': 'Old metadata title',
+          'taskId': 'task-1',
+        },
+      };
+      var replies = 0;
+      await pumpRow(tester, data, onReply: () => replies++);
+      expect(find.text('Dee'), findsOneWidget);
+      final avatar = tester.widget<SwarmChatAvatar>(
+        find.byType(SwarmChatAvatar),
       );
-      expect(find.text(name), findsOneWidget);
-      expect(find.text('in review'), findsOneWidget);
-      expect(tester.takeException(), isNull);
-      final row = find.byKey(const ValueKey('swarm-message-line-1'));
-      expect(tester.getSize(row).height, greaterThanOrEqualTo(44));
-    },
-  );
+      expect(avatar.name, 'Dee');
+      expect(avatar.id, me);
+      expect(avatar.agent, isFalse);
+      expect(find.text("Let's build: Offline drafts"), findsOneWidget);
+      expect(find.text('Old metadata title'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('swarm-reply-line-1')));
+      expect(replies, 1);
+      expect(find.text('Copy'), findsOneWidget);
+    });
 
-  testWidgets('tapping a line opens its task chat without a reply action', (
-    tester,
-  ) async {
-    final semantics = tester.ensureSemantics();
-    await pumpTaskChat(tester, taskLineBackend([taskLine()]));
-    expect(
-      tester
-          .getSemantics(find.bySemanticsLabel('Fix login, working'))
-          .getSemanticsData()
-          .hasAction(SemanticsAction.tap),
-      isTrue,
-    );
-    semantics.dispose();
-    await tester.tap(find.byKey(const ValueKey('swarm-message-line-1')));
-    await tester.pumpAndSettle();
-    expect(find.text('Inside the task chat'), findsOneWidget);
-    expect(
-      tester
-          .widget<SwarmConversationPage>(
-            find.byType(SwarmConversationPage).last,
-          )
-          .conversationId,
-      'task-1',
-    );
-    expect(find.text('Reply in thread'), findsNothing);
-  });
-
-  for (final target in <Object?>['task-1', 7, null]) {
     testWidgets(
-      'a target absent from the read stays readable without navigation: $target',
+      '$kind legacy text remains complete on a narrow large-text phone',
       (tester) async {
-        final semantics = tester.ensureSemantics();
-        final fake = taskLineBackend([taskLine(target: target)], target: false);
-        await pumpTaskChat(tester, fake);
-        expect(find.text('Fix login'), findsOneWidget);
-        expect(
-          tester
-              .getSemantics(find.bySemanticsLabel('Fix login, working'))
-              .getSemanticsData()
-              .hasAction(SemanticsAction.tap),
-          isFalse,
+        final text =
+            'Goal: Save drafts offline.\nScope: Keep edits and attachments after reconnecting.\nPriority: High.';
+        await pumpRow(
+          tester,
+          {
+            ...taskLine(),
+            'text': text,
+            'source': {
+              'kind': kind,
+              'title': 'Truncated old title',
+              'taskId': 'missing',
+            },
+          },
+          width: 320,
+          scale: 2,
         );
-        await tester.tap(find.byKey(const ValueKey('swarm-message-line-1')));
+        final body = find.text(text);
+        expect(body, findsOneWidget);
+        expect(tester.widget<Text>(body).maxLines, isNull);
+        expect(find.text('River'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    for (final openWith in ['replies', 'Reply']) {
+      testWidgets('$kind $openWith opens the ordinary project thread', (
+        tester,
+      ) async {
+        final root = {
+          ...taskLine(),
+          'text': "Let's build: Offline drafts",
+          'author': {'kind': 'person', 'id': me, 'name': 'Dee'},
+          'thread': 'line-1',
+          'source': {'kind': kind, 'taskId': 'task-1', 'title': 'Wrong title'},
+          'reactions': [
+            {
+              'emoji': 'heart',
+              'count': 1,
+              'by': [
+                {'kind': 'person', 'id': me},
+              ],
+            },
+          ],
+        };
+        final fake = taskLineBackend([root]);
+        await pumpTaskChat(tester, fake);
+        // A person is named by their username (dee@example.com).
+        expect(find.text('dee'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('swarm-author-line-1')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('swarm-reaction-line-1-heart')),
+          findsOneWidget,
+        );
+        expect(find.text('1 reply'), findsOneWidget);
+        if (openWith == 'Reply') {
+          await tester.tap(find.text("Let's build: Offline drafts"));
+          await tester.pumpAndSettle();
+          expect(find.text('Reply in thread'), findsOneWidget);
+          await tester.tap(find.byKey(const ValueKey('swarm-reply-line-1')));
+        } else {
+          await tester.tap(
+            find.byKey(const ValueKey('swarm-thread-line-line-1')),
+          );
+        }
         await tester.pumpAndSettle();
-        expect(find.byType(SwarmConversationPage), findsOneWidget);
+        final page = tester.widget<SwarmThreadPage>(
+          find.byType(SwarmThreadPage),
+        );
+        expect(page.root, 'line-1');
+        expect(page.chat.id, leadChat);
+        expect(find.text('Goal: Save edits while offline.'), findsOneWidget);
+        expect(
+          fake.paths,
+          contains(
+            '/api/super-tabs/$tab/conversations/$leadChat/messages?thread=line-1',
+          ),
+        );
         expect(
           fake.paths.any((p) => p.contains('/conversations/task-1/messages')),
           isFalse,
         );
-        expect(find.text('Copy'), findsNothing);
-        semantics.dispose();
-      },
-    );
+        expect(find.byKey(const ValueKey('swarm-author-line-1')), findsWidgets);
+      });
+    }
   }
 
-  for (final lineFirst in [true, false]) {
-    testWidgets('a line hides only its task’s legacy ship, order $lineFirst', (
+  testWidgets('legacy task without a target opens ordinary inline Reply', (
+    tester,
+  ) async {
+    final fake = taskLineBackend([taskLine(target: null)], target: false);
+    await pumpTaskChat(tester, fake);
+    expect(find.text('Fix login · working'), findsOneWidget);
+    await tester.tap(find.text('Fix login · working'));
+    await tester.pumpAndSettle();
+    expect(find.text('Reply'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('swarm-reply-line-1')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('swarm-quote-line-1')), findsNothing);
+    expect(find.textContaining('Reply to'), findsOneWidget);
+    expect(find.byType(SwarmConversationPage), findsOneWidget);
+  });
+
+  testWidgets('legacy ship text stays readable beside an ordinary task root', (
+    tester,
+  ) async {
+    await pumpTaskChat(
       tester,
-    ) async {
-      final line = taskLine(sequence: lineFirst ? 1 : 3);
-      final ship = legacyShip('task-1', 2);
-      await pumpTaskChat(
-        tester,
-        taskLineBackend([
-          if (lineFirst) line,
-          ship,
-          if (!lineFirst) line,
-          legacyShip('other-task', 4),
-        ]),
-      );
-      expect(find.text('Fix login'), findsOneWidget);
-      expect(find.text('Shipped: task-1'), findsNothing);
-      expect(find.text('Shipped: other-task'), findsOneWidget);
-    });
-  }
-
-  testWidgets('a legacy ship stays when no line replaces it', (tester) async {
-    await pumpTaskChat(tester, taskLineBackend([legacyShip('task-1', 2)]));
+      taskLineBackend([taskLine(), legacyShip('task-1', 3)]),
+    );
+    expect(find.text('Fix login · working'), findsOneWidget);
     expect(find.text('Shipped: task-1'), findsOneWidget);
   });
 
-  test('a normal message after a task line keeps its author header', () {
+  test('task source follows ordinary same-author grouping', () {
     final line = taskLine(sequence: 1);
     final normal = {
       ...taskLine(id: 'normal', sequence: 2),
@@ -315,7 +385,7 @@ void main() {
         SuperTabMessage.fromJson(line),
         SuperTabMessage.fromJson(normal),
       ]),
-      isEmpty,
+      {'normal'},
     );
   });
 }

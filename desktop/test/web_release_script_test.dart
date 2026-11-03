@@ -49,6 +49,7 @@ for arg in "\$@"; do
   case "\$arg" in --output=*) out="\${arg#--output=}" ;; esac
 done
 mkdir -p "\$out/assets"
+printf '%s\\n' "\$@" > "\$out/build-args.txt"
 printf '%s' '$manifest' > "\$out/assets/FontManifest.json"
 printf '%s' '$_index' > "\$out/index.html"
 for asset in $assets; do
@@ -115,6 +116,17 @@ void main() {
   tearDown(() => repo.deleteSync(recursive: true));
 
   final skip = Platform.isWindows ? 'needs bash and python3' : null;
+
+  test('the build compiles its own version in, for a page an old cache keeps '
+      'to tell it is out of date', () async {
+    await _release(repo, [..._others, _mono, _icons, ..._unusedLucide, _used]);
+
+    final args = File(
+      p.join(repo.path, 'build/web-release/build-args.txt'),
+    ).readAsLinesSync();
+    expect(args, contains('--dart-define=HARNESS_BUILD_VERSION=1.2.3'));
+    expect(args, contains('--build-name=1.2.3'));
+  }, skip: skip);
 
   test('the web release drops the Lucide weights the app never uses', () async {
     final result = await _release(repo, [

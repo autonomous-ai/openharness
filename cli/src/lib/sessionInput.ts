@@ -439,6 +439,11 @@ export class SessionInputController {
     }
   }
 
+  /** Whether a caller holds this pane (`acquireControl`): a question being answered, a sequence of keys. */
+  controlHeld(sessionId: string): boolean {
+    return this.states.get(sessionId)?.controlLocked === true
+  }
+
   onTurnStarted(sessionId: string, userMessage: string): void {
     const state = this.state(sessionId)
     const session = this.controlSession(sessionId)

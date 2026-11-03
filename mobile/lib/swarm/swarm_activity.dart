@@ -17,8 +17,9 @@ enum SwarmActivityFilter {
   /// Decisions asked of the person and work waiting on them.
   needsYou('Needs you'),
 
-  /// The Product Manager's tags of the person.
-  mentions('@'),
+  /// The Product Manager's tags of the person: "Mentions" on the phone, a
+  /// word a screen reader says, where the desktop has "@" (Tony, 2026-11-03).
+  mentions('Mentions'),
 
   /// Threads the person wrote in or was tagged in.
   threads('Threads'),
@@ -103,6 +104,42 @@ class SwarmActivityNeed extends SwarmActivityItem {
     SwarmMentionNeed(:final mention) => mention.createdAt,
     SwarmWorkNeed(:final work) => work.conversation.changedAt,
   };
+}
+
+/// Activity's All (Slack's one feed, Tony, 2026-11-03): what needs the
+/// person and is still to handle first, as Needs you lists it; then every
+/// other row — tags, replies, reactions — newest first, those with no time
+/// last; then the needs handled. Each row once.
+List<SwarmActivityItem> swarmActivityAll(SwarmActivity activity) {
+  final needs = activity.items(SwarmActivityFilter.needsYou);
+  final seen = <String>{};
+  final waiting = [
+    for (final item in needs)
+      if (activity.handled(item) == null && seen.add(item.key)) item,
+  ];
+  final rest = [
+    for (final filter in SwarmActivityFilter.values)
+      if (filter != SwarmActivityFilter.needsYou)
+        for (final item in activity.items(filter))
+          if (seen.add(item.key)) item,
+  ];
+  // Stable: rows at the same time keep their filter's order.
+  final order = {for (final (i, item) in rest.indexed) item.key: i};
+  rest.sort((a, b) {
+    final (atA, atB) = (a.at, b.at);
+    if (atA == null || atB == null) {
+      if (atA != atB) return atA == null ? 1 : -1;
+    } else if (atA != atB) {
+      return atB.compareTo(atA);
+    }
+    return order[a.key]!.compareTo(order[b.key]!);
+  });
+  return [
+    ...waiting,
+    ...rest,
+    for (final item in needs)
+      if (seen.add(item.key)) item,
+  ];
 }
 
 /// Whether [item] is of project [projectId], as [snapshot] — its Swarm's read

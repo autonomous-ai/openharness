@@ -359,6 +359,19 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   person who leaves and joins again starts with a new chat and the default name. Look-alike letters from other
   scripts are not compared.
 - Nobody else is ever added to a Buddy chat, the Swarm's owner and the product manager included.
+- **Switching its model** (Scholes, 2026-11-03; docs/plans/2026-11-03-buddy-model-switch-design.md). The bar under the Buddy
+  chat's header starts with a picker: **Your subscription** first, then every model the Swarm's grid serves now (a model a
+  member's machine serves, or an API a member shares), each naming who serves it. The server accepts only those, the same
+  check a routed start gets, and only from the Buddy's owner (`buddy.model`). The Buddy's own machine carries it out:
+  its Claude Code relaunches in place on the model and reopens the same conversation, as a pane's model switch does, and
+  the Buddy's thread sessions there move with it. A conversation at 80% or more of the model's window starts fresh on it
+  instead, and switching back to the subscription reopens the earlier one. One line in the Buddy chat says how it went.
+  Whoever serves the model gets a line in their own Buddy chat saying whose Buddy runs on it; a model that hits a limit,
+  keeps failing or nobody has served for 2 minutes sends the Buddy back to its owner's subscription by itself. On a
+  shared model a Buddy keeps its guard and starts no MCP server: none of the grid's web tools. What it sends, which can
+  include anything its owner reads, goes to the machine or API serving the model; the picker names them for that reason.
+  A Buddy on a Buddy-only machine cannot reach the Swarm's grid: the picker says to add the machine to the Swarm's
+  Machines. A new thread session starts on the model its Buddy runs on.
 - A proposal is sent only for its owner's own message in their Buddy chat that asked for it: their newest message there,
   or one from the last hour, and only once for each such message. The server writes the "on behalf of" label, so a Buddy cannot leave it out or change it.
 - A proposal's files are only ones its owner handed it: a file inside the Buddy's own copy of the project (checked by
@@ -795,7 +808,8 @@ roster, machine rows and mentions. A person sets theirs from their own row in
 the roster. They can pick one of eight pictures or upload a PNG, JPEG or WebP.
 Desktop and the web app crop the upload square and resize it to 256 pixels
 before sending it. The server accepts only those three formats, judged by the
-file's own bytes, and at most 1 MB. Each upload can be used once. Without a picture, a person shows their initial. An
+file's own bytes, and at most 1 MB. Each upload can be used once. An upload not used within a day is removed, and so is
+a chat file attached but never sent: attach it again to send it. Without a picture, a person shows their initial. An
 agent shows a pattern made from its name, the same on every computer, with a
 small Claude or Codex badge. Its contributor changes it from the agent's
 details, and the project's coordinator can change it with `agent.avatar`.

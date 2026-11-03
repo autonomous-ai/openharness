@@ -12,7 +12,7 @@ bool pro_voice_init(void);
 
 // Start a recording for `agent_id` (a gate-checked agent). After it returns pro_voice_start_pending() is true until
 // the recorder is running; false at once if the start was refused.
-void pro_voice_begin(const char *agent_id);
+void pro_voice_begin(const char *agent_id, bool face);   // face: spoken on a Lead view (pro_cable_voice_begin)
 // send=true: stop and send what was recorded (the reply arrives as pro_app_voice_result). send=false: discard it.
 void pro_voice_end(bool send);
 
