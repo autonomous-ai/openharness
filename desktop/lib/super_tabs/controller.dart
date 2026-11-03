@@ -3098,10 +3098,13 @@ class SuperTabController extends ChangeNotifier {
     return _heldSinceRead(group) ? count : max(count, 1);
   }
 
-  /// Whether [m] is the reader's own: written by them, not by an agent or a
-  /// terminal.
+  /// Whether [m] is the reader's own: written by them, not by an agent, a
+  /// terminal or the server in their name.
   bool isOwn(SuperTabMessage m) =>
-      !m.fromAgent && !m.fromTerminal && m.authorId == accountId;
+      !m.fromAgent &&
+      !m.fromTerminal &&
+      !m.postedForAuthor &&
+      m.authorId == accountId;
 
   /// Whether what [id]'s main stream gained since sequence [after] is all the reader's own, sent from
   /// any device. Unsure is no: a message that can't be read is told about, never lost.

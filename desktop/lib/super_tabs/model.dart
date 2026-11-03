@@ -1327,6 +1327,12 @@ class SuperTabMessage {
   String? get proposalOwnerId =>
       source['kind'] == 'buddy-proposal' ? source['personId'] as String? : null;
 
+  /// A "Let's build" root the server posted in its person's name (plain chat,
+  /// #2294): theirs to read, not their own writing, so it reads nothing
+  /// before it and is unread for them as anyone else's message is.
+  bool get postedForAuthor =>
+      source['kind'] == 'task-line' || source['kind'] == 'buddy-proposal';
+
   /// The agent a "waiting at a prompt" note is about; null for any other row.
   String? get promptAlertAgentId =>
       source['kind'] == 'terminal-alert' && source['alert'] == 'prompt'
