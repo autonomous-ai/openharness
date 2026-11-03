@@ -289,8 +289,9 @@ class _ManageSwarmState extends State<_ManageSwarm> {
         requireWrite: false,
         child: AlertDialog(
           title: const Text('Leave Swarm?'),
-          content: const Text(
+          content: superTabLeaveWords(
             'Swarm access and agent contributions will be withdrawn.',
+            autoJoin: c.snapshot?.autoJoin == true,
           ),
           actions: [
             TextButton(

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import './lib/connectWait.js'
 import './config/startHome.js'
 import './config/loadEnv.js'
 import { runDevicesCommand } from './devices/client.js'

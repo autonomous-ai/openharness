@@ -877,7 +877,9 @@ class ProjectSidebar extends StatelessWidget {
       controller.unreadShown(group) ||
       (attention?.mentionsIn(group.id) ?? 0) > 0;
 
-  /// Every project with its workgroups, by name from A to Z.
+  /// Every project with its workgroups, by name from A to Z. The round dial
+  /// swipes projects in this order (cli superTabs/cards.ts `leadsOf`): the
+  /// two must match.
   List<(String, Widget)> _channels(
     SuperTabSnapshot? snapshot,
     _SidebarReading reading,
@@ -1160,7 +1162,9 @@ List<SuperTabConversation> superTabOpenWorkgroups(
 /// Up (Slack's next unread): the reader's one Buddy chat (`# buddy`, first
 /// under Projects), each project from A to Z, its chat then its open
 /// workgroups in their groups (#2309), each newest first, then the reader's
-/// project Buddy chats. [needsHuman] is the sidebar's.
+/// project Buddy chats. [needsHuman] is the sidebar's. The round dial swipes
+/// projects in this A to Z order too (cli superTabs/cards.ts `leadsOf`): the
+/// two must match.
 List<String> superTabSidebarOrder(
   SuperTabController controller, {
   int Function(SuperTabConversation group)? needsHuman,

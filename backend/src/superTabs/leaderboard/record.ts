@@ -15,8 +15,9 @@ import type { UnblockKind } from './contract.js'
 export interface Unblock { personId: string; at: number; waitedMs: number; kind?: UnblockKind; item?: string }
 /** One attempt at a group's work: what it ran on and whether its first review passed (roadmap, Dec: about 30% of work on
  *  cheaper models without lower quality). `grid`: a model served on the Swarm's grid, named by its start, since the engine
- *  reports none of its own. `firstVerdicts`: each check's first verdict during this attempt by anyone but its assignee, by
- *  check id. `firstReview`: false once any of them failed, true while every one so far passed, absent until the first. */
+ *  reports none of its own. `firstVerdicts`: each check's first verdicts during this attempt by anyone but its assignee, by
+ *  check id: false once any checker's first verdict on it failed (#2311). `firstReview`: false once any of them failed, true
+ *  while every one so far passed, absent until the first. */
 export interface Run extends RanOn { assignmentId: string; at: number
   /** The agent and its terminal that ran it, so the model that terminal reports later fills this attempt only (record
    *  ReportedModel). Absent from attempts recorded before them. */
@@ -29,7 +30,9 @@ export interface Run extends RanOn { assignmentId: string; at: number
   engineDefault?: true
   /** Re-reviews after a failed review during this attempt (evidence routing, Ken 2026-10-29): the most on any one check, so
    *  a review that judges two checks counts once. Absent until a review fails; 0 while a failure waits for its
-   *  re-review. `reworks`: each check's last verdict and its re-reviews after a failure, by check id. */
+   *  re-review. `reworks`: each checker's last verdict on a check and its re-reviews after its own failure, by check id and
+   *  checker's actor key (`${checkId} ${by}`); one checker passing what another failed is no re-review (#2311). Attempts
+   *  recorded before kept them by check id alone. */
   reworkRounds?: number
   reworks?: Record<string, { last: boolean; rounds: number }> }
 /** What an agent ran on: its engine, the model (a grid model's own name, `grid` set), and its effort when it names one;
@@ -289,15 +292,16 @@ export function firstAssignedAt(ledger: GroupLedger): number | undefined {
 }
 
 /** An agent's verdict on a check of another agent's task is one finished review by the model it runs on; the assignee's own
- *  verdicts are no review (checks are information, project instructions phase 4: `independent` is read by nothing). */
-export function recordVerdict(state: SuperTabState, group: Conversation, check: Check, checker: Agent, now: number): void {
+ *  verdicts are no review (checks are information, project instructions phase 4: `independent` is read by nothing).
+ *  [first]: the checker gave no verdict on this check during this attempt before. */
+export function recordVerdict(state: SuperTabState, group: Conversation, check: Check, checker: Agent, now: number, first: boolean): void {
   if (checker.id === group.assignment?.agentId) return
   const ledger = group.ledger ??= {}
-  // A check given again on the same attempt is the same review (full review of #2097): only its first verdict counts.
-  // An attempt recorded before attempts were has no run to tell a repeat by, so it earns no model credit (review of
-  // #2128).
+  // A check given again on the same attempt by the same checker is the same review (full review of #2097): only each
+  // checker's first verdict counts, so a Reviewer after a Tester earns its own (#2311). An attempt recorded before attempts
+  // were has no run to tell a repeat by, so it earns no model credit (review of #2128).
   const run = ledger.runs?.find(r => r.assignmentId === group.assignment?.id)
-  if (!run || run.firstVerdicts?.[check.id] !== undefined) return
+  if (!run || !first) return
   const on = ranOn(state, checker, checker.configuration), week = weekStart(now)
   // Only the weeks the board reads: one row per week and model, however many verdicts.
   const kept = (ledger.reviews ?? []).filter(r => week - r.week < LEDGER_WEEKS * WEEK_MS)
@@ -332,23 +336,24 @@ function ranOn(state: SuperTabState, worker: Agent, configuration: AgentConfigur
 const namedEffort = (effort: string | null): string | undefined =>
   effort && effort !== 'auto' && effort !== 'default' ? effort : undefined
 
-/** Each check's first verdict during an attempt, by anyone but its assignee, is its first review; later verdicts are repairs
- *  and never rewrite it. The attempt's first review fails once any first verdict failed, and passes while every one so far
- *  passed (review of #1808: one check passing first used to count as a pass while another failed). */
-export function recordReview(group: Conversation, check: Check, passed: boolean, byAssignee: boolean): void {
+/** Each checker's first verdict on a check during an attempt, by anyone but its assignee, is a first review; its later
+ *  verdicts are repairs and never rewrite it (#2311: each checker's, not only the check's first). The attempt's first review
+ *  fails once any first verdict failed, and passes while every one so far passed (review of #1808: one check passing first
+ *  used to count as a pass while another failed). [by]: the checker's actor key; [first]: as recordVerdict's. */
+export function recordReview(group: Conversation, check: Check, by: string, passed: boolean, byAssignee: boolean, first: boolean): void {
   const run = group.ledger?.runs?.find(r => r.assignmentId === group.assignment?.id)
   if (byAssignee || !run) return
   const verdicts = run.firstVerdicts ??= {}
-  verdicts[check.id] ??= passed
-  recordRework(run, check.id, passed)
+  if (first) verdicts[check.id] = (verdicts[check.id] ?? true) && passed
+  recordRework(run, `${check.id} ${by}`, passed)
   run.firstReview = !group.checks.some(c => verdicts[c.id] === false)
 }
 
-/** A verdict on a check whose last verdict in this attempt failed is a rework round. */
-function recordRework(run: Run, checkId: string, passed: boolean): void {
-  const trail = run.reworks?.[checkId]
+/** A checker's verdict on a check whose last verdict from it in this attempt failed is a rework round. */
+function recordRework(run: Run, key: string, passed: boolean): void {
+  const trail = run.reworks?.[key]
   if (!trail && passed) return
   const reworks = run.reworks ??= {}
-  reworks[checkId] = { last: passed, rounds: (trail?.rounds ?? 0) + (trail && !trail.last ? 1 : 0) }
+  reworks[key] = { last: passed, rounds: (trail?.rounds ?? 0) + (trail && !trail.last ? 1 : 0) }
   run.reworkRounds = Math.max(...Object.values(reworks).map(r => r.rounds))
 }
