@@ -62,7 +62,7 @@ import { freeze, readStamps, stampOwed, swarmReadCache, swarmTransaction, type C
 import { countReport, DEADLINE_CAP_MS, localReportMemory, RECORD_TTL_MS, type ReportMemory, type ReportRecord } from './machineReports.js'
 import { DIRECT, readLastChangedAt, readParts, type ReadNamed } from './cachedReads.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
-import { activeMember, addMember, hasWorkspaceAccess, listWorkspaces, memberId, WORKSPACE_ACCESS_REVOKED, workspaceForNewSwarm, requireWorkspaceAccess, requireWorkspaceRole, SwarmWorkspaces } from './workspaceStore.js'
+import { activeMember, addMember, autoJoinDeclinedBy, hasWorkspaceAccess, listWorkspaces, memberId, WORKSPACE_ACCESS_REVOKED, workspaceForNewSwarm, requireWorkspaceAccess, requireWorkspaceRole, SwarmWorkspaces } from './workspaceStore.js'
 import { WORKSPACE_LABEL, type WorkspaceRole } from './workspaces.js'
 import { STATUS_LABELS,
   activeWork, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
@@ -1065,7 +1065,8 @@ export class SuperTabStore {
       if (state.workspaceId) {
         // As a link join: a guest of the Workspace, never higher; someone active there keeps their role (addMember).
         const prior = await tx.swarmWorkspaceMember.findUnique({ where: { id: memberId(state.workspaceId, user.sub) } })
-        if (prior?.removedAt) return 'revoked' as const
+        // Removed from the Workspace: its row says so until purged, and the Workspace's own decline after that.
+        if (prior?.removedAt || (!prior && await autoJoinDeclinedBy(tx, state.workspaceId, user.sub))) return 'revoked' as const
         await addMember(tx, state.workspaceId, { id: user.sub, email }, 'guest', state.ownerId, generation)
       }
       state.people.push({ id: user.sub, email, role: state.sharing!.access.role, generation, joinedVia: 'domain' })

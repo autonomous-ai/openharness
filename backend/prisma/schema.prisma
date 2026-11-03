@@ -1695,6 +1695,9 @@ model SwarmWorkspace {
   createdAt     DateTime  @default(now())
   deletedAt     DateTime?
   purgeAt       DateTime?
+  /// People this Workspace removed, whom Swarm auto-join never adds again (superTabs/autoJoin.ts). Kept past the purge of their
+  /// member row; cleared when they are added back on purpose (workspaceStore.ts addMember).
+  autoJoinDeclined String[]
 
   /// Removed rows go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
   @@index([purgeAt], map: "workspace_purge")
