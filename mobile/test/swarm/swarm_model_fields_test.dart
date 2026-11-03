@@ -39,12 +39,14 @@ void main() {
 
   test("the Swarm's domain auto-join, off from an older server", () {
     Map<String, dynamic> head([Map<String, dynamic> extra = const {}]) => {
+      'version': 1,
       'id': 'tab',
       'name': 'Swarm',
       'ownerId': 'o',
       'people': const [],
       'agents': const [],
       'conversations': const [],
+      'invitations': const [],
       ...extra,
     };
     expect(
