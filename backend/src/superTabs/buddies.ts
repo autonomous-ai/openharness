@@ -101,7 +101,7 @@ const BUDDY_RESERVED: ReadonlySet<string> = new Set(['reviewer', 'admin', 'admin
 /** A name as names are compared: NFKC, lowercased. Look-alike letters of other scripts are out of scope (review of #2094). */
 const nameKey = (name: string): string => name.normalize('NFKC').toLowerCase()
 /** Whether [name] is a reserved one, numbered too ("Reviewer 2", "system-3"), as the role check reads "Lead 2". */
-const reserved = (name: string): boolean => BUDDY_RESERVED.has(nameKey(name).replace(/[\s#-]+\d+$/, ''))
+export const reserved = (name: string): boolean => BUDDY_RESERVED.has(nameKey(name).replace(/[\s#-]+\d+$/, ''))
 
 /** A name chosen in a Buddy chat, as the store reads every Buddy chat's, quiet ones included (store.ts buddyNames). */
 export interface ChosenBuddyName { conversationId: string; name: string }

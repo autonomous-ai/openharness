@@ -373,7 +373,7 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
     final person = c.snapshot?.people
         .where((p) => p.id == mention.leadId)
         .firstOrNull;
-    final author = person?.username ?? mention.leadName;
+    final author = person?.shownName ?? mention.leadName;
     // Who tagged, a person or a Lead: one face, in one place.
     final Widget? face = person != null
         ? SuperTabAvatar.person(person, size: 24)

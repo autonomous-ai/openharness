@@ -37,6 +37,7 @@ SwarmHomeSwarm swarmHomeSwarm(
           'id': p.id,
           'email': '',
           'username': ?p.chosenUsername,
+          'name': ?p.name,
           'role': p.role,
           'avatar': ?_preset(p.avatar),
         },

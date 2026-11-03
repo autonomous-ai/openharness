@@ -50,6 +50,10 @@ class SuperTabPerson {
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       status = SuperTabPersonStatus.fromJson(row['status']),
       chosenUsername = row['username'] as String?,
+      name = switch (row['name']) {
+        final String name when name.trim().isNotEmpty => name,
+        _ => null,
+      },
       username =
           row['username'] as String? ??
           superTabDefaultUsername(_text(row, 'email'));
@@ -61,7 +65,8 @@ class SuperTabPerson {
       joinedVia = person.joinedVia,
       avatar = person.avatar,
       status = person.status,
-      chosenUsername = person.chosenUsername;
+      chosenUsername = person.chosenUsername,
+      name = person.name;
   final String id, email, role;
 
   /// How the Swarm shows and tags them, as the server sends it, worked out in
@@ -71,6 +76,15 @@ class SuperTabPerson {
 
   /// The name the server sent; null from a server without usernames.
   final String? chosenUsername;
+
+  /// The name they set for the Swarm to show ("Minh Nguyen",
+  /// backend/src/superTabs/personNames.ts); null until they set one, and
+  /// from an older server.
+  final String? name;
+
+  /// How the Swarm shows them: the name they set, else their username. A tag
+  /// still types [username].
+  String get shownName => name ?? username;
   final SuperTabAvatarPicture? avatar;
   final SuperTabPersonStatus? status;
 
@@ -881,7 +895,7 @@ class SuperTabSnapshot {
   // Recorded labels remain the fallback for agents no longer in the Swarm.
   String authorName(SuperTabMessage message) => message.fromAgent
       ? agentName(message.authorId, fallback: message.authorName)
-      : people.where((p) => p.id == message.authorId).firstOrNull?.username ??
+      : people.where((p) => p.id == message.authorId).firstOrNull?.shownName ??
             superTabPersonName(message.authorName);
 }
 

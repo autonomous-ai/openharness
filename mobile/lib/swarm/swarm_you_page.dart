@@ -85,7 +85,7 @@ class SwarmYouButton extends StatelessWidget {
     final session = SwarmScope.of(context);
     Widget face() {
       final me = swarmYouOf(session).me;
-      final name = me == null || me.email.isEmpty ? 'You' : me.username;
+      final name = me == null || me.email.isEmpty ? 'You' : me.shownName;
       final status = me?.statusAt(clock.now())?.label;
       return Semantics(
         button: true,
@@ -126,7 +126,7 @@ class SwarmYouButton extends StatelessWidget {
 /// You, as Tony's prototype C4 draws it (2026-10-30), opened from the avatar
 /// on Home and Activity since it stopped being a tab (2026-11-03):
 /// who they are in the Swarm Home shows — their face, their name and that
-/// Swarm — then their status and their username, each with Change for their
+/// Swarm — then their status, their name and their username, each with Change for their
 /// profile, where it is set ([showSwarmProfile]); Your models, with how many of their own machines'
 /// models the Swarms can use now, and Your devices, with how many of their
 /// own computers are online; and Settings. Only what is theirs counts: not a
@@ -219,6 +219,20 @@ class SwarmYouPage extends StatelessWidget {
           _Status(
             key: const ValueKey('swarm-you-status'),
             me: me,
+            onTap: profile,
+          ),
+        ],
+      ),
+      const SwarmCaption('Name'),
+      SwarmGroup(
+        children: [
+          SwarmRow(
+            key: const ValueKey('swarm-you-name'),
+            leading: const SwarmRowGlyph(LucideIcons.user300),
+            // How the Swarm shows them, the username until they set one;
+            // nothing of a Swarm before it is read, or once it is taken away.
+            title: me == null ? 'Name' : me.name ?? 'Add your name',
+            trailing: profile == null ? null : const _Change(),
             onTap: profile,
           ),
         ],
@@ -334,7 +348,7 @@ class _Me extends StatelessWidget {
     AppTheme.watch(context);
     final me = this.me;
     // A Home kept for a cold start holds no email.
-    final name = me == null || me.email.isEmpty ? 'You' : me.username;
+    final name = me == null || me.email.isEmpty ? 'You' : me.shownName;
     return Padding(
       padding: const EdgeInsets.fromLTRB(
         AppSpace.xs,

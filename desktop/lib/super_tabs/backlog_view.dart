@@ -243,7 +243,7 @@ class _Row extends StatelessWidget {
   String? _personName(String id) => controller.snapshot?.people
       .where((p) => p.id == id)
       .firstOrNull
-      ?.username;
+      ?.shownName;
 
   String get _pullRequestText {
     final url = _pullRequest(task);

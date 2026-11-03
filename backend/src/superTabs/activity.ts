@@ -21,7 +21,7 @@ import { agentOnly, isLeads, stableId, type Actor, type Author, type Conversatio
 import { SESSION_ENDED_KIND } from './buddySessions.js'
 import { canReadGroup, projectOf } from './projects.js'
 import { groupsBy, readBy } from './parts/indexed.js'
-import { usernameOf } from './usernames.js'
+import { shownNameOf } from './personNames.js'
 import { FIELDS, readable, row as messageRow, type Row } from './read/inbox.js'
 
 type Tx = Prisma.TransactionClient
@@ -162,9 +162,9 @@ export async function listActivity(db: PrismaClient, tabId: string, state: Super
 /** A reply that lives only in its thread names its root; a top-level message or one also sent to the chat names none. */
 const threadOf = (m: Row) => m.thread && m.thread !== m.id && !m.alsoInChat ? m.thread : null
 
-/** A person by their username, as everywhere in the Swarm; an agent by its name, or the reply's author name when it left. */
+/** A person by the name the Swarm shows for them (personNames.ts); an agent by its name, or the reply's author name when it left. */
 function actorName(state: SuperTabState, kind: string, id: string, message: Row, rowKind: string): string {
-  if (kind === 'person') return usernameOf(state, id) ?? 'Someone'
+  if (kind === 'person') return shownNameOf(state, id) ?? 'Someone'
   const agent = state.agents.find(a => a.id === id) as { displayName?: string | null; name?: string } | undefined
   const author = rowKind === 'reply' ? message.author as Author & { displayName?: string } : undefined
   return agent?.displayName ?? agent?.name ?? author?.displayName ?? author?.name ?? 'An agent'
