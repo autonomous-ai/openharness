@@ -42,12 +42,12 @@
 - Consumes: `canReadAgent(state, actor, agent)` and `canReadProject(state, actor, project)` from `projects.ts`.
 - Produces: version 2 previews with a response marker, readable `agents`, `hiddenAgentCount`, `blockedBy` with visible project details or `{ reason: "A Product Manager of a project you can't see runs on this machine." }`, readable `soleSourceProjects`, and `hiddenSoleSourceProjectCount`. Unversioned requests receive the legacy shape only when no hidden details exist; otherwise they receive a generic update-required refusal.
 
-- [ ] **Step 1: Write a failing unit test** named `the removal preview names only the agents and projects its owner reads`. Build a peer-contributed machine containing a worker and PM in an unreadable private project, plus an unreadable sole source project; assert that readable entries remain detailed, hidden entries are counted, and the result contains none of the hidden IDs, names, project names or task titles.
-- [ ] **Step 2: Run the named unit test** with `cd backend && npm test -- src/superTabs/machines.test.ts -t 'the removal preview names only the agents and projects its owner reads'`; confirm it fails because private details are currently returned.
-- [ ] **Step 3: Implement filtering in `removalPreview`**. Keep all agents in `hiddenAgentCount` accounting; include an agent's ID, name, project name and task only when `canReadAgent` is true. For `blockedBy`, return a project ID and name only when `canReadProject` is true, otherwise return only the generic Product Manager reason. Preserve the block in both cases. Count unreadable sole source projects in `hiddenSoleSourceProjectCount`.
-- [ ] **Step 4: Make `protectLead(state, agentId, actor)` generic when `canReadProject` is false**, so direct attempts to remove a machine with an unreadable PM stay blocked without returning hidden names.
-- [ ] **Step 5: Rerun the named unit test and the direct removal refusal integration test**; confirm both pass.
-- [ ] **Step 6: Commit** failing tests before the passing backend implementation.
+- [x] **Step 1: Write a failing unit test** named `the removal preview names only the agents and projects its owner reads`. Build a peer-contributed machine containing a worker and PM in an unreadable private project, plus an unreadable sole source project; assert that readable entries remain detailed, hidden entries are counted, and the result contains none of the hidden IDs, names, project names or task titles.
+- [x] **Step 2: Run the named unit test** with `cd backend && npm test -- src/superTabs/machines.test.ts -t 'the removal preview names only the agents and projects its owner reads'`; confirm it fails because private details are currently returned.
+- [x] **Step 3: Implement filtering in `removalPreview`**. Keep all agents in `hiddenAgentCount` accounting; include an agent's ID, name, project name and task only when `canReadAgent` is true. For `blockedBy`, return a project ID and name only when `canReadProject` is true, otherwise return only the generic Product Manager reason. Preserve the block in both cases. Count unreadable sole source projects in `hiddenSoleSourceProjectCount`.
+- [x] **Step 4: Make `protectLead(state, agentId, actor)` generic when `canReadProject` is false**, so direct attempts to remove a machine with an unreadable PM stay blocked without returning hidden names.
+- [x] **Step 5: Rerun the named unit test and the direct removal refusal integration test**; confirm both pass.
+- [x] **Step 6: Commit** failing tests before the passing backend implementation.
 
 ### Task 2: Verify the route and blocked removal behavior
 
@@ -57,11 +57,11 @@
 **Interfaces:**
 - Consumes: Task 1's removal preview response and the existing `machine.remove` command.
 
-- [ ] **Step 1: Write a failing route integration test** using a machine owner who cannot read the private project of a worker and PM on their machine. Assert the GET response contains aggregate counts and no private identifier, name, project or task; assert `machine.remove` remains refused with no private name in its error.
-- [ ] **Step 2: Run the new integration test** with `cd backend && npm run test:super-tabs -- integration/superTabs.test.ts -t 'removal preview'`; confirm it fails on the current unfiltered response.
-- [ ] **Step 3: Confirm the existing route uses the filtered `removalPreview` output** without changing its authorization boundary.
-- [ ] **Step 4: Rerun the new integration test** and confirm it passes.
-- [ ] **Step 5: Commit** the failing integration test separately.
+- [x] **Step 1: Write a failing route integration test** using a machine owner who cannot read the private project of a worker and PM on their machine. Assert the GET response contains aggregate counts and no private identifier, name, project or task; assert `machine.remove` remains refused with no private name in its error.
+- [x] **Step 2: Run the new integration test** with `cd backend && npm run test:super-tabs -- integration/superTabs.test.ts -t 'removal preview'`; confirm the refusal assertion fails before the generic error fix. The unit test records the preview disclosure's red result.
+- [x] **Step 3: Confirm the existing route uses the filtered `removalPreview` output** without changing its authorization boundary.
+- [x] **Step 4: Rerun the new integration test** and confirm it passes.
+- [x] **Step 5: Commit** the failing integration test separately.
 
 ### Task 3: Show aggregate counts in Desktop
 
@@ -73,11 +73,11 @@
 - Consumes: Task 1's `hiddenAgentCount` and `hiddenSoleSourceProjectCount` response fields.
 - Produces: confirmation dialog lines `N agents of projects you can't see` and `N projects have code only on this machine that you can't see` when counts are nonzero, plus a generic blocking reason for an unreadable PM.
 
-- [ ] **Step 1: Write a failing widget test** that opens the removal dialog with aggregate counts and checks that each count line is shown without any hidden name.
-- [ ] **Step 2: Run the named widget test** with `cd desktop && flutter test test/super_tab_machines_test.dart --plain-name 'removal preview counts projects the viewer cannot see'`; confirm the count lines are absent.
-- [ ] **Step 3: Parse the two aggregate count fields and either form of `blockedBy`; show its generic reason when supplied. Render aggregate count lines when positive and retain current readable-agent and readable-project details.**
-- [ ] **Step 4: Rerun the named widget test** and confirm it passes.
-- [ ] **Step 5: Commit** the failing widget test, then commit the passing UI implementation separately.
+- [x] **Step 1: Write a failing widget test** that opens the removal dialog with aggregate counts and checks that each count line is shown without any hidden name.
+- [x] **Step 2: Run the named widget test** with `cd desktop && flutter test test/super_tab_machines_test.dart --plain-name 'removal preview counts projects the viewer cannot see'`; confirm the count lines are absent.
+- [x] **Step 3: Parse the two aggregate count fields and either form of `blockedBy`; show its generic reason when supplied. Render aggregate count lines when positive and retain current readable-agent and readable-project details.**
+- [x] **Step 4: Rerun the named widget test** and confirm it passes.
+- [x] **Step 5: Commit** the failing widget test, then commit the passing UI implementation separately.
 
 ### Task 4: Keep the Mobile removal prompt in sync
 
@@ -97,19 +97,7 @@ Added after the independent security review found that the phone rejected a reas
 - [x] **Step 4: Rerun the affected Mobile test file** and confirm it passes after the fix.
 - [x] **Step 5: Commit** the failing tests separately from the implementation.
 
-### Task 5: Run required verification
-
-**Files:**
-- No additional files.
-
-**Interfaces:**
-- Consumes: Tasks 1–4.
-
-- [ ] **Step 1: Run affected backend unit tests and the full Super Tab integration suite.**
-- [ ] **Step 2: Run the affected Desktop and Mobile tests and analyze changed Dart code.**
-- [ ] **Step 3: Record red/green evidence in a PR comment and request two independent security reviews.**
-
-### Task 6: Preserve privacy across client versions and removal results
+### Task 5: Preserve privacy across client versions and removal results
 
 **Files:**
 - Modify: `backend/src/routes/superTabs.ts`
@@ -131,3 +119,15 @@ Added after the independent security review found that the phone rejected a reas
 - [ ] **Step 1: Add failing tests** for versioned client success, legacy client refusal with hidden data and compatibility with fully readable data, current clients rejecting an unversioned backend response, and filtering unreadable agent IDs from removal results.
 - [ ] **Step 2: Implement the compatibility handshake, neutral generic copy and readable-ID filter.**
 - [ ] **Step 3: Run the focused tests for each changed component.**
+
+### Task 6: Run required verification
+
+**Files:**
+- No additional files.
+
+**Interfaces:**
+- Consumes: Tasks 1–5.
+
+- [ ] **Step 1: Run affected backend unit tests and the full Super Tab integration suite.**
+- [ ] **Step 2: Run the affected Desktop and Mobile tests and analyze changed Dart code.**
+- [ ] **Step 3: Record red/green evidence in a PR comment, attach the changed Desktop screenshot, and request two independent security reviews.**
