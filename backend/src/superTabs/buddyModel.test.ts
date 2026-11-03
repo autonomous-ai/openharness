@@ -170,6 +170,13 @@ describe('the Buddy\'s machine reporting the switch', () => {
       + 'for it (128K). Switch back to your subscription to continue the earlier one.'])
   })
 
+  it('names a machine as Desktop does, without its .local', () => {
+    const f = setup()
+    f.state.machines!.find(m => m.machineId === 'owner-studio')!.name = 'Studio.local'
+    f.run({ type: 'buddy.model', gridModel: MODEL })
+    expect(f.agent().modelRequest!.servedBy).toEqual(['Studio'])
+  })
+
   it('names a saved API by the member who shares it', () => {
     const f = setup()
     f.run({ type: 'buddy.model', gridModel: 'gpt-6.1-sol' })
