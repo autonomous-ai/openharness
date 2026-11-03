@@ -547,6 +547,20 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
       await expect(offlineStart('super-tab/start-1')).rejects.toThrow()
       expect(await readFile(contacts, 'utf8').catch(() => '')).toBe('')
     })
+
+    // GIT_NO_LAZY_FETCH is read only by git 2.44 and later (Ubuntu 22.04 ships 2.34, Debian 12 2.39): review 1 of #2770.
+    it('never fetches missing files offline even with a git that ignores GIT_NO_LAZY_FETCH', async () => {
+      await pushToOrigin('main', 'main, later')
+      await inClone('fetch', '--quiet', '--no-tags', 'origin', '+refs/heads/main:refs/remotes/origin/main')
+      await rm(contacts, { force: true })
+      const realGit = (await exec('sh', ['-c', 'command -v git'])).stdout.trim()
+      const olderGit = join(root, 'older-git')
+      await mkdir(olderGit)
+      await writeFile(join(olderGit, 'git'), `#!/bin/sh\nunset GIT_NO_LAZY_FETCH\nexec '${realGit}' "$@"\n`, { mode: 0o755 })
+      vi.stubEnv('PATH', `${olderGit}:${process.env.PATH}`)
+      await expect(offlineStart('super-tab/start-1')).rejects.toThrow()
+      expect(await readFile(contacts, 'utf8').catch(() => '')).toBe('')
+    })
   })
 
   describe('a worktree whose git is slow or fails', () => {
