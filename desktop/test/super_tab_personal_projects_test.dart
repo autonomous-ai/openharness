@@ -774,6 +774,59 @@ void main() {
       },
     );
 
+    // Security review 1 of #2753 (Linnet): every computer sends one request for a
+    // tab's project, so a tab renamed before another computer asks must not
+    // change that request, which the server refuses for another name.
+    test('a tab renamed before another computer asks still finds its project there', () async {
+      final f = SuperTabLaunchFixture();
+      f.connection.server.refuseReusedOperations = true;
+      final p = _huyDesk(f);
+      final c = await _personal(f);
+      await PersonalProjects.of(f.app).sync(c);
+      final code = c.snapshot!.projects.firstWhere((p) => p.name == 'code');
+
+      // The laptop, with nothing kept, after the tab was renamed.
+      final laptop = SuperTabLaunchFixture();
+      laptop.connection.server
+        ..refuseReusedOperations = true
+        ..receipts.addAll(f.connection.server.receipts)
+        ..receiptCommands.addAll(f.connection.server.receiptCommands);
+      laptop.connection.server.state
+        ..clear()
+        ..addAll(f.connection.server.state);
+      final lp = _huyDesk(laptop);
+      laptop.app.swarms.firstWhere((s) => s.id == 'desk-code')
+        ..name = 'backend'
+        ..nameIsCustom = true;
+      final lc = await _personal(laptop);
+      await PersonalProjects.of(laptop.app).sync(lc);
+      expect(
+        PersonalProjects.of(laptop.app).panesFor(lc, code.leadConversationId),
+        [lp.a1, lp.a2],
+      );
+      expect(p.a1.agentId, lp.a1.agentId);
+      // The project keeps the name it was made with.
+      expect(lc.snapshot!.projectById(code.id)?.name, 'code');
+    });
+
+    test('a tab with no usable name still gets a project, under a name the server takes', () async {
+      final f = SuperTabLaunchFixture();
+      final p = _huyDesk(f);
+      f.app.swarms.firstWhere((s) => s.id == 'desk-code').name = '   ';
+      f.app.swarms.firstWhere((s) => s.id == 'desk-monitor').name = 'M' * 300;
+      final c = await _personal(f);
+      await PersonalProjects.of(f.app).sync(c);
+      final names = [for (final p in c.snapshot!.projects) p.name];
+      expect(names, contains('Tab'));
+      expect(names, contains('M' * 160));
+      final tab = c.snapshot!.projects.firstWhere((p) => p.name == 'Tab');
+      expect(
+        PersonalProjects.of(f.app)
+            .panesFor(f.app.superTabs.peek(tabId)!, tab.leadConversationId),
+        [p.a1, p.a2],
+      );
+    });
+
     test('nothing is sent of a tab but its project\'s name', () async {
       final f = SuperTabLaunchFixture();
       _huyDesk(f);
