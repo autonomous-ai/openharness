@@ -12,7 +12,6 @@ import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 
-import 'identity.dart';
 import 'swarm_invites_sheet.dart';
 import 'model.dart';
 import 'swarm_leaderboard_reader.dart';
@@ -61,8 +60,7 @@ List<SwarmProjectHuman> swarmProjectHumans(
     for (final person in swarmProjectPeople(snapshot, project))
       (
         person: person,
-        name:
-            scores[person.id]?.displayName ?? superTabPersonName(person.email),
+        name: scores[person.id]?.displayName ?? person.username,
         score: scores[person.id],
         own: person.id == viewer,
       ),
@@ -553,7 +551,7 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
     SuperTabPerson? personOf(String id) =>
         people.where((p) => p.id == id).firstOrNull;
     String nameOf(SwarmScore score) => switch (personOf(score.personId)) {
-      final person? => score.displayName ?? superTabPersonName(person.email),
+      final person? => score.displayName ?? person.username,
       null => 'Former member',
     };
     final week = _shownLabel(reader, current);

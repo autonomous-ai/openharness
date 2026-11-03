@@ -393,7 +393,7 @@ void main() {
       expect(find.text('Jump to…'), findsNothing);
       expect(find.text('Needs you'), findsNothing, reason: "Activity's now");
       expect(find.text('Ship it behind a flag?'), findsNothing);
-      expect(key('swarm-away'), findsNothing, reason: 'the person never left');
+      expect(key('swarm-away'), findsOneWidget, reason: 'always there');
       expect(find.text('Buddies'), findsNothing);
       expect(key('swarm-home-buddy-$tab-$project'), findsNothing);
       expect(find.text('Chat with PM'), findsNothing);
@@ -600,16 +600,25 @@ void main() {
       },
     };
 
-    testWidgets('none on a first open, nor back within five minutes; back '
+    testWidgets('there on a first open and back within five minutes; back '
         'later, how long, the work done since and what needs you; a tap '
         'opens what needs you', (tester) async {
       var now = _halfHourIn();
       final fake = backend();
       final host = await pump(tester, fake, now: () => now);
-      expect(key('swarm-away'), findsNothing, reason: 'never left');
+      expect(
+        inside('swarm-away', find.text('now')),
+        findsOneWidget,
+        reason: 'never left: no time away yet',
+      );
+      expect(inside('swarm-away-done', find.text('0')), findsOneWidget);
 
       await away(tester, const Duration(minutes: 4), (d) => now = now.add(d));
-      expect(key('swarm-away'), findsNothing, reason: 'four minutes');
+      expect(
+        inside('swarm-away', find.text('4m')),
+        findsOneWidget,
+        reason: 'four minutes',
+      );
 
       final left = now;
       moveOn(fake, {
@@ -645,24 +654,24 @@ void main() {
       expect(find.byType(SwarmActivityPage), findsOneWidget);
     });
 
-    testWidgets('back within five minutes and using the app on: still no '
-        'card, as only time in the background is time away', (tester) async {
+    testWidgets('back within five minutes and using the app on: the time stays, '
+        'as only time in the background is time away', (tester) async {
       var now = _halfHourIn();
       await pump(tester, backend(), now: () => now);
       await away(tester, const Duration(minutes: 4), (d) => now = now.add(d));
-      expect(key('swarm-away'), findsNothing);
+      expect(inside('swarm-away', find.text('4m')), findsOneWidget);
 
       now = now.add(const Duration(minutes: 2));
       await tester.pump(const Duration(minutes: 2));
       expect(
-        key('swarm-away'),
-        findsNothing,
+        inside('swarm-away', find.text('4m')),
+        findsOneWidget,
         reason: 'two minutes in the foreground are no time away',
       );
     });
 
     testWidgets('opened four minutes after the app was last left, and used '
-        'on: no card', (tester) async {
+        'on: four minutes', (tester) async {
       var now = _halfHourIn();
       final store = MemoryKeyValueStore()
         ..values['swarm_home.$me'] = jsonEncode({
@@ -672,11 +681,62 @@ void main() {
               .millisecondsSinceEpoch,
         });
       await pump(tester, backend(), now: () => now, store: store);
-      expect(key('swarm-away'), findsNothing);
+      expect(inside('swarm-away', find.text('4m')), findsOneWidget);
 
       now = now.add(const Duration(minutes: 2));
       await tester.pump(const Duration(minutes: 2));
+      expect(inside('swarm-away', find.text('4m')), findsOneWidget);
+    });
+
+    testWidgets('waits for when the app was last left, so it never shows a '
+        'first open and then jumps', (tester) async {
+      final now = _halfHourIn();
+      final store = _HeldStore()
+        ..values['swarm_home.$me'] = jsonEncode({
+          'pins': <Object>[],
+          'seen': now
+              .subtract(const Duration(minutes: 20))
+              .millisecondsSinceEpoch,
+        });
+      await pump(tester, backend(), now: () => now, store: store, settle: false);
       expect(key('swarm-away'), findsNothing);
+
+      store.release.complete();
+      await tester.pumpAndSettle();
+
+      expect(inside('swarm-away', find.text('20m')), findsOneWidget);
+    });
+
+    testWidgets('with no Swarm to report on, there is none', (tester) async {
+      final fake = backend();
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': <Object>[],
+        'next': null,
+      };
+      await pump(tester, fake);
+
+      expect(key('swarm-away'), findsNothing);
+    });
+
+    testWidgets('a moment away leaves the card as it was; a long time away '
+        'starts it over', (tester) async {
+      var now = _halfHourIn();
+      await pump(tester, backend(), now: () => now);
+      await away(tester, const Duration(hours: 1), (d) => now = now.add(d));
+      expect(inside('swarm-away', find.text('1h')), findsOneWidget);
+
+      await away(tester, const Duration(seconds: 30), (d) => now = now.add(d));
+      expect(
+        inside('swarm-away', find.text('1h')),
+        findsOneWidget,
+        reason: 'a phone locked for a moment takes nothing away',
+      );
+      await away(tester, const Duration(minutes: 4), (d) => now = now.add(d));
+      expect(inside('swarm-away', find.text('1h')), findsOneWidget);
+
+      await away(tester, const Duration(minutes: 6), (d) => now = now.add(d));
+      expect(inside('swarm-away', find.text('6m')), findsOneWidget);
+      expect(inside('swarm-away', find.text('1h')), findsNothing);
     });
 
     testWidgets('its time is how long the person was away, not how long since '
@@ -2782,7 +2842,7 @@ void main() {
       expect(find.text('Buddies'), findsNothing);
       expect(find.text('Projects'), findsOneWidget);
       expect(find.textContaining('Reading'), findsNothing);
-      expect(key('swarm-away'), findsNothing);
+      expect(key('swarm-away'), findsOneWidget, reason: 'its figures skeletons');
 
       listed.complete();
       await tester.pumpAndSettle();
@@ -2929,4 +2989,15 @@ void main() {
       expect(find.text('Projects'), findsOneWidget);
     });
   });
+}
+
+/// A store whose reads wait for [release]: the phone's disk, slower than Home.
+class _HeldStore extends MemoryKeyValueStore {
+  final release = Completer<void>();
+
+  @override
+  Future<String?> read(String key) async {
+    await release.future;
+    return super.read(key);
+  }
 }

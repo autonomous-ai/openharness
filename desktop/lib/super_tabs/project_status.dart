@@ -38,6 +38,14 @@ Future<void> showSuperTabProjectStatus(
   SuperTabController c,
   String projectId, {
   DateTime Function() now = DateTime.now,
+}) => showSuperTabProjectStatusWith(context, c, projectId, now: now);
+
+/// The Status above, with the clock given, so a test fixes the day.
+Future<void> showSuperTabProjectStatusWith(
+  BuildContext context,
+  SuperTabController c,
+  String projectId, {
+  required DateTime Function() now,
 }) => showAppDialog<void>(
   context: context,
   builder: (context) => SuperTabDialogScope(

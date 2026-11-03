@@ -2,7 +2,7 @@ name: harness_mobile
 description: "Harness viewer for iOS and Android."
 publish_to: 'none'
 
-version: 1.0.12+76
+version: 1.0.12+80
 
 environment:
   sdk: ^3.13.0
@@ -19,6 +19,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # Swarm messages use the same maintained Markdown renderer and GFM parser as Desktop.
+  flutter_markdown_plus: ^1.0.12
+  markdown: ^7.3.1
   # `compareNatural` — the desktop's name order, so `harness 9` sorts before `harness 10` on both.
   collection: ^1.19.1
   # The time a Swarm status clears by (`swarm/swarm_face.dart`), which tests move

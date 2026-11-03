@@ -56,6 +56,36 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
     chat.addListener(_chatChanged);
     reader.addListener(_chatChanged);
     files.addListener(_filesChanged);
+    final posts = [
+      for (final row
+          in reader.kept?.posts(reader.tabId, chat.id, root) ?? const [])
+        ?SwarmPost.fromKept(row, _heldOf),
+    ];
+    if (posts.isNotEmpty) _outbox.restore(posts);
+  }
+
+  /// What a kept reply puts back in the box if it is refused: only its words.
+  static Object? _heldOf(String text) =>
+      (draft: text, alsoSend: false, newSession: false);
+
+  void _keepPosts() {
+    if (_disposed) return;
+    reader.kept?.setPosts(reader.tabId, chat.id, root, [
+      for (final post in _outbox.posts)
+        if (post.state != SwarmPostState.confirmed) post.kept,
+    ]);
+  }
+
+  /// Takes [post], Not sent, away for good: Delete. It may still have arrived,
+  /// and then it shows when the thread is next read.
+  void deletePost(SwarmPost post) {
+    if (_disposed || post.state != SwarmPostState.unconfirmed) return;
+    _uploads.forget(post.files);
+    _outbox.remove(post);
+    if (error != null && error == _postError && _outbox.unconfirmed == null) {
+      error = null;
+      _tell();
+    }
   }
 
   final SwarmConversation chat;
@@ -311,6 +341,7 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
     path: '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/commands',
     timeout: chat.sendTimeout,
     onChanged: () {
+      _keepPosts();
       if (!_disposed) _tell();
     },
     onTaken: (post) {
@@ -433,7 +464,10 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
   /// A reply read back shows as its row, once, no longer on its way —
   /// whatever its answer, which may still be coming.
   void _settle() {
-    if (_outbox.settle(messages)) _composer.changed();
+    if (_outbox.settle(messages)) {
+      _keepPosts();
+      _composer.changed();
+    }
   }
 
   /// Reads the thread: from its newest reply back through [pagesOnOpen]

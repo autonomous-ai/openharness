@@ -1362,4 +1362,27 @@ void main() {
     expect(box.worktree, isTrue);
     await unmount(tester);
   });
+
+  // A harness starts in the folder of a repository with no commits; the
+  // Product Manager never works in the person's checkout, so it is refused.
+  testWidgets('The Product Manager is refused a repository with no commits', (
+    tester,
+  ) async {
+    final (box, _) = await mount(
+      tester,
+      leadMachines: [studio],
+      setup: (f) => f.app.gitProjectReaderForTest = (_, _) async => {
+        'isGit': true,
+        'root': '/home/u',
+        'branch': 'main',
+        'branches': [],
+      },
+    );
+    await tester.pumpAndSettle();
+    expect(box.noCommitsYet, isTrue);
+    expect(box.requiredChoice?.field, NewHarnessField.projectMenu);
+    expect(box.requiredChoice?.message, contains('no commits'));
+    expect(box.requiredChoice?.message, contains('Product Manager'));
+    await unmount(tester);
+  });
 }

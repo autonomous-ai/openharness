@@ -414,7 +414,13 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                     child: NotificationListener<Notification>(
                       onNotification: _measured,
                       child: ListenableBuilder(
-                        listenable: _thread,
+                        // Message links resolve against the inbox's current
+                        // reader, which can change independently of this
+                        // thread's older conversation reader.
+                        listenable: Listenable.merge([
+                          _thread,
+                          if (_session case final session?) session.inbox,
+                        ]),
                         builder: (context, _) => _body(tty),
                       ),
                     ),
