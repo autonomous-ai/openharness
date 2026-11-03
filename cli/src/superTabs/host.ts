@@ -99,6 +99,17 @@ export async function swarmRoleFor(sources: SwarmSources, harnessId: string): Pr
   // agent, and last an agent that was a Reviewer.
   return (['buddy', 'lead', 'dev', 'review'] as const).map(role => grants.find(grant => grant && wireRole(grant) === role)).find(Boolean) ?? null
 }
+/** Whether any Swarm's roster lists [harnessId] on this machine, whatever its chats or stop: Import agent never brings in a
+ *  session a Swarm lists, as its transcript may hold that Swarm's private project (re-review of #2783). Its restart role
+ *  above is none for one whose chats are archived or whose stop was asked, and it is listed still. */
+export async function swarmListedFor(sources: SwarmSources, harnessId: string): Promise<boolean> {
+  const machineId = sources.feed.machineId
+  if (!identifier(machineId) || !identifier(harnessId)) return false
+  return (await sources.feed.refresh()).roster.map(object).some(row => {
+    const agent = object(row.agent)
+    return identifier(row.tabId) && agent.machineId === machineId && agent.harnessId === harnessId
+  })
+}
 /** A Buddy names its owner (backend buddies.ts); its role field stays a builder's for older readers. */
 const isBuddy = (agent: Record<string, unknown>) => !!agent.buddyOf && typeof agent.buddyOf === 'object'
 
@@ -1659,16 +1670,24 @@ export class SuperTabHost {
       .filter(group => group.archived !== true && identifier(group.id) && Array.isArray(group.agentIds) && group.agentIds.includes(id))
     const group = groups.find(g => g.leadId === id) ?? groups.find(g => object(g.assignment).agentId === id) ?? groups[0]
     if (!group || !current()) return false
-    const send = (agentOnly: boolean) => backend(this.core, 'POST', `/api/super-tabs/${target.tabId}/commands`, {
+    const send = (agentOnly: boolean, notice: boolean) => backend(this.core, 'POST', `/api/super-tabs/${target.tabId}/commands`, {
       // A switch back to an earlier mode's text is a new rewrite, so its count keeps it from reusing that text's id.
       operationId: `skill-${id}-${refresh.version.slice(0, 32)}${refresh.change ? `-${refresh.change}` : ''}`, asAgentId: id,
-      command: { type: 'message.send', conversationId: group.id, replyTo: null, recipientIds: [id], text: refresh.notice, ...(agentOnly ? { agentOnly } : {}) },
+      command: { type: 'message.send', conversationId: group.id, replyTo: null, recipientIds: [id], text: refresh.notice,
+        ...(agentOnly ? { agentOnly } : {}), ...(notice ? { notice: 'skills' } : {}) },
     })
+    const refused = (error: unknown, key: string) => error instanceof SuperTabHostError && error.code === 'VALIDATION_ERROR' && error.message.includes(`"${key}"`)
     try {
-      // Only the agent sees its notice. A backend from before the mark refuses it before recording anything, so the same
-      // id sends it the old way, visible in the group (2026-10-24: the owner found it confusing in the project chat).
-      await send(true).catch(error => {
-        if (error instanceof SuperTabHostError && error.code === 'VALIDATION_ERROR' && error.message.includes('"agentOnly"')) return send(false)
+      // Only the agent sees its notice, marked as a skills notice: its coordinator's waits for its digest (backend
+      // noticeDigest.ts). A backend from before a mark refuses it before recording anything, so the same id goes again
+      // without it: without the skills mark, or, before agent-only notices, the old way, visible in the group (2026-10-24:
+      // the owner found it confusing in the project chat).
+      await send(true, true).catch(error => {
+        if (refused(error, 'agentOnly')) return send(false, false)
+        if (refused(error, 'notice')) return send(true, false).catch(again => {
+          if (refused(again, 'agentOnly')) return send(false, false)
+          throw again
+        })
         throw error
       })
     } catch (error) {

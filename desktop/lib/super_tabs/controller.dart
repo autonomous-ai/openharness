@@ -5016,7 +5016,7 @@ class SuperTabController extends ChangeNotifier {
       for (final file in files) {
         var id = _uploaded[file];
         if (id == null) {
-          final answer = await _uploadFile(conversationId, file);
+          final answer = await uploadFile(conversationId, file);
           if (run != _uploadRun) return null;
           id = superTabMap(answer['attachment'])['id'] as String;
           _uploaded[file] = id;
@@ -5046,7 +5046,7 @@ class SuperTabController extends ChangeNotifier {
 
   /// Sends [file] to the backend and returns its attachment. Gives up when no
   /// byte has moved for [uploadTimeout], or when the upload is cancelled.
-  Future<Map<String, dynamic>> _uploadFile(
+  Future<Map<String, dynamic>> uploadFile(
     String conversationId,
     HarnessAttachment file,
   ) async {

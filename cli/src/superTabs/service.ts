@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import type { CoreApi, ServiceRequests, SuperTabsPort } from '../core/api.js'
 import { validModelTokens } from '../lib/agentUsageWire.js'
 import { ASSIGNMENT_COMMANDS, staleAssignmentHint, wantsCurrent, withCurrentAssignment } from './assignmentIds.js'
-import { backend, swarmRoleFor, hostJournalFile, identifier, object, SuperTabHost, SuperTabHostError, type SuperTabHostOptions, type SwarmSources } from './host.js'
+import { backend, swarmListedFor, swarmRoleFor, hostJournalFile, identifier, object, SuperTabHost, SuperTabHostError, type SuperTabHostOptions, type SwarmSources } from './host.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads, type SwarmRead } from './swarmReads.js'
 import { within } from './wire.js'
@@ -465,6 +465,12 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           // In the wire's values, which the core reads in either set (inCore/role.ts) and a core from before role kinds in
           // these alone; a Reviewer's keeps its swarm-review file.
           return { ok: true, role: grant ? wireRole(grant) : grant, ...(grant ? { mode: grant.mode } : {}) }
+        }
+        // Import agent (Desktop): whether any Swarm lists this harness here. An unreadable roster answers no `listed`, on which
+        // Desktop refuses rather than share.
+        if (payload.action === 'swarmListed') {
+          const listed = await within(swarmListedFor(sources(), String(payload.harnessId ?? '')))
+          return listed === null ? { ok: true } : { ok: true, listed }
         }
         // `harness send`, `new`, `tell` and `close` from a pane (buddyPane.ts): whether its harness is a Buddy, from this computer's
         // own launch record (start.ts starts one with the Swarm role buddy; core/agents/create.ts saves it on the session). The

@@ -4176,6 +4176,14 @@ describe('Lead mentions', () => {
     expect(JSON.stringify(mention)).not.toContain(owner.email)
   })
 
+  it('lists a person’s tag under the name they set, when they set one', async () => {
+    const { tab, group } = await tagged()
+    await run(tab, { type: 'member.name', name: 'The Boss' })
+    const messageId = (await run(tab, { type: 'message.send', conversationId: group, text: 'Peer, look.', replyTo: null, recipientIds: [],
+      mentions: [peer.sub] })).result.messageId as string
+    expect((await list(tab, peer, 'waiting')).find(m => m.messageId === messageId)).toMatchObject({ leadName: 'The Boss' })
+  })
+
   it('resolves on the person’s later post in that conversation, not on anyone else’s', async () => {
     const { tab, group } = await tagged()
     await run(tab, { type: 'message.send', conversationId: group, text: 'Owner chimes in.', replyTo: null, recipientIds: [] })

@@ -46,9 +46,15 @@ List<SuperTabProject> buddyProjects(SuperTabController c) => [
     if (c.buddy(project.id) == null) project,
 ];
 
-/// A person by the name the Swarm shows: their username.
-String buddyPersonName(SuperTabController c, String personId) =>
-    c.snapshot?.usernameOf(personId) ?? 'its owner';
+/// A person by the name the Swarm shows: the name they set, else their
+/// username.
+String buddyPersonName(SuperTabController c, String personId) {
+  return c.snapshot?.people
+          .where((p) => p.id == personId)
+          .firstOrNull
+          ?.shownName ??
+      'its owner';
+}
 
 /// The machine [machineId]'s name as the dialog and the chat show it.
 String buddyMachineName(

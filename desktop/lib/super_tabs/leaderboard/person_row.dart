@@ -27,10 +27,11 @@ TextStyle leaderboardPointsStyle() => grid.AppType.label(
   fontFeatures: grid.AppFont.tabularFigures,
 );
 
-/// A person as the leaderboard names them: their username, as everywhere in
-/// the Swarm (the board's account display name was a long one).
+/// A person as the leaderboard names them: as everywhere in the Swarm, the
+/// name they set, else their username (the board's account display name was
+/// a long one).
 String leaderboardName(SuperTabPerson person, SuperTabPersonScore? score) =>
-    person.username;
+    person.shownName;
 
 /// Whether a person wears the crown: first on the board, with points. At the
 /// start of a week everyone ties at 0, and no one has taken #1 yet.
@@ -150,6 +151,7 @@ class LeaderboardPersonRow extends StatelessWidget {
     builder: (context) => Tooltip(
       message: [
         leaderboardName(person, score),
+        if (person.name != null) '@${person.username}',
         person.email,
         ?person.statusAt(clock.now())?.text,
       ].join('\n'),
