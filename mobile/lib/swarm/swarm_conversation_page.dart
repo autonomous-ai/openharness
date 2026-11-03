@@ -1832,7 +1832,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           final reactions = c.reactionsOf(m);
           final receipt =
               m.id == latestOwn?.id &&
-              const {'queued', 'uncertain'}.contains(m.receiptDelivery?.status);
+              // Sent to nobody: where no Lead runs, the line says so.
+              (m.receiptDelivery == null ||
+                  const {
+                    'queued',
+                    'uncertain',
+                  }.contains(m.receiptDelivery?.status));
           // A card's facts are its group's: only a reader of the group has
           // them, and a change to them draws the row again.
           final group = c.conversation;
