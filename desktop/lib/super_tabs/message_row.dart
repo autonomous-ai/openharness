@@ -843,42 +843,44 @@ class SuperTabThreadLine extends StatelessWidget {
     final lastReply = last == null
         ? null
         : 'Last reply ${superTabAgo(DateTime.now().difference(last))}';
-    final when = DesktopChrome.metadata();
-    // Wide enough for either words, so hover moves nothing.
-    final slot = _widest(context, [?lastReply, 'View thread'], when);
     final link = _SuperTabThreadBar(
       key: ValueKey('super-thread-bar-${thread.id}'),
       label: unread ? '$count, unread' : count,
       onTap: onOpen,
       builder: (active) => Row(
-        mainAxisSize: MainAxisSize.min,
         children: [
           for (final author in thread.authors.take(_faces)) ...[
             _face(author),
             const SizedBox(width: grid.AppDesktop.menuInset),
           ],
-          Flexible(
-            child: Text(
-              count,
-              key: ValueKey('super-thread-count-${thread.id}'),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: DesktopChrome.control(color: DesktopChrome.accent)
-                  .copyWith(
-                    fontWeight: unread ? FontWeight.w700 : FontWeight.w500,
+          // Its words share what the faces leave; the arrow ends the bar.
+          Expanded(
+            child: Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    count,
+                    key: ValueKey('super-thread-count-${thread.id}'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: DesktopChrome.control(color: DesktopChrome.accent)
+                        .copyWith(
+                          fontWeight: unread
+                              ? FontWeight.w700
+                              : FontWeight.w500,
+                        ),
                   ),
-            ),
-          ),
-          const SizedBox(width: grid.AppDesktop.controlGap),
-          Flexible(
-            child: SizedBox(
-              width: slot,
-              child: Text(
-                active ? 'View thread' : lastReply ?? '',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: when,
-              ),
+                ),
+                const SizedBox(width: grid.AppDesktop.controlGap),
+                Flexible(
+                  child: Text(
+                    active ? 'View thread' : lastReply ?? '',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: DesktopChrome.metadata(),
+                  ),
+                ),
+              ],
             ),
           ),
           const SizedBox(width: grid.AppDesktop.controlGap),
@@ -912,32 +914,14 @@ class SuperTabThreadLine extends StatelessWidget {
   /// On one line while it fits, and on two in a narrow chat.
   Widget _wrapped(List<Widget> children) =>
       Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: children);
-
-  /// The width of the widest of [texts] in [style], as this context lays out.
-  static double _widest(
-    BuildContext context,
-    List<String> texts,
-    TextStyle style,
-  ) {
-    var widest = 0.0;
-    for (final text in texts) {
-      final painter = TextPainter(
-        text: TextSpan(text: text, style: style),
-        textDirection: Directionality.of(context),
-        textScaler: MediaQuery.textScalerOf(context),
-        maxLines: 1,
-      )..layout();
-      if (painter.width > widest) widest = painter.width;
-      painter.dispose();
-    }
-    return widest.ceilToDouble();
-  }
 }
 
 /// The reply bar: one target, a hand cursor anywhere on it, reached by Tab and
 /// pressed with Enter or Space. Hover fills it and draws the rim; focus fills
 /// it and draws the blue boundary. Both rims are reserved at rest, so neither
-/// moves the words. [builder] is told whether it is hovered or focused.
+/// moves the words. [builder] is told whether it is hovered or focused, and
+/// fills the bar's width: Slack's, or the column's when the chat is narrower
+/// (Huy, 2026-11-03, #2373).
 class _SuperTabThreadBar extends StatefulWidget {
   const _SuperTabThreadBar({
     super.key,
@@ -950,8 +934,8 @@ class _SuperTabThreadBar extends StatefulWidget {
   final VoidCallback onTap;
   final Widget Function(bool active) builder;
 
-  /// No wider than this, however wide the chat.
-  static const maxWidth = 480.0;
+  /// Its width, however wide the chat.
+  static const width = 600.0;
 
   @override
   State<_SuperTabThreadBar> createState() => _SuperTabThreadBarState();
@@ -969,39 +953,42 @@ class _SuperTabThreadBarState extends State<_SuperTabThreadBar> {
     return Semantics(
       button: true,
       label: widget.label,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(
-          maxWidth: _SuperTabThreadBar.maxWidth,
-          minHeight: 32,
-        ),
-        child: InkWell(
-          onTap: widget.onTap,
-          onHover: (hovered) => setState(() => _hovered = hovered),
-          onFocusChange: (focused) => setState(() => _focused = focused),
-          mouseCursor: SystemMouseCursors.click,
-          borderRadius: radius,
-          hoverColor: Colors.transparent,
-          focusColor: Colors.transparent,
-          highlightColor: grid.AppSurface.hoverFill,
-          splashFactory: NoSplash.splashFactory,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: active ? grid.AppSurface.hoverFill : Colors.transparent,
-              borderRadius: radius,
-              border: Border.all(
-                color: _focused
-                    ? DesktopChrome.focusRing
-                    : _hovered
-                    ? DesktopChrome.rim
-                    : Colors.transparent,
-                width: grid.AppDesktop.focusWidth,
+      child: LayoutBuilder(
+        builder: (context, constraints) => ConstrainedBox(
+          constraints: BoxConstraints.tightFor(
+            width: constraints.maxWidth < _SuperTabThreadBar.width
+                ? constraints.maxWidth
+                : _SuperTabThreadBar.width,
+          ).copyWith(minHeight: 32),
+          child: InkWell(
+            onTap: widget.onTap,
+            onHover: (hovered) => setState(() => _hovered = hovered),
+            onFocusChange: (focused) => setState(() => _focused = focused),
+            mouseCursor: SystemMouseCursors.click,
+            borderRadius: radius,
+            hoverColor: Colors.transparent,
+            focusColor: Colors.transparent,
+            highlightColor: grid.AppSurface.hoverFill,
+            splashFactory: NoSplash.splashFactory,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: active ? grid.AppSurface.hoverFill : Colors.transparent,
+                borderRadius: radius,
+                border: Border.all(
+                  color: _focused
+                      ? DesktopChrome.focusRing
+                      : _hovered
+                      ? DesktopChrome.rim
+                      : Colors.transparent,
+                  width: grid.AppDesktop.focusWidth,
+                ),
               ),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: grid.AppDesktop.menuInset,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: grid.AppDesktop.menuInset,
+                ),
+                child: ExcludeSemantics(child: widget.builder(active)),
               ),
-              child: ExcludeSemantics(child: widget.builder(active)),
             ),
           ),
         ),

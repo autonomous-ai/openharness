@@ -35,7 +35,7 @@ static int checks;
 
 // ---- the recorder --------------------------------------------------------------------------------------
 enum { EV_STATS, EV_LINK, EV_AGENTS, EV_SWARMS, EV_LIBRARY, EV_CONTEXT, EV_TURN, EV_SUMMARY, EV_QUESTION, EV_QCLOSE, EV_FOCUS,
-       EV_VOICE, EV_MACHINES, EV_NREPLACE, EV_NSEEN, EV_STIDS, EV_SUPERTAB, EV_STRECAP, EV_STFOCUS, EV_STNOTICE, EV_STNOTICE_READ };
+       EV_VOICE, EV_MACHINES, EV_NREPLACE, EV_NSEEN, EV_STIDS, EV_SUPERTAB, EV_STRECAP, EV_STFOCUS, EV_STNOTICE, EV_STNOTICE_READ, EV_FEATURES };
 typedef struct { int kind; char id[64]; char a[2400], b[2400], c[2400], d[128]; long n1, n2, n3, n4, n5; } ev_t;
 #define EV_MAX 64
 static ev_t evs[EV_MAX];
@@ -56,6 +56,7 @@ static ev_t *add(int kind, const char *id)
 }
 static void put(char *dst, const char *s) { snprintf(dst, 2400, "%s", s ? s : "<null>"); }
 
+void pro_app_features(uint32_t features) { ev_t *e = add(EV_FEATURES, NULL); e->n1 = (long)features; }
 void pro_app_link(bool up, const char *machine) { ev_t *e = add(EV_LINK, NULL); e->n1 = up; put(e->a, machine); }
 void pro_app_agents(const pro_agent_row_t *rows, int n)
 {
@@ -277,6 +278,27 @@ static void welcome(void)
 }
 
 // ---- cases ---------------------------------------------------------------------------------------------
+static void pro_cable_test_welcome_swarm_remote_feature(void)
+{
+    reset();
+    feed("{\"t\":\"welcome\",\"machine\":{\"id\":\"m1\",\"name\":\"Mac\"},\"features\":[\"swarm.remote\"]}");
+    int seen = 0;
+    for (int i = 0; i < nev; i++) if (evs[i].kind == EV_FEATURES) { seen++; CHECK((evs[i].n1 & CABLE_FEATURE_SWARM_REMOTE) && !(evs[i].n1 & CABLE_FEATURE_PLAYER_LIBRARY)); }
+    CHECK(seen == 1);
+    reset();
+    feed("{\"t\":\"welcome\",\"machine\":{\"id\":\"m1\",\"name\":\"Mac\"},\"features\":[\"player.library\"]}");
+    seen = 0;
+    for (int i = 0; i < nev; i++) if (evs[i].kind == EV_FEATURES) { seen++; CHECK(!(evs[i].n1 & CABLE_FEATURE_SWARM_REMOTE) && (evs[i].n1 & CABLE_FEATURE_PLAYER_LIBRARY)); }
+    CHECK(seen == 1);
+}
+static void pro_cable_test_voice_error_buddy(void)
+{
+    welcome();
+    reset();
+    CHECK(pro_cable_voice_begin("l2", true, NULL, 16000, "upb") && strstr(sent[nsent - 1], "\"agentId\":\"l2\"") && strstr(sent[nsent - 1], "\"face\":true"));
+    feed("{\"t\":\"voice.error\",\"uploadId\":\"upb\",\"message\":\"Could not reach your Buddy. Try again.\"}");
+    CHECK(nev == 1 && evs[0].kind == EV_VOICE && evs[0].n1 == PRO_VOICE_ERROR && !strcmp(evs[0].a, "Could not reach your Buddy. Try again."));
+}
 static void pro_cable_test_turn_activity(void)
 {
     welcome();   // frames only count inside a session
@@ -548,7 +570,7 @@ static void pro_cable_test_no_session(void)
     CHECK(nev == 0 && nsent == 1 && strstr(sent[0], "pong"));   // the link's own keepalive still answers
     // After a session ends the same holds: the welcome opens the gate, the silence closes it.
     welcome();
-    CHECK(pro_cable_connected() && nev == 1 && evs[0].kind == EV_LINK);
+    CHECK(pro_cable_connected() && nev == 2 && evs[0].kind == EV_FEATURES && evs[1].kind == EV_LINK);
     reset();
     end_session();
     reset();
@@ -563,12 +585,12 @@ static void test_session_machines_library_voice(void)
     // welcome: link up, then machines.list + agents.list are asked for; a repeat greeting does nothing more.
     reset();
     welcome();
-    CHECK(nev == 1 && evs[0].kind == EV_LINK && evs[0].n1 == 1 && !strcmp(evs[0].a, "Mac"));
+    CHECK(nev == 2 && evs[0].kind == EV_FEATURES && evs[1].kind == EV_LINK && evs[1].n1 == 1 && !strcmp(evs[1].a, "Mac"));
     CHECK(nsent == 2 && strstr(sent[0], "machines.list") && strstr(sent[1], "agents.list"));
     CHECK(pro_cable_connected() && pro_cable_library_supported());
     reset();
     welcome();
-    CHECK(nev == 0 && nsent == 0);
+    CHECK(nev == 1 && evs[0].kind == EV_FEATURES && nsent == 0);   // the features are told again; nothing else
     feed("{\"t\":\"ping\"}");
     CHECK(nsent == 1 && strstr(sent[0], "pong"));
     reset();
@@ -650,7 +672,7 @@ static void test_session_machines_library_voice(void)
 
     // voice: replies for another upload are dropped; a route that needs confirming is confirmed
     reset();
-    CHECK(pro_cable_voice_begin("a", NULL, 16000, "up1") && nsent == 1 && strstr(sent[0], "\"lang\":\"en\"") && strstr(sent[0], "\"uploadId\":\"up1\""));
+    CHECK(pro_cable_voice_begin("a", false, NULL, 16000, "up1") && nsent == 1 && strstr(sent[0], "\"lang\":\"en\"") && strstr(sent[0], "\"uploadId\":\"up1\"") && !strstr(sent[0], "\"face\""));
     feed("{\"t\":\"voice.transcript\",\"uploadId\":\"up0\",\"agentId\":\"a\"}");
     feed("{\"t\":\"voice.error\",\"uploadId\":\"up0\",\"message\":\"no\"}");
     CHECK(nev == 0);
@@ -1141,6 +1163,53 @@ static void test_swarm_chat(void)
     CHECK(nev == 1 && evs[0].d[0] == 0);
 }
 
+// Each Lead's Buddy and the Swarm's side (swarmBuddy): a bad field never drops the Lead or the frame.
+static void test_swarm_buddy(void)
+{
+    welcome();
+    reset();   // supertab_reads_buddy_block
+    feed("{\"t\":\"supertab\",\"id\":\"S1\",\"leads\":[{\"id\":\"L1\",\"buddies\":true,\"buddy\":{\"chatId\":\"b1\",\"name\":\"diego's Buddy\","
+         "\"engine\":\"codex\",\"cells\":25513,\"color\":\"#d6a79a\",\"live\":true}},{\"id\":\"L2\",\"buddies\":\"yes\"},{\"id\":\"L3\",\"buddies\":true,"
+         "\"buddy\":{\"cells\":3,\"color\":\"red\",\"live\":1}}]}");
+    CHECK(nev == 1 && rec_card.lead_n == 3);
+    const pod_lead_t *l = &rec_card.leads[0];
+    CHECK(l->buddies && l->has_buddy && !l->buddy_unread && !strcmp(l->buddy.chat_id, "b1") && !strcmp(l->buddy.name, "diego's Buddy") &&
+          !strcmp(l->buddy.engine, "codex") && l->buddy.cells == 25513 && l->buddy.color == 0xD6A79A && l->buddy.live);
+    CHECK(!rec_card.leads[1].buddies && !rec_card.leads[1].has_buddy);   // buddies is true only for JSON true
+    CHECK(rec_card.leads[2].has_buddy && rec_card.leads[2].buddy.cells == 3 && rec_card.leads[2].buddy.color == 0xC49BFF &&
+          !rec_card.leads[2].buddy.live && rec_card.leads[2].buddy.chat_id[0] == 0);
+
+    reset();   // buddy_bad_cells_dropped
+    feed("{\"t\":\"supertab\",\"id\":\"S1\",\"leads\":[{\"id\":\"L1\",\"buddy\":{\"cells\":-1}},{\"id\":\"L2\",\"buddy\":{\"cells\":40000}},"
+         "{\"id\":\"L3\",\"buddy\":{\"cells\":\"x\"}},{\"id\":\"L4\",\"buddy\":{}},{\"id\":\"L5\",\"buddy\":7},{\"id\":\"L6\",\"buddy\":{\"cells\":32767}}]}");
+    CHECK(nev == 1 && rec_card.lead_n == 6);
+    for (int i = 0; i < 5; i++) CHECK(!rec_card.leads[i].has_buddy);
+    CHECK(rec_card.leads[5].has_buddy && rec_card.leads[5].buddy.cells == 32767);
+
+    reset();   // buddy_name_cut_on_codepoint: 60 bytes of "é" cut to 48 whole letters
+    char *name = repeat("\xc3\xa9", 30);
+    feedf("{\"t\":\"supertab\",\"id\":\"S1\",\"leads\":[{\"id\":\"L1\",\"buddy\":{\"cells\":1,\"name\":\"%s\"}}]}", name);
+    free(name);
+    CHECK(nev == 1 && rec_card.leads[0].has_buddy && strlen(rec_card.leads[0].buddy.name) == 48 && utf8_ok(rec_card.leads[0].buddy.name));
+
+    reset();   // supertab_reads_side
+    feed("{\"t\":\"supertab\",\"id\":\"S1\",\"side\":\"pm\",\"leads\":[]}");
+    CHECK(nev == 1 && rec_card.side == POD_SIDE_PM);
+    feed("{\"t\":\"supertab\",\"id\":\"S1\",\"side\":\"buddy\",\"leads\":[]}");
+    CHECK(rec_card.side == POD_SIDE_BUDDY);
+    feed("{\"t\":\"supertab\",\"id\":\"S1\",\"side\":\"x\",\"leads\":[]}");
+    CHECK(rec_card.side == POD_SIDE_NONE);
+    feed("{\"t\":\"supertab\",\"id\":\"S1\",\"leads\":[]}");
+    CHECK(rec_card.side == POD_SIDE_NONE);
+    feed("{\"t\":\"supertab\",\"id\":\"S1\",\"side\":3,\"leads\":[]}");
+    CHECK(rec_card.side == POD_SIDE_NONE);
+
+    reset();   // side_frame_written: exactly these keys, only pm / buddy
+    CHECK(pro_cable_supertab_side("S1", "buddy") && nsent == 1);
+    CHECK(!strcmp(sent[0], "{\"t\":\"supertab.side\",\"tab\":\"S1\",\"side\":\"buddy\"}"));
+    CHECK(!pro_cable_supertab_side("S1", "x") && !pro_cable_supertab_side("", "pm") && !pro_cable_supertab_side("S1", NULL) && nsent == 1);
+}
+
 // The Swarm cards (the hello's swarmCard:v1 is checked in test_pro_hello.py): supertabs {ids} + one supertab per Swarm +
 // supertab.recap / supertab.focus in, pro_app_supertab* out.
 static void test_swarm_cards(void)
@@ -1426,6 +1495,8 @@ int main(void)
     pro_cable_start();   // the lock and the machine table; no tasks run on the host
     pro_cable_test_no_session();
     pro_cable_test_turn_activity();
+    pro_cable_test_welcome_swarm_remote_feature();
+    pro_cable_test_voice_error_buddy();
     pro_cable_test_old_daemon();
     pro_cable_test_oversize();
     pro_cable_test_ignores_round();
@@ -1446,6 +1517,7 @@ int main(void)
     seq_gaps();
     test_swarm_cards();
     test_swarm_chat();
+    test_swarm_buddy();
     test_swarm_notice();
     self_replug();
     replug_spares_a_frame_in_flight();

@@ -879,6 +879,9 @@ model HarnessShare {
 
   @@unique([machineId, agentId, recipientEmail])
   @@index([recipientEmail, autonomousEnv, expiresAt])
+  /// The share list (routes/harnessShares.ts): one recipient's unrevoked shares by createdAt, read without a sort in memory and
+  /// without fetching the revoked ones. expiresAt last, so an expired share is dropped from its key before it is fetched.
+  @@index([recipientEmail, autonomousEnv, revokedAt, createdAt, expiresAt])
   @@index([ownerId, machineId])
   @@map("harness_shares")
 }

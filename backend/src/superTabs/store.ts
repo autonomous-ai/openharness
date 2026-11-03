@@ -21,7 +21,7 @@ import { agentGatheredCount, agentGatheredDeliveries, agentOpenDeliveries, CANCE
 import { deliveriesByMessage } from './read/pageDeliveries.js'
 import { restoreDelivery } from './deliveryCompaction.js'
 import { threadSummaries } from './threads.js'
-import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, directUploads, errorCode, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, peekType, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
+import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, directUploads, errorCode, EXPIRED_UPLOAD, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, peekType, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
 import { FileLinks } from './fileLinks.js'
 import { randomBytes } from 'node:crypto'
@@ -649,7 +649,7 @@ export class SuperTabStore {
       if (target && target.machineId !== team && !onTeamAccount(state, target)) refuse(target)
     }
     switch (command.type) {
-      case 'machine.contribute': case 'machine.pause': case 'machine.remove': case 'machine.engineResume': return refuse()
+      case 'machine.contribute': case 'machine.pause': case 'machine.remove': case 'machine.engineResume': case 'machine.projects': return refuse()
       case 'machine.cleaned': case 'tab.project': case 'agent.add':
         if (command.machineId !== team) refuse()
         return
@@ -1543,7 +1543,7 @@ export class SuperTabStore {
       }
       if (command.type === 'note.add' || command.type === 'note.remove') context.notes = await readNotes(tx, tabId, command.projectId)
       if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
-        || command.type === 'machine.engineResume') && command.askedIn) {
+        || command.type === 'machine.engineResume' || command.type === 'machine.projects') && command.askedIn) {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.askedIn.messageId, tabId, conversationId: command.askedIn.conversationId } })
         if (asked) context.askedIn = { author: asked.author as unknown as Author, source: !!asked.source, createdAt: asked.createdAt.getTime() }
       }
@@ -2165,6 +2165,7 @@ export class SuperTabStore {
       if (!row || row.actorKey !== actorKey(actor) || row.conversationId !== command.conversationId || row.purpose) {
         fail('ATTACHMENT_UNAVAILABLE', 'Attach this file again before sending it.', 400)
       }
+      if (row.usedBy === EXPIRED_UPLOAD) fail('ATTACHMENT_EXPIRED', 'This file was not sent within a day and was removed. Attach it again.', 410)
       if (row.usedBy) fail('ATTACHMENT_USED', 'This file was already sent. Attach it again to send it in another message.')
       return { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) }
     })
@@ -2185,7 +2186,8 @@ export class SuperTabStore {
     const ids = [...new Set(command.attachmentIds)]
     const rows = await tx.superTabAttachment.findMany({ where: { tabId: state.id, id: { in: ids }, conversationId: command.conversationId } })
     const own = rows.filter(r => !r.purpose && r.actorKey === actorKey(actor) && !r.usedBy)
-    let handed = rows.filter(r => !r.purpose && r.actorKey === `person:${ownerId}` && !!r.usedBy)
+    // A file the expiry sweep took (lib/attachmentSweep.ts) is being removed: it was never sent, so it was never handed.
+    let handed = rows.filter(r => !r.purpose && r.actorKey === `person:${ownerId}` && !!r.usedBy && r.usedBy !== EXPIRED_UPLOAD)
     // A thread session reads its own thread alone, so it proposes only files its person sent there (spec: Guard): a file from
     // the main chat or another thread could be another project's.
     const thread = self.buddySession?.thread
