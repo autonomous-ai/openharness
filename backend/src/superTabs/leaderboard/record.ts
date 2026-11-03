@@ -22,6 +22,9 @@ export interface Run extends RanOn { assignmentId: string; at: number
   /** The agent and its terminal that ran it, so the model that terminal reports later fills this attempt only (record
    *  ReportedModel). Absent from attempts recorded before them. */
   agentId?: string; harnessId?: string
+  /** The machine it ran on, so a person's card can say what their machine shipped (contributor view, #2444). Absent from
+   *  attempts recorded before it; the board then finds it by the agent while that agent exists (brought.ts runMachine). */
+  machineId?: string
   firstVerdicts?: Record<string, boolean>; firstReview?: boolean
   /** The step up from a cheaper model this attempt is, on a task stepped up before project instructions: its attempt number and why. */
   stepUp?: { attempt: number; reason: string }
@@ -246,7 +249,7 @@ export function waitsNow(group: Conversation): boolean {
 /** An assignment records what its agent runs on (ranOn), for the board's models. */
 export function recordRun(state: SuperTabState, group: Conversation, assignment: Assignment, worker: Agent, now: number): void {
   const run: Run = { assignmentId: assignment.id, ...ranOn(state, worker, assignment.configuration), at: now,
-    agentId: worker.id, harnessId: worker.harnessId,
+    agentId: worker.id, harnessId: worker.harnessId, machineId: assignment.execution.machineId,
     ...(group.stepUp ? { stepUp: { attempt: group.stepUp.attempt, reason: group.stepUp.reason } } : {}),
     ...(agentTarget(state, worker).launchedDefault ? { engineDefault: true as const } : {}) }
   const ledger = group.ledger ??= {}

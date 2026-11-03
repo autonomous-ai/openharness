@@ -637,7 +637,7 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     const id = f.create(owner, { checks: independent })
     const { assignmentId, worker } = f.assign(id)
     const harnessId = f.state.agents.find(a => a.id === worker)!.harnessId
-    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'opus', effort: 'high', at: 5_000, agentId: worker, harnessId }])
+    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'opus', effort: 'high', at: 5_000, agentId: worker, harnessId, machineId: 'host' }])
   })
 
   it('records no effort that names none: what Claude Code reports as auto, or a start that left the engine its own', () => {
@@ -667,7 +667,7 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     report(worker, 'gpt-6.1-sol')
     report(earlier, 'gpt-6.1-sol')
     expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', at: 1_000,
-      agentId: worker, harnessId: f.state.agents.find(a => a.id === worker)!.harnessId }])
+      agentId: worker, harnessId: f.state.agents.find(a => a.id === worker)!.harnessId, machineId: 'host' }])
     // A task finished before its agent's first report still takes it (Scholes, 2026-10-30): the agent ran that model all along.
     expect(f.group(done).ledger!.runs![0]!.model).toBe('gpt-6.1-sol')
     // A model on record is never rewritten by a later report.
@@ -761,7 +761,7 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
         requirements: { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 80, tools: [], devices: [], quotaRequired: false } } }]
     const { assignmentId } = f.assign(id, worker)
     expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'moonshotai/kimi-k3', effort: 'high', grid: true, at: 1_000,
-      agentId: worker, harnessId: f.state.agents.find(a => a.id === worker)!.harnessId }])
+      agentId: worker, harnessId: f.state.agents.find(a => a.id === worker)!.harnessId, machineId: 'host' }])
   })
 
   // Checks are information (project instructions, phase 4): every check is a review's, whatever `independent` says.
@@ -970,7 +970,7 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     f.at(6_000)
     f.passChecks(id, assignmentId)
     f.status(id, assignmentId, worker, 'done', 'Shipped at rev abc.')
-    const shippedBy = { assignmentId, at: 5_000, engine: 'claude', model: 'opus', effort: 'high' }
+    const shippedBy = { assignmentId, at: 5_000, engine: 'claude', model: 'opus', effort: 'high', machineId: 'host' }
     expect(f.group(id).ledger!.shippedBy).toEqual(shippedBy)
     // Reopened and worked again on another model: the ship stays the first attempt's.
     const other = f.add('other', id)
