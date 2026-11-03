@@ -3,7 +3,7 @@
 // records the request for the Buddy's machine, and writes the outcome in the person's Buddy chat only.
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import { createSuperTab, type Actor } from './model.js'
+import { createSuperTab, visibleState, type Actor } from './model.js'
 import type { ContributedMachine } from './machines.js'
 import { swarmBuddyChatId } from './buddies.js'
 import { sweepLiveness } from './liveness.js'
@@ -134,6 +134,29 @@ describe('the Buddy\'s machine reporting the switch', () => {
     expect(f.agent().modelRequest).toBeUndefined()
     expect(effects.messages.filter(m => m.conversationId === f.chat).map(m => m.text)).toEqual([
       'Your Buddy now runs on DeepSeek 4.1 Flash, served by Mac Studio.'])
+  })
+
+  // Security review 1 of #2787: the machines a line hides are the request's own as well as those serving now.
+  it('names no machine to a Buddy reading a failed switch from its subscription, nor one whose machine stopped serving since', () => {
+    const buddyRead = (m: unknown) => withoutMachineNames(m as Parameters<typeof withoutMachineNames>[0]).text
+    const failed = asked()
+    const refused = failed.f.run({ type: 'buddy.modelResult', agentId: failed.f.buddyId, requestId: failed.requestId, ok: false,
+      error: "Mac Studio isn't serving DeepSeek 4.1 Flash now" }, failed.f.buddy())
+    expect(refused.messages.map(buddyRead).join(' ')).not.toContain('Mac Studio')
+    const moved = asked()
+    const studio = moved.f.state.machines!.find(m => m.machineId === 'owner-studio')!
+    studio.observation!.localModels = studio.observation!.localModels!.filter(l => l.model !== MODEL)
+    const landed = moved.f.run({ type: 'buddy.modelResult', agentId: moved.f.buddyId, requestId: moved.requestId, ok: true }, moved.f.buddy())
+    expect(landed.messages.map(m => m.text).join(' ')).toContain('Mac Studio')
+    expect(landed.messages.map(buddyRead).join(' ')).not.toContain('Mac Studio')
+  })
+
+  it('keeps a pending switch out of every Buddy\'s read of the roster: it names the serving machines', () => {
+    const { f } = asked()
+    const row = visibleState(f.state, f.buddy()).agents.find(a => a.id === f.buddyId)!
+    expect(row.modelRequest).toBeUndefined()
+    expect(JSON.stringify(row)).not.toContain('Mac Studio')
+    expect(visibleState(f.state, peer).agents.find(a => a.id === f.buddyId)!.modelRequest).toMatchObject({ servedBy: ['Mac Studio'] })
   })
 
   it('records the move on the Buddy\'s thread sessions too, which its machine moved with it', () => {
