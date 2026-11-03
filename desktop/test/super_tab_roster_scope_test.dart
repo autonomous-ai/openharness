@@ -449,6 +449,11 @@ void main() {
     'This project: the active people, the rest under Others (Dee, 11-03)',
     () {
       final others = find.byKey(const ValueKey('super-members-others'));
+      // The heading's words toggle it, as Idle (N)'s do.
+      final othersLabel = find.descendant(
+        of: others,
+        matching: find.textContaining('Others ('),
+      );
 
       /// openharness's board names all three; Tony did nothing there yet.
       Future<RosterFixture> withIdlePerson(WidgetTester tester) async {
@@ -490,14 +495,14 @@ void main() {
             lessThan(tester.getTopLeft(find.text('Agents')).dy),
             reason: 'Others closes People, above Agents',
           );
-          await tester.tap(others);
+          await tester.tap(othersLabel);
           await tester.pumpAndSettle();
           expect(person('tony'), findsOneWidget);
           expect(
             tester.getTopLeft(person('tony')).dy,
             greaterThan(tester.getTopLeft(others).dy),
           );
-          await tester.tap(others);
+          await tester.tap(othersLabel);
           await tester.pumpAndSettle();
           expect(person('tony'), findsNothing);
           await f.close(tester);
@@ -560,7 +565,7 @@ void main() {
             find.descendant(of: others, matching: find.text('Others (1)')),
             findsOneWidget,
           );
-          await tester.tap(others);
+          await tester.tap(othersLabel);
           await tester.pumpAndSettle();
           expect(person('dee'), findsOneWidget);
           expect(
@@ -575,8 +580,11 @@ void main() {
       test(
         'splitProjectPeople keeps the order and splits on points above 0',
         () {
-          SuperTabPerson p(String id) =>
-              SuperTabPerson.fromJson({'id': id, 'email': '$id@example.com'});
+          SuperTabPerson p(String id) => SuperTabPerson.fromJson({
+            'id': id,
+            'email': '$id@example.com',
+            'role': 'collaborator',
+          });
           final people = [p('a'), p('b'), p('c'), p('d')];
           final scores = {
             for (final (id, points) in [('a', 9), ('b', 0), ('c', 3)])
@@ -610,11 +618,11 @@ void main() {
               );
             }
             if (!open) {
-              await tester.tap(others);
+              await tester.tap(othersLabel);
               await tester.pumpAndSettle();
             }
           }
-          await tester.tap(others);
+          await tester.tap(othersLabel);
           await tester.pumpAndSettle();
           await choose(tester, 'All projects');
         }
