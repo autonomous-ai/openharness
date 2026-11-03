@@ -1,4 +1,5 @@
 import '../notify/alert_sounds.dart';
+import '../super_tabs/activity.dart';
 import '../super_tabs/decisions.dart';
 import '../super_tabs/notifications.dart';
 import 'app_state.dart';
@@ -196,7 +197,7 @@ void clearStatusMenuNotifications(AppNotifier app, List receipts) {
 }
 
 /// The menu bar's Swarm section: in each open Swarm tab, the decisions asked
-/// of this account, then the tags waiting for it, newest first in each, as its
+/// of this account, then the tags waiting for it and not read past, newest first in each, as its
 /// Notifications page lists them. Only from conversations it can read now,
 /// none from a Swarm it lost, none signed out: the lists are what was read
 /// last, and access can leave before they are read again. Choosing one opens
@@ -250,8 +251,10 @@ List<Map<String, Object?>> statusMenuSwarmEntries(AppNotifier app) {
         ),
       );
     }
+    final activity = SuperTabActivity.of(controller);
     for (final m in SuperTabMentions.of(controller).waiting) {
-      if (!readable(m.conversationId)) continue;
+      // Read past, it leaves here as it leaves Activity.
+      if (!readable(m.conversationId) || !activity.mentionUnread(m)) continue;
       rows.add(
         row(
           'mention',
