@@ -159,6 +159,8 @@ describe('member.name', () => {
     const f = fixture()
     f.setName('[Ken](https://ev.il) *x*')
     expect(writtenNameOf(f.state, 'relay')).toBe('\\[Ken\\]\\(https://ev.il\\) \\*x\\*')
+    f.setName('1. Minh')
+    expect(writtenNameOf(f.state, 'relay')).toBe('1\\. Minh')
     // A username is written as it is today.
     expect(writtenNameOf(f.state, 'peer')).toBe('dee')
   })

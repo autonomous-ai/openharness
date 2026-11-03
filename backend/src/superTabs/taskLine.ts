@@ -4,7 +4,7 @@ import { shippedNotice } from './buddyNews.js'
 import { isLeads, stableId, type Author, type CommandEffects, type Conversation, type MessageDraft, type SuperTabState, type WorkStatus } from './model.js'
 import { groupProject, projectsOf } from './projects.js'
 import { isStep } from './steps.js'
-import { shownNameOf } from './personNames.js'
+import { writtenNameOf } from './personNames.js'
 
 /**
  * A task's one message in its project chat (Quiet Swarm, Dee, 11-02; docs/plans/2026-11-02-quiet-swarm-task-line-plan.md):
@@ -50,7 +50,7 @@ const same = (a: Omit<TaskLine, 'messageId' | 'conversationId'>, b: TaskLine) =>
   && a.builderId === b.builderId && a.answerFor === b.answerFor
 
 function words(state: SuperTabState, line: Omit<TaskLine, 'messageId' | 'conversationId'>): string {
-  const asked = line.answerFor && shownNameOf(state, line.answerFor)
+  const asked = line.answerFor && writtenNameOf(state, line.answerFor)
   return `${line.title} · ${line.state === 'waiting' ? asked ? `waiting on ${asked}` : 'waiting' : WORDS[line.state]}`
 }
 

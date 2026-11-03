@@ -24,8 +24,10 @@ function base(email: string): string {
  * `@River` beside the Product Manager. [people] are in join order (the state's own order). Readers get these names from
  * the server (read/views.ts, model.ts visibleState); Desktop works out the same defaults only for an older server.
  */
-export function usernames(people: ReadonlyArray<Pick<Person, 'id' | 'email' | 'username'>>, agentNames: Iterable<string> = []): Map<string, string> {
+export function usernames(people: ReadonlyArray<Pick<Person, 'id' | 'email' | 'username' | 'name'>>, agentNames: Iterable<string> = []): Map<string, string> {
   const taken = new Set([...people.flatMap(p => p.username ? [p.username] : []), ...[...agentNames].map(name => name.toLowerCase())])
+  // Another person's display name (personNames.ts) too, so a later joiner never reads like them; never one's own.
+  const shown = people.flatMap(p => p.name ? [{ id: p.id, key: nameKey(p.name) }] : [])
   const names = new Map<string, string>()
   for (const member of people) {
     if (member.username) {
@@ -33,8 +35,9 @@ export function usernames(people: ReadonlyArray<Pick<Person, 'id' | 'email' | 'u
       continue
     }
     const root = base(member.email)
+    const free = (name: string) => !taken.has(name) && !shown.some(s => s.id !== member.id && s.key === name)
     let name = root
-    for (let n = 2; taken.has(name); n++) name = `${root}${n}`
+    for (let n = 2; !free(name); n++) name = `${root}${n}`
     taken.add(name)
     names.set(member.id, name)
   }

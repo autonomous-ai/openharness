@@ -1,3 +1,5 @@
+import { isRoleName } from './agentNames.js'
+import { reserved } from './buddies.js'
 import { fail, person, type Actor, type SuperTabState } from './model.js'
 import { printable } from './profile.js'
 import { agentNamesSeenBy, nameKey, swarmUsernames, usernameOf } from './usernames.js'
@@ -20,6 +22,10 @@ export function setName(state: SuperTabState, actor: Actor, input: string | null
   if (!name || [...name].length > MAX_NAME_LENGTH || !printable(name)) {
     fail('INVALID_NAME', `Use 1 to ${MAX_NAME_LENGTH} characters, with no hidden ones.`, 400)
   }
+  // A role's or the Swarm's own voice, as a Buddy may not take (buddies.ts), and the words readers put in place of a name.
+  if (isRoleName(name) || reserved(name) || /^(?:tester|you|someone)(?:[\s#-]+\d+)?$/i.test(name)) {
+    fail('NAME_RESERVED', `${name} is a role's name. Choose another.`, 400)
+  }
   const key = nameKey(name)
   const usernames = swarmUsernames(state)
   const others = state.people.filter(p => p.id !== member.id)
@@ -33,3 +39,16 @@ export function setName(state: SuperTabState, actor: Actor, input: string | null
 /** The name the Swarm shows for person [id]: the one they set, else their username. */
 export const shownNameOf = (state: SuperTabState, id: string): string | undefined =>
   state.people.find(p => p.id === id)?.name ?? usernameOf(state, id)
+
+/** Markdown's punctuation, escaped so a name reads as the words it is (CommonMark backslash escapes); a dot only after the
+ *  digits a name may open with, where "1. Ken" would start a list. */
+const escaped = (text: string): string =>
+  text.replace(/[\\`*_{}[\]()#+\-!<>|~]/g, c => `\\${c}`).replace(/^(\d+)\./, '$1\\.')
+
+/** The name of person [id] as text the server writes into a message, which readers render as Markdown: a name they set,
+ *  escaped, so `[Ken](https://ev.il)` never becomes a link in a Lead's line (review 1 of #2794); else their username, as
+ *  today (its letters, digits, `.`, `_` and `-` never form Markdown on their own). */
+export function writtenNameOf(state: SuperTabState, id: string): string | undefined {
+  const name = state.people.find(p => p.id === id)?.name
+  return name ? escaped(name) : usernameOf(state, id)
+}

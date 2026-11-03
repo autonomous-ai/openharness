@@ -76,6 +76,10 @@ Your profile: Name [ Minh Nguyen ] [Save] above Username [ wkpnjjhbnm ] [Save]
 4. Concurrency: two people choosing one name at once, one wins (Task 2 integration test through the real store).
 5. Tags still work: a tag in text stays `@username` and still notifies; only its pill label changes (Tasks 4, 6).
 6. With no name set, every surface reads exactly as today (each client task has a no-name test).
+7. Review 1: role and Swarm names (PM, Lead, Reviewer, Tester, Harness, System, Admin, Everyone, You, Someone) are
+   refused; a later joiner's default username is numbered around display names; a name written into server text
+   (member rows, task lines, the PM-switch note) is Markdown-escaped. Out of scope, as for Buddy names: look-alike
+   letters of other scripts (NFKC does not fold them), and Buddy names against display names (a Minor of review 1).
 
 ---
 
