@@ -947,6 +947,25 @@ class SuperTabLaunch {
         'Waiting for the new harness to appear on its machine.',
       );
     }
+    // Whether it leads was read when the box opened. A project that got its
+    // Product Manager since keeps it: agent.add would make this one its lead
+    // (Hollis, review of #2803). This one was started as a PM, so it does not
+    // join as a worker either; it keeps running, and its person decides.
+    if (saved['coordinator'] == true) {
+      final fresh = await app.superTabs.readSnapshot(saved['tabId'] as String);
+      checkAccount();
+      final project = fresh.projectFor(saved['conversationId'] as String);
+      final lead = project == null ? null : fresh.leadOf(project.id);
+      if (lead != null &&
+          (lead.machineId != machine || lead.harnessId != harnessId)) {
+        throw SuperTabFailure(
+          'COORDINATOR_TAKEN',
+          'Another $who joined this project while this one was starting. '
+              'This one keeps running on $machineName: Discard request to '
+              'leave it out of the project.',
+        );
+      }
+    }
     final project = native.project ?? app.stateOf(machine)?.projectOf(native);
     saved['command'] ??= {
       'type': 'agent.add',
@@ -1098,6 +1117,7 @@ class SuperTabLaunch {
       if (const {
         'ACCOUNT_CHANGED',
         'AGENT_UNAVAILABLE',
+        'COORDINATOR_TAKEN',
         'FILES_UNCONFIRMED',
       }.contains(failure.code)) {
         rethrow;
