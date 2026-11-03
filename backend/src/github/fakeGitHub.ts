@@ -132,7 +132,14 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
           : tagged({ total_count: checkSuites.get(key)?.length ?? 0, check_suites: checkSuites.get(key) ?? [] })
       }
       const talk = /^\/(pulls|issues)\/(\d+)\/(reviews|comments)$/.exec(repoPath[3] ?? '')
-      if (talk) return tagged((talk[3] === 'reviews' ? reviews : comments).get(`${repoKey}#${talk[2]}`) ?? [])
+      if (talk) {
+        // Oldest first, a page at a time, with a Link to the last page as GitHub sends it.
+        const all = (talk[3] === 'reviews' ? reviews : comments).get(`${repoKey}#${talk[2]}`) ?? []
+        const size = Number(url.searchParams.get('per_page') ?? 30), page = Number(url.searchParams.get('page') ?? 1), last = Math.max(1, Math.ceil(all.length / size))
+        const answer = tagged(all.slice((page - 1) * size, page * size))
+        if (last > 1) answer.headers.set('link', `<${FAKE_API}${url.pathname}?per_page=${size}&page=${last}>; rel="last"`)
+        return answer
+      }
       if (repoPath[3] === `/rules/branches/${encodeURIComponent(branch)}`) return json(200, known.rules ?? [])
       if (repoPath[3] === `/branches/${encodeURIComponent(branch)}`) return json(200, { name: branch, protected: known.protected ?? false })
     }

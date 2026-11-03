@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { pullRequestEvents, type PullRequestWatch } from './pullRequestEvents.js'
+import { pullRequestEvents, SEEN_KEPT, type PullRequestWatch } from './pullRequestEvents.js'
 
 // Dee, #1891: what GitHub says about a task's pull request becomes one message per event for its Engineer.
 const URL = 'https://github.com/acme/app/pull/12'
@@ -116,6 +116,18 @@ describe('pullRequestEvents', () => {
     const red = events(watch({ mergeable: false, checkRuns: [run('build', 'failure')] }))
     const next = watch({ head: 'fff0000aaa', mergeable: false, checkRuns: [run('build', 'failure', NOW + 30_000)] })
     expect(pullRequestEvents(next, red.keys, null, NOW + 60_000).events.map(e => e.key)).toEqual(['ci-red:fff0000aaa', 'conflict:fff0000aaa'])
+  })
+
+  // Review of #2750, Important 2: from about the 49th comment the newest fell past the kept keys, and nothing posted again.
+  it('posts every new comment however many came before', () => {
+    let seen = events(watch()).keys
+    for (let count = 1; count <= 60; count++) {
+      const comments = Array.from({ length: count }, (_, i) => ({ id: i + 1, login: 'dee', association: 'MEMBER', body: `note ${i + 1}`, url: URL }))
+      const result = pullRequestEvents(watch({ comments }), seen, null, NOW)
+      expect(result.events.map(e => e.key)).toEqual([`comment:${count}`])
+      seen = result.keys
+    }
+    expect(seen.length).toBeLessThanOrEqual(SEEN_KEPT)
   })
 
   it('keeps the newest 50 keys', () => {

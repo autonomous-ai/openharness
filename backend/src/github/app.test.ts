@@ -503,6 +503,21 @@ describe('watching a pull request', () => {
     expect((await app.watchPullRequest(repo, 12, token))!.comments).toEqual([])
   })
 
+  // Review of #2750, Important 2: GitHub lists reviews and comments oldest first, so the newest are on the last page.
+  it('reads the newest reviews and comments from the last page', async () => {
+    const { app, github } = setup()
+    const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
+    seed(github)
+    github.comments.set('acme/app#12', Array.from({ length: 250 }, (_, i) => ({ id: i + 1, user: { login: 'dee' }, author_association: 'MEMBER', body: `note ${i + 1}`,
+      html_url: `https://github.com/acme/app/pull/12#issuecomment-${i + 1}` })))
+    const ids = (await app.watchPullRequest(repo, 12, token))!.comments.map(c => c.id)
+    expect(ids).toContain(250)
+    expect(ids).toContain(201)
+    // A new comment shows on the next read, even though the first page is unchanged.
+    github.comments.get('acme/app#12')!.push({ id: 251, user: { login: 'dee' }, author_association: 'MEMBER', body: 'note 251', html_url: 'x' })
+    expect((await app.watchPullRequest(repo, 12, token))!.comments.map(c => c.id)).toContain(251)
+  })
+
   it('answers null when GitHub cannot say', async () => {
     const { app, github } = setup()
     const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
