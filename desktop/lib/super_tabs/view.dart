@@ -2631,16 +2631,15 @@ class _SuperTabViewState extends State<SuperTabView>
   );
 
   /// The reader's own setting for a chat, kept on every device (Slack's channel
-  /// notifications); a viewer has one too.
-  Widget _notifyMenu(SuperTabConversation group, {bool asRow = false}) =>
+  /// notifications); a viewer has one too. A row like its menu's others, as
+  /// tall as their [finger] rows (Huy, #2342: the chat menu's had a border).
+  Widget _notifyMenu(SuperTabConversation group, {required bool finger}) =>
       SubmenuButton(
         key: const ValueKey('super-notify-menu'),
-        style: asRow ? _menuRowStyle(finger: _phone) : null,
-        submenuIcon: asRow
-            ? const WidgetStatePropertyAll(
-                Icon(AppIcons.chevronRight, size: 14),
-              )
-            : null,
+        style: _menuRowStyle(finger: finger),
+        submenuIcon: const WidgetStatePropertyAll(
+          Icon(AppIcons.chevronRight, size: 14),
+        ),
         menuChildren: [
           for (final (level, label) in const [
             (SuperTabNotify.all, 'All new messages'),
@@ -2649,6 +2648,7 @@ class _SuperTabViewState extends State<SuperTabView>
           ])
             MenuItemButton(
               key: ValueKey('super-notify-${level.name}'),
+              style: _menuRowStyle(finger: finger),
               leadingIcon: SizedBox(
                 width: 16,
                 child: c.notifyOf(group.id) == level
@@ -2703,7 +2703,7 @@ class _SuperTabViewState extends State<SuperTabView>
           item('Instructions', () => _groupAction('instructions', group)),
         if (editable && owner)
           item('Sharing', () => _groupAction('sharing', group)),
-        _notifyMenu(group, asRow: true),
+        _notifyMenu(group, finger: _phone),
         const Divider(height: 9),
         item(
           'Project settings…',
@@ -2825,7 +2825,7 @@ class _SuperTabViewState extends State<SuperTabView>
             ),
           ],
         ],
-        _notifyMenu(group),
+        _notifyMenu(group, finger: views),
         if (_mayHaveArchived(group.projectId))
           item('Archived conversations', () => _groupAction('archived', group)),
       ],
