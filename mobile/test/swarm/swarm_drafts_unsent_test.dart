@@ -460,11 +460,8 @@ void main() {
     test('a thread draft written after the chat is lost is refused', () async {
       final inbox = await app();
       final c = await chat(inbox);
-      swarm.routes[messages] = (_) => throw const SuperTabFailure(
-        'FORBIDDEN',
-        'No.',
-        statusCode: 403,
-      );
+      swarm.routes[messages] = (_) =>
+          throw const SuperTabFailure('FORBIDDEN', 'No.', statusCode: 403);
       await c.load();
       c.setThreadDraft('root-1', 'too late');
       expect(inbox.kept.draft(tab, 'g1', 'root-1'), isNull);

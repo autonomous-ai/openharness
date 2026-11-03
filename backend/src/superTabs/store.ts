@@ -31,7 +31,8 @@ import { noteClaim, recordDeliveryCall } from '../lib/deliveryCalls.js'
 import { retryTransient } from './retry.js'
 import { recordReload } from './retryStats.js'
 import { buddyChatId, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
-import { accountOf, wordsOf, buddyPerson, canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type SwarmProject } from './projects.js'
+import { cleanPullRequestLinks } from './cards.js'
+import { accountOf, wordsOf, buddyPerson, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type SwarmProject } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
 import { isBuddy, isBuddyChat, isBuddyReader, refuseBuddyRouting, routingRow } from './buddies.js'
@@ -1554,6 +1555,13 @@ export class SuperTabStore {
         if (proposal) context.proposal = { id: proposal.id, conversationId: proposal.conversationId, author: proposal.author as unknown as Author,
           source: proposal.source as Record<string, unknown> | null }
       }
+      if (command.type === 'conversation.create' && command.requestMessageId) {
+        // By id within this tab: the person's chat message the new group answers (commands.ts requestOf checks where it is).
+        const request = await tx.superTabMessage.findFirst({ where: { id: command.requestMessageId, tabId },
+          select: { id: true, conversationId: true, author: true, source: true, replyTo: true } })
+        if (request) context.request = { id: request.id, conversationId: request.conversationId, author: request.author as unknown as Author,
+          source: request.source, replyTo: request.replyTo }
+      }
       if (command.type === 'buddy.propose') {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.ownerMessageId, tabId, conversationId: command.conversationId } })
         // The newest message its owner wrote there: the chat's newest rows, the Buddy's and the owner's in turn.
@@ -1627,10 +1635,12 @@ export class SuperTabStore {
       // An agent-only notice changes nothing people see: no link, no unread mark, no project report.
       const shown = effects.messages.filter(message => !agentOnly(message.source, message.recipients))
       for (const group of effects.state.conversations) {
+        const repositoryUrl = groupRepositoryUrl(effects.state, group)
         appendPullRequestUrls(group, [
           ...shown.filter(message => message.conversationId === group.id).map(message => message.text),
           ...group.checks.map(check => check.evidence), group.assignment?.result,
-        ])
+        ], repositoryUrl)
+        cleanPullRequestLinks(group, repositoryUrl)
       }
       if (command.type === 'agent.rebind') {
         const target = agent(effects.state, command.agentId)
@@ -1819,10 +1829,6 @@ export class SuperTabStore {
       }
       await recordEvidence(tx, tabId, original, effects.state, context.now)
       await this.writeMessages(tx, tabId, effects.state, effects.messages, sequences)
-      // A task's line takes its new words in place, keeping its id, place and author (taskLine.ts).
-      for (const edit of effects.edits ?? []) {
-        await tx.superTabMessage.updateMany({ where: { tabId, conversationId: edit.conversationId, id: edit.id }, data: { text: edit.text, source: json(edit.source) } })
-      }
       if (effects.lateDeliveries?.length) await this.writeLateDeliveries(tx, tabId, effects.state, effects.lateDeliveries)
       if (command.type === 'message.send' && actor.kind === 'person') await resolveByReply(tx, tabId, command.conversationId, actor.userId, context.now)
       if (command.type === 'work.assign') await resolveWhenWorked(tx, tabId, command.conversationId, context.now)

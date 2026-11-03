@@ -1304,11 +1304,15 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   bool _receiptCurrent = false;
   Future<void>? _readingReceipt;
 
-  /// The person's newest message here, written by them and not by an agent or
-  /// a terminal: the only one that can carry a delivery line.
+  /// The person's newest message here, written by them and not by an agent, a
+  /// terminal or the server in their name: the only one that can carry a
+  /// delivery line (Desktop's `isOwn`).
   SuperTabMessage? get latestOwn {
     for (final m in messages.reversed) {
-      if (!m.fromAgent && !m.fromTerminal && m.authorId == reader.accountId) {
+      if (!m.fromAgent &&
+          !m.fromTerminal &&
+          !m.postedForAuthor &&
+          m.authorId == reader.accountId) {
         return m;
       }
     }
