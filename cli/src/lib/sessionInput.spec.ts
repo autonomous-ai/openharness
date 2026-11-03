@@ -1423,10 +1423,12 @@ describe('SessionInputController', () => {
     const release = controller.acquireControl('s1')
     expect(release).toBeTypeOf('function')
     expect(controller.acquireControl('s1')).toBeNull()
+    expect(controller.controlHeld('s1')).toBe(true)
     controller.submit('s1', 'wait behind control')
     expect(injected).toEqual([])
 
     release?.()
+    expect(controller.controlHeld('s1')).toBe(false)
     await vi.waitFor(() => expect(injected).toEqual(['wait behind control']))
     controller.forget('s1')
   })
