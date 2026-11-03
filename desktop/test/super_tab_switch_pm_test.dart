@@ -4,12 +4,15 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
 
+import 'support/real_fonts.dart';
 import 'support/super_tab_fixture.dart';
 import 'support/super_tab_members.dart';
 
 /// Switch PM (spec 2026-11-02-pm-switch-engine-account-design.md, section 8):
 /// who is offered it, what its dialog lists and what Confirm sends.
 void main() {
+  setUpAll(loadRealFonts);
+
   // sha256('m:claude:default') and sha256('m:codex:default'), first 16 hex.
   const claudeDefault = '71dc90339553114c', codexDefault = '07f54db4cdffbb30';
   ConversationServer swarm({Map<String, dynamic> pm = const {}}) {
@@ -27,6 +30,7 @@ void main() {
         'engines': ['claude', 'codex'],
         'observation': {
           'receivedAt': DateTime.now().millisecondsSinceEpoch,
+          'capabilities': ['leadStart', 'leadSwitch'],
           'profiles': [
             {
               'engine': 'claude',
@@ -297,6 +301,10 @@ void main() {
     await tester.tap(item);
     await tester.pumpAndSettle();
     expect(find.text('Machine'), findsOneWidget);
+    await expectLater(
+      find.byType(AlertDialog),
+      matchesGoldenFile('goldens/switch-pm-machine-model.png'),
+    );
     await tester.tap(find.byKey(const ValueKey('switch-pm-machine')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Mac Two').last);
@@ -330,7 +338,7 @@ void main() {
     currentPool['engines'] = ['claude'];
     currentPool['observation'] = {
       'receivedAt': DateTime.now().millisecondsSinceEpoch,
-      'capabilities': ['leadStart'],
+      'capabilities': ['leadStart', 'leadSwitch'],
       'profiles': [],
     };
     await mount(tester, server, 'owner');
@@ -344,6 +352,10 @@ void main() {
       findsOneWidget,
     );
     expect(find.byKey(const ValueKey('switch-pm-machine')), findsOneWidget);
+    await expectLater(
+      find.byType(AlertDialog),
+      matchesGoldenFile('goldens/switch-pm-no-choice.png'),
+    );
     await tester.tap(find.text('Cancel'));
     await finish(tester);
   });
