@@ -18,6 +18,7 @@ import 'jump_to_latest.dart';
 import 'model.dart';
 import 'thread_scroll.dart';
 import '../widgets/laid_out_list.dart';
+import 'swarm_type.dart';
 
 /// One thread beside the chat (Dee, 2026-10-29): its root, a "N replies"
 /// divider, the replies, and a composer whose reply goes to the root.
@@ -354,10 +355,7 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                   Expanded(
                     child: Semantics(
                       header: true,
-                      child: Text(
-                        'Thread',
-                        style: DesktopChrome.text(medium: true),
-                      ),
+                      child: Text('Thread', style: SwarmType.name(context)),
                     ),
                   ),
                   AppIconButton(

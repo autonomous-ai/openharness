@@ -1,5 +1,8 @@
 # Development and release work
 
+Read [ENGINEERING.md](ENGINEERING.md) before changing code: every change meets its standards. What Harness must
+achieve, and the targets code is measured against, is in [PRODUCT.md](PRODUCT.md).
+
 Follow [CONTRIBUTING.md](CONTRIBUTING.md) and the component's instructions. For
 validation and shipping, use [docs/validation-and-release.md](docs/validation-and-release.md).
 
