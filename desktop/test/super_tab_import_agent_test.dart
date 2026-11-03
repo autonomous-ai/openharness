@@ -41,6 +41,11 @@ class _Daemon extends WsConn {
   /// Thrown instead of an answer: a daemon that does not answer in time.
   Object? fails;
 
+  /// The daemon's answer to which Swarm role an agent has, from the backend
+  /// (cli superTabs/service.ts `swarmRole`): none here unless a test says.
+  Map<String, dynamic> Function(Map<String, dynamic> payload) swarmRole = (_) =>
+      {'ok': true, 'role': null};
+
   @override
   Future<Map<String, dynamic>> request(
     String type, {
@@ -48,6 +53,9 @@ class _Daemon extends WsConn {
     Duration timeout = const Duration(seconds: 20),
   }) async {
     calls.add((asked, type, Map.of(payload)));
+    if (type == 'super_tabs' && payload['action'] == 'swarmRole') {
+      return swarmRole(payload);
+    }
     if (type == 'agent_handoff_prepare') {
       if (fails case final failure?) throw failure;
       return handoff(payload);
@@ -378,7 +386,14 @@ void main() {
 
       final handoff = await prepareImportHandoff(f.app, agent);
 
-      final (machine, type, payload) = f.daemon.calls.single;
+      // First whether a Swarm lists it (any Swarm, open here or not), then the
+      // handoff.
+      expect(f.daemon.calls.map((c) => (c.$1, c.$2, c.$3['action'])), [
+        ('m', 'super_tabs', 'swarmRole'),
+        ('m', 'agent_handoff_prepare', null),
+      ]);
+      expect(f.daemon.calls.first.$3['harnessId'], 'fix');
+      final (machine, type, payload) = f.daemon.calls.last;
       expect((machine, type), ('m', 'agent_handoff_prepare'));
       expect(payload['agentId'], 'fix');
       expect(payload['targetEngine'], 'codex');
@@ -427,6 +442,59 @@ void main() {
         );
       });
     }
+
+    // Security review of #2783 (Alder3), Important 1: an agent the person
+    // added to a Swarm that is not open in this window is in a Swarm too, and
+    // its transcript may hold that Swarm's private project.
+    test('an agent in a Swarm not open here is refused before anything is '
+        'prepared', () async {
+      final f = await fixture();
+      f.agents = [_agent('fix', engine: 'codex', cwd: folder.path)];
+      f.daemon.writes(folder, record: '# Handoff\n');
+      f.daemon.swarmRole = (_) => {
+        'ok': true,
+        'role': 'dev',
+        'mode': 'default',
+      };
+      final agent = importableAgents(f.app, f.c).single;
+      await expectLater(
+        prepareImportHandoff(f.app, agent),
+        throwsA(
+          isA<ImportFailure>()
+              .having((e) => e.step, 'step', ImportStep.prepare)
+              .having(
+                (e) => e.message,
+                'message',
+                contains('already in a Swarm'),
+              ),
+        ),
+      );
+      expect(f.daemon.calls.map((c) => c.$2), ['super_tabs']);
+      expect(f.server.posts, isEmpty);
+    });
+
+    test(
+      'a Swarm role that cannot be read refuses, rather than share',
+      () async {
+        final f = await fixture();
+        f.agents = [_agent('fix', engine: 'codex', cwd: folder.path)];
+        f.daemon.writes(folder, record: '# Handoff\n');
+        // The backend did not answer: the daemon knows no role either way.
+        f.daemon.swarmRole = (_) => {'ok': true};
+        final agent = importableAgents(f.app, f.c).single;
+        await expectLater(
+          prepareImportHandoff(f.app, agent),
+          throwsA(
+            isA<ImportFailure>().having(
+              (e) => e.message,
+              'message',
+              contains('could not check'),
+            ),
+          ),
+        );
+        expect(f.daemon.calls.map((c) => c.$2), ['super_tabs']);
+      },
+    );
 
     test('a reply naming another file is refused', () async {
       final f = await fixture();
@@ -591,7 +659,12 @@ void main() {
       // The new conversation is the one on screen.
       expect(f.c.selectedId, conversation);
       // The imported agent is never stopped, messaged or registered.
-      expect(f.daemon.calls.map((c) => c.$2), ['agent_handoff_prepare']);
+      expect(f.daemon.calls.map((c) => c.$2), [
+        'super_tabs',
+        'agent_handoff_prepare',
+      ]);
+      // That first ask is only a read of which Swarm role it has.
+      expect(f.daemon.calls.first.$3['action'], 'swarmRole');
     });
 
     test('a project whose repository is the Team account\'s own folder starts '
