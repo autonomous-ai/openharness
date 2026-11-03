@@ -18,7 +18,7 @@ const db = vi.hoisted(() => {
         if ('gt' in filter) return (row[key] as Date) > (filter.gt as Date)
         if ('lt' in filter) return (row[key] as number | Date) < (filter.lt as number | Date)
         if ('gte' in filter) return (row[key] as number | Date) >= (filter.gte as number | Date)
-        if ('isSet' in filter || 'not' in filter) return (!filter.isSet || row[key] !== undefined) && (!('not' in filter) || row[key] !== filter.not)
+        if ('isSet' in filter || 'not' in filter) return (!('isSet' in filter) || filter.isSet === (row[key] !== undefined)) && (!('not' in filter) || row[key] !== filter.not)
         return matches(row, filter)
       }
       return value instanceof Date ? (row[key] as Date)?.getTime() === value.getTime() : row[key] === value
@@ -82,7 +82,7 @@ const db = vi.hoisted(() => {
     }
   }
   return { communityHarness: table({ defaults: { likeCount: 0 } }), communityLike: table({ unique: ['autonomousEnv', 'harnessId', 'userId'] }), communityComment: table(), communityFollow: table(),
-    communityReport: table({ unique: ['autonomousEnv', 'targetType', 'targetId', 'userId'] }), communityHidden: table({ defaults: { restoredAt: null } }), communityNotification: table(), user: { findUnique: vi.fn(async ({ where }: { where: { id: string } }) => ({ name: where.id === 'alice' ? 'Alice' : 'Bob' })) } }
+    communityReport: table({ unique: ['autonomousEnv', 'targetType', 'targetId', 'userId'] }), communityHidden: table(), communityNotification: table(), user: { findUnique: vi.fn(async ({ where }: { where: { id: string } }) => ({ name: where.id === 'alice' ? 'Alice' : 'Bob' })) } }
 })
 vi.mock('../lib/prisma.js', () => ({ prisma: db }))
 import { communityRoutes, publicationSchema } from './community.js'
