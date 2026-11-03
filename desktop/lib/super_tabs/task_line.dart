@@ -8,6 +8,7 @@ import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/laid_out_list.dart';
 import 'controller.dart';
+import 'message_row.dart' show SuperTabMessageRow;
 import 'model.dart';
 import 'reply_box.dart';
 
@@ -25,7 +26,9 @@ String superTabTaskWord(SuperTabMessage message, String readerId) =>
       'waiting' =>
         message.source['answerFor'] == readerId ? 'Answer' : 'working',
       'review' => 'in review',
+      'ready' => 'ready',
       'shipped' => 'shipped',
+      'done' => 'done',
       'stopped' => 'stopped',
       _ => '',
     };
@@ -41,7 +44,8 @@ String superTabTaskName(SuperTabMessage message) =>
 IconData superTabTaskMark(SuperTabMessage message) =>
     switch (message.source['state']) {
       'planned' => AppIcons.circleDashed,
-      'shipped' => AppIcons.check,
+      'ready' => AppIcons.circleDot,
+      'shipped' || 'done' => AppIcons.check,
       'stopped' => AppIcons.circleSlash,
       _ => AppIcons.circleDot,
     };
@@ -54,6 +58,25 @@ String _proposalName(String text) {
     if (line.startsWith('Goal: ')) return line.substring(6).trim();
   }
   return lines.first;
+}
+
+/// A line's mark, in the column a message's avatar stands in, so its name starts
+/// where a message's text does.
+class _Gutter extends StatelessWidget {
+  const _Gutter(this.mark);
+  final Widget mark;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: SuperTabMessageRow.avatarSize + SuperTabMessageRow.avatarGap,
+    child: Align(
+      alignment: Alignment.centerLeft,
+      child: SizedBox(
+        width: SuperTabMessageRow.avatarSize,
+        child: Center(child: mark),
+      ),
+    ),
+  );
 }
 
 /// One line that opens: the row both a task's and a proposal's message are.
@@ -73,7 +96,7 @@ class _OpeningRow extends StatelessWidget {
       onTap: onOpen,
       child: Padding(
         padding: const EdgeInsets.symmetric(
-          horizontal: grid.AppDesktop.panelPadding,
+          horizontal: SuperTabMessageRow.horizontalInset,
           vertical: grid.AppDesktop.menuInset,
         ),
         child: child,
@@ -122,10 +145,12 @@ class SuperTabTaskLine extends StatelessWidget {
       onOpen: onOpen,
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final mark = Icon(
-            superTabTaskMark(message),
-            size: AppIcons.inlineSize,
-            color: DesktopChrome.muted,
+          final mark = _Gutter(
+            Icon(
+              superTabTaskMark(message),
+              size: AppIcons.inlineSize,
+              color: DesktopChrome.muted,
+            ),
           );
           const gap = SizedBox(width: grid.AppDesktop.controlGap);
           if (constraints.maxWidth < _narrow && word.isNotEmpty) {
@@ -133,7 +158,6 @@ class SuperTabTaskLine extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 mark,
-                gap,
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -147,7 +171,6 @@ class SuperTabTaskLine extends StatelessWidget {
           return Row(
             children: [
               mark,
-              gap,
               Expanded(child: name),
               if (word.isNotEmpty) ...[gap, said],
             ],
@@ -180,12 +203,13 @@ class SuperTabProposalLine extends StatelessWidget {
       onOpen: onOpen,
       child: Row(
         children: [
-          Icon(
-            AppIcons.chevronRight,
-            size: AppIcons.inlineSize,
-            color: DesktopChrome.muted,
+          _Gutter(
+            Icon(
+              AppIcons.chevronRight,
+              size: AppIcons.inlineSize,
+              color: DesktopChrome.muted,
+            ),
           ),
-          const SizedBox(width: grid.AppDesktop.controlGap),
           Expanded(
             child: Text(
               text,
@@ -326,19 +350,25 @@ class _SuperTabTaskPanelState extends State<SuperTabTaskPanel> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Padding(
+          Container(
+            // As high as the chat's header, so their rules meet.
+            constraints: const BoxConstraints(minHeight: 51),
+            alignment: Alignment.center,
             padding: const EdgeInsets.fromLTRB(
-              grid.AppDesktop.groupGap,
+              SuperTabMessageRow.horizontalInset,
+              0,
               grid.AppDesktop.controlGap,
-              grid.AppDesktop.controlGap,
-              grid.AppDesktop.controlGap,
+              0,
             ),
             child: Row(
               children: [
                 Expanded(
                   child: Semantics(
                     header: true,
-                    child: Text('Thread', style: DesktopChrome.heading()),
+                    child: Text(
+                      'Thread',
+                      style: DesktopChrome.text(medium: true),
+                    ),
                   ),
                 ),
                 TextButton(
@@ -357,7 +387,12 @@ class _SuperTabTaskPanelState extends State<SuperTabTaskPanel> {
           ),
           Divider(height: 1, thickness: 1, color: DesktopChrome.rim),
           Padding(
-            padding: const EdgeInsets.all(grid.AppDesktop.groupGap),
+            padding: const EdgeInsets.fromLTRB(
+              SuperTabMessageRow.horizontalInset,
+              grid.AppDesktop.groupGap,
+              SuperTabMessageRow.horizontalInset,
+              grid.AppDesktop.groupGap,
+            ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -403,26 +438,34 @@ class _SuperTabTaskPanelState extends State<SuperTabTaskPanel> {
             ),
           ),
           if (c.canWrite && task?.archived == false)
-            SuperTabReplyBox(
-              controller: c,
-              text: _reply,
-              focus: _focus,
-              files: c.threadAttachments(widget.taskId, widget.taskId),
-              enabled: true,
-              writable: true,
-              busy: _busy,
-              error:
-                  c.composerError(widget.taskId) ??
-                  c.threadComposerError(widget.taskId, widget.taskId),
-              onEdited: (text) => c.setThreadDraft(
-                widget.taskId,
-                text,
-                conversationId: widget.taskId,
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                grid.AppDesktop.groupGap,
+                0,
+                grid.AppDesktop.groupGap,
+                grid.AppDesktop.groupGap,
               ),
-              onSend: () => unawaited(_send()),
-              surfaceKey: const ValueKey('super-task-reply-surface'),
-              fieldKey: const ValueKey('super-task-reply'),
-              sendKey: const ValueKey('super-task-send'),
+              child: SuperTabReplyBox(
+                controller: c,
+                text: _reply,
+                focus: _focus,
+                files: c.threadAttachments(widget.taskId, widget.taskId),
+                enabled: true,
+                writable: true,
+                busy: _busy,
+                error:
+                    c.composerError(widget.taskId) ??
+                    c.threadComposerError(widget.taskId, widget.taskId),
+                onEdited: (text) => c.setThreadDraft(
+                  widget.taskId,
+                  text,
+                  conversationId: widget.taskId,
+                ),
+                onSend: () => unawaited(_send()),
+                surfaceKey: const ValueKey('super-task-reply-surface'),
+                fieldKey: const ValueKey('super-task-reply'),
+                sendKey: const ValueKey('super-task-send'),
+              ),
             ),
         ],
       );

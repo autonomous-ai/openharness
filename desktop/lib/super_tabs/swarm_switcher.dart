@@ -13,7 +13,6 @@ import 'controller.dart';
 import 'machines.dart' show contributeComputer;
 import 'personal_machines.dart';
 import 'section_heading.dart' show SuperTabSectionHeading;
-import 'swarm_delete.dart';
 
 /// The Swarm dropdown at the top of a Swarm tab's left bar (Dee, 10-30): the
 /// Swarm the tab shows, and in its menu Personal, every other Swarm the
@@ -422,24 +421,6 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
     app.showSuperTabIn(tab, choice.id, choice.name);
   }
 
-  DeletedSwarms get deleted => DeletedSwarms.of(app);
-
-  /// Asks its owner to confirm; once deleted, it leaves this dropdown and
-  /// its tab moves on as for any Swarm taken away.
-  Future<void> _delete(BuildContext context) async {
-    _menu.close();
-    final c = widget.controller;
-    if (!await showDeleteSwarmDialog(context, c)) return;
-    unawaited(app.superTabs.refreshTabs());
-    unawaited(deleted.read());
-  }
-
-  /// Restores a deleted Swarm and shows it in this tab.
-  void _restore(String id) {
-    _menu.close();
-    unawaited(deleted.restore(id, tab: _tab));
-  }
-
   void _pickPersonal() {
     _menu.close();
     final tab = _tab;
@@ -448,7 +429,7 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: Listenable.merge([app, personal, deleted, widget.controller]),
+    listenable: Listenable.merge([app, personal, widget.controller]),
     builder: (context, _) {
       grid.AppTheme.watch(context);
       final c = widget.controller;
@@ -461,7 +442,6 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
           ? 'Swarm'
           : app.superTabName(current) ?? c.snapshot?.name ?? 'Swarm';
       final choices = swarmChoices(app);
-      final restorable = deleted.items;
       final personalWaiting = personalId == null || isPersonal
           ? 0
           : swarmWaiting(app, personalId);
@@ -477,10 +457,13 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
                 controller: _menu,
                 consumeOutsideTap: true,
                 alignmentOffset: const Offset(0, grid.AppControl.menuGap),
-                style: grid.AppMenu.style(minWidth: width, maxWidth: width),
+                style: grid.AppMenu.style(
+                  minWidth: width,
+                  maxWidth: width,
+                  maxHeight: 480,
+                ),
                 onOpen: () {
                   if (_tab case final tab?) personal.clearError(tab);
-                  unawaited(deleted.read());
                 },
                 // As wide as the row it opens from.
                 menuChildren: [
@@ -513,6 +496,7 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
                             : badge(choice.waiting),
                         onPressed: () => _pick(choice.id),
                       ),
+                    const AppMenuDivider(),
                     AppMenuItem(
                       key: const ValueKey('swarm-switch-new'),
                       label: 'New Swarm',
@@ -523,40 +507,6 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
                         widget.onNewSwarm();
                       },
                     ),
-                    // Its owner's alone, never Personal (backend deletion.ts).
-                    if (current != null &&
-                        !isPersonal &&
-                        c.isOwner &&
-                        c.snapshot != null)
-                      AppMenuItem(
-                        key: const ValueKey('swarm-switch-delete'),
-                        label: 'Delete “$label”…',
-                        icon: AppIcons.trash2,
-                        danger: true,
-                        expandLabel: true,
-                        onPressed: () => _delete(context),
-                      ),
-                    if (restorable.isNotEmpty) const AppMenuDivider(),
-                    for (final swarm in restorable)
-                      AppMenuItem(
-                        key: ValueKey('swarm-switch-restore-${swarm.id}'),
-                        label: 'Restore “${swarm.name}”',
-                        icon: AppIcons.undo2,
-                        expandLabel: true,
-                        detail: deleted.restoreError?.id == swarm.id
-                            ? deleted.restoreError!.message
-                            : 'Deleted · '
-                                  '${restoreTimeLeft(swarm.purgeAt, DateTime.now())}',
-                        trailing: deleted.restoring(swarm.id)
-                            ? const SizedBox.square(
-                                dimension: 12,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 1.5,
-                                ),
-                              )
-                            : null,
-                        onPressed: () => _restore(swarm.id),
-                      ),
                   ])
                     SizedBox(width: width, child: item),
                 ],

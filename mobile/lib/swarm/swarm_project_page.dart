@@ -35,6 +35,7 @@ import 'swarm_session.dart';
 import 'swarm_style.dart';
 import 'swarm_task_status.dart';
 import 'swarm_terminal_row.dart';
+import 'swarm_thread.dart' show SwarmThreadFocus;
 import 'swarm_unread.dart';
 import 'team_glance.dart';
 
@@ -105,20 +106,23 @@ void openSwarmProject(
 }
 
 /// A route to chat [conversationId] of Swarm [swarmId], at [messageId], or
-/// with [threadId]'s thread open over it at its root, as a notice, a link,
-/// Activity, Threads or a row opens it ([SwarmOpenedChat]). A decision opens
-/// in Activity instead, where it is answered.
+/// with [threadId]'s thread open over it at its root, or at [threadFocus],
+/// as a notice, a link, Activity, Threads or a row opens it
+/// ([SwarmOpenedChat]). A decision opens in Activity instead, where it is
+/// answered.
 Route<void> swarmChatRoute({
   required String swarmId,
   required String conversationId,
   String? messageId,
   String? threadId,
+  SwarmThreadFocus? threadFocus,
 }) => phoneRoute(
   (_) => SwarmOpenedChat(
     swarmId: swarmId,
     conversationId: conversationId,
     messageId: messageId,
     threadId: threadId,
+    threadFocus: threadFocus,
   ),
   listensForItself: true,
 );
@@ -143,6 +147,7 @@ class SwarmOpenedChat extends StatefulWidget {
     required this.conversationId,
     this.messageId,
     this.threadId,
+    this.threadFocus,
   });
 
   final String swarmId, conversationId;
@@ -150,6 +155,9 @@ class SwarmOpenedChat extends StatefulWidget {
 
   /// The thread opened over the chat ([SwarmConversationPage.threadId]).
   final String? threadId;
+
+  /// Where that thread lands ([SwarmConversationPage.threadFocus]).
+  final SwarmThreadFocus? threadFocus;
 
   @override
   State<SwarmOpenedChat> createState() => _SwarmOpenedChatState();
@@ -265,6 +273,7 @@ class _SwarmOpenedChatState extends State<SwarmOpenedChat> {
       projectId: projectId,
       messageId: widget.messageId,
       threadId: widget.threadId,
+      threadFocus: widget.threadFocus,
     ),
     null => SwarmConversationPage(
       key: const ValueKey('swarm-opened-chat'),
@@ -272,6 +281,7 @@ class _SwarmOpenedChatState extends State<SwarmOpenedChat> {
       conversationId: widget.conversationId,
       messageId: widget.messageId,
       threadId: widget.threadId,
+      threadFocus: widget.threadFocus,
     ),
   };
 }
@@ -296,6 +306,7 @@ class SwarmProjectPage extends StatefulWidget {
     this.mention,
     this.messageId,
     this.threadId,
+    this.threadFocus,
   });
 
   final String swarmId, projectId;
@@ -315,6 +326,9 @@ class SwarmProjectPage extends StatefulWidget {
   /// ([SwarmConversationPage.threadId]). Only the first time the chat shows.
   final String? messageId, threadId;
 
+  /// Where that thread lands ([SwarmConversationPage.threadFocus]).
+  final SwarmThreadFocus? threadFocus;
+
   @override
   State<SwarmProjectPage> createState() => _SwarmProjectPageState();
 }
@@ -331,6 +345,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
   /// Where the chat opens ([SwarmProjectPage.messageId]): forgotten once
   /// another tab is picked, so the chat shown again opens at its end.
   late String? _messageId = widget.messageId, _threadId = widget.threadId;
+  late SwarmThreadFocus? _threadFocus = widget.threadFocus;
 
   /// What the page shows of the inbox ([_inboxChanged]): its Swarm's
   /// reader, whether there are several Swarms, why the list was not read.
@@ -435,6 +450,14 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       swarmId: widget.swarmId,
       projectId: widget.projectId,
       team: true,
+    ),
+  );
+
+  void _openWork() => unawaited(
+    showSwarmProjectSheet(
+      context,
+      swarmId: widget.swarmId,
+      projectId: widget.projectId,
     ),
   );
 
@@ -552,6 +575,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
               projectId: project.id,
               onStatus: _openStatusSheet,
               onLeaderboard: _openLeaderboardSheet,
+              onWork: _openWork,
               onTeam: _openTeamSheet,
               onNotifications:
                   snapshot.conversation(project.leadConversationId) == null
@@ -613,6 +637,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       mention: widget.mention,
       messageId: _messageId,
       threadId: _threadId,
+      threadFocus: _threadFocus,
       homeC: _homeC,
     ),
     SwarmProjectTab.buddy => SwarmProjectBuddy(
@@ -680,7 +705,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
                           : swarmChatNews(reader, asks, chat),
                       onSelect: (tab) => setState(() {
                         _tab = tab;
-                        _messageId = _threadId = null;
+                        _messageId = _threadId = _threadFocus = null;
                       }),
                     ),
                   ),
@@ -790,13 +815,14 @@ class _ProjectMenu extends StatelessWidget {
     required this.projectId,
     required this.onStatus,
     required this.onLeaderboard,
+    required this.onWork,
     required this.onTeam,
     this.onNotifications,
   });
 
   final SwarmReader reader;
   final String projectId;
-  final VoidCallback onStatus, onLeaderboard, onTeam;
+  final VoidCallback onStatus, onLeaderboard, onWork, onTeam;
   final VoidCallback? onNotifications;
 
   @override
@@ -843,27 +869,41 @@ class _ProjectMenu extends StatelessWidget {
             computers: computers,
           )
         : null;
-    return MenuAnchor(
-      alignmentOffset: const Offset(0, AppSpace.xs),
-      menuChildren: [
-        if (terminal != null)
-          row(
-            'swarm-project-menu-terminal',
-            terminal.label,
-            terminal.enabled ? terminal.onTap : null,
-            value: terminal.value,
-          ),
-        row('swarm-project-menu-status', 'Status', onStatus),
-        row('swarm-project-menu-leaderboard', 'Leaderboard', onLeaderboard),
-        row('swarm-project-menu-team', 'Team', onTeam),
-        if (onNotifications case final onTap?)
-          row('swarm-project-menu-notifications', 'Notifications', onTap),
-      ],
-      builder: (context, menu, _) => SwarmIconButton(
-        key: const ValueKey('swarm-project-menu'),
-        icon: LucideIcons.ellipsisVertical300,
-        label: 'Menu',
-        onPressed: () => menu.isOpen ? menu.close() : menu.open(),
+    return MenuTheme(
+      data: MenuThemeData(
+        submenuIcon: MenuTheme.of(context).submenuIcon,
+        // Home C sits near the top of the phone. Six rows at their 48-point
+        // layout height, panel padding, and a small edge fit without scrolling.
+        style: AppMenu.style(
+          maxHeight:
+              6 * (minTouchTarget + AppSpace.xs) +
+              AppMenu.panelPadding.vertical +
+              AppSpace.xs,
+        ),
+      ),
+      child: MenuAnchor(
+        alignmentOffset: const Offset(0, AppSpace.xs),
+        menuChildren: [
+          if (terminal != null)
+            row(
+              'swarm-project-menu-terminal',
+              terminal.label,
+              terminal.enabled ? terminal.onTap : null,
+              value: terminal.value,
+            ),
+          row('swarm-project-menu-status', 'Status', onStatus),
+          row('swarm-project-menu-leaderboard', 'Leaderboard', onLeaderboard),
+          row('swarm-project-menu-work', 'Work', onWork),
+          row('swarm-project-menu-team', 'Team', onTeam),
+          if (onNotifications case final onTap?)
+            row('swarm-project-menu-notifications', 'Notifications', onTap),
+        ],
+        builder: (context, menu, _) => SwarmIconButton(
+          key: const ValueKey('swarm-project-menu'),
+          icon: LucideIcons.ellipsisVertical300,
+          label: 'Menu',
+          onPressed: () => menu.isOpen ? menu.close() : menu.open(),
+        ),
       ),
     );
   }

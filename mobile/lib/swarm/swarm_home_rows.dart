@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/fzf.dart' show fzfAge;
+import 'package:harness_mobile/phone/tty.dart';
+import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
@@ -98,6 +100,50 @@ String swarmNeedAsk(SwarmNeed need) => switch (need) {
     mention.text.isNotEmpty ? mention.text : mention.conversationTitle,
   SwarmWorkNeed(:final work) => work.question ?? work.conversation.label,
 };
+
+/// An invitation to a Swarm on Home (Tony's mobile list, task 24), one line: the
+/// Swarm's name, Not now and Join. The account's, so it shows whichever Swarm
+/// or filter Home is on.
+class SwarmInvitationRow extends StatelessWidget {
+  const SwarmInvitationRow({
+    super.key,
+    required this.invitation,
+    required this.joining,
+    required this.onJoin,
+    required this.onLater,
+  });
+
+  final SwarmInvitation invitation;
+  final bool joining;
+  final VoidCallback onJoin, onLater;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return SwarmRow(
+      title: invitation.name.trim(),
+      chevron: null,
+      onTap: null,
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TtyTextButton(
+            key: ValueKey('swarm-invitation-later-${invitation.inviteId}'),
+            label: 'Not now',
+            color: tty.dim,
+            onPressed: joining ? null : onLater,
+          ),
+          const SizedBox(width: AppSpace.s),
+          TtyTextButton(
+            key: ValueKey('swarm-invitation-join-${invitation.inviteId}'),
+            label: joining ? 'Joining…' : 'Join',
+            onPressed: joining ? null : onJoin,
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 /// One project on Home, as C1 draws it: a dot in the colour of how its team
 /// is ([swarmProjectColor]), its name as a channel's ("#openharness") — bold
@@ -317,10 +363,10 @@ class SwarmOtherProjectsRow extends StatelessWidget {
 /// How a project's team is, as its dot on Home: red with someone down,
 /// yellow with someone waiting or a tag waiting on the person, green with
 /// someone working, faint otherwise.
-Color swarmProjectColor(SwarmTeamGlance glance, SwarmRowNews news) =>
+Color swarmProjectColor(SwarmTeamGlance glance, SwarmProjectNews news) =>
     glance.down > 0
     ? swarmStateColor(SwarmAgentState.down)
-    : glance.waiting > 0 || news.tags > 0
+    : glance.waiting > 0 || news.tags > 0 || news.hasWaitingTag
     ? swarmStateColor(SwarmAgentState.waiting)
     : glance.working > 0
     ? swarmStateColor(SwarmAgentState.working)

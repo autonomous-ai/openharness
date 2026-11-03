@@ -73,8 +73,8 @@ await new Promise((resolve, reject) => {
   socket.addEventListener(
     "error",
     () =>
-      // Over the socket no credential is shown, and the port may be anyone's: there is nothing to ask it.
-      (daemonSocketPath(18473) ? Promise.resolve(false) : fetch(bridge.replace(/^ws:/, "http:"), { headers })
+      // Over the socket or the pipe no credential is shown, and the port may be anyone's: there is nothing to ask it.
+      (process.platform === "win32" || daemonSocketPath(18473) ? Promise.resolve(false) : fetch(bridge.replace(/^ws:/, "http:"), { headers })
         .then((answer) => answer.status === 401, () => false))
         .then((refused) =>
           reject(new Error(refused ? CREDENTIAL_REFUSED : "Could not open the local Harness bridge.")),

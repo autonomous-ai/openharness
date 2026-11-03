@@ -534,6 +534,13 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
         reply = await scoped({ action: 'command', operationId: `joined-legacy-${startId}`, command: join })
       }
       joined = requireSuccess(reply)
+      // Another coordinator was set while this one started (backend leadStart.ts leadOvertaken): it is no agent of the Swarm, so
+      // the session this start created goes, and nothing else does.
+      const refused = text(object(joined.result).refused)
+      if (refused) {
+        const closed = await target.request('agent_close', { agentId: nativeId, mode: 'now' }, 60_000).catch((): Json => ({}))
+        return { ok: false, error: refused, refused, startId, machineId: request.machineId, creationId, harnessId: nativeId, ...(closed.closed === true ? {} : { closeFailed: true }) }
+      }
     }
     await target.request('super_tabs', { action: 'wake' }).catch(() => {})
     await target.request('harness_share_rosters', {}).catch(() => {})

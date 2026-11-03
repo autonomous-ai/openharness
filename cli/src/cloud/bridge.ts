@@ -3,8 +3,8 @@
  * connection's credential, so this service holds none (services/AGENTS.md, "Do not hold credentials").
  * A connection is found by where it points (Fo's MCP server, Devin's API), not by what the person named it.
  */
-import { bridgePort, bridgeSocketPath, harnessKey } from '../lib/connectors/agents.js'
-import { fetchOverSocket } from '../lib/localTransport.js'
+import { bridgePort, bridgeSocketPath, harnessKey, readBridgePipe } from '../lib/connectors/agents.js'
+import { fetchOverPipe, fetchOverSocket } from '../lib/localTransport.js'
 import { Store } from '../lib/connectors/store.js'
 import { CLOUD_AGENTS, type CloudAgentId } from '../lib/cloudAgents.js'
 import { CloudError } from './types.js'
@@ -26,15 +26,17 @@ export interface BridgeRoute { base: string; fetch: typeof fetch }
 
 /**
  * Through Harness's own key (agents.ts `harnessKey`), never the one in the agents' configurations, and over the bridge's 0600 socket
- * where it can have one: whoever holds a port hears what is sent to it (audit H1). With the socket gone Connections is down, and
- * nothing goes to the port. The address's host is then only a name, one that resolves nowhere (RFC 6761), so the key cannot leave if the
+ * where it can have one, or on Windows its pipe: whoever holds a port hears what is sent to it and can answer it (audit H1; on
+ * Windows the Team account from boot, task #2162). The pipe is read for each request, dialled only while the bridge's process runs,
+ * and its answer must prove the token (agents.ts `readBridgePipe`). With the socket or pipe gone Connections is down, and nothing
+ * goes to the port. The address's host is then only a name, one that resolves nowhere (RFC 6761), so the key cannot leave if the
  * address ever reached plain `fetch`.
  */
-export function bridgeRoute(vault: Store = new Store()): BridgeRoute {
-  const socket = bridgeSocketPath(vault)
-  return socket
-    ? { base: `http://connections.invalid/${harnessKey(vault)}`, fetch: fetchOverSocket(socket) }
-    : { base: `http://127.0.0.1:${bridgePort(process.env, vault)}/${harnessKey(vault)}`, fetch: (input, init) => fetch(input, init) }
+export function bridgeRoute(vault: Store = new Store(), platform: NodeJS.Platform = process.platform): BridgeRoute {
+  const socket = bridgeSocketPath(vault, platform)
+  if (socket) return { base: `http://connections.invalid/${harnessKey(vault)}`, fetch: fetchOverSocket(socket) }
+  if (platform === 'win32') return { base: `http://connections.invalid/${harnessKey(vault)}`, fetch: fetchOverPipe(() => readBridgePipe(vault)) }
+  return { base: `http://127.0.0.1:${bridgePort(process.env, vault)}/${harnessKey(vault)}`, fetch: (input, init) => fetch(input, init) }
 }
 
 export function connectionsBridge(target: () => string | BridgeRoute = () => bridgeRoute()): Bridge {

@@ -7,10 +7,13 @@ import '../core/local_key_value_store.dart';
 import '../core/relative_time.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/theme/app_icons.dart';
 import '../shared/theme/appearance_prefs_store.dart';
+import '../shared/widgets/app_icon_button.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_select_field.dart';
 import '../state/app_state.dart';
+import '../state/harness_activity.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/browser_menu_guard.dart';
@@ -28,7 +31,6 @@ import 'leaderboard/member_row.dart';
 import 'leaderboard/model.dart';
 import 'leaderboard/person_row.dart';
 import 'leaderboard/reader.dart';
-import 'leaderboard/waiting_line.dart';
 import 'model.dart';
 import 'profile_sheet.dart';
 import 'roster_scope.dart';
@@ -48,6 +50,7 @@ class SuperTabRoster extends StatefulWidget {
     required this.onOpenAgent,
     required this.onAddAgent,
     required this.onAnswer,
+    this.onClose,
     this.app,
     this.board,
     this.storage,
@@ -62,6 +65,10 @@ class SuperTabRoster extends StatefulWidget {
   /// Opens a conversation: one where an agent waits on a person, or an agent
   /// row's task.
   final ValueChanged<String> onAnswer;
+
+  /// Closes the column: it opens only from Members (Quiet Swarm, Dee,
+  /// 2026-11-02). No close when null.
+  final VoidCallback? onClose;
 
   /// The open project's week board, shared with the sidebar's Models; the
   /// roster reads its own when not given.
@@ -79,6 +86,14 @@ class _SuperTabRosterState extends State<SuperTabRoster>
     with WidgetsBindingObserver, VisibleTick<SuperTabRoster> {
   /// One per agent menu open now, each keeping the browser's menu off.
   final _menuHolds = <Object>{};
+
+  /// Whether the agents folded under Idle (N) show; folded at first, for
+  /// this visit.
+  bool _idleOpen = false;
+
+  /// Whether the people folded under Others (N) show; folded at first, for
+  /// this visit.
+  bool _othersOpen = false;
 
   SuperTabController get c => widget.controller;
 
@@ -274,44 +289,65 @@ class _SuperTabRosterState extends State<SuperTabRoster>
     );
   }
 
-  /// A person's email and role, and their week when the board has them. One's
-  /// own also opens the profile sheet, where one's avatar and status change.
-  Future<void> _person(SuperTabPerson person, SuperTabPersonScore? score) =>
-      showAppDialog<void>(
-        context: context,
-        builder: (context) => SuperTabDetailDialog(
-          title: leaderboardName(person, score),
-          // Who they are on one line under the name (Ken, 2026-10-28).
-          detail:
+  /// A person's card (Quiet Swarm, screen 5): their name with the crown,
+  /// their points, the period on hover, their numbers under the name and
+  /// what is behind them; who they are on the avatar's hover. One's own also
+  /// opens the profile sheet, where one's avatar and status change.
+  Future<void> _person(SuperTabPerson person, SuperTabPersonScore? score) {
+    final name = leaderboardName(person, score);
+    return showAppDialog<void>(
+      context: context,
+      builder: (context) => SuperTabDetailDialog(
+        title: leaderboardCrowned(score) ? '$name \u{1F451}' : name,
+        detail: score == null ? null : leaderboardCardNumbers(score),
+        leading: Tooltip(
+          message:
               '${person.email} · ${switch (person.role) {
                 'owner' => 'Owner',
                 'viewer' => 'Can view',
                 _ => 'Can collaborate',
               }}',
-          leading: SuperTabAvatar.person(person, size: 40),
-          body: score == null
-              ? const SizedBox.shrink()
-              : LeaderboardPersonWeek(score: score),
-          actions: [
+          child: SuperTabAvatar.person(person, size: 40),
+        ),
+        headerActions: [
+          if (score != null)
+            Tooltip(
+              // The period, and the one before rather than a difference.
+              message: [
+                'Points ${score.spanName}',
+                if (score.prevWeekPoints case final before?)
+                  '$before ${score.earlierName}',
+              ].join(' · '),
+              child: Text(
+                plural(score.points, 'point'),
+                style: leaderboardPointsStyle(),
+              ),
+            ),
+        ],
+        body: score == null
+            ? const SizedBox.shrink()
+            : LeaderboardPersonWeek(score: score, summary: false),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              widget.onInvite();
+            },
+            child: const Text('Manage people'),
+          ),
+          if (person.id == c.accountId && c.canWrite)
             TextButton(
+              key: const ValueKey('super-profile-edit'),
               onPressed: () {
                 Navigator.pop(context);
-                widget.onInvite();
+                showSuperTabProfile(this.context, c);
               },
-              child: const Text('Manage people'),
+              child: const Text('Edit profile'),
             ),
-            if (person.id == c.accountId && c.canWrite)
-              TextButton(
-                key: const ValueKey('super-profile-edit'),
-                onPressed: () {
-                  Navigator.pop(context);
-                  showSuperTabProfile(this.context, c);
-                },
-                child: const Text('Edit profile'),
-              ),
-          ],
-        ),
-      );
+        ],
+      ),
+    );
+  }
 
   Future<void> _details(SuperTabAgent agent) => showSuperTabAgentDetails(
     context,
@@ -321,134 +357,42 @@ class _SuperTabRosterState extends State<SuperTabRoster>
     widget.onOpenAgent,
   );
 
-  /// Name, role chip, then the model and effort in the details line's grey
-  /// (Dee, 2026-10-31). The name and chip are measured first; the model takes
-  /// what is left and is cut before either shrinks.
-  Widget _agentIdentity(
-    String name,
-    String role,
-    String badge, {
-    String? model,
-    Key? modelKey,
-  }) => LayoutBuilder(
-    builder: (context, constraints) {
-      final nameStyle = DesktopChrome.control();
-      final tagStyle = DesktopChrome.metadata();
-      final scale = MediaQuery.textScalerOf(context);
-      double measure(String text, TextStyle style) {
-        final painter = TextPainter(
-          text: TextSpan(text: text, style: style),
-          textDirection: Directionality.of(context),
-          textScaler: scale,
-          maxLines: 1,
-        )..layout();
-        final width = painter.width;
-        painter.dispose();
-        return width;
-      }
-
-      final badgeWidth = (measure(badge, tagStyle) + 10).clamp(
-        0.0,
-        constraints.maxWidth,
-      );
-      // One gap between name, chip and model.
-      const gap = 6.0;
-      final nameWidth = measure(name, nameStyle).clamp(
-        0.0,
-        (constraints.maxWidth - badgeWidth - gap).clamp(0.0, double.infinity),
-      );
-      Widget tag(String text) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-        decoration: BoxDecoration(
-          color: grid.AppSurface.hoverFill,
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: Text(
-          text,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: tagStyle,
-        ),
-      );
-      return Row(
-        children: [
-          if (nameWidth > 0) ...[
-            SizedBox(
-              width: nameWidth,
-              child: Text(
-                name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: nameStyle,
-              ),
-            ),
-            const SizedBox(width: gap),
-          ],
-          Semantics(
-            label: role,
-            excludeSemantics: true,
-            child: SizedBox(width: badgeWidth, child: tag(badge)),
-          ),
-          // The gap shrinks with the model, so a name that fills the row never overflows.
-          if (model != null)
-            Flexible(
-              child: Padding(
-                padding: const EdgeInsets.only(left: gap),
-                child: Text(
-                  model,
-                  key: modelKey,
-                  maxLines: 1,
-                  softWrap: false,
-                  overflow: TextOverflow.ellipsis,
-                  style: tagStyle,
-                ),
-              ),
-            ),
-        ],
-      );
-    },
+  /// The agent's card (Quiet Swarm, screen 5).
+  Future<void> _card(SuperTabAgent agent) => showSuperTabAgentCard(
+    context,
+    c,
+    widget.app,
+    agent,
+    onOpenAgent: widget.onOpenAgent,
+    onOpenTask: widget.onAnswer,
   );
 
-  /// An agent's row, in the shape the people's rows share (Dee, 2026-10-29):
-  /// avatar, name and role chip, today's one status line beneath, and the
-  /// tabs' status mark at the right. No rank and no points.
+  /// An agent's row, one line (Quiet Swarm, screen 4): avatar, name, then
+  /// its state in a word and the tabs' status mark at the right. Role, task,
+  /// model, effort and machine are on its card and its hover.
   Widget _agent(SuperTabAgent agent, SuperTabAgentState state, DateTime now) {
     final name = c.snapshot!.agentName(agent.id), shown = state.mark;
     final info = SuperTabAgentInfo(c, widget.app, agent, activity: state.words);
-    final work = state.work;
-    // The state in a word, where it runs, its engine, model and effort: on hover (Dee, 2026-10-30); the model and
-    // effort on the first line too (Dee, 2026-10-31).
+    // The state in a word, where it runs, its engine, model and effort: on hover (Dee, 2026-10-30).
     final glance = superTabAgentGlance(info, now: now);
     final project = c.snapshot!.projects
         .where((p) => p.id == _agentProjectId(agent))
         .firstOrNull;
-    final (name: role, :badge) =
+    final (name: role, badge: _) =
         c.snapshot!.roleOf(agent.id) ?? (name: 'Engineer', badge: 'Dev');
     final status = info.status ?? 'Status unavailable';
+    // Who, then where and on what, then the task, then when (Dee,
+    // 2026-10-30); since the row is one line, how long since its last
+    // progress too, which its line said.
     final tooltip = [
       [name, role, ?project?.name, ?info.engine].join(' · '),
       glance.line,
       if (status != glance.label) status,
+      if (state.work?.progressAt case final at?)
+        'Last progress ${relativeAgo(at, now)}',
       if (info.lastActive case final at?) 'Last active ${relativeAgo(at, now)}',
     ].join('\n');
-    // The row's details line (Dee, 2026-10-30): the task in plain words and
-    // how long since its last progress; with no task, the state in a word.
-    final limited =
-        glance.label.startsWith('Limited until') || glance.label == 'Switching…'
-        ? glance.label
-        : null;
-    final detail = work == null
-        ? glance.label
-        : [
-            ?limited,
-            work.group.title,
-            if (work.progressAt case final at?)
-              superTabAgentAge(now.difference(at)),
-          ].join(' · ');
-    // A task opens its conversation, a needs-you one at its question; no task, the details.
-    void open() => work == null
-        ? unawaited(_details(agent))
-        : widget.onAnswer(work.group.id);
+    void open() => unawaited(_card(agent));
     final theme = terminalThemeFor(
       grid.AppTheme.surfacePalette,
       terminalThemeStore.value,
@@ -508,37 +452,41 @@ class _SuperTabRosterState extends State<SuperTabRoster>
           child: SuperTabMemberRow(
             rowKey: ValueKey('super-member-${agent.id}'),
             onTap: open,
-            onLongPress: () => unawaited(_details(agent)),
+            onLongPress: open,
             avatar: SuperTabAvatar.agent(
               agent,
               name: name,
               size: SuperTabAvatar.rowSize,
               engineBadge: false,
             ),
-            name: _agentIdentity(
+            name: Text(
               name,
-              role,
-              badge,
-              model: glance.modelEffort,
-              modelKey: ValueKey('super-member-model-${agent.id}'),
-            ),
-            detail: Text(
-              detail,
-              key: ValueKey('super-member-line-${agent.id}'),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: DesktopChrome.metadata(),
+              style: DesktopChrome.control(),
             ),
-            trailing: ActivityMark(
-              key: ValueKey('super-member-mark-${agent.id}'),
-              activity: shown,
-              tooltip: false,
-              showIdle: true,
-              color: activityColor(
-                shown,
-                theme,
-                color: appearancePrefsStore.value.prompt.color,
-              ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  superTabMemberWord(glance.label),
+                  key: ValueKey('super-member-word-${agent.id}'),
+                  maxLines: 1,
+                  style: DesktopChrome.metadata(),
+                ),
+                const SizedBox(width: DesktopChrome.controlGap),
+                ActivityMark(
+                  key: ValueKey('super-member-mark-${agent.id}'),
+                  activity: shown,
+                  tooltip: false,
+                  showIdle: true,
+                  color: activityColor(
+                    shown,
+                    theme,
+                    color: appearancePrefsStore.value.prompt.color,
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -594,8 +542,9 @@ class _SuperTabRosterState extends State<SuperTabRoster>
         if (scoped == null || personInProject(scoped, person.id, board: board))
           person,
     ];
-    final scores = {
-      for (final score in board?.people ?? const []) score.personId: score,
+    final scores = <String, SuperTabPersonScore>{
+      for (final score in board?.people ?? const <SuperTabPersonScore>[])
+        score.personId: score,
     };
     // The selected week's points, highest first; equal points, and no points
     // at all, by name, letter case aside (Dee, 2026-10-29).
@@ -609,6 +558,12 @@ class _SuperTabRosterState extends State<SuperTabRoster>
         final byName = sortName(a).compareTo(sortName(b));
         return byName != 0 ? byName : a.id.compareTo(b.id);
       });
+    // This project lists who is active in it; everyone else who can read it
+    // folds under Others (Dee, 2026-11-03). Only on its own board's numbers:
+    // before they land there is nothing to tell the two apart.
+    final split = scoped != null && board != null
+        ? splitProjectPeople(sorted, scores)
+        : (active: sorted, others: const <SuperTabPerson>[]);
     // Most urgent first, as the tabs order their marks: needs input, working,
     // idle, offline; within a mark, the most recent progress first (Dee,
     // 2026-10-30). Equals keep today's order, the Lead first. Each agent's
@@ -635,7 +590,6 @@ class _SuperTabRosterState extends State<SuperTabRoster>
         return pb.compareTo(pa);
       },
     );
-    final current = leaderboardWeekOf(widget.now());
     // One points column for every person's row.
     final columns = board == null || board.people.isEmpty
         ? null
@@ -643,83 +597,11 @@ class _SuperTabRosterState extends State<SuperTabRoster>
             context,
             points: board.people.map((s) => s.points),
           );
-    final week = board?.spanName ?? weekName(_board.week, current);
     final openProject = projectId == null
         ? null
         : state?.projectById(projectId);
-    final showWeek =
-        board != null ||
-        _board.week != null ||
-        (_board.period ?? leaderboardDefaultPeriod) != leaderboardDefaultPeriod;
-    Widget weekSelect({double? width}) => switch (_board.period) {
-      final period? => AppSelectField<String>(
-        key: const ValueKey('leaderboard-period'),
-        value: period,
-        width: width,
-        height: DesktopChrome.compactControlHeight,
-        semanticLabel: 'Period',
-        options: [
-          for (final option in leaderboardPeriods)
-            SelectOption(value: option, label: leaderboardPeriodLabel(option)),
-        ],
-        onChanged: (period) => unawaited(_board.showPeriod(period)),
-      ),
-      // A server before periods keeps the weeks.
-      null => AppSelectField<int>(
-        key: const ValueKey('leaderboard-week'),
-        value: _board.week ?? current,
-        width: width,
-        height: DesktopChrome.compactControlHeight,
-        semanticLabel: 'Week',
-        options: [
-          for (var back = 0; back < 4; back++)
-            SelectOption(
-              value: current - back * weekMs,
-              label: capitalized(weekName(current - back * weekMs, current)),
-            ),
-        ],
-        onChanged: (week) =>
-            unawaited(_board.showWeek(week == current ? null : week)),
-      ),
-    };
     return [
-      // Humans and Agents: the two roles in one team (Dee, 2026-10-29).
-      SuperTabSectionHeading(
-        'Humans',
-        actions: [if (showWeek) weekSelect(width: 112)],
-        onAdd: c.isOwner ? widget.onInvite : null,
-        addTooltip: 'Invite people',
-      ),
-      if (openProject != null)
-        Padding(
-          padding: const EdgeInsets.fromLTRB(
-            DesktopChrome.groupGap,
-            0,
-            DesktopChrome.groupGap,
-            DesktopChrome.controlGap,
-          ),
-          // The pane is too narrow for the scope beside the week on the
-          // heading's line, so it takes the line below.
-          child: AppSelectField<SuperTabRosterScope>(
-            key: const ValueKey('roster-scope'),
-            value: scoped == null
-                ? SuperTabRosterScope.all
-                : SuperTabRosterScope.project,
-            height: DesktopChrome.compactControlHeight,
-            semanticLabel: 'Show',
-            options: [
-              const SelectOption(
-                value: SuperTabRosterScope.all,
-                label: 'All projects',
-              ),
-              SelectOption(
-                value: SuperTabRosterScope.project,
-                label: openProject.name,
-              ),
-            ],
-            onChanged: _choice.choose,
-          ),
-        ),
+      _heading(openProject == null ? null : scoped != null),
       if (_board.error case final error?)
         Padding(
           padding: const EdgeInsets.fromLTRB(
@@ -730,27 +612,27 @@ class _SuperTabRosterState extends State<SuperTabRoster>
           ),
           child: Text(error, style: DesktopChrome.metadata()),
         ),
-      for (final person in sorted)
-        LeaderboardPersonRow(
-          person: person,
-          score: scores[person.id],
-          columns: columns,
-          own: person.id == c.accountId,
-          weekName: week,
-          onTap: () => _person(person, scores[person.id]),
+      // People and Agents: the two roles in one team (Quiet Swarm, screen 4).
+      SuperTabSectionHeading(
+        'People',
+        onAdd: c.isOwner ? widget.onInvite : null,
+        addTooltip: 'Invite people',
+      ),
+      // Points are the last 7 days, the period on hover; who waits on whom is
+      // Activity's Needs you (Quiet Swarm, 2026-11-02).
+      for (final person in split.active) _personRow(person, scores, columns),
+      if (split.others case final others when others.isNotEmpty) ...[
+        SuperTabSectionHeading(
+          'Others (${others.length})',
+          key: const ValueKey('super-members-others'),
+          // In line with the rows, as Idle (N) is under Agents.
+          startInset: 16,
+          collapsed: !_othersOpen,
+          onToggleCollapsed: () => setState(() => _othersOpen = !_othersOpen),
         ),
-      if (board != null && board.waiting.total > 0)
-        LeaderboardWaitingLine(
-          waiting: board.waiting,
-          viewerId: c.accountId,
-          nameOf: (id) {
-            final person = state?.people.where((p) => p.id == id).firstOrNull;
-            return person == null
-                ? 'Former member'
-                : leaderboardName(person, scores[id]);
-          },
-          onAnswer: widget.onAnswer,
-        ),
+        if (_othersOpen)
+          for (final person in others) _personRow(person, scores, columns),
+      ],
       const SizedBox(height: DesktopChrome.groupGap),
       SuperTabSectionHeading(
         'Agents',
@@ -760,8 +642,97 @@ class _SuperTabRosterState extends State<SuperTabRoster>
             : null,
         addTooltip: 'Add agent',
       ),
-      for (final agent in listed) _agent(agent, states[agent.id]!, now),
+      for (final agent in listed)
+        if (!superTabFoldsIdle(states[agent.id]!))
+          _agent(agent, states[agent.id]!, now),
+      if (listed.where((a) => superTabFoldsIdle(states[a.id]!)).toList()
+          case final idle when idle.isNotEmpty) ...[
+        SuperTabSectionHeading(
+          'Idle (${idle.length})',
+          key: const ValueKey('super-members-idle'),
+          // In line with People and Agents, which do not fold.
+          startInset: 16,
+          collapsed: !_idleOpen,
+          onToggleCollapsed: () => setState(() => _idleOpen = !_idleOpen),
+        ),
+        if (_idleOpen)
+          for (final agent in idle) _agent(agent, states[agent.id]!, now),
+      ],
     ];
+  }
+
+  Widget _personRow(
+    SuperTabPerson person,
+    Map<String, SuperTabPersonScore> scores,
+    LeaderboardColumns? columns,
+  ) => LeaderboardPersonRow(
+    person: person,
+    score: scores[person.id],
+    columns: columns,
+    own: person.id == c.accountId,
+    onTap: () => _person(person, scores[person.id]),
+  );
+
+  /// The column's heading: the project-or-Swarm choice while a project is
+  /// open ([narrowed] says which is chosen), All projects alone otherwise,
+  /// and its close at the right as a thread's has.
+  Widget _heading(bool? narrowed) {
+    final style = DesktopChrome.heading();
+    return Padding(
+      key: const ValueKey('super-members-heading'),
+      padding: const EdgeInsets.fromLTRB(
+        DesktopChrome.groupGap,
+        0,
+        DesktopChrome.controlGap,
+        DesktopChrome.controlGap,
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: narrowed == null
+                  ? Semantics(
+                      header: true,
+                      child: Text(
+                        superTabRosterScopeLabel(SuperTabRosterScope.all),
+                        style: style,
+                      ),
+                    )
+                  : AppSelectField<SuperTabRosterScope>(
+                      key: const ValueKey('roster-scope'),
+                      value: narrowed
+                          ? SuperTabRosterScope.project
+                          : SuperTabRosterScope.all,
+                      width: AppSelectField.fitWidth(
+                        context,
+                        labels: SuperTabRosterScope.values.map(
+                          superTabRosterScopeLabel,
+                        ),
+                      ),
+                      height: DesktopChrome.compactControlHeight,
+                      semanticLabel: 'Show',
+                      options: [
+                        for (final scope in SuperTabRosterScope.values.reversed)
+                          SelectOption(
+                            value: scope,
+                            label: superTabRosterScopeLabel(scope),
+                          ),
+                      ],
+                      onChanged: _choice.choose,
+                    ),
+            ),
+          ),
+          if (widget.onClose case final close?)
+            AppIconButton(
+              key: const ValueKey('super-members-close'),
+              icon: AppIcons.close,
+              tooltip: 'Close members',
+              onPressed: close,
+            ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -787,3 +758,24 @@ class _SuperTabRosterState extends State<SuperTabRoster>
     );
   }
 }
+
+/// An agent row's state word: the glance's in the chat's words ("waiting",
+/// "working", "in review"), one short word so the row stays one line; a
+/// reset time or a reason is on hover.
+String superTabMemberWord(String label) => switch (label) {
+  'Waiting on others' => 'in review',
+  'Kept (closed)' => 'kept',
+  _ when label.startsWith('Limited until') => 'limited',
+  '' => label,
+  _ => '${label[0].toLowerCase()}${label.substring(1)}',
+};
+
+/// Whether an agent folds under Idle (N): it holds no task and is idle,
+/// stopped or offline. An agent with work, lost work too, stays in view.
+bool superTabFoldsIdle(SuperTabAgentState state) =>
+    state.work == null &&
+    const {
+      HarnessActivity.idle,
+      HarnessActivity.paused,
+      HarnessActivity.offline,
+    }.contains(state.mark);

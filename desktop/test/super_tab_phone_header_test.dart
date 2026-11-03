@@ -11,7 +11,7 @@ import 'package:harness/super_tabs/roster.dart';
 import 'support/super_tab_phone.dart';
 
 final _menu = find.byTooltip('Project options');
-final _people = find.byTooltip('Members and machines');
+final _people = find.byTooltip('Members');
 final _openView = find.byKey(const ValueKey('super-open-view'));
 
 void main() {
@@ -79,7 +79,7 @@ void main() {
     await tester.tap(_menu);
     await tester.pumpAndSettle();
     expect(find.text('Pull requests'), findsOneWidget);
-    expect(find.text('Members and machines'), findsNothing);
+    expect(find.text('Members'), findsNothing);
     await unmountPhoneSuperTab(tester, controller);
   });
 

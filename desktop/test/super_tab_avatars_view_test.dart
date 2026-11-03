@@ -6,6 +6,11 @@ import 'package:harness/super_tabs/model.dart';
 
 import 'super_tab_roster_test.dart' show RosterFixture;
 
+/// A hover that says [text].
+Finder saying(String text) => find.byWidgetPredicate(
+  (w) => w is Tooltip && (w.message ?? '').contains(text),
+);
+
 void main() {
   testWidgets(
     'the roster shows each person’s avatar and status, each agent its pattern',
@@ -40,11 +45,9 @@ void main() {
         find.descendant(of: person, matching: find.text('☕')),
         findsOneWidget,
       );
+      // Its words on hover: a row is one line (Quiet Swarm).
       expect(
-        find.descendant(
-          of: person,
-          matching: find.textContaining('Coffee break'),
-        ),
+        find.descendant(of: person, matching: saying('Coffee break')),
         findsOneWidget,
       );
       expect(f.inRow(1, find.text('🦉')), findsOneWidget);
@@ -109,7 +112,7 @@ void expiryTests() {
       await f.show(tester);
       final person = find.byKey(const ValueKey('super-person-owner'));
       expect(
-        find.descendant(of: person, matching: find.textContaining('At lunch')),
+        find.descendant(of: person, matching: saying('At lunch')),
         findsOneWidget,
       );
       expect(
@@ -118,7 +121,7 @@ void expiryTests() {
       );
       await tester.pump(const Duration(minutes: 10, seconds: 1));
       expect(
-        find.descendant(of: person, matching: find.textContaining('At lunch')),
+        find.descendant(of: person, matching: saying('At lunch')),
         findsNothing,
       );
       expect(

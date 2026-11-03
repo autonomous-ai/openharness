@@ -11,15 +11,22 @@
  * connection per agent. And the updater ships only cli.js and notify.mjs, so a third file there would need its manifest changed.
  * Node's built-ins only: nothing else is beside it.
  *
+ * On Windows there is no socket: the shim reaches the bridge's pipe (bridge.ts serveBridgePipe, task #2162), named in a record in
+ * the vault's private folder (`--pipe <record>`). Node cannot set a pipe's DACL, so reaching it proves nothing, and once the bridge
+ * is gone any account can make a pipe of its name: the shim dials it only while the recorded process runs as this account, proves
+ * the record's token without sending it, and relays no answer that does not prove the token back (lib/windows/pipeAuth.ts).
+ *
  * The client's stream is newline-delimited JSON-RPC (MCP's stdio transport). Each message becomes one POST of MCP's HTTP transport,
  * whose answer is JSON or an event stream. `initialize` goes first and alone: its answer names the session the rest carry. A
  * service's own unprompted stream (GET) is not opened, so `notifications/*_changed` are not relayed.
  */
+import { PIPE_AUTH_HEADER, PIPE_PROOF_HEADER } from '../windows/pipeAuth.js'
 import { SOCKET_KEY } from './bridge.js'
 
 export const MCP_SHIM_SOURCE = String.raw`#!/usr/bin/env node
 // Written by Harness (lib/connectors/mcpShimSource.ts); it is replaced at each daemon start.
-import { lstatSync } from 'node:fs'
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { closeSync, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs'
 import { request as httpRequest } from 'node:http'
 import { dirname } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -27,9 +34,12 @@ import { createInterface } from 'node:readline'
 const NOT_RUNNING = 'Harness is not running on this computer, so this connection cannot be reached. Start it and try again.'
 const UNREADABLE = "The connection's answer could not be read. Try again."
 const NOT_PRIVATE = "Harness's connection socket is not private to this account, so it was not used. Restart Harness."
+const UNPROVEN = "Something other than Harness answered on its connection pipe, so its answer was not used. Restart Harness."
 
 const [flag, socket, code, graceFlag, grace] = process.argv.slice(2)
-if (flag !== '--socket' || !socket || !code) { console.error('usage: mcp-shim --socket PATH CODE'); process.exit(2) }
+// --pipe names the bridge's pipe record on Windows (lib/connectors/bridge.ts serveBridgePipe), --socket its 0600 socket elsewhere.
+const piped = flag === '--pipe'
+if ((flag !== '--socket' && !piped) || !socket || !code) { console.error('usage: mcp-shim --socket PATH CODE | --pipe RECORD CODE'); process.exit(2) }
 // How long open requests get once the client has gone, so a hung stream does not leave a process behind.
 const graceMs = graceFlag === '--grace-ms' ? Number(grace) : 5000
 const path = '/${SOCKET_KEY}/' + encodeURIComponent(code) + '/mcp'
@@ -44,6 +54,42 @@ function socketState() {
   } catch (error) {
     return error.code === 'ENOENT' ? 'absent' : 'open'
   }
+}
+
+// Mirrors LOCAL_PIPE_RE and isPipePath in lib/windows/pipeAuth.ts: on Windows a pipe on this computer named harness-<id>, never
+// another computer's (an SMB connection that can carry this user's sign-in); elsewhere only the tests make one, a socket so named.
+const PIPE_RE = process.platform === 'win32' ? /^\\\\\.\\pipe\\harness-([0-9a-f]{32})$/ : /(?:^|\/)harness-([0-9a-f]{32})$/
+
+// The bridge's pipe, read from its record for each request so a bridge that restarted under a new name is followed; null when
+// there is nothing to dial. The record must be a plain file (not a link), the very one opened, and private to this account where
+// the system says so. The bridge is this account's, so a pid that is gone or answers EPERM (another account's process, one that
+// took the pid since) means no bridge: a pipe of its name may be anyone's.
+function pipeTarget() {
+  let fd = null
+  try {
+    const seen = lstatSync(socket, { bigint: true })
+    if (!seen.isFile() || seen.size > 4096n) return null
+    fd = openSync(socket, 'r')
+    const opened = fstatSync(fd, { bigint: true })
+    if (!opened.isFile() || opened.dev !== seen.dev || opened.ino !== seen.ino) return null
+    const uid = process.getuid?.()
+    if (process.platform !== 'win32' && ((opened.mode & 0o077n) !== 0n || (uid !== undefined && opened.uid !== BigInt(uid)))) return null
+    const record = JSON.parse(readFileSync(fd, 'utf8'))
+    const id = typeof record?.pipe === 'string' ? PIPE_RE.exec(record.pipe)?.[1] : null
+    if (!id || typeof record.token !== 'string' || !/^[0-9a-f]{64}$/.test(record.token)) return null
+    if (!Number.isSafeInteger(record.pid) || record.pid <= 0) return null
+    try { process.kill(record.pid, 0) } catch { return null }
+    return { pipe: record.pipe, id, token: Buffer.from(record.token, 'hex') }
+  } catch {
+    return null
+  } finally {
+    if (fd !== null) closeSync(fd)
+  }
+}
+const mac = (token, separator, nonce) => createHmac('sha256', token).update(Buffer.of(separator)).update(nonce, 'utf8').digest('hex')
+const proven = (proof, token, nonce) => {
+  if (typeof proof !== 'string' || !/^[0-9a-f]{64}$/.test(proof)) return false
+  return timingSafeEqual(Buffer.from(proof, 'hex'), Buffer.from(mac(token, 0x00, nonce), 'hex'))
 }
 
 // A client that went away closes this stream: nothing more to say, and no reason to fall over saying it.
@@ -104,13 +150,27 @@ const relay = (answer, sent, quiet) => new Promise((resolve, reject) => {
 const post = (raw, sent, quiet = false, retried = false) => new Promise((resolve) => {
   const asked = sent.method !== undefined && sent.id !== undefined
   const failed = (reason) => { if (asked && !quiet) refuse(sent.id, -32001, reason); resolve(0) }
-  const state = socketState()
-  if (state !== 'private') { failed(state === 'absent' ? NOT_RUNNING : NOT_PRIVATE); return }
-  const request = httpRequest({ socketPath: socket, method: 'POST', path,
+  let target = null, nonce = null
+  if (piped) {
+    target = pipeTarget()
+    if (!target) { failed(NOT_RUNNING); return }
+    nonce = target.id + randomBytes(16).toString('hex')
+  } else {
+    const state = socketState()
+    if (state !== 'private') { failed(state === 'absent' ? NOT_RUNNING : NOT_PRIVATE); return }
+  }
+  const request = httpRequest({ socketPath: target ? target.pipe : socket, method: 'POST', path,
     headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream',
-      ...(session ? { 'mcp-session-id': session } : {}), ...(version ? { 'mcp-protocol-version': version } : {}) } },
+      ...(session ? { 'mcp-session-id': session } : {}), ...(version ? { 'mcp-protocol-version': version } : {}),
+      ...(target ? { '${PIPE_AUTH_HEADER}': nonce + '.' + mac(target.token, 0x01, nonce) } : {}) } },
   (answer) => {
     open.delete(request)
+    // Before anything of it is read: an answer that is not the bridge's never reaches the client.
+    if (target && !proven(answer.headers['${PIPE_PROOF_HEADER}'], target.token, nonce)) {
+      request.destroy()
+      failed(UNPROVEN)
+      return
+    }
     // The service forgot the session (it restarted, or it expired). An HTTP client opens another on a 404; a stdio client
     // cannot know to, so an agent running for days would lose this connection until it restarts.
     if (answer.statusCode === 404 && session && !retried && sent.method !== 'initialize' && opening) {

@@ -52,13 +52,22 @@ export async function writeReplyActivity(tx: Tx, tabId: string, messages: Messag
   // By id through its index, as a plain $in (parts/indexed.ts): Prisma's `in` plans slowly.
   const found = new Map((await readBy(tx, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: ids }, tabId } }, { $project: { conversationId: 1, author: 1 } }]))
     .map(r => [r._id as string, { conversationId: r.conversationId as string, author: r.author }]))
-  const data = replies.flatMap(m => {
+  const recipients = replies.map(m => {
     const people = new Set([m.thread!, m.replyTo].flatMap(target => {
       const row = target ? found.get(target) : undefined
       const by = row?.author as { kind?: string; id?: string } | undefined
       return row && row.conversationId === m.conversationId && by?.kind === 'person' && by.id && !own(m.author, by.id) ? [by.id] : []
     }))
-    return [...people].map(personId => ({ id: stableId(tabId, 'reply', m.id, personId), tabId, personId, kind: 'reply', conversationId: m.conversationId,
+    return { message: m, people }
+  })
+  const markIds = [...new Set(recipients.flatMap(({ message, people }) => [...people].map(personId =>
+    stableId(tabId, message.conversationId, message.thread!, personId))))]
+  const marks = markIds.length ? await tx.superTabThreadMark.aggregateRaw({ pipeline: [
+    { $match: { _id: { $in: markIds } } }, { $project: { _id: 1, follow: 1 } },
+  ] }) as unknown as Array<{ _id: string; follow?: boolean | null }> : []
+  const unfollowed = new Set(marks.filter(mark => mark.follow === false).map(mark => mark._id))
+  const data = recipients.flatMap(({ message: m, people }) => {
+    return [...people].filter(personId => !unfollowed.has(stableId(tabId, m.conversationId, m.thread!, personId))).map(personId => ({ id: stableId(tabId, 'reply', m.id, personId), tabId, personId, kind: 'reply', conversationId: m.conversationId,
       messageId: m.id, threadId: m.thread!, actorKind: m.author.kind, actorId: m.author.id, emoji: null, createdAt: new Date(now), readAt: null,
       ...sequences.has(m.id) ? { sequence: sequences.get(m.id)! } : {}, ...m.alsoInChat ? { alsoInChat: true } : {} }))
   })

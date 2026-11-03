@@ -22,6 +22,9 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
   SuperTabLeaderboard? board;
   String? error;
   String? _projectId;
+
+  /// The project this reader asks about; null while none.
+  String? get projectId => _projectId;
   int? _week;
   String _period = leaderboardDefaultPeriod;
   bool _weeksOnly = false;
@@ -180,12 +183,17 @@ class SuperTabProjectBoard extends SuperTabLeaderboardReader {
   bool _missed = false;
 
   /// The project whose board this is; null while none is open.
+  @override
   String? get projectId => _following;
 
   void _follow() {
-    final projectId = controller.snapshot
-        ?.projectFor(controller.selectedId)
-        ?.id;
+    // A chat of no project (the one Buddy) still has models to show in Manage:
+    // the read needs some project. It sums them all unless Members has been
+    // set to one project, a choice this shared board keeps.
+    final snapshot = controller.snapshot;
+    final projectId =
+        snapshot?.projectFor(controller.selectedId)?.id ??
+        snapshot?.projects.firstOrNull?.id;
     if (projectId == _following) return;
     _following = projectId;
     if (projectId == null) {

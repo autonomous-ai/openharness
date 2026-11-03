@@ -32,7 +32,9 @@ Future<(ConversationServer, SuperTabController)> mountPhoneSuperTab(
       given ?? (ConversationServer()..append('Ship the phone header.'));
   if (given == null) {
     final lead = (server0.state['conversations'] as List).first as Map;
-    lead['agentIds'] = ['builder'];
+    lead
+      ..['agentIds'] = ['builder']
+      ..['leadId'] = 'builder';
   }
   seed?.call(server0);
   final controller = server0.controller();

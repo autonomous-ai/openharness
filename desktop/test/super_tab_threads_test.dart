@@ -1,8 +1,9 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
@@ -11,6 +12,7 @@ import 'package:harness/super_tabs/message_link.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
 
 import 'support/super_tab_fixture.dart';
 
@@ -385,11 +387,8 @@ void main() {
       expect(left.name, 'gone');
       expect(left.picture, isNull);
       expect(left.status, isNull);
-      // Its size is unchanged.
-      expect(
-        tester.getSize(find.byWidget(person)).width,
-        grid.AppDesktop.iconSize,
-      );
+      // Faces about 24 points, as Slack's (Huy, 2026-11-03, #2315).
+      expect(tester.getSize(find.byWidget(person)).width, 24);
     });
 
     testWidgets('a person with a preset shows it', (tester) async {
@@ -913,5 +912,151 @@ void main() {
     );
     expect(find.text('1 reply'), findsOneWidget);
     expect(find.text('Last reply 2 min ago'), findsOneWidget);
+  });
+
+  // Huy, 2026-11-03 (#2315): the line under a thread's root was hard to click.
+  // Like Slack's, it is one padded bar: hover or focus fills and frames it,
+  // reads View thread and shows a chevron, and a click anywhere opens it.
+  group('the reply bar', () {
+    final bar = find.byKey(const ValueKey('super-thread-bar-m1'));
+    final chevron = find.byKey(const ValueKey('super-thread-chevron-m1'));
+
+    Future<List<String>> pump(
+      WidgetTester tester, {
+      double width = 800,
+      int authors = 2,
+    }) async {
+      final opened = <String>[];
+      final people = [for (var i = 0; i < authors; i++) 'p$i'];
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.light),
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.topLeft,
+              child: SizedBox(
+                width: width,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SuperTabThreadLine(
+                      thread: SuperTabThread.fromJson({
+                        'id': 'm1',
+                        'replies': 17,
+                        'lastSequence': 2,
+                        'lastAt': DateTime.now()
+                            .toUtc()
+                            .subtract(const Duration(minutes: 2))
+                            .toIso8601String(),
+                        'authors': [
+                          for (final id in people)
+                            {'kind': 'person', 'id': id, 'name': '$id@x.com'},
+                        ],
+                        'people': people,
+                      }),
+                      unread: false,
+                      onOpen: () => opened.add('m1'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      return opened;
+    }
+
+    BoxDecoration frame(WidgetTester tester) =>
+        tester
+                .widget<DecoratedBox>(
+                  find
+                      .descendant(of: bar, matching: find.byType(DecoratedBox))
+                      .first,
+                )
+                .decoration
+            as BoxDecoration;
+    double chevronOpacity(WidgetTester tester) => tester
+        .widget<Opacity>(
+          find.ancestor(of: chevron, matching: find.byType(Opacity)).first,
+        )
+        .opacity;
+
+    testWidgets(
+      'hovering anywhere on it highlights it and offers View thread',
+      (tester) async {
+        await pump(tester);
+        final resting = tester.getSize(bar);
+        expect(find.text('Last reply 2 min ago'), findsOneWidget);
+        expect(chevronOpacity(tester), 0);
+        expect(frame(tester).color, isNot(grid.AppSurface.hoverFill));
+
+        final mouse = await tester.createGesture(
+          kind: PointerDeviceKind.mouse,
+          pointer: 1,
+        );
+        await mouse.addPointer(location: Offset.zero);
+        addTearDown(mouse.removePointer);
+        // Its right end, past the words: still the bar.
+        await mouse.moveTo(
+          tester.getRect(bar).centerRight - const Offset(3, 0),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('View thread'), findsOneWidget);
+        expect(find.text('Last reply 2 min ago'), findsNothing);
+        expect(chevronOpacity(tester), 1);
+        expect(frame(tester).color, grid.AppSurface.hoverFill);
+        expect((frame(tester).border! as Border).top.color, DesktopChrome.rim);
+        expect(
+          RendererBinding.instance.mouseTracker.debugDeviceActiveCursor(1),
+          SystemMouseCursors.click,
+        );
+        // Hover moves nothing.
+        expect(tester.getSize(bar), resting);
+      },
+    );
+
+    testWidgets('one click anywhere on it opens the thread', (tester) async {
+      final opened = await pump(tester);
+      expect(tester.getSize(bar).height, greaterThanOrEqualTo(32));
+      expect(tester.getSize(find.byType(SuperTabAvatar).first).height, 24);
+
+      await tester.tapAt(tester.getRect(bar).topLeft + const Offset(3, 3));
+      await tester.pump();
+      expect(opened, ['m1']);
+      await tester.tapAt(tester.getCenter(chevron));
+      await tester.pump();
+      expect(opened, ['m1', 'm1']);
+    });
+
+    testWidgets('Tab reaches it and Enter opens the thread', (tester) async {
+      final opened = await pump(tester);
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pumpAndSettle();
+      expect(find.text('View thread'), findsOneWidget);
+      expect(chevronOpacity(tester), 1);
+      expect(
+        (frame(tester).border! as Border).top.color,
+        DesktopChrome.focusRing,
+      );
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      expect(opened, ['m1']);
+    });
+
+    testWidgets('it is as wide as its content, within its maximum', (
+      tester,
+    ) async {
+      await pump(tester);
+      expect(tester.getSize(bar).width, lessThan(600));
+
+      // Many repliers in a narrow chat: a few faces, and nothing overflows.
+      await pump(tester, width: 300, authors: 12);
+      expect(tester.takeException(), isNull);
+      expect(tester.getSize(bar).width, lessThanOrEqualTo(300));
+      expect(find.byType(SuperTabAvatar), findsNWidgets(5));
+    });
   });
 }

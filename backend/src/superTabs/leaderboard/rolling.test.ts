@@ -240,9 +240,8 @@ describe('what a verdict writes', () => {
 
   it('counts it in its week and its hour, one row per hour and model', () => {
     const g = reviewed()
-    recordVerdict(swarm(), g, check, reviewer, NOW + 1)
-    g.ledger!.runs![0]!.firstVerdicts = undefined
-    recordVerdict(swarm(), g, check, reviewer, NOW + 2)
+    recordVerdict(swarm(), g, check, reviewer, NOW + 1, true)
+    recordVerdict(swarm(), g, check, reviewer, NOW + 2, true)
     expect(g.ledger!.reviews).toEqual([{ week: THIS_WEEK, ...opus, count: 2 }])
     expect(g.ledger!.reviewHours).toEqual([{ hour: NOW, ...opus, count: 2 }])
   })
@@ -250,13 +249,13 @@ describe('what a verdict writes', () => {
   it('lets go of hours older than the weeks kept', () => {
     const g = reviewed()
     g.ledger!.reviewHours = [{ hour: NOW - 36 * DAY, ...opus, count: 7 }, { hour: NOW - 34 * DAY, ...opus, count: 1 }]
-    recordVerdict(swarm(), g, check, reviewer, NOW)
+    recordVerdict(swarm(), g, check, reviewer, NOW, true)
     expect(g.ledger!.reviewHours.map(r => r.hour)).toEqual([NOW - 34 * DAY, NOW])
   })
 
   it('keeps an assignee\'s own verdict out of both', () => {
     const g = reviewed()
-    recordVerdict(swarm(), g, check, { ...reviewer, id: 'worker' }, NOW)
+    recordVerdict(swarm(), g, check, { ...reviewer, id: 'worker' }, NOW, true)
     expect(g.ledger).not.toHaveProperty('reviewHours')
   })
 })

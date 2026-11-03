@@ -37,6 +37,14 @@ String leaderboardName(SuperTabPerson person, SuperTabPersonScore? score) =>
 bool leaderboardCrowned(SuperTabPersonScore? score) =>
     score != null && score.rank == 1 && score.points > 0;
 
+/// A person's card's numbers (Quiet Swarm, screen 5), each said even at 0:
+/// "111 shipped · 40 unblocked · 411 hours" (hours lent).
+String leaderboardCardNumbers(SuperTabPersonScore score) => [
+  '${score.shipped} shipped',
+  '${score.unblocked} unblocked',
+  plural(int.parse(leaderboardHours(score.lentMs)), 'hour'),
+].join(' · ');
+
 /// "16 shipped", "1 unblocked", "43 hours lent": each number that would not
 /// read zero, in words; empty when all would.
 List<String> leaderboardNumbers(SuperTabPersonScore score) {
@@ -74,12 +82,11 @@ class LeaderboardColumns {
   final double points;
 }
 
-/// One person in the People section, in the row shape the agents share
-/// (Dee, 2026-10-29): avatar, name (number one's with a crown beside it) and
-/// status, their points at the right of that line, and a quiet line of their
-/// non-zero numbers beneath. No rank. The viewer's own row carries the
-/// selected fill. Without a [score] (no board yet, or a server without one)
-/// only the name and status.
+/// One person in the People section, on one line (Quiet Swarm, screen 4):
+/// avatar, name (number one's with a crown beside it) and their points at the
+/// right, the period on hover. Their numbers and status are on their card.
+/// No rank. The viewer's own row carries the selected fill. Without a [score]
+/// (no board yet, or a server without one) only the name.
 class LeaderboardPersonRow extends StatelessWidget {
   const LeaderboardPersonRow({
     super.key,
@@ -88,7 +95,6 @@ class LeaderboardPersonRow extends StatelessWidget {
     required this.onTap,
     this.columns,
     this.own = false,
-    this.weekName = 'this week',
   });
   final SuperTabPerson person;
   final SuperTabPersonScore? score;
@@ -100,42 +106,33 @@ class LeaderboardPersonRow extends StatelessWidget {
   /// Whether this is the viewer's own row.
   final bool own;
 
-  /// The week the board shows, "this week", "last week", …, as the crown says it.
-  final String weekName;
-
   @override
   Widget build(BuildContext context) {
     final score = this.score;
     final columns = this.columns;
-    final numbers = score == null
-        ? const <String>[]
-        : leaderboardNumbers(score);
     return SuperTabMemberRow(
       rowKey: ValueKey('super-person-${person.id}'),
       onTap: onTap,
       selected: own,
       avatar: SuperTabAvatar.person(person, size: _avatarSize),
       name: _name(),
-      detail: numbers.isEmpty
-          ? null
-          : LeaderboardNumbers(
-              key: ValueKey('leaderboard-meta-${person.id}'),
-              parts: numbers,
-            ),
       trailing: columns == null || score == null
           ? null
-          : SizedBox(
-              key: ValueKey('leaderboard-points-${person.id}'),
-              width: columns.points,
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: Semantics(
-                  label: '${score.points} points',
-                  excludeSemantics: true,
-                  child: Text(
-                    '${score.points}',
-                    maxLines: 1,
-                    style: leaderboardPointsStyle(),
+          : Tooltip(
+              message: 'Points ${score.spanName}',
+              child: SizedBox(
+                key: ValueKey('leaderboard-points-${person.id}'),
+                width: columns.points,
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: Semantics(
+                    label: '${score.points} points',
+                    excludeSemantics: true,
+                    child: Text(
+                      '${score.points}',
+                      maxLines: 1,
+                      style: leaderboardPointsStyle(),
+                    ),
                   ),
                 ),
               ),
@@ -143,26 +140,30 @@ class LeaderboardPersonRow extends StatelessWidget {
     );
   }
 
-  /// The name, number one's crown, then the status quietly; on hover the whole name, which a long one cut short
-  /// needs, and the email. The crown is content artwork beside the name, said in words, at the metadata size so a
-  /// crowned row is as tall as any other (Team and celebration, design system).
-  Widget _name() => Tooltip(
-    message: '${leaderboardName(person, score)}\n${person.email}',
-    child: SuperTabUntil(
-      until: person.status?.until,
-      builder: (context) => Text.rich(
+  /// The name and number one's crown; on hover the whole name, which a long
+  /// one cut short needs, the email and their status. The crown is content
+  /// artwork beside the name, said in words, at the metadata size so a
+  /// crowned row is as tall as any other (Team and celebration, design
+  /// system).
+  Widget _name() => SuperTabUntil(
+    until: person.status?.until,
+    builder: (context) => Tooltip(
+      message: [
+        leaderboardName(person, score),
+        person.email,
+        ?person.statusAt(clock.now())?.text,
+      ].join('\n'),
+      child: Text.rich(
         TextSpan(
           text: leaderboardName(person, score),
           children: [
             if (leaderboardCrowned(score))
               WidgetSpan(
                 alignment: PlaceholderAlignment.middle,
-                child: LeaderboardCrown(id: person.id, weekName: weekName),
-              ),
-            if (person.statusAt(clock.now()) case final status?)
-              TextSpan(
-                text: '  ${status.text}',
-                style: DesktopChrome.metadata(),
+                child: LeaderboardCrown(
+                  id: person.id,
+                  weekName: score!.spanName,
+                ),
               ),
           ],
         ),
@@ -263,16 +264,31 @@ class LeaderboardNumbers extends StatelessWidget {
 /// they unblocked and what they lent, item by item. From a server without
 /// details, the medians, the time freed and lent, and their shipping streak.
 class LeaderboardPersonWeek extends StatelessWidget {
-  const LeaderboardPersonWeek({super.key, required this.score});
+  const LeaderboardPersonWeek({
+    super.key,
+    required this.score,
+    this.summary = true,
+  });
   final SuperTabPersonScore score;
+
+  /// Whether it says the points first; a card that shows them and the
+  /// three numbers in its heading leaves them out, and from a server without
+  /// details shows nothing more.
+  final bool summary;
 
   @override
   Widget build(BuildContext context) {
     if (score.details case final details?) {
-      return _LeaderboardPersonDetails(score: score, details: details);
+      return _LeaderboardPersonDetails(
+        score: score,
+        details: details,
+        summary: summary,
+      );
     }
     String median(int? ms, String what) =>
         ms == null ? '' : ' · median ${leaderboardDuration(ms)}$what';
+    // A card says the points and the three numbers itself.
+    if (!summary) return const SizedBox.shrink();
     final rows = [
       (
         'Points',
@@ -339,9 +355,14 @@ class LeaderboardPersonWeek extends StatelessWidget {
 /// five and the rest one click away, and saying so when empty. The dialog
 /// around it scrolls (Ken, 2026-10-28).
 class _LeaderboardPersonDetails extends StatefulWidget {
-  const _LeaderboardPersonDetails({required this.score, required this.details});
+  const _LeaderboardPersonDetails({
+    required this.score,
+    required this.details,
+    required this.summary,
+  });
   final SuperTabPersonScore score;
   final SuperTabPersonDetails details;
+  final bool summary;
 
   @override
   State<_LeaderboardPersonDetails> createState() =>
@@ -437,13 +458,14 @@ class _LeaderboardPersonDetailsState extends State<_LeaderboardPersonDetails> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          [
-            '${plural(score.points, 'point')} ${score.spanName}',
-            if (before != null) '$before ${score.earlierName}',
-          ].join(' · '),
-          style: quiet,
-        ),
+        if (widget.summary)
+          Text(
+            [
+              '${plural(score.points, 'point')} ${score.spanName}',
+              if (before != null) '$before ${score.earlierName}',
+            ].join(' · '),
+            style: quiet,
+          ),
         section('Shipped', 'No pull requests merged yet', [
           for (final shipped in details.shipped)
             item(switch (Uri.tryParse(shipped.prUrl ?? '')) {

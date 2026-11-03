@@ -1,11 +1,12 @@
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:flutter/services.dart';
-import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
@@ -207,7 +208,6 @@ Future<(SuperTabController, GlobalKey)> _show(
   await attention.mentions.load();
   await attention.decisions.load();
   await attention.load();
-  await SuperTabActivity.of(c).load();
   await c.select(selected);
   if (!c.expandedProjects.contains('lead')) c.toggleProject('lead');
   final picture = GlobalKey();
@@ -272,7 +272,7 @@ void main() {
             if (c.unreadShown(c.snapshot!.conversation(id)!)) id,
         ];
         expect(order, isNot(contains('roster')));
-        await tester.tap(find.byKey(const ValueKey('super-group-lead')));
+        await tester.tap(find.byKey(const ValueKey('super-message-composer')));
         await tester.pumpAndSettle();
         await _keys(tester, [
           LogicalKeyboardKey.altLeft,
@@ -342,7 +342,7 @@ void main() {
       final (c, _) = await _show(tester, Brightness.dark);
       final unread = c.snapshot!.conversations.where(c.unreadShown).length;
       expect(unread, greaterThan(1));
-      await tester.tap(find.byKey(const ValueKey('super-group-web-lead')));
+      await tester.tap(find.byKey(const ValueKey('super-message-composer')));
       await tester.pumpAndSettle();
       await _keys(tester, [
         LogicalKeyboardKey.shiftLeft,
@@ -381,6 +381,76 @@ void main() {
       },
       variant: TargetPlatformVariant.only(TargetPlatform.macOS),
     );
+
+    // Huy, #2342: in a chat's ⋮ menu the Notifications row had a rounded
+    // border no other row has. It draws as the row above it does, at rest and
+    // under the mouse, and keeps its submenu arrow, in each menu it is in.
+    for (final (menu, selected, neighbour) in const [
+      ('super-group-options', 'offline', 'Work details'),
+      ('super-project-menu', 'lead', 'Pull requests'),
+    ]) {
+      testWidgets('$menu: the Notifications row looks like $neighbour', (
+        tester,
+      ) async {
+        final (c, _) = await _show(tester, Brightness.dark, selected: selected);
+        await tester.tap(find.byKey(ValueKey(menu)));
+        await tester.pumpAndSettle();
+        // The PR's pictures: the menu is a route of its own.
+        if (shotsOn) await captureWindow(tester, shots, 'notify-row-$menu');
+        final notify = find.byKey(const ValueKey('super-notify-menu'));
+        final other = find
+            .ancestor(
+              of: find.text(neighbour),
+              matching: find.byType(MenuItemButton),
+            )
+            .first;
+        Material material(Finder row) => tester.widget<Material>(
+          find.descendant(of: row, matching: find.byType(Material)).first,
+        );
+        InkWell ink(Finder row) => tester.widget<InkWell>(
+          find.descendant(of: row, matching: find.byType(InkWell)).first,
+        );
+        double inset(Finder row, String label) =>
+            tester.getTopLeft(find.text(label)).dx - tester.getTopLeft(row).dx;
+
+        expect(material(notify).shape, material(other).shape);
+        expect(material(notify).color, material(other).color);
+        expect(tester.getSize(notify), tester.getSize(other));
+        expect(inset(notify, 'Notifications'), inset(other, neighbour));
+        expect(
+          find.descendant(
+            of: notify,
+            matching: find.byIcon(AppIcons.chevronRight),
+          ),
+          findsOneWidget,
+        );
+        const hovered = {WidgetState.hovered};
+        expect(
+          ink(notify).overlayColor?.resolve(hovered),
+          ink(other).overlayColor?.resolve(hovered),
+        );
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(location: tester.getCenter(other));
+        await tester.pump();
+        final otherHovered = material(other).shape;
+        await mouse.moveTo(tester.getCenter(notify));
+        await tester.pump();
+        if (shotsOn) {
+          await tester.pumpAndSettle();
+          await captureWindow(tester, shots, 'notify-row-$menu-hover');
+        }
+        expect(material(notify).shape, otherHovered);
+        // Its submenu's rows are rows of the same kind (they had the border too).
+        await tester.pumpAndSettle();
+        for (final level in SuperTabNotify.values) {
+          final row = find.byKey(ValueKey('super-notify-${level.name}'));
+          expect(material(row).shape, material(other).shape);
+          expect(tester.getSize(row).height, tester.getSize(other).height);
+        }
+        await mouse.removePointer();
+        await _done(tester, c);
+      }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+    }
   });
 
   for (final brightness in Brightness.values) {

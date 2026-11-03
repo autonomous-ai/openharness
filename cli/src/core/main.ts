@@ -201,7 +201,6 @@ import { createGuestCreate } from './agents/guestCreate.js'
 import { createStoreLink } from './storeLink.js'
 import { createModelsLink } from './modelsLink.js'
 import { createRecapsLink } from './recapsLink.js'
-import { HOSTED_JEV_PATH } from '../lib/jev/jevClient.js'
 import { createAgentCleanupLink } from './agentCleanupLink.js'
 import { AGENT_CLEANUP_FALLBACKS, RECAPS_FALLBACKS, TERMINALS_OFF } from './api.js'
 import { answerAgentQuery } from './agentQueries.js'
@@ -1456,9 +1455,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const purges = swarm.purgeRecord(join(env.ADAPTER_DATA_DIR, 'super-tabs', 'team-purges.json'))
     const policy = swarm.teamAppPolicyFor(env.ADAPTER_DATA_DIR, () => coreApi.daemon.machineId(), () => registry.list(), () => stoppedAgents.list(), purges)
     backend.remoteAppPolicy = policy
-    teamPurge = swarm.createConfidentialPurge({ confidential: (agentId) => policy.isConfidential(agentId), home: homedir(), record: purges,
+    // What it doesn't finish is tried again, here and after a restart (superTabs/inCore/teamPurge.ts withPurgeRetries).
+    const purgeSessions = () => ({ live: registry.list(), stopped: stoppedAgents.list() })
+    teamPurge = swarm.withPurgeRetries(swarm.createConfidentialPurge({ sessions: purgeSessions, confidential: (agentId) => policy.isConfidential(agentId), home: homedir(), record: purges,
       session: (agentId) => registry.byAgent(agentId) ?? stoppedAgents.get(agentId),
-      purge: async (request) => backend.purgeAgentService ? await backend.purgeAgentService.request(request as never) : { error: 'UNSUPPORTED' } })
+      purge: async (request) => backend.purgeAgentService ? await backend.purgeAgentService.request(request as never) : { error: 'UNSUPPORTED' } }),
+      { record: purges, sessions: purgeSessions, report: swarm.teamPurgeReport(), log: (line) => console.warn(`[super-tabs] ${line}`) })
   }
   const questionWatcher = asking.questionWatcher
 
@@ -1477,6 +1479,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     bySession: (sessionId) => registry.bySession(sessionId), resolve: (id) => registry.resolve(id), live: () => registry.list(),
     stopped: (agentId) => stoppedAgents.get(agentId),
     orchestratorRoleOf: (agentId) => ports.orchestrator?.roleOf(agentId) ?? null,
+    quietOnDevices: (session) => swarm?.quietOnDevices(session) ?? false,
   })
   asking.hearQuestions(recaps.question) // a turn waiting on the person is not announced as done
   const isSubagentSession = recaps.isSubagentSession
@@ -1547,6 +1550,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (notice.type === 'machines_changed' && outOfProcess.has('sharedMachines')) {
       serviceLinks.notify('sharedMachines', { type: 'service_event', payload: { kind: 'notice', notice } })
     }
+    // The devices' fleet reads the machine list on `machines_changed` (services/fleet.ts); in its own process it hears it
+    // only through this (services/devicesProcess.ts), in the core's through `account.onNotice`.
+    if (notice.type === 'machines_changed' && outOfProcess.has('devices')) {
+      serviceLinks.notify('devices', { type: 'service_event', payload: { kind: 'notice', notice } })
+    }
   }
   // What shared machines in their own process reach through the core: this machine's sharing on the
   // backend, signed in here, and the gateway's trust stores (core/sharedMachinesQueries.ts).
@@ -1583,8 +1591,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (outOfProcess.has('wifi')) ports.wifi = wifiLink.port
   // What the core tells the recaps in their own process, and reads back from what they said (core/recapsLink.ts).
   const recapsLink = createRecapsLink({ notify: (frame, opts) => serviceLinks.notify('recaps', frame, opts), buffered: () => serviceLinks.buffered('recaps'),
-    call: (type, payload) => serviceLinks.call('recaps', type, payload), clients: coreApi.clients, lastTurn: coreApi.transcripts.lastTurn,
-    jev: (body) => proxyBackend('POST', HOSTED_JEV_PATH, body) })
+    call: (type, payload) => serviceLinks.call('recaps', type, payload), clients: coreApi.clients, lastTurn: coreApi.transcripts.lastTurn })
   // What the core tells the agent cleanup in its own process, and answers it (core/agentCleanupLink.ts).
   const agentCleanupLink = createAgentCleanupLink(coreApi, (frame, opts) => serviceLinks.notify('agentCleanup', frame, opts))
   const usageLink = createUsageLink({ call: payload => ports.usage?.read(payload.target as AgentUsageTarget) ?? Promise.resolve({}), changed: agentEvents.onTokenUsageChanged })

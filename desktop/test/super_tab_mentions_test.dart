@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -575,7 +576,7 @@ void main() {
   });
 
   group('notifications view', () {
-    testWidgets('the entry counts what waits and lists Waiting and Earlier', (
+    testWidgets('the entry counts what waits; the view lists only that', (
       tester,
     ) async {
       final server = ConversationServer()
@@ -594,106 +595,45 @@ void main() {
       );
       await tester.tap(notificationsEntry());
       await tester.pumpAndSettle();
-      final waiting = find.byKey(const ValueKey('super-mention-mention-2'));
-      final earlier = find.byKey(const ValueKey('super-mention-mention-1'));
-      // Activity is one list, newest first (Slack); the waiting tag is newer.
-      expect(
-        tester.getTopLeft(waiting).dy,
-        lessThan(tester.getTopLeft(earlier).dy),
+      final waiting = find.byKey(
+        const ValueKey('super-activity-row-mention:mention-2'),
       );
-      for (final text in [
-        'web-project · Lead',
-        'Wren tagged you',
-        'Ship it?',
-        '3 min ago',
-      ]) {
-        expect(
-          find.descendant(of: waiting, matching: find.text(text)),
-          findsOneWidget,
-          reason: text,
-        );
-      }
+      expect(waiting, findsOneWidget);
       expect(
-        find.descendant(of: earlier, matching: find.text('1 h ago')),
+        find.descendant(
+          of: waiting,
+          matching: find.text('Wren mentioned you in # web-project'),
+        ),
         findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+        findsNothing,
       );
     });
 
-    testWidgets('a tag shows the Lead’s avatar beside its name', (
-      tester,
-    ) async {
-      final server = ConversationServer()
-        ..append('Ship it?')
-        ..tag('message-1', text: 'Ship it?', leadId: 'lead-agent');
-      server.state['agents'] = [
-        {
-          'id': 'lead-agent',
-          'name': 'Lead',
-          'displayName': 'Wren',
-          'machineId': 'm',
-          'harnessId': 'h',
-          'contributorId': 'owner',
-          'configuration': {'engine': 'claude'},
-          'avatar': {'kind': 'preset', 'key': 'owl'},
-        },
-      ];
-      await showView(tester, server);
-      await tester.tap(notificationsEntry());
-      await tester.pumpAndSettle();
-      final row = find.byKey(const ValueKey('super-mention-mention-1'));
-      expect(
-        find.descendant(of: row, matching: find.text('🦉')),
-        findsOneWidget,
-      );
-    });
-
-    testWidgets('a person’s tag shows their avatar and username', (
-      tester,
-    ) async {
-      final server = ConversationServer()
-        ..append('Ship it?')
-        ..tag('message-1', text: 'Ship it?', leadId: 'dee');
-      server.mentions.last['leadName'] = 'dee';
-      server.state['people'] = [
-        {'id': 'owner', 'email': 'owner@example.com', 'role': 'owner'},
-        {
-          'id': 'dee',
-          'email': 'dee@example.com',
-          'role': 'collaborator',
-          'username': 'deedee',
-          'avatar': {'kind': 'preset', 'key': 'fox'},
-        },
-      ];
-      await showView(tester, server);
-      await tester.tap(notificationsEntry());
-      await tester.pumpAndSettle();
-      final row = find.byKey(const ValueKey('super-mention-mention-1'));
-      expect(
-        find.descendant(of: row, matching: find.text('🦊')),
-        findsOneWidget,
-      );
-      // The name they go by now, though they were tagged under another.
-      expect(
-        find.descendant(of: row, matching: find.text('deedee tagged you')),
-        findsOneWidget,
-      );
-    });
-
-    testWidgets('mark done moves the tag to Earlier and clears the count', (
-      tester,
-    ) async {
+    testWidgets('Mark done, offered where the time is on hover, clears the tag '
+        'and the count', (tester) async {
       final server = ConversationServer()
         ..append('Ship it?')
         ..tag('message-1', text: 'Ship it?', createdAt: minutesAgo(3));
       await showView(tester, server);
       await tester.tap(notificationsEntry());
       await tester.pumpAndSettle();
+      expect(find.text('Mark done'), findsNothing);
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      addTearDown(mouse.removePointer);
+      await mouse.moveTo(
+        tester.getCenter(
+          find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+        ),
+      );
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Mark done'));
       await tester.pumpAndSettle();
-      expect(find.text('Mark done'), findsNothing);
       expect(
-        find.byKey(const ValueKey('super-mention-mention-1')),
-        findsOneWidget,
+        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+        findsNothing,
       );
       expect(
         find.descendant(of: notificationsEntry(), matching: find.text('1')),
@@ -720,7 +660,9 @@ void main() {
         expect(c.snapshot?.conversation('group'), isNull);
         await tester.tap(notificationsEntry());
         await tester.pumpAndSettle();
-        await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+        await tester.tap(
+          find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+        );
         await tester.pumpAndSettle();
         expect(c.selectedId, 'group');
         expect(find.text('Builder could not start.'), findsWidgets);
@@ -737,7 +679,9 @@ void main() {
       final c = await showView(tester, server);
       await tester.tap(notificationsEntry());
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+      await tester.tap(
+        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+      );
       await tester.pumpAndSettle();
       expect(find.text('Message unavailable'), findsOneWidget);
       expect(c.selectedId, isNot('private-chat'));
@@ -759,7 +703,9 @@ void main() {
       final c = await showView(tester, server);
       await tester.tap(notificationsEntry());
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+      await tester.tap(
+        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+      );
       await tester.pumpAndSettle();
       expect(
         find.text('This message is too far back to open.'),
@@ -790,7 +736,9 @@ void main() {
       server.tag('message-150', conversationId: 'group', text: 'Note 150');
       await tester.tap(notificationsEntry());
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+      await tester.tap(
+        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+      );
       await tester.pumpAndSettle();
       expect(
         find.text('This message is no longer in the conversation.'),
@@ -824,7 +772,9 @@ void main() {
       server.tag('message-120', conversationId: 'group', text: 'Note 120');
       await tester.tap(notificationsEntry());
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+      await tester.tap(
+        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+      );
       await tester.pumpAndSettle();
       expect(
         find.text('This message is no longer in the conversation.'),
@@ -859,7 +809,9 @@ void main() {
       server.tag('message-650', conversationId: 'group', text: 'Note 650');
       await tester.tap(notificationsEntry());
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+      await tester.tap(
+        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+      );
       await tester.pumpAndSettle();
       expect(
         find.text('This message is no longer in the conversation.'),
@@ -901,7 +853,9 @@ void main() {
         // A background poll is reading the rows held when the tag opens.
         final held = server.holdReads = Completer<void>();
         final poll = c.loadMessages('group');
-        await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+        await tester.tap(
+          find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+        );
         await tester.pump();
         server.holdReads = null;
         held.complete();
@@ -940,7 +894,9 @@ void main() {
       final c = await showView(tester, server);
       await tester.tap(notificationsEntry());
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+      await tester.tap(
+        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+      );
       await tester.pumpAndSettle();
       expect(c.selectedId, 'group');
       expect(find.text('Replying to owner'), findsOneWidget);
@@ -1409,7 +1365,9 @@ void main() {
     await tester.tap(notificationsEntry());
     await tester.pumpAndSettle();
     await shot(tester, 'notifications');
-    await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+    await tester.tap(
+      find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+    );
     await tester.pumpAndSettle();
     expect(find.text('Replying to Wren'), findsOneWidget);
     await shot(tester, 'opened-at-message');
@@ -1450,11 +1408,16 @@ void main() {
         );
         expect(tab['attention'], 2);
       } else {
+        // A Swarm's tab is its name, bold when something there waits, with
+        // no count (Quiet Swarm, screen 0).
+        expect(find.byKey(ValueKey('tab-tags:${swarm.id}')), findsNothing);
+        expect(find.byKey(ValueKey('tab-activity:${swarm.id}')), findsNothing);
         expect(
           tester
-              .widget<Text>(find.byKey(ValueKey('tab-tags:${swarm.id}')))
-              .data,
-          '2',
+              .widget<Text>(find.byKey(ValueKey('tab-label:${swarm.id}')))
+              .style
+              ?.fontWeight,
+          grid.AppFont.semibold,
         );
       }
       await tester.pumpWidget(const SizedBox());

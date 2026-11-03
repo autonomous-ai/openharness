@@ -13,10 +13,11 @@ import 'support/super_tab_fixture.dart';
 /// Set to a folder to write the PR's screenshots there.
 final shots = Platform.environment['SUPER_TAB_REPLY_BOX_SHOTS'];
 
-/// The thread reply box's options as the PR shows them (Scholes, 10-31), in
-/// both appearances: a project thread and a Buddy thread, Also send off and
-/// on, at the thread's default width, widened, and dragged to the 280px
-/// minimum (the "…" fallback), and the hover hint.
+/// The thread reply box's options as the PR shows them (Scholes, 11-03), in
+/// both appearances: square checkboxes at rest, on and on hover (with its
+/// hint), in a project thread and a Buddy thread, at the thread's default
+/// width (Also send on its own line), widened (one row), and dragged to the
+/// 280px minimum. The main chat's New session: super_tab_session_chips_shots.
 void main() {
   setUpAll(() async {
     if (shots != null) await loadPreviewFonts();
@@ -69,6 +70,8 @@ void main() {
     for (final scene in [
       'project-off',
       'project-on',
+      'project-hint',
+      'project-280-off',
       'buddy-off',
       'buddy-on',
       'buddy-hint',

@@ -294,6 +294,19 @@ describe('the core\'s doors, across the link', () => {
 })
 
 describe('what the core tells the devices, reaching their port', () => {
+  // Final review of spec 2026-11-02 poll cost: the fleet reads the machine list on `machines_changed` and only every
+  // 5 minutes otherwise, so the account's notices the core forwards must reach it here too.
+  it('hands the account notices the core forwards to its listeners', () => {
+    const h = setup()
+    const heard: unknown[] = []
+    const stop = h.api().account.onNotice((notice) => heard.push(notice))
+    h.event({ kind: 'notice', notice: { type: 'machines_changed', reason: 'renamed' } })
+    expect(heard).toEqual([{ type: 'machines_changed', reason: 'renamed' }])
+    stop()
+    h.event({ kind: 'notice', notice: { type: 'machines_changed', reason: 'renamed' } })
+    expect(heard).toHaveLength(1)
+  })
+
   it('is each kind of notice, read as the port takes it', () => {
     const f = setup()
     const focus = { voice: { machineId: 'm1', agentId: 'a1', connId: 'w1' }, form: { machineId: 'm1', connId: 'w1' } }

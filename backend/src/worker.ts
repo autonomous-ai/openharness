@@ -25,7 +25,7 @@ import { startDeliveryCompaction } from './superTabs/deliveryCompaction.js'
 import { startThreadBackfill } from './superTabs/threadBackfill.js'
 import { appPullRequests, markFinishedGroups, startSwarmArchive, unknownPullRequests } from './superTabs/archive.js'
 import { SuperTabStore } from './superTabs/store.js'
-import { announceSwarmDeliveries } from './lib/swarmDeliveryPushes.js'
+import { announceSwarmDeliveries, announceSwarmTerminal } from './lib/swarmDeliveryPushes.js'
 import { announceSwarmHostChanges } from './lib/swarmHostPushes.js'
 import { announceSwarmChanges } from './lib/swarmClientPushes.js'
 import { GitHubApp, githubAppConfig } from './github/app.js'
@@ -113,7 +113,7 @@ async function start(): Promise<void> {
   configureSwarmStamps(redisSwarmStamps(), { reads: false })
   // Archive notes and Workspace removals write messages too: their recipients' hosts hear of them at once, and of the
   // groups they changed.
-  const swarms = new SuperTabStore(prisma, Date.now, null, { deliveriesWaiting: announceSwarmDeliveries, hostsChanged: announceSwarmHostChanges,
+  const swarms = new SuperTabStore(prisma, Date.now, null, { deliveriesWaiting: announceSwarmDeliveries, terminalWaiting: announceSwarmTerminal, hostsChanged: announceSwarmHostChanges,
     swarmChanged: announceSwarmChanges })
   // Decisions still waiting in work that was over before #2454 closed them where work ends: they counted toward the open
   // limit and came back on a reopen (store.ts withdrawEndedDecisions). Remove in the release after the one that runs it.

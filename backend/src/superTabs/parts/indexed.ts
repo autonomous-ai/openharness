@@ -45,6 +45,8 @@ export const NAMED_INDEX = {
     workspace: { autonomousEnv: 1, workspaceId: 1 },
     /** Deleted Swarms by purge time (deletion.ts): the purge sweep. */
     purge: { purgeAt: 1 },
+    /** The Swarms people at a domain join by themselves (autoJoin.ts): one read per person at most every 2 minutes. */
+    autoJoin: { autonomousEnv: 1, autoJoinDomain: 1 },
   },
   /** Each part kind's changes since a cursor; machines also by when they were last read. */
   SwarmHead: { changes: { tabId: 1, changedAt: 1 } },

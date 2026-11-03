@@ -1,4 +1,3 @@
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -9,18 +8,29 @@ import 'package:harness/widgets/engine_identity.dart';
 import 'support/humans_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
-/// Models in the left sidebar, after Machines (Dee, 2026-10-29 and 10-30):
+/// Manage › Models (Quiet Swarm, screen 10b; Dee, 2026-10-29 and 10-30):
 /// every model by its exact name with its share of the agents' tasks of the
 /// last 7 days, largest first, rounded so the rows add up to 100%, behind its
 /// engine's icon. A record with no reported model is not listed and not in
-/// the shares (Scholes, 2026-11-02). Its chevron collapses it like every other section; the
+/// the shares (Scholes, 2026-11-02). The
 /// counts and first-review pass rate are in words on hover and for a screen
 /// reader.
 void main() {
+  /// Manage's Models. Its Your models action says the page is there, so that a
+  /// test finding no model rows is not looking at another page.
+  Future<void> openModels(WidgetTester tester) async {
+    await tester.tap(find.byKey(const ValueKey('super-manage')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('super-manage-tab-models')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('super-local-models')), findsOneWidget);
+  }
+
   Future<SuperTabController> show(
     WidgetTester tester,
     ConversationServer server, {
     Map<String, dynamic>? initial,
+    bool openManage = true,
   }) async {
     await tester.binding.setSurfaceSize(const Size(1300, 1400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -46,6 +56,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    if (openManage) await openModels(tester);
     return controller;
   }
 
@@ -56,10 +67,6 @@ void main() {
   }
 
   final heading = find.byKey(const ValueKey('super-models-heading'));
-  final headingText = find.descendant(
-    of: heading,
-    matching: find.text('Models'),
-  );
   Finder row(String name) => find.byKey(ValueKey('super-model-$name'));
   final rows = find.byWidgetPredicate(
     (w) =>
@@ -95,22 +102,12 @@ void main() {
   }
 
   testWidgets(
-    'is headed Models, says on hover it is the last 7 days, and lists every model largest first after Machines',
+    'has no heading of its own under the Models tab, says on hover it is the last 7 days, and lists every model largest first',
     (tester) async {
       final controller = await show(tester, modelsSwarm());
-      expect(headingText, findsOneWidget);
+      expect(heading, findsNothing);
       expect(find.textContaining('this week'), findsNothing);
-      // The chevron says what it does, as every section's does; the title
-      // says what the shares are.
-      expect(find.byTooltip('Collapse Models'), findsOneWidget);
-      expect(
-        find.byTooltip('Share of agent work, last 7 days'),
-        findsOneWidget,
-      );
-      expect(
-        tester.getTopLeft(heading).dy,
-        greaterThan(tester.getTopLeft(find.text('Machines')).dy),
-      );
+      expect(find.byTooltip(RegExp('in the last 7 days')), findsNWidgets(3));
       // 97 tasks of named models (the fixture's 3 with no model are left
       // out): no Other row, the rest add up to 100.
       expect(names(tester), ['Opus 5.5', 'Sonnet 5.5', 'GPT-6.1 Sol']);
@@ -124,44 +121,6 @@ void main() {
         tester.getTopRight(find.text('87%')).dx,
         tester.getTopRight(find.text('2%')).dx,
       );
-      await close(tester, controller);
-    },
-  );
-
-  testWidgets(
-    'says the last 7 days over the title and Collapse over the chevron, and a screen reader hears the action',
-    (tester) async {
-      final semantics = tester.ensureSemantics();
-      final controller = await show(tester, modelsSwarm());
-      const explained = 'Share of agent work, last 7 days';
-      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-      await mouse.addPointer(location: Offset.zero);
-      addTearDown(mouse.removePointer);
-      await mouse.moveTo(tester.getCenter(headingText));
-      await tester.pumpAndSettle(const Duration(seconds: 2));
-      expect(find.text(explained), findsOneWidget);
-      expect(find.text('Collapse Models'), findsNothing);
-      await mouse.moveTo(Offset.zero);
-      await tester.pumpAndSettle(const Duration(seconds: 2));
-      await mouse.moveTo(
-        tester.getCenter(
-          find.descendant(of: heading, matching: find.byType(Icon)).first,
-        ),
-      );
-      await tester.pumpAndSettle(const Duration(seconds: 2));
-      expect(find.text('Collapse Models'), findsOneWidget);
-      expect(find.text(explained), findsNothing);
-      // The button is named by its title and its action, as Projects' is;
-      // the explanation is a hint, never its name.
-      final node = tester.getSemantics(headingText);
-      expect(node.label, 'Models');
-      expect(node.tooltip, 'Collapse Models');
-      expect(node.hint, explained);
-      expect(
-        find.bySemanticsLabel(RegExp('Share of agent work')),
-        findsNothing,
-      );
-      semantics.dispose();
       await close(tester, controller);
     },
   );
@@ -181,11 +140,6 @@ void main() {
         reason: name,
       );
     }
-    // In the sidebar's icon column: under the channel marks' column.
-    expect(
-      tester.getCenter(mark('Opus 5.5', 'claude')).dx,
-      closeTo(tester.getCenter(find.text('#').first).dx, 1),
-    );
     await close(tester, controller);
   });
 
@@ -201,34 +155,6 @@ void main() {
       expect(notReported, findsNothing);
       semantics.dispose();
       await close(tester, controller);
-    },
-  );
-
-  testWidgets(
-    'collapses fully from its chevron and expands again, remembered after a restart',
-    (tester) async {
-      final server = modelsSwarm();
-      final controller = await show(tester, server);
-      expect(controller.modelsGroupOpen, isTrue);
-      await tester.tap(headingText);
-      await tester.pumpAndSettle();
-      // Collapsed: the heading stays, nothing below it.
-      expect(headingText, findsOneWidget);
-      expect(rows, findsNothing);
-      expect(find.text('87%'), findsNothing);
-      await controller.flush();
-      expect(server.saved!['modelsGroupOpen'], isFalse);
-      await close(tester, controller);
-
-      final reopened = await show(tester, server, initial: server.saved);
-      expect(reopened.modelsGroupOpen, isFalse);
-      expect(headingText, findsOneWidget);
-      expect(rows, findsNothing);
-      await tester.tap(headingText);
-      await tester.pumpAndSettle();
-      expect(names(tester), hasLength(3));
-      expect(inRow('Opus 5.5', find.text('87%')), findsOneWidget);
-      await close(tester, reopened);
     },
   );
 
@@ -311,30 +237,16 @@ void main() {
     },
   );
 
-  testWidgets('keeps the last 7 days whichever week the right pane shows', (
-    tester,
-  ) async {
-    final server = modelsSwarm();
-    final controller = await show(tester, server);
-    await tester.tap(find.byKey(const ValueKey('leaderboard-week')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Last week').last);
-    await tester.pumpAndSettle();
-    expect(server.leaderboardReads.last, contains('&week='));
-    expect(headingText, findsOneWidget);
-    expect(find.textContaining('last week'), findsNothing);
-    expect(inRow('Opus 5.5', find.text('87%')), findsOneWidget);
-    await close(tester, controller);
-  });
-
   testWidgets(
-    'shows the week\'s models from a server before the last 7 days, still headed Models',
+    'shows the week\'s models from a server before the last 7 days in Manage',
     (tester) async {
       final server = modelsSwarm();
       server.leaderboard!.remove('recentModels');
       final controller = await show(tester, server);
-      expect(headingText, findsOneWidget);
-      expect(find.byTooltip('Share of agent work, this week'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('super-manage-tab-models')),
+        findsOneWidget,
+      );
       // 32 tasks: Opus at two efforts as one, 14; then 9, 6 and 3; Luna ran
       // none of its own.
       expect(names(tester), [
@@ -394,7 +306,6 @@ void main() {
       recentModel('claude', null, attempts: 9),
     ];
     final controller = await show(tester, server);
-    expect(heading, findsNothing);
     expect(rows, findsNothing);
     expect(notReported, findsNothing);
     await close(tester, controller);
@@ -428,7 +339,7 @@ void main() {
     final server = modelsSwarm();
     server.leaderboard!['recentModels'] = <Object>[];
     final controller = await show(tester, server);
-    expect(heading, findsNothing);
+    expect(rows, findsNothing);
     await close(tester, controller);
   });
 
@@ -447,7 +358,7 @@ void main() {
       ),
     ];
     final controller = await show(tester, server);
-    expect(heading, findsNothing);
+    expect(rows, findsNothing);
     await close(tester, controller);
   });
 
@@ -456,7 +367,7 @@ void main() {
     (tester) async {
       final server = modelsSwarm()..failLeaderboardReads = 1;
       final controller = await show(tester, server);
-      expect(heading, findsNothing);
+      expect(rows, findsNothing);
       expect(find.textContaining('Loading'), findsNothing);
       await controller.refresh();
       await tester.pump(const Duration(minutes: 5));
@@ -475,7 +386,7 @@ void main() {
     server.state['projects'] = <Object>[];
     await controller.refresh();
     await tester.pumpAndSettle();
-    expect(heading, findsNothing);
+    expect(rows, findsNothing);
     expect(find.text('87%'), findsNothing);
     await close(tester, controller);
   });
@@ -486,7 +397,7 @@ void main() {
     final server = modelsSwarm();
     server.leaderboard!['projectId'] = 'other';
     final controller = await show(tester, server);
-    expect(heading, findsNothing);
+    expect(rows, findsNothing);
     await close(tester, controller);
   });
 }

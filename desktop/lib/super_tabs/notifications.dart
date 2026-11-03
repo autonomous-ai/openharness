@@ -76,8 +76,8 @@ void Function(String tabId, SuperTabMention mention)? superTabMentionNotice(
       );
 
 /// What tells the person about a new message in a chat they set to All new
-/// messages: the operating system, on Desktop only, as tags are. The chat's
-/// newest message is not read for it; the notice names the chat.
+/// messages: the operating system, on Desktop only, as tags are. The notice
+/// names the chat, not its newest message.
 void Function(String tabId, SuperTabConversation group, int sequence)?
 superTabChatNotice(SystemNotifications system, {bool web = kIsWeb}) => web
     ? null
