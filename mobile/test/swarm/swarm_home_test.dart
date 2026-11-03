@@ -29,7 +29,6 @@ import 'package:harness_mobile/swarm/swarm_row.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_start.dart';
 import 'package:harness_mobile/swarm/swarm_style.dart';
-import 'package:harness_mobile/swarm/team_glance.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import '../voice_fakes.dart';
@@ -322,20 +321,6 @@ void main() {
       };
     };
   }
-
-  /// The colour of the dot before project row [k], null with none there.
-  Color? dotOf(WidgetTester tester, String k) =>
-      ((tester
-                  .widgetList<Container>(
-                    find.descendant(
-                      of: inside(k, key('swarm-project-dot')),
-                      matching: find.byType(Container),
-                    ),
-                  )
-                  .firstOrNull
-                  ?.decoration
-              as BoxDecoration?)
-          ?.color);
 
   /// The weight of the words in row [k] that hold [words].
   FontWeight? weightOf(WidgetTester tester, String k, String words) => tester
@@ -949,9 +934,9 @@ void main() {
         expect(tester.getSize(key(row)).height, SwarmHomeProjectRow.height);
       }
       expect(
-        dotOf(tester, publicRow),
-        swarmStateColor(SwarmAgentState.working),
-        reason: 'who is running is its dot now',
+        inside(publicRow, key('swarm-project-dot')),
+        findsNothing,
+        reason: 'who is running is not on the row, not even as a dot',
       );
     });
 
@@ -976,16 +961,17 @@ void main() {
       expect(inside(mobileRow, find.text('30m')), findsNothing);
       expect(inside(mobileRow, find.text('#Mobile')), findsOneWidget);
       expect(inside(webRow, find.text('#Web')), findsOneWidget);
-      expect(
-        dotOf(tester, mobileRow),
-        AppColors.danger,
-        reason: 'someone down comes first',
-      );
-      expect(dotOf(tester, webRow), isNull, reason: 'all idle: no dot');
+      for (final row in [mobileRow, webRow]) {
+        expect(
+          inside(row, key('swarm-project-dot')),
+          findsNothing,
+          reason: 'no dot, with someone down or all idle',
+        );
+      }
       expect(
         tester.getTopLeft(inside(webRow, find.text('#Web'))).dx,
         tester.getTopLeft(inside(mobileRow, find.text('#Mobile'))).dx,
-        reason: "the idle dot's place is kept: the names stay in line",
+        reason: 'the names stay in line',
       );
       semantics.dispose();
     });
@@ -1135,12 +1121,9 @@ void main() {
         reason: "a project's dot, not its tile",
       );
       expect(
-        tester
-            .getSize(
-              inside('swarm-project-$tab-$project', key('swarm-project-dot')),
-            )
-            .width,
-        16,
+        inside('swarm-project-$tab-$project', key('swarm-project-dot')),
+        findsNothing,
+        reason: 'no dot before the name',
       );
     });
 
@@ -1366,8 +1349,9 @@ void main() {
         findsNothing,
       );
       expect(
-        dotOf(tester, 'swarm-project-$tab-$project'),
-        swarmStateColor(SwarmAgentState.waiting),
+        weightOf(tester, 'swarm-project-$tab-$project', 'Mobile'),
+        AppFont.semibold,
+        reason: 'the tag waiting on the person makes it bold',
       );
     });
 
@@ -2872,9 +2856,6 @@ void main() {
         await pump(tester, fake, settle: false);
         final row = height(tester, 'swarm-projects-loading-0');
         final loading = find.byKey(const ValueKey('swarm-projects-loading-0'));
-        final dot = tester.getCenter(
-          find.descendant(of: loading, matching: find.byType(Skeleton)).first,
-        );
         final title = tester.getTopLeft(
           find
               .descendant(of: loading, matching: find.byType(SkeletonText))
@@ -2890,11 +2871,6 @@ void main() {
           reason: 'its title and its team, as the skeleton draws them',
         );
         const webRow = 'swarm-project-$tab-$web';
-        expect(
-          tester.getCenter(inside(webRow, key('swarm-project-dot'))).dx,
-          closeTo(dot.dx, .01),
-          reason: 'the dot stays where its skeleton was',
-        );
         expect(
           tester.getTopLeft(inside(webRow, find.text('#Web'))).dx,
           closeTo(title.dx, .01),

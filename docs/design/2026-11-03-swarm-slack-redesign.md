@@ -84,12 +84,12 @@ Each decision lists what was chosen, the alternatives, the reasoning, the cost, 
 
 ### D4. Project rows become one line
 
-- **Layout:** a 44pt row: `[state dot] #name  [Swarm] … [tags]`. A bold name means there is something new.
+- **Layout:** a 44pt row: `#name  [Swarm] … [tags]`. A bold name means there is something new.
 - **Alternatives:** keep two lines with time and an unread dot; a last-message preview; drop the state dot.
-- **Why:** the second line repeated on every row, and times like "now / now / 1m" did not help anyone decide. Slack signals two levels, bold for new and a badge for mentions. The state dot (working, waiting, down) is something only Harness knows, so it stays.
+- **Why:** the second line repeated on every row, and times like "now / now / 1m" did not help anyone decide. Slack signals two levels, bold for new and a badge for mentions. The prototype kept a state dot (working, waiting, down); the build dropped it (below).
 - **Cost:** the people count and the time leave the row. The list is still sorted by latest activity.
 - **Built:** `SwarmHomeProjectRow` (`swarm/swarm_home_rows.dart`). With several Swarms, the Swarm's name follows the #name in faint ink. Rows stay inside the grouped card the app already uses.
-- **The dot shows only a state worth seeing** (Tony, 2026-11-03): green while the team works, yellow while someone waits or a tag waits on the person, red with someone down. An idle team has no dot, and its place stays empty so the names line up. A faint dot on nearly every row said nothing and hid the few that matter.
+- **No state dot** (Tony, 2026-11-03): an idle team's grey dot sat on nearly every row and said nothing, so the dot went first for idle teams and then altogether. A tag or decision waiting on the person still makes the name bold and adds `@N`; who works, waits or is down is on the project's page, in Activity and on the Agents tile. Home no longer counts a team per row, and its loading rows draw the name's bar alone.
 - **Phase 2:** the unread rule. Agents post constantly, so almost every row ends up bold. The proposal is that only people's messages, tags of the person and items that need them make a row bold. That has to change together with desktop `_hasUnread`.
 
 ### D5. A Search field on Home, plus a pull down to open it

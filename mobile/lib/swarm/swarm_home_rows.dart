@@ -15,7 +15,6 @@ import 'swarm_home_list.dart';
 import 'swarm_inbox.dart';
 import 'swarm_row.dart';
 import 'swarm_style.dart';
-import 'swarm_unread.dart';
 import 'team_glance.dart';
 
 /// The rows of Swarm Home: a project with how many people read it, how many
@@ -129,21 +128,20 @@ class SwarmInvitationRow extends StatelessWidget {
   }
 }
 
-/// One project on Home, on one line as Slack's channels (Tony, 2026-11-03): a
-/// dot in the colour of how its team is ([swarmProjectColor]), or its place
-/// left empty while the team is idle so the names stay in line; its name as a
-/// channel's ("#openharness") — bold and bright with something new in it,
-/// quiet otherwise — its Swarm faint after it where Home shows several, the
-/// first to go when the row is short, and at its end the tags waiting in it
-/// ("@2", filled), or a skeleton in their place while what waits is on its way
-/// ([tagsLoading]). No second line: who reads it and how long ago it moved
+/// One project on Home, on one line as Slack's channels (Tony, 2026-11-03):
+/// its name as a channel's ("#openharness") — bold and bright with something
+/// new in it, quiet otherwise — its Swarm faint after it where Home shows
+/// several, the first to go when the row is short, and at its end the tags
+/// waiting in it ("@2", filled), or a skeleton in their place while what
+/// waits is on its way ([tagsLoading]). No dot for how its team is: one on
+/// every row said little, and the name already says what waits on the person
+/// (Tony, 2026-11-03). No second line: who reads it and how long ago it moved
 /// were the same on every row. A tap opens it; a long press offers its pin
 /// ([onLongPress]).
 class SwarmHomeProjectRow extends StatelessWidget {
   const SwarmHomeProjectRow({
     super.key,
     required this.project,
-    required this.glance,
     this.swarmName,
     this.tagsLoading = false,
     required this.onTap,
@@ -154,7 +152,6 @@ class SwarmHomeProjectRow extends StatelessWidget {
   static const double height = minTouchTarget;
 
   final SwarmHomeProject project;
-  final SwarmTeamGlance glance;
 
   /// Its Swarm, where Home shows several.
   final String? swarmName;
@@ -182,17 +179,6 @@ class SwarmHomeProjectRow extends StatelessWidget {
           ),
           child: Row(
             children: [
-              ExcludeSemantics(
-                child: SizedBox(
-                  key: const ValueKey('swarm-project-dot'),
-                  width: 16,
-                  child: switch (swarmProjectColor(glance, news)) {
-                    final color? => Center(child: _Dot(size: 8, color: color)),
-                    null => null,
-                  },
-                ),
-              ),
-              const SizedBox(width: AppSpace.s),
               Expanded(
                 child: Semantics(
                   label: bright && news.tags == 0 ? 'Unread messages' : null,
@@ -304,19 +290,6 @@ class SwarmOtherProjectsRow extends StatelessWidget {
   }
 }
 
-/// How a project's team is, as its dot on Home: red with someone down,
-/// yellow with someone waiting or a tag waiting on the person, green with
-/// someone working. Null, no dot, while it is idle: a faint dot on nearly
-/// every row said nothing and hid the few that do (Tony, 2026-11-03).
-Color? swarmProjectColor(SwarmTeamGlance glance, SwarmProjectNews news) =>
-    glance.down > 0
-    ? swarmStateColor(SwarmAgentState.down)
-    : glance.waiting > 0 || news.tags > 0 || news.hasWaitingTag
-    ? swarmStateColor(SwarmAgentState.waiting)
-    : glance.working > 0
-    ? swarmStateColor(SwarmAgentState.working)
-    : null;
-
 /// A row's ink on a tap, with a click a thumb can feel.
 class _Tap extends StatelessWidget {
   const _Tap({required this.onTap, this.onLongPress, required this.child});
@@ -337,25 +310,6 @@ class _Tap extends StatelessWidget {
               onLongPress!();
             },
       child: child,
-    ),
-  );
-}
-
-/// A small round mark: what waits on the person in the warning colour, or
-/// [color].
-class _Dot extends StatelessWidget {
-  const _Dot({required this.size, this.color});
-
-  final double size;
-  final Color? color;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    width: size,
-    height: size,
-    decoration: BoxDecoration(
-      color: color ?? AppColors.warning,
-      shape: BoxShape.circle,
     ),
   );
 }

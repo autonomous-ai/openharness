@@ -39,7 +39,6 @@ import 'swarm_threads.dart';
 import 'swarm_threads_page.dart';
 import 'swarm_unread.dart';
 import 'swarm_you_page.dart' show SwarmYouButton;
-import 'team_glance.dart';
 
 /// Swarm Home from anywhere in the shell: every page closed and Swarm Home
 /// the root again ([PhoneShellScope.onShowSwarm]). Without the shell — a
@@ -680,7 +679,6 @@ class _SwarmPageState extends State<SwarmPage> {
     }
     final several = shown.length > 1;
     final projects = <SwarmHomeProject>[];
-    final glances = <String, SwarmTeamGlance>{};
     final names = <String, String>{};
     final reading = <String>[];
     final failed = <(String, String)>[];
@@ -701,7 +699,6 @@ class _SwarmPageState extends State<SwarmPage> {
               news: projectNews ?? swarmNoProjectNews,
             );
             projects.add(row);
-            glances[row.key] = swarmTeamGlance(snapshot, projectId: project.id);
             names[row.key] = swarm.name;
           }
         case final SwarmReader reader
@@ -744,7 +741,6 @@ class _SwarmPageState extends State<SwarmPage> {
     Widget row(SwarmHomeProject project) => SwarmHomeProjectRow(
       key: ValueKey('swarm-project-${project.swarmId}-${project.project.id}'),
       project: project,
-      glance: glances[project.key]!,
       swarmName: several ? names[project.key] : null,
       tagsLoading: asking.contains(project.swarmId),
       onTap: () => _openProject(context, project.swarmId, project.project.id),
@@ -812,11 +808,11 @@ class _SwarmPageState extends State<SwarmPage> {
       // A Swarm still to be read has its skeleton below: one is enough.
       if (mentionsComing && reading.isEmpty) ...[
         const SizedBox(height: 8),
-        SwarmSkeletonRows(id: 'swarm-mentions-loading', dot: true),
+        SwarmSkeletonRows(id: 'swarm-mentions-loading', nameOnly: true),
       ],
       for (final (i, id) in reading.indexed) ...[
         if (projects.isNotEmpty || i > 0) const SizedBox(height: 8),
-        SwarmSkeletonRows(id: 'swarm-projects-loading-$id', dot: true),
+        SwarmSkeletonRows(id: 'swarm-projects-loading-$id', nameOnly: true),
       ],
       for (final (id, error) in failed) ...[
         const SizedBox(height: 8),
@@ -874,7 +870,7 @@ class _SwarmPageState extends State<SwarmPage> {
   /// Home before the list answers: the projects as rows on their way.
   List<Widget> _reading({required bool first}) => [
     SwarmCaption('Projects', first: first),
-    SwarmSkeletonRows(id: 'swarm-projects-loading', dot: true),
+    SwarmSkeletonRows(id: 'swarm-projects-loading', nameOnly: true),
   ];
 }
 

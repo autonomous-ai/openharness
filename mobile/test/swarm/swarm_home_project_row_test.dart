@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
@@ -9,13 +10,12 @@ import 'package:harness_mobile/swarm/swarm_home_list.dart';
 import 'package:harness_mobile/swarm/swarm_home_rows.dart';
 import 'package:harness_mobile/swarm/swarm_style.dart';
 import 'package:harness_mobile/swarm/swarm_unread.dart';
-import 'package:harness_mobile/swarm/team_glance.dart';
 
 import 'swarm_fixture.dart';
 
 /// A project on Swarm Home, one line as Slack's channels (2026-11-03): its
-/// dot, its #name — bold with something new — its Swarm where Home shows
-/// several, and its tags at the end. No second line, no time, no unread dot.
+/// #name — bold with something new — its Swarm where Home shows several, and
+/// its tags at the end. No dot, no second line, no time.
 void main() {
   final now = DateTime(2026, 10, 27, 9);
 
@@ -73,7 +73,6 @@ void main() {
                     active: active,
                     news: news,
                   ),
-                  glance: swarmTeamGlance(snapshot, now: now),
                   swarmName: swarmName,
                   tagsLoading: tagsLoading,
                   onTap: onTap ?? () {},
@@ -100,7 +99,6 @@ void main() {
     expect(find.textContaining('running'), findsNothing);
     expect(find.text('now'), findsNothing, reason: 'no time on the row');
     expect(nameText(tester).maxLines, 1);
-    expect(find.byKey(const ValueKey('swarm-project-dot')), findsOneWidget);
   });
 
   /// The round marks in the row.
@@ -114,36 +112,19 @@ void main() {
     ),
   );
 
-  Color? dotColor(WidgetTester tester) =>
-      (tester.widget<Container>(dots()).decoration! as BoxDecoration).color;
+  testWidgets("no dot for how its team is, working, idle or with a tag "
+      "waiting: the name starts at the row's inset", (tester) async {
+    for (final (running, news) in [
+      (0, swarmNoProjectNews),
+      (1, swarmNoProjectNews),
+      (0, (bold: true, tags: 1, hasWaitingTag: true)),
+    ]) {
+      await pump(tester, running: running, news: news);
 
-  testWidgets('its team idle: no dot, its place kept so the names stay in '
-      'line', (tester) async {
-    await pump(tester, running: 1);
-    expect(dots(), findsOneWidget);
-    final dotted = tester.getTopLeft(name).dx;
-
-    await pump(tester);
-
-    expect(
-      dots(),
-      findsNothing,
-      reason: 'a faint dot on every row said nothing',
-    );
-    expect(
-      tester.getSize(find.byKey(const ValueKey('swarm-project-dot'))).width,
-      16,
-    );
-    expect(tester.getTopLeft(name).dx, dotted);
-  });
-
-  testWidgets('its dot: green while its team works, yellow with a tag waiting '
-      'on the person though the team is idle', (tester) async {
-    await pump(tester, running: 1);
-    expect(dotColor(tester), swarmStateColor(SwarmAgentState.working));
-
-    await pump(tester, news: (bold: false, tags: 1, hasWaitingTag: false));
-    expect(dotColor(tester), swarmStateColor(SwarmAgentState.waiting));
+      expect(dots(), findsNothing, reason: '$running running, $news');
+      expect(find.byKey(const ValueKey('swarm-project-dot')), findsNothing);
+      expect(tester.getTopLeft(name).dx, AppSpace.l);
+    }
   });
 
   testWidgets('quiet, the name in the second ink, not bold', (tester) async {
@@ -158,27 +139,13 @@ void main() {
   testWidgets('something new: bold in the main ink, heard as unread, with no '
       'dot at its end', (tester) async {
     final semantics = tester.ensureSemantics();
-    await pump(
-      tester,
-      running: 1,
-      news: (bold: true, tags: 0, hasWaitingTag: false),
-    );
+    await pump(tester, news: (bold: true, tags: 0, hasWaitingTag: false));
 
     final style = nameText(tester).style!;
     expect(style.color, AppPalette.textPrimary);
     expect(style.fontWeight, FontWeight.w600);
     expect(find.bySemanticsLabel(RegExp('Unread messages')), findsOneWidget);
-    // Only the team's dot at its start: the unread dot is gone.
-    final dots = find.descendant(
-      of: find.byKey(row),
-      matching: find.byWidgetPredicate(
-        (w) =>
-            w is Container &&
-            w.decoration is BoxDecoration &&
-            (w.decoration! as BoxDecoration).shape == BoxShape.circle,
-      ),
-    );
-    expect(dots, findsOneWidget);
+    expect(dots(), findsNothing, reason: 'no unread dot at its end either');
     semantics.dispose();
   });
 

@@ -377,13 +377,13 @@ class SwarmGroup extends StatelessWidget {
 /// tall as the line it stands for ([SkeletonText]), so nothing moves when the
 /// row arrives. It stands for a card's row (`SwarmRow`) with a line under its
 /// title — a need's — or its title alone ([titleOnly]), or a project's on Home
-/// ([dot]).
+/// ([nameOnly]).
 class SwarmSkeletonRow extends StatelessWidget {
   const SwarmSkeletonRow({
     super.key,
     this.round = false,
     this.titleOnly = false,
-    this.dot = false,
+    this.nameOnly = false,
     this.width = .45,
   });
 
@@ -393,9 +393,9 @@ class SwarmSkeletonRow extends StatelessWidget {
   /// The row it stands for has no line under its title.
   final bool titleOnly;
 
-  /// A project's small dot on Home ([SwarmHomeProjectRow]) rather than a tile,
-  /// in the room that row keeps for it, on its one line, as tall as it.
-  final bool dot;
+  /// A project's row on Home ([SwarmHomeProjectRow]): its name alone, with no
+  /// mark before it, on its one line, as tall as it.
+  final bool nameOnly;
 
   /// The title bar's share of the row's words.
   final double width;
@@ -405,25 +405,17 @@ class SwarmSkeletonRow extends StatelessWidget {
     // The real rows' metrics.
     final title = AppType.label(height: 1.3);
     final line = AppType.caption(height: 1.35);
-    final titleOnly = this.titleOnly || dot;
+    final titleOnly = this.titleOnly || nameOnly;
     return ConstrainedBox(
-      constraints: BoxConstraints(minHeight: dot ? minTouchTarget : 56),
+      constraints: BoxConstraints(minHeight: nameOnly ? minTouchTarget : 56),
       child: Padding(
         padding: EdgeInsets.symmetric(
           horizontal: AppSpace.l,
-          vertical: dot ? AppSpace.xs : AppSpace.m,
+          vertical: nameOnly ? AppSpace.xs : AppSpace.m,
         ),
         child: Row(
           children: [
-            if (dot) ...[
-              const SizedBox(
-                width: 16,
-                child: Center(
-                  child: Skeleton(width: 8, height: 8, shape: BoxShape.circle),
-                ),
-              ),
-              const SizedBox(width: AppSpace.s),
-            ] else ...[
+            if (!nameOnly) ...[
               Skeleton(
                 width: 32,
                 height: 32,
@@ -464,7 +456,7 @@ class SwarmSkeletonRows extends StatelessWidget {
     this.rows = 2,
     this.round = false,
     this.titleOnly = false,
-    this.dot = false,
+    this.nameOnly = false,
   }) : super(key: ValueKey(id));
 
   final String id;
@@ -476,8 +468,8 @@ class SwarmSkeletonRows extends StatelessWidget {
   /// Rows with no line under their titles ([SwarmSkeletonRow.titleOnly]).
   final bool titleOnly;
 
-  /// Projects' dots on Home ([SwarmSkeletonRow.dot]).
-  final bool dot;
+  /// Projects' rows on Home ([SwarmSkeletonRow.nameOnly]).
+  final bool nameOnly;
 
   @override
   Widget build(BuildContext context) {
@@ -489,7 +481,7 @@ class SwarmSkeletonRows extends StatelessWidget {
             key: ValueKey('$id-$i'),
             round: round,
             titleOnly: titleOnly,
-            dot: dot,
+            nameOnly: nameOnly,
             width: i.isEven ? .45 : .6,
           ),
         ),
