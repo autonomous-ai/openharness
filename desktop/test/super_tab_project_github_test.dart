@@ -222,21 +222,24 @@ void main() {
   });
 
   // Review of #2713: a person's own check records what GitHub says, even right after the revision moved.
-  test('a person checking again records the answer, even after a revision move', () async {
-    final c = controllerFor();
-    await c.refresh();
-    final project = c.snapshot!.projects.first;
-    await c.readGitHubAccess(project.id);
-    final projects = server.state['projects'] ??= <dynamic>[
-      projectFixture('lead', server.state['name'] as String, 'lead'),
-    ];
-    ((projects as List).first as Map)['githubRevision'] = 1;
-    server.revision++;
-    await c.refresh();
-    await c.readGitHubAccess(project.id, refresh: true);
-    expect(asked.last, endsWith('/github?refresh=1'));
-    c.dispose();
-  });
+  test(
+    'a person checking again records the answer, even after a revision move',
+    () async {
+      final c = controllerFor();
+      await c.refresh();
+      final project = c.snapshot!.projects.first;
+      await c.readGitHubAccess(project.id);
+      final projects = server.state['projects'] ??= <dynamic>[
+        projectFixture('lead', server.state['name'] as String, 'lead'),
+      ];
+      ((projects as List).first as Map)['githubRevision'] = 1;
+      server.revision++;
+      await c.refresh();
+      await c.readGitHubAccess(project.id, refresh: true);
+      expect(asked.last, endsWith('/github?refresh=1'));
+      c.dispose();
+    },
+  );
 
   // Task #2316: a setup done on GitHub's own site is picked up when anyone opens the dialog or Project details.
   testWidgets(

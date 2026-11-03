@@ -51,9 +51,11 @@ afterAll(async () => {
 })
 
 /** One control API with the app configured against a fresh fake GitHub, its store revoking as tasks end. */
-async function fresh(options: { github?: boolean; approveAll?: boolean; signIn?: GitHubSignIn | null; now?: () => number } = {}) {
-  const github = fakeGitHub({ publicKey: key.publicKey, appId: '424242' })
-  github.installed.set('example/app', 91)
+async function fresh(options: { github?: boolean; approveAll?: boolean; signIn?: GitHubSignIn | null; now?: () => number
+  /** Another server's GitHub, shared: a second control API on the same database and GitHub, with its own caches. */
+  shared?: ReturnType<typeof fakeGitHub> } = {}) {
+  const github = options.shared ?? fakeGitHub({ publicKey: key.publicKey, appId: '424242' })
+  if (!options.shared) github.installed.set('example/app', 91)
   const log = { warn: vi.fn() }
   const tokens = new GitHubTokens(fakeApp(key.privateKey, github, { now: options.now }), new MemoryTokenCache(), { log, secret: randomBytes(32) })
   const releases: Promise<void>[] = []
@@ -754,22 +756,20 @@ describe('the GitHub revision', () => {
   // would move the revision back and forth, each move making every app read again.
   it('a read that follows a revision move records nothing, whatever answer it gets; a person\'s check still does', async () => {
     teamAccounts()
-    let at = Date.now()
-    const env = await fresh({ approveAll: false, signIn, now: () => at })
-    const { tab } = await swarm(env)
-    expect((await check(env, tab, 'lead')).json().data).toMatchObject({ state: 'not-approved' })
-    const seen = await revisions(env, tab)
-    // Removed from the repository, then put back, then removed: the answers alternate, as two servers' caches would.
-    for (const installed of [false, true, false]) {
-      if (installed) env.github.installed.set('example/app', 91)
-      else env.github.installed.delete('example/app')
-      at += 11 * 60_000
-      expect((await check(env, tab, 'lead', true, false)).json().data).toMatchObject({ state: installed ? 'not-approved' : 'not-installed' })
-      expect(await revisions(env, tab)).toEqual(seen)
+    const one = await fresh({ approveAll: false, signIn })
+    const two = await fresh({ approveAll: false, signIn, shared: one.github })
+    const { tab } = await swarm(one)
+    expect((await check(one, tab, 'lead')).json().data).toMatchObject({ state: 'not-approved' })
+    const seen = await revisions(one, tab)
+    // Removed from the repository: the first server still keeps the installation (10 minutes), the second asks GitHub.
+    one.github.installed.delete('example/app')
+    for (const [server, state] of [[one, 'not-approved'], [two, 'not-installed'], [one, 'not-approved'], [two, 'not-installed']] as const) {
+      expect((await check(server, tab, 'lead', true, false)).json().data).toMatchObject({ state })
+      expect(await revisions(one, tab)).toEqual(seen)
     }
     // A person checks again: that records the answer, once.
-    expect((await check(env, tab, 'lead')).json().data).toMatchObject({ state: 'not-installed' })
-    expect((await revisions(env, tab)).lead).toBe(seen.lead! + 1)
+    expect((await check(two, tab, 'lead')).json().data).toMatchObject({ state: 'not-installed' })
+    expect((await revisions(one, tab)).lead).toBe(seen.lead! + 1)
   })
 
   it('GitHub sending a person back after installing forgets the cache and moves every project on the repository', async () => {
