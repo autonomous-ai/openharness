@@ -284,6 +284,12 @@ describe('strength, fit and effective cost', () => {
     expect(r.shown).toHaveLength(28)
     for (const b of boxes) expect(r.shown.filter(s => s.machineName === b).map(s => [s.engine, s.fit.status]).sort()).toEqual([['claude', 'fits'], ['codex', 'short']])
   })
+  it('shows at most 64 rows, what the backend keeps of a decision, the best-ranked first', () => {
+    const boxes = Array.from({ length: 40 }, (_, i) => `box-${String(i).padStart(2, '0')}`)
+    const r = route(boxes.flatMap(b => [on(CODEX, b, windows(null, [50, 5 * D], `${b}-x`)), on(OPUS, b, windows(null, [99, D], `${b}-c`))]), { difficulty: 'high' })
+    expect(r.shown).toHaveLength(64)
+    expect(r.shown.at(-1)!.id).toBe('c63')
+  })
   it('an engine on an API key is metered: it fits with no window, beside a subscription machine', () => {
     const metered = quotaOf2({ known: true, windows: [] })
     expect(metered).toEqual({ known: true, leftPercent: null, resetsAt: null, metered: true })
