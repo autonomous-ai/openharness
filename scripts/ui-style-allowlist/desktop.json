@@ -45,7 +45,7 @@
     "font-size": 1
   },
   "desktop/lib/super_tabs/project_sidebar.dart": {
-    "edge-insets": 9
+    "edge-insets": 8
   },
   "desktop/lib/super_tabs/pull_requests.dart": {
     "edge-insets": 12,

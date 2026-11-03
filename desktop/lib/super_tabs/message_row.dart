@@ -19,6 +19,7 @@ import 'message_text.dart';
 import 'model.dart';
 import 'pull_requests.dart';
 import 'reactions.dart';
+import 'swarm_type.dart';
 
 /// Presentation only. Message identity and reply routing use backend IDs.
 class SuperTabMessageRow extends StatefulWidget {
@@ -273,8 +274,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     final taggedYou =
         widget.readerId.isNotEmpty &&
         message.mentions.contains(widget.readerId);
-    final authorStyle = DesktopChrome.text(medium: true)
-        .copyWith(fontWeight: FontWeight.w600);
+    final authorStyle = SwarmType.name(context);
     // A phone's author is a finger tall, 44 over its 20 px line. The gap
     // above the row gives up the half that would push the name down and the
     // avatar moves down with it, so both stay where they were.
@@ -407,7 +407,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                             TimeOfDay.fromDateTime(
                                               time.toLocal(),
                                             ).format(context),
-                                            style: DesktopChrome.metadata(),
+                                            style: SwarmType.time(context),
                                           ),
                                         ),
                                     ],
