@@ -4,6 +4,7 @@ Run: python3 -m unittest desktop/tool/test_test_flavor.py
 """
 import hashlib
 import plistlib
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -44,9 +45,11 @@ class FlavorEnvTest(unittest.TestCase):
         self.assertEqual(self.base['PORT'], '3000', 'the base environment is not changed')
 
     def test_no_path_reaches_the_person_s_harness_folder(self):
-        real_harness = str(self.real_home / '.harness')
+        real_harness = self.real_home / '.harness'
         for key, value in self.env.items():
-            self.assertFalse(value.startswith(real_harness), f'{key}={value}')
+            if value.startswith('/'):
+                path = Path(value)
+                self.assertFalse(path == real_harness or real_harness in path.parents, f'{key}={value}')
 
     def test_the_claude_keychain_item_is_not_the_person_s(self):
         service = test_flavor.claude_keychain_service(self.env)
@@ -61,12 +64,20 @@ class FlavorEnvTest(unittest.TestCase):
         self.assertEqual(
             test_flavor.claude_keychain_service({'CLAUDE_SECURESTORAGE_CONFIG_DIR': '/a', 'CLAUDE_CONFIG_DIR': '/b'}),
             'Claude Code-credentials-' + hashlib.sha256(b'/a').hexdigest()[:8])
+        # Empty CLAUDE_SECURESTORAGE_CONFIG_DIR means the plain name even with a config dir set
+        # (desktop/lib/usage/usage_credentials.dart keychainService; the CLI's `secure ?? configDir`).
+        self.assertEqual(
+            test_flavor.claude_keychain_service({'CLAUDE_SECURESTORAGE_CONFIG_DIR': '', 'CLAUDE_CONFIG_DIR': '/b'}),
+            'Claude Code-credentials')
 
 
 class PatchInfoTest(unittest.TestCase):
     def setUp(self):
-        with (REPO / 'desktop/macos/Runner/Info.plist').open('rb') as source:
-            self.info = plistlib.load(source)
+        # Read as macOS reads it: the source has '--' inside an XML comment, which Xcode and plutil accept
+        # and Python's strict parser does not. The built app's Info.plist is clean either way.
+        xml = subprocess.run(['plutil', '-convert', 'xml1', '-o', '-', str(REPO / 'desktop/macos/Runner/Info.plist')],
+                             check=True, capture_output=True).stdout
+        self.info = plistlib.loads(xml)
         self.patched = test_flavor.patch_info(self.info)
 
     def test_has_its_own_identity(self):
