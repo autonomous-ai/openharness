@@ -35,11 +35,14 @@ SuperTabBacklogGroup? superTabBacklogGroupOf(SuperTabConversation task) {
   if (status == 'review' || wait == 'review' || wait == 'revision') {
     return SuperTabBacklogGroup.inReview;
   }
+  // Orphaned (its agent removed or lost, never started, its start failed),
+  // though the assignment may still read working: it needs a new agent.
   if (assignment == null ||
       assignment['agentId'] is! String ||
       status == 'stopped' ||
       status == 'lost' ||
-      wait == 'queued') {
+      wait == 'queued' ||
+      liveness?['state'] == 'orphaned') {
     return SuperTabBacklogGroup.waitingForMachine;
   }
   return SuperTabBacklogGroup.working;

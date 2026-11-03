@@ -59,8 +59,18 @@ class _SuperTabBacklogViewState extends State<SuperTabBacklogView> {
     _watched = next;
   }
 
+  // Rebuilt when GitHub's answer lands, as the live cards are: Manage rebuilds
+  // only on the controller (review of #2776).
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => switch (widget.facts) {
+    final facts? => ListenableBuilder(
+      listenable: facts,
+      builder: (context, _) => _build(context),
+    ),
+    null => _build(context),
+  };
+
+  Widget _build(BuildContext context) {
     grid.AppTheme.watch(context);
     final c = widget.controller, snapshot = c.snapshot;
     final all = superTabBacklogTasks(c);
