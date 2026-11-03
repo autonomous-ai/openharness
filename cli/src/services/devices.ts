@@ -190,7 +190,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   let cardInclude: string[] = []
   // The conversation the window has open in its active Swarm tab, which the round dial's face follows (design
   // 2026-10-28-round-dial-swarm-chat): said with the wish, and left out when there is none, as before.
-  let cardFocus: { tabId: string; conversationId: string; fromDevice?: true } | null = null
+  let cardFocus: { tabId: string; conversationId: string; threadRoot?: string; fromDevice?: true } | null = null
   const tellCards = (): void => {
     const on = cardDevices > 0
     void askCards({ action: 'cardsWanted', on, include: on ? cardInclude : [], ...(on && cardFocus ? { focus: cardFocus } : {}) })
@@ -254,6 +254,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // name that chat by an id: a dial never shows it for another one.
     swarmCardRecap: async (tabId, leadId, chat) => {
       const r = await askCards({ action: 'cardRecap', tabId, leadId, ...chatFlag(chat) })
+      // A refusal fails with its code, which the dial's log names; null was silent (Diego, 2026-11-03).
+      if (r.ok !== true && typeof r.error === 'string') throw new Error(r.error)
       if (r.ok !== true || typeof r.text !== 'string' || typeof r.at !== 'number' || !Number.isInteger(r.at) || r.at < 0 || typeof r.none !== 'boolean') return null
       if (chat && !(typeof r.chatId === 'string' && CHAT_ID.test(r.chatId))) return null
       return { tabId, leadId, text: truncateUtf8(r.text, 1500), at: r.at, none: r.none, ...(chat ? { chatId: r.chatId as string } : {}),
@@ -582,9 +584,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       const include = [...new Set((swarms?.swarms ?? []).map((s) => s.superTabId).filter((id): id is string => !!id))].slice(0, 16)
       const open = cableHost.activeSwarmProject()
       // `fromDevice`: the window followed a device's own pick, which the cards keep a dial's side through.
+      // `threadRoot`: the thread open beside it, whose opening or closing moves the dial's face too.
       const focus = open?.conversationId
-        ? { tabId: open.superTabId, conversationId: open.conversationId, ...(open.fromDevice ? { fromDevice: true as const } : {}) } : null
-      const refocused = `${focus?.tabId}/${focus?.conversationId}` !== `${cardFocus?.tabId}/${cardFocus?.conversationId}`
+        ? { tabId: open.superTabId, conversationId: open.conversationId, ...(open.threadRoot ? { threadRoot: open.threadRoot } : {}),
+          ...(open.fromDevice ? { fromDevice: true as const } : {}) } : null
+      const refocused = `${focus?.tabId}/${focus?.conversationId}/${focus?.threadRoot}` !== `${cardFocus?.tabId}/${cardFocus?.conversationId}/${cardFocus?.threadRoot}`
       if (include.join(',') !== cardInclude.join(',') || refocused) { cardInclude = include; cardFocus = focus; if (cardDevices > 0) tellCards() }
       void cable.syncSwarms()
       void cable.syncAgents()

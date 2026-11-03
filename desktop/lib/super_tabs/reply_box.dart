@@ -63,6 +63,15 @@ class SuperTabReplyBox extends StatelessWidget {
   /// The field's hint: what an empty box says it is for.
   final String hint;
 
+  /// The Tab order inside an [OrderedTraversalPolicy] group around the box:
+  /// the field (and its files) first, then the options, wherever the owner
+  /// places them ([optionsOrder], such as the pane's Also send on its own line
+  /// under the box), then attach and send. Outside such a group it has no
+  /// effect, and the reading order applies.
+  static const fieldOrder = NumericFocusOrder(1),
+      optionsOrder = 2.0,
+      sendOrder = NumericFocusOrder(3);
+
   @override
   Widget build(BuildContext context) => NewHarnessDropZone(
     attachments: files,
@@ -157,23 +166,29 @@ class SuperTabReplyBox extends StatelessWidget {
             Row(
               children: [
                 Expanded(child: options ?? const SizedBox.shrink()),
-                NewHarnessAttachButton(
-                  attachments: files,
-                  enabled: writable && !busy,
+                FocusTraversalOrder(
+                  order: sendOrder,
+                  child: NewHarnessAttachButton(
+                    attachments: files,
+                    enabled: writable && !busy,
+                  ),
                 ),
-                ListenableBuilder(
-                  listenable: Listenable.merge([files, text]),
-                  builder: (context, _) => AppIconButton(
-                    key: sendKey,
-                    icon: AppIcons.arrowUp,
-                    tooltip: 'Send reply',
-                    color: DesktopChrome.accent,
-                    onPressed:
-                        writable &&
-                            !busy &&
-                            (text.text.trim().isNotEmpty || !files.isEmpty)
-                        ? onSend
-                        : null,
+                FocusTraversalOrder(
+                  order: sendOrder,
+                  child: ListenableBuilder(
+                    listenable: Listenable.merge([files, text]),
+                    builder: (context, _) => AppIconButton(
+                      key: sendKey,
+                      icon: AppIcons.arrowUp,
+                      tooltip: 'Send reply',
+                      color: DesktopChrome.accent,
+                      onPressed:
+                          writable &&
+                              !busy &&
+                              (text.text.trim().isNotEmpty || !files.isEmpty)
+                          ? onSend
+                          : null,
+                    ),
                   ),
                 ),
               ],

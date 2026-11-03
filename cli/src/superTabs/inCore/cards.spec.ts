@@ -263,6 +263,11 @@ describe('whether the Swarm cards are wanted, which the core owns', () => {
     expect(request).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['t1'], focus: { ...focus, fromDevice: true } })
     cards.want(true, ['t1'], { ...focus, fromDevice: 1 })
     expect(request).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['t1'], focus })
+    // The thread the window has open beside it rides along, an id or nothing; its change is a change.
+    cards.want(true, ['t1'], { ...focus, threadRoot: 'm1' })
+    expect(request).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['t1'], focus: { ...focus, threadRoot: 'm1' } })
+    cards.want(true, ['t1'], { ...focus, threadRoot: 'bad id' })
+    expect(request).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['t1'], focus })
     // The devices gone take the focus with them.
     cards.want(true, ['t1'], focus)
     cards.devicesGone()

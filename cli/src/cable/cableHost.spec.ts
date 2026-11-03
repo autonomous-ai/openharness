@@ -1006,6 +1006,12 @@ describe('Swarm cards', () => {
     expect(host.activeSwarmProject()).toEqual({ superTabId: 'st1', projectId: '', fromDevice: false })
   })
 
+  it('names the thread the window has open beside that conversation', () => {
+    const host = new DaemonCableHost(wiring())
+    host.setSwarms({ active: 't1', tiles: [], swarms: [{ id: 't1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st1', projectId: 'p1', conversationId: 'pm1', threadRoot: 'm1' }] })
+    expect(host.activeSwarmProject()).toEqual({ superTabId: 'st1', projectId: 'p1', conversationId: 'pm1', threadRoot: 'm1', fromDevice: false })
+  })
+
   it('names the conversation the window has open in the active Swarm tab, when it names one', () => {
     const host = new DaemonCableHost(wiring())
     const swarms = [

@@ -6084,6 +6084,12 @@ class AppNotifier extends ChangeNotifier {
     return controller.snapshot?.conversation(id) == null ? null : id;
   }
 
+  /// The thread whose pane is on screen beside that conversation, by its
+  /// root: the round dial shows and answers it while it stays open.
+  String? _dialThread(String tabId) => _dialConversation(tabId) == null
+      ? null
+      : superTabs.peek(tabId)?.threadOnScreen;
+
   /// The tile roster and the tabs, to every daemon this window reaches over
   /// its loopback ([_deskConnection]) — never a relayed machine's.
   void _announceOpenPanesToDial() {
@@ -6152,6 +6158,7 @@ class AppNotifier extends ChangeNotifier {
             'superTabId': tabId,
             'projectId': ?_rememberDialProject(tabId),
             'conversationId': ?_dialConversation(tabId),
+            'threadRoot': ?_dialThread(tabId),
           },
           'agentIds': [
             for (final pane in swarm.panes)

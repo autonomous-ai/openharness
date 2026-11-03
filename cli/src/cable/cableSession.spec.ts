@@ -16,7 +16,7 @@ import { DaemonCableHost } from './cableHost.js'
 import type { MachineFleet } from './machineFleet.js'
 import { CableSession, recapFrame, type CableAgent, type CableHost, type CableMachine, type CablePort } from './cableSession.js'
 import { DialLog } from './dialLog.js'
-import { leadsOf, type SaidOnCard, type SwarmCard, type SwarmLead } from '../superTabs/cards.js'
+import { leadsOf, type LeadRecap, type SaidOnCard, type SwarmCard, type SwarmLead } from '../superTabs/cards.js'
 import { createSuperTabCards } from '../superTabs/inCore/cards.js'
 import type { PetStore } from './pets/store.js'
 
@@ -4137,6 +4137,35 @@ describe('swarm cards', () => {
       port.say({ t: 'supertab.recap.get', lead: 'lead1' })
       await settle(); await settle()
       expect(host.swarmCardRecap).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+
+  // A dial's recap that came back with nothing left its face on the resting pet and said nowhere why (Diego, 2026-11-03).
+  it('logs a recap that came back empty or failed once per Lead and reason, and again after one came back', async () => {
+    const lines: string[] = []
+    const host = cardHost({ cards: [card('st1')] }, { log: (l) => lines.push(l) })
+    const { session, port } = await connect(host)
+    const recapLines = () => lines.filter((l) => l.startsWith('cable: recap for'))
+    const ask = async (answer: () => Promise<LeadRecap | null>) => {
+      vi.mocked(host.swarmCardRecap!).mockImplementationOnce(answer)
+      port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead1' })
+      await settle(); await settle()
+      // A pushed recap for that Lead ends the repeat window, so the next ask is read again.
+      await session.swarmCardRecap({ tabId: 'st1', leadId: 'lead1', text: 'x', at: 1, none: false })
+    }
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+      await ask(async () => null)
+      await ask(async () => null)
+      expect(recapLines()).toEqual(['cable: recap for lead1 came back empty'])
+      await ask(async () => { throw new Error('SERVICE_UNAVAILABLE') })
+      await ask(async () => { throw new Error('SERVICE_UNAVAILABLE') })
+      expect(recapLines()).toEqual(['cable: recap for lead1 came back empty', 'cable: recap for lead1 failed (SERVICE_UNAVAILABLE)'])
+      await ask(async () => ({ tabId: 'st1', leadId: 'lead1', text: 'Shipped it.', at: 1792560000, none: false }))
+      await ask(async () => null)
+      expect(recapLines()).toHaveLength(3)
+      expect(recapLines().at(-1)).toBe('cable: recap for lead1 came back empty')
     } finally { await session.stop() }
   })
 
