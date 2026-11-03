@@ -77,8 +77,10 @@ const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', '
 /** An engine retrying a model that does not answer: Claude Code's "Waiting for API response · will retry in 2m 38s · check
  *  your network" and its "API Error: 503 …", "Request timed out" or "Connection error", and Codex's "stream disconnected -
  *  retrying" and "Reconnecting…". 2026-10-24: a Builder on a small local model retried for an hour, the relay giving up on
- *  every answer, while its Lead waited on it. Only near the prompt, as a limit is. */
-const MODEL_LINE = /waiting for api response|api error:\s*(?:5\d\d|overloaded|request timed out|connection)|stream (?:error|disconnected)[^\n]*retrying|^\W*reconnecting\b/i
+ *  every answer, while its Lead waited on it. Only near the prompt, as a limit is. Claude Code 2.1 names a connection's
+ *  failure instead ("Unable to connect to API (ECONNREFUSED)", "No internet route — …"), and Codex says "Connection
+ *  failed: error sending request" under its reconnect: Team agents whose relay was gone after an update (2026-11-03). */
+const MODEL_LINE = /waiting for api response|api error:\s*(?:5\d\d|overloaded|request timed out|connection)|unable to connect to api\b|no internet route\b|connection failed: error sending request|stream (?:error|disconnected)[^\n]*retrying|^\W*reconnecting\b/i
 /** Retries come and go on a busy model; ten minutes of them is a model the work cannot get answers from. */
 const MODEL_WAIT_MS = 10 * 60_000
 /** How long a screen must stay clear of retries before its model counts as answering again. Between retries the engine
