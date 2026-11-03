@@ -437,17 +437,30 @@ Future<void> _waitForNotice(
   answers.send(control.sendPort);
   try {
     final process = await Process.start(executable, arguments);
-    control.listen((_) => process.kill());
+    var stopped = false;
+    void stop() {
+      stopped = true;
+      process.kill();
+    }
+
+    control.listen((_) => stop());
     final out = process.stdout.transform(utf8.decoder).join();
     final err = process.stderr.transform(utf8.decoder).join();
     final code = await process.exitCode.timeout(
       limit,
       onTimeout: () {
-        process.kill();
+        stop();
         return process.exitCode;
       },
     );
-    answers.send((process.pid, code, await out, await err));
+    // A stopped process answers without its output: a child it left behind can hold the pipes
+    // open for as long as it runs (Linux CI, 11-03), and a stopped wait opens nothing anyway.
+    answers.send((
+      process.pid,
+      code,
+      stopped ? '' : await out,
+      stopped ? '' : await err,
+    ));
   } on ProcessException catch (error) {
     answers.send(error.message);
   } finally {
