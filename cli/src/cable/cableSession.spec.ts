@@ -2194,6 +2194,24 @@ describe('cable session', () => {
     } finally { await session.stop() }
   })
 
+  it('drops and logs a frame over the cap, and the link stays up', async () => {
+    const lines: string[] = []
+    const { session, port } = await connect(makeHost({ log: (l) => lines.push(l) }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      // A message this side made too big is its own bug, never the port's: nothing a dial asks may close the link over it.
+      const send = (session as unknown as { send(m: Record<string, unknown>): Promise<boolean> }).send.bind(session)
+      expect(await send({ t: 'oversized', pad: 'x'.repeat(9000) })).toBe(false)
+      expect(port.isOpen).toBe(true)
+      expect(lines.filter((l) => l.includes('oversized'))).toHaveLength(1)
+      expect(lines.some((l) => l.includes('write failed'))).toBe(false)
+      port.sent.length = 0
+      expect(await send({ t: 'small' })).toBe(true)
+      expect(port.types()).toEqual(['small'])
+    } finally { await session.stop() }
+  })
+
   it('answers models.list when the provider throws', async () => {
     const { session, port } = await connect(makeHost({ listModels: async () => { throw new Error('no engine') } }))
     port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
