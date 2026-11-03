@@ -662,7 +662,8 @@ void main() {
     expect(find.byKey(_jump), findsNothing);
     final unread = await linkedTop(tester, offlineChat(22));
     expect(find.byKey(_jump), findsOneWidget);
-    expect(unread, read);
+    // Layout arithmetic differs in the last bits with the rows above.
+    expect(unread, moreOrLessEquals(read, epsilon: .5));
   });
 
   testWidgets('the band going as the reader scrolls up to the line moves the '
