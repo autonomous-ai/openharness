@@ -1208,6 +1208,28 @@ void main() {
     );
   });
 
+  testWidgets('Delete takes a Not sent post away, and sends nothing', (
+    tester,
+  ) async {
+    final fake = backend([message('m1', 1)]);
+    fake.routes[commands] = (_) =>
+        throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.');
+    await pump(tester, fake);
+    await tester.enterText(find.byType(TextField), 'Never mind');
+    await tester.pump();
+    await tester.tap(key('swarm-send'));
+    await tester.pumpAndSettle();
+    expect(find.text('Not sent'), findsOneWidget);
+    final sends = fake.commands.length;
+
+    await tester.tap(key('swarm-delete-post'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Not sent'), findsNothing);
+    expect(find.text('Never mind'), findsNothing);
+    expect(fake.commands, hasLength(sends));
+  });
+
   testWidgets('a post whose answer was lost reads Not sent under it, and '
       'Retry sends the same post', (tester) async {
     final fake = backend([message('m1', 1)]);

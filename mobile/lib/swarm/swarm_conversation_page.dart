@@ -372,6 +372,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           : widget.messageId ?? _held.value,
     );
     c.composer.addListener(_drafted);
+    // The draft it kept, in the box.
+    _drafted();
     c.addListener(_chatMoved);
     c.addListener(_guardVoice);
     if (widget.mention case final agentId?) c.mention(agentId);
@@ -1002,6 +1004,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         state: post.state,
         quote: null,
         onSendAgain: () => unawaited(t.retry(post)),
+        onDelete: () => t.deletePost(post),
       ),
     );
   }
@@ -2007,6 +2010,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                     text: reply?.text,
                   ),
             onSendAgain: () => unawaited(_retry(c, post)),
+            onDelete: () => c.deletePost(post),
           );
         }
         if (index - lead < entries.length) {
@@ -2980,6 +2984,7 @@ class _Pending extends StatelessWidget {
     required this.state,
     required this.quote,
     required this.onSendAgain,
+    required this.onDelete,
     required this.look,
   });
 
@@ -2994,7 +2999,7 @@ class _Pending extends StatelessWidget {
   final SwarmMentions mentions;
   final SwarmPostState state;
   final Widget? quote;
-  final VoidCallback onSendAgain;
+  final VoidCallback onSendAgain, onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -3047,7 +3052,11 @@ class _Pending extends StatelessWidget {
           if (state != SwarmPostState.confirmed)
             Padding(
               padding: const EdgeInsets.only(top: AppSpace.xs),
-              child: SwarmPostLine(sending: sending, onRetry: onSendAgain),
+              child: SwarmPostLine(
+                sending: sending,
+                onRetry: onSendAgain,
+                onDelete: onDelete,
+              ),
             ),
         ],
       ),

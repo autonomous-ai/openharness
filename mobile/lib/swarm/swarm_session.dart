@@ -15,6 +15,7 @@ import 'swarm_face.dart';
 import 'swarm_home_cache.dart';
 import 'swarm_home_prefs.dart';
 import 'swarm_inbox.dart';
+import 'swarm_kept.dart';
 import 'swarm_mark_all.dart';
 import 'swarm_notices.dart';
 import 'swarm_profile.dart';
@@ -38,6 +39,7 @@ class SwarmSession extends ChangeNotifier {
     this.markAllHold = swarmMarkAllHold,
     SwarmHomeCache? homeCache,
     LocalKeyValueStore? readMarks,
+    SwarmKeptStore? kept,
     SwarmTold? told,
   }) : inbox = SwarmInbox(
          accountId: accountId,
@@ -46,6 +48,7 @@ class SwarmSession extends ChangeNotifier {
          pollInterval: pollInterval,
          homeCache: homeCache,
          readMarks: readMarks,
+         keptStore: kept,
        ),
        home = SwarmHomePrefs(accountId: accountId, store: readMarks) {
     _announcer = SwarmAnnouncer(
@@ -133,7 +136,11 @@ class SwarmSession extends ChangeNotifier {
   /// watches every few seconds. Behind, nothing is. Going behind sends a
   /// held Mark all read at once: the app may not come back to send it.
   set foreground(bool value) {
-    if (!value) _markAll?.commit();
+    if (!value) {
+      _markAll?.commit();
+      // The app going behind may be its last moment.
+      unawaited(inbox.kept.flush());
+    }
     _foreground = value;
     inbox.shown = value;
     _show();
@@ -315,17 +322,23 @@ class SwarmHost extends ChangeNotifier {
     this.computers,
     SwarmHomeCache? homeCache,
     LocalKeyValueStore? readMarks,
+    SwarmKeptStore? kept,
     this.uploadAvatar,
     this.voice,
     this.dictation,
   }) : features = features ?? experimentalFeaturesStore,
        homeCache = homeCache ?? SwarmHomeCache.device(),
-       readMarks = readMarks ?? HarnessFileStore.shared {
+       readMarks = readMarks ?? HarnessFileStore.shared,
+       kept = kept ?? SealedSwarmKeptStore.device() {
     account.addListener(_update);
     this.features.addListener(_update);
     computers?.addListener(_computersChanged);
     _update();
   }
+
+  /// Where the session's drafts and unsent posts are kept, sealed; cleared when
+  /// the account leaves or Swarm is turned off, not while it is being read.
+  final SwarmKeptStore kept;
 
   /// The signed-in account's id; null while nobody is.
   final String? Function() accountId;
@@ -413,7 +426,10 @@ class SwarmHost extends ChangeNotifier {
       // Swarm off with no session to end: its switch is read before the first
       // frame, so this is known, and what an earlier run kept goes. A missing
       // account is not: the signed-in shell is up before the account is read.
-      if (!on && wasOn != false) unawaited(homeCache.clear());
+      if (!on && wasOn != false) {
+        unawaited(homeCache.clear());
+        unawaited(kept.clear());
+      }
       // No session either way, but [accountComing] may have moved with it.
       if (wasOn != null && on != wasOn) notifyListeners();
       return;
@@ -423,7 +439,14 @@ class SwarmHost extends ChangeNotifier {
       unawaited(homeCache.clear());
       swarmForgetAvatarImages();
     }
+    final hadSession = session != null;
+    // What it was still writing goes first: the clear comes after it.
     session?.dispose();
+    // The same account still being read is no leaving: what it wrote waits.
+    if (hadSession &&
+        (!on || id != null || !(accountReading?.call() ?? false))) {
+      unawaited(kept.clear());
+    }
     session = id == null
         ? null
         : (SwarmSession(
@@ -433,6 +456,7 @@ class SwarmHost extends ChangeNotifier {
             notices: notices,
             homeCache: homeCache,
             readMarks: readMarks,
+            kept: kept,
             told: _told,
           )..foreground = _foreground);
     notifyListeners();
