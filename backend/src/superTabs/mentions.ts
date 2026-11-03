@@ -5,8 +5,8 @@ import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { ensureIndex } from '../lib/db/indexes.js'
 import { activeWork, agentOnly, fail, isLeads, person, stableId, type Actor, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-import { canReadGroup, groupProject, projectAgent, projectOf } from './projects.js'
-import { isSwarmBuddyChat } from './buddies.js'
+import { canReadGroup, canReadProject, groupProject, projectAgent, projectOf, projectsOf } from './projects.js'
+import { isBuddyChat, isSwarmBuddyChat } from './buddies.js'
 import { groupsBy, readBy } from './parts/indexed.js'
 import { deliveredCopies } from './pageReads.js'
 import { usernameOf } from './usernames.js'
@@ -154,6 +154,39 @@ export async function writeMentions(tx: Tx, tabId: string, state: SuperTabState,
 export async function resolveByReply(tx: Tx, tabId: string, conversationId: string, personId: string, now: number): Promise<void> {
   await tx.superTabMention.updateMany({ where: { tabId, conversationId, personId, createdAt: { lte: new Date(now) }, ...waiting },
     data: { resolvedAt: new Date(now), resolvedBy: 'reply' } })
+}
+
+/** A read mark moved to [sequence] resolves the person's waiting tags it passes: in the chat (threadId null) those shown there, in a
+ *  thread those shown only in it (threadsOf, as Desktop's mentionUnread reads them). Most marks find no tag and stop after one read. */
+export async function resolveRead(db: Tx | PrismaClient, input: { tabId: string; personId: string; conversationId: string; threadId: string | null;
+  sequence: number; now: number }): Promise<number> {
+  const { tabId, personId, conversationId, threadId, sequence, now } = input, tx = db as Tx
+  const rows = await tx.superTabMention.findMany({ where: { tabId, personId, conversationId, createdAt: { gt: new Date(now - MENTION_EXPIRY_MS) }, ...waiting },
+    select: { id: true, messageId: true }, take: 500 })
+  if (!rows.length) return 0
+  const messages = await tx.superTabMessage.findMany({ where: { tabId, id: { in: rows.map(r => r.messageId) } },
+    select: { id: true, conversationId: true, thread: true, alsoInChat: true, sequence: true } })
+  const threads = await threadsOf(tx, tabId, messages)
+  const passed = new Set(messages.filter(m => m.sequence <= sequence && (threads.get(m.id) ?? null) === threadId).map(m => m.id))
+  const ids = rows.filter(r => passed.has(r.messageId)).map(r => r.id)
+  if (!ids.length) return 0
+  return (await tx.superTabMention.updateMany({ where: { tabId, personId, id: { in: ids }, ...waiting }, data: { resolvedAt: new Date(now), resolvedBy: 'read' } })).count
+}
+
+/** The agents a person's post answers: its recipients, and in their own Buddy chat also the coordinator of each project the Buddy
+ *  relays to (every project they read for the Swarm chat, the chat's own for a project chat). */
+export function answeredAgents(state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>, group: Conversation, recipients: readonly string[]): string[] {
+  const coordinators = !isBuddyChat(group) || !group.audience?.people.some(p => p.id === actor.userId) ? []
+    : (isSwarmBuddyChat(group) ? projectsOf(state).filter(p => canReadProject(state, actor, p)) : [projectOf(state, group.projectId ?? 'lead')])
+      .map(p => state.conversations.find(c => c.id === p.leadConversationId)?.leadId)
+  return [...new Set([...recipients.filter(id => state.agents.some(a => a.id === id)), ...coordinators.filter((id): id is string => !!id)])]
+}
+
+/** A post to an agent answers every tag that agent made for the person, in any conversation. */
+export async function resolveByAnswer(tx: Tx, tabId: string, personId: string, agentIds: readonly string[], now: number): Promise<void> {
+  if (!agentIds.length) return
+  await tx.superTabMention.updateMany({ where: { tabId, personId, authorAgentId: { in: [...agentIds] }, createdAt: { lte: new Date(now) }, ...waiting },
+    data: { resolvedAt: new Date(now), resolvedBy: 'answer' } })
 }
 
 /** A worker took the group: its held tags are over. A listed one moves to Earlier; one not yet listed is dropped, as if never

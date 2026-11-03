@@ -7,7 +7,7 @@ import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
 import { agentOnly, author, fail, groupForBuddy, isLeads, seenMachineIds, stableId, SuperTabError, visibleState, type Actor, type AgentStart, type SuperTabState } from '../model.js'
-import { mentionsDigest, swarmsWithTags, waitingMentions, waitingTagConversations } from '../mentions.js'
+import { mentionsDigest, resolveRead, swarmsWithTags, waitingMentions, waitingTagConversations } from '../mentions.js'
 import { decisionsWaiting } from '../decisions.js'
 import { readMarks, readThreadMarks, writeThreadFollow, writeThreadMark } from '../readMarks.js'
 import { activityDigest, listActivity, markActivityRead, markActivityThreadRead, type ActivityItem } from '../activity.js'
@@ -233,7 +233,9 @@ export class SwarmReads {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const { group, state } = await this.readGroup(user, tabId, conversationId)
     const next = Math.min(sequence, group.data!.lastMessageSequence), now = this.now()
-    return { sequence: await moveChatMark(this.db, { tabId, state, personId: user.sub, conversationId, next, now }) }
+    const stored = await moveChatMark(this.db, { tabId, state, personId: user.sub, conversationId, next, now })
+    await resolveRead(this.db, { tabId, personId: user.sub, conversationId, threadId: null, sequence: stored, now })
+    return { sequence: stored }
   }
 
   /** Moves the person's mark of thread `threadId` in a conversation they can read forward, never past the conversation's
@@ -247,6 +249,7 @@ export class SwarmReads {
     const stored = await writeThreadMark(this.db, { tabId, personId: user.sub, conversationId, threadId, sequence: Math.min(sequence, newest), now })
     // The thread's replies the mark passes are read in Activity too (activity.ts).
     await markActivityThreadRead(this.db, { tabId, personId: user.sub, conversationId, threadId, sequence: stored, now })
+    await resolveRead(this.db, { tabId, personId: user.sub, conversationId, threadId, sequence: stored, now })
     return { sequence: stored }
   }
 

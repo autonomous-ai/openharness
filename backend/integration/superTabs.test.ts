@@ -3852,7 +3852,7 @@ describe('Lead mentions', () => {
   it('resolves on the person’s later post in that conversation, not on anyone else’s', async () => {
     const { tab, group } = await tagged()
     await run(tab, { type: 'message.send', conversationId: group, text: 'Owner chimes in.', replyTo: null, recipientIds: [] })
-    await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Elsewhere.', replyTo: null, recipientIds: [] }, peer)
+    // A post elsewhere to the Lead who tagged them answers it too (superTabTagsClear.test.ts): not one here.
     expect(await list(tab, peer, 'waiting')).toHaveLength(1)
     await run(tab, { type: 'message.send', conversationId: group, text: 'Looks good.', replyTo: null, recipientIds: [] }, peer)
     expect(await list(tab, peer, 'waiting')).toEqual([])
