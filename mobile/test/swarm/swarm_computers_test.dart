@@ -176,6 +176,68 @@ void main() {
     expect(computers.own, isEmpty);
   });
 
+  test('the sessions running on them, for Add agent: Claude Code and Codex '
+      'with their terminal there, not stopped, the last used first, only on '
+      'a computer answering now', () async {
+    final rig = viewerApp();
+    addTearDown(rig.app.dispose);
+    final computers = AppSwarmComputers(rig.app);
+    addTearDown(computers.dispose);
+    rig.api.onMachines = () async => [
+      remoteMachine('a', name: 'Studio Mac'),
+      remoteMachine('b', name: 'Mac mini'),
+    ];
+    for (final id in ['a', 'b']) {
+      rig.conn(id).answers['agents_list'] = (_) => {
+        'agents': [
+          agentJson(
+            '$id-older',
+            name: 'Fix login',
+            updatedAt: '2026-11-01T09:00:00.000Z',
+          ),
+          agentJson(
+            '$id-newer',
+            name: 'Write docs',
+            engine: 'codex',
+            updatedAt: '2026-11-02T09:00:00.000Z',
+          ),
+          agentJson('$id-cursor', name: 'Cursor work', engine: 'cursor'),
+          agentJson('$id-shell', name: 'Shell', engine: 'terminal'),
+          agentJson('$id-no-tty', name: 'No terminal', terminal: false),
+          agentJson('$id-stopped', name: 'Stopped', status: 'stopped'),
+          agentJson('$id bad id', name: 'Bad id'),
+        ],
+      };
+      rig.conn(id).answers['terminal_capabilities'] = (_) => capabilities();
+    }
+    await rig.app.bootstrap();
+    await settle();
+    rig.app.connectionStatusForTest('a', ConnectionStatus.connected);
+    rig.app.connectionStatusForTest('b', ConnectionStatus.disconnected);
+    await settle();
+
+    expect(computers.running, [
+      (
+        machineId: 'a',
+        machine: 'Studio Mac',
+        harnessId: 'a-newer',
+        name: 'Write docs',
+        engine: 'codex',
+      ),
+      (
+        machineId: 'a',
+        machine: 'Studio Mac',
+        harnessId: 'a-older',
+        name: 'Fix login',
+        engine: 'claude',
+      ),
+    ]);
+
+    // A list kept from the last run may name a session long gone.
+    rig.app.machineStates['a']!.agentsFromCache = true;
+    expect(computers.running, isEmpty);
+  });
+
   test('Try again reads the list again', () async {
     final rig = await signedInWith({'a': []});
     addTearDown(rig.app.dispose);
