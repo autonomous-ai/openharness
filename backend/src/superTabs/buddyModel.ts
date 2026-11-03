@@ -151,7 +151,9 @@ export function buddyModelResult(state: SuperTabState, actor: Actor,
     theirs.push({ conversationId: openSwarmBuddyChat(state, member).id, machines: [],
       text: `${personName(state, owner.personId)}'s Buddy now runs on ${name}, ${s.api ? 'on your saved API' : 'which your machine serves'}.` })
   }
-  return [...mine(text, machines), ...theirs]
+  // The Buddy moved; a thread session that could not is named, so its owner knows where that thread's answers come from.
+  const stayed = clean(command.error ?? '')
+  return [...mine(stayed ? `${text} ${stayed}.` : text, machines), ...theirs]
 }
 
 /** Requests nobody answered within their lease, dropped, each with the line its owner reads. */
