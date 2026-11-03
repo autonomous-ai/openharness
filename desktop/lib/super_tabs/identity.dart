@@ -22,6 +22,7 @@ class SuperTabAvatar extends StatelessWidget {
     this.status,
     this.pattern = false,
     this.now,
+    this.radius,
   });
 
   SuperTabAvatar.person(
@@ -29,6 +30,7 @@ class SuperTabAvatar extends StatelessWidget {
     super.key,
     this.size = 30,
     this.now,
+    this.radius,
   }) : identity = 'person:${person.id}',
        name = person.shownName,
        picture = person.avatar,
@@ -44,6 +46,7 @@ class SuperTabAvatar extends StatelessWidget {
     String? name,
     this.size = 30,
     bool engineBadge = true,
+    this.radius,
   }) : identity = 'agent:${agent.id}',
        name = name ?? agent.displayName ?? agent.name,
        picture = agent.avatar,
@@ -72,6 +75,9 @@ class SuperTabAvatar extends StatelessWidget {
   /// Draw the agent pattern rather than an initial when there is no picture.
   final bool pattern;
 
+  /// The corner of a rounded-square face, as a message's; round when null.
+  final double? radius;
+
   @override
   Widget build(BuildContext context) {
     final badge = size * .46;
@@ -81,6 +87,7 @@ class SuperTabAvatar extends StatelessWidget {
       size: size,
       picture: picture,
       pattern: pattern,
+      radius: radius,
     );
     return SuperTabUntil(
       until: now == null ? status?.until : null,

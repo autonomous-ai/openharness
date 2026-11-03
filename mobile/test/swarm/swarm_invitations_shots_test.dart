@@ -82,9 +82,8 @@ void main() {
             'This invitation has expired.',
             statusCode: 409,
           );
-      final features = ExperimentalFeaturesStore(
-        storage: MemoryKeyValueStore(),
-      )..value = {PhoneExperiment.swarm};
+      final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
+        ..value = {PhoneExperiment.swarm};
       final account = ValueNotifier<String?>(me);
       final host = SwarmHost(
         accountId: () => account.value,
@@ -113,9 +112,8 @@ void main() {
                     as RenderRepaintBoundary)
                 .toImage(pixelRatio: 3);
         final png = await image.toByteData(format: ui.ImageByteFormat.png);
-        await File(
-          '$shots/invitations-$name-${brightness.name}.png',
-        ).writeAsBytes(png!.buffer.asUint8List());
+        await File('$shots/invitations-$name-${brightness.name}.png')
+            .writeAsBytes(png!.buffer.asUint8List());
         image.dispose();
       });
       await capture('home');

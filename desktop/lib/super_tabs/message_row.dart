@@ -48,7 +48,6 @@ class SuperTabMessageRow extends StatefulWidget {
     this.readerId = '',
     this.reactorName,
     this.onReact,
-    this.proposalOwner,
     this.headerStatus,
     this.dimmed = false,
     this.thread,
@@ -85,10 +84,6 @@ class SuperTabMessageRow extends StatefulWidget {
   /// Who a thread's reply author is in the Swarm now, for the faces on its
   /// reply line; without it each shows the face its recorded name gives.
   final SuperTabMemberOf? member;
-
-  /// The person a Buddy's proposal speaks for, by name, from the server's tag
-  /// on it ([SuperTabMessage.proposalOwnerId]); null for any other message.
-  final String? proposalOwner;
 
   /// The names of the people [message] tags.
   final List<String> mentions;
@@ -143,9 +138,12 @@ class SuperTabMessageRow extends StatefulWidget {
 
   // Routing notes share the message body column, including grouped messages.
   static const horizontalInset = 24.0;
-  static const avatarSize = 28.0;
+  static const avatarSize = grid.AppDesktop.messageAvatarSize;
   static const avatarGap = 12.0;
   static const bodyInset = horizontalInset + avatarSize + avatarGap;
+
+  /// Above and below a grouped line, and below a sender's last line.
+  static const rowPad = 6.0;
 
   /// Compact only a few short updates. Reports and long runs retain their own
   /// speaker identity, so scrolling through agent output does not lose the who.
@@ -247,16 +245,18 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
 
   Widget _avatar(SuperTabMessage message) {
     const size = SuperTabMessageRow.avatarSize;
+    const radius = grid.AppDesktop.messageAvatarRadius;
     if (widget.agent case final agent?) {
       return SuperTabAvatar.agent(
         agent,
         name: widget.author,
         size: size,
         engineBadge: false,
+        radius: radius,
       );
     }
     if (widget.person case final person? when !message.fromAgent) {
-      return SuperTabAvatar.person(person, size: size);
+      return SuperTabAvatar.person(person, size: size, radius: radius);
     }
     // Someone no longer in the Swarm keeps the face their recorded name gives.
     return SuperTabAvatar(
@@ -266,6 +266,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
           : superTabPersonName(message.authorName),
       size: size,
       pattern: message.fromAgent,
+      radius: radius,
     );
   }
 
@@ -286,8 +287,15 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     final phone = workspaceIsCompact(context);
     final finger = phone && !widget.grouped;
     final slack = finger ? 12.0 : 0.0;
+    // A new sender starts a group gap down, and its name a control gap below
+    // that, as Slack spaces its senders (Huy, 2026-11-03). A grouped follow-up
+    // line keeps its tight spacing.
+    final above = widget.grouped ? 0.0 : grid.AppDesktop.groupGap - slack;
+    final headerTop = widget.grouped
+        ? SuperTabMessageRow.rowPad
+        : grid.AppDesktop.controlGap;
     return Padding(
-      padding: EdgeInsets.only(top: widget.grouped ? 0 : 12 - slack),
+      padding: EdgeInsets.only(top: above),
       child: MouseRegion(
         onEnter: (_) => setState(() => _hovered = true),
         onExit: (_) => setState(() => _hovered = false),
@@ -343,9 +351,11 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
               child: Stack(
                 children: [
                   Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: SuperTabMessageRow.horizontalInset,
-                      vertical: 6,
+                    padding: EdgeInsets.only(
+                      left: SuperTabMessageRow.horizontalInset,
+                      right: SuperTabMessageRow.horizontalInset,
+                      top: headerTop,
+                      bottom: SuperTabMessageRow.rowPad,
                     ),
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -457,30 +467,6 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     onTap: widget.onOpenReply == null
                                         ? null
                                         : () => widget.onOpenReply!(context),
-                                  ),
-                                ),
-                              if (widget.proposalOwner case final owner?)
-                                Padding(
-                                  padding: const EdgeInsets.only(
-                                    bottom: grid.AppDesktop.menuInset,
-                                  ),
-                                  child: Container(
-                                    key: const ValueKey('super-proposal-label'),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: grid.AppDesktop.controlGap,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      border: Border.all(
-                                        color: DesktopChrome.rim,
-                                      ),
-                                      borderRadius: BorderRadius.circular(
-                                        DesktopChrome.rowRadius,
-                                      ),
-                                    ),
-                                    child: Text(
-                                      "Proposal · on $owner's behalf",
-                                      style: DesktopChrome.metadata(),
-                                    ),
                                   ),
                                 ),
                               if (message.terminalNote case final note?)

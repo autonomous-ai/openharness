@@ -490,8 +490,8 @@ describe('reactions', () => {
 
 describe('the ship moment', () => {
   const config = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
-  // The task's own line says it shipped, in place of the Shipped line (taskLine.ts; Quiet Swarm, Dee, 11-02).
-  it('edits the task\'s one line in the project chat to shipped when its merge is recorded, once on a retry, waking nobody', async () => {
+  // The task's own thread says it merged, in place of the Shipped line (taskLine.ts; plain chat, Dee, 11-03).
+  it('replies Merged in the task\'s thread when its merge is recorded, once on a retry, waking nobody', async () => {
     const tab = await swarm()
     await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: randomUUID(), name: 'River', configuration: config, lead: true })
     const group = (await run(tab, { type: 'conversation.create', title: 'Avatars', brief: 'Add avatars.',
@@ -516,7 +516,9 @@ describe('the ship moment', () => {
     expect(rows.filter(m => (m.source as { kind?: string } | null)?.kind === 'ship')).toEqual([])
     const lines = rows.filter(m => (m.source as { kind?: string } | null)?.kind === 'task-line')
     expect(lines).toHaveLength(1)
-    expect(lines[0]).toMatchObject({ text: 'Avatars · shipped', recipientIds: [], source: { taskId: group, state: 'shipped', builderId: builder } })
-    expect(await db.superTabDelivery.count({ where: { tabId: tab, messageId: lines[0]!.id } })).toBe(0)
+    expect(lines[0]).toMatchObject({ text: "Let's build: Avatars", recipientIds: [], source: { taskId: group } })
+    const merges = rows.filter(m => m.thread === lines[0]!.id && m.text.startsWith('Merged'))
+    expect(merges).toEqual([expect.objectContaining({ text: 'Merged: PR #7. Ships in the next release.', recipientIds: [] })])
+    expect(await db.superTabDelivery.count({ where: { tabId: tab, messageId: { in: [lines[0]!.id, merges[0]!.id] } } })).toBe(0)
   })
 })

@@ -52,7 +52,6 @@ import 'swarm_reactions.dart';
 import 'swarm_read_marks.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
-import 'swarm_task_line.dart';
 import 'swarm_thread.dart';
 import 'swarm_thread_line.dart';
 import 'swarm_thread_page.dart';
@@ -948,20 +947,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     );
   }
 
-  VoidCallback? _taskOpener(SwarmConversation c, SuperTabMessage message) {
-    final taskId = message.source['taskId'];
-    if (!swarmIsTaskLine(message) ||
-        taskId is! String ||
-        c.reader.snapshot?.conversation(taskId) == null) {
-      return null;
-    }
-    return () {
-      if (c.reader.snapshot?.conversation(taskId) != null) {
-        openSwarmConversation(context, widget.swarmId, taskId);
-      }
-    };
-  }
-
   void _openNumberedConversation(SwarmConversation c, String id) {
     final reader = _session?.inbox.reader(c.reader.tabId);
     if (mounted && swarmCanOpenNumberedConversation(reader, id)) {
@@ -1014,7 +999,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       taggedAddresses: _taggedOf(c, m),
       taggedLabels: _labelsOf(c, m),
       readerId: c.reader.accountId,
-      onOpenTask: _taskOpener(c, m),
       references: _numberedReferences(c, m.text).references,
       onOpenConversation: (id) => _openNumberedConversation(c, id),
       grouped: grouped,
@@ -1841,14 +1825,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       stream,
       (agentId) => snapshot?.agent(agentId),
     );
-    final messages = swarmTaskLineMessages(
-      answered.isEmpty
-          ? stream
-          : [
-              for (final m in stream)
-                if (!answered.contains(m.id)) m,
-            ],
-    );
+    final messages = answered.isEmpty
+        ? stream
+        : [
+            for (final m in stream)
+              if (!answered.contains(m.id)) m,
+          ];
     // The notes hidden are part of what the rows were made from: a warning
     // goes once its agent's prompt is answered, with no new message.
     final from = (
@@ -2001,7 +1983,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               taggedAddresses: tagged,
               taggedLabels: labels,
               readerId: c.reader.accountId,
-              onOpenTask: _taskOpener(c, m),
               references: references,
               onOpenConversation: (id) => _openNumberedConversation(c, id),
               grouped: grouped,
@@ -2031,9 +2012,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                   ? () => _openThread(c, root)
                   : () => _reply(c, m),
               inThread: root != null,
-              onOpenProposal: m.proposalOwnerId == null
-                  ? null
-                  : () => _openThread(c, m.id),
               card: card == null
                   ? null
                   : SwarmLiveCard(
@@ -2878,11 +2856,9 @@ String swarmDayLabel(DateTime day, DateTime now) {
 Set<String> swarmGroupedMessages(List<SuperTabMessage> messages) {
   bool joins(SuperTabMessage current, SuperTabMessage previous) {
     bool plain(SuperTabMessage m) =>
-        !swarmIsTaskLine(m) &&
         m.source['kind'] != 'ship' &&
         m.route == null &&
         !m.terminalEvent &&
-        m.proposalOwnerId == null &&
         m.replyTo == null &&
         m.text.length <= 280 &&
         !m.text.contains('\n') &&
