@@ -98,7 +98,7 @@ describe('pull request events', () => {
       checkSuites: [{ status: 'completed', runs: 1 }] }))
     expect(await f.pass()).toBe(1)
     f.pulls.set(f.PR, f.pull({ head: head2, mergeable: false, checkRuns: [{ name: 'build (ubuntu)', status: 'completed', conclusion: 'success', completedAt: f.clock.now }],
-      checkSuites: [{ status: 'completed', runs: 1 }], reviews: [{ id: 7, login: 'huy', state: 'CHANGES_REQUESTED', body: 'Keep the arrow.', url: `${f.PR}#pullrequestreview-7` }] }))
+      checkSuites: [{ status: 'completed', runs: 1 }], reviews: [{ id: 7, login: 'huy', association: 'MEMBER', state: 'CHANGES_REQUESTED', body: 'Keep the arrow.', url: `${f.PR}#pullrequestreview-7` }] }))
     expect(await f.pass()).toBe(2)
     const rows = await f.told()
     expect(rows.map(r => r.text)).toEqual([
