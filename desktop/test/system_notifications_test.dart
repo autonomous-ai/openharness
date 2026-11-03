@@ -904,25 +904,128 @@ void main() {
         expect(ran.last, isNot(contains('--wait')));
       });
 
-      test('waits for at most eight at once; the rest go up plainly', () async {
-        final open = Completer<ProcessResult>();
+      /// A fake [NoticeWaiter]: each wait stays open until the test answers it, and a kill
+      /// ends it as a signal does.
+      ({
+        LinuxSystemNotifier notifier,
+        List<Completer<ProcessResult>> open,
+        List<int> killed,
+        List<Duration> limits,
+        List<List<String>> plain,
+      })
+      waiting() {
+        final open = <Completer<ProcessResult>>[];
+        final killed = <int>[];
+        final limits = <Duration>[];
         final plain = <List<String>>[];
-        final waiting = LinuxSystemNotifier(
-          run: (exe, args) {
-            if (args.contains('--wait')) return open.future;
+        final notifier = LinuxSystemNotifier(
+          run: (exe, args) async {
             plain.add(args);
-            return Future.value(ProcessResult(0, 0, '', ''));
+            return ProcessResult(0, 0, '', '');
+          },
+          wait: (exe, args, {required limit}) {
+            final i = open.length;
+            final done = Completer<ProcessResult>();
+            open.add(done);
+            limits.add(limit);
+            return (
+              result: done.future,
+              kill: () {
+                killed.add(i);
+                if (!done.isCompleted) {
+                  done.complete(ProcessResult(0, -15, '', ''));
+                }
+              },
+            );
           },
         );
-        for (var i = 0; i < 9; i++) {
-          await notice(waiting, '@chat', 'tab-1/c$i');
-        }
+        return (
+          notifier: notifier,
+          open: open,
+          killed: killed,
+          limits: limits,
+          plain: plain,
+        );
+      }
+
+      // Review of #2808 (Lyra): GNOME and KDE keep an unclicked notice in their list, so a
+      // wait can last all session; once eight were stuck, no notice could be clicked again.
+      test(
+        'past eight waiting, the oldest gives way and the newest still opens',
+        () async {
+          final w = waiting();
+          final taps = <(String, String)>[];
+          w.notifier.onTap = (machine, agent) => taps.add((machine, agent));
+          for (var i = 0; i < 9; i++) {
+            await notice(w.notifier, '@chat', 'tab-1/c$i');
+          }
+          await pumpEventQueue();
+          expect(
+            w.open,
+            hasLength(9),
+            reason: 'every notice waits for its click',
+          );
+          expect(w.killed, [0], reason: 'the oldest wait gave way');
+          expect(w.plain, isEmpty);
+          w.open[8].complete(ProcessResult(0, 0, 'default\n', ''));
+          await pumpEventQueue();
+          expect(taps, [('@chat', 'tab-1/c8')]);
+        },
+      );
+
+      test('each wait has a time limit', () async {
+        final w = waiting();
+        await notice(w.notifier, '@chat', 'tab-1/offline');
+        expect(w.limits.single, greaterThan(Duration.zero));
+        expect(w.limits.single, lessThanOrEqualTo(const Duration(minutes: 30)));
+      });
+
+      test('a wait that fails still puts its notice up, plainly', () async {
+        final plain = <List<String>>[];
+        final n = LinuxSystemNotifier(
+          run: (exe, args) async {
+            plain.add(args);
+            return ProcessResult(0, 0, '', '');
+          },
+          wait: (exe, args, {required limit}) => (
+            result: Future.value(ProcessResult(0, 1, '', 'Could not connect')),
+            kill: () {},
+          ),
+        );
+        await notice(n, '@chat', 'tab-1/offline');
         await pumpEventQueue();
         expect(plain, hasLength(1));
         expect(plain.single, contains('Offline editing'));
-        open.complete(ProcessResult(0, 0, '', ''));
       });
     });
+
+    test(
+      'a waiting notify-send stops at its limit, or when it is stopped',
+      () async {
+        final answered = await waitOffUiIsolate('/bin/sh', [
+          '-c',
+          'printf default',
+        ], limit: const Duration(minutes: 1)).result;
+        expect((answered.exitCode, answered.stdout), (0, 'default'));
+        final timedOut = await waitOffUiIsolate(
+          '/bin/sh',
+          ['-c', 'sleep 30'],
+          limit: const Duration(milliseconds: 200),
+        ).result.timeout(const Duration(seconds: 10));
+        expect(timedOut.exitCode, isNot(0));
+        final stopped = waitOffUiIsolate('/bin/sh', [
+          '-c',
+          'sleep 30',
+        ], limit: const Duration(minutes: 1));
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        stopped.kill();
+        expect(
+          (await stopped.result.timeout(const Duration(seconds: 10))).exitCode,
+          isNot(0),
+        );
+      },
+      skip: Platform.isWindows,
+    );
 
     test(
       'a desktop without notify-send is unavailable, not an error',
