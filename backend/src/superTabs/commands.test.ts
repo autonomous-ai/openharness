@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { storeOldLeads } from './leads.test-support.js'
-import { applyCommand, commandSchema, LOOP_NOTICE_AT, PAIR_CHAIN_LIMIT, swarmGridName, withoutCredentials, type Command, type CommandContext } from './commands.js'
+import { applyCommand, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, PAIR_CHAIN_LIMIT, swarmGridName, withoutCredentials, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
 import { sweepLiveness } from './liveness.js'
 import { SWITCH_UNCLAIMED_MS } from './tidy.js'
@@ -1483,6 +1483,11 @@ it('joins a lead and records its first message when its requested launch was ref
   expect(f.state.conversations.find(conversation => conversation.id === 'lead')!.leadId).toBe(joined.result.agentId)
   expect(initial.id).toBe(joined.result.messageId)
   expect(refusal.id).not.toBe(initial.id)
+})
+it('returns a client error when one command produces duplicate message IDs', () => {
+  expect(() => assertUniqueMessageIds('agent.add', [{ id: 'same' }, { id: 'same' }]))
+    .toThrow(expect.objectContaining({ name: 'SuperTabError', code: 'DUPLICATE_MESSAGE_ID', status: 400,
+      message: expect.stringContaining('duplicate message IDs') }))
 })
 it('accepts POSIX, Windows drive and UNC folders and refuses relative, drive-relative and control-character ones', () => {
   const contribute = (cwd: string) => commandSchema.safeParse({ type: 'machine.contribute', machineId: 'host', name: 'PC', cwd, engines: ['claude'], maxAgents: 1 })
