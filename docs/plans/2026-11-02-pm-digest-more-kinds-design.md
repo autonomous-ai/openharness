@@ -20,10 +20,9 @@ decision someone answered. This design gathers only the parts of them where the 
 
 ## What changes
 
-1. **A step's Stuck.** A `work.status` row with status `blocked` in a step (a group with `reviewOf`) is gathered for the
-   coordinator. The task's owner, who acts on it, still gets it at once, as today. Stuck on a task itself, and Needs a
-   human anywhere, still reach the PM at once. A Reviewer or Tester that needs a person sets `needs_human`; the project
-   instructions now say so (workflow step 3, PR #2638).
+1. **A step's Stuck: dropped after review.** It stays at once for the coordinator, as today. The project instructions say
+   blocked and needs_human are only for something a person must do (workflow step 3; #2638, which would have changed that,
+   closed unmerged), so a step's Stuck is always something a person acts on (review of #2797, 2026-11-03).
 2. **The PM's instructions and skills notices.** An `agent-only` message a coordinator's own host sends to it about its
    skills (instructions changed, skills replaced or updated) is gathered. The host marks it: `message.send` gains an
    optional `notice: "skills"`, accepted only with `agentOnly: true`, from an agent to itself; the row keeps it as
