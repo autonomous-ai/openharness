@@ -172,11 +172,17 @@ export async function resolveRead(db: Tx | PrismaClient, input: { tabId: string;
       alsoInChat: (m.alsoInChat as boolean | undefined) ?? null }))
   const threads = await threadsOf(tx, tabId, messages)
   const passed = new Set(messages.filter(m => (threads.get(m.id) ?? null) === threadId).map(m => m.id))
-  const ids = rows.filter(r => passed.has(r.messageId)).map(r => r.id)
+  return resolveIds(tx, tabId, personId, rows.filter(r => passed.has(r.messageId)).map(r => r.id), 'read', now)
+}
+
+/** Resolves these waiting tags of the person in one write, by their ids (at most the 500 a read takes): raw, since Prisma sends
+ *  an `in` on this hot collection as $expr (hotFilters.test.ts). `resolvedAt: null` matches an unset one too. Answers how many. */
+async function resolveIds(tx: Tx, tabId: string, personId: string, ids: string[], by: 'read' | 'answer', now: number): Promise<number> {
   if (!ids.length) return 0
-  let count = 0
-  for (const id of ids) count += (await tx.superTabMention.updateMany({ where: { id, tabId, personId, ...waiting }, data: { resolvedAt: new Date(now), resolvedBy: 'read' } })).count
-  return count
+  const answer = await tx.$runCommandRaw({ update: 'SuperTabMention', updates: [{ q: { _id: { $in: ids }, tabId, personId, resolvedAt: null },
+    u: { $set: { resolvedAt: { $date: new Date(now).toISOString() }, resolvedBy: by } }, multi: true }] }) as { nModified?: number; writeErrors?: unknown[] }
+  if (answer.writeErrors?.length) throw new Error('The database refused some tag resolves')
+  return answer.nModified ?? 0
 }
 
 /** The agents a person's post answers: its recipients, and in their own Buddy chat also the coordinator of each project the Buddy
@@ -190,16 +196,13 @@ export function answeredAgents(state: SuperTabState, actor: Extract<Actor, { kin
 
 /** A post to an agent answers every tag that agent made for the person, in any conversation. A held tag (holdUntil) resolved
  *  before its time is never listed, as in resolveByReply (intended). The agent that made a tag is in no index: the person's
- *  waiting tags are read once by theirs, as resolveRead reads them, and the agents' resolved by id. */
+ *  waiting tags are read once by theirs, as resolveRead reads them, and the agents' resolved in one write. */
 export async function resolveByAnswer(tx: Tx, tabId: string, personId: string, agentIds: readonly string[], now: number): Promise<void> {
   if (!agentIds.length) return
   const answered = new Set(agentIds)
   const rows = await tx.superTabMention.findMany({ where: { tabId, personId, createdAt: { gt: new Date(now - MENTION_EXPIRY_MS), lte: new Date(now) }, ...waiting },
     select: { id: true, authorAgentId: true }, orderBy: { createdAt: 'desc' }, take: 500 })
-  for (const row of rows) {
-    if (!answered.has(row.authorAgentId)) continue
-    await tx.superTabMention.updateMany({ where: { id: row.id, tabId, personId, ...waiting }, data: { resolvedAt: new Date(now), resolvedBy: 'answer' } })
-  }
+  await resolveIds(tx, tabId, personId, rows.filter(row => answered.has(row.authorAgentId)).map(row => row.id), 'answer', now)
 }
 
 /** A worker took the group: its held tags are over. A listed one moves to Earlier; one not yet listed is dropped, as if never
