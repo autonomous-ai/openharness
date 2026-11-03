@@ -666,6 +666,22 @@ void main() {
     }
   });
 
+  // Review of #2756 (ENGINEERING.md §6): a dial thread whose root never
+  // reaches the chat is given up, and the log says so, without its root.
+  test('a dial thread whose root never arrives is given up, and logged', () async {
+    final lines = <String>[];
+    final previous = appLog;
+    appLog = _RecordingLog(lines);
+    addTearDown(() => appLog = previous);
+    final (f, c) = await openChats();
+    f.app.dialThreadWaitForTest = const Duration(milliseconds: 20);
+    await threadOnly(f, 'design-lead', 'message-never');
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    expect(c.openedThread, isNull);
+    expect(lines.where((l) => l.contains('thread')), hasLength(1));
+    expect(lines.join('\n'), isNot(contains('message-never')));
+  });
+
   test('a decisions view or an unloaded Swarm leaves conversationId out', () async {
     final (f, c) = await openChats();
     c.select('design-pm');
