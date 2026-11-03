@@ -484,6 +484,86 @@ void main() {
     expect(row(announces(f).last).containsKey('threadRoot'), isFalse);
   });
 
+  Future<void> pickThread(
+    SuperTabLaunchFixture f,
+    String project,
+    Object? root, {
+    bool withRoot = true,
+  }) => f.app.handleEventForTest('m', {
+    'type': 'dial_super_tab',
+    'payload': {
+      'superTabId': tabId,
+      'projectId': project,
+      if (withRoot) 'threadRoot': root,
+    },
+  });
+
+  // Diego's dial, 2026-11-03: the dial's thread opens in the app too.
+  test('a dial pick with threadRoot opens that thread beside the chat', () async {
+    final (f, c) = await openChats();
+    f.connection.server.append('Fix it', conversationId: 'design-lead');
+    await pickThread(f, 'design', 'message-${f.connection.server.revision}');
+    await settle();
+    expect(c.selectedId, 'design-lead');
+    expect(c.openedThread?.conversationId, 'design-lead');
+    expect(c.openedThread?.root, 'message-${f.connection.server.revision}');
+    // A root that is no message of the chat opens nothing.
+    c.closeThread();
+    await pickThread(f, 'design', 'nope');
+    await settle();
+    expect(c.openedThread, isNull);
+  });
+
+  test('a root posted a moment before the pick opens once the chat reads it', () async {
+    final (f, c) = await openChats();
+    final server = f.connection.server;
+    final root = 'message-${server.revision + 1}';
+    await pickThread(f, 'design', root);
+    await settle();
+    expect(c.openedThread, isNull);
+    server.append('Fix it', conversationId: 'design-lead');
+    await c.refresh();
+    await settle();
+    expect(c.openedThread?.root, root);
+    expect(c.openedThread?.conversationId, 'design-lead');
+  });
+
+  test('a pending root is dropped when the dial picks another chat', () async {
+    final (f, c) = await openChats();
+    final server = f.connection.server;
+    final root = 'message-${server.revision + 1}';
+    await pickThread(f, 'design', root);
+    await settle();
+    await pickThread(f, 'lead', null, withRoot: false);
+    await settle();
+    server.append('Fix it', conversationId: 'design-lead');
+    await c.refresh();
+    await settle();
+    expect(c.openedThread, isNull);
+  });
+
+  test('threadRoot null closes the open thread', () async {
+    final (f, c) = await openChats();
+    c.select('design-lead');
+    await settle();
+    c.openThread('m-root');
+    expect(c.openedThread, isNotNull);
+    await pickThread(f, 'design', null);
+    await settle();
+    expect(c.openedThread, isNull);
+  });
+
+  test('no threadRoot keeps today\'s pick', () async {
+    final (f, c) = await openChats();
+    c.select('design-lead');
+    await settle();
+    c.openThread('m-root');
+    await pickThread(f, 'design', null, withRoot: false);
+    await settle();
+    expect(c.selectedId, 'design-lead');
+    expect(c.openedThread?.root, 'm-root');
+  });
+
   test('a decisions view or an unloaded Swarm leaves conversationId out', () async {
     final (f, c) = await openChats();
     c.select('design-pm');

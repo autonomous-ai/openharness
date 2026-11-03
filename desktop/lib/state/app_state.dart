@@ -4701,6 +4701,7 @@ class AppNotifier extends ChangeNotifier {
     String tabId,
     String projectId, {
     bool buddy = false,
+    Object? thread,
   }) async {
     final open = swarms.where((s) => s.superTabId == tabId).firstOrNull;
     final name = open?.name ?? _superTabNames[tabId];
@@ -4743,7 +4744,14 @@ class AppNotifier extends ChangeNotifier {
         );
         if (_disposed || _devicePick != pick) return;
       } else {
-        controller.select(project.leadConversationId);
+        await controller.select(project.leadConversationId);
+        if (_disposed || _devicePick != pick) return;
+      }
+      if (thread == '') {
+        controller.closeThread();
+      } else if (thread is String) {
+        await _openDialThread(controller, thread, pick);
+        if (_disposed || _devicePick != pick) return;
       }
       // Selecting what is already selected announces nothing by itself.
       _announceOpenPanesToDial();
@@ -4753,6 +4761,38 @@ class AppNotifier extends ChangeNotifier {
       abandon.cancel();
       if (_devicePick == pick) _announceFromDevice = false;
     }
+  }
+
+  /// Opens [root] beside the selected chat once the chat holds it. The dial
+  /// names a thread right after its post made the root, so the app often has
+  /// not read it: read once, then wait for a later read, until another pick,
+  /// another chat or 10 seconds. A root the chat never holds opens nothing.
+  Future<void> _openDialThread(
+    SuperTabController controller,
+    String root,
+    int pick,
+  ) async {
+    final id = controller.selectedId;
+    bool holds() => controller
+        .messages(id)
+        .any((m) => m.id == root || m.thread == root);
+    if (!holds()) await controller.refresh();
+    if (_disposed || _devicePick != pick || controller.selectedId != id) return;
+    if (holds()) return controller.openThread(root);
+    Timer? giveUp;
+    void listener() {
+      final stale =
+          _disposed || _devicePick != pick || controller.selectedId != id;
+      if (!stale && !holds()) return;
+      giveUp?.cancel();
+      controller.removeListener(listener);
+      if (!stale) controller.openThread(root);
+    }
+
+    controller.addListener(listener);
+    giveUp = Timer(const Duration(seconds: 10), () {
+      controller.removeListener(listener);
+    });
   }
 
   void _noteNavigation() {
@@ -22478,6 +22518,11 @@ class AppNotifier extends ChangeNotifier {
             tabId,
             projectId,
             buddy: payload['chat'] == 'buddy',
+            // A string opens that thread, null closes the pane, absent keeps
+            // today's pick (the dial's thread face, 2026-11-03).
+            thread: payload.containsKey('threadRoot')
+                ? (payload['threadRoot'] as Object?) ?? ''
+                : null,
           );
         }
         break;
