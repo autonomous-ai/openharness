@@ -595,7 +595,7 @@ class _InstructionsPanelState extends State<_InstructionsPanel> {
   }
 
   String _personName(String id) =>
-      c.snapshot?.people.where((p) => p.id == id).firstOrNull?.username ??
+      c.snapshot?.people.where((p) => p.id == id).firstOrNull?.shownName ??
       'a member';
 
   /// What the coordinator was told to keep, newest first, with who asked and until when (spec: PM notes).

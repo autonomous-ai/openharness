@@ -409,6 +409,46 @@ void main() {
   );
 
   testWidgets(
+    'a machine’s owner is named by the name they set (review of #2794)',
+    (tester) async {
+      final server = ConversationServer();
+      server.state['people'] = [
+        {
+          'id': 'tony',
+          'email': 'tony@example.com',
+          'role': 'owner',
+          'name': 'Tony Tran',
+        },
+      ];
+      server.state['machines'] = [
+        {
+          'machineId': 't',
+          'name': 'MacBook Pro',
+          'contributorId': 'tony',
+          'observation': {'receivedAt': DateTime.now().millisecondsSinceEpoch},
+        },
+      ];
+      final c = server.controller();
+      await c.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabMachines(controller: c, onAddAgent: (_) {}),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        _tipOf(tester, find.byKey(const ValueKey('super-machine-t'))),
+        'Owned by Tony Tran',
+      );
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    },
+  );
+
+  testWidgets(
     'two machines of one model keep their names, and each has its owner avatar and tooltip',
     (tester) async {
       final server = ConversationServer();

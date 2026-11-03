@@ -1417,7 +1417,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         app?.stateOf(id)?.machine.displayName ??
         // The Swarm knows no name for it, and sharing its own would be new data: it is named by its owner.
         (agentsOnly && person != null
-            ? "${person.username}'s computer"
+            ? "${person.shownName}'s computer"
             : 'Unavailable machine');
     final subscriptions = _subscriptions(
       id,
@@ -1539,7 +1539,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       // after its state when that is not online. Never an age. Only current readings are included.
       tip: [
         if (cleaning) 'Cleaning up' else ?superTabMachineTip(status),
-        if (person != null) 'Owned by ${person.username}',
+        if (person != null) 'Owned by ${person.shownName}',
         if (paused) 'New work paused',
         if (!dim && value?.cpuPercent != null)
           'CPU ${available(value!.cpuPercent!)} free',
@@ -1888,7 +1888,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               ],
               body: SuperTabMachineDetails(
                 name: name,
-                owner: person?.username,
+                owner: person?.shownName,
                 status: details,
                 // Details follow the same freshness rule as the row and its disclosure.
                 resources: dim ? null : value,
@@ -2966,7 +2966,7 @@ class _MachineLine extends StatelessWidget {
                   left: grid.AppDesktop.controlGap,
                 ),
                 child: Text(
-                  owner.username,
+                  owner.shownName,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: DesktopChrome.metadata(),
@@ -2985,7 +2985,7 @@ class _MachineLine extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(left: 6),
               child: Tooltip(
-                message: 'Owned by ${owner.username}',
+                message: 'Owned by ${owner.shownName}',
                 child: SuperTabAvatar.person(owner, size: 20),
               ),
             ),
