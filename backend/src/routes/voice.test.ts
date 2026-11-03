@@ -242,6 +242,12 @@ describe('POST /api/voice/stt', () => {
       expect((await send(app, wav(20))).statusCode).toBe(429)
     })
 
+    it('does not grant a plan through a machine whose subscription lapsed', async () => {
+      store.machines = [{ userId: 'user-1', planId: MAX.id, billingStatus: 'suspended', billingActivatedAt: new Date('2026-10-01') }]
+      expect((await send(app, wav(590))).statusCode).toBe(200)
+      expect((await send(app, wav(20))).statusCode).toBe(429)
+    })
+
     it('holds even with no plan rows: a forgotten default never means unlimited', async () => {
       store.plans = []
       expect((await send(app, wav(590))).statusCode).toBe(200)
