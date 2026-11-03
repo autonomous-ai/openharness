@@ -1112,7 +1112,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const projectId = command.sessionProjectId ?? context.reply?.sessionProject
       const project = swarm ? projectId ? readProject(state, actor, projectId) : undefined : groupProject(state, chat)
       const me = person(state, owner.id)
-      const folder = project ? { cwd: projectFolder(pool, project), worktree: true, ...(swarm ? { buddyNarrow: true as const } : {}) }
+      // A session of one project never reads beyond its folder, in either chat (task #2356: one in an older project chat ran
+      // wide, so it read its person's whole home, other projects' clones included, while that chat's own Buddy was narrow).
+      const folder = project ? { cwd: projectFolder(pool, project), worktree: true, buddyNarrow: true as const }
         : { cwd: buddyHomeFolder(pool, me), worktree: false, buddyScope: 'swarm' as const, buddyProjects: buddyProjectsOn(state, pool, me) }
       const request: AgentStartRequest = { conversationId: chat.id, machineId: main.machineId, engine: main.configuration.engine,
         ...(main.configuration.model ? { model: main.configuration.model } : {}), ...(main.configuration.effort ? { effort: main.configuration.effort } : {}),
