@@ -174,7 +174,7 @@ export const buddyReady = (name: string): string => `${name} is ready. Tell it w
  *  model, a terminal alert, its own stop). Every other command is refused, so it can never assign, start, route, ask
  *  decisions or change anything for its owner (spec constraint: PRIVACY-CRITICAL). */
 const BUDDY_COMMANDS: ReadonlySet<string> = new Set(['message.send', 'message.react', 'buddy.propose', 'agent.configuration', 'agent.alert',
-  'agent.stopLease', 'agent.stopRefused', 'agent.remove'])
+  'agent.stopLease', 'agent.stopRefused', 'agent.remove', 'buddy.modelResult'])
 
 export function requireBuddyCommand(buddy: Agent, command: { type: string; conversationId?: unknown; agentId?: unknown }, groups: readonly Conversation[]): void {
   if (!BUDDY_COMMANDS.has(command.type)) fail('BUDDY_FORBIDDEN', 'A Buddy only talks with its owner and sends the proposals they ask for.', 403)
