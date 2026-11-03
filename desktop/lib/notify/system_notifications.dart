@@ -380,18 +380,80 @@ typedef NoticeWaiter = NoticeWait Function(
   required Duration limit,
 });
 
-/// A [NoticeWaiter] on an isolate of its own, as [offUiIsolate] runs.
+/// A [NoticeWaiter] on an isolate of its own, for the reason [offUiIsolate]
+/// gives. The isolate starts the process, stops it at [limit] or when asked,
+/// and answers as [Process.run] would; a missing tool is a [ProcessException].
 NoticeWait waitOffUiIsolate(
   String executable,
   List<String> arguments, {
   required Duration limit,
-}) => (
-  result: Isolate.run(
-    () => Process.run(executable, arguments),
-    debugName: executable,
-  ),
-  kill: () {},
-);
+}) {
+  final answers = ReceivePort();
+  final done = Completer<ProcessResult>();
+  SendPort? control;
+  var stop = false;
+  void finish() => answers.close();
+  answers.listen((message) {
+    switch (message) {
+      case SendPort port:
+        control = port;
+        if (stop) port.send(null);
+      case (int pid, int code, String out, String err):
+        done.complete(ProcessResult(pid, code, out, err));
+        finish();
+      case String error:
+        done.completeError(ProcessException(executable, arguments, error));
+        finish();
+    }
+  });
+  unawaited(
+    Isolate.spawn(_waitForNotice, (
+      answers.sendPort,
+      executable,
+      arguments,
+      limit,
+    ), debugName: executable).then<void>(
+      (_) {},
+      onError: (Object error) {
+        if (!done.isCompleted) done.completeError(error);
+        finish();
+      },
+    ),
+  );
+  return (
+    result: done.future,
+    kill: () {
+      stop = true;
+      control?.send(null);
+    },
+  );
+}
+
+Future<void> _waitForNotice(
+  (SendPort, String, List<String>, Duration) job,
+) async {
+  final (answers, executable, arguments, limit) = job;
+  final control = ReceivePort();
+  answers.send(control.sendPort);
+  try {
+    final process = await Process.start(executable, arguments);
+    control.listen((_) => process.kill());
+    final out = process.stdout.transform(utf8.decoder).join();
+    final err = process.stderr.transform(utf8.decoder).join();
+    final code = await process.exitCode.timeout(
+      limit,
+      onTimeout: () {
+        process.kill();
+        return process.exitCode;
+      },
+    );
+    answers.send((process.pid, code, await out, await err));
+  } on ProcessException catch (error) {
+    answers.send(error.message);
+  } finally {
+    control.close();
+  }
+}
 
 /// Linux: `notify-send`, which talks to whatever notification daemon the
 /// desktop already runs. No native dependency. A Swarm tag's or chat's notice
@@ -425,11 +487,15 @@ class LinuxSystemNotifier implements SystemNotifier {
   /// Whether this `notify-send` knows `--action`/`--wait`; asked once, as above.
   bool _canAct = true;
 
-  /// The notices whose `notify-send` is still waiting for a click, each on an
-  /// isolate of its own until its notice closes. A daemon may keep a notice
-  /// until it is dismissed, so past [_maxWaiting] they go up without a click.
-  int _waiting = 0;
+  /// The notices whose `notify-send` still waits for a click, oldest first,
+  /// each on an isolate of its own. GNOME and KDE keep an unclicked notice
+  /// until it is dismissed, so a wait would last all session (review of
+  /// #2808): each stops after [_waitLimit], and past [_maxWaiting] the oldest
+  /// stops so the newest can still be clicked. A stopped wait leaves its
+  /// notice up; only its click goes nowhere.
+  final _waits = <NoticeWait>[];
   static const _maxWaiting = 8;
+  static const _waitLimit = Duration(minutes: 10);
 
   void Function(String machineId, String agentId)? _onTap;
 
@@ -467,41 +533,56 @@ class LinuxSystemNotifier implements SystemNotifier {
         (machineId == SystemNotifications.mentionNoticeMachine ||
             machineId == SystemNotifications.chatNoticeMachine) &&
         agentId.isNotEmpty;
-    if (opens && _canAct && _waiting < _maxWaiting) {
-      _waiting++;
-      unawaited(
-        _wait('notify-send', [
-              '--app-name=Harness',
-              '--action=default=Open',
-              '--wait',
-              '--',
-              title,
-              body,
-            ], limit: const Duration(minutes: 10)).result
-            .then((result) async {
-              if (result.exitCode == 0) {
-                // The invoked action's name, on a line of its own; nothing when the notice
-                // expired or was dismissed.
-                final lines = '${result.stdout}'
-                    .split('\n')
-                    .map((l) => l.trim());
-                if (lines.contains('default')) _onTap?.call(machineId, agentId);
-                return;
-              }
-              // Only a notify-send that does not KNOW the flags gives them up, and its notice
-              // still goes up, plainly.
-              if ('${result.stderr}'.toLowerCase().contains('unknown option')) {
-                _canAct = false;
-                await _post(id, title, body);
-              }
-            })
-            .catchError((Object _) {})
-            .whenComplete(() => _waiting--),
-      );
+    if (opens && _canAct) {
+      if (_waits.length >= _maxWaiting) _waits.removeAt(0).kill();
+      final wait = _wait('notify-send', [
+        '--app-name=Harness',
+        '--action=default=Open',
+        '--wait',
+        '--',
+        title,
+        body,
+      ], limit: _waitLimit);
+      _waits.add(wait);
+      unawaited(_clicked(wait, id, title, body, machineId, agentId));
       // Its answer comes when the notice closes; what the platform last said stands meanwhile.
       return NotificationPermission.unknown;
     }
     return _post(id, title, body);
+  }
+
+  Future<void> _clicked(
+    NoticeWait wait,
+    String id,
+    String title,
+    String body,
+    String machineId,
+    String agentId,
+  ) async {
+    try {
+      final result = await wait.result;
+      if (result.exitCode == 0) {
+        // The invoked action's name, on a line of its own; nothing when the notice expired or
+        // was dismissed.
+        final lines = '${result.stdout}'.split('\n').map((l) => l.trim());
+        if (lines.contains('default')) _onTap?.call(machineId, agentId);
+        return;
+      }
+      // Stopped by a signal: its time ran out, or a newer notice took its place. Its notice is up.
+      if (result.exitCode < 0) return;
+      // A notify-send that does not KNOW the flags gives them up for good. Any other failure is
+      // the daemon's; either way the notice still goes up, plainly, and says what happened.
+      if ('${result.stderr}'.toLowerCase().contains('unknown option')) {
+        _canAct = false;
+      }
+      await _post(id, title, body);
+    } on ProcessException {
+      // No notify-send at all: the next notice goes the plain way, which reports it.
+      _canAct = false;
+      await _post(id, title, body);
+    } finally {
+      _waits.remove(wait);
+    }
   }
 
   Future<NotificationPermission> _post(
