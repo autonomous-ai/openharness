@@ -44,6 +44,7 @@ import 'join_machine.dart' show superTabSuggestedAgentSlots;
 import 'personal_machine_rows.dart';
 import 'team_account_setup.dart';
 import 'section_heading.dart';
+import 'swarm_switcher.dart' show PersonalSwarm;
 import '../widgets/laid_out_list.dart';
 
 export 'machine_status.dart';
@@ -412,8 +413,11 @@ Future<bool> _sendContribution(
   }
   await app.wakeSuperTabHost(machineId);
   // This Mac, added while its person is here: macOS asks once for the Harness
-  // Team account (cli/src/team/autoSetup.ts).
-  if (offerTeamAccount && app.stateOf(machineId)?.isLocalMachine == true) {
+  // Team account (cli/src/team/autoSetup.ts). Never for the Personal Swarm,
+  // which has no teammates to run work for (Diego, 2026-11-03).
+  if (offerTeamAccount &&
+      app.stateOf(machineId)?.isLocalMachine == true &&
+      PersonalSwarm.of(app).id != c.tabId) {
     unawaited(app.offerTeamAccount('contribute', tabId: c.tabId));
   }
   return true;
@@ -709,6 +713,10 @@ Future<void> _machineSettingsDialog(
                   engines,
                   maxAgents: atMost ?? memoryLimit(prepared),
                   alive: () => context.mounted,
+                  // The machine is in the Swarm already: changing its
+                  // settings is no moment to ask for the Team account, and
+                  // asking locked the app (Diego, 2026-11-03).
+                  offerTeamAccount: false,
                 )) {
                   return;
                 }
