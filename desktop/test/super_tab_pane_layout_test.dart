@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -310,4 +312,84 @@ void main() {
       expect(tester.getSize(left).width, 400, reason: saved);
     }
   });
+
+  // Huy, 11-03: an open thread (or task, or Members) is set apart from the
+  // chat by a soft shadow on its left edge, as in Slack, in both themes.
+  for (final brightness in Brightness.values) {
+    testWidgets('the right pane casts the shared shadow over the chat on its '
+        'left edge; the chat casts none (${brightness.name})', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      grid.AppTheme.brightness.value = brightness;
+      addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
+      final picture = GlobalKey();
+      final page = grid.AppDesktop.surface;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: brightness),
+          home: RepaintBoundary(
+            key: picture,
+            child: SuperTabPaneLayout(
+              storage: MemoryStore(),
+              onLeave: () {},
+              left: ColoredBox(color: page),
+              right: ColoredBox(color: page),
+              center: ColoredBox(color: page),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      List<BoxShadow> shadowsIn(Finder pane) => [
+        for (final box in tester.widgetList<DecoratedBox>(
+          find.descendant(of: pane, matching: find.byType(DecoratedBox)),
+        ))
+          if (box.decoration case BoxDecoration(:final boxShadow?))
+            ...boxShadow,
+      ];
+      expect(shadowsIn(right), grid.AppDesktop.paneEdgeShadow);
+      for (final shadow in shadowsIn(right)) {
+        expect(shadow.offset.dx, lessThan(0), reason: 'falls to the left');
+        expect(shadow.offset.dy, 0, reason: 'only to the left');
+      }
+      expect(shadowsIn(center), isEmpty);
+      expect(shadowsIn(left), isEmpty);
+
+      // The shadow is painted, over the chat: the chat just left of the pane
+      // is darker than the chat further in, which is the plain page.
+      final edge = tester.getTopLeft(right).dx;
+      final y = 400;
+      final pixels = await tester.runAsync(() async {
+        final boundary =
+            picture.currentContext!.findRenderObject()!
+                as RenderRepaintBoundary;
+        final image = await boundary.toImage();
+        final data = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+        int luma(double x) {
+          final at = (y * image.width + x.round()) * 4;
+          final b = data!.buffer.asUint8List();
+          return (b[at] * 299 + b[at + 1] * 587 + b[at + 2] * 114) ~/ 1000;
+        }
+
+        final read = (near: luma(edge - 6), far: luma(edge - 120));
+        image.dispose();
+        return read;
+      });
+      expect(
+        pixels!.far - pixels.near,
+        greaterThanOrEqualTo(3),
+        reason: 'shadow beside the pane: $pixels',
+      );
+      // The chat's own middle stays the page colour.
+      expect(pixels.far, closeTo(_luma(page), 1));
+      expect(tester.takeException(), isNull);
+    });
+  }
 }
+
+int _luma(Color c) =>
+    ((c.r * 255).round() * 299 +
+        (c.g * 255).round() * 587 +
+        (c.b * 255).round() * 114) ~/
+    1000;
