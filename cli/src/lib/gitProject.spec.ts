@@ -548,6 +548,19 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
       expect(await readFile(contacts, 'utf8').catch(() => '')).toBe('')
     })
 
+    it('says so when the files of a start\'s branch could not be fetched', async () => {
+      await pushToOrigin('main', 'main, later')
+      // The branch comes; the request for its files fails.
+      const flaky = join(root, 'flaky-upload-pack'), served = join(root, 'served')
+      await writeFile(flaky, `#!/bin/sh\n[ -e '${served}' ] && exit 1\ntouch '${served}'\nexec git-upload-pack "$@"\n`, { mode: 0o755 })
+      await inClone('config', 'remote.origin.uploadpack', flaky)
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        expect(await fetchStartBase(managed, process.env)).toBe(true)
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('could not fetch the files of refs/remotes/origin/main'))
+      } finally { warn.mockRestore() }
+    })
+
     // GIT_NO_LAZY_FETCH is read only by git 2.44 and later (Ubuntu 22.04 ships 2.34, Debian 12 2.39): review 1 of #2770.
     it('never fetches missing files offline even with a git that ignores GIT_NO_LAZY_FETCH', async () => {
       await pushToOrigin('main', 'main, later')
