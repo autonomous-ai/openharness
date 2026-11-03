@@ -556,7 +556,8 @@ model ProductUsageTotal {
   @@index([dayUtc], map: "product_usage_expiry")
 }
 
-/// Random report receipt, used only to prevent retries counting twice. No identity or report body.
+/// Random report receipt, used only to prevent retries counting twice. No identity or report body. Removed at expiresAt by a TTL index
+/// (product_usage_expiry); the old 36-day receipts go by 2026-12-04, sooner if the sweep may install its rule (lib/productUsageReceiptSweep.ts).
 model ProductUsageReceipt {
   id        String   @id @map("_id")
   expiresAt DateTime
@@ -1489,7 +1490,8 @@ model SuperTabAttempt {
   @@index([tabId, conversationId, createdAt])
 }
 
-/// One `harness super-tab route` decision (superTabs/routeRecord.ts). Pruned after 90 days on write.
+/// One `harness super-tab route` decision (superTabs/routeRecord.ts). Deleted 90 days after createdAt on each write (routeDecisions.ts
+/// RETENTION_MS; the costs report reads 90 days). Stored trimmed (routeRecord.ts storedRecord).
 model SuperTabRouteDecision {
   id             String    @id @map("_id")
   tabId          String
