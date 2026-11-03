@@ -1438,27 +1438,6 @@ abstract final class AppDesktop {
   static const double dialogElevation = 16;
   static const Color shadow = Color(0x3D000000);
 
-  /// The soft shadow a right-side pane (a thread, a task, Members) casts
-  /// leftward over the chat beside it, as in Slack (Huy, 11-03). It falls
-  /// only to the left: the pane sits above the chat, never beside it.
-  /// Darker in dark mode, where a light shadow would not show on charcoal.
-  static List<BoxShadow> get paneEdgeShadow => AppTheme.pick(
-    const [
-      BoxShadow(
-        color: Color(0x1F000000),
-        blurRadius: 14,
-        offset: Offset(-3, 0),
-      ),
-    ],
-    const [
-      BoxShadow(
-        color: Color(0x80000000),
-        blurRadius: 16,
-        offset: Offset(-3, 0),
-      ),
-    ],
-  );
-
   /// The soft shade a right-side pane (a thread, a task, Members) lays over
   /// the chat along its left edge, as in Slack (Huy, 11-03): a strip
   /// [paneEdgeShadeWidth] wide, darkest at the pane, fading to nothing over

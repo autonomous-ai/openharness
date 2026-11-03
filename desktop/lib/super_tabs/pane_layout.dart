@@ -232,10 +232,10 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
 }
 
 /// A pane on the right of a Swarm chat (a thread, a task, Members), beside it
-/// or over it as a drawer. It casts the design system's one pane shadow
-/// leftward over the chat, so the two read as separate surfaces, as in
-/// Slack (Huy, 11-03). The pane is drawn after the chat, so the shadow lies
-/// on the chat, never under it.
+/// or over it as a drawer. Along its left edge it lays the design system's
+/// pane shade over the chat, so the two read as separate surfaces, as in
+/// Slack (Huy, 11-03). The pane is drawn after the chat, so the shade lies on
+/// the chat; it takes no pointer, so the chat beneath it still gets clicks.
 class SuperTabRightPane extends StatelessWidget {
   const SuperTabRightPane({super.key, required this.child});
 
@@ -244,13 +244,25 @@ class SuperTabRightPane extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        // The pane's own surface under it: the shadow shows only outside.
-        color: grid.AppDesktop.surface,
-        boxShadow: grid.AppDesktop.paneEdgeShadow,
-      ),
-      child: child,
+    return Stack(
+      fit: StackFit.passthrough,
+      clipBehavior: Clip.none,
+      children: [
+        child,
+        Positioned(
+          top: 0,
+          bottom: 0,
+          left: -grid.AppDesktop.paneEdgeShadeWidth,
+          width: grid.AppDesktop.paneEdgeShadeWidth,
+          child: IgnorePointer(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: grid.AppDesktop.paneEdgeShade,
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
