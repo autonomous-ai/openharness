@@ -2,15 +2,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/machine_resources.dart';
+import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shortcuts/app_keymap.dart';
+import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/machine_status.dart';
+import 'package:harness/super_tabs/machines.dart';
+import 'package:harness/super_tabs/manage_page.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/section_heading.dart';
 
+import 'keymap_host_test.dart' show MemoryKeymap;
+import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show createApp;
 
@@ -36,17 +42,17 @@ Material rowMaterial(WidgetTester tester, String key) => tester.widget(
       .first,
 );
 
+/// The sidebar, with Manage opening Devices, one of its pages: [onManage] and
+/// the row's selection follow the controller as they do in the view.
 Future<void> pumpSidebar(
   WidgetTester tester,
   SuperTabController controller,
   AppNotifier app, {
   double width = 280,
   double scale = 1,
-  bool devices = true,
   VoidCallback? onNewProject,
-  VoidCallback? onYourDevices,
-  DateTime Function()? now,
-  Future<MachineResources?> Function(String)? readLocal,
+  VoidCallback? onManage,
+  VoidCallback? onNotifications,
 }) async {
   await tester.binding.setSurfaceSize(Size(width, 1000));
   await tester.pumpWidget(
@@ -63,18 +69,49 @@ Future<void> pumpSidebar(
           builder: (context, _) => ProjectSidebar(
             controller: controller,
             app: app,
-            onAddAgent: (_) {},
             needsHuman: (_) => 0,
             onSelect: controller.select,
             onNewProject: onNewProject ?? () {},
-            onYourDevices: devices
-                ? () {
-                    onYourDevices?.call();
-                    controller.selectDevices();
-                  }
-                : null,
-            devicesSelected: controller.devicesSelected,
-            readLocal: readLocal,
+            onNotifications: onNotifications ?? () {},
+            onManage: () {
+              onManage?.call();
+              controller.selectDevices();
+            },
+            manageSelected: controller.devicesSelected,
+          ),
+        ),
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
+
+/// The Machines group on its own, heading included.
+Future<void> pumpMachines(
+  WidgetTester tester,
+  SuperTabController controller,
+  AppNotifier app, {
+  double width = 280,
+  double scale = 1,
+  DateTime Function()? now,
+}) async {
+  await tester.binding.setSurfaceSize(Size(width, 1000));
+  await tester.pumpWidget(
+    MaterialApp(
+      theme: grid.buildAppTheme(brightness: Brightness.dark),
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context)
+            .copyWith(textScaler: TextScaler.linear(scale)),
+        child: child!,
+      ),
+      home: Scaffold(
+        body: ListenableBuilder(
+          listenable: controller,
+          builder: (context, _) => SuperTabMachines(
+            controller: controller,
+            app: app,
+            onAddAgent: (_) {},
+            embedded: true,
             now: now ?? DateTime.now,
           ),
         ),
@@ -118,143 +155,142 @@ Future<SuperTabController> projectSidebar(ConversationServer server) async {
 
 void main() {
   for (final scale in [1.0, 2.0]) {
-    testWidgets('flat navigation shares text and selection bounds; a project row '
-        'opens its chat and shows its workgroups at ${scale}x', (tester) async {
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      final app = createApp(connected: true);
-      addTearDown(app.dispose);
-      final server = ConversationServer();
-      final controller = await projectSidebar(server);
-      var created = 0;
-      var openedDevices = 0;
-      await pumpSidebar(
-        tester,
-        controller,
-        app,
-        scale: scale,
-        onNewProject: () => created++,
-        onYourDevices: () => openedDevices++,
-      );
-      final project = find.byKey(const ValueKey('super-group-lead'));
-      final empty = find.byKey(const ValueKey('super-group-empty-lead'));
-      final devices = find.byKey(const ValueKey('super-your-devices'));
-      final newProject = find.byKey(const ValueKey('super-new-project'));
-      expect(find.byType(OutlinedButton), findsNothing);
-      expect(
-        tester.getBottomLeft(devices).dy,
-        lessThan(tester.getTopLeft(find.text('Projects')).dy),
-      );
-      expect(
-        tester.getBottomLeft(newProject).dy,
-        lessThan(tester.getTopLeft(devices).dy),
-      );
-      expect(inRow('super-group-lead', find.text('#')), findsOneWidget);
+    testWidgets(
+      'flat navigation shares text and selection bounds; a project row '
+      'opens its chat and shows its workgroups at ${scale}x',
+      (tester) async {
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final app = createApp(connected: true);
+        addTearDown(app.dispose);
+        final server = ConversationServer();
+        final controller = await projectSidebar(server);
+        var created = 0;
+        var openedManage = 0;
+        var openedActivity = 0;
+        await pumpSidebar(
+          tester,
+          controller,
+          app,
+          scale: scale,
+          onNewProject: () => created++,
+          onManage: () => openedManage++,
+          onNotifications: () => openedActivity++,
+        );
+        final project = find.byKey(const ValueKey('super-group-lead'));
+        final empty = find.byKey(const ValueKey('super-group-empty-lead'));
+        final manage = find.byKey(const ValueKey('super-manage'));
+        final activity = find.byKey(const ValueKey('super-activity'));
+        expect(find.byType(OutlinedButton), findsNothing);
+        expect(
+          tester.getBottomLeft(activity).dy,
+          lessThan(tester.getTopLeft(find.text('Projects')).dy),
+        );
+        expect(
+          tester.getTopLeft(manage).dy,
+          greaterThan(tester.getBottomLeft(empty).dy),
+        );
+        expect(inRow('super-group-lead', find.text('#')), findsOneWidget);
 
-      // Its name in the Projects list, not its direct message's grey tag.
-      final sample = inRow(
-        'super-group-empty-lead',
-        find.text('sample-project'),
-      );
-      await tester.tap(sample);
-      await tester.pumpAndSettle();
-      expect(controller.selectedId, 'empty-lead');
-      await tester.tap(project);
-      await tester.pumpAndSettle();
-      expect(controller.selectedId, 'lead');
-      expect(inRow('super-group-lead', find.text('#')), findsOneWidget);
-      final toggle = find.byKey(const ValueKey('super-project-toggle-lead'));
-      await tester.tap(toggle);
-      await tester.pumpAndSettle();
-      final work = find.byKey(const ValueKey('super-group-offline'));
-      expect(work, findsOneWidget);
-      final textX = tester
-          .getTopLeft(inRow('super-group-lead', find.text('web-project')))
-          .dx;
-      for (final label in [
-        find.text('New project'),
-        find.text('Your devices'),
-        sample,
-        // A workgroup's number is grey, with no #: it is no channel.
-        inRow('super-group-offline', find.text('12  Offline editing')),
-      ]) {
-        expect(tester.getTopLeft(label).dx, textX, reason: '$label');
-      }
-      // Unread is a bold name, with no dot in either row (Dee, 2026-10-29).
-      expect(unreadDot('offline'), findsNothing);
-      expect(unreadDot('lead'), findsNothing);
-      for (final row in [newProject, devices, work]) {
-        final bounds = tester.getRect(row);
-        expect(bounds.left, tester.getRect(project).left);
-        expect(bounds.right, tester.getRect(toggle).right);
-      }
+        // Its name in the Projects list, not its direct message's grey tag.
+        final sample = inRow(
+          'super-group-empty-lead',
+          find.text('sample-project'),
+        );
+        await tester.tap(sample);
+        await tester.pumpAndSettle();
+        expect(controller.selectedId, 'empty-lead');
+        await tester.tap(project);
+        await tester.pumpAndSettle();
+        expect(controller.selectedId, 'lead');
+        expect(inRow('super-group-lead', find.text('#')), findsOneWidget);
+        // A second click shows its workgroups (no chevrons: Quiet Swarm).
+        await tester.tap(project);
+        await tester.pumpAndSettle();
+        final work = find.byKey(const ValueKey('super-group-offline'));
+        expect(work, findsOneWidget);
+        final textX = tester
+            .getTopLeft(inRow('super-group-lead', find.text('web-project')))
+            .dx;
+        for (final label in [
+          find.text('Activity'),
+          find.text('Manage'),
+          sample,
+          // A workgroup's number is grey, with no #: it is no channel.
+          inRow('super-group-offline', find.text('12  Offline editing')),
+        ]) {
+          expect(tester.getTopLeft(label).dx, textX, reason: '$label');
+        }
+        // Unread is a bold name, with no dot in either row (Dee, 2026-10-29).
+        expect(unreadDot('offline'), findsNothing);
+        expect(unreadDot('lead'), findsNothing);
+        for (final row in [activity, manage, work]) {
+          final bounds = tester.getRect(row);
+          expect(bounds.left, tester.getRect(project).left);
+          expect(bounds.right, tester.getRect(project).right);
+        }
 
-      await tester.tap(work);
-      await tester.pumpAndSettle();
-      expect(controller.selectedId, 'offline');
-      await tester.tap(empty);
-      await tester.pumpAndSettle();
-      expect(controller.selectedId, 'empty-lead');
-      expect(find.text('No workgroups yet'), findsNothing);
-      final emptyToggle = find.byKey(
-        const ValueKey('super-project-toggle-empty'),
-      );
-      await tester.tap(emptyToggle);
-      await tester.pumpAndSettle();
-      expect(find.text('No workgroups yet'), findsOneWidget);
-      expect(tester.getTopLeft(find.text('No workgroups yet')).dx, textX);
-      // A second click on its chevron hides them again.
-      await tester.tap(emptyToggle);
-      await tester.pumpAndSettle();
-      expect(controller.selectedId, 'empty-lead');
-      expect(find.text('No workgroups yet'), findsNothing);
+        await tester.tap(work);
+        await tester.pumpAndSettle();
+        expect(controller.selectedId, 'offline');
+        await tester.tap(empty);
+        await tester.pumpAndSettle();
+        expect(controller.selectedId, 'empty-lead');
+        expect(find.text('No workgroups yet'), findsNothing);
+        await tester.tap(empty);
+        await tester.pumpAndSettle();
+        expect(find.text('No workgroups yet'), findsOneWidget);
+        expect(tester.getTopLeft(find.text('No workgroups yet')).dx, textX);
+        // Another click hides them again.
+        await tester.tap(empty);
+        await tester.pumpAndSettle();
+        expect(controller.selectedId, 'empty-lead');
+        expect(find.text('No workgroups yet'), findsNothing);
 
-      // The plain top actions retain keyboard operation and do not create tabs.
-      Focus.of(tester.element(find.text('New project'))).requestFocus();
-      await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pumpAndSettle();
-      expect(created, 1);
-      await tester.tap(find.byTooltip('New project'));
-      await tester.pumpAndSettle();
-      expect(created, 2);
-      final tabsBefore = app.swarms.length;
-      Focus.of(tester.element(find.text('Your devices'))).requestFocus();
-      await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pumpAndSettle();
-      expect(openedDevices, 1);
-      expect(controller.devicesSelected, isTrue);
-      expect(controller.selectedId, 'empty-lead');
-      expect(app.swarms, hasLength(tabsBefore));
-      expect(
-        rowMaterial(tester, 'super-your-devices').color,
-        grid.AppSurface.selectedFill,
-      );
-      expect(
-        rowMaterial(tester, 'super-group-offline').color,
-        Colors.transparent,
-      );
+        // The plain rows retain keyboard operation and do not create tabs.
+        Focus.of(tester.element(find.text('Activity'))).requestFocus();
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(openedActivity, 1);
+        await tester.tap(find.byTooltip('New project'));
+        await tester.pumpAndSettle();
+        expect(created, 1);
+        final tabsBefore = app.swarms.length;
+        Focus.of(tester.element(find.text('Manage'))).requestFocus();
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(openedManage, 1);
+        expect(controller.devicesSelected, isTrue);
+        expect(controller.selectedId, 'empty-lead');
+        expect(app.swarms, hasLength(tabsBefore));
+        expect(
+          rowMaterial(tester, 'super-manage').color,
+          grid.AppSurface.selectedFill,
+        );
+        expect(
+          rowMaterial(tester, 'super-group-offline').color,
+          Colors.transparent,
+        );
 
-      // Returning to the already selected workgroup still leaves Devices.
-      await tester.tap(work);
-      await tester.pumpAndSettle();
-      expect(controller.devicesSelected, isFalse);
-      expect(controller.selectedId, 'offline');
-      expect(
-        rowMaterial(tester, 'super-group-offline').color,
-        grid.AppSurface.selectedFill,
-      );
-      expect(
-        rowMaterial(tester, 'super-your-devices').color,
-        Colors.transparent,
-      );
-      expect(tester.takeException(), isNull);
-      await disposeSidebar(tester, controller);
-    });
+        // Returning to the already selected workgroup still leaves it.
+        await tester.tap(work);
+        await tester.pumpAndSettle();
+        expect(controller.devicesSelected, isFalse);
+        expect(controller.selectedId, 'offline');
+        expect(
+          rowMaterial(tester, 'super-group-offline').color,
+          grid.AppSurface.selectedFill,
+        );
+        expect(rowMaterial(tester, 'super-manage').color, Colors.transparent);
+        expect(tester.takeException(), isNull);
+        await disposeSidebar(tester, controller);
+      },
+    );
   }
 
-  testWidgets('reads like a chat app: utilities, Projects A to Z with their '
-      'workgroups, Buddies, then Machines; no # product-managers', (
+  testWidgets('reads like a chat app: Activity, Projects A to Z with their '
+      'workgroups, Buddies, then Manage; no # product-managers', (
     tester,
   ) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -275,9 +311,7 @@ void main() {
     await pumpSidebar(tester, controller, app);
 
     final order = [
-      find.byKey(const ValueKey('super-new-project')),
-      find.byKey(const ValueKey('super-your-devices')),
-      find.byKey(const ValueKey('super-local-models')),
+      find.byKey(const ValueKey('super-activity')),
       find.text('Projects'),
       find.byKey(const ValueKey('super-group-empty-lead')),
       find.text('No workgroups yet'),
@@ -286,7 +320,7 @@ void main() {
       find.text('Buddies'),
       find.byKey(const ValueKey('super-buddy-lead')),
       find.byKey(const ValueKey('super-buddy-empty')),
-      find.text('Machines'),
+      find.byKey(const ValueKey('super-manage')),
     ];
     for (var i = 1; i < order.length; i++) {
       expect(
@@ -312,15 +346,16 @@ void main() {
     await disposeSidebar(tester, controller);
   });
 
-  testWidgets('section disclosure follows its label and + aligns with the '
-      'rows\' right status column', (tester) async {
+  testWidgets('section disclosure follows its label and the +s line up', (
+    tester,
+  ) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final app = createApp(connected: true);
     addTearDown(app.dispose);
     final controller = await projectSidebar(ConversationServer());
     for (final width in [180.0, 280.0, 420.0]) {
       await pumpSidebar(tester, controller, app, width: width);
-      for (final title in ['Projects', 'Machines']) {
+      for (final title in ['Projects', 'Buddies']) {
         final heading = find.ancestor(
           of: find.text(title),
           matching: find.byType(SuperTabSectionHeading),
@@ -335,15 +370,9 @@ void main() {
         expect(chevron.left, closeTo(label.right + 4, .01));
         expect(
           tester.getCenter(find.byTooltip('New project')).dx,
-          tester.getCenter(find.byTooltip('Add machine')).dx,
+          tester.getCenter(find.byTooltip('Add a Buddy')).dx,
         );
       }
-      expect(
-        tester.getCenter(find.byTooltip('New project')).dx,
-        tester
-            .getCenter(find.byKey(const ValueKey('super-project-toggle-lead')))
-            .dx,
-      );
       expect(tester.takeException(), isNull);
     }
     await disposeSidebar(tester, controller);
@@ -370,7 +399,18 @@ void main() {
         }
         for (final width in [180.0, 240.0]) {
           for (final scale in [1.0, 2.0]) {
+            final reason = '$width px, ${scale}x, unreachable=$unreachable';
             await pumpSidebar(
+              tester,
+              controller,
+              app,
+              width: width,
+              scale: scale,
+            );
+            expect(tester.takeException(), isNull, reason: reason);
+            expect(find.text('Manage'), findsOneWidget, reason: reason);
+
+            await pumpMachines(
               tester,
               controller,
               app,
@@ -378,9 +418,7 @@ void main() {
               scale: scale,
               now: now,
             );
-            final reason = '$width px, ${scale}x, unreachable=$unreachable';
             expect(tester.takeException(), isNull, reason: reason);
-            expect(find.text('Your devices'), findsOneWidget, reason: reason);
             expect(
               find.byTooltip('Add machine'),
               findsOneWidget,
@@ -405,17 +443,14 @@ void main() {
           }
         }
       }
-      await pumpSidebar(tester, controller, app, devices: false);
-      expect(find.byKey(const ValueKey('super-your-devices')), findsNothing);
-      expect(find.byTooltip('Add machine'), findsOneWidget);
       await disposeSidebar(tester, controller);
     },
   );
 
-  testWidgets('the left Machines group repaints on a live app change alone', (
-    tester,
-  ) async {
+  testWidgets('Manage\'s Machines read a live app change when the workspace '
+      'rebuilds', (tester) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.binding.setSurfaceSize(const Size(800, 700));
     final app = createApp(connected: true);
     addTearDown(app.dispose);
     final server = ConversationServer();
@@ -432,29 +467,86 @@ void main() {
     ];
     final controller = server.controller();
     await controller.refresh();
-    await pumpSidebar(
-      tester,
-      controller,
-      app,
-      readLocal: (_) async => const MachineResources(cpuPercent: 10),
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.dark),
+        home: Scaffold(
+          // The workspace rebuilds on the app; the next test holds it to that.
+          body: ListenableBuilder(
+            listenable: app,
+            builder: (context, _) => SuperTabManagePage(
+              controller: controller,
+              app: app,
+              tab: SuperTabManageTab.machines,
+              onAddAgent: (_) {},
+              readLocal: (_) async => const MachineResources(cpuPercent: 10),
+            ),
+          ),
+        ),
+      ),
     );
+    await tester.pumpAndSettle();
     await tester.pump();
     await tester.pump();
-    final dot = inRow('super-machine-m', find.byType(SuperTabMachineDot));
+    final entry = find.byKey(const ValueKey('super-machine-entry-m'));
     expect(
-      tester.widget<SuperTabMachineDot>(dot).status,
-      isNot(SuperTabMachineStatus.offline),
+      find.descendant(of: entry, matching: find.text('offline')),
+      findsNothing,
     );
 
     await app.handleEventForTest('m', {'type': 'node_status', 'online': false});
     await tester.pump();
     expect(find.byKey(const ValueKey('super-machine-m')), findsOneWidget);
     expect(
-      tester.widget<SuperTabMachineDot>(dot).status,
-      SuperTabMachineStatus.offline,
+      find.descendant(of: entry, matching: find.text('offline')),
+      findsOneWidget,
     );
     await disposeSidebar(tester, controller);
   });
+
+  testWidgets(
+    'the workspace rebuilds Manage\'s Machines on a live app change',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      final map = MemoryKeymap();
+      addTearDown(map.dispose);
+      final projects = SwarmProjectStore();
+      addTearDown(projects.dispose);
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(1280, 800);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: (context, child) =>
+              KeymapProvider(keymap: map, child: child!),
+          home: SwarmScreen(
+            notifier: f.app,
+            nativeTabs: false,
+            projectStore: projects,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-manage')));
+      await tester.pumpAndSettle();
+      final machines = find.byType(SuperTabMachines);
+      final before = tester.widget(machines);
+      await f.app.handleEventForTest('m', {
+        'type': 'node_status',
+        'online': false,
+      });
+      await tester.pump();
+      expect(tester.widget(machines), isNot(same(before)));
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      f.dispose();
+    },
+  );
 
   testWidgets('section collapse persists and keeps top navigation available', (
     tester,
@@ -465,29 +557,29 @@ void main() {
     final server = ConversationServer();
     final controller = await projectSidebar(server);
     await pumpSidebar(tester, controller, app);
-    const machinesBody = "Add a machine for this Swarm's agents to use.";
+    final buddy = find.byKey(const ValueKey('super-buddy-lead'));
     expect(inRow('super-group-lead', find.text('web-project')), findsOneWidget);
-    expect(find.text(machinesBody), findsOneWidget);
+    expect(buddy, findsOneWidget);
 
     await tester.tap(find.byTooltip('Collapse Projects'));
     await tester.pumpAndSettle();
     expect(inRow('super-group-lead', find.text('web-project')), findsNothing);
     expect(controller.projectsGroupOpen, isFalse);
-    await tester.tap(find.byTooltip('Collapse Machines'));
+    await tester.tap(find.byTooltip('Collapse Buddies'));
     await tester.pumpAndSettle();
-    expect(find.text(machinesBody), findsNothing);
-    expect(controller.machinesGroupOpen, isFalse);
-    expect(find.text('New project'), findsOneWidget);
-    expect(find.text('Your devices'), findsOneWidget);
+    expect(buddy, findsNothing);
+    expect(controller.buddiesGroupOpen, isFalse);
+    expect(find.text('Activity'), findsOneWidget);
+    expect(find.text('Manage'), findsOneWidget);
 
     await controller.flush();
     final saved = server.saved!;
     expect(saved['projectsGroupOpen'], isFalse);
-    expect(saved['machinesGroupOpen'], isFalse);
+    expect(saved['buddiesGroupOpen'], isFalse);
     final reopened = server.controller(initial: saved);
     await reopened.refresh();
     expect(reopened.projectsGroupOpen, isFalse);
-    expect(reopened.machinesGroupOpen, isFalse);
+    expect(reopened.buddiesGroupOpen, isFalse);
 
     Focus.of(tester.element(find.text('Projects'))).requestFocus();
     await tester.pump();
@@ -519,14 +611,10 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
-            body: ListenableBuilder(
-              listenable: c,
-              builder: (context, _) => ProjectSidebar(
-                controller: c,
-                onAddAgent: (_) {},
-                needsHuman: (_) => 0,
-                onSelect: c.select,
-              ),
+            body: SuperTabManagePage(
+              controller: c,
+              tab: SuperTabManageTab.models,
+              onAddAgent: (_) {},
             ),
           ),
         ),
@@ -545,11 +633,11 @@ void main() {
         final c = server.controller();
         await c.refresh();
         await mount(tester, c);
-        expect(find.text('Your models'), findsOneWidget);
+        expect(find.text('Your models…'), findsOneWidget);
         await tester.tap(open);
         await tester.pumpAndSettle();
-        // The page is titled as the row that opens it.
-        expect(find.text('Your models'), findsNWidgets(2));
+        // The page is titled as the action that opens it.
+        expect(find.text('Your models'), findsOneWidget);
         expect(find.byType(Switch), findsNothing);
         expect(
           find.textContaining('Set up connects this computer to the Swarm'),

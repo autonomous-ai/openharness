@@ -42,7 +42,9 @@ void main() {
   Future<void> openDelete(WidgetTester tester) async {
     await tester.tap(find.byTooltip('Project options'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(MenuItemButton, 'Delete Project'));
+    await tester.tap(find.widgetWithText(MenuItemButton, 'Project settings…'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete Project'));
     await tester.pumpAndSettle();
   }
 
@@ -223,6 +225,8 @@ void main() {
     });
     await mount(tester, server: server, account: 'peer');
     await tester.tap(find.byTooltip('Project options'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(MenuItemButton, 'Project settings…'));
     await tester.pumpAndSettle();
     expect(find.text('Delete Project'), findsNothing);
     expect(server.posts, isEmpty);

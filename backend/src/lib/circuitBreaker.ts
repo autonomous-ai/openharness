@@ -39,7 +39,15 @@ export interface CircuitBreakerOptions {
 export interface CircuitBreaker {
   run<T>(fn: (signal: AbortSignal) => Promise<T>): Promise<T>
   state(): CircuitState
+  /** Count the outcome of a call made without `run` while the circuit was closed, with the accounting `run` applies to
+   *  it. The Redis guard sends each command this way, for want of an async frame per command (redisGuard.ts). */
+  success(): void
+  failure(err: unknown): void
 }
+
+// Handed to every call when there is no timeout: nothing can abort it, so one signal serves them all, and a call costs
+// no AbortController.
+const NEVER_ABORTED = new AbortController().signal
 
 export function createCircuitBreaker({
   name,
@@ -62,7 +70,7 @@ export function createCircuitBreaker({
   }
 
   const withTimeout = <T>(fn: (signal: AbortSignal) => Promise<T>): Promise<T> => {
-    if (timeoutMs === undefined) return fn(new AbortController().signal)
+    if (timeoutMs === undefined) return fn(NEVER_ABORTED)
     const controller = new AbortController()
     let timer: NodeJS.Timeout | undefined
     const expired = new Promise<never>((_, reject) => {
@@ -75,8 +83,26 @@ export function createCircuitBreaker({
     return Promise.race([fn(controller.signal), expired]).finally(() => clearTimeout(timer))
   }
 
+  const succeeded = (): void => {
+    failures = 0
+    move('closed')
+  }
+
+  const failed = (err: unknown, trial: boolean): void => {
+    if (!isFailure(err)) {
+      failures = 0
+      move('closed')
+    } else if (trial || ++failures >= failureThreshold) {
+      failures = 0
+      openedAt = now()
+      move('open')
+    }
+  }
+
   return {
     state: () => state,
+    success: succeeded,
+    failure: err => failed(err, false),
     async run(fn) {
       let trial = false
       if (state !== 'closed') {
@@ -87,18 +113,10 @@ export function createCircuitBreaker({
       }
       try {
         const result = await withTimeout(fn)
-        failures = 0
-        move('closed')
+        succeeded()
         return result
       } catch (err) {
-        if (!isFailure(err)) {
-          failures = 0
-          move('closed')
-        } else if (trial || ++failures >= failureThreshold) {
-          failures = 0
-          openedAt = now()
-          move('open')
-        }
+        failed(err, trial)
         throw err
       } finally {
         if (trial) trialRunning = false

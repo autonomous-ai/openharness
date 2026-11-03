@@ -3,6 +3,7 @@ import { closeSync, constants, fstatSync, lstatSync, openAsBlob, openSync, readS
 import { stat } from 'node:fs/promises'
 import { basename, extname, isAbsolute, relative, sep } from 'node:path'
 import { localCredentialHeaders } from '../lib/localCredential.js'
+import { daemonFetch } from '../lib/localTransport.js'
 import { ATTACHMENT_TOTAL_MS } from '../lib/superTabAttachmentProxy.js'
 import { object } from './wire.js'
 import { formatSize, MAX_ATTACHMENT_BYTES, MAX_FORM_ATTACHMENT_BYTES } from './attachments.js'
@@ -173,7 +174,8 @@ export function readInsideFolder(paths: string[], folder: string): CheckedFile[]
 /** Uploads each file of `post --attach` and answers the ids `message.send` names. Repeating a post whose message already
  * went out uploads nothing and names that message's files, so the send returns its receipt. */
 export async function uploadAttachments(paths: Array<string | CheckedFile>, operationId: string, target: UploadTarget, request: Request,
-  fetcher: typeof fetch = fetch): Promise<string[]> {
+  // Through the daemon's private socket: a file, and any credential, must not reach whoever holds its port (audit H1).
+  fetcher: typeof fetch = daemonFetch(target.dataDir, target.port)): Promise<string[]> {
   // A file too large is refused before any request, and so uploads none of the others. One not there is left to the check
   // below, after the answer whether the post already went out: a repeat of one that did still names its files.
   for (const path of paths) {

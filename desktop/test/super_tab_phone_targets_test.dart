@@ -143,7 +143,7 @@ void main() {
       seed: _agentMessages,
     );
     expect(find.byKey(const ValueKey('super-terminals')), findsOneWidget);
-    expect(find.byKey(const ValueKey('super-pull-requests')), findsOneWidget);
+    expect(find.byTooltip('Project options'), findsOneWidget);
     const mouse = {
       'Reply': Size(32, 32),
       'Copy message': Size(32, 32),
@@ -166,7 +166,7 @@ void main() {
     );
     await _openReply(tester);
     expect(tester.getSize(find.byTooltip('Cancel reply')), const Size(32, 32));
-    await tester.tap(find.byTooltip('Members and machines'));
+    await tester.tap(find.byTooltip('Members'));
     await tester.pumpAndSettle();
     expect(
       tester.getSize(find.byKey(const ValueKey('super-person-owner'))).height,

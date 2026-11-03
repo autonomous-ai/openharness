@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { CoreApi } from '../core/api.js'
+import type { BackendNotice, CoreApi } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { lastAgentMessage, leadsOf, SwarmCards, type SwarmCard } from './cards.js'
 import { swarmReply } from './fixtures/read/index.js'
@@ -315,6 +315,31 @@ describe('SwarmCards.tick', () => {
     expect(t.seen.at(-1)).toEqual([])
   })
 
+  it('holds the first list while a Swarm could not be read yet, and only for a minute: a list without it says it went', async () => {
+    const t = setup({ t1: { lastChangedAt: 1, state: swarm() }, t2: { lastChangedAt: 1, state: swarm({ name: 'two' }) } })
+    t.failing.set('t1', 500)
+    await t.cards.tick()
+    expect(t.seen).toEqual([])
+    t.failing.delete('t1')
+    await t.cards.tick()
+    expect(t.seen.at(-1)?.map(c => c.id)).toEqual(['t1', 't2'])
+    // Refused is an answer: no wait.
+    const refused = setup({ t1: { lastChangedAt: 1, state: swarm() }, t2: { lastChangedAt: 1, state: swarm({ name: 'two' }) } })
+    refused.failing.set('t1', 403)
+    await refused.cards.tick()
+    expect(refused.seen.at(-1)?.map(c => c.id)).toEqual(['t2'])
+    // One that keeps failing does not hide the others for long.
+    const stuck = setup({ t1: { lastChangedAt: 1, state: swarm() }, t2: { lastChangedAt: 1, state: swarm({ name: 'two' }) } })
+    stuck.failing.set('t1', 500)
+    await stuck.cards.tick()
+    stuck.advance(59_000)
+    await stuck.cards.tick()
+    expect(stuck.seen).toEqual([])
+    stuck.advance(2_000)
+    await stuck.cards.tick()
+    expect(stuck.seen.at(-1)?.map(c => c.id)).toEqual(['t2'])
+  })
+
   it('keeps a tab it already read when another failure happens on re-read', async () => {
     const t = setup({ t1: { lastChangedAt: 1, state: swarm() } })
     await t.cards.tick()
@@ -500,6 +525,92 @@ describe('SwarmCards.want', () => {
     t.calls.length = 0
     await vi.advanceTimersByTimeAsync(20_000)
     expect(t.calls).toEqual([])
+  })
+})
+
+// Spec 2026-11-02-poll-cost Part 4.3: a Pro's cards read the Swarm list every 5 s, ignoring the server's pushes (prod
+// 2026-11-02: about 200 of the 279 list reads a minute). While the server says it pushes Swarm changes, as it does to
+// Desktop, the list is read when a Swarm's main parts change and every 2 minutes as the safety net.
+describe('SwarmCards and the server\'s Swarm pushes', () => {
+  it('cards read on push and every 2 minutes, every 5 s without the lease', async () => {
+    const t = setup({ t1: { lastChangedAt: 1, state: swarm() } })
+    let told: ((notice: BackendNotice) => void) | undefined
+    const unsubscribe = vi.fn()
+    vi.mocked(t.core.account.onNotice).mockImplementation(listener => { told = listener; return unsubscribe })
+    const listed = () => t.calls.filter(c => c === 'GET /api/super-tabs/list').length
+    // The cards' timer, every 5 s here, and their clock with it.
+    const every5s = async (seconds: number) => { for (let s = 0; s < seconds; s += 5) { t.advance(5_000); await vi.advanceTimersByTimeAsync(5_000) } }
+    vi.useFakeTimers()
+    t.cards.want(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(listed()).toBe(1)
+    // No lease: every tick.
+    await every5s(10)
+    expect(listed()).toBe(3)
+    // The server says it pushes: read once now, then only when told or every 2 minutes.
+    told!({ type: 'swarm_changed' })
+    await every5s(5)
+    expect(listed()).toBe(4)
+    await every5s(60)
+    expect(listed()).toBe(4)
+    // A machine's reading changes nothing a card shows; a commit to a Swarm's main parts does.
+    told!({ type: 'swarm_changed', tabId: 't1', lastChangedAt: 2, parts: ['machine'] })
+    await every5s(5)
+    expect(listed()).toBe(4)
+    told!({ type: 'swarm_changed', tabId: 't1', lastChangedAt: 3, parts: ['main'] })
+    await every5s(5)
+    expect(listed()).toBe(5)
+    await every5s(115)
+    expect(listed()).toBe(5)
+    await every5s(5)
+    expect(listed()).toBe(6)
+    // Five minutes without the server's word: every tick again.
+    await every5s(240)
+    const lapsed = listed()
+    await every5s(10)
+    expect(listed()).toBe(lapsed + 2)
+    t.cards.want(false)
+    expect(unsubscribe).toHaveBeenCalledOnce()
+  })
+
+  it('under the lease, a Swarm the list could not read yet is read on the next tick, not 2 minutes later', async () => {
+    const t = setup({ t1: { lastChangedAt: 1, state: swarm() }, t2: { lastChangedAt: 1, state: swarm({ name: 'two' }) } })
+    let told: ((notice: BackendNotice) => void) | undefined
+    vi.mocked(t.core.account.onNotice).mockImplementation(listener => { told = listener; return () => {} })
+    const tick = async () => { t.advance(5_000); await vi.advanceTimersByTimeAsync(5_000) }
+    t.failing.set('t1', 500)
+    vi.useFakeTimers()
+    t.cards.want(true)
+    await vi.advanceTimersByTimeAsync(0)
+    told!({ type: 'swarm_changed' })
+    await tick()
+    expect(t.seen).toEqual([])
+    t.failing.delete('t1')
+    await tick()
+    expect(t.seen.at(-1)?.map(c => c.id)).toEqual(['t1', 't2'])
+    t.cards.want(false)
+  })
+
+  it('reads the list again on the next tick after a list read that failed under the lease', async () => {
+    const t = setup({ t1: { lastChangedAt: 1, state: swarm() } })
+    let told: ((notice: BackendNotice) => void) | undefined
+    vi.mocked(t.core.account.onNotice).mockImplementation(listener => { told = listener; return () => {} })
+    const listed = () => t.calls.filter(c => c === 'GET /api/super-tabs/list').length
+    const tick = async () => { t.advance(5_000); await vi.advanceTimersByTimeAsync(5_000) }
+    vi.useFakeTimers()
+    t.cards.want(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(listed()).toBe(1)
+    told!({ type: 'swarm_changed' })
+    t.breakList()
+    await tick()
+    expect(listed()).toBe(2)
+    t.breakList(false)
+    await tick()
+    expect(listed()).toBe(3)
+    await tick()
+    expect(listed()).toBe(3)
+    t.cards.want(false)
   })
 })
 

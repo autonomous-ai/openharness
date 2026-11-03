@@ -200,7 +200,7 @@ void main() {
           await mouse.addPointer(location: Offset.zero);
           await mouse.moveTo(
             tester.getCenter(
-              find.byKey(const ValueKey('super-project-toggle-web')),
+              find.byKey(const ValueKey('super-group-web-lead')),
             ),
           );
           await tester.pumpAndSettle();

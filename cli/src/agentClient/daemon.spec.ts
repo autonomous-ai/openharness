@@ -1,11 +1,11 @@
 import { EventEmitter } from 'node:events'
 import { randomBytes } from 'node:crypto'
 import http from 'node:http'
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { connectSocket, openDaemon, whereFor, type ClientSocket } from './daemon.js'
 import { saveDaemonPort } from '../lib/daemonEndpoint.js'
 import { WebSocketServer } from 'ws'
@@ -14,6 +14,10 @@ import { attachLocalWsServer } from '../localWsServer.js'
 import { localSocketPath } from '../lib/localSocket.js'
 import { NOT_RUNNING, SANDBOXED } from '../lib/unreachable.js'
 import { newPipePath } from '../lib/windows/pipeAuth.js'
+
+// A folder too long for a socket now has one under the home folder: only a home too long as well is left on the port.
+beforeEach(() => { vi.stubEnv('HOME', `/${'h'.repeat(120)}`) })
+afterEach(() => { vi.unstubAllEnvs() })
 
 /** A real named pipe on Windows; a short Unix socket with the same auth name elsewhere. */
 function pipeFixture(): { path: string; close: () => void } {
@@ -77,8 +81,9 @@ describe('a line to the daemon that cannot open', () => {
   })
 })
 
-it('dials the port this user recorded when another daemon took the configured port', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'agent-daemon-port-'))
+it('where no socket can exist, dials the port this user recorded when another daemon took the configured port', async () => {
+  const dataDir = join(mkdtempSync(join(tmpdir(), 'agent-daemon-port-')), 'd'.repeat(100))
+  mkdirSync(dataDir, { mode: 0o700 })
   const server = new WebSocketServer({ host: '127.0.0.1', port: 0 })
   try {
     await new Promise<void>((resolve) => server.once('listening', resolve))

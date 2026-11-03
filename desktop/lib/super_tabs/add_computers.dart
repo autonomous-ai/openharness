@@ -488,7 +488,7 @@ class _AddComputersState extends State<_AddComputers> {
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: Listenable.merge([app, c]),
+    listenable: Listenable.merge([app, c, c.machinesChanged]),
     builder: (context, _) {
       // Another account signed in: nothing of this one's stays on screen.
       if (!_sameAccount) {

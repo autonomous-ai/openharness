@@ -134,11 +134,9 @@ void main() {
               f.message['createdAt'] = DateTime.now().toIso8601String(),
         );
         expect(find.text('Sending…'), findsOneWidget);
-        f.message['createdAt'] = f.now
-            .subtract(const Duration(seconds: 8))
-            .toIso8601String();
-        await f.controller.refresh();
-        await tester.pump();
+        // The message ages on screen: no read of it again, which a state
+        // with the same counters no longer makes (spec 2026-11-02-poll-cost).
+        await tester.pump(const Duration(seconds: 8));
         f.expectQuiet();
         await f.close();
       },

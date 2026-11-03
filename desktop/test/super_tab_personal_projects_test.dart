@@ -81,6 +81,10 @@ Future<SuperTabController> _personal(
   SuperTabLaunchFixture f, {
   List<String> people = const ['owner'],
 }) async {
+  // These panes are this computer's: Personal's sync of other machines has no part here.
+  for (final state in f.app.machineStates.values) {
+    state.localOnly = true;
+  }
   f.connection.server.state
     ..['name'] = 'Personal'
     ..['ownerId'] = 'owner'
@@ -195,6 +199,26 @@ void main() {
       for (final form in forms) {
         expect(normalizedRemote(form), 'github.com/acme/api', reason: form);
       }
+    });
+
+    test('the daemon\'s own form, host/owner/repo, is that repo too', () {
+      // What every agent reports as its project's remote (cli agentProject.ts
+      // canonicalRepository): no scheme, no user, no .git.
+      for (final form in [
+        'github.com/acme/api',
+        'GitHub.com/Acme/Api',
+        'github.com/acme/api/',
+      ]) {
+        expect(normalizedRemote(form), 'github.com/acme/api', reason: form);
+      }
+      expect(
+        normalizedRemote('example.com:2222/Org/App'),
+        'example.com/org/app',
+      );
+      expect(
+        normalizedRemote('gitlab.com/team/sub/api'),
+        'gitlab.com/team/sub/api',
+      );
     });
 
     test('a folder or nothing is no repo', () {
@@ -334,6 +358,35 @@ void main() {
         );
       },
     );
+
+    test('panes whose agents report the daemon\'s own remote form get repo projects', () async {
+      final f = SuperTabLaunchFixture();
+      f.app.machineStates['m']!.agents = [
+        _agent('n1', remote: 'github.com/acme/api', cwd: '/w/api'),
+        _agent('n2', remote: 'github.com/acme/web', cwd: '/w/web'),
+      ];
+      _machine(f.app, 'laptop').agents = [
+        _agent('n1', remote: 'github.com/acme/api', cwd: '/x/api-copy'),
+      ];
+      _tab(f.app, 'one', [_pane('m', 'n1'), _pane('m', 'n2')]);
+      _tab(f.app, 'two', [_pane('laptop', 'n1')]);
+      expect(
+        [for (final e in personalPanes(f.app)) e.repo],
+        ['github.com/acme/api', 'github.com/acme/web', 'github.com/acme/api'],
+      );
+      final c = await _personal(f);
+      await PersonalProjects.of(f.app).sync(c);
+      expect(
+        [for (final p in _commands(f)) p['operationId']],
+        [
+          personalProjectOperation('github.com/acme/api'),
+          personalProjectOperation('github.com/acme/web'),
+        ],
+      );
+      final names = [for (final p in c.snapshot!.projects) p.name];
+      expect(names, containsAll(['api', 'web']));
+      expect(names, isNot(contains('scratch')));
+    });
 
     test('nothing is sent of a pane but its project\'s name', () async {
       final f = SuperTabLaunchFixture();

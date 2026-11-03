@@ -25,6 +25,9 @@ import 'swarm_post_line.dart';
 import 'swarm_attach.dart';
 import 'swarm_buddy.dart';
 import 'swarm_buddy_chat.dart';
+import 'swarm_session_widgets.dart';
+import 'swarm_buddy_tab.dart'
+    show SwarmBuddyDot, SwarmBuddyMark, swarmBuddyMark;
 import 'swarm_chat_menu.dart';
 import 'swarm_file_links.dart';
 import 'swarm_choices.dart';
@@ -47,6 +50,7 @@ import 'swarm_reactions.dart';
 import 'swarm_read_marks.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
+import 'swarm_task_line.dart';
 import 'swarm_thread.dart';
 import 'swarm_thread_line.dart';
 import 'swarm_thread_page.dart';
@@ -115,8 +119,11 @@ class SwarmConversationPage extends StatefulWidget {
     this.buddy,
     this.messageId,
     this.threadId,
+    this.threadFocus,
     this.mention,
     this.homeC = false,
+    this.tabRoot = false,
+    this.swarmSwitch,
   });
 
   final String swarmId, conversationId;
@@ -126,6 +133,9 @@ class SwarmConversationPage extends StatefulWidget {
   /// root: as Threads opens one on the desktop (`_openThreadFromList`), the
   /// chat behind it at the root.
   final String? threadId;
+
+  /// Where [threadId]'s thread lands as it opens; its top when none.
+  final SwarmThreadFocus? threadFocus;
 
   /// An agent to @mention in the draft as the chat opens: the PM, as its
   /// private line is answered in the project chat.
@@ -150,6 +160,14 @@ class SwarmConversationPage extends StatefulWidget {
   /// Buddy tab and on its own page.
   final bool homeC;
 
+  /// At the root of a tab, as the Buddy tab holds the person's Buddy chat: no
+  /// back in its header, and its Buddy's dot before its name.
+  final bool tabRoot;
+
+  /// The Swarm it is in and how to pick another, for its Buddy menu; null with
+  /// no other Swarm to pick.
+  final SwarmBuddySwitch? swarmSwitch;
+
   @override
   State<SwarmConversationPage> createState() => _SwarmConversationPageState();
 }
@@ -163,6 +181,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
 
   /// What the last pick left out, or why it could not pick, over the files.
   final _attachNote = ValueNotifier<String?>(null);
+
+  /// Why New session is greyed, once it is tapped (a phone has no hover).
+  final _sessionNote = ValueNotifier<String?>(null);
 
   /// A picker is up: one at a time.
   bool _picking = false;
@@ -351,12 +372,15 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           : widget.messageId ?? _held.value,
     );
     c.composer.addListener(_drafted);
+    // The draft it kept, in the box.
+    _drafted();
     c.addListener(_chatMoved);
     c.addListener(_guardVoice);
     if (widget.mention case final agentId?) c.mention(agentId);
     reader.addListener(_see);
     reader.addListener(_guardVoice);
     session.inbox.addListener(_see);
+    session.home.addListener(_see);
     _see();
     _watch();
     unawaited(
@@ -643,6 +667,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     session?.inbox
       ?..removeListener(_attach)
       ..removeListener(_see);
+    session?.home.removeListener(_see);
     if (_conversation case final c?) {
       c.composer.removeListener(_drafted);
       c.removeListener(_chatMoved);
@@ -690,6 +715,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _text.dispose();
     _focus.dispose();
     _attachNote.dispose();
+    _sessionNote.dispose();
     _scroll.dispose();
     super.dispose();
   }
@@ -811,6 +837,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   void _send(SwarmConversation c) {
     _target = null;
     _attachNote.value = null;
+    _sessionNote.value = null;
     if (_scroll.hasClients && _scroll.offset > 0) _toFoot();
     unawaited(_post(c));
   }
@@ -820,8 +847,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// typed; a post refused or not confirmed keeps it up, to send again.
   Future<void> _post(SwarmConversation c) async {
     final sent = await c.send();
+    final started = c.takeStartedSession();
     if (sent && mounted && _conversation == c && c.draft.isEmpty) {
       _focus.unfocus();
+    }
+    // A message that started a session opens its thread: it answers there.
+    if (sent && started != null && mounted && _conversation == c) {
+      _openThread(c, started);
     }
   }
 
@@ -841,7 +873,11 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   }
 
   /// Opens [root]'s thread of [c] over the chat, full screen.
-  void _openThread(SwarmConversation c, String root) {
+  void _openThread(
+    SwarmConversation c,
+    String root, {
+    SwarmThreadFocus? focus,
+  }) {
     if (_acting != null) setState(() => _acting = null);
     _focus.unfocus();
     unawaited(
@@ -853,17 +889,27 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               swarmId: widget.swarmId,
               chat: c,
               root: root,
+              focus: focus,
               title: _view.value?.title,
               row:
-                  (t, m, {required grouped, required acting, required onTap}) =>
-                      _threadRow(
-                        c,
-                        t,
-                        m,
-                        grouped: grouped,
-                        acting: acting,
-                        onTap: onTap,
-                      ),
+                  (
+                    t,
+                    m, {
+                    required grouped,
+                    required acting,
+                    required lit,
+                    required followed,
+                    required onTap,
+                  }) => _threadRow(
+                    c,
+                    t,
+                    m,
+                    grouped: grouped,
+                    acting: acting,
+                    lit: lit,
+                    followed: followed,
+                    onTap: onTap,
+                  ),
               pending: (t, post) => _threadPending(c, t, post),
             ),
           ),
@@ -871,6 +917,20 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         ),
       ),
     );
+  }
+
+  VoidCallback? _taskOpener(SwarmConversation c, SuperTabMessage message) {
+    final taskId = message.source['taskId'];
+    if (!swarmIsTaskLine(message) ||
+        taskId is! String ||
+        c.reader.snapshot?.conversation(taskId) == null) {
+      return null;
+    }
+    return () {
+      if (c.reader.snapshot?.conversation(taskId) != null) {
+        openSwarmConversation(context, widget.swarmId, taskId);
+      }
+    };
   }
 
   /// One of thread [t]'s messages as the chat draws its own, less what only
@@ -881,6 +941,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     SuperTabMessage m, {
     required bool grouped,
     required bool acting,
+    required bool lit,
+    required bool followed,
     required VoidCallback onTap,
   }) {
     final view = _view.value;
@@ -897,8 +959,10 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       tagged: _taggedOf(c, m).keys.toList(),
       taggedAddresses: _taggedOf(c, m),
       readerId: c.reader.accountId,
+      onOpenTask: _taskOpener(c, m),
       grouped: grouped,
-      lit: false,
+      lit: lit,
+      followed: followed,
       quote: null,
       actions: acting,
       onTap: onTap,
@@ -942,6 +1006,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         state: post.state,
         quote: null,
         onSendAgain: () => unawaited(t.retry(post)),
+        onDelete: () => t.deletePost(post),
       ),
     );
   }
@@ -953,6 +1018,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// The thread the chat opens with, until its first jump
   /// ([SwarmConversationPage.threadId]).
   late String? _threadAt = widget.threadId;
+  late SwarmThreadFocus? _threadFocusAt = widget.threadFocus;
 
   /// Brings [messageId] into view and lights it — read in from earlier pages
   /// when it is further back — or says why it cannot.
@@ -960,8 +1026,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     if (_finding) return;
     // Only the jump the chat opened with opens [SwarmConversationPage.threadId]:
     // a quote of the root tapped later brings the root into view.
-    final thread = _threadAt;
+    final thread = _threadAt, focus = _threadFocusAt;
     _threadAt = null;
+    _threadFocusAt = null;
     final landing = _land();
     setState(() {
       _finding = true;
@@ -981,10 +1048,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     if (thread == messageId &&
         !c.reader.accessRevoked &&
         c.reader.snapshot?.conversation(c.id) != null) {
-      _openThread(c, messageId);
-    }
-    if (target != null && target.threadReply) {
-      _openThread(c, target.thread!);
+      _openThread(c, messageId, focus: focus);
+    } else if (target != null && target.threadReply) {
+      _openThread(
+        c,
+        target.thread!,
+        focus: SwarmThreadFocus.message(messageId),
+      );
       if (!target.inMainStream) {
         setState(() => _finding = false);
         if (!_scroll.hasClients || _scroll.offset <= _readingBack) {
@@ -1135,12 +1205,30 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     required String? title,
     String? project,
     Widget? action,
+    SwarmBuddyMark? mark,
   }) => Padding(
     key: const ValueKey('swarm-chat-header'),
-    padding: const EdgeInsets.fromLTRB(0, AppSpace.xs, _headerEnd, AppSpace.xs),
+    padding: EdgeInsets.fromLTRB(
+      widget.tabRoot ? AppSpace.screenInset : 0,
+      AppSpace.xs,
+      _headerEnd,
+      AppSpace.xs,
+    ),
     child: Row(
       children: [
-        TtyBackButton(onPressed: () => Navigator.of(context).maybePop()),
+        if (!widget.tabRoot)
+          TtyBackButton(onPressed: () => Navigator.of(context).maybePop()),
+        if (mark != null)
+          Padding(
+            padding: const EdgeInsetsDirectional.only(end: AppSpace.s),
+            child: Semantics(
+              label: 'Buddy ${mark.label}',
+              child: SwarmBuddyDot(
+                mark,
+                key: const ValueKey('swarm-buddy-dot'),
+              ),
+            ),
+          ),
         Expanded(
           child: title == null
               ? Column(
@@ -1223,6 +1311,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                 ? view.title
                 : null,
             project: view.project,
+            mark: widget.tabRoot ? swarmBuddyMark(c.reader) : null,
             // The person's own Buddy chat: its Notifications, Rename Buddy,
             // Remove Buddy. Any other chat: its Notifications (the desktop's
             // chat menu).
@@ -1230,6 +1319,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               final buddy? => SwarmBuddyMenuButton(
                 actions: buddy,
                 chatId: widget.conversationId,
+                swarmId: widget.swarmId,
+                swarmSwitch: widget.swarmSwitch,
               ),
               null => SwarmChatMenuButton(reader: c.reader, chatId: c.id),
             },
@@ -1348,7 +1439,68 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                         );
                       },
                     ),
-                    if (view.canPost)
+                    if (view.decisionsAside.isNotEmpty)
+                      Padding(
+                        key: const ValueKey('swarm-decisions-aside'),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: AppSpace.l,
+                        ),
+                        child: Row(
+                          children: [
+                            Text(
+                              view.decisionsAside.length == 1
+                                  ? '1 decision set aside'
+                                  : '${view.decisionsAside.length} decisions set aside',
+                              style: swarmChatText(
+                                13.5,
+                                color: AppPalette.textSecondary,
+                              ),
+                            ),
+                            SwarmButton(
+                              key: const ValueKey('swarm-decisions-show'),
+                              label: 'Show',
+                              style: SwarmButtonStyle.link,
+                              onPressed: () => _session?.home.setDecisionsAside(
+                                c.reader.tabId,
+                                view.decisionsAside,
+                                aside: false,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (view.old)
+                      Padding(
+                        key: const ValueKey('swarm-old-chat'),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: AppSpace.l,
+                          vertical: AppSpace.s,
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                'Old chat, kept to read.',
+                                style: swarmChatText(
+                                  13.5,
+                                  color: AppPalette.textSecondary,
+                                ),
+                              ),
+                            ),
+                            if (swarmCanWrite(c.reader) ||
+                                swarmBuddyChat(c.reader, swarmBuddyKey) != null)
+                              SwarmButton(
+                                key: const ValueKey(
+                                  'swarm-old-chat-open-buddy',
+                                ),
+                                label: 'Open Buddy',
+                                style: SwarmButtonStyle.link,
+                                onPressed: () => _openBuddy(c),
+                              ),
+                          ],
+                        ),
+                      )
+                    else if (view.canPost)
                       Flexible(
                         child: ListenableBuilder(
                           listenable: Listenable.merge([c.composer, _voice]),
@@ -1380,6 +1532,24 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     ],
   );
 
+  /// From an old chat, back to the person's one Buddy: the Buddy tab, in this
+  /// Swarm, with what covered it gone; its chat as its own page with no tabs
+  /// up.
+  void _openBuddy(SwarmConversation c) {
+    final session = _session;
+    if (session == null) return;
+    final show = session.showBuddyTab;
+    if (show == null) {
+      unawaited(
+        openSwarmBuddy(context, c.reader, widget.swarmId, swarmBuddyKey),
+      );
+      return;
+    }
+    session.home.showBuddy(widget.swarmId);
+    Navigator.of(context).popUntil((route) => route.isFirst);
+    show();
+  }
+
   /// Opens [projectId]'s chat with [pmId] mentioned in its draft: the PM's
   /// private line answered where the PM reads, and everyone with it.
   void _answerIn(String projectId, String pmId) => openSwarmProject(
@@ -1399,15 +1569,14 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// cannot read it (#2090).
   /// The people [m] tags: each one's address by their username, as the
   /// server names them; an older server's member without one goes by their
-  /// email's name.
+  /// email name.
   static Map<String, String> _taggedOf(
     SwarmConversation c,
     SuperTabMessage m,
   ) => {
     if (m.mentions.isNotEmpty)
       for (final person in c.reader.snapshot?.people ?? <SuperTabPerson>[])
-        if (m.mentions.contains(person.id))
-          person.chosenUsername ?? person.email.split('@').first: person.email,
+        if (m.mentions.contains(person.id)) person.username: person.email,
   };
 
   /// The open task's steps, each read on its own, merged into its chat (task
@@ -1464,13 +1633,14 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       (picture: agent?.avatar, status: null);
 
   /// Who gave a reaction, by name and never by email: "You", an agent's
-  /// name, another person's email name.
+  /// name, another person's username.
   String _reactorName(SwarmConversation c, String kind, String id) {
     if (kind == 'person' && id == c.reader.accountId) return 'You';
     final snapshot = c.reader.snapshot;
     if (kind == 'agent') return snapshot?.agentName(id) ?? 'Agent';
-    final email = snapshot?.people.where((p) => p.id == id).firstOrNull?.email;
-    return email == null ? 'Someone' : superTabPersonName(email);
+    final person = snapshot?.people.where((p) => p.id == id).firstOrNull;
+    return person?.username ??
+        (person == null ? 'Someone' : superTabPersonName(person.email));
   }
 
   /// The reaction picker over thread [t]'s message [id], as [_pickReaction]
@@ -1568,12 +1738,14 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       stream,
       (agentId) => snapshot?.agent(agentId),
     );
-    final messages = answered.isEmpty
-        ? stream
-        : [
-            for (final m in stream)
-              if (!answered.contains(m.id)) m,
-          ];
+    final messages = swarmTaskLineMessages(
+      answered.isEmpty
+          ? stream
+          : [
+              for (final m in stream)
+                if (!answered.contains(m.id)) m,
+            ],
+    );
     // The notes hidden are part of what the rows were made from: a warning
     // goes once its agent's prompt is answered, with no new message.
     final from = (
@@ -1660,7 +1832,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           final reactions = c.reactionsOf(m);
           final receipt =
               m.id == latestOwn?.id &&
-              const {'queued', 'uncertain'}.contains(m.receiptDelivery?.status);
+              // Sent to nobody: where no Lead runs, the line says so.
+              (m.receiptDelivery == null ||
+                  const {
+                    'queued',
+                    'uncertain',
+                  }.contains(m.receiptDelivery?.status));
           // A card's facts are its group's: only a reader of the group has
           // them, and a change to them draws the row again.
           final group = c.conversation;
@@ -1671,6 +1848,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
             key,
             (
               m,
+              // Drop a cached opener when access to its target changes.
+              snapshot?.conversation(
+                m.source['taskId'] is String
+                    ? m.source['taskId'] as String
+                    : '',
+              ),
               card,
               name,
               swarmLookKey(look),
@@ -1709,6 +1892,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               tagged: tagged.keys.toList(),
               taggedAddresses: tagged,
               readerId: c.reader.accountId,
+              onOpenTask: _taskOpener(c, m),
               grouped: grouped,
               lit: lit,
               followed: followed,
@@ -1863,6 +2047,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                     text: reply?.text,
                   ),
             onSendAgain: () => unawaited(_retry(c, post)),
+            onDelete: () => c.deletePost(post),
           );
         }
         if (index - lead < entries.length) {
@@ -2085,6 +2270,34 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                 style: AppType.caption(color: AppPalette.textSecondary),
               ),
             ),
+          ValueListenableBuilder(
+            valueListenable: _sessionNote,
+            builder: (context, note, _) => note == null || talking
+                ? const SizedBox.shrink()
+                : Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                      AppSpace.xs,
+                      0,
+                      AppSpace.xs,
+                      AppSpace.s,
+                    ),
+                    child: Text(
+                      note,
+                      key: const ValueKey('swarm-session-note'),
+                      style: AppType.caption(color: tty.yellow),
+                    ),
+                  ),
+          ),
+          // Where a session works is the Swarm's one Buddy chat's to pick;
+          // a project's own Buddy chat sends no project.
+          if (c.newSession &&
+              !talking &&
+              c.conversation?.isSwarmBuddyChat == true)
+            SwarmSessionProjectRow(
+              key: const ValueKey('swarm-session-project'),
+              chat: c,
+              onTap: () => unawaited(showSwarmSessionProjects(context, c)),
+            ),
           Flexible(
             child: SwarmComposerCard(
               focus: _focus,
@@ -2121,7 +2334,30 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                               _focus.requestFocus();
                             },
                           ),
-                        const Spacer(),
+                        // The rest of the row: the chip takes what its label
+                        // needs, and gives up letters only when the row is full.
+                        Expanded(
+                          child: c.offersSessions
+                              ? Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(
+                                      left: AppSpace.xs,
+                                    ),
+                                    child: SwarmNewSessionChip(
+                                      on: c.newSession,
+                                      blocked: c.sessionBlocked,
+                                      onChanged: (on) {
+                                        _sessionNote.value = null;
+                                        c.newSession = on;
+                                      },
+                                      onBlocked: () =>
+                                          _sessionNote.value = c.sessionBlocked,
+                                    ),
+                                  ),
+                                )
+                              : const SizedBox.shrink(),
+                        ),
                         if (voice != null) SwarmVoiceMic(voice: voice),
                         SwarmRoundButton(
                           key: const ValueKey('swarm-send'),
@@ -2160,12 +2396,14 @@ class _ChatView {
     required this.project,
     required this.canPost,
     required this.archived,
+    required this.old,
     required this.names,
     required this.mentions,
     required this.roles,
     required this.leads,
     required this.mentionable,
     required this.decisions,
+    required this.decisionsAside,
     required this.buddyProject,
     required this.hint,
     required this.cards,
@@ -2183,9 +2421,14 @@ class _ChatView {
     final group = c.conversation;
     final agents = snapshot?.agents ?? const <SuperTabAgent>[];
     final names = [for (final agent in agents) snapshot!.agentName(agent.id)];
+    // An older Buddy chat, where the Swarm gives one Buddy: kept to read, with
+    // no Buddy of its own to start, name or ask (the desktop's).
+    final old = group != null && swarmIsOldBuddyChat(reader, group.id);
     // The person's own Buddy chat (#2090): named after their Buddy, and
-    // holding every question the PM asked them in its project, as on Desktop.
-    final buddyProject = group != null && swarmIsOwnBuddyChat(reader, group.id)
+    // holding every question the PM asked them in its project, as on Desktop;
+    // their one chat for the Swarm holds every project's.
+    final buddyProject =
+        group != null && !old && swarmIsOwnBuddyChat(reader, group.id)
         ? group.projectId
         : null;
     final buddy = buddyProject == null
@@ -2200,20 +2443,32 @@ class _ChatView {
     // (Dee, 11-01: they blocked the project chat). A chat not open to the
     // person shows none either, even while the decisions read has not caught
     // up.
-    final decisions = [
+    final asked = [
       if (group != null && buddyProject != null)
         for (final need in session.inbox.needs)
           if (need is SwarmDecisionNeed &&
               need.swarmId == reader.tabId &&
-              need.decision.projectId == buddyProject)
+              (buddyProject == swarmBuddyKey ||
+                  need.decision.projectId == buddyProject))
             need,
+    ];
+    bool aside(SwarmDecisionNeed need) =>
+        session.home.decisionAside(need.swarmId, need.decision.id);
+    final decisions = [
+      for (final need in asked)
+        if (!aside(need)) need,
     ];
     return _ChatView(
       known: group != null,
-      title: group == null ? 'Chat' : buddy ?? group.label,
+      title: group == null
+          ? 'Chat'
+          : old
+          ? 'Old chat'
+          : buddy ?? group.label,
       project: buddy != null && project != null ? '#$project' : project,
       canPost: c.canPost,
       archived: group?.archived ?? false,
+      old: old,
       names: names,
       mentions: before != null && listEquals(before.names, names)
           ? before.mentions
@@ -2230,6 +2485,10 @@ class _ChatView {
       decisions: before != null && _sameAsks(before.decisions, decisions)
           ? before.decisions
           : List.unmodifiable(decisions),
+      decisionsAside: [
+        for (final need in asked)
+          if (aside(need)) need.decision.id,
+      ],
       buddyProject: buddyProject,
       // "Message Wren"; plain while no Buddy runs to read it.
       hint: buddyProject != null && swarmBuddy(reader, buddyProject) != null
@@ -2253,6 +2512,9 @@ class _ChatView {
   final String? project;
   final bool canPost, archived;
 
+  /// An older Buddy chat, kept to read ([swarmIsOldBuddyChat]).
+  final bool old;
+
   /// The Swarm's agents by name, and the @mentions of them marked in
   /// messages: made again only when a name changed.
   final List<String> names;
@@ -2269,6 +2531,9 @@ class _ChatView {
   /// The agents a post can mention, by id.
   final List<String> mentionable;
   final List<SwarmDecisionNeed> decisions;
+
+  /// The decisions of this Buddy chat set aside with Not now, by id.
+  final List<String> decisionsAside;
 
   /// The project whose Buddy chat of the person's own this is; null for any
   /// other chat.
@@ -2308,11 +2573,13 @@ class _ChatView {
       other.project == project &&
       other.canPost == canPost &&
       other.archived == archived &&
+      other.old == old &&
       listEquals(other.names, names) &&
       mapEquals(other.roles, roles) &&
       setEquals(other.leads, leads) &&
       listEquals(other.mentionable, mentionable) &&
       identical(other.decisions, decisions) &&
+      listEquals(other.decisionsAside, decisionsAside) &&
       other.buddyProject == buddyProject &&
       other.hint == hint &&
       mapEquals(other.cards, cards);
@@ -2324,8 +2591,10 @@ class _ChatView {
     project,
     canPost,
     archived,
+    old,
     Object.hashAll(names),
     Object.hashAll(mentionable),
+    Object.hashAll(decisionsAside),
     decisions,
     buddyProject,
     hint,
@@ -2487,6 +2756,8 @@ String swarmDayLabel(DateTime day, DateTime now) {
 Set<String> swarmGroupedMessages(List<SuperTabMessage> messages) {
   bool joins(SuperTabMessage current, SuperTabMessage previous) {
     bool plain(SuperTabMessage m) =>
+        !swarmIsTaskLine(m) &&
+        m.source['kind'] != 'ship' &&
         m.replyTo == null &&
         m.text.length <= 280 &&
         !m.text.contains('\n') &&
@@ -2766,6 +3037,7 @@ class _Pending extends StatelessWidget {
     required this.state,
     required this.quote,
     required this.onSendAgain,
+    required this.onDelete,
     required this.look,
   });
 
@@ -2780,7 +3052,7 @@ class _Pending extends StatelessWidget {
   final SwarmMentions mentions;
   final SwarmPostState state;
   final Widget? quote;
-  final VoidCallback onSendAgain;
+  final VoidCallback onSendAgain, onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -2833,7 +3105,11 @@ class _Pending extends StatelessWidget {
           if (state != SwarmPostState.confirmed)
             Padding(
               padding: const EdgeInsets.only(top: AppSpace.xs),
-              child: SwarmPostLine(sending: sending, onRetry: onSendAgain),
+              child: SwarmPostLine(
+                sending: sending,
+                onRetry: onSendAgain,
+                onDelete: onDelete,
+              ),
             ),
         ],
       ),
@@ -2935,6 +3211,11 @@ class _Ask extends StatelessWidget {
                     session: session,
                     need: need,
                     fillRecommended: true,
+                    onNotNow: () => session.home.setDecisionsAside(
+                      need.swarmId,
+                      [need.decision.id],
+                      aside: true,
+                    ),
                   ),
                 ),
               ],

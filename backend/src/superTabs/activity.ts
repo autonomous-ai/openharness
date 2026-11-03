@@ -18,6 +18,7 @@ import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { createRateLimiter } from '../lib/rateLimit.js'
 import { agentOnly, isLeads, stableId, type Actor, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import { SESSION_ENDED_KIND } from './buddySessions.js'
 import { canReadGroup, projectOf } from './projects.js'
 import { groupsBy, readBy } from './parts/indexed.js'
 import { usernameOf } from './usernames.js'
@@ -41,22 +42,34 @@ const own = (author: { kind?: string; id?: string } | undefined, personId: strin
 
 /** Activity rows for the thread replies among `messages`: one for the person who wrote the thread's root and one for the person
  *  who wrote the message replied to, unless they wrote the reply. A notice for agents alone is nobody's activity, and a root or
- *  quoted message counts only in the reply's own chat. Those messages by id in one read. */
-export async function writeReplyActivity(tx: Tx, tabId: string, messages: MessageDraft[], now: number): Promise<void> {
-  const replies = messages.filter(m => m.thread && m.thread !== m.id && !agentOnly(m.source ?? null, m.recipients))
+ *  quoted message counts only in the reply's own chat. A Buddy session's ended line is nobody's activity either. Each row keeps its
+ *  message's `sequence` (from `sequences`) and whether it is also in the chat, so a thread or chat mark reads it (markActivityThreadRead).
+ *  Those messages by id in one read. */
+export async function writeReplyActivity(tx: Tx, tabId: string, messages: MessageDraft[], sequences: ReadonlyMap<string, number>, now: number): Promise<void> {
+  const replies = messages.filter(m => m.thread && m.thread !== m.id && !agentOnly(m.source ?? null, m.recipients) && m.source?.kind !== SESSION_ENDED_KIND)
   if (!replies.length) return
   const ids = [...new Set(replies.flatMap(m => [m.thread!, ...(m.replyTo ? [m.replyTo] : [])]))]
   // By id through its index, as a plain $in (parts/indexed.ts): Prisma's `in` plans slowly.
   const found = new Map((await readBy(tx, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: ids }, tabId } }, { $project: { conversationId: 1, author: 1 } }]))
     .map(r => [r._id as string, { conversationId: r.conversationId as string, author: r.author }]))
-  const data = replies.flatMap(m => {
+  const recipients = replies.map(m => {
     const people = new Set([m.thread!, m.replyTo].flatMap(target => {
       const row = target ? found.get(target) : undefined
       const by = row?.author as { kind?: string; id?: string } | undefined
       return row && row.conversationId === m.conversationId && by?.kind === 'person' && by.id && !own(m.author, by.id) ? [by.id] : []
     }))
-    return [...people].map(personId => ({ id: stableId(tabId, 'reply', m.id, personId), tabId, personId, kind: 'reply', conversationId: m.conversationId,
-      messageId: m.id, threadId: m.thread!, actorKind: m.author.kind, actorId: m.author.id, emoji: null, createdAt: new Date(now), readAt: null }))
+    return { message: m, people }
+  })
+  const markIds = [...new Set(recipients.flatMap(({ message, people }) => [...people].map(personId =>
+    stableId(tabId, message.conversationId, message.thread!, personId))))]
+  const marks = markIds.length ? await tx.superTabThreadMark.aggregateRaw({ pipeline: [
+    { $match: { _id: { $in: markIds } } }, { $project: { _id: 1, follow: 1 } },
+  ] }) as unknown as Array<{ _id: string; follow?: boolean | null }> : []
+  const unfollowed = new Set(marks.filter(mark => mark.follow === false).map(mark => mark._id))
+  const data = recipients.flatMap(({ message: m, people }) => {
+    return [...people].filter(personId => !unfollowed.has(stableId(tabId, m.conversationId, m.thread!, personId))).map(personId => ({ id: stableId(tabId, 'reply', m.id, personId), tabId, personId, kind: 'reply', conversationId: m.conversationId,
+      messageId: m.id, threadId: m.thread!, actorKind: m.author.kind, actorId: m.author.id, emoji: null, createdAt: new Date(now), readAt: null,
+      ...sequences.has(m.id) ? { sequence: sequences.get(m.id)! } : {}, ...m.alsoInChat ? { alsoInChat: true } : {} }))
   })
   if (data.length) await tx.superTabActivity.createMany({ data })
 }
@@ -160,6 +173,27 @@ function actorName(state: SuperTabState, kind: string, id: string, message: Row,
 /** Marks the person's rows made at or before `through` read, on every device. Only their own. */
 export async function markActivityRead(db: PrismaClient, tabId: string, personId: string, through: number, now: number): Promise<number> {
   const moved = await db.superTabActivity.updateMany({ where: { tabId, personId, createdAt: { lte: new Date(through) }, ...unread },
+    data: { readAt: new Date(now) } })
+  return moved.count
+}
+
+/** Marks the person's unread reply rows of thread `threadId` read when their thread mark stands at `sequence`: those at or below it,
+ *  in one update on every device. Only their own; a row without a sequence (written before they were kept) is not matched:
+ *  `gt: 0` keeps it out, since Prisma's `lte` alone matches a null. */
+export async function markActivityThreadRead(db: PrismaClient, read: { tabId: string; personId: string; conversationId: string; threadId: string
+  sequence: number; now: number }): Promise<number> {
+  const { tabId, personId, conversationId, threadId, sequence, now } = read
+  const moved = await db.superTabActivity.updateMany({ where: { tabId, personId, conversationId, threadId, kind: 'reply', sequence: { gt: 0, lte: sequence }, ...unread },
+    data: { readAt: new Date(now) } })
+  return moved.count
+}
+
+/** Marks the person's unread reply rows of a chat read when their chat mark stands at `sequence`: those also shown in the chat at or
+ *  below it. A reply only in its thread waits for its thread's mark, as the chat read leaves it unread (threadMarkSeeds.ts). */
+export async function markActivityChatRead(db: PrismaClient, read: { tabId: string; personId: string; conversationId: string; sequence: number; now: number }):
+  Promise<number> {
+  const { tabId, personId, conversationId, sequence, now } = read
+  const moved = await db.superTabActivity.updateMany({ where: { tabId, personId, conversationId, kind: 'reply', alsoInChat: true, sequence: { gt: 0, lte: sequence }, ...unread },
     data: { readAt: new Date(now) } })
   return moved.count
 }

@@ -269,7 +269,8 @@ void main() {
           matching: find.byType(Icon),
         ),
       );
-      expect(icon.size, 16, reason: key);
+      // The phone bar's one icon size (Huy, 2026-11-02), still well under the target.
+      expect(icon.size, 20, reason: key);
     }
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
@@ -282,6 +283,13 @@ void main() {
     final app = await mount(tester, const Size(1280, 800));
     for (final key in ['swarm-search-button']) {
       expect(tester.getSize(find.byKey(ValueKey(key))).height, 28);
+      final icon = tester.widget<Icon>(
+        find.descendant(
+          of: find.byKey(ValueKey(key)),
+          matching: find.byType(Icon),
+        ),
+      );
+      expect(icon.size, 16, reason: key);
     }
     await tester.pumpWidget(const SizedBox.shrink());
     app.dispose();
@@ -299,7 +307,8 @@ void main() {
   testWidgets('a wide window keeps the row of tabs', (tester) async {
     final app = await mount(tester, const Size(1280, 800));
     expect(find.byKey(const ValueKey('web-tab-switcher')), findsNothing);
-    expect(find.byKey(const ValueKey('swarm-store-button')), findsOneWidget);
+    expect(find.byKey(const ValueKey('swarm-search-button')), findsOneWidget);
+    expect(find.byKey(const ValueKey('swarm-store-button')), findsNothing);
     expect(
       find.byKey(const ValueKey('workspace-subscription-usage')),
       findsOneWidget,

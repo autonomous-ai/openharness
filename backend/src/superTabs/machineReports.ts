@@ -20,6 +20,8 @@ export interface ReportRecord {
   stamp: number
   /** This machine's agents Lent counts for the next report (leaderboard/lent.ts lentAgents). */
   lentCount: number
+  /** The same agents by the project of their task (lentProjects); absent from a record of an older server. */
+  lentProjects?: Record<string, number>
   /** Whether any machine of the Swarm was being removed (machines.ts expireRemovals). */
   removals: boolean
   /** The earliest a worker here may lose its task to time (liveness.ts nextLossAt), at most DEADLINE_CAP_MS on. */
@@ -49,7 +51,7 @@ export interface ReportRedis {
   set(key: string, value: string, px: 'PX', ms: number, nx: 'NX'): Promise<string | null>
 }
 
-const record = z.object({ stamp: z.number().finite(), lentCount: z.number().int().nonnegative(), removals: z.boolean(), deadline: z.number().finite(),
+const record = z.object({ stamp: z.number().finite(), lentCount: z.number().int().nonnegative(), lentProjects: z.record(z.string(), z.number().int().nonnegative()).optional(), removals: z.boolean(), deadline: z.number().finite(),
   team: z.boolean(), members: z.array(z.string()), preparable: z.array(z.string()), at: z.number().finite() })
 
 function parse(value: string | null): ReportRecord | undefined {

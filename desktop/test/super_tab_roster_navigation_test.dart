@@ -5,6 +5,7 @@ import 'package:harness/super_tabs/workspace.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 import 'support/super_tab_fixture.dart';
+import 'support/super_tab_members.dart';
 
 void main() {
   testWidgets(
@@ -34,6 +35,7 @@ void main() {
       final mobileLead = {
         ...conversationFixture('mobile-lead', 'Product Manager'),
         'projectId': 'mobile',
+        'leadId': 'nova',
         'agentIds': ['nova'],
       };
       final mobileWork = {
@@ -58,7 +60,6 @@ void main() {
       final c = await f.app.superTabs.open(tabId);
       await c.refresh();
       c.select('mobile-lead');
-      c.selectDevices();
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
@@ -74,11 +75,15 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(c.devicesSelected, isTrue);
       expect(c.selectedId, 'mobile-lead');
+      // Members opens from a chat (Quiet Swarm) and stays open over Devices.
+      await openSuperTabMembers(tester);
+      c.selectDevices();
+      await tester.pumpAndSettle();
+      expect(c.devicesSelected, isTrue);
       await tester.tap(find.byKey(const ValueKey('super-member-nova')));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(FilledButton, 'Open terminal'));
+      await tester.tap(find.text('Open terminal'));
       await tester.pumpAndSettle();
       await tester.tap(
         find.byKey(const ValueKey('super-agent-group-mobile-work')),

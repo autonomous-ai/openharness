@@ -730,7 +730,7 @@ void main() {
         .text
         .style
         ?.fontWeight;
-    await tester.tap(find.byKey(const ValueKey('super-project-toggle-lead')));
+    await tester.tap(find.byKey(const ValueKey('super-group-lead')));
     await tester.pumpAndSettle();
     expect(weight(), grid.AppFont.semibold);
     // Read on another device.

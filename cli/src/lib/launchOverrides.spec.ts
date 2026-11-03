@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { agentTmpEnv, buddyTmpEnv } from './agentTmp.js'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -558,5 +559,39 @@ describe('buildLaunchOverrides — a Swarm session on the Harness GitHub App', (
       expect(await buildLaunchOverrides(d, 'claude', { cwd: workspace(), swarmSkill: skill }, 'agent-1', () => true))
         .toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED' })
     } finally { rmSync(root, { force: true }) }
+  })
+})
+
+describe('buildLaunchOverrides — the owner\'s private temporary folder (audit M1)', () => {
+  const told = (tmp: Record<string, string>) => vi.mocked(agentTmpEnv).mockReturnValueOnce(tmp)
+
+  it('reaches a relaunch, resume, fork and swap, which all pass here', async () => {
+    told({ TMPDIR: '/data/agent-tmp' })
+    expect(await buildLaunchOverrides(deps().d, 'claude', {}, 'a')).toMatchObject({ ok: true, overrides: { env: { TMPDIR: '/data/agent-tmp' } } })
+    expect(agentTmpEnv).toHaveBeenLastCalledWith('claude', undefined)
+  })
+
+  it('names the saved role of an agent', async () => {
+    const swarm = { args: () => [], prepare: () => ({ instructions: 'x' }) }
+    await buildLaunchOverrides(deps({ swarm } as never).d, 'claude', { cwd: '/w', swarmSkill: { role: 'agent', key: 'k' } as never }, 'a')
+    expect(agentTmpEnv).toHaveBeenLastCalledWith('claude', 'agent')
+  })
+
+  // A restart, update, resume or fork of a Buddy keeps its own folder: its guard still names it (review of #2563).
+  it('keeps a relaunched Buddy in its own folder, and the launch\'s own variables win', async () => {
+    const swarm = { args: () => [], prepare: () => ({ instructions: 'x' }) }
+    const agents = vi.mocked(agentTmpEnv).mock.calls.length
+    vi.mocked(buddyTmpEnv).mockReturnValueOnce({ TMPDIR: '/data-buddy-tmp/one', CLAUDE_CODE_TMPDIR: '/data-buddy-tmp/one' })
+    expect(await buildLaunchOverrides(deps({ swarm } as never).d, 'claude', { cwd: '/w', swarmSkill: { role: 'buddy', key: 'k' } as never }, 'a'))
+      .toMatchObject({ ok: true, overrides: { env: { TMPDIR: '/data-buddy-tmp/one', CLAUDE_CODE_TMPDIR: '/data-buddy-tmp/one' } } })
+    expect(buddyTmpEnv).toHaveBeenLastCalledWith('claude', '/w')
+    expect(vi.mocked(agentTmpEnv).mock.calls.length).toBe(agents)
+  })
+
+  it('gives way to the launch\'s own variables', async () => {
+    told({ TMPDIR: '/data/agent-tmp' })
+    const ownerRelay = async () => ({ env: { TMPDIR: '/chosen' }, args: [] })
+    const result = await buildLaunchOverrides(deps({ ownerRelay }).d, 'claude', {}, 'a')
+    expect(result).toMatchObject({ ok: true, overrides: { env: { TMPDIR: '/chosen' } } })
   })
 })

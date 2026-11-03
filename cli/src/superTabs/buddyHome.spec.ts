@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
-import { buddyProjectsOf, folderName, prepareBuddyHome, pruneBuddyHome, removeBuddyHome, trustBuddyHome } from './buddyHome.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { BUDDY_COPIES_FILE, buddyProjectsOf, folderName, prepareBuddyHome, pruneBuddyHome, buddyHomeDue, refreshBuddyHome, removeBuddyHome, trustBuddyHome } from './buddyHome.js'
 
 // A person's one Buddy's folder (spec 2026-10-31-one-buddy-per-swarm, Folder): one worktree per project checkout on the
 // machine, each from its own checkout, and a lost project's out before the next turn. Real git, in a throwaway folder.
@@ -156,5 +156,271 @@ describe('a person\'s one Buddy\'s folder', () => {
     expect(folderName('///', new Set())).toBe('project')
     expect(buddyProjectsOf({ buddyProjects: [{ id: 'a', name: 'A', cwd: '/x' }, { id: '../b', name: 'B', cwd: '/y' }, { id: 'c', name: 'C', cwd: 'relative' }] }))
       .toEqual([{ id: 'a', name: 'A', cwd: '/x' }])
+  })
+})
+
+// Scholes, 11-02: the Buddy kept saying a merged button was "not in my copy of the code yet". Real git: a bare origin, the
+// person's clone of it, and new commits pushed from another clone.
+// Each test here runs dozens of real git commands: a busy machine takes more than the default 5 s (seen with a hook added).
+describe('a Buddy\'s copy of a project follows its default branch', { timeout: 30_000 }, () => {
+  const commit = (dir: string, file: string, text: string) => {
+    writeFileSync(join(dir, file), text)
+    git(dir, 'add', file)
+    git(dir, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', file)
+  }
+  /** origin, the person's clone, and a teammate's clone that pushes. */
+  function project(r: string) {
+    const first = checkout(r, 'first'), origin = join(r, 'origin.git')
+    git(r, 'clone', '-q', '--bare', first, origin)
+    const clone = join(r, 'clone'), teammate = join(r, 'teammate')
+    git(r, 'clone', '-q', origin, clone)
+    git(r, 'clone', '-q', origin, teammate)
+    return { origin, clone, teammate, home: join(r, 'home'), web: [{ id: 'web', name: 'Web', cwd: clone }] }
+  }
+  const advance = (teammate: string, file = 'NEW', text = 'new\n') => { commit(teammate, file, text); git(teammate, 'push', '-q', 'origin', 'main') }
+  const head = (dir: string) => git(dir, 'rev-parse', 'HEAD').trim()
+  const copy = (home: string) => join(home, 'projects', 'Web')
+  const copies = (home: string) => readFileSync(join(home, BUDDY_COPIES_FILE), 'utf8')
+
+  it('moves a Buddy home made at an old commit to the new origin head on the next prepare, and says where it is', async () => {
+    const p = project(root())
+    await prepareBuddyHome(p.home, p.web)
+    const old = head(copy(p.home))
+    expect(copies(p.home)).toContain(`Web: at ${old.slice(0, 7)}`)
+    advance(p.teammate)
+    await prepareBuddyHome(p.home, p.web)
+    expect(head(copy(p.home))).toBe(head(p.teammate))
+    expect(readFileSync(join(copy(p.home), 'NEW'), 'utf8')).toBe('new\n')
+    // Still detached, as a Buddy holds no branch.
+    expect(() => git(copy(p.home), 'symbolic-ref', '--quiet', 'HEAD')).toThrow()
+    expect(copies(p.home)).toContain(`Web: at ${head(p.teammate).slice(0, 7)}`)
+    expect(copies(p.home)).toContain('latest default branch')
+  })
+
+  it('makes a new copy at the default branch too, not at wherever its person\'s checkout stands', async () => {
+    const p = project(root())
+    git(p.clone, 'checkout', '-q', '-b', 'my-private-work')
+    commit(p.clone, 'PRIVATE', 'mine\n')
+    await prepareBuddyHome(p.home, p.web)
+    expect(existsSync(join(copy(p.home), 'PRIVATE'))).toBe(false)
+    expect(head(copy(p.home))).toBe(head(p.teammate))
+  })
+
+  it('leaves the person\'s checkout as it is: HEAD, branches, working files, tags, FETCH_HEAD and hooks', async () => {
+    const p = project(root())
+    git(p.clone, 'checkout', '-q', '-b', 'my-work')
+    commit(p.clone, 'MINE', 'mine\n')
+    writeFileSync(join(p.clone, 'WHO'), 'uncommitted\n')
+    writeFileSync(join(p.clone, 'UNTRACKED'), 'untracked\n')
+    const marker = join(p.clone, 'HOOK_RAN')
+    writeFileSync(join(p.clone, '.git', 'hooks', 'post-checkout'), `#!/bin/sh\ntouch ${marker}\n`, { mode: 0o755 })
+    await prepareBuddyHome(p.home, p.web)
+    rmSync(marker, { force: true })
+    git(p.teammate, 'tag', 'v9')
+    advance(p.teammate)
+    git(p.teammate, 'push', '-q', 'origin', 'v9')
+    git(p.teammate, 'push', '-q', 'origin', 'main:refs/heads/other')
+    const before = { head: head(p.clone), status: git(p.clone, 'status', '--porcelain'), mine: git(p.clone, 'rev-parse', 'refs/heads/main'),
+      branch: git(p.clone, 'symbolic-ref', 'HEAD'), config: readFileSync(join(p.clone, '.git', 'config'), 'utf8') }
+    const fetchHead = join(p.clone, '.git', 'FETCH_HEAD'), fetched = existsSync(fetchHead) ? readFileSync(fetchHead, 'utf8') : null
+    await refreshBuddyHome(p.home)
+    expect(head(copy(p.home))).toBe(head(p.teammate))
+    expect({ head: head(p.clone), status: git(p.clone, 'status', '--porcelain'), mine: git(p.clone, 'rev-parse', 'refs/heads/main'),
+      branch: git(p.clone, 'symbolic-ref', 'HEAD'), config: readFileSync(join(p.clone, '.git', 'config'), 'utf8') }).toEqual(before)
+    expect(readFileSync(join(p.clone, 'WHO'), 'utf8')).toBe('uncommitted\n')
+    expect(existsSync(fetchHead) ? readFileSync(fetchHead, 'utf8') : null).toBe(fetched)
+    expect(existsSync(marker)).toBe(false)
+    // Only the one remote-tracking ref moved.
+    expect(git(p.clone, 'tag')).toBe('')
+    expect(git(p.clone, 'rev-parse', 'refs/remotes/origin/main').trim()).toBe(head(p.teammate))
+    expect(() => git(p.clone, 'rev-parse', '--verify', '--quiet', 'refs/remotes/origin/other')).toThrow()
+  })
+
+  it.each([
+    ['a changed file', (dir: string) => { chmodSync(join(dir, 'WHO'), 0o644); writeFileSync(join(dir, 'WHO'), 'changed\n') }],
+    ['an untracked file', (dir: string) => writeFileSync(join(dir, 'SCRATCH'), 'x\n')],
+  ])('leaves a copy with %s alone, and says it may be behind', async (_, dirty) => {
+    const p = project(root())
+    await prepareBuddyHome(p.home, p.web)
+    const old = head(copy(p.home))
+    dirty(copy(p.home))
+    advance(p.teammate)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await refreshBuddyHome(p.home)
+    expect(warn).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+    expect(head(copy(p.home))).toBe(old)
+    expect(copies(p.home)).toContain('may be behind')
+  })
+
+  it('leaves a missing copy missing, and still moves the others', async () => {
+    const r = root(), p = project(r), other = checkout(r, 'other-src')
+    await prepareBuddyHome(p.home, [...p.web, { id: 'other', name: 'Other', cwd: other }])
+    rmSync(copy(p.home), { recursive: true, force: true })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await refreshBuddyHome(p.home)
+    warn.mockRestore()
+    expect(existsSync(copy(p.home))).toBe(false)
+    expect(copies(p.home)).toContain('Web: revision not known')
+    expect(copies(p.home)).toContain('Other: at')
+    expect(copies(p.home)).toContain('no remote default branch')
+  })
+
+  it('moves nothing above a copy that lost its .git: another repository around it is left alone', async () => {
+    const r = root(), p = project(r), outer = checkout(r, 'outer')
+    const home = join(outer, 'home')
+    git(outer, 'remote', 'add', 'origin', p.origin)
+    git(outer, 'fetch', '-q', 'origin')
+    await prepareBuddyHome(home, p.web)
+    rmSync(join(copy(home), '.git'))
+    const before = head(outer)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await refreshBuddyHome(home)
+    warn.mockRestore()
+    expect(head(outer)).toBe(before)
+    expect(copies(home)).toContain('Web: revision not known')
+  })
+
+  it('offline: keeps the old copy, says so, logs one line with no address, and tries no more that pass', async () => {
+    const p = project(root())
+    await prepareBuddyHome(p.home, p.web)
+    const old = head(copy(p.home))
+    git(p.clone, 'remote', 'set-url', 'origin', 'https://user:s3cret-token@127.0.0.1:9/nothing.git')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await refreshBuddyHome(p.home)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0])).not.toMatch(/s3cret|127\.0\.0\.1/)
+    warn.mockRestore()
+    expect(head(copy(p.home))).toBe(old)
+    expect(copies(p.home)).toContain('may be behind')
+    expect(copies(p.home)).not.toContain('s3cret')
+  })
+
+  it('locks again the files a move wrote, and never a link\'s target', async () => {
+    const r = root(), p = project(r), target = join(r, 'outside')
+    writeFileSync(target, 'x', { mode: 0o644 })
+    await prepareBuddyHome(p.home, p.web)
+    // As the launch's lock leaves it.
+    chmodSync(join(copy(p.home), 'WHO'), 0o444)
+    commit(p.teammate, 'WHO', 'changed\n')
+    symlinkSync(target, join(p.teammate, 'LINK'))
+    git(p.teammate, 'add', 'LINK')
+    advance(p.teammate, 'RUN', 'new\n')
+    chmodSync(join(p.teammate, 'RUN'), 0o755)
+    git(p.teammate, 'add', 'RUN')
+    git(p.teammate, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'run')
+    git(p.teammate, 'push', '-q', 'origin', 'main')
+    await refreshBuddyHome(p.home)
+    expect(readFileSync(join(copy(p.home), 'WHO'), 'utf8')).toBe('changed\n')
+    for (const file of ['WHO', 'RUN']) expect(statSync(join(copy(p.home), file)).mode & 0o222).toBe(0)
+    expect(statSync(join(copy(p.home), 'RUN')).mode & 0o111).not.toBe(0)
+    expect(statSync(target).mode & 0o222).not.toBe(0)
+    // The lock reads as no change, or the next pass would leave it behind.
+    expect(git(copy(p.home), 'status', '--porcelain')).toBe('')
+    advance(p.teammate, 'LATER')
+    await refreshBuddyHome(p.home)
+    expect(head(copy(p.home))).toBe(head(p.teammate))
+  })
+
+  it('locks a file a move wrote whatever its name: a leading space, a line break, a folder (security review 2 of #2524)', async () => {
+    const p = project(root()), names = [' leading.txt', 'trailing.txt ', 'line\nbreak.txt', 'plain.txt']
+    await prepareBuddyHome(p.home, p.web)
+    mkdirSync(join(p.teammate, ' folder'))
+    for (const name of [...names, ' folder/ inner.txt']) writeFileSync(join(p.teammate, name), 'x\n')
+    git(p.teammate, 'add', '-A')
+    git(p.teammate, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'names')
+    git(p.teammate, 'push', '-q', 'origin', 'main')
+    await refreshBuddyHome(p.home)
+    expect(head(copy(p.home))).toBe(head(p.teammate))
+    for (const name of [...names, ' folder/ inner.txt']) expect([name, statSync(join(copy(p.home), name)).mode & 0o222]).toEqual([name, 0])
+  })
+
+  // macOS refuses such a name; CI's Linux takes it.
+  it.skipIf(process.platform === 'darwin')('locks a file a move wrote whose name is not UTF-8 (security review 2 of #2524)', async () => {
+    const p = project(root()), name = Buffer.from([0x66, 0xff, 0x2e, 0x74])
+    await prepareBuddyHome(p.home, p.web)
+    writeFileSync(Buffer.concat([Buffer.from(`${p.teammate}/`), name]), 'x\n')
+    git(p.teammate, 'add', '-A')
+    git(p.teammate, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'bytes')
+    git(p.teammate, 'push', '-q', 'origin', 'main')
+    await refreshBuddyHome(p.home)
+    expect(head(copy(p.home))).toBe(head(p.teammate))
+    expect(statSync(Buffer.concat([Buffer.from(`${copy(p.home)}/`), name])).mode & 0o222).toBe(0)
+  })
+
+  it('never locks a file outside through a folder a commit turned into a link (review of #2524)', async () => {
+    const r = root(), p = project(r), outside = join(r, 'outside')
+    mkdirSync(outside)
+    writeFileSync(join(outside, 'b.txt'), 'theirs', { mode: 0o644 })
+    mkdirSync(join(p.teammate, 'a'))
+    commit(p.teammate, 'a/b.txt', 'in the folder\n')
+    git(p.teammate, 'push', '-q', 'origin', 'main')
+    await prepareBuddyHome(p.home, p.web)
+    expect(existsSync(join(copy(p.home), 'a', 'b.txt'))).toBe(true)
+    git(p.teammate, 'rm', '-q', '-r', 'a')
+    symlinkSync(outside, join(p.teammate, 'a'))
+    git(p.teammate, 'add', 'a')
+    git(p.teammate, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'link')
+    git(p.teammate, 'push', '-q', 'origin', 'main')
+    await refreshBuddyHome(p.home)
+    expect(head(copy(p.home))).toBe(head(p.teammate))
+    expect(statSync(join(outside, 'b.txt')).mode & 0o222).not.toBe(0)
+  })
+
+  it('is due at most hourly, across restarts, by the age of its file; a clock moved back does not stop it for good', async () => {
+    const p = project(root())
+    await prepareBuddyHome(p.home, p.web)
+    const file = join(p.home, BUDDY_COPIES_FILE), now = Date.now()
+    expect(buddyHomeDue(p.home, now + 59 * 60_000)).toBe(false)
+    expect(buddyHomeDue(p.home, now + 61 * 60_000)).toBe(true)
+    const later = new Date(now + 3_600_000)
+    utimesSync(file, later, later)
+    expect(buddyHomeDue(p.home, now)).toBe(true)
+    rmSync(file)
+    expect(buddyHomeDue(p.home)).toBe(true)
+  })
+
+  it('a lost project: its name leaves the file, and a pass running then stops and writes nothing back', async () => {
+    const r = root(), p = project(r), otherRoot = join(r, 'o')
+    mkdirSync(otherRoot)
+    const other = project(otherRoot)
+    const both = [...p.web, { id: 'secret', name: 'Secret', cwd: other.clone }]
+    await prepareBuddyHome(p.home, both)
+    expect(copies(p.home)).toContain('Secret')
+    advance(p.teammate)
+    const pass = refreshBuddyHome(p.home)
+    expect(await pruneBuddyHome(p.home, new Set(['web']))).toEqual(['Secret'])
+    await pass
+    expect(existsSync(join(p.home, BUDDY_COPIES_FILE))).toBe(false)
+    expect(existsSync(join(p.home, 'projects', 'Secret'))).toBe(false)
+    await refreshBuddyHome(p.home)
+    expect(copies(p.home)).not.toContain('Secret')
+    expect(copies(p.home)).toContain('Web: at')
+  })
+
+  it('a Buddy ending during a pass: the folder goes whole and nothing comes back', async () => {
+    const p = project(root())
+    await prepareBuddyHome(p.home, p.web)
+    advance(p.teammate)
+    let finished = false
+    void refreshBuddyHome(p.home).then(() => { finished = true })
+    await removeBuddyHome(p.home)
+    // Nothing of the pass is left running to write in the folder after it is gone.
+    expect(finished).toBe(true)
+    expect(existsSync(p.home)).toBe(false)
+    expect(git(p.clone, 'worktree', 'list').trim().split('\n')).toHaveLength(1)
+  })
+
+  it('joins a pass already running instead of starting a second, and never throws for a folder that is a link', async () => {
+    const r = root(), p = project(r)
+    await prepareBuddyHome(p.home, p.web)
+    expect(refreshBuddyHome(p.home)).toBe(refreshBuddyHome(p.home))
+    await refreshBuddyHome(p.home)
+    const linked = join(r, 'linked')
+    symlinkSync(p.home, linked)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await expect(refreshBuddyHome(linked)).resolves.toBeUndefined()
+    expect(warn).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
   })
 })

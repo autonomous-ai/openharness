@@ -131,6 +131,39 @@ describe('a review task while its build is back with the Engineer', () => {
     expect(sweep(reviewing(later, { status: 'review', result: 'Ready for review at abc1234' }, {}, {}), later)).toEqual({ status: 'lost', lost: true })
   })
 
+  // Task #2241: Reviewers give their verdict as a post, and stay Working while the Engineer fixes it (instructions, revision 27).
+  const told = { toldEngineerAt: asked }
+  it('keeps its task through 35 quiet minutes after writing to its Engineer, while the Engineer is fixing', () => {
+    for (const status of ['working', 'blocked', 'needs_human'] as const) expect(sweep(reviewing(later, { status }, {}, told), later)).toEqual({ status: 'working', lost: false })
+    expect(nextLossAt(reviewing(later, {}, {}, told), 'm')).toBeUndefined()
+  })
+
+  it('holds nothing when its Engineer is waiting on a review: "starting now", then silence, still moves', () => {
+    const waiting = reviewing(later, { status: 'review', result: 'Ready for review at abc1234' }, {}, told)
+    expect(sweep(waiting, later)).toEqual({ status: 'lost', lost: true })
+    expect(review(waiting).lost?.reason).toBe('no progress for 35 minutes')
+    // An older skill's hand-off is working by status, and waits on a review all the same.
+    expect(sweep(reviewing(later, { status: 'working', result: 'Ready for review at abc1234' }, {}, told), later)).toEqual({ status: 'lost', lost: true })
+  })
+
+  it('has 30 minutes from the Engineer\'s next Ready, and is moved after them', () => {
+    const ready = (at: number) => {
+      const state = reviewing(at, { status: 'review', result: 'Ready for review at abc1234', progressAt: later }, {}, told)
+      revisionReady(state, group(state, 'g1'), later)
+      return state
+    }
+    expect(review(ready(later)).toldEngineerAt).toBeUndefined()
+    expect(sweep(ready(later + QUIET_RUNNING_MS), later + QUIET_RUNNING_MS)).toEqual({ status: 'working', lost: false })
+    expect(sweep(ready(later + QUIET_RUNNING_MS + 1), later + QUIET_RUNNING_MS + 1)).toEqual({ status: 'lost', lost: true })
+  })
+
+  it('still loses its task at once when its session stops or its machine goes, and to time once its build ends', () => {
+    const stopped = reviewing(later, {}, {}, told)
+    stopped.machines![0]!.observation!.stoppedHarnessIds = ['h']
+    expect(sweep(stopped, later)).toEqual({ status: 'lost', lost: true })
+    for (const status of ['cancelled', 'done', 'lost'] as const) expect(sweep(reviewing(later, { status }, {}, told), later)).toEqual({ status: 'lost', lost: true })
+  })
+
   it('still loses its task to time once its build is cancelled, finished, lost, archived, unloaded or in another project', () => {
     for (const status of ['cancelled', 'done', 'lost'] as const) expect(sweep(reviewing(later, { status }), later)).toEqual({ status: 'lost', lost: true })
     expect(sweep(reviewing(later, {}, { archived: true }), later)).toEqual({ status: 'lost', lost: true })

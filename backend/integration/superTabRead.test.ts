@@ -128,8 +128,8 @@ describe('first load (design 4.3)', () => {
     const { status, body } = await get(`/api/super-tabs/${s.tabId}/parts`, peer)
     expect(status).toBe(200)
     expect(Object.keys(body.data).sort()).toEqual(['agents', 'cursor', 'derived', 'epoch', 'format', 'groups', 'head', 'lastChangedAt',
-      'machines', 'members', 'progress', 'serverTime', 'starts', 'tabId'].sort())
-    expect(body.data).toMatchObject({ format: 2, tabId: s.tabId, serverTime: NOW, epoch: 1, lastChangedAt: MIGRATED,
+      'machines', 'members', 'progress', 'serverTime', 'starts', 'steps', 'tabId'].sort())
+    expect(body.data).toMatchObject({ format: 2, tabId: s.tabId, serverTime: NOW, epoch: 1, lastChangedAt: MIGRATED, steps: true,
       head: { key: 'head', version: R, changedAt: MIGRATED, data: { id: s.tabId, name: 'Pilot' } } })
     expect(JSON.parse(Buffer.from(body.data.cursor, 'base64url').toString())).toEqual({ v: 2, t: NOW - 30_000, e: 1 })
     expect(keys(body.data.members)).toEqual([owner.sub, peer.sub, outsider.sub])
@@ -429,6 +429,9 @@ describe('host form (design 4.10)', () => {
     const readers = [{ email: peer.email, userId: peer.sub }, { email: outsider.email, userId: outsider.sub }]
     expect(rows.get(s.lead)).toMatchObject({ lead: true, active: true, leadsConversationId: null, lastChangedAt: MIGRATED, observers: readers,
       confidential: true, membersWatch: true })
+    // The chat a PM's host rebuilds its start prompt from when it switches it, a real id (2026-11-02, both reviews of #2527).
+    expect((rows.get(s.lead) as Row & { ledConversationId?: string }).ledConversationId).toBe('lead')
+    expect(rows.get(s.worker)).toMatchObject({ ledConversationId: null })
     expect(rows.get(s.worker)).toMatchObject({ observers: readers, confidential: false, membersWatch: false })
     // Its only group is finished and dormant, yet not archived: the host must not hand it to automatic cleanup.
     expect(rows.get(s.more.idle)).toMatchObject({ lead: false, active: true })
@@ -673,8 +676,10 @@ describe('a real command through the store by parts (design 4.7)', () => {
     expect(written.version).toBeGreaterThan(R)
     clock = Date.now()
     const seen = (await get(`/api/super-tabs/${s.tabId}/changes?cursor=${cursor}`, peer)).body.data
+    // The task's line in its project chat takes the new name too (taskLine.ts): that chat is written in the same commit.
+    expect(reply.parts.filter(p => p.kind === 'group').map(p => [p.key, p.version]).sort()).toEqual([['lead', written.version], [s.web, written.version]].sort())
     expect(seen.groups.map((g: { key: string; version: number; data: { title: string } }) => [g.key, g.version, g.data.title]))
-      .toEqual([[s.web, written.version, 'Renamed for real']])
+      .toEqual([['lead', written.version, 'Lead'], [s.web, written.version, 'Renamed for real']])
     expect(seen.lastChangedAt).toBe(reply.lastChangedAt)
   })
 })

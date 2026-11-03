@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -9,8 +10,8 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
-import 'package:harness/super_tabs/threads_view.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -125,7 +126,6 @@ Future<void> pumpSidebar(
   SuperTabController c,
   SuperTabAttention attention, {
   Brightness brightness = Brightness.dark,
-  bool threadsSelected = false,
 }) async {
   await tester.binding.setSurfaceSize(const Size(300, 900));
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -137,12 +137,9 @@ Future<void> pumpSidebar(
           listenable: c,
           builder: (context, _) => ProjectSidebar(
             controller: c,
-            onAddAgent: (_) {},
             needsHuman: (_) => 0,
             onSelect: c.select,
             attention: attention,
-            onThreads: () {},
-            threadsSelected: threadsSelected,
           ),
         ),
       ),
@@ -159,6 +156,125 @@ Text rowText(WidgetTester tester, String key, String text) =>
 
 void main() {
   group('the red number counts only what is for the reader', () {
+    // Dee: the 7, 7 and 3 on project rows never cleared, and opening them showed none of what they counted.
+    group('a project row counts only what opening it shows', () {
+      Future<(SuperTabController, SuperTabAttention)> opened(
+        ConversationServer server,
+      ) async {
+        final c = await openHere(server);
+        final attention = SuperTabAttention.of(c);
+        await attention.mentions.load();
+        await attention.decisions.load();
+        await attention.load();
+        return (c, attention);
+      }
+
+      testWidgets('a tag in a task conversation shows no number on the '
+          'collapsed row, which is still bold and kept by the unread filter', (
+        tester,
+      ) async {
+        final server = projectServer();
+        fromLead(server, 'Please look', conversationId: 'offline');
+        server.tag('message-1', conversationId: 'offline');
+        final (c, attention) = await opened(server);
+        await pumpSidebar(tester, c, attention);
+        expect(attention.mentionsIn('offline'), 1);
+        expect(
+          inRow('super-group-lead', find.byType(SuperTabCountBadge)),
+          findsNothing,
+        );
+        expect(
+          rowText(tester, 'super-group-lead', 'web-project').style?.fontWeight,
+          FontWeight.w600,
+        );
+        c.toggleUnreadOnly();
+        await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('super-group-lead')), findsOneWidget);
+        // Still listed where it can be opened, and on its own row once expanded.
+        expect(attention.mentions.waiting, hasLength(1));
+        c.toggleProject('lead');
+        await tester.pumpAndSettle();
+        expect(inRow('super-group-offline', find.text('1')), findsOneWidget);
+        await close(tester, c);
+      });
+
+      testWidgets('a tag in the project chat counts collapsed or open, and '
+          'reading it clears it', (tester) async {
+        final server = projectServer();
+        server.tag('message-1', messageSequence: 1);
+        fromLead(server, 'Please look');
+        final (c, attention) = await opened(server);
+        await pumpSidebar(tester, c, attention);
+        expect(inRow('super-group-lead', find.text('1')), findsOneWidget);
+        c.toggleProject('lead');
+        await tester.pumpAndSettle();
+        expect(inRow('super-group-lead', find.text('1')), findsOneWidget);
+        c.toggleProject('lead');
+        await tester.pumpAndSettle();
+        c.select('lead');
+        await tester.pumpAndSettle();
+        c.markRead('lead');
+        await tester.pumpAndSettle();
+        expect(
+          inRow('super-group-lead', find.byType(SuperTabCountBadge)),
+          findsNothing,
+        );
+        await close(tester, c);
+      });
+
+      testWidgets('a tag in a reply that lives only in a thread counts on '
+          'its thread, not on the project row', (tester) async {
+        final server = projectServer();
+        server.followedThreads = {
+          'unread': [unreadThread('message-1', 2, conversationId: 'lead')],
+          'read': [],
+          'more': false,
+        };
+        server.tag('message-1', threadId: 'message-1');
+        final (c, attention) = await opened(server);
+        await pumpSidebar(tester, c, attention);
+        expect(attention.threadMentions, 1);
+        expect(
+          inRow('super-group-lead', find.byType(SuperTabCountBadge)),
+          findsNothing,
+        );
+        await close(tester, c);
+      });
+
+      testWidgets('every number shown clears by reading what it counts', (
+        tester,
+      ) async {
+        final server = projectServer();
+        fromLead(server, 'In the task', conversationId: 'offline');
+        server.tag('message-1', conversationId: 'offline');
+        server.tag('message-1', messageSequence: 1);
+        fromLead(server, 'In the chat');
+        final (c, attention) = await opened(server);
+        await pumpSidebar(tester, c, attention);
+        expect(inRow('super-group-lead', find.text('1')), findsOneWidget);
+        c.select('lead');
+        await tester.pumpAndSettle();
+        c.markRead('lead');
+        await tester.pumpAndSettle();
+        expect(find.byType(SuperTabCountBadge), findsNothing);
+        await close(tester, c);
+      });
+
+      testWidgets('a muted project chat shows no number', (tester) async {
+        final server = projectServer();
+        server.tag('message-1', messageSequence: 1);
+        fromLead(server, 'Please look');
+        final (c, attention) = await opened(server);
+        await c.setNotify('lead', SuperTabNotify.muted);
+        await pumpSidebar(tester, c, attention);
+        expect(
+          inRow('super-group-lead', find.byType(SuperTabCountBadge)),
+          findsNothing,
+        );
+        await close(tester, c);
+      });
+    });
+
     testWidgets('a tag in the chat counts on its row; a tag in a thread on '
         'Threads; a decision on its row; plain unread is bold with no '
         'number', (tester) async {
@@ -187,8 +303,8 @@ void main() {
         findsOneWidget,
       );
       expect(inRow('super-group-offline', find.text('2')), findsOneWidget);
-      // Threads carries the tag inside a thread.
-      expect(inRow('super-threads', find.text('1')), findsOneWidget);
+      // The tag inside a thread is counted apart from the row.
+      expect(attention.threadMentions, 1);
       // The project chat: unread, nothing for the reader, so no number.
       expect(
         inRow('super-group-lead', find.byType(SuperTabCountBadge)),
@@ -201,8 +317,8 @@ void main() {
       await close(tester, c);
     });
 
-    testWidgets('a collapsed project counts the tags of the workgroups it '
-        'hides', (tester) async {
+    testWidgets('a collapsed project counts its own chat\'s tags, not those of '
+        'the workgroups it hides', (tester) async {
       final server = projectServer();
       server.followedThreads = {'unread': [], 'read': [], 'more': false};
       fromLead(server, 'News', conversationId: 'offline');
@@ -212,13 +328,34 @@ void main() {
       final attention = SuperTabAttention.of(c);
       await attention.mentions.load();
       await pumpSidebar(tester, c, attention);
-      expect(inRow('super-group-lead', find.text('2')), findsOneWidget);
+      expect(inRow('super-group-lead', find.text('1')), findsOneWidget);
       c.toggleProject('lead');
       await tester.pumpAndSettle();
       expect(inRow('super-group-lead', find.text('1')), findsOneWidget);
       expect(inRow('super-group-offline', find.text('1')), findsOneWidget);
       await close(tester, c);
     });
+  });
+
+  test('Unfollow is kept on the server and the list read again', () async {
+    final server = projectServer();
+    server.followedThreads = {
+      'unread': [],
+      'read': [readThread('message-9', 7)],
+      'more': false,
+    };
+    final c = await open(server);
+    final attention = SuperTabAttention.of(c);
+    await attention.load();
+    final reads = server.threadListReads.length;
+    expect(await attention.setFollow(attention.read.single, false), isTrue);
+    await pumpEventQueue();
+    expect(server.followPosts.single, {
+      'conversationId': 'lead',
+      'root': 'message-9',
+      'follow': false,
+    });
+    expect(server.threadListReads.length, greaterThan(reads));
   });
 
   group('read rows are muted, unread rows full strength and bold', () {
@@ -259,52 +396,31 @@ void main() {
         );
         expect(unread.style?.color, DesktopChrome.foreground);
         expect(unread.style?.fontWeight, grid.AppFont.semibold);
-        // Threads: a followed thread has new replies.
-        final threads = rowText(tester, 'super-threads', 'Threads');
-        expect(threads.style?.color, DesktopChrome.foreground);
-        expect(threads.style?.fontWeight, grid.AppFont.semibold);
         await close(tester, c);
       });
     }
-
-    testWidgets('Threads is muted with nothing new', (tester) async {
-      final server = projectServer();
-      server.followedThreads = {
-        'unread': [],
-        'read': [readThread('message-1', 2)],
-        'more': false,
-      };
-      final c = await openHere(server);
-      final attention = SuperTabAttention.of(c);
-      await attention.load();
-      await pumpSidebar(tester, c, attention);
-      final threads = rowText(tester, 'super-threads', 'Threads');
-      expect(threads.style?.color, DesktopChrome.muted);
-      expect(threads.style?.fontWeight, isNot(grid.AppFont.semibold));
-      await close(tester, c);
-    });
   });
 
-  testWidgets('a project row lights whole on hover, chevron included, as wide '
-      'as its selected highlight', (tester) async {
+  testWidgets('a project row lights whole on hover, as wide as its selected '
+      'highlight', (tester) async {
     final server = projectServer();
     server.followedThreads = {'unread': [], 'read': [], 'more': false};
     final c = await openHere(server);
     final attention = SuperTabAttention.of(c);
     c.select('offline');
     await pumpSidebar(tester, c, attention);
-    final toggle = find.byKey(const ValueKey('super-project-toggle-lead'));
+    final row = find.byKey(const ValueKey('super-group-lead'));
     final groundFinder = find
-        .ancestor(of: toggle, matching: find.byType(Material))
+        .ancestor(of: row, matching: find.byType(Material))
         .first;
     Material ground() => tester.widget<Material>(groundFinder);
     expect(ground().color, Colors.transparent);
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     addTearDown(mouse.removePointer);
     await mouse.addPointer(location: Offset.zero);
-    await mouse.moveTo(tester.getCenter(toggle));
+    await mouse.moveTo(tester.getRect(row).centerRight - const Offset(4, 0));
     await tester.pumpAndSettle();
-    // The whole row's ground, the one that holds the chevron too.
+    // The whole row's ground, out to its end.
     expect(ground().color, grid.AppSurface.hoverFill);
     await mouse.moveTo(
       tester.getCenter(inRow('super-group-lead', find.text('web-project'))),
@@ -312,7 +428,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(ground().color, grid.AppSurface.hoverFill);
     final hovered = tester.getRect(groundFinder);
-    expect(hovered.right, greaterThanOrEqualTo(tester.getRect(toggle).right));
+    expect(hovered.right, greaterThanOrEqualTo(tester.getRect(row).right));
     c.select('lead');
     await tester.pumpAndSettle();
     expect(ground().color, grid.AppSurface.selectedFill);
@@ -519,26 +635,6 @@ void main() {
       expect(attention.threadMentions, 0);
     });
 
-    testWidgets('the sidebar Threads row shows no number for a tag in a '
-        'thread the list leaves out, the very case of an empty list', (
-      tester,
-    ) async {
-      final server = projectServer();
-      server.followedThreads = {'unread': [], 'read': [], 'more': true};
-      server.tag('message-1', threadId: 'message-1', messageSequence: 2);
-      final c = await openHere(server);
-      final attention = SuperTabAttention.of(c);
-      await attention.mentions.load();
-      await attention.load();
-      await pumpSidebar(tester, c, attention);
-      expect(
-        inRow('super-threads', find.byType(SuperTabCountBadge)),
-        findsNothing,
-      );
-      expect(inRow('super-threads', find.text('1')), findsNothing);
-      await close(tester, c);
-    });
-
     test('a tag in a thread the reader unfollowed (never listed) counts '
         'nothing; in a thread the list shows it counts', () async {
       final server = projectServer();
@@ -624,95 +720,6 @@ void main() {
   });
 
   group('the Threads list', () {
-    test('lists threads with new replies first, then the rest; showing one '
-        'reads its new replies and marks it read on every device', () async {
-      final server = projectServer();
-      fromLead(server, 'Root');
-      fromLead(server, 'Old reply');
-      server.messages.last['thread'] = 'message-1';
-      fromLead(server, 'New reply');
-      server.messages.last['thread'] = 'message-1';
-      server.followedThreads = {
-        'unread': [unreadThread('message-1', 3)],
-        'read': [readThread('message-9', 7, follow: true)],
-        'more': false,
-      };
-      conversation(server, 'lead')['lastMainSequence'] = 1;
-      server.markThreadReadElsewhere('lead', 'message-1', 2);
-      final c = await open(server);
-      final attention = SuperTabAttention.of(c)..opened();
-      await attention.load();
-      expect(attention.shown.map((t) => t.rootId), ['message-1', 'message-9']);
-      expect(attention.isNew(attention.shown.first), isTrue);
-      expect(attention.isNew(attention.shown.last), isFalse);
-      await attention.showReplies(attention.shown.first);
-      expect(attention.newReplies['lead/message-1']!.map((m) => m.text), [
-        'New reply',
-      ]);
-      expect(server.threadMarkPosts.last, {
-        'conversationId': 'lead',
-        'root': 'message-1',
-        'sequence': 3,
-      });
-      // Read now, it stays new until the view is left.
-      server.followedThreads = {
-        'unread': [],
-        'read': [readThread('message-1', 3), readThread('message-9', 7)],
-        'more': false,
-      };
-      await attention.load();
-      expect(attention.isNew(attention.shown.first), isTrue);
-      attention.closed();
-      expect(attention.shown.every((t) => !attention.isNew(t)), isTrue);
-    });
-
-    test('Unfollow is kept on the server and the list read again', () async {
-      final server = projectServer();
-      server.followedThreads = {
-        'unread': [],
-        'read': [readThread('message-9', 7)],
-        'more': false,
-      };
-      final c = await open(server);
-      final attention = SuperTabAttention.of(c);
-      await attention.load();
-      final reads = server.threadListReads.length;
-      expect(await attention.setFollow(attention.read.single, false), isTrue);
-      await pumpEventQueue();
-      expect(server.followPosts.single, {
-        'conversationId': 'lead',
-        'root': 'message-9',
-        'follow': false,
-      });
-      expect(server.threadListReads.length, greaterThan(reads));
-    });
-
-    test('a server before followed threads lists the inbox\'s unread ones '
-        'and offers no Follow', () async {
-      final server = projectServer()
-        ..inbox = {
-          'threads': [unreadThread('message-1', 3)],
-          'latest': [],
-          'more': false,
-        };
-      final c = await open(server);
-      final attention = SuperTabAttention.of(c);
-      await attention.load();
-      expect(attention.unread.single.rootId, 'message-1');
-      expect(attention.followSupported, isFalse);
-      expect(
-        await attention.setFollow(attention.unread.single, false),
-        isFalse,
-      );
-      expect(server.followPosts, isEmpty);
-      // It does not ask the missing route again.
-      await attention.load();
-      expect(
-        server.threadListReads.where((p) => p.endsWith('/threads')),
-        hasLength(1),
-      );
-    });
-
     test('a thread in a chat the reader no longer has is not listed', () async {
       final server = projectServer();
       server.followedThreads = {
@@ -883,113 +890,6 @@ void main() {
     });
   });
 
-  testWidgets('the Threads view shows new replies under their root with a '
-      'reply box, the rest after, and Unfollow', (tester) async {
-    final server = projectServer();
-    fromLead(server, 'Root');
-    fromLead(server, 'Fresh reply');
-    server.messages.last['thread'] = 'message-1';
-    conversation(server, 'lead')['lastMainSequence'] = 1;
-    server.followedThreads = {
-      'unread': [unreadThread('message-1', 2, text: 'Root')],
-      'read': [readThread('message-7', 5, text: 'Settled question')],
-      'more': false,
-    };
-    final c = await openHere(server);
-    final attention = SuperTabAttention.of(c);
-    await attention.load();
-    String? opened;
-    await tester.binding.setSurfaceSize(const Size(700, 900));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.dark),
-        home: Scaffold(
-          body: SuperTabThreadsView(
-            attention: attention,
-            onOpen: (id, root) => opened = '$id/$root',
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-    expect(find.text('New replies'), findsOneWidget);
-    expect(find.text('Earlier'), findsOneWidget);
-    expect(
-      tester.getTopLeft(find.text('Root')).dy,
-      lessThan(tester.getTopLeft(find.text('Settled question')).dy),
-    );
-    expect(find.text('Fresh reply'), findsOneWidget);
-    expect(find.text('1 new reply'), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('super-thread-reply-lead/message-1')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const ValueKey('super-thread-reply-lead/message-7')),
-      findsNothing,
-    );
-    expect(server.threadMarkPosts.last['root'], 'message-1');
-    await tester.tap(find.text('Root'));
-    expect(opened, 'lead/message-1');
-    // The reply box is the thread pane's own: attach and the arrow send.
-    final box = find.byKey(
-      const ValueKey('super-thread-reply-surface-lead/message-1'),
-    );
-    expect(
-      find.descendant(of: box, matching: find.byTooltip('Send reply')),
-      findsOneWidget,
-    );
-    expect(find.text('Send'), findsNothing);
-    await tester.enterText(
-      find.byKey(const ValueKey('super-thread-reply-lead/message-1')),
-      'On it',
-    );
-    await tester.pump();
-    await tester.tap(
-      find.byKey(const ValueKey('super-thread-send-lead/message-1')),
-    );
-    await tester.pumpAndSettle();
-    final sent = server.posts.last['command'] as Map;
-    expect(sent['type'], 'message.send');
-    expect(sent['conversationId'], 'lead');
-    expect(sent['replyTo'], 'message-1');
-    expect(sent['text'], 'On it');
-    Opacity more(String key) => tester.widget<Opacity>(
-      find
-          .ancestor(
-            of: find.byKey(ValueKey('super-thread-more-$key')),
-            matching: find.byType(Opacity),
-          )
-          .first,
-    );
-    // Unfollow is quiet: its ⋯ shows only while the card is pointed at, or
-    // focused (the reply box focused shows its card's).
-    expect(more('lead/message-1').opacity, 1);
-    FocusManager.instance.primaryFocus?.unfocus();
-    await tester.pumpAndSettle();
-    expect(find.text('Unfollow'), findsNothing);
-    expect(more('lead/message-7').opacity, 0);
-    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-    addTearDown(mouse.removePointer);
-    await mouse.addPointer(location: Offset.zero);
-    await mouse.moveTo(tester.getCenter(find.text('Settled question')));
-    await tester.pumpAndSettle();
-    expect(more('lead/message-7').opacity, 1);
-    expect(more('lead/message-1').opacity, 0);
-    await tester.tap(
-      find.descendant(
-        of: find.byKey(const ValueKey('super-thread-more-lead/message-7')),
-        matching: find.byTooltip('More'),
-      ),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Unfollow thread'));
-    await tester.pumpAndSettle();
-    expect(server.followPosts.single['follow'], isFalse);
-    await close(tester, c);
-  });
-
   testWidgets('a read workgroup with a tag of the reader is never behind '
       '"… N more"', (tester) async {
     final server = projectServer();
@@ -1020,56 +920,6 @@ void main() {
     );
     expect(find.byKey(const ValueKey('super-group-offline')), findsOneWidget);
     expect(inRow('super-group-offline', find.text('1')), findsOneWidget);
-    await close(tester, c);
-  });
-
-  testWidgets('a thread in the reader\'s Buddy chat offers Open thread to '
-      'reply, not a box its ended session would refuse', (tester) async {
-    final server = projectServer();
-    (server.state['conversations'] as List).add({
-      ...conversationFixture('buddy-owner-lead', "owner's Buddy"),
-      'kind': 'buddy',
-      'projectId': 'lead',
-      'buddyOwnerId': 'owner',
-    });
-    server.followedThreads = {
-      'unread': [
-        unreadThread(
-          'message-1',
-          2,
-          conversationId: 'buddy-owner-lead',
-          text: 'Plan the week',
-        ),
-      ],
-      'read': [],
-      'more': false,
-    };
-    final c = await openHere(server);
-    final attention = SuperTabAttention.of(c);
-    await attention.load();
-    String? opened;
-    await tester.binding.setSurfaceSize(const Size(700, 900));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.dark),
-        home: Scaffold(
-          body: SuperTabThreadsView(
-            attention: attention,
-            onOpen: (id, root) => opened = '$id/$root',
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-    expect(
-      find.byKey(
-        const ValueKey('super-thread-reply-buddy-owner-lead/message-1'),
-      ),
-      findsNothing,
-    );
-    await tester.tap(find.text('Open thread to reply'));
-    expect(opened, 'buddy-owner-lead/message-1');
     await close(tester, c);
   });
 
@@ -1119,70 +969,6 @@ void main() {
       expect(sent['conversationId'], 'offline');
       expect(sent['replyTo'], 'message-1');
       expect(sent['recipientIds'], ['kestrel']);
-    });
-
-    testWidgets('the Threads view\'s box offers @ as the thread pane does: '
-        'whom the thread\'s chat offers, Backspace takes a tag whole, and the '
-        'reply carries it', (tester) async {
-      final server = tagged();
-      final c = await openHere(server);
-      c.select('lead');
-      final attention = SuperTabAttention.of(c);
-      await attention.load();
-      await tester.binding.setSurfaceSize(const Size(700, 900));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: grid.buildAppTheme(brightness: Brightness.dark),
-          home: Scaffold(
-            body: SuperTabThreadsView(
-              attention: attention,
-              onOpen: (_, _) {},
-              machineName: (_) => 'Studio',
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      final field = find.byKey(
-        const ValueKey('super-thread-reply-offline/message-1'),
-      );
-      final picker = find.byKey(
-        const ValueKey('super-thread-completions-offline/message-1'),
-      );
-      await tester.tap(field);
-      await tester.enterText(field, '@Kes');
-      await tester.pumpAndSettle();
-      expect(picker, findsOneWidget);
-      expect(
-        find.descendant(of: picker, matching: find.textContaining('Kestrel')),
-        findsWidgets,
-      );
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pumpAndSettle();
-      expect(picker, findsNothing);
-      expect(tester.widget<TextField>(field).controller!.text, '@Kestrel ');
-      expect(c.threadMentions('offline', 'message-1'), {'kestrel': '@Kestrel'});
-      // Backspace into the tag takes it whole.
-      await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
-      await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
-      await tester.pumpAndSettle();
-      expect(tester.widget<TextField>(field).controller!.text, '');
-      // Picked again and sent: the reply carries the tag.
-      await tester.enterText(field, '@Kes');
-      await tester.pumpAndSettle();
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pumpAndSettle();
-      await tester.enterText(field, '@Kestrel please look');
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const ValueKey('super-thread-send-offline/message-1')),
-      );
-      await tester.pumpAndSettle();
-      final sent = server.posts.last['command'] as Map;
-      expect(sent['conversationId'], 'offline');
-      expect(sent['recipientIds'], ['kestrel']);
-      await close(tester, c);
     });
   });
 }

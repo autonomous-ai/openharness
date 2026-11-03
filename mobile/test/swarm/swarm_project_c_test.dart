@@ -30,6 +30,7 @@ import 'swarm_fixture.dart';
 /// ☰ opening its Leaderboard and its Team as sheets.
 void main() {
   const board = '/api/super-tabs/$tab/leaderboard?projectId=$project';
+  bool boardRead(String p) => p.startsWith(board) && !p.contains('&week=');
 
   /// One Swarm whose project Mobile has three people (the viewer, diego and
   /// ken) and four agents: River, the Product Manager; Nova at work on g1;
@@ -767,7 +768,7 @@ void main() {
         tester.getTopRight(points('ken')).dx,
         reason: 'the points line up',
       );
-      expect(fake.paths.where((p) => p == board).length, 1);
+      expect(fake.paths.where(boardRead).length, 1);
       expect(
         fake.paths.where(
           (p) => p.contains('/leaderboard') && !p.startsWith(board),
@@ -1052,13 +1053,13 @@ void main() {
       expect(key('swarm-leaderboard-loading'), findsNothing);
       expect(onBoard(tester), contains('diego'));
       expect(find.textContaining('Loading'), findsNothing);
-      final reads = fake.paths.where((p) => p == board).length;
+      final reads = fake.paths.where(boardRead).length;
 
       fake.routes[board] = answer;
       await tester.tap(key('swarm-leaderboard-retry'));
       await tester.pumpAndSettle();
 
-      expect(fake.paths.where((p) => p == board).length, reads + 1);
+      expect(fake.paths.where(boardRead).length, reads + 1);
       expect(find.text('Board is down.'), findsNothing);
       expect(onBoard(tester), ['person-me', 'diego', 'ken']);
       expect(figures('swarm-leaderboard-person-diego'), findsWidgets);
@@ -1109,7 +1110,7 @@ void main() {
       await tester.tap(key('swarm-leaderboard-close'));
       await tester.pumpAndSettle();
       expect(find.byType(SwarmLeaderboardPage), findsNothing);
-      final reads = fake.paths.where((p) => p == board).length;
+      final reads = fake.paths.where(boardRead).length;
       gate.complete();
       await tester.pumpAndSettle();
 
@@ -1120,7 +1121,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(key('swarm-project-menu-leaderboard'));
       await tester.pumpAndSettle();
-      expect(fake.paths.where((p) => p == board).length, reads + 1);
+      expect(fake.paths.where(boardRead).length, reads + 1);
       expect(find.text('1320'), findsOneWidget);
     });
 

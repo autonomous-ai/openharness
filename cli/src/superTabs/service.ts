@@ -23,9 +23,9 @@ import { teamEngineReporter, type TeamEngineReporter } from '../team/engines.js'
 import { AUTO_SETUP_REASONS, realTeamAutoSetup, type AutoSetupReason, type TeamAutoSetup } from '../team/autoSetup.js'
 import { openDaemon } from '../agentClient/daemon.js'
 import { readTeamConfig } from '../team/config.js'
-import { realTeamRelayPublisher, type TeamRelayPublisher } from '../team/relay.js'
+import { realTeamRelayPublisher, TEAM_RELAY_GRANT_FILE, type TeamRelayPublisher } from '../team/relay.js'
 import { readLastTry, refreshCreationId, refreshTeamAccount, teamRefreshFile, writeLastTry, type TeamRefreshDeps } from '../team/refresh.js'
-import { readTeamStatus } from '../team/privacy.js'
+import { readTeamStatusOffThread } from '../team/privacy.js'
 import { ensureTeamTmux, TMUX_MANIFEST_URL, tmuxRunsAt, untarGz, type TeamTmuxDeps, type TeamTmuxOutcome } from '../team/tmux.js'
 import { downloadVerified } from '../lib/selfUpdate.js'
 import { managedTmuxPath, tmuxInstallDirectories } from '../lib/tmuxOnPath.js'
@@ -82,7 +82,7 @@ const HELP = {
   release: 'agent.release records keep, or requests stop, for an agent whose work ended; assigning it new work reuses it. Wait for the execution host to confirm a stop. A person can withdraw a stuck stop; the session cannot receive new work in that Swarm. Its native capacity stays reserved until its host confirms stopping. Other Swarms wait up to two minutes for an in-flight close, then may reuse it.',
   resume: 'resume START_ID: finish a pending start without creating another agent.',
   // Buddies (backend superTabs/buddies.ts): a person adds and removes their own; the Buddy proposes only when they ask.
-  buddies: 'Buddies, in every Swarm: each person has one Buddy chat for the whole Swarm that only they and their Buddy read (buddy.chat opens it before any Buddy; with projectId, their older chat in that project), may add their one Buddy (buddy.create with machineId of their own machine, engine claude), remove it (buddy.remove), and name it (buddy.rename with conversationId of their Buddy chat and name, or null for the default name). It reads every project they read and brainstorms with them in that chat, and the PM\'s private lines to them land there too, marked with their project. A New session in one project (message.send with newSession and sessionProjectId) is the only Buddy that sends into that project. propose OPERATION_ID JSON [--attach PATH]...: a project session only, when its owner asks in its thread: {"conversationId":"its chat","ownerMessageId":"their message asking","goal":"...","scope":"...","priority":"low|normal|high","attachmentIds":["a file its owner sent in its chat"]}. --attach adds a file inside its own folder; up to 5 files in all, 10 MB each. The Swarm posts it in the project chat to the PM, marked as on the owner\'s behalf. A Buddy is never assigned work.',
+  buddies: 'Buddies, in every Swarm: each person has one Buddy chat for the whole Swarm that only they and their Buddy read (buddy.chat opens it before any Buddy; with projectId, their older chat in that project), may add their one Buddy (buddy.create with machineId of their own machine, engine claude), remove it (buddy.remove), and name it (buddy.rename with conversationId of their Buddy chat and name, or null for the default name). It reads every project they read and brainstorms with them in that chat, and the PM\'s private lines to them land there too, marked with their project. A proposal is the only thing it sends into a project. propose OPERATION_ID JSON [--attach PATH]...: when its owner asks (a New session in one project, in its thread, for that project): {"conversationId":"its chat","ownerMessageId":"their message asking","projectId":"the project they read to send it to; a session of one project leaves it out","goal":"...","scope":"...","priority":"low|normal|high","attachmentIds":["a file its owner sent in its chat"]}. --attach adds a file inside its own folder (in that project\'s folder, for their one Buddy); up to 5 files in all, 10 MB each. The Swarm posts it in the project chat to the PM, marked as on the owner\'s behalf. A Buddy is never assigned work.',
   // A person's own command, for the machines they added; an agent's terminal is refused (command.ts), so no agent raises its
   // own machine's room (Lead, 2026-10-28).
   setAgents: 'set-agents MACHINE_ID COUNT: for a machine\'s owner, from their own terminal, not an agent\'s: how many Swarm agents may run on that machine at once. Each agent still needs free memory when it starts. A machine may offer one agent for every 2 GB of its memory, and at least 4; a larger number is refused.',
@@ -363,8 +363,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   // On the Mac's owner's daemon, while a Harness Team account exists here: the owner's subscriptions for it, through a
   // relay of its own (team/relay.ts). Kept through a lost backend connection, which running agents do not need.
   const relay = (options.teamRelay ?? (() => realTeamRelayPublisher(
-    () => startSubscriptionRelay({ owner: createOwnerSubscriptions(), log: line => console.log(`[team] relay · ${line}`) }),
+    port => startSubscriptionRelay({ owner: createOwnerSubscriptions(), log: line => console.log(`[team] relay · ${line}`), ...(port ? { port } : {}) }),
     () => readTeamConfig(), options.team ?? (() => readAuthSession()?.kind === 'team'), line => console.log(`[team] ${line}`),
+    // In the owner's closed home: a running Team agent's relay outlives this daemon (task #2125).
+    join(core.dataDir, TEAM_RELAY_GRANT_FILE),
     // A team account still on a build that cannot use the relay is updated from here (team/refresh.ts).
     (publishedAt) => refreshTeamAccount(realTeamRefreshDeps(core, publishedAt)))))()
   let autoSetup: Promise<Pick<TeamAutoSetup, 'offer' | 'decline'> & Partial<Pick<TeamAutoSetup, 'status'>>> | null = null
@@ -880,7 +882,8 @@ function realTeamRefreshDeps(core: CoreApi, publishedAt: number | null): TeamRef
   const file = teamRefreshFile(core.dataDir)
   return {
     config: () => readTeamConfig(),
-    status: readTeamStatus,
+    // Never on this thread on Windows: the Team account can hold its file's open for as long as it likes (audit W4).
+    status: (path) => readTeamStatusOffThread(path),
     publishedAt: () => publishedAt,
     machines: async () => {
       const reply = await core.account.backend('GET', '/api/machines')

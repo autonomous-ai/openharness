@@ -28,6 +28,7 @@ import type { ClientKind } from './registry.js'
 import type { Frame, UpBusMsg } from './tunnel.js'
 import { routeDown } from './providerLink.js'
 import { logger } from '../utils/logger.js'
+import { env } from '../config/env.js'
 import { decodeTerminalHop, encodeTerminalHop, TerminalHopDirection } from './terminalBinary.js'
 import { guardedSend, guardedSendJson } from './wsSend.js'
 
@@ -153,10 +154,17 @@ async function sendClientsControlNow(machineId: string, commanderJoined: boolean
 /** B_m-only: read the cross-instance total and emit `__clients` down the local manager control socket
  *  (single in-order writer → the node's last frame is always the true global state). */
 export async function recomputeAndSendClients(machineId: string): Promise<void> {
-  const { totals: { ui, commander, commanderActive }, commanderJoinGeneration } = await getAgentClientState(machineId)
+  const { totals: { ui, commander, commanderActive }, commanderJoinGeneration, failed } = await getAgentClientState(machineId)
   const frame = {
     type: CLIENTS_FRAME,
-    payload: { ui, commander, commanderActive, ...(commanderJoinGeneration != null ? { commanderJoinGeneration } : {}) },
+    // `uiGate` lets the daemon hold live events while `ui` is 0; without it the daemon sends everything, so
+    // RELAY_UI_GATE=off undoes the gate from here alone (spec 2026-11-02-swarm-cache-delta-design, Part 4).
+    payload: {
+      ui, commander, commanderActive,
+      ...(commanderJoinGeneration != null ? { commanderJoinGeneration } : {}),
+      // Never on a count that could not be read: its zero would tell the daemon nobody is viewing (final review, Critical 1).
+      ...(env.RELAY_UI_GATE !== 'off' && !failed ? { uiGate: true } : {}),
+    },
   }
   const local = registry.controlSocketFor(machineId)
   if (local && local.readyState === WebSocket.OPEN) {

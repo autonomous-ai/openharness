@@ -5,6 +5,15 @@ import 'swarm_unread.dart';
 /// How long a project is quiet before Home folds it under "Other projects".
 const swarmQuietAfter = Duration(hours: 24);
 
+/// How Home lays its projects out: in [sections], Pinned, Projects and the
+/// quiet ones folded under Other projects; [newest], every project not pinned
+/// in one list, nothing folded. A pin holds under both.
+enum SwarmHomeSort { sections, newest }
+
+/// Which projects Home lists: [all]; those with something new, [unread]; those
+/// where the person is tagged or asked to decide, [mentions].
+enum SwarmHomeFilter { all, unread, mentions }
+
 /// What a pin names: a project in one Swarm, as the same id may be in
 /// another.
 String swarmHomeProjectKey(String swarmId, String projectId) =>
@@ -17,13 +26,13 @@ class SwarmHomeProject {
     required this.swarmId,
     required this.project,
     this.active,
-    this.news = swarmNoNews,
+    this.news = swarmNoProjectNews,
   });
 
   final String swarmId;
   final SuperTabProject project;
   final DateTime? active;
-  final SwarmRowNews news;
+  final SwarmProjectNews news;
 
   String get key => swarmHomeProjectKey(swarmId, project.id);
 }
@@ -42,11 +51,14 @@ typedef SwarmHomeLists = ({
 /// latest activity, those quiet for a day folded. A project whose time is not
 /// known comes after those whose is, in the order read, and is never folded,
 /// nor is one with something new in it. Nothing is folded when nothing else
-/// would be listed.
+/// would be listed. [sort] newest folds nothing; [unreadsFirst] brings those
+/// with something new to the top of each list, in the same order among them.
 SwarmHomeLists swarmHomeLists(
   Iterable<SwarmHomeProject> projects, {
   required Set<String> pins,
   required DateTime now,
+  SwarmHomeSort sort = SwarmHomeSort.sections,
+  bool unreadsFirst = false,
 }) {
   final pinned = <SwarmHomeProject>[];
   final recent = <SwarmHomeProject>[];
@@ -55,7 +67,8 @@ SwarmHomeLists swarmHomeLists(
     final active = project.active;
     if (pins.contains(project.key)) {
       pinned.add(project);
-    } else if (active != null &&
+    } else if (sort == SwarmHomeSort.sections &&
+        active != null &&
         now.difference(active) > swarmQuietAfter &&
         !project.news.bold &&
         project.news.tags == 0) {
@@ -68,6 +81,9 @@ SwarmHomeLists swarmHomeLists(
   List<SwarmHomeProject> newest(List<SwarmHomeProject> list) {
     final order = {for (final (i, p) in list.indexed) p: i};
     return list..sort((a, b) {
+      if (unreadsFirst && _hasNews(a) != _hasNews(b)) {
+        return _hasNews(a) ? -1 : 1;
+      }
       final (x, y) = (a.active, b.active);
       if (x != null && y != null && x != y) return y.compareTo(x);
       if ((x == null) != (y == null)) return x == null ? 1 : -1;
@@ -81,15 +97,26 @@ SwarmHomeLists swarmHomeLists(
   return (pinned: newest(pinned), recent: newest(recent), quiet: newest(quiet));
 }
 
-/// [lists] under Home's unread filter (`SwarmHomePrefs.unreadOnly`, the
-/// desktop's `_hasUnread`): only the projects with something new in them,
-/// bold or tags waiting, pinned ones too. None of them was folded.
-SwarmHomeLists swarmHomeUnreadOnly(SwarmHomeLists lists) {
-  bool news(SwarmHomeProject p) => p.news.bold || p.news.tags > 0;
+bool _hasNews(SwarmHomeProject p) =>
+    p.news.bold || p.news.tags > 0 || p.news.hasWaitingTag;
+
+/// [lists] under Home's [filter] (`SwarmHomePrefs.filter`; unread is the
+/// desktop's `_hasUnread`), pinned ones too. None with something new was
+/// folded.
+SwarmHomeLists swarmHomeFiltered(SwarmHomeLists lists, SwarmHomeFilter filter) {
+  final bool Function(SwarmHomeProject) keep;
+  switch (filter) {
+    case SwarmHomeFilter.all:
+      return lists;
+    case SwarmHomeFilter.unread:
+      keep = _hasNews;
+    case SwarmHomeFilter.mentions:
+      keep = (p) => p.news.hasWaitingTag || p.news.tags > 0;
+  }
   return (
-    pinned: lists.pinned.where(news).toList(),
-    recent: lists.recent.where(news).toList(),
-    quiet: lists.quiet.where(news).toList(),
+    pinned: lists.pinned.where(keep).toList(),
+    recent: lists.recent.where(keep).toList(),
+    quiet: lists.quiet.where(keep).toList(),
   );
 }
 

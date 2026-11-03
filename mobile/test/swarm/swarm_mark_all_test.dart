@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
@@ -9,7 +8,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_chat_notify.dart';
-import 'package:harness_mobile/swarm/swarm_home_prefs.dart';
 import 'package:harness_mobile/swarm/swarm_home_rows.dart';
 import 'package:harness_mobile/swarm/swarm_mark_all.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
@@ -20,12 +18,11 @@ import 'package:harness_mobile/swarm/swarm_style.dart';
 import '../voice_fakes.dart' show MemoryKeyValueStore;
 import 'swarm_fixture.dart';
 
-/// Mark all read and the unread filter on the phone, as Desktop has them
+/// Mark all read on the phone, as Desktop has it
 /// (#2453): every chat shown unread reads as read at once, and its mark goes
 /// to the server only once 6 s pass without Undo, since read marks never
 /// move back there. Leaving the app or closing the session is no Undo; access
-/// lost sends nothing. The filter lists only the projects with something
-/// unread, kept on this phone.
+/// lost sends nothing.
 void main() {
   const web = 'project-2';
   const webLead = 'group-lead-web';
@@ -444,51 +441,6 @@ void main() {
     });
   });
 
-  group('The unread filter', () {
-    test('is kept on this phone and read back', () async {
-      final store = MemoryKeyValueStore();
-      final prefs = SwarmHomePrefs(accountId: me, store: store);
-      await settle();
-      prefs.toggleUnreadOnly();
-      await settle();
-      prefs.dispose();
-
-      final again = SwarmHomePrefs(accountId: me, store: store);
-      await settle();
-      expect(again.unreadOnly, isTrue);
-
-      again.toggleUnreadOnly();
-      await settle();
-      // Nothing else chosen: nothing left on the phone.
-      expect(store.values['swarm_home.$me'], isNull);
-      again.dispose();
-    });
-
-    test('what an older phone wrote reads with it off; turned on before '
-        'the choices are back, it stays on', () async {
-      final store = MemoryKeyValueStore()
-        ..values['swarm_home.$me'] = jsonEncode({
-          'pins': ['$tab/$project'],
-        });
-      final old = SwarmHomePrefs(accountId: me, store: store);
-      await settle();
-      expect(old.unreadOnly, isFalse);
-      expect(old.pins, {'$tab/$project'});
-      old.dispose();
-
-      final early = SwarmHomePrefs(accountId: me, store: store)
-        ..toggleUnreadOnly();
-      await settle();
-      expect(early.unreadOnly, isTrue);
-      expect(early.pins, {'$tab/$project'});
-      expect(
-        jsonDecode(store.values['swarm_home.$me']!),
-        containsPair('unread', true),
-      );
-      early.dispose();
-    });
-  });
-
   group('Home', () {
     Future<SwarmHost> pump(
       WidgetTester tester,
@@ -534,45 +486,6 @@ void main() {
         tester.widget<SwarmHomeProjectRow>(row(projectId)).project.news.bold;
     SwarmIconButton button(WidgetTester tester, String k) =>
         tester.widget<SwarmIconButton>(key(k));
-
-    testWidgets('the filter lists only projects with something unread, '
-        'and says so when none has, with Show all', (tester) async {
-      await pump(tester, backend());
-      expect(row(project), findsOneWidget);
-      expect(row(web), findsOneWidget);
-      expect(button(tester, 'swarm-unread-only').selected, isFalse);
-
-      await tester.tap(key('swarm-unread-only'));
-      await tester.pumpAndSettle();
-
-      expect(row(project), findsOneWidget);
-      expect(row(web), findsNothing);
-      expect(button(tester, 'swarm-unread-only').selected, isTrue);
-      expect(
-        tester.getSemantics(key('swarm-unread-only')),
-        matchesSemantics(
-          label: 'Show all projects',
-          isButton: true,
-          hasEnabledState: true,
-          isEnabled: true,
-          hasToggledState: true,
-          isToggled: true,
-          hasTapAction: true,
-        ),
-      );
-
-      await tester.tap(key('swarm-mark-all-read'));
-      await tester.pumpAndSettle();
-      expect(row(project), findsNothing);
-      expect(key('swarm-unread-none'), findsOneWidget);
-
-      await tester.tap(key('swarm-unread-show-all'));
-      await tester.pumpAndSettle();
-      expect(row(project), findsOneWidget);
-      expect(row(web), findsOneWidget);
-      expect(button(tester, 'swarm-unread-only').selected, isFalse);
-      await tester.pump(const Duration(seconds: 7));
-    });
 
     testWidgets('Mark all read tells how many with Undo; Undo puts the bold '
         'back and sends nothing, and with nothing unread it is greyed', (

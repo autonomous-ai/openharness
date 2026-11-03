@@ -1,4 +1,5 @@
 import '../core/home_dir.dart';
+import '../usage/usage_account_key.dart';
 import '../measurement/product_measurement.dart';
 import '../measurement/product_runtime_health.dart';
 import '../measurement/product_connections.dart';
@@ -96,6 +97,7 @@ import '../settings/config_store.dart';
 import '../settings/experimental_features.dart';
 import '../core/local_key_value_store.dart';
 import '../core/harness_file_store.dart';
+import '../super_tabs/swarm_accounts.dart';
 import '../super_tabs/attachment_upload.dart';
 import '../super_tabs/avatar_upload.dart';
 import '../super_tabs/backend_transport.dart';
@@ -104,7 +106,8 @@ import '../super_tabs/controller.dart';
 import '../super_tabs/join_machine.dart';
 import '../super_tabs/identity.dart' show superTabMachineName;
 import '../super_tabs/view_store.dart';
-import '../super_tabs/notifications.dart' show superTabChatNotice, superTabMentionNotice;
+import '../super_tabs/notifications.dart'
+    show superTabChatNotice, superTabMentionNotice;
 import '../measurement/setup_preference_store.dart';
 import '../devices/device_hosts.dart';
 import '../stats/harness_stats.dart';
@@ -127,6 +130,7 @@ import 'harness_share_status.dart';
 import 'desk_sync.dart';
 import 'machine_profile.dart';
 import 'pane_layout_store.dart';
+import 'profile_cache.dart';
 import 'terminal_pane.dart';
 import 'device_visit.dart';
 import 'started_children.dart';
@@ -266,12 +270,50 @@ class AgentForkAttempt {
   Future<ForkAgentResult>? get pending => _inFlight;
 }
 
+/// One account an engine can run under on a machine, as Change agent offers it.
+class AgentProfile {
+  const AgentProfile({
+    required this.id,
+    required this.key,
+    required this.label,
+    this.path,
+    this.percentLeft,
+    this.offered = true,
+    this.canOffer = false,
+  });
+
+  /// False when the machine's owner has not offered this account to the Swarm. Using it does not:
+  /// only Swarm accounts… does ([AppNotifier.setAccountOffered]).
+  final bool offered;
+
+  /// Not the default account, on a CLI that says what is offered: Swarm accounts… can list it.
+  final bool canOffer;
+
+  /// The account's Swarm profile id ([swarmProfileId]): what `usage_read` and the current-account check use.
+  final String id;
+
+  /// What [AppNotifier.changeAgent] is given: the folder, or `'default'` for the default account.
+  final String key;
+  final String label;
+  final String? path;
+
+  /// Null when the machine could not read this account's usage.
+  final int? percentLeft;
+}
+
+/// Null and `'default'` both mean the machine's default account.
+bool sameAgentProfile(String? a, String? b) =>
+    (a ?? 'default') == (b ?? 'default');
+
 /// One deliberate creation, retained by the form if its reply is lost. Reusing
 /// it checks the original request; opening New agent starts a fresh intent.
 class _AgentChange {
-  _AgentChange(this.source, this.engine, this.revision);
+  _AgentChange(this.source, this.engine, this.revision, [this.profile]);
   final Agent source;
   final String engine;
+
+  /// The account folder to start in ([AgentProfile.key]); null keeps the default.
+  final String? profile;
   final int revision;
   final creation = AgentCreationAttempt(background: true);
   Future<String?>? pending;
@@ -722,6 +764,8 @@ enum AttachIntent { person, automatic }
 /// Machines asked for from outside the workspace ([AppNotifier.requestMachines]): the device to
 /// select there, or the first phone or app.
 typedef MachinesRequest = ({String? devicePub, bool phones});
+
+const buddyKeepsItsEngine = 'A Buddy keeps its engine for now';
 
 /// Change agent on a Swarm Buddy, which keeps running and so keeps its agent
 /// (hn's `BUDDY_KEEPS_ITS_AGENT`, word for word).
@@ -1972,6 +2016,7 @@ class AppNotifier extends ChangeNotifier {
           throw const SuperTabFailure(
             'MACHINE_UNAVAILABLE',
             teamComputerSwarmMessage,
+            settled: true,
           );
         }
         throw const SuperTabFailure(
@@ -6606,7 +6651,24 @@ class AppNotifier extends ChangeNotifier {
     await _store?.saveEnvironment(value);
   }
 
+  /// How long into startup each step finished, in ms, for the log line and for tests. Task #2169.
+  @visibleForTesting
+  Map<String, int> get startupTimings => Map.unmodifiable(_startupTimings);
+  final _startupTimings = <String, int>{};
+  final _startupClock = Stopwatch();
+  void _markStartup(String step) {
+    if (_startupClock.isRunning) _startupTimings[step] = _startupClock.elapsedMilliseconds;
+  }
+
+  /// Set by any install during this boot: what the CLI said before it is out of date.
+  bool _installedThisBoot = false;
+
   Future<void> bootstrap() async {
+    _startupTimings.clear();
+    _startupClock
+      ..reset()
+      ..start();
+    _installedThisBoot = false;
     final localFixture = localManualFixture;
     if (localFixture != null) {
       _bootstrapLocalManual(localFixture);
@@ -6641,8 +6703,20 @@ class AppNotifier extends ChangeNotifier {
         if (!_selfInstallUnavailable) {
           _startUpdateChecking();
         }
+        // Beside the tool probe, as neither waits on the other (task #2169). A fresh computer has no CLI yet: a check that
+        // fails is asked again after. One from before a sign-out or an install says nothing about now.
+        final askedAt = _authRevision;
+        final early = cliLogin.checkStatus().then<CliAuthStatus?>((status) {
+          _markStartup('signed-in check');
+          return status;
+        }).catchError((Object _) => null);
         final environmentReady = await _prepareEnvironment();
+        _markStartup('tools');
         if (!environmentReady) return;
+        await _continueAfterEnvironmentReady(
+          early: _installedThisBoot || askedAt != _authRevision ? null : early,
+        );
+        return;
       }
       await _continueAfterEnvironmentReady();
     } catch (error, stack) {
@@ -6818,6 +6892,7 @@ class AppNotifier extends ChangeNotifier {
     bool quiet = false,
   }) async {
     final provisioner = environmentProvisioner ?? EnvironmentProvisioner();
+    if (install) _installedThisBoot = true;
     final result = await provisioner.ensureReady(
       onProgress: (value) {
         _measureSetup(value);
@@ -6856,7 +6931,7 @@ class AppNotifier extends ChangeNotifier {
   /// What `bootstrap()` does right after the environment is confirmed ready — pulled out so
   /// [recheckEnvironmentStep] can reach the same destination without repeating `bootstrap()`'s config
   /// load and update-check startup, which already ran on the launch that got stuck here.
-  Future<void> _continueAfterEnvironmentReady() async {
+  Future<void> _continueAfterEnvironmentReady({Future<CliAuthStatus?>? early}) async {
     agentPrefetch?.setupRunning = false;
     final revision = _authRevision;
     if (!_authWorkCurrent(revision)) return;
@@ -6872,9 +6947,12 @@ class AppNotifier extends ChangeNotifier {
     // refreshes it itself. This app never reads, stores, or refreshes a token of its own; it just
     // asks the CLI whether this computer is currently signed in.
     try {
-      final authStatus = await cliLogin.checkStatus();
+      final authStatus = await early ?? await cliLogin.checkStatus();
+      _markStartup('signed-in check');
       if (!_authWorkCurrent(revision)) return;
       signedIn = authStatus.loggedIn;
+      await _useKeptProfile(authStatus, revision);
+      if (!_authWorkCurrent(revision)) return;
       if (!authStatus.loggedIn) {
         currentUser = null;
         // Viewers keep their own login screen. Desktop can prepare the saved
@@ -7140,6 +7218,15 @@ class AppNotifier extends ChangeNotifier {
     // `_authWorkCurrent` returns) used to leave "Starting local service…" on a screen nothing would
     // ever repaint.
     await _identifyBeforeLayout(revision);
+    _ensurePool();
+    // The daemon check starts beside the restores, as neither waits on the other (task #2169). The window opens once both
+    // have answered, so the tiles are there for it, as before.
+    Object? daemonFailure;
+    var daemonFailed = false;
+    final daemon = ensureCliDaemonReady().then<void>((_) => _markStartup('daemon')).catchError((Object error) {
+      daemonFailed = true;
+      daemonFailure = error;
+    });
     await _restorePaneLayout(claimOnAttach: true);
     _armLaunchClaimExpiry();
     if (!_authWorkCurrent(revision)) {
@@ -7148,14 +7235,14 @@ class AppNotifier extends ChangeNotifier {
     }
     await dial.restore();
     await firstArrival.restore();
+    _markStartup('saved tabs');
     if (!_authWorkCurrent(revision)) {
       _bootStatusMessage = null;
       return;
     }
-    _ensurePool();
-    try {
-      await ensureCliDaemonReady();
-    } catch (error) {
+    await daemon;
+    if (daemonFailed) {
+      final error = daemonFailure;
       _bootStatusMessage = null;
       if (!_authWorkCurrent(revision)) return;
       status = AppStatus.authenticated;
@@ -7170,6 +7257,9 @@ class AppNotifier extends ChangeNotifier {
     // the saved session gone) — that already routed to the login screen, so don't clobber it.
     if (status == AppStatus.unauthenticated) return;
     status = AppStatus.authenticated;
+    _markStartup('window');
+    appLog.info('startup', startupLogLine(_startupTimings));
+    _startupClock.stop();
     notifyListeners();
     // The CLI has confirmed daemon readiness. Display-name/avatar metadata is
     // independent of machine discovery and must not delay work — and a guest
@@ -7315,6 +7405,10 @@ class AppNotifier extends ChangeNotifier {
     signedIn = false;
     _signInStep = true;
     currentUser = null;
+    _provenMachineId = null;
+    _keptProfileId = null;
+    _profileConfirmed = false;
+    unawaited(_profileCache.clear());
     if (banner != null) {
       _lastError = banner;
       _lastErrorRetryable = true;
@@ -7491,10 +7585,67 @@ class AppNotifier extends ChangeNotifier {
       final me = await api.me();
       if (me != null && _authWorkCurrent(revision)) {
         currentUser = CurrentUserProfile.fromMe(me);
+        _profileConfirmed = true;
       }
     } catch (_) {
       /* Unknown: the profile load after boot tries again. */
     }
+  }
+
+  /// The machine id `harness auth status` named at this boot: what a kept profile is checked against ([ProfileCache]).
+  String? _provenMachineId;
+  late final _profileCache = ProfileCache(_paneLayout?.storage);
+
+  /// The account the kept profile showing now names, if one is: a server answer for another account clears it.
+  String? _keptProfileId;
+
+  /// Whether the server has answered who is signed in during this run. A kept profile shows until it has, and it is asked again
+  /// when the backend returns, as a person with no profile at all is. Security review of #2617.
+  bool _profileConfirmed = false;
+
+  /// The last profile, when the CLI's session is the one it was read under; otherwise it goes (task #2169). A viewer has no CLI
+  /// session to prove it, and reads its profile before the layout instead ([_identifyBeforeLayout]).
+  Future<void> _useKeptProfile(CliAuthStatus authStatus, int revision) async {
+    if (viewer != null) return;
+    final machineId = authStatus.loggedIn ? authStatus.machineId : null;
+    _provenMachineId = machineId;
+    _keptProfileId = null;
+    _profileConfirmed = false;
+    final kept = machineId == null ? null : await _profileCache.read(machineId);
+    if (!_authWorkCurrent(revision)) return;
+    if (kept == null) {
+      await _profileCache.clear();
+      return;
+    }
+    _keptProfileId = kept.id;
+    currentUser = kept;
+    notifyListeners();
+  }
+
+  /// Keeps what the server just answered, only where it can't name another account later: a machine id proves the account only
+  /// while everything under it is that account's. Someone can sign in as another in a terminal while the answer is on its way,
+  /// so an answer naming another account than the record goes, and a first record waits for the CLI to name the machine still.
+  Future<void> _keepProfile(CurrentUserProfile profile, int revision) async {
+    final machineId = _provenMachineId;
+    if (machineId == null) return;
+    final kept = _keptProfileId;
+    if (kept != null && kept != profile.id) {
+      _provenMachineId = null;
+      _keptProfileId = null;
+      await _profileCache.clear();
+      return;
+    }
+    if (kept == null) {
+      final CliAuthStatus still;
+      try {
+        still = await cliLogin.checkStatus();
+      } catch (_) {
+        return;
+      }
+      if (!_authWorkCurrent(revision) || !still.loggedIn || still.machineId != machineId) return;
+      _keptProfileId = profile.id;
+    }
+    await _profileCache.write(machineId, profile);
   }
 
   Future<void> _readProfile(int revision) async {
@@ -7505,6 +7656,8 @@ class AppNotifier extends ChangeNotifier {
       }
       if (me != null) {
         currentUser = CurrentUserProfile.fromMe(me);
+        _profileConfirmed = true;
+        if (currentUser case final profile?) unawaited(_keepProfile(profile, revision));
         // A sign-in by hand: the device log keeps which account it was made to.
         if (currentUser!.id case final id?)
           unawaited(_deviceLog?.signedInAs(id));
@@ -7611,13 +7764,19 @@ class AppNotifier extends ChangeNotifier {
     appLog.info('daemon', 'backend ${online ? 'online' : 'offline'}');
     if (online && wasOffline && status == AppStatus.authenticated) {
       if (refetch && !machinesRefreshing) unawaited(retryMachines());
-      if (currentUser == null) unawaited(_loadProfile());
+      if (!_profileConfirmed) unawaited(_loadProfile());
       _deskEnsure(_authRevision);
       // A daemon whose backend was away answered the last read with an error.
       if (_desk.enabled) unawaited(agentMessages.refresh());
+      // The same for the Swarm's: a daemon just started has its backend a few seconds later
+      // (6 s on 10-30), and the Swarm on screen would otherwise wait for its next poll.
+      if (viewer == null) superTabs.serverAvailable();
     }
     notifyListeners();
   }
+
+  @visibleForTesting
+  void noteBackendOnlineForTest(bool online) => _noteBackendOnline(online);
 
   /// Supervision starts once the daemon is at least ANSWERING — ready or still connecting. It used to
   /// wait for ready, out of fear of a concurrent `harness start` from both places; the supervisor
@@ -7838,6 +7997,10 @@ class AppNotifier extends ChangeNotifier {
     cliLogin.cancel();
     _sessionExpired = true;
     currentUser = null;
+    _provenMachineId = null;
+    _keptProfileId = null;
+    _profileConfirmed = false;
+    unawaited(_profileCache.clear());
     signingIn = false;
     pendingAuthorizeUrl = null;
     final previousMachineId = localMachineState?.machine.machineId;
@@ -9235,6 +9398,10 @@ class AppNotifier extends ChangeNotifier {
     final becomesGuest = viewer == null && localManualFixture == null;
     if (!becomesGuest) status = AppStatus.unauthenticated;
     currentUser = null;
+    _provenMachineId = null;
+    _keptProfileId = null;
+    _profileConfirmed = false;
+    unawaited(_profileCache.clear());
     notifyListeners();
     // Clear saved credentials alongside connection cleanup. A new login must
     // wait for both, otherwise the old logout can delete its fresh session.
@@ -9694,7 +9861,8 @@ class AppNotifier extends ChangeNotifier {
     // (`SuperTabReading.readsOnConnect`). The web reads the backend itself,
     // so a machine connecting there is no reason to read.
     if (viewer == null) {
-      final served = sharedTabsTarget != null;
+      final served =
+          sharedTabsTarget?.connectionStatus == ConnectionStatus.connected;
       if (served && !_superTabsServed) superTabs.serverAvailable();
       _superTabsServed = served;
     }
@@ -10816,6 +10984,7 @@ class AppNotifier extends ChangeNotifier {
           prev.engineDisplayName != agent.engineDisplayName ||
           prev.engineIconHint != agent.engineIconHint ||
           prev.codexHome != agent.codexHome ||
+          prev.claudeHome != agent.claudeHome ||
           prev.modelName != agent.modelName ||
           prev.modelEffort != agent.modelEffort ||
           prev.gridModel != agent.gridModel ||
@@ -12025,7 +12194,7 @@ class AppNotifier extends ChangeNotifier {
     if (!_authWorkCurrent(revision) || status == AppStatus.unauthenticated) {
       return;
     }
-    if (signedIn && currentUser == null) unawaited(_loadProfile());
+    if (signedIn && !_profileConfirmed) unawaited(_loadProfile());
     // A boot that found the daemon still connecting finishes THROUGH here (see
     // `_loadProfile`), so the local id is followed and the desk joined here as
     // well — once, after the list, as the boot does.
@@ -15156,6 +15325,262 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  Future<Map<String, dynamic>> listClaudeProfiles(
+    String machineId, {
+    Set<String> observedPaths = const {},
+  }) async {
+    try {
+      return await _conn(machineId).request(
+        'claude_profiles_list',
+        payload: {'observedPaths': observedPaths.toList()},
+        timeout: const Duration(seconds: 10),
+      );
+    } catch (error) {
+      return {'error': 'UNREACHABLE'};
+    }
+  }
+
+  final _addingClaude = <String>{};
+
+  /// This computer's accounts its owner can offer to the Swarm or take back. Throws when it cannot
+  /// tell, so the screen says so and never reads a failure as "no accounts".
+  Future<List<SwarmAccount>> swarmAccounts(String machineId) async {
+    if (stateOf(machineId)?.isLocalMachine != true) {
+      throw StateError('not this computer');
+    }
+    final agents = stateOf(machineId)?.agents ?? const <Agent>[];
+    return [
+      for (final engine in const ['claude', 'codex'])
+        ...await () async {
+          final reply = engine == 'claude'
+              ? await listClaudeProfiles(
+                  machineId,
+                  observedPaths: {for (final a in agents) ?a.claudeHome},
+                )
+              : await listCodexProfiles(
+                  machineId,
+                  observedPaths: {for (final a in agents) ?a.codexHome},
+                );
+          final rows = reply['profiles'];
+          if (rows is! List) throw StateError('no list');
+          return [
+            for (final row in rows)
+              if (row is Map &&
+                  row['path'] is String &&
+                  row['offered'] is bool &&
+                  row['default'] != true)
+                SwarmAccount(
+                  engine: engine,
+                  path: row['path'] as String,
+                  label: row['label'] as String? ?? row['path'] as String,
+                  offered: row['offered'] as bool,
+                ),
+          ];
+        }(),
+    ];
+  }
+
+  /// Offers an account of this computer to the Swarm, or takes it back. Null when done, or what to
+  /// tell the owner.
+  Future<String?> setAccountOffered(
+    String machineId,
+    String engine,
+    String path,
+    bool offered,
+  ) async {
+    if (stateOf(machineId)?.isLocalMachine != true) {
+      return 'Accounts can be offered on their own computer only.';
+    }
+    String? code;
+    try {
+      final reply = await _conn(machineId).request(
+        'swarm_account_offer',
+        payload: {'engine': engine, 'path': path, 'offered': offered},
+        timeout: const Duration(seconds: 10),
+      );
+      code = reply['error'] as String?;
+    } on WsRequestFailure catch (failure) {
+      code = failure.code;
+    } catch (_) {
+      code = 'UNREACHABLE';
+    }
+    return switch (code) {
+      null => null,
+      'NOT_FOUND' => 'That account’s folder is gone.',
+      'UNSUPPORTED' ||
+      'UNKNOWN_TYPE' => 'Update Harness on this computer to offer accounts.',
+      'TOO_MANY' => 'Too many accounts are offered. Withdraw one first.',
+      _ => 'Couldn’t reach this computer. Try again.',
+    };
+  }
+
+  /// What `usage_read` last said per account, kept so opening the picker again does not call the vendors again.
+  final _usageCache = <(String, String, String), ({DateTime at, int? left})>{};
+  static const _usageFresh = Duration(minutes: 5);
+  static const _usageReadsPerEngine = 8;
+
+  /// Where Codex keeps the default account, which the picker names `'default'`.
+  static String _codexDefaultHome() =>
+      Platform.environment['CODEX_HOME'] ?? '${homeDir()}/.codex';
+
+  /// The accounts [engine] runs under on [machineId], each with the share of its limit left when
+  /// the machine can read it. Empty for any other engine or when the machine does not answer.
+  Future<List<AgentProfile>> agentProfiles(
+    String machineId,
+    String engine,
+  ) async {
+    if (engine != 'claude' && engine != 'codex') return const [];
+    // Profile requests are not sealed for the relay, so only this computer's own daemon is asked.
+    if (stateOf(machineId)?.isLocalMachine != true) return const [];
+    final observed = {
+      for (final a in stateOf(machineId)?.agents ?? const <Agent>[])
+        ?(engine == 'claude' ? a.claudeHome : a.codexHome),
+    };
+    final Map<String, dynamic> reply;
+    try {
+      reply = engine == 'claude'
+          ? await listClaudeProfiles(machineId, observedPaths: observed)
+          : await listCodexProfiles(machineId, observedPaths: observed);
+    } catch (_) {
+      return const [];
+    }
+    final rows = reply['profiles'];
+    if (rows is! List) return const [];
+    final defaultId = swarmProfileId(machineId, engine, 'default');
+    final profiles = [
+      for (final row in rows)
+        if (row is Map && row['path'] is String)
+          () {
+            final path = row['path'] as String;
+            final rowId = row['id'] as String?;
+            // An old Claude CLI names its default account with the literal 'default'.
+            final legacy = engine == 'claude' && rowId == 'default';
+            // The CLI marks the default row; an old Codex CLI sends no flag, so its env folder is it.
+            final isDefault =
+                row['default'] == true ||
+                legacy ||
+                rowId == defaultId ||
+                (engine == 'codex' &&
+                    row['default'] == null &&
+                    path == _codexDefaultHome());
+            return (
+              path: path,
+              offered: row['offered'] != false,
+              canOffer: row['offered'] is bool && !isDefault,
+              label: row['label'] as String? ?? path,
+              id: isDefault
+                  ? defaultId
+                  : (rowId ?? swarmProfileId(machineId, engine, path)),
+              isDefault: isDefault,
+              legacy: legacy,
+            );
+          }(),
+    ];
+    // One account has no choice to show, so its usage is not worth a vendor call.
+    var budget = profiles.length > 1 ? _usageReadsPerEngine : 0;
+    return Future.wait([
+      for (final p in profiles)
+        () async {
+          final key = (machineId, engine, p.id);
+          var cached = _usageCache[key];
+          if ((cached == null ||
+                  clock.now().difference(cached.at) >= _usageFresh) &&
+              budget > 0) {
+            budget--;
+            int? left;
+            try {
+              // An old CLI does not know profile reads: its plain read answers both
+              // engines' default accounts, so take the one for this engine.
+              final usage = parseUsageReadResult(
+                await _conn(machineId).request(
+                  'usage_read',
+                  payload: p.legacy
+                      ? const {}
+                      : {
+                          'profile': {'engine': engine, 'id': p.id},
+                        },
+                  timeout: const Duration(seconds: 10),
+                ),
+              );
+              final tightest =
+                  (p.legacy
+                          ? usage
+                                .where((u) => u.provider.name == engine)
+                                .firstOrNull
+                          : usage.firstOrNull)
+                      ?.tightest;
+              if (tightest != null) {
+                left = (100 - tightest.usedPercent).round().clamp(0, 100);
+              }
+            } catch (_) {}
+            cached = _usageCache[key] = (at: clock.now(), left: left);
+          }
+          return AgentProfile(
+            id: p.id,
+            key: p.isDefault ? 'default' : p.path,
+            label: p.label,
+            path: p.path,
+            percentLeft: cached?.left,
+            offered: p.offered,
+            canOffer: p.canOffer,
+          );
+        }(),
+    ]);
+  }
+
+  /// Opens a Claude that is signed out in a new account folder beside the others on [machineId]:
+  /// the picker lists it once the person has run /login there. A pane cannot be given an
+  /// environment, so Claude is started with `claudeHome` instead of `CLAUDE_CONFIG_DIR`.
+  Future<String?> addClaudeAccount(String machineId, String agentId) async {
+    if (stateOf(machineId)?.isLocalMachine != true) {
+      return 'A Claude account can be added on this computer only.';
+    }
+    final source = stateOf(machineId)?.agents
+        .where((a) => a.id == agentId)
+        .firstOrNull;
+    final folder =
+        source?.project?.cwd ??
+        (source == null ? null : stateOf(machineId)?.projectOf(source)?.cwd);
+    if (folder == null) {
+      return 'This harness has no project folder to open Claude in.';
+    }
+    // One add at a time per machine: a second click would pick the same folder.
+    if (!_addingClaude.add(machineId)) {
+      return 'A Claude account is already being added.';
+    }
+    try {
+      final listed = await listClaudeProfiles(machineId);
+      final rows =
+          (listed['profiles'] as List?)?.whereType<Map>().toList() ?? [];
+      final home = rows.isEmpty ? null : rows.first['path'] as String?;
+      if (home == null) return 'Could not reach this machine.';
+      // A folder is free when the machine does not list it and no agent here runs in it.
+      final taken = {
+        for (final r in rows) r['path'],
+        for (final a in stateOf(machineId)?.agents ?? const <Agent>[])
+          a.claudeHome,
+      };
+      var n = 1;
+      while (taken.contains('$home/.harness/claude-profiles/$n')) {
+        n++;
+      }
+      final path = '$home/.harness/claude-profiles/$n';
+      // The folder only exists once Claude has signed in there; the machine finds it by itself then.
+      final error = await createAgent(
+        machineId,
+        engine: 'claude',
+        folder: folder,
+        claudeHome: path,
+      );
+      if (error == null) {
+        agentChangeNotice?.call('Run /login, then pick it again');
+      }
+      return error;
+    } finally {
+      _addingClaude.remove(machineId);
+    }
+  }
+
   /// Starts an agent, or recovers this form's earlier request after a lost reply.
   /// Returns null on success, or an inline message; [attempt] tells the form
   /// whether to offer Check status instead of inviting another creation.
@@ -15205,6 +15630,7 @@ class AppNotifier extends ChangeNotifier {
     bool bypassPermission = true,
     String? permissionMode,
     String? codexHome,
+    String? claudeHome,
     String? dsh,
     String? swarmRole,
     String? swarmSkillMode,
@@ -15229,6 +15655,7 @@ class AppNotifier extends ChangeNotifier {
       // dialog derives from the same choice.
       'permissionMode': ?permissionMode,
       'codexHome': ?codexHome,
+      'claudeHome': ?claudeHome,
       // The harness this agent is created from. `engine` above is its BASE —
       // the machine refuses the pair when they disagree (`INVALID_DSH`).
       'dsh': ?dsh,
@@ -15698,6 +16125,9 @@ class AppNotifier extends ChangeNotifier {
           ? null
           : _creationPlacementError(targetId, split, placement: placement);
       if (placementError != null) return placementError;
+      if (choices['claudeHome'] != null && choices['engine'] != 'claude') {
+        return 'Choose a Claude account only for Claude';
+      }
       if (choices['codexHome'] != null) {
         if (choices['engine'] != 'codex') {
           return 'Choose a Codex profile only for Codex';
@@ -17293,6 +17723,24 @@ class AppNotifier extends ChangeNotifier {
   /// top, which shows it as a snack bar; null when no screen is listening.
   void Function(String message)? agentChangeNotice;
 
+  /// Whether [agentId] is a Swarm Buddy, as any open Swarm's roster says. Its machine refuses to
+  /// stop it, so Change agent cannot switch it.
+  @visibleForTesting
+  final buddyAgentsForTest = <(String, String)>{};
+
+  bool isSwarmBuddy(String machineId, String agentId) =>
+      buddyAgentsForTest.contains((machineId, agentId)) ||
+      superTabs.loadedControllers.any(
+        (c) =>
+            c.snapshot?.agents.any(
+              (a) =>
+                  a.isBuddy &&
+                  a.machineId == machineId &&
+                  a.harnessId == agentId,
+            ) ==
+            true,
+      );
+
   List<String> agentSwitchEngines(String machineId, Agent source) {
     if (source.dsh == 'autonomous/pair') {
       return const ['opencode', 'codex', 'claude'];
@@ -17314,14 +17762,25 @@ class AppNotifier extends ChangeNotifier {
 
   /// One switch intent owns its creation receipt. Save the old conversation,
   /// then move all views as soon as the replacement terminal can be attached.
-  Future<String?> changeAgent(String machineId, String agentId, String engine) {
+  Future<String?> changeAgent(
+    String machineId,
+    String agentId,
+    String engine, {
+    String? profile,
+  }) {
     final source = stateOf(machineId)?.agents
         .where((a) => a.id == agentId)
         .firstOrNull;
     if (source == null) {
       return Future.value('This harness is no longer available.');
     }
-    if (source.engine == engine) return Future.value();
+    final currentProfile = source.engine == 'claude'
+        ? source.claudeHome
+        : source.codexHome;
+    if (source.engine == engine &&
+        (profile == null || sameAgentProfile(profile, currentProfile))) {
+      return Future.value();
+    }
     if (stateOf(machineId)?.machine.isShared != false) {
       return Future.value('Shared harnesses are view-only.');
     }
@@ -17335,6 +17794,9 @@ class AppNotifier extends ChangeNotifier {
         'This agent is not supported by the installed harness.',
       );
     }
+    if (isSwarmBuddy(machineId, agentId)) {
+      return Future.value(buddyKeepsItsEngine);
+    }
     final key = (machineId, agentId);
     if (source.dsh == 'autonomous/pair' &&
         _agentChanges[key] == null &&
@@ -17346,25 +17808,35 @@ class AppNotifier extends ChangeNotifier {
     }
     var operation = _agentChanges[key];
     if (operation?.pending case final pending?) {
-      return operation!.engine == engine
+      return operation!.engine == engine &&
+              sameAgentProfile(operation.profile, profile)
           ? pending
           : Future.value('The agent is already switching.');
     }
     if (operation != null &&
         ((!operation.preservingViews &&
-                (!operation.handoffHeld || operation.engine != engine)) ||
+                (!operation.handoffHeld ||
+                    operation.engine != engine ||
+                    !sameAgentProfile(operation.profile, profile))) ||
             operation.launchFailed ||
             (operation.creation._finished &&
                 operation.creation.agentId == null))) {
       _agentChanges.remove(key);
       operation = null;
     }
-    if (operation != null && operation.engine != engine) {
+    if (operation != null &&
+        (operation.engine != engine ||
+            !sameAgentProfile(operation.profile, profile))) {
       return Future.value(
         'Check the pending switch to ${operation.engine} before choosing another agent.',
       );
     }
-    final change = operation ??= _AgentChange(source, engine, _authRevision);
+    final change = operation ??= _AgentChange(
+      source,
+      engine,
+      _authRevision,
+      profile,
+    );
     _agentChanges[key] = change;
     return change.pending = _changeAgent(
       machineId,
@@ -17570,6 +18042,12 @@ class AppNotifier extends ChangeNotifier {
         engine: change.engine,
         folder: folder,
         dsh: source.dsh,
+        codexHome: change.engine == 'codex' && change.profile != 'default'
+            ? change.profile
+            : null,
+        claudeHome: change.engine == 'claude' && change.profile != 'default'
+            ? change.profile
+            : null,
         name: source.displayName,
         permissionMode: mode,
         bypassPermission: mode == 'auto' || mode == 'full',
@@ -22704,3 +23182,8 @@ String machineSelectErrorText(String code, String machine) => switch (code) {
     'The subscription for $machine has ended. Renew it to use it again.',
   _ => 'Could not connect to $machine. Try again in a moment.',
 };
+
+/// The startup stopwatch as its log line: each step, in the order it finished.
+String startupLogLine(Map<String, int> timings) => timings.entries
+    .map((step) => '${step.key} after ${step.value} ms')
+    .join(', ');

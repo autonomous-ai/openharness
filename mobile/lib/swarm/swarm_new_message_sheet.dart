@@ -128,6 +128,7 @@ swarmNewMessageChats(SwarmInbox inbox, List<SwarmListing> swarms) {
       if (own != null &&
           own.projectId == project.id &&
           !own.archived &&
+          !swarmIsOldBuddyChat(reader, own.id) &&
           own.buddyOwnerId == reader.accountId) {
         chats.add(
           SwarmNewMessageChat(

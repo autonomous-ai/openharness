@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
-import { agentOnly, createSuperTab, SuperTabError, visibleState, type Actor, type MessageDraft } from './model.js'
-import { canReadAgent, canWatchAgent, markConfidential, projectOf, projectsOf, readConversation, skillModeOf, skillSetOf, watchersLost, workRequesterId, requestedByLine } from './projects.js'
+import { activeWork, agentOnly, awaitingWorkers, createSuperTab, fail, SuperTabError, visibleState, workerIndex, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState, type WorkStatus } from './model.js'
+import { canReadAgent, canWatchAgent, confidentialSession, groupProject, ledProject, markConfidential, projectOf, projectsOf, readConversation, requireSingleRegistration, sessionKey, skillModeOf, skillSetOf, watchersLost, workRequesterId, requestedByLine, type OtherRegistrations, type SwarmProject } from './projects.js'
 import { mayDrive } from './terminal.js'
 
 const owner: Actor = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -23,7 +23,10 @@ function setup() {
     run({ type: 'project.create', name: 'Other project', visibility, brief: 'Its own outcome' }, actor) as { projectId: string; conversationId: string }
   const add = (conversationId: string, harnessId: string, lead = true) =>
     run({ type: 'agent.add', conversationId, harnessId, machineId: 'machine', name: harnessId, configuration, lead }).agentId as string
-  return { run, project, add, get state() { return state }, get messages() { return messages } }
+  /** A task of [projectId]: work starts and is assigned there, as the project chat holds only its coordinator (#2207). */
+  const task = (projectId: string, actor = owner) =>
+    run({ type: 'conversation.create', projectId, title: 'Work', brief: 'Do it', checks: [] }, actor).conversationId as string
+  return { run, project, add, task, get state() { return state }, get messages() { return messages } }
 }
 
 describe('projects inside an invite-only swarm', () => {
@@ -192,7 +195,7 @@ describe('projects inside an invite-only swarm', () => {
 
   it.each(['queued', 'dispatched', 'settling'] as const)('refuses %s starts and removes only settled project history', phase => {
     const f = setup(), p = f.project()
-    const request = { conversationId: p.conversationId, machineId: 'machine', engine: 'codex', name: 'Builder',
+    const request = { conversationId: f.task(p.projectId), machineId: 'machine', engine: 'codex', name: 'Builder',
       cwd: '/work', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const startId = String(f.run({ type: 'agent.start', request }).startId)
@@ -236,13 +239,13 @@ describe('projects inside an invite-only swarm', () => {
   })
 
   it('keeps active work visible after its contributed agent is removed', () => {
-    const f = setup(), p = f.project(), agentId = f.add(p.conversationId, 'worker', false)
-    f.run({ type: 'work.define', conversationId: p.conversationId, brief: 'Finish the task',
+    const f = setup(), p = f.project(), agentId = f.add(p.conversationId, 'worker', false), work = f.task(p.projectId)
+    f.run({ type: 'work.define', conversationId: work, brief: 'Finish the task',
       checks: [{ description: 'Verified', independent: false }] })
-    f.run({ type: 'work.assign', conversationId: p.conversationId, agentId })
+    f.run({ type: 'work.assign', conversationId: work, agentId })
     f.run({ type: 'agent.remove', agentId })
     expect(() => f.run({ type: 'project.delete', projectId: p.projectId })).toThrow('active work')
-    expect(readConversation(f.state, owner, p.conversationId).assignment?.status).toBe('reconciling')
+    expect(readConversation(f.state, owner, work).assignment?.status).toBe('reconciling')
   })
 })
 
@@ -335,9 +338,10 @@ describe('custom role sets', () => {
     const writer = { ...role('abcdefabcdef', 'Docs writer', 'builder'), defaults: { engine: 'codex' as const, model: 'gpt-6.1-sol', effort: 'medium' } }
     const { f, p, roles } = custom([...defaults(), writer])
     Object.assign(projectOf(f.state, p.projectId), { skillSet: 'custom' })
+    const work = f.task(p.projectId, peer)
     expect(roles()!.find(r => r.id === 'abcdefabcdef')).toMatchObject({ defaults: { engine: 'codex', model: 'gpt-6.1-sol', effort: 'medium' } })
     const startWith = (extra: Record<string, unknown>) => {
-      const startId = String(f.run({ type: 'agent.start', request: request(p.conversationId, extra) } as Command, peer).startId)
+      const startId = String(f.run({ type: 'agent.start', request: request(work, extra) } as Command, peer).startId)
       return f.state.starts!.find(s => s.id === startId)!.request
     }
     expect(startWith({ roleId: 'abcdefabcdef' })).not.toHaveProperty('model')
@@ -357,7 +361,8 @@ describe('custom role sets', () => {
   it('starts and assigns in any role id an older client sends, keeping it and naming the agent by it', () => {
     const { f, p } = custom([...defaults(), role('abcdefabcdef', 'Docs writer', 'builder')])
     // The project's owner starts it: a teammate's project runs only on a Team machine (machines.ts teamWorkCheck).
-    const start = (extra: Record<string, unknown>) => String(f.run({ type: 'agent.start', request: request(p.conversationId, extra) } as Command, peer).startId)
+    const work = f.task(p.projectId, peer)
+    const start = (extra: Record<string, unknown>) => String(f.run({ type: 'agent.start', request: request(work, extra) } as Command, peer).startId)
     for (const extra of [{ roleId: 'review' }, { roleId: 'lead' }, { roleId: 'eeeeeeeeeeee' }, { role: 'reviewer', roleId: 'dev' }]) {
       const id = start(extra)
       expect(f.state.starts!.find(s => s.id === id)!.request).toMatchObject(extra)
@@ -370,7 +375,7 @@ describe('custom role sets', () => {
     // Its role name stays the one it started in.
     expect(f.state.agents.find(a => a.id === worker)).toMatchObject({ roleId: 'review', roleName: 'Docs writer' })
     const plain = f.project('public', peer)
-    expect(f.run({ type: 'agent.start', request: request(plain.conversationId, { roleId: 'dev' }) } as Command).startId).toEqual(expect.any(String))
+    expect(f.run({ type: 'agent.start', request: request(f.task(plain.projectId), { roleId: 'dev' }) } as Command).startId).toEqual(expect.any(String))
   })
 
   it('joins an agent with the role the New Harness form sends, kept with a reviewer role\'s kind for older readers and naming it', () => {
@@ -412,7 +417,7 @@ describe('custom role sets', () => {
     Object.assign(projectOf(f.state, p.projectId), { skillSet: 'custom' })
     // A role set decides nothing (project instructions, phase 4): a review group, a Reviewer's start and its assignment are accepted.
     const review = String(f.run({ type: 'conversation.create', projectId: p.projectId, title: 'Review', brief: 'Check it', reviewOf: build, checks: [{ description: 'Read', independent: true }] }, peer).conversationId)
-    expect(f.run({ type: 'agent.start', request: request(p.conversationId, { role: 'reviewer' }) } as Command).startId).toEqual(expect.any(String))
+    expect(f.run({ type: 'agent.start', request: request(build, { role: 'reviewer' }) } as Command).startId).toEqual(expect.any(String))
     f.run({ type: 'work.assign', conversationId: review, agentId: reviewer }, peer)
     expect(f.state.conversations.find(c => c.id === review)!.assignment).toMatchObject({ agentId: reviewer })
   })
@@ -615,5 +620,179 @@ describe('whom a task\'s pull requests are for', () => {
     // An owner with no email on their row: no line, as the start gave none.
     f.state.people.find(p => p.id === 'owner')!.email = ''
     expect(requestedByLine(f.state, project, group(plain), agentOf('host'))).toBeNull()
+  })
+})
+
+// The implementations before Part 5 (spec 2026-11-02, hot loops), kept here only to pin that the one-pass lookups answer
+// exactly as they did.
+const legacyLedProject = (state: SuperTabState, agentId: string): SwarmProject | undefined =>
+  projectsOf(state).find(p => state.conversations.some(c => c.id === p.leadConversationId && c.leadId === agentId))
+const legacyPrivateMember = (state: SuperTabState, agentId: string) => state.conversations.some(c => !!c.audience && c.agentIds.includes(agentId))
+const legacyConfidentialSession = (state: SuperTabState, target: Agent): boolean =>
+  !!legacyLedProject(state, target.id) || legacyPrivateMember(state, target.id)
+function legacyMarkConfidential(state: SuperTabState): void {
+  for (const target of state.agents) if (!target.confidential && legacyConfidentialSession(state, target)) target.confidential = true
+}
+function legacyRequireSingleRegistration(before: SuperTabState, after: SuperTabState, elsewhere: OtherRegistrations): void {
+  const prior = new Map(before.agents.map(a => [a.id, a]))
+  for (const target of after.agents) {
+    const was = prior.get(target.id), key = sessionKey(target.machineId, target.harnessId)
+    if ((!was || was.harnessId !== target.harnessId) && elsewhere.confidential.has(key)) {
+      fail('SESSION_CONFIDENTIAL', 'This terminal reads private chats in another Swarm. Start a new agent here.')
+    }
+    const lead = !!legacyLedProject(after, target.id) && !(was && legacyLedProject(before, target.id))
+    const member = legacyPrivateMember(after, target.id) && !(was && legacyPrivateMember(before, target.id))
+    if ((lead || member) && elsewhere.registered.has(key)) {
+      fail('SESSION_CONFIDENTIAL', 'This terminal also works in another Swarm, so it cannot lead or read private chats. Start a new agent for this.')
+    }
+  }
+}
+function legacyAwaitingWorkers(state: SuperTabState, projectId: string): Agent[] {
+  return state.agents.filter(a => {
+    if (state.conversations.some(c => c.leadId === a.id)
+      || state.conversations.some(c => activeWork(c) && c.assignment?.agentId === a.id)) return false
+    const groups = state.conversations.filter(c => c.assignment?.agentId === a.id && !c.assignment.lost)
+    return (a.projectId ?? groups.map(c => groupProject(state, c).id)[0] ?? 'lead') === projectId &&
+      (a.workDecision === 'awaiting' || (!a.workDecision && groups.some(c => !activeWork(c))))
+  })
+}
+
+/** A deterministic generator (mulberry32), so a failing Swarm is the same on every run. */
+function seeded(seed: number) {
+  let s = seed >>> 0
+  const next = () => {
+    s = (s + 0x6D2B79F5) >>> 0
+    let t = s
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+  const below = (n: number) => Math.floor(next() * n)
+  const pick = <T>(items: readonly T[]): T => items[below(items.length)]!
+  return { next, below, pick, chance: (p: number) => next() < p }
+}
+type Random = ReturnType<typeof seeded>
+
+const STATUSES: WorkStatus[] = ['planned', 'working', 'needs_human', 'blocked', 'review', 'done', 'stopped', 'cancelled', 'reconciling', 'lost']
+/** A Swarm of up to 2,000 conversations, 50 agents and 20 projects (exactly that when [full]): no projects at all or the legacy
+ *  single one, private projects, Leads without a conversation, an agent leading two projects, lost assignments, audience
+ *  conversations, agents already marked, and the odd conversation whose project lookup refuses (a removed Leads one, a Swarm
+ *  Buddy chat). Most are small, so 200 of them compare quickly against the quadratic legacy code. */
+function generatedSwarm(random: Random, full = false): SuperTabState {
+  const agentCount = full ? 50 : 1 + random.below(50), projectCount = full ? 20 : random.below(21)
+  const conversationCount = full ? 2_000 : Math.floor(random.next() ** 2 * 2_000)
+  // Sparse to dense, so some Swarms keep most agents unmarked, leading nothing and working on nothing.
+  const leadRate = random.next() * 0.1, privateRate = random.next() * 0.05, assignRate = random.next() * 0.4
+  const agentIds = Array.from({ length: agentCount }, (_, i) => `a${i}`)
+  const someAgent = () => random.chance(0.03) ? 'gone' : random.pick(agentIds)
+  const conversationIds = Array.from({ length: conversationCount }, (_, i) => `c${i}`)
+  const projects: SwarmProject[] | undefined = projectCount === 0 ? (random.chance(0.5) ? undefined : []) : Array.from({ length: projectCount }, (_, i) => ({
+    id: i === 0 && random.chance(0.8) ? 'lead' : `p${i}`, name: `P${i}`, ownerId: 'owner',
+    // A Lead conversation that does not exist: a Lead without a conversation.
+    leadConversationId: !conversationCount || random.chance(0.15) ? `missing${i}` : random.pick(conversationIds),
+    visibility: random.chance(0.4) ? 'private' : 'public', members: [], updateMinutes: 5,
+  }))
+  const projectIds = (projects ?? [{ id: 'lead' }]).map(p => p.id)
+  const agents = agentIds.map((id): Agent => ({
+    id, machineId: `m${random.below(5)}`, harnessId: `h-${id}`, machineOwnerId: 'host', contributorId: 'owner', membershipGeneration: 'g', name: id,
+    configuration: configuration as unknown as Agent['configuration'],
+    ...(random.chance(0.3) && projectIds.length ? { projectId: random.pick(projectIds) } : {}),
+    ...(random.chance(0.15) ? { confidential: true as const } : {}),
+    ...(random.chance(0.5) ? { workDecision: random.pick(['awaiting', 'keep', 'stop'] as const) } : {}),
+  }))
+  const conversations = conversationIds.map((id): Conversation => {
+    const kind = random.chance(0.01) ? 'leads' as const : random.chance(0.01) ? 'swarm-buddy' as const : random.chance(0.02) ? 'buddy' as const : undefined
+    return {
+      id, title: id, archived: false, brief: '', checks: [], lastMessageSequence: 0,
+      ...(kind ? { kind } : {}),
+      ...(random.chance(0.85) && projectIds.length ? { projectId: random.pick(projectIds) } : {}),
+      leadId: random.chance(leadRate) ? someAgent() : null,
+      agentIds: Array.from({ length: random.below(4) }, someAgent),
+      ...(random.chance(privateRate) ? { audience: { people: [] } } : {}),
+      assignment: random.chance(assignRate) ? {
+        id: `w-${id}`, agentId: someAgent(), status: random.pick(STATUSES), result: null,
+        configuration: configuration as unknown as Agent['configuration'], execution: { machineId: 'm0', harnessId: 'h', machineOwnerId: 'host' },
+        ...(random.chance(0.2) ? { lost: { reason: 'stalled', at: 1 } } : {}),
+      } : null,
+    }
+  })
+  // Most projects have a Lead; an agent leading two projects' Lead conversations.
+  for (const p of projects ?? []) { const chat = conversations.find(c => c.id === p.leadConversationId); if (chat && random.chance(0.7)) chat.leadId = someAgent() }
+  if (projects && projects.length > 1 && random.chance(0.5)) {
+    const both = random.pick(agentIds)
+    for (const p of projects.slice(0, 2)) { const chat = conversations.find(c => c.id === p.leadConversationId); if (chat) chat.leadId = both }
+  }
+  const { projects: _first, ...base } = createSuperTab('swarm', 'Team', { id: 'owner', email: 'owner@example.com' }, 'test')
+  return { ...base, agents, conversations, ...(projects ? { projects } : {}) }
+}
+
+/** [before] after a command: Leads replaced, conversations made private or opened, members added, sessions rebound or added. */
+function changedSwarm(random: Random, before: SuperTabState): SuperTabState {
+  const after = structuredClone(before)
+  const ids = after.agents.map(a => a.id)
+  for (const c of after.conversations) {
+    if (random.chance(0.05)) c.leadId = random.pick(ids)
+    if (random.chance(0.05)) c.audience = random.chance(0.5) ? { people: [] } : undefined
+    if (random.chance(0.05)) c.agentIds = [...c.agentIds, random.pick(ids)]
+  }
+  for (const a of after.agents) if (random.chance(0.05)) a.harnessId = `${a.harnessId}-rebound`
+  if (random.chance(0.5)) {
+    const { confidential: _marked, ...added } = after.agents[0]!
+    after.agents.push({ ...added, id: 'added', harnessId: 'h-added' })
+    if (random.chance(0.6) && after.conversations.length) after.conversations[random.below(after.conversations.length)]!.leadId = 'added'
+  }
+  return after
+}
+
+/** What a call did: its answer, or the refusal it threw. */
+function outcome<T>(call: () => T): { value: T } | { code: string; message: string } {
+  try { return { value: call() } } catch (error) {
+    if (!(error instanceof SuperTabError)) throw error
+    return { code: error.code, message: error.message }
+  }
+}
+
+describe('confidential marks, Leads and waiting workers in one pass (spec 2026-11-02, Part 5)', () => {
+  it('new and old answers agree on generated Swarms', { timeout: 30_000 }, () => {
+    const random = seeded(20261102)
+    for (let i = 0; i < 200; i++) {
+      const before = generatedSwarm(random, i === 0)
+      const after = changedSwarm(random, before)
+      for (const state of [before, after]) {
+        const ids = [...state.agents.map(a => a.id), 'gone', 'nobody']
+        expect(ids.map(id => ledProject(state, id)?.id), `swarm ${i}`).toEqual(ids.map(id => legacyLedProject(state, id)?.id))
+        expect(state.agents.map(a => confidentialSession(state, a)), `swarm ${i}`).toEqual(state.agents.map(a => legacyConfidentialSession(state, a)))
+        const marked = (mark: (s: SuperTabState) => void) => {
+          const copy = { ...state, agents: state.agents.map(a => ({ ...a })) }
+          mark(copy)
+          return copy.agents.filter(a => a.confidential).map(a => a.id)
+        }
+        expect(marked(markConfidential), `swarm ${i}`).toEqual(marked(legacyMarkConfidential))
+        const projects = projectsOf(state), index = workerIndex(state)
+        const legacy = projects.map(p => outcome(() => legacyAwaitingWorkers(state, p.id).map(a => a.id)))
+        expect(projects.map(p => outcome(() => awaitingWorkers(state, p.id).map(a => a.id))), `swarm ${i}`).toEqual(legacy)
+        expect(projects.map(p => outcome(() => awaitingWorkers(state, p.id, index).map(a => a.id))), `swarm ${i}`).toEqual(legacy)
+      }
+      const keys = after.agents.map(a => sessionKey(a.machineId, a.harnessId))
+      const someKeys = () => new Set(keys.filter(() => random.chance(0.1)))
+      for (const elsewhere of [{ registered: someKeys(), confidential: new Set<string>() }, { registered: someKeys(), confidential: someKeys() },
+        { registered: new Set(keys), confidential: new Set<string>() }]) {
+        expect(outcome(() => requireSingleRegistration(before, after, elsewhere)), `swarm ${i}`)
+          .toEqual(outcome(() => legacyRequireSingleRegistration(before, after, elsewhere)))
+      }
+    }
+  })
+
+  it('markConfidential scans the conversations a constant number of times', () => {
+    const state = generatedSwarm(seeded(7), true)
+    for (const target of state.agents) delete target.confidential
+    // Every scan, a for-of, some, find or filter alike, reads the first conversation once.
+    let scans = 0
+    state.conversations = new Proxy(state.conversations, { get(target, key, receiver) {
+      if (key === '0') scans++
+      return Reflect.get(target, key, receiver)
+    } })
+    markConfidential(state)
+    expect(scans).toBeLessThanOrEqual(3)
   })
 })

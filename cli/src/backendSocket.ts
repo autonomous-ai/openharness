@@ -158,6 +158,8 @@ export class BackendSocket {
     grid: GridLaunchOverride | null
     /** A Codex CODEX_HOME folder to launch this agent against instead of `~/.codex`; codex only. */
     codexHome: string | null
+    /** A Claude CLAUDE_CONFIG_DIR folder (a profile) to launch this agent against; claude only. Absent for the default account. */
+    claudeHome?: string | null
     /** The domain-specific harness to create this agent as (installed here, base engine = `engine`). */
     dsh: string | null
     /** The message the session opens with, already submitted (`FIRST_PROMPT_ARGS` in engineLaunch.ts);
@@ -474,7 +476,7 @@ export class BackendSocket {
     notice: (notice: BackendNotice) => {
       this.onAccountNotice?.(notice)
       // Only the Swarm host acts on these (superTabs/host.ts): the windows have nothing to re-read.
-      if (notice.type === 'super_tab_deliveries' || notice.type === 'swarm_host_changed') return
+      if (notice.type === 'super_tab_deliveries' || notice.type === 'swarm_host_changed' || notice.type === '__terminal_waiting') return
       if (notice.type === 'machines_changed' && notice.reason === 'harness_shares') { this.sharesNotice.tell(); return }
       // A Swarm changed: its id, time and parts, or nothing for the server's word that it pushes (desktop swarm_pushes.dart).
       if (notice.type === 'swarm_changed') {

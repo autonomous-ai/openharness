@@ -674,14 +674,89 @@ describe('when reports go', () => {
 
   it('spreads the later ticks across 45 to 75 seconds', async () => {
     const values = [0, 0, 0.5, 0.99999]
-    start(() => values.shift() ?? 0)
+    // Each tick samples the gateway's resources, at most once in 45 s (gateway/productHealth.ts): what shows a tick here.
+    const sampled: number[] = []
+    usage = createProductUsage({ file, now: () => Date.now(), request, random: () => values.shift() ?? 0,
+      context: { surface: 'cli', release: '0.4.0', platform: 'macos', channel: 'production' },
+      sample: () => { sampled.push(Date.now()); return { rss: 1 } }, write: async (target, data) => { writeFileSync(target, data) } })
+    await usage.sync(false)
+    await vi.advanceTimersByTimeAsync(200_000)
+    // The gateway's own read, then a tick 10 s on (the first report's, under the 45 s floor), then 45, 60 and 74.999 s apart.
+    expect(sampled).toEqual([at(0), at(55_000), at(115_000), at(189_999)])
+  })
+
+  // Spec 2026-11-02-poll-cost Part 4.1: each gateway read the choice and reported at every tick, 45 to 75 s apart (prod
+  // 2026-11-02: 330 settings GETs and 284 report POSTs a minute), though the report already carries the choice's revision.
+  it('settings are read at start, on a local choice, hourly, and on CHOICE_CHANGED only', async () => {
+    start(() => 0.5)
     const reads: number[] = []
     const answer = request.getMockImplementation()!
     request.mockImplementation(async (method, path, body) => { if (method === 'GET') reads.push(Date.now()); return answer(method, path, body) })
+    await usage.sync(false); usage.counter('search_requests')
+    // Ticks every 60 s from 35 s: the first at or after the hour is at 3,635 s.
+    await vi.advanceTimersByTimeAsync(3_640_000)
+    expect(reads).toEqual([at(0), at(3_635_000)])
+    // This computer's own read (`sync`): at once.
+    await usage.sync()
+    expect(reads).toHaveLength(3)
+    // A report refused because the choice changed elsewhere (the tick at 3,695 s): read at the next tick.
+    usage.counter('search_requests')
+    answers = [{ status: 200, body: { data: { accepted: false, reason: 'CHOICE_CHANGED' } } }]
+    await vi.advanceTimersByTimeAsync(55_000)
+    const refused = posts.at(-1)!
+    expect(refused).toBe(at(3_695_000))
+    expect(reads.filter(time => time > refused)).toEqual([])
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(reads.filter(time => time > refused)).toEqual([refused + 60_000])
+  })
+
+  // The choice made on this computer (Settings here, through the core's proxy) is read at once, not at the next hourly read.
+  it('reads a choice made on this computer at once, and stops counting if it is off', async () => {
+    start(() => 0.5)
     await usage.sync(false)
-    await vi.advanceTimersByTimeAsync(200_000)
-    // The gateway's own read, then a tick 10 s on (the first report's), then 45, 60 and 74.999 s apart.
-    expect(reads).toEqual([at(0), at(10_000), at(55_000), at(115_000), at(189_999)])
+    const reads: number[] = []
+    request.mockImplementation(async (method: string, _path: string, body?: unknown) => {
+      if (method === 'GET') { reads.push(Date.now()); return { status: 200, body: { data: { enabled: false, revision: 1 } } } }
+      posts.push(Date.now()); sent.push(structuredClone(body))
+      return { status: 200, body: { data: { accepted: true } } }
+    })
+    await usage.choiceChanged()
+    expect(reads).toEqual([T0])
+    usage.counter('search_requests')
+    await vi.advanceTimersByTimeAsync(600_000)
+    expect(posts).toEqual([])
+  })
+
+  it('reads a choice made on this computer after a report already on its way, never instead of reading', async () => {
+    start(() => 0.5)
+    await usage.sync(false); usage.counter('search_requests')
+    const reads: number[] = []
+    let release = (): void => {}
+    const held = new Promise<void>(resolve => { release = resolve })
+    request.mockImplementation(async (method: string, _path: string, body?: unknown) => {
+      if (method === 'GET') { reads.push(Date.now()); return { status: 200, body: { data: { enabled: false, revision: 1 } } } }
+      posts.push(Date.now()); sent.push(structuredClone(body))
+      await held
+      return { status: 200, body: { data: { accepted: true } } }
+    })
+    await vi.advanceTimersByTimeAsync(35_000)
+    expect(posts).toEqual([at(35_000)])
+    const changed = usage.choiceChanged()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(reads).toEqual([])
+    release()
+    await changed
+    expect(reads).toHaveLength(1)
+  })
+
+  it('reports go every 5 minutes', async () => {
+    start(() => 0.5)
+    await usage.sync(false)
+    for (let minute = 0; minute < 20; minute++) { usage.counter('search_requests'); await vi.advanceTimersByTimeAsync(60_000) }
+    // Ticks every 60 s from 35 s; the first report at the first tick, each next at the first tick 5 minutes on.
+    expect(posts).toEqual([at(35_000), at(335_000), at(635_000), at(935_000)])
+    // From the queue on disk: what the ticks between them counted goes in the next report, none lost.
+    expect(totals().search_requests).toBe(16)
   })
 
   it('backs off a busy backend, longer each time and at most half an hour, counting each attempt as before', async () => {
@@ -689,14 +764,14 @@ describe('when reports go', () => {
     await usage.sync(false); usage.counter('search_requests')
     answers = Array.from({ length: 12 }, () => ({ status: 429, body: { error: { code: 'USAGE_BUSY' } } }))
     await vi.advanceTimersByTimeAsync(3 * 3600_000)
-    // Ticks every 60 s here (0.5 of 45 to 75) and half of a ceiling that doubles from two minutes to the half
-    // hour: twelve refusals in 2.3 hours, where a report each minute made 135 attempts.
-    const gaps = posts.slice(1, 13).map((t, i) => t - posts[i])
-    expect(gaps).toEqual([60_000, 120_000, 240_000, 480_000, ...Array(8).fill(900_000)])
-    // Answered again: a report each tick, and each refused attempt counted once.
+    // Ticks every 60 s here (0.5 of 45 to 75), reports at most every 5 minutes, and half of a ceiling that doubles from two
+    // minutes to the half hour: twelve refusals in 2.2 hours, where a report each minute made 135 attempts.
+    const gaps = posts.slice(1, 12).map((t, i) => t - posts[i])
+    expect(gaps).toEqual([300_000, 300_000, 300_000, 480_000, ...Array(7).fill(900_000)])
+    // Answered again: a report every 5 minutes, and each refused attempt counted once.
     const attempts = posts.length
-    usage.counter('search_requests'); await vi.advanceTimersByTimeAsync(60_000)
-    usage.counter('search_requests'); await vi.advanceTimersByTimeAsync(60_000)
+    usage.counter('search_requests'); await vi.advanceTimersByTimeAsync(300_000)
+    usage.counter('search_requests'); await vi.advanceTimersByTimeAsync(300_000)
     expect(posts.length).toBe(attempts + 2)
     expect(totals().health_cli_report_rejected).toBe(12)
     expect(totals().health_cli_report_failure_rate_limited).toBe(12)
@@ -706,25 +781,33 @@ describe('when reports go', () => {
     start(() => 0.5)
     await usage.sync(false); usage.counter('search_requests')
     answers = [{ status, body: { error: { code } } }, { status, body: { error: { code } } }]
-    await vi.advanceTimersByTimeAsync(35_000 + 60_000 + 60_000)
-    expect(posts).toEqual([at(35_000), at(95_000)])
+    await vi.advanceTimersByTimeAsync(35_000 + 300_000 + 60_000)
+    expect(posts).toEqual([at(35_000), at(335_000)])
   })
 
   it('backs off a report whose request threw, and not one the backend refused as invalid', async () => {
     start(() => 0.5)
     await usage.sync(false); usage.counter('search_requests')
-    const choice = async () => ({ status: 200, body: { data: { enabled: true, revision: 0 } } })
-    const thrown = async () => { posts.push(Date.now()); throw new Error('PRIVATE_CANARY') }
-    request.mockImplementationOnce(choice).mockImplementationOnce(thrown).mockImplementationOnce(choice).mockImplementationOnce(thrown)
-    await vi.advanceTimersByTimeAsync(95_000)
-    expect(posts).toEqual([at(35_000), at(95_000)])
-    // Two in a row: up to four minutes, here two, so the tick at 155 s sends nothing.
+    const reads: number[] = []
+    let throws = 2
+    request.mockImplementation(async (method: string, _path: string, body?: unknown) => {
+      if (method === 'GET') { reads.push(Date.now()); return { status: 200, body: { data: { enabled: true, revision: 0 } } } }
+      posts.push(Date.now())
+      if (throws-- > 0) throw new Error('PRIVATE_CANARY')
+      sent.push(structuredClone(body))
+      return answers.shift() ?? { status: 200, body: { data: { accepted: true } } }
+    })
+    await vi.advanceTimersByTimeAsync(335_000)
+    // A request that threw says nothing of the choice: it is read again at the next tick.
+    expect(posts).toEqual([at(35_000), at(335_000)])
+    expect(reads).toEqual([at(95_000)])
+    // Two in a row: up to four minutes, here two, inside the 5 minutes anyway.
     answers = [{ status: 400, body: {} }]
-    await vi.advanceTimersByTimeAsync(120_000)
-    expect(posts).toEqual([at(35_000), at(95_000), at(215_000)])
-    // The backend's answer, if a refusal: the next report goes at the next tick.
-    usage.counter('search_requests'); await vi.advanceTimersByTimeAsync(60_000)
-    expect(posts).toEqual([at(35_000), at(95_000), at(215_000), at(275_000)])
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(posts).toEqual([at(35_000), at(335_000), at(635_000)])
+    // The backend's answer, if a refusal: the next report goes 5 minutes on.
+    usage.counter('search_requests'); await vi.advanceTimersByTimeAsync(300_000)
+    expect(posts).toEqual([at(35_000), at(335_000), at(635_000), at(935_000)])
     expect(JSON.stringify(sent)).not.toContain('PRIVATE_CANARY')
   })
 
@@ -752,16 +835,16 @@ describe('when reports go', () => {
     answers = [{ status: 429, body: { success: false, error: { code: 'USAGE_WRITE_CONFLICT' } }, retryAfterMs: 90_000 }]
     await vi.advanceTimersByTimeAsync(10_000)
     expect(posts).toEqual([at(10_000)])
-    // Ticks every 45 s here; the one at 55 s is inside the 90 s asked, the one at 100 s is not.
-    await vi.advanceTimersByTimeAsync(90_000 - 1)
+    // Ticks every 45 s here; the 90 s asked are inside the 5 minutes between reports, so the tick at 325 s sends it.
+    await vi.advanceTimersByTimeAsync(315_000 - 1)
     expect(posts).toHaveLength(1)
     await vi.advanceTimersByTimeAsync(1)
-    expect(posts).toEqual([at(10_000), at(100_000)])
+    expect(posts).toEqual([at(10_000), at(325_000)])
     // Not lost: the same receipt and counts again, which the backend's receipt makes count once.
     expect(sent[1]).toEqual(sent[0])
     expect(JSON.parse(readFileSync(file, 'utf8')).pending).toBeNull()
     // The refusal's own counts go in the next report.
-    await vi.advanceTimersByTimeAsync(45_000)
+    await vi.advanceTimersByTimeAsync(315_000)
     expect(posts).toHaveLength(3)
     expect(totals().health_cli_report_failure_write_conflict).toBe(1)
     expect(totals().health_cli_report_failure_rate_limited).toBeUndefined()

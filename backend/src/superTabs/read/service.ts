@@ -2,14 +2,15 @@
  * The read API by parts (design section 4; shapes in contract.ts). Every read takes its time `T0` before any query and
  * makes the next cursor from it, so a write that commits late, inside the overlap, is still seen by the next poll.
  */
+import { startsOfRule } from '../cachePatch.js'
 import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
 import { agentOnly, author, fail, groupForBuddy, isLeads, seenMachineIds, stableId, SuperTabError, visibleState, type Actor, type AgentStart, type SuperTabState } from '../model.js'
 import { mentionsDigest, swarmsWithTags, waitingMentions, waitingTagConversations } from '../mentions.js'
 import { decisionsWaiting } from '../decisions.js'
-import { readMarks, readThreadMarks, writeReadMark, writeThreadFollow, writeThreadMark } from '../readMarks.js'
-import { activityDigest, listActivity, markActivityRead, type ActivityItem } from '../activity.js'
+import { readMarks, readThreadMarks, writeThreadFollow, writeThreadMark } from '../readMarks.js'
+import { activityDigest, listActivity, markActivityRead, markActivityThreadRead, type ActivityItem } from '../activity.js'
 import { readChatSettings, writeChatSetting, type NotifyLevel } from '../chatSettings.js'
 import { deliveredCopies } from '../pageReads.js'
 import { readBy } from '../parts/indexed.js'
@@ -20,12 +21,13 @@ import { readChanged, readLastChangedAt, readLastChangedAts, readLight, readLigh
 import { migrateSwarm } from '../migration/migrate.js'
 import * as parts from '../parts/index.js'
 import type { GroupData, Part, SwarmParts } from '../parts/index.js'
-import { canReadGroup, readConversation, readProject } from '../projects.js'
+import { canReadGroup, canReadProject, projectsOf, readConversation, readProject } from '../projects.js'
 import { isBuddyReader } from '../buddies.js'
 import { workspacesRequired } from '../workspaceStore.js'
 import type { Leaderboard } from '../leaderboard/contract.js'
 import { profileNames, readableWeek, recentDormantGroups } from '../leaderboard/read.js'
 import { LEDGER_WEEKS } from '../leaderboard/record.js'
+import type { PeriodName } from '../leaderboard/rolling.js'
 import { leaderboard } from '../leaderboard/stats.js'
 import { WEEK_MS } from '../leaderboard/week.js'
 import { READ_FORMAT, SWARM_MIGRATING, type Changes, type Derived, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
@@ -34,7 +36,7 @@ import { cursorFor, readCursor } from './cursor.js'
 import { changesFor } from './changes.js'
 import { envelope, groupView, readerView, seenIn, type ReaderView } from './views.js'
 import { decodeDormantPage, encodeDormantPage } from './dormantPage.js'
-import { seedThreadMarks } from './threadMarkSeeds.js'
+import { moveChatMark } from './threadMarkSeeds.js'
 import { memberSwarms } from '../swarmRows.js'
 
 type LoadOptions = NonNullable<Parameters<typeof parts.loadActive>[2]>
@@ -123,7 +125,9 @@ export class SwarmReads {
       return [...seen.runningHarnessIds, ...seen.stoppedHarnessIds, ...Object.keys(seen.harnessProgress ?? {}), ...(seen.stoppedReservations ?? []).map(r => r.harnessId)]
         .map(harnessId => stableId(pool.machineId, harnessId))
     }))].filter(id => !covered.has(id)).sort()
-    const named = listed.length ? await cached.get(tabId, `startsOf:${JSON.stringify(listed)}`, 'main', () => parts.loadStartsOfAgents(tx, tabId, listed)) : []
+    // Patched from each change (cachePatch.ts startsOfRule, spec 2026-11-02 poll cost), not loaded again after every bump.
+    const named = listed.length ? await cached.get(tabId, `startsOf:${JSON.stringify(listed)}`, 'main', () => parts.loadStartsOfAgents(tx, tabId, listed),
+      startsOfRule(listed)) : []
     const taken = new Set([...held, ...fresh.map(s => s.key)])
     return [...fresh, ...named.filter(s => !taken.has(s.key))]
   }
@@ -229,9 +233,7 @@ export class SwarmReads {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const { group, state } = await this.readGroup(user, tabId, conversationId)
     const next = Math.min(sequence, group.data!.lastMessageSequence), now = this.now()
-    const held = await this.db.superTabReadMark.findUnique({ where: { id: stableId(tabId, conversationId, user.sub) }, select: { sequence: true } })
-    await seedThreadMarks(this.db, { tabId, state, personId: user.sub, conversationId, old: held?.sequence ?? 0, next, now })
-    return { sequence: await writeReadMark(this.db, { tabId, personId: user.sub, conversationId, sequence: next, now }) }
+    return { sequence: await moveChatMark(this.db, { tabId, state, personId: user.sub, conversationId, next, now }) }
   }
 
   /** Moves the person's mark of thread `threadId` in a conversation they can read forward, never past the conversation's
@@ -241,8 +243,11 @@ export class SwarmReads {
    *  an unreadable conversation or project included, is the same refusal. Only a person reading as themselves has marks. */
   async markThreadRead(user: AuthUser, tabId: string, conversationId: string, threadId: string, sequence: number): Promise<{ sequence: number }> {
     const newest = await this.readableThread(user, tabId, conversationId, threadId)
-    return { sequence: await writeThreadMark(this.db, { tabId, personId: user.sub, conversationId, threadId, sequence: Math.min(sequence, newest),
-      now: this.now() }) }
+    const now = this.now()
+    const stored = await writeThreadMark(this.db, { tabId, personId: user.sub, conversationId, threadId, sequence: Math.min(sequence, newest), now })
+    // The thread's replies the mark passes are read in Activity too (activity.ts).
+    await markActivityThreadRead(this.db, { tabId, personId: user.sub, conversationId, threadId, sequence: stored, now })
+    return { sequence: stored }
   }
 
   /** Stores the person's Follow (true), Unfollow (false) or neither (null) of thread `threadId` (readMarks.ts writeThreadFollow),
@@ -320,17 +325,22 @@ export class SwarmReads {
 
   /** One project's leaderboard for a week (leaderboard/stats.ts), for the people who read the project. It sums only the
    *  groups the reader may read, dormant ones of the kept weeks included, and never a private conversation. */
-  async leaderboard(user: AuthUser, tabId: string, projectId: string, week?: number): Promise<Leaderboard> {
+  async leaderboard(user: AuthUser, tabId: string, projectId: string, week?: number, period?: PeriodName, allProjects = false): Promise<Leaderboard> {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const now = this.now(), start = readableWeek(week, now)
     return this.read(user, tabId, async (tx, cached) => {
       const state = parts.reassemble(await readParts(tx, cached, tabId), { share: true })
       const actor = await this.store.actor(tx, user, state)
       readProject(state, actor, projectId)
-      const dormant = await recentDormantGroups(tx, tabId, projectId, now - LEDGER_WEEKS * WEEK_MS)
+      // Every project this reader reads, by the same check as the one asked for; what they may not read is never loaded.
+      const readable = allProjects ? projectsOf(state).filter(p => canReadProject(state, actor, p)).map(p => p.id) : undefined
+      const dormant = await recentDormantGroups(tx, tabId, readable ?? projectId, now - LEDGER_WEEKS * WEEK_MS)
       const groups = [...state.conversations.filter(g => !g.dormant), ...dormant].filter(g => !isLeads(g) && canReadGroup(state, actor, g))
       const names = await profileNames(tx, state.people.map(p => p.id))
-      return leaderboard({ state, groups, machines: visibleState(state, actor, now).machines ?? [], projectId, week: start, now, names })
+      // Which machines the reader sees, with the daily rows no other read carries.
+      const machines = (visibleState(state, actor, now).machines ?? [])
+        .map(m => ({ ...m, lentDays: state.machines?.find(own => own.machineId === m.machineId)?.lentDays }))
+      return leaderboard({ state, groups, machines, projectId, week: start, now, period, allProjects: readable, names })
     })
   }
 

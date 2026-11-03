@@ -122,19 +122,6 @@ vi.mock('../lib/voiceRouter.js', () => ({
   routeVoiceTask: vi.fn(),
 }))
 
-const jevMade = vi.hoisted(() => vi.fn())
-vi.mock('../lib/jev/jevClient.js', async (orig) => {
-  const actual = await orig<typeof import('../lib/jev/jevClient.js')>()
-  return {
-    ...actual,
-    createJevDecide: (options: Parameters<typeof actual.createJevDecide>[0]) => {
-      jevMade(options)
-      // Keep the real hosted request and answer parsing, without discovering a key or calling OpenRouter.
-      return actual.createJevDecide({ ...options, key: async () => null })
-    },
-  }
-})
-
 const { startDevices } = await import('./devices.js')
 
 let dataDir: string
@@ -150,6 +137,15 @@ afterEach(() => {
   rmSync(dataDir, { recursive: true, force: true })
   vi.restoreAllMocks()
 })
+
+/** The account's machines: a Harness Team one (`team-mac`) and a computer of the person's own (`mac-mini`). */
+const teamAccount = (core: CoreApi) => {
+  vi.mocked(core.account.machines).mockResolvedValue({ status: 200, body: { success: true, data: { machines: [
+    { machineId: 'team-mac', name: 'Diego’s Mac', sessionKind: 'team' },
+    { machineId: 'mac-mini', name: 'Mac mini', sessionKind: 'computer' },
+  ] } } })
+  return seen.fleet!.deps.machines.refresh()
+}
 
 function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
@@ -401,39 +397,65 @@ describe('what the windows say, reaching the dial', () => {
   })
 
   describe('a summary\'s tier', () => {
-    afterEach(() => { delete process.env.HARNESS_NOTIFY_SMART })
-    it('builds the default decider without Jev when HARNESS_NOTIFY_SMART is 0, and with it otherwise', () => {
-      process.env.HARNESS_NOTIFY_SMART = '0'
-      start({ decideTier: null })
-      expect(jevMade).not.toHaveBeenCalled()
-      delete process.env.HARNESS_NOTIFY_SMART
-      start({ decideTier: null })
-      expect(jevMade).toHaveBeenCalledTimes(1)
-    })
-
-    it('asks the signed-in backend for a default tier, sends its answer to the dial, and tallies it', async () => {
-      delete process.env.HARNESS_NOTIFY_SMART
-      const backend = vi.fn(async () => ({ status: 200, body: { data: { answers: {
-        tier: { choice: 'alert', probabilities: { alert: 0.8, list: 0.15, silent: 0.05 } },
-      } } } }))
-      const core = fakeCore({ dataDir, account: { backend } })
-      const { port } = start({ core, decideTier: null })
+    it('decides a card without a tier by the fixed rules: a harness agent alerts, with no Jev call, and it is tallied', async () => {
+      const backend = vi.fn()
+      const { port } = start({ core: fakeCore({ dataDir, account: { backend } }), decideTier: null })
       port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'done', recap: 'The requested build is ready.' } })
       await vi.waitFor(() => expect(calls('summary')).toEqual([
         ['a1', 'The requested build is ready.', 'done', 'alert', undefined, false],
       ]))
-      expect(backend).toHaveBeenCalledExactlyOnceWith('POST', '/api/route/jev', {
-        state: {
-          agent: 'an agent', recap: 'The requested build is ready.', turn: 'duration unknown',
-          recent: '0 alerts and 0 list entries in the last 30 minutes',
-        },
-        questions: { tier: {
-          type: 'choice', instructions: expect.any(String),
-          criteria: { alert: expect.any(String), list: expect.any(String), silent: expect.any(String) },
-        } },
-      })
-      expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · .* · alert · jev · p=alert=0\.80,list=0\.15,silent=0\.05 · \d+ms$/))
+      expect(backend).not.toHaveBeenCalled()
+      expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · .* · alert · rule:turn · turn · \d+ms$/))
       expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · day \d{4}-\d\d-\d\d · alert 1 · list 0 · silent 0$/))
+    })
+
+    it.each(['lead', 'buddy', 'agent', 'coordinator'])('decides a local Swarm agent\'s card silent, whatever its role (%s)', async (role) => {
+      const { port } = start({ core: fakeCore({ dataDir, agents: { byAgent: vi.fn(() => ({ agentId: 'a1', swarmSkill: { role, key: 'k' } }) as never) } }), decideTier: null })
+      port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'done', recap: 'Built.' } })
+      await vi.waitFor(() => expect(calls('summary')).toEqual([['a1', 'Built.', 'done', 'silent', undefined, false]]))
+      expect(logs).toContainEqual(expect.stringMatching(/silent · rule:swarm · swarm/))
+    })
+
+    it('decides an agent on a Harness Team machine silent, and one on another computer of the person alert', async () => {
+      const core = fakeCore({ dataDir })
+      const { port } = start({ core, decideTier: null })
+      await teamAccount(core)
+      seen.fleet!.events!({ machineId: 'team-mac', kind: 'summary', agentId: 'reviewer', text: 'done', recap: 'Reviewed.' })
+      seen.fleet!.events!({ machineId: 'mac-mini', kind: 'summary', agentId: 'far', text: 'done', recap: 'Done far.' })
+      await vi.waitFor(() => expect(calls('summary')).toHaveLength(2))
+      expect(calls('summary').map((c) => [c[0], c[3]])).toEqual([['reviewer', 'silent'], ['far', 'alert']])
+      void port
+    })
+
+    // #2540's review (Orion): a card that carries a tier was followed before its machine was looked at, so a Team machine's
+    // agent could alert. A Team machine runs Swarm work only.
+    it('decides a Team machine\'s agent by the Team rule even when its card brings a tier, and follows any other card\'s', async () => {
+      const core = fakeCore({ dataDir })
+      const { port } = start({ core, decideTier: null })
+      await teamAccount(core)
+      const card = (event: FleetEvent) => seen.fleet!.events!(event)
+      card({ machineId: 'team-mac', kind: 'summary', agentId: 'reviewer', text: 'done', recap: 'Reviewed.', tier: 'alert' })
+      card({ machineId: 'mac-mini', kind: 'summary', agentId: 'far', text: 'done', recap: 'Done far.', tier: 'list' })
+      await vi.waitFor(() => expect(calls('summary')).toHaveLength(2))
+      // The one followed lands first; the one decided here waits for the decider.
+      expect(new Map(calls('summary').map((c) => [c[0], c[3]]))).toEqual(new Map([['reviewer', 'silent'], ['far', 'list']]))
+      expect(logs).toContainEqual(expect.stringMatching(/silent · rule:swarm · swarm/))
+      void port
+    })
+
+    it('follows the tier another of the person\'s machines decided: a Swarm agent there is silent on this dial', async () => {
+      const { port } = start({ decideTier: null })
+      seen.fleet!.events!({ machineId: 'mac-mini', kind: 'summary', agentId: 'far-pm', text: 'done', recap: 'Planned.', tier: 'silent' })
+      await vi.waitFor(() => expect(calls('summary')).toEqual([['far-pm', 'Planned.', 'done', 'silent', undefined, false]]))
+      void port
+    })
+
+    it('still decides a remote card that came without a tier, and never throws', async () => {
+      const { port } = start({ decideTier: null })
+      expect(() => seen.fleet!.events!({ machineId: 'mac-mini', kind: 'summary', agentId: 'far', text: 'done', recap: '' })).not.toThrow()
+      await vi.waitFor(() => expect(calls('summary')).toHaveLength(1))
+      expect(calls('summary')[0][3]).toBe('alert') // a harness agent's, whatever machine it ran on
+      void port
     })
 
     it('keeps a recap in the list when the decider rejects', async () => {
@@ -1151,13 +1173,6 @@ describe('a failed turn of a Swarm worker', () => {
   const swarmAgents = (sessions: Array<Partial<RegisteredSession>>) => fakeCore({ dataDir, agents: {
     byAgent: vi.fn((id: string) => sessions.find((s) => s.agentId === id) as RegisteredSession | undefined),
   } })
-  const teamAccount = (core: CoreApi) => {
-    vi.mocked(core.account.machines).mockResolvedValue({ status: 200, body: { success: true, data: { machines: [
-      { machineId: 'team-mac', name: 'Diego’s Mac', sessionKind: 'team' },
-      { machineId: 'mac-mini', name: 'Mac mini', sessionKind: 'computer' },
-    ] } } })
-    return seen.fleet!.deps.machines.refresh()
-  }
 
   it('on a Harness Team account never reaches the dial as an error, and ends its tile quietly', async () => {
     const { core } = start()

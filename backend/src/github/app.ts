@@ -7,6 +7,7 @@
  * crypto signs the app's JWT. Nothing here logs a token or the private key.
  */
 import { createPrivateKey, hkdfSync, sign, type KeyObject } from 'node:crypto'
+import { readPushOrigin, type GitHubRead, type PushOrigin } from './pushOrigin.js'
 import { githubRepository, type GitHubRepository } from './repository.js'
 
 /** What a Swarm agent's token may do, and nothing more: push to and read the repository, open and update pull requests,
@@ -18,6 +19,10 @@ export const PREPARE_PERMISSIONS = { contents: 'read', metadata: 'read' } as con
 export const PULL_READ_PERMISSIONS = { pull_requests: 'read', metadata: 'read' } as const
 /** What the route's read of running CI jobs may do: read workflow runs and their jobs, nothing more. */
 export const ACTIONS_READ_PERMISSIONS = { actions: 'read', metadata: 'read' } as const
+/** What reading who pushed a pull request's commits may do (pushOrigin.ts): read the pull request and the repository's activity log. */
+export const PUSH_ORIGIN_PERMISSIONS = { contents: 'read', pull_requests: 'read', metadata: 'read' } as const
+const PUSH_ORIGINS_KEPT = 1000
+const PUSH_UNKNOWN_MS = 60_000
 export type TokenPermissions = Readonly<Record<string, 'read' | 'write'>>
 /** Jobs running and waiting on a repository's GitHub Actions, in all and on macOS runners: counts only. */
 export interface CiLoad { running: number; queued: number; macosRunning: number; macosQueued: number }
@@ -50,7 +55,9 @@ export function readPrivateKey(value: string): KeyObject {
 /** Both empty: the feature is off. One without the other, or a value that cannot be right, stops the backend at startup
  *  rather than failing the first agent that asks. */
 /** The name a Harness GitHub App's commits carry, whatever the app is called on GitHub (cli/src/lib/swarmGitHub.ts accepts it). */
-export const COMMIT_NAME = 'Harness'
+export const COMMIT_IDENTITY: CommitIdentity = { name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' }
+/** The line a commit, or the merge helper's squash message, names Harness by (attribution.ts; scripts/merge-validated-pr.py). */
+export const HARNESS_CO_AUTHOR = `Co-authored-by: ${COMMIT_IDENTITY.name} <${COMMIT_IDENTITY.email}>`
 
 export function githubAppConfig(env: { GITHUB_APP_ID: string; GITHUB_APP_PRIVATE_KEY: string; GITHUB_APP_SLUG: string }): GitHubAppConfig | null {
   const appId = env.GITHUB_APP_ID.trim(), key = env.GITHUB_APP_PRIVATE_KEY.trim(), slug = env.GITHUB_APP_SLUG.trim()
@@ -97,7 +104,6 @@ export const CI_READS_PER_HOUR = 3
 export const SERVER_PROCESSES_MAX = 8
 export const CI_STALE_MS = 5 * 60_000
 const CI_WAITING = new Set(['queued', 'waiting', 'requested', 'pending'])
-const IDENTITY_RETRY_MS = 10 * 60_000
 
 /** A git author and committer. */
 export interface CommitIdentity { name: string; email: string }
@@ -114,8 +120,8 @@ export class GitHubApp {
   private readonly now: () => number
   private readonly apiUrl: string
   private signed: { jwt: string; until: number } | null = null
-  /** The app's commit identity once read; a failed read is asked again after [IDENTITY_RETRY_MS]. */
-  private identity: { value: CommitIdentity | null; until: number } | null = null
+  /** The app's name, as GitHub answers it (botLogin). */
+  private slug: string | null = null
   private readonly installations = new Map<string, { id: number | null; until: number }>()
   private readonly branches = new Map<string, { value: DefaultBranch; until: number }>()
   /** A repository's name now, by the name asked for (lower case): null when it was not renamed. */
@@ -123,6 +129,7 @@ export class GitHubApp {
   private readonly shownNames = new Map<string, { name: string; until: number }>()
   /** Each repository's CI load while fresh, or being read ([ciLoad]), by its name in lower case; per server process. */
   private readonly ciLoads = new Map<string, { value: Promise<CiLoad | null>; until: number }>()
+  private readonly pushOrigins = new Map<string, { origin: PushOrigin; until: number }>()
   /** Each repository's CI reads in the last hour, and its last load read, for [CI_READS_PER_HOUR]. */
   private readonly ciReads = new Map<string, { at: number[]; last: { load: CiLoad | null; at: number } | null }>()
   /** When each repository's "not installed" was last forgotten on request ([forget]). */
@@ -140,39 +147,25 @@ export class GitHubApp {
   }
 
   /**
-   * Who the app's commits are by: "Harness", at its bot account's address (`<id>+<slug>[bot]@users.noreply.github.com`),
-   * so a commit made with the app's token shows the app, not the made-up address of the machine account that ran git. A Harness
-   * Team account has no git identity of its own, so its commits read "Harness Team <harnessteam@<host>.local>", unverified and
-   * linked to nobody (PR #1934, 2026-10-28). Read once and kept; null while GitHub cannot say, asked again ten minutes later.
-   * [token]: a token to ask with. Asked without one, from a server's shared address, GitHub's limit for unsigned
-   * requests could refuse it, and a Team account's commits stayed the machine's (PR #1948): the token just issued is used.
+   * Who the app's commits are by, as Claude's are by its own line (Dee, task #2136). A Harness Team account has no git identity
+   * of its own, so its commits would read "Harness Team <harnessteam@<host>.local>" (PR #1934). No GitHub account owns this
+   * address, so GitHub links these commits to nobody: telling a Team agent's commits apart rests on who pushed (pushOrigin.ts).
    */
-  async commitIdentity(token?: string): Promise<CommitIdentity | null> {
-    if (this.identity && (this.identity.value || this.identity.until > this.now())) return this.identity.value
-    let value: CommitIdentity | null = null
+  commitIdentity(): CommitIdentity { return COMMIT_IDENTITY }
+
+  /** The app's bot account's login, which GitHub's activity log names as the actor of every push with the app's token: GitHub's
+   *  own answer, remembered. Never a configured name, as a wrong one asks the log for a bot that never pushed, and its empty
+   *  answer reads as clean. Null while GitHub cannot say, which reads as unknown. Never read from a commit. */
+  async botLogin(): Promise<string | null> {
+    if (this.slug) return `${this.slug}[bot]`
     try {
-      let slug = this.config.slug
-      if (!slug) {
-        const app = await this.call('GET', '/app', `Bearer ${this.jwt()}`)
-        const named = (app.body as { slug?: unknown }).slug
-        slug = app.status === 200 && typeof named === 'string' && /^[a-z0-9-]{1,100}$/.test(named) ? named : null
-      }
-      if (slug) {
-        const login = `${slug}[bot]`
-        // The app's own JWT is not accepted here; any installation token is, and the bot's id is no secret.
-        const user = await this.call('GET', `/users/${encodeURIComponent(login)}`, token ? `Bearer ${token}` : null)
-        const id = (user.body as { id?: unknown }).id
-        if (user.status === 200 && typeof id === 'number' && Number.isSafeInteger(id) && id > 0) {
-          // Shown as "Harness" (2026-11-02: no "harness-for-autonomous[bot]"); the bot's noreply address is what links the
-          // commit to the app's account on GitHub.
-          value = { name: COMMIT_NAME, email: `${id}+${login}@users.noreply.github.com` }
-        } else console.warn(`[github] the app's bot account ${login} was not read: HTTP ${user.status}`)
-      }
+      const app = await this.call('GET', '/app', `Bearer ${this.jwt()}`)
+      const named = (app.body as { slug?: unknown }).slug
+      if (app.status === 200 && typeof named === 'string' && /^[a-z0-9-]{1,100}$/.test(named)) this.slug = named
     } catch (error) {
       if (!(error instanceof GitHubAppError)) throw error
     }
-    this.identity = { value, until: this.now() + IDENTITY_RETRY_MS }
-    return value
+    return this.slug ? `${this.slug}[bot]` : null
   }
 
   /** The app's own JWT (RS256, ten minutes at most): issued a minute back against clock drift, valid nine minutes, and
@@ -188,7 +181,7 @@ export class GitHubApp {
     return jwt
   }
 
-  private async call(method: string, path: string, auth: string | null, body?: unknown): Promise<{ status: number; body: Record<string, unknown> | unknown[] }> {
+  private async call(method: string, path: string, auth: string | null, body?: unknown): Promise<{ link?: string | null; status: number; body: Record<string, unknown> | unknown[] }> {
     let response: Response
     try {
       response = await this.fetch(`${this.apiUrl}${path}`, {
@@ -203,7 +196,8 @@ export class GitHubApp {
     const text = await response.text().catch(() => '')
     let parsed: unknown = {}
     try { parsed = text ? JSON.parse(text) : {} } catch { parsed = {} }
-    return { status: response.status, body: parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {} }
+    return { status: response.status, body: parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {},
+      link: response.headers.get('link') }
   }
 
   private misconfigured(): GitHubAppError {
@@ -372,6 +366,57 @@ export class GitHubApp {
     // A failed read leaves the cache only if it is still this read's: one that fails late never drops a newer read's entry.
     value.then(load => { reads.last = { load, at: now } }, () => { if (this.ciLoads.get(key)?.value === value) this.ciLoads.delete(key) })
     return value
+  }
+
+  /**
+   * Who pushed the pull request [number]'s commits (pushOrigin.ts), remembered by its head alone. A failure never reads as clean.
+   */
+  async pushOrigin(repository: GitHubRepository, number: number): Promise<PushOrigin> {
+    try {
+      const resolved = await this.resolve(repository)
+      if (!resolved) return 'unknown'
+      const { token } = await this.createToken(resolved.installation, resolved.repository, PUSH_ORIGIN_PERMISSIONS)
+      const auth = `Bearer ${token}`, name = `${resolved.repository.owner}/${resolved.repository.name}`
+      const call: GitHubRead = async path => {
+        const answer = await this.call('GET', path, auth)
+        const next = /<https:\/\/[^/>]+(\/[^>]+)>;\s*rel="next"/.exec(answer.link ?? '')?.[1]
+        return { status: answer.status, body: answer.body, ...(next ? { next } : {}) }
+      }
+      const pullPath = `/repos/${name}/pulls/${number}`
+      const pull = await call(pullPath)
+      const sha = (pull.body as { head?: { sha?: unknown } }).head?.sha
+      const key = typeof sha === 'string' ? `${name.toLowerCase()}@${sha}` : null
+      const known = key ? this.pushOrigins.get(key) : undefined
+      if (known && known.until > this.now()) return known.origin
+      // The same read of the pull request decides the head and the answer, so a push in between cannot file it under another commit.
+      const read: GitHubRead = path => path === pullPath ? Promise.resolve(pull) : call(path)
+      const origin = await readPushOrigin(read, name, number, await this.botLogin())
+      if (key) {
+        if (this.pushOrigins.size >= PUSH_ORIGINS_KEPT) this.pushOrigins.delete(this.pushOrigins.keys().next().value!)
+        // An answer for a head holds for good. An `unknown` is asked again a minute later, so retries cost no more than that.
+        this.pushOrigins.set(key, { origin, until: origin === 'unknown' ? this.now() + PUSH_UNKNOWN_MS : Infinity })
+      }
+      return origin
+    } catch {
+      return 'unknown'
+    }
+  }
+
+  /** Who pushed [branch]: the default branch is clean, as it passed review; any other reads its one open pull request, and with none is unknown. */
+  async branchOrigin(repository: GitHubRepository, branch: string): Promise<PushOrigin> {
+    try {
+      const resolved = await this.resolve(repository)
+      if (!resolved) return 'unknown'
+      const { token } = await this.createToken(resolved.installation, resolved.repository, PUSH_ORIGIN_PERMISSIONS)
+      const auth = `Bearer ${token}`, { owner, name } = resolved.repository
+      const about = await this.call('GET', `/repos/${owner}/${name}`, auth)
+      if (about.status === 200 && (about.body as { default_branch?: unknown }).default_branch === branch) return 'clean'
+      const listed = await this.call('GET', `/repos/${owner}/${name}/pulls?state=open&head=${encodeURIComponent(`${owner}:${branch}`)}&per_page=2`, auth)
+      const number = Array.isArray(listed.body) && listed.body.length === 1 ? (listed.body[0] as { number?: unknown }).number : null
+      return listed.status === 200 && typeof number === 'number' ? await this.pushOrigin(repository, number) : 'unknown'
+    } catch {
+      return 'unknown'
+    }
   }
 
   private async readCiLoad(repository: GitHubRepository): Promise<CiLoad | null> {

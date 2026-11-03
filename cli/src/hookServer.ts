@@ -23,7 +23,8 @@ import { registry, type RegisterInput, type RegisteredSession } from './lib/regi
 import { sid } from './lib/log.js'
 import { VERSION } from './version.js'
 import { env } from './config/env.js'
-import { hookCredentialMatches, loadOrCreateHookCredential } from './lib/hookAuth.js'
+import { hookCredentialMatches, loadOrCreateHookCredential, loadOrCreateHookToken } from './lib/hookAuth.js'
+import { peerIsThisAccount, type PeerAccount } from './lib/peerAccount.js'
 import { LOCAL_CREDENTIAL_REQUIRED, localCredentialMatches } from './lib/localCredential.js'
 import { routeStoreRequest, type StoreHandler } from './lib/storeProxy.js'
 import type { HookTerminalHint } from './lib/terminalTypes.js'
@@ -397,6 +398,8 @@ async function inspectHermesKind(sessionId: string, knownHome?: string): Promise
 }
 
 export interface HookServerOptions {
+  /** Whether a TCP caller runs as this OS account (lib/peerAccount.ts). A test's stand-in for another account. */
+  peerAccount?: PeerAccount
   /** Also serve on this Unix socket, or with pipeToken the Windows pipe (see lib/localSocket.ts). Null or absent: TCP only. */
   socketPath?: string | null
   /** Windows: the daemon's token. When given, `socketPath` is a pipe whose every request proves it (lib/localSocket.ts). */
@@ -426,6 +429,8 @@ export function startHookServer(
   options: HookServerOptions = {},
 ): Promise<{ server: http.Server; port: number; localSocket: LocalSocketServer | null }> {
   const hookCredential = loadOrCreateHookCredential(env.ADAPTER_DATA_DIR)
+  const hookToken = loadOrCreateHookToken(env.ADAPTER_DATA_DIR)
+  const peerAccount: PeerAccount = options.peerAccount ?? peerIsThisAccount
   const admissions = createPendingAdmissions({ isProcessCurrent: (key, scope) => admissionProcessScope(registry.byAgent(key)) === scope })
   let admissionArrival = 0
   const admissionHolds = new Map<string, Map<string, string>>()
@@ -483,15 +488,18 @@ export function startHookServer(
       // send it, can trigger actions. A local process could still call it — same trust level as the
       // CLI, which is acceptable on loopback.
       const localOk = req.headers['x-adapter-local'] === '1'
-      // An engine hook's token. Today the daemon's own credential; a guest's harness will carry a token
-      // scoped to its own agent (docs/plans/2026-10-19-guest-machine-sharing-plan.md), checked here.
-      const hookTokenMatches = (request: http.IncomingMessage): boolean =>
-        hookCredentialMatches(hookCredential, request.headers['x-harness-hook-token'])
-      const hookOk = hookTokenMatches(req)
+      // An engine hook's token, which opens these hook routes and nothing else (lib/hookAuth.ts). The credential
+      // is still taken here: an engine's loaded plugin keeps the copy it started with until its pane restarts. A
+      // guest's harness will carry a token scoped to its own agent (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
+      // Over TCP either may have been heard by another account that held this port during a restart (audit H1), which
+      // could then forge session ends or turn stops here, so it counts only from this one. Asked only once it matched.
+      const suppliedHookToken = req.headers['x-harness-hook-token']
+      const hookOk = trustedLocal || ((hookCredentialMatches(hookToken, suppliedHookToken) || hookCredentialMatches(hookCredential, suppliedHookToken)) && await peerAccount(req.socket))
       // The loopback port takes any local OS user's process, so over TCP every route but the few below
       // wants the daemon's local credential (lib/localCredential.ts): the 0600 file only this OS user can
-      // read. Over the daemon's Unix socket the filesystem already said who this is.
-      const credentialOk = trustedLocal || localCredentialMatches(hookCredential, req)
+      // read. Over the daemon's Unix socket the filesystem already said who this is. Over TCP the credential may have
+      // been heard by another account that held this port during a restart (audit H1), so it counts only from this one.
+      const credentialOk = trustedLocal || (localCredentialMatches(hookCredential, req) && await peerAccount(req.socket))
       // Open without it: liveness, the status a discovery reads (cut down, below), the hook routes (their
       // own token, above) and the native device routes (their own bearer, just below).
       const open = (req.method === 'GET' && (url === '/api/health' || url === '/api/status'))
@@ -502,7 +510,7 @@ export function startHookServer(
         const peer = req.socket.remoteAddress
         const loopback = trustedLocal || peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1'
         const bearer = req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : undefined
-        if (!loopback || req.headers.origin || !hookCredentialMatches(hookCredential, bearer)) {
+        if (!loopback || req.headers.origin || !hookCredentialMatches(hookCredential, bearer) || !credentialOk) {
           json(403, { error: { code: 'FORBIDDEN', message: 'Authenticated native loopback client required' } }); return
         }
         if (!handlers.onAutonomousDeviceRequest) { json(503, { error: { code: 'UNAVAILABLE', message: 'Autonomous device service unavailable' } }); return }

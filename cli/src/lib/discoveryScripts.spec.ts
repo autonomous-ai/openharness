@@ -99,13 +99,16 @@ describe('generated discovery scripts', () => {
   // pane shows. The legacy file must be absent: 2.0 also discovers it, then refuses its old API.
   it('installs only the compatible OpenCode 2 plugin, posting the session the pane shows', async () => {
     const config = scratch()
-    const data = scratch()
+    // No socket can be, so this reads the post where a test can see it (pluginPosts.spec.ts covers the socket).
+    const data = join(scratch(), 'd'.repeat(100))
+    mkdirSync(data, { recursive: true })
     const pluginDir = join(config, 'plugin')
     vi.resetModules()
     version.major = 2
+    vi.stubEnv('HOME', `/${'h'.repeat(120)}`)
     vi.stubEnv('OPENCODE_PLUGIN_DIR', pluginDir)
     vi.stubEnv('ADAPTER_DATA_DIR', data)
-    writeFileSync(join(data, 'hook-credential'), 'tok-123\n')
+    writeFileSync(join(data, 'hook-token'), 'tok-123\n')
     const { installOpencodePlugin } = await import('./hooks.js')
     await installOpencodePlugin(18473)
 

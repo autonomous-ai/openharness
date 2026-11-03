@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
@@ -49,10 +48,10 @@ class SuperTabFollowedThread {
 
 /// What needs the reader in one Swarm, the way Slack shows it: which
 /// conversations hold a tag of them (the red number), and which threads they
-/// follow have replies they have not read (the Threads row and view). Tags and
+/// follow have replies they have not read (Activity's New replies). Tags and
 /// decisions come from [SuperTabMentions] and [SuperTabDecisions]; threads
 /// from the server's followed-threads read, read again when the Swarm moves,
-/// at most every [quietGap] (every [openGap] while the Threads view is open).
+/// at most every [quietGap] (every [openGap] while Activity is open).
 /// One per controller.
 class SuperTabAttention extends ChangeNotifier {
   SuperTabAttention._(this.controller, {DateTime Function()? now})
@@ -101,19 +100,10 @@ class SuperTabAttention extends ChangeNotifier {
   /// The server stopped short of everything (its bounds).
   bool more = false;
 
-  /// Threads shown as new in this visit of the Threads view: they stay new
+  /// Threads shown as new in this visit of Activity: they stay new
   /// until the view is left, though opening them marked them read.
   final Set<String> _newThisVisit = {};
   bool _open = false;
-
-  /// New replies under each unread thread's root, read when the view showed
-  /// it; by [SuperTabFollowedThread.key].
-  final Map<String, List<SuperTabMessage>> newReplies = {};
-  final Set<String> _readingReplies = {};
-
-  /// Threads whose replies failed to read this visit: not asked again until
-  /// the next one, so a failing read is not repeated on every redraw.
-  final Set<String> _repliesFailed = {};
 
   /// Threads whose Follow is being sent.
   final Set<String> following = {};
@@ -167,13 +157,13 @@ class SuperTabAttention extends ChangeNotifier {
 
   /// A tag from a server that does not say where it is: it counts until
   /// answered, past any read mark.
-  static const _unknown = 1 << 52;
+  static const _unknown = 9007199254740991;
 
-  /// The Threads row's number: tags of the reader inside threads they have
+  /// The number of tags of the reader inside threads they have
   /// not read past, in chats this Swarm still lists for them. A muted chat's
   /// threads never count, as its main stream does not ([mentionsIn]).
   ///
-  /// Only threads the Threads view lists count ([unread] and [read]): the
+  /// Only threads Activity lists count ([unread] and [read]): the
   /// number promises something to open there. A tag in a thread the server
   /// left out (older than its bounds, unfollowed, a root the reader cannot
   /// read) stays in Activity, and counts nothing here. None until the list
@@ -245,8 +235,6 @@ class SuperTabAttention extends ChangeNotifier {
     _trailing = null;
     _newThisVisit.clear();
     _counts.clear();
-    newReplies.clear();
-    _repliesFailed.clear();
     if (!_disposed) notifyListeners();
   }
 
@@ -257,9 +245,6 @@ class SuperTabAttention extends ChangeNotifier {
     more = false;
     _newThisVisit.clear();
     _counts.clear();
-    newReplies.clear();
-    _readingReplies.clear();
-    _repliesFailed.clear();
     _trailing?.cancel();
     _trailing = null;
   }
@@ -300,7 +285,7 @@ class SuperTabAttention extends ChangeNotifier {
       if (_lastRead case final last?) last.add(_open ? openGap : quietGap),
     ].fold<DateTime?>(null, (a, b) => a == null || b.isAfter(a) ? b : a);
     if (until != null && now.isBefore(until)) {
-      // Only while something shows it (the sidebar, the Threads view).
+      // Only while something shows it (the sidebar, Activity).
       if (!hasListeners) return;
       _trailing ??= Timer(until.difference(now), () {
         _trailing = null;
@@ -390,56 +375,6 @@ class SuperTabAttention extends ChangeNotifier {
       }
       error = 'Could not load threads.';
       notifyListeners();
-    }
-  }
-
-  /// Reads the replies of [thread] the reader has not read, to show under its
-  /// root, then marks the thread read: opening the view reads what it shows.
-  Future<void> showReplies(SuperTabFollowedThread thread) async {
-    if (_disposed ||
-        controller.accessRevoked ||
-        newReplies.containsKey(thread.key) ||
-        _repliesFailed.contains(thread.key) ||
-        !_readingReplies.add(thread.key)) {
-      return;
-    }
-    final epoch = controller.visibilityEpoch;
-    final seen = controller.threadReadMark(thread.rootId);
-    try {
-      final answer = await controller.request(
-        'GET',
-        '$_path/conversations/${Uri.encodeComponent(thread.conversationId)}'
-            '/messages?thread=${Uri.encodeQueryComponent(thread.rootId)}',
-      );
-      if (_disposed ||
-          controller.accessRevoked ||
-          controller.visibilityEpoch != epoch ||
-          !_readingReplies.contains(thread.key)) {
-        return;
-      }
-      final replies = [
-        for (final row in answer['messages'] as List? ?? const [])
-          if (SuperTabMessage.fromJson(superTabMap(row)) case final m
-              when m.conversationId == thread.conversationId &&
-                  m.thread == thread.rootId &&
-                  m.threadReply &&
-                  m.sequence > seen)
-            m,
-      ]..sort(superTabMessageOrder);
-      newReplies[thread.key] = replies.length > 5
-          ? replies.sublist(replies.length - 5)
-          : replies;
-      final through = max(
-        thread.lastReplySequence,
-        replies.lastOrNull?.sequence ?? 0,
-      );
-      controller.markThreadRead(thread.conversationId, thread.rootId, through);
-      notifyListeners();
-    } catch (_) {
-      // The thread stays unread and its root shows; the next visit tries again.
-      _repliesFailed.add(thread.key);
-    } finally {
-      _readingReplies.remove(thread.key);
     }
   }
 

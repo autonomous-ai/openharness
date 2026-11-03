@@ -133,7 +133,7 @@ describe('a person\'s one Buddy\'s status (spec 2026-10-31-one-buddy-per-swarm)'
     const status = await buddyStatus(input(state, changed(state)), { pullRequests: reader().read, decisions: decisions() })
     expect(status.projects).toHaveLength(50)
     expect(status.moreProjects).toBe(10)
-    expect((status.projects as Array<Record<string, unknown>>)[0]).toEqual({ name: 'Project p0', chat: 'p0-chat', open: 2, changed: 0 })
+    expect((status.projects as Array<Record<string, unknown>>)[0]).toEqual({ id: expect.any(String), name: 'Project p0', chat: 'p0-chat', open: 2, changed: 0 })
     const tasks = status.tasks as Array<Record<string, unknown>>
     expect(tasks).toHaveLength(20)
     expect(tasks[0]).toMatchObject({ project: 'Project p59', title: 'p59 task 2' })

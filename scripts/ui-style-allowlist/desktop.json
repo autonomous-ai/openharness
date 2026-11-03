@@ -60,8 +60,7 @@
     "edge-insets": 3
   },
   "desktop/lib/super_tabs/roster.dart": {
-    "edge-insets": 2,
-    "border-radius": 1
+    "edge-insets": 1
   },
   "desktop/lib/super_tabs/route_row.dart": {
     "edge-insets": 3
@@ -83,7 +82,7 @@
     "edge-insets": 2
   },
   "desktop/lib/super_tabs/view.dart": {
-    "edge-insets": 20,
+    "edge-insets": 19,
     "border-radius": 1
   }
 }

@@ -319,7 +319,7 @@ void main() {
       final r = await unreadAndTagged();
       expect(news(r), (bold: true, tags: 1));
       expect(swarmProjectNews(r.reader, r.asks), {
-        project: (bold: true, tags: 1),
+        project: (bold: true, tags: 0, hasWaitingTag: true),
       });
 
       final held = hold(r.swarm);
@@ -337,8 +337,24 @@ void main() {
       final r = await rig(
         tags: [tag('t1', threadId: 'm1', messageSequence: 2)],
       );
+      // The Threads page lists the thread the tag is in: only listed threads
+      // count.
+      r.swarm.routes['/api/super-tabs/$tab/threads'] = (_) => {
+        'unread': [],
+        'read': [
+          {
+            'conversationId': 'g1',
+            'rootId': 'm1',
+            'root': {'id': 'm1', 'sequence': 1, 'text': 'Root'},
+            'lastReplyAt': '2026-11-01T01:00:00.000Z',
+            'lastReplySequence': 2,
+          },
+        ],
+      };
       final threads = SwarmThreads(r.reader, asks: r.asks);
       addTearDown(threads.dispose);
+      threads.addListener(() {});
+      await r.reader.refresh();
       await settle();
       expect(threads.threadMentions, 1);
 

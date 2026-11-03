@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path'
 import { hookPreparationRoutes, runHookPreparation, type HookPreparationProof } from './kit/nativeHookFiles.js'
 import { nativeHookLocations, type NativeHookOptions } from './kit/nativeLocations.js'
 import { env } from '../config/env.js'
+import { hookTokenPath } from '../lib/hookAuth.js'
 import { VERSION } from '../version.js'
 import { OPENCODE_LEGACY_PLUGIN, OPENCODE_TUI_PLUGIN, OPENCODE_LEGACY_REMOVAL, OPENCODE_VERSION } from './opencode/contract.js'
 import { KILO_PLUGIN } from './kilo/contract.js'
@@ -21,6 +22,7 @@ import { CURSOR_HOOK_SETTINGS } from './cursor/contract.js'
 import { COMMANDCODE_HOOK_SETTINGS } from './commandcode/contract.js'
 import { DEVIN_HOOK_SETTINGS } from './devin/contract.js'
 import { installNativeHookSettings } from './kit/nativeHookSettings.js'
+import { unixSocketPath } from '../lib/localSocket.js'
 
 export const installGrokHooks = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativeHookSettings(options?.environment ? { ...GROK_HOOK_SETTINGS, file: join(nativeHookLocations(options.environment).GROK_HOME, 'hooks', 'harness.json') } : GROK_HOOK_SETTINGS, port, options)
 export const installAgyHooks = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativeHookSettings(options?.environment ? { ...AGY_HOOK_SETTINGS, file: join(nativeHookLocations(options.environment).AGY_CONFIG_DIR, 'hooks.json') } : AGY_HOOK_SETTINGS, port, options)
@@ -30,7 +32,9 @@ export const installCommandCodeHooks = (port: number, options?: NativeHookOption
 export const installDevinHooks = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativeHookSettings(options?.environment ? { ...DEVIN_HOOK_SETTINGS, file: nativeHookLocations(options.environment).DEVIN_CONFIG_PATH } : DEVIN_HOOK_SETTINGS, port, options)
 
 const pluginValues = (port: number) => ({
-  port: String(port), credential: JSON.stringify(join(env.ADAPTER_DATA_DIR, 'hook-credential')), version: JSON.stringify(VERSION),
+  port: String(port), credential: JSON.stringify(hookTokenPath(env.ADAPTER_DATA_DIR)), version: JSON.stringify(VERSION),
+  // Named for the configured port, as the daemon's socket is, whichever port it was given.
+  socket: JSON.stringify(unixSocketPath(env.ADAPTER_DATA_DIR, env.PORT)),
 })
 export const installKiloPlugin = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativePlugin(options?.environment ? { ...KILO_PLUGIN, file: join(nativeHookLocations(options.environment).KILO_PLUGIN_DIR, 'launcher-register.js') } : KILO_PLUGIN, pluginValues(port), options)
 export const installPiExtension = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativePlugin(options?.environment ? { ...PI_EXTENSION, file: join(nativeHookLocations(options.environment).PI_AGENT_DIR, 'extensions', 'launcher-register.ts') } : PI_EXTENSION, pluginValues(port), options)

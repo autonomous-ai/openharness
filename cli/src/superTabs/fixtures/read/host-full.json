@@ -49,7 +49,8 @@
        "email": "dev@example.com",
        "userId": "6a0000000000000000000002"
       }
-     ]
+     ],
+     "ledConversationId": "c00000000000000000000001"
     },
     {
      "tabId": "f1a5c0de0000000000000001",
@@ -91,7 +92,8 @@
        "email": "dev@example.com",
        "userId": "6a0000000000000000000002"
       }
-     ]
+     ],
+     "ledConversationId": null
     }
    ],
    "pool": {

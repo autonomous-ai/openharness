@@ -115,13 +115,22 @@ const median = (values: number[]): number | null => {
 
 /** Each shipped request's shipping attempt and when it shipped. A request ships once, at its earliest recorded merge or first
  *  Done (leaderboard/record.ts shippedAt), by the attempt that was running then: the latest started by that time. Attempts
- *  done after it ship nothing new; counting each Done had counted one request once per attempt (review of #2106). */
-function shipping(rows: CostRow[], groups: Conversation[]): Map<string, number> {
+ *  done after it ship nothing new; counting each Done had counted one request once per attempt (review of #2106). Of attempts
+ *  started together, the first read. The rows are grouped by group once: filtering every row per shipped group was 0.3 M or
+ *  more calls in the 2026-11-02 prod profiles (12 profiles). */
+export function shipping(rows: CostRow[], groups: Conversation[]): Map<string, number> {
+  const byGroup = new Map<string, CostRow[]>()
+  for (const row of rows) {
+    const own = byGroup.get(row.conversationId)
+    if (own) own.push(row)
+    else byGroup.set(row.conversationId, [row])
+  }
   const shipped = new Map<string, number>()
   for (const group of groups) {
     const at = group.ledger?.shippedAt
     if (at === undefined) continue
-    const ran = rows.filter(r => r.conversationId === group.id && r.run.startedAt <= at).sort((a, b) => b.run.startedAt - a.run.startedAt)[0]
+    let ran: CostRow | undefined
+    for (const row of byGroup.get(group.id) ?? []) if (row.run.startedAt <= at && (!ran || row.run.startedAt > ran.run.startedAt)) ran = row
     if (ran) shipped.set(ran.assignmentId, at)
   }
   return shipped

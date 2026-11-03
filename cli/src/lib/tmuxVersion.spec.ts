@@ -50,11 +50,13 @@ describe('tmuxFeaturesOf', () => {
     expect(tmuxFeaturesOf({ major: 2, minor: 7 })).toEqual(none)
     expect(tmuxFeaturesOf({ major: 2, minor: 8 })).toEqual(none)
     expect(tmuxFeaturesOf({ major: 2, minor: 9 })).toEqual({ ...none, resizeWindow: true })
-    // Ubuntu 20.04 ships 3.0a: pane options, but no client flags or session environment yet.
-    const three = { ...none, resizeWindow: true, paneOptions: true, sendKeysHex: true, respawnEnv: true }
+    // Ubuntu 20.04 ships 3.0a: pane options, but no client flags or session environment yet, and no
+    // `source-file -` to give a respawn its variables off the command line.
+    const three = { ...none, resizeWindow: true, paneOptions: true, sendKeysHex: true }
     expect(tmuxFeaturesOf({ major: 3, minor: 0 })).toEqual(three)
-    expect(tmuxFeaturesOf({ major: 3, minor: 1 })).toEqual({ ...three, captureTrailingSpaces: true })
-    const threeTwo = { ...three, captureTrailingSpaces: true, clientFlags: true, sessionEnv: true }
+    const threeOne = { ...three, respawnEnv: true, captureTrailingSpaces: true }
+    expect(tmuxFeaturesOf({ major: 3, minor: 1 })).toEqual(threeOne)
+    const threeTwo = { ...threeOne, clientFlags: true, sessionEnv: true }
     expect(tmuxFeaturesOf({ major: 3, minor: 2 })).toEqual(threeTwo)
     // Ubuntu 24.04 ships 3.4, Fedora 3.5a: a notification can still reach a control client mid-attach.
     expect(tmuxFeaturesOf({ major: 3, minor: 6 })).toEqual(threeTwo)

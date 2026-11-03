@@ -12,7 +12,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import type { Command } from '../src/superTabs/commands.js'
-import { appendRouting, instructionsHash } from '../src/superTabs/instructions.js'
+import { appendRouting, FIRST_INSTRUCTIONS, instructionsHash } from '../src/superTabs/instructions.js'
 import { stableId } from '../src/superTabs/model.js'
 import { roleVersion } from '../src/superTabs/projects.js'
 import { DEFAULT_ROUTING_POLICY } from '../src/superTabs/routingPolicy.js'
@@ -221,11 +221,12 @@ describe('reading the instructions', () => {
     const secret = (await run(tab, { type: 'project.create', name: 'Secret', visibility: 'private', brief: '' })).result.projectId as string
     for (const url of [doc(tab, secret), `${doc(tab, secret)}/revisions`, `${doc(tab, secret)}/revisions/1`]) expect((await get(peer, url)).statusCode).toBe(404)
     expect((await get(owner, doc(tab, secret))).statusCode).toBe(200)
-    // A project from before instructions, until the migration writes its document: the built-in template, revision 0.
+    // A project from before instructions, until the migration writes its document: the built-in template, revision 0, with the
+    // template's hash so a running daemon reads again when the template moves (agent-context design, section 3).
     const head = await db.swarmHead.findFirstOrThrow({ where: { tabId: tab } })
     const data = head.data as { projects: Array<Record<string, unknown>> }
     await db.swarmHead.update({ where: { id: head.id }, data: { data: { ...data, projects: data.projects.map(({ instructionsRevision: _r, instructionsHash: _h, ...p }) => p) } as never } })
-    expect((await get(owner, doc(tab))).json().data).toMatchObject({ revision: 0, hash: null, text: INSTRUCTIONS_TEMPLATE, template: true, notes: [] })
+    expect((await get(owner, doc(tab))).json().data).toMatchObject({ revision: 0, hash: FIRST_INSTRUCTIONS.instructionsHash, text: INSTRUCTIONS_TEMPLATE, template: true, notes: [] })
   })
 
   it('reads nothing to a Buddy whose person lost the private project, as every other Buddy read (review of phase 2)', async () => {

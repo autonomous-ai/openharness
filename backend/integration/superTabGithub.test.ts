@@ -133,7 +133,7 @@ describe('the GitHub token endpoint', () => {
     expect(data).toMatchObject({ token: 'ghs_fixture_1', repository: 'example/app', defaultBranch: 'main', defaultBranchProtected: false,
       defaultBranchProtection: 'none', requestedBy: { name: 'Olive Owner', email: owner.email }, agent: expect.any(String), machine: 'Fixture Mac',
       pullRequestLine: `Requested by Olive Owner (${owner.email}) through Harness.` })
-    expect(data.trailers).toEqual([`Co-authored-by: Olive Owner <${owner.email}>`, `Harness-Agent: ${data.agent}`, 'Harness-Machine: Fixture Mac'])
+    expect(data.trailers).toEqual([`Co-authored-by: Olive Owner <${owner.email}>`, 'Co-authored-by: Harness by Autonomous <noreply@autonomous.ai>', `Harness-Agent: ${data.agent}`, 'Harness-Machine: Fixture Mac'])
     expect(Date.parse(data.expiresAt)).toBeGreaterThan(Date.now() + 50 * 60_000)
     const minted = env.github.calls.find(c => c.path === '/app/installations/91/access_tokens')!
     expect(minted.body).toEqual({ repositories: ['app'],
@@ -175,7 +175,7 @@ describe('the GitHub token endpoint', () => {
   })
 
   // A Harness Team account has no git identity of its own (PR #1934, 2026-10-28): its commits are the app's bot account's.
-  it('names the app\'s bot account as who a Harness Team account\'s commits are by', async () => {
+  it('names Harness by Autonomous as who a Harness Team account\'s commits are by, asking GitHub nothing', async () => {
     const env = await fresh()
     const { tab, worker } = await working(env)
     const computerId = createHash('sha256').update('gh-host').digest('hex').slice(0, 32)
@@ -187,15 +187,13 @@ describe('the GitHub token endpoint', () => {
     const response = await env.app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/github-token?asAgentId=${worker}`,
       headers: { authorization: `Bearer ${host.sub}`, 'x-test-team': '1' }, payload: { machineId: 'gh-host' } })
     expect(response.statusCode, response.body).toBe(200)
-    expect(response.json().data.commitAs).toEqual({ name: 'Harness', email: '4242+harness-fixture[bot]@users.noreply.github.com' })
-    // GitHub not saying who the bot is leaves it out, and the token is still given.
-    const other = await fresh()
-    other.github.control.botId = null
-    const second = await working(other)
-    const again = await other.app.inject({ method: 'POST', url: `/api/super-tabs/${second.tab}/github-token?asAgentId=${second.worker}`,
+    expect(response.json().data.commitAs).toEqual({ name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' })
+    // GitHub is not asked: not saying who the bot is changes nothing.
+    env.github.control.botId = null
+    const again = await env.app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/github-token?asAgentId=${worker}`,
       headers: { authorization: `Bearer ${host.sub}`, 'x-test-team': '1' }, payload: { machineId: 'gh-host' } })
-    expect(again.json().data).toMatchObject({ token: expect.any(String) })
-    expect(again.json().data).not.toHaveProperty('commitAs')
+    expect(again.statusCode, again.body).toBe(200)
+    expect(again.json().data.commitAs).toEqual({ name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' })
   })
 
   it('warns, but still gives the token, when the default branch does not require a pull request; and says when it does', async () => {
@@ -306,9 +304,10 @@ describe('a queued start\'s preparation token', () => {
       const pool = (await poolRows(env.store, team, machineId)).find(p => p.tabId === tab)!
       await env.store.observeMachine(team, tab, machineId, { generation: pool.machine.generation, ...observed, privacy: { mode: 'dedicated' } })
     }
-    // A group [requester] asked for, its start's conversation; else the Lead's. The contributor joined above.
-    const conversationId = requester ? String((await env.run(tab, { type: 'conversation.create', title: 'Add search', brief: 'Add a search field',
-      checks: [], requesterId: requester.sub } as Command)).result.conversationId) : 'lead'
+    // A group of the project, its start's conversation: no agent but the coordinator starts into the project chat (#2207).
+    // [requester] asked for it, where given. The contributor joined above.
+    const conversationId = String((await env.run(tab, { type: 'conversation.create', title: 'Add search', brief: 'Add a search field',
+      checks: [], ...(requester ? { requesterId: requester.sub } : {}) } as Command)).result.conversationId)
     const startId = String((await env.run(tab, { type: 'agent.start', request: { conversationId, machineId, engine: 'codex', name: 'Builder',
       cwd: '/swarm-root/lead', permissionMode: 'full', worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } as Command)).result.startId)
     return { tab, startId }
