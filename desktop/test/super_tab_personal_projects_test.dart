@@ -5,6 +5,7 @@ import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/logging/app_log.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/swarm.dart';
@@ -817,6 +818,47 @@ void main() {
       expect(lc.snapshot!.projectById(code.id)?.name, 'code');
     });
 
+    // ENGINEERING.md 6 (Linnet, review round 3): a refused create or rename
+    // says so in the log, with its code and nothing of the tab.
+    test(
+      'a refused create or rename is logged by its code, without the tab',
+      () async {
+        final lines = <String>[];
+        final previous = appLog;
+        appLog = _Recorder(lines);
+        addTearDown(() => appLog = previous);
+        final f = SuperTabLaunchFixture();
+        _huyDesk(f);
+        for (final tab in f.app.swarms.where((s) => s.id.startsWith('desk-'))) {
+          tab.name = 'SECRET_${tab.id}';
+        }
+        final c = await _personal(f);
+        var now = DateTime(2026, 11, 3, 9);
+        Future<void> sync() => withClock(
+          Clock(() => now),
+          () => PersonalProjects.of(f.app).sync(c),
+        );
+        f.connection.server
+          ..refuse = {'code': 'SERVICE_UNAVAILABLE', 'message': 'Busy.'}
+          ..refuseStatus = 503;
+        await sync();
+        expect(
+          lines.where((l) => l.contains('SERVICE_UNAVAILABLE')),
+          isNotEmpty,
+        );
+        f.connection.server.refuse = null;
+        f.connection.server.unknownCommand = (command) =>
+            command['type'] == 'project.rename';
+        now = now.add(const Duration(seconds: 11));
+        await sync();
+        expect(lines.where((l) => l.contains('VALIDATION_ERROR')), isNotEmpty);
+        for (final line in lines) {
+          expect(line, isNot(contains('SECRET_')), reason: line);
+          expect(line, isNot(contains('desk-')), reason: line);
+        }
+      },
+    );
+
     // ENGINEERING.md §6 (River, 11-03): a failed rename waits, as a failed
     // create does, instead of being asked again on every sync.
     test(
@@ -1167,3 +1209,17 @@ void main() {
 
 int _projectCount(SuperTabLaunchFixture f) =>
     (f.connection.server.state['projects'] as List? ?? const []).length;
+
+class _Recorder implements AppLog {
+  _Recorder(this.lines);
+  final List<String> lines;
+
+  @override
+  void record(
+    AppLogLevel level,
+    String category,
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) => lines.add('$level $category $message ${error ?? ''}');
+}
