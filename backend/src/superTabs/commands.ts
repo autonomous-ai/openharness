@@ -3280,14 +3280,17 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   }
   // A Buddy hears the project-chat rows about its person's proposals and requested work (buddyNews.ts).
   for (const draft of effects.messages) tellBuddies(state, draft, draft.replyTo && draft.replyTo === context.reply?.id ? context.reply.threadSource ?? null : null)
-  // Each row is stored under its id: two alike roll the whole command back on a duplicate key, in the store alone (review of
-  // #2275: the review-capacity notice took the Ready for review row's id, so no Builder could hand over during a shortage).
+  assertUniqueMessageIds(command.type, effects.messages)
+  return effects
+}
+
+/** Reject an invalid command result before the store tries to write duplicate message keys. */
+export function assertUniqueMessageIds(commandType: string, messages: Array<{ id: string }>): void {
   const ids = new Set<string>()
-  for (const draft of effects.messages) {
-    if (ids.has(draft.id)) throw new Error(`Command ${command.type} wrote two messages with the id ${draft.id}.`)
+  for (const draft of messages) {
+    if (ids.has(draft.id)) throw new SuperTabError('DUPLICATE_MESSAGE_ID', `Command ${commandType} produced duplicate message IDs.`, 400)
     ids.add(draft.id)
   }
-  return effects
 }
 
 /** A contribution owns capacity independently of membership. Reuse invalidates every prior stop proof. */
