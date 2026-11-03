@@ -189,8 +189,8 @@ void main() {
     );
   }
 
-  /// Also send on its own line under the box, its square in line with the
-  /// box's text, not on the send row.
+  /// Also send on its own line under the box, its square under the send
+  /// row's first one, not on the send row.
   void expectUnderBox(WidgetTester tester) {
     expect(alsoLine, findsOneWidget);
     expect(find.descendant(of: alsoLine, matching: alsoSend), findsOneWidget);
@@ -204,8 +204,9 @@ void main() {
           )
           .hitTestable(),
     );
-    // The box's text starts 16 in; the square lines up with it.
-    expect((mark.left - (box.left + 16)).abs(), lessThan(1.5));
+    // Under the send row's first square: the options start 16 in, and the
+    // control's own padding is 6.
+    expect((mark.left - (box.left + 16 + 6)).abs(), lessThan(.5));
     expect(rect.right, lessThanOrEqualTo(box.right));
   }
 
@@ -271,8 +272,11 @@ void main() {
         for (final (pane, below) in [
           (paneFor(fullFits) + 1, false),
           (paneFor(fullFits) - 1, true),
-          (SuperTabPaneLayout.threadWidth, paneFor(fullFits) > 340),
-          (SuperTabPaneLayout.rightWidth, true),
+          for (final width in [
+            SuperTabPaneLayout.threadWidth,
+            SuperTabPaneLayout.rightWidth,
+          ])
+            (width, paneFor(fullFits) > width),
         ]) {
           await panel(tester, server(), conversation, width: pane);
           expect(box(tester, alsoSend).label, full, reason: 'at $pane');
@@ -384,7 +388,8 @@ void main() {
       await tester.tap(newSession);
       await tester.pump();
       expectMark(tester, newSession, on: true);
-      expect(alsoSend, findsNothing);
+      // Hidden, its place kept.
+      expect(alsoSend.hitTestable(), findsNothing);
       expect(
         tester
             .widget<Visibility>(
@@ -458,7 +463,8 @@ void main() {
       final before = tester.getRect(surface);
       await tester.tap(newSession);
       await tester.pump();
-      expect(alsoSend, findsNothing);
+      // Hidden, its place kept.
+      expect(alsoSend.hitTestable(), findsNothing);
       expect(tester.getRect(surface), before);
       await tester.tap(newSession);
       await tester.pump();
@@ -503,15 +509,16 @@ void main() {
     });
   }
 
+  // The default width was chosen for "New session" and "Also to chat" on one
+  // row (10-31); the full wording needs about 410px there, so at 340px it
+  // takes its own line, whole.
   testBox('at the thread\'s default width, in the Mac\'s face, a Buddy '
-      'thread fits "New session" and "Also post to the main chat" on the send '
-      'row with no "…", and a project thread names #openharness in full', (
-    tester,
-  ) async {
+      'thread shows "New session" on the send row and "Also post to the main '
+      'chat" whole under the box, and a project thread names #openharness in '
+      'full on the row', (tester) async {
     await panel(tester, buddyChat(), 'offline');
-    expect(alsoLine, findsNothing);
-    expectOneRow(tester, [newSession, alsoSend]);
     expectWhole(tester, newSession, 'New session');
+    expectUnderBox(tester);
     expectWhole(tester, alsoSend, 'Also post to the main chat');
     await tester.pumpWidget(const SizedBox());
     await shown.flush();
@@ -520,6 +527,8 @@ void main() {
     project.state['name'] = 'openharness';
     await panel(tester, project, 'lead');
     expect(box(tester, alsoSend).label, 'Also post to #openharness');
+    expect(alsoLine, findsNothing);
+    expectOneRow(tester, [alsoSend]);
     expectWhole(tester, alsoSend, 'Also post to #openharness');
   }, skip: !systemFace);
 }
