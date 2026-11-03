@@ -1034,6 +1034,21 @@ describe('a Buddy on its person\'s own machine outside the Swarm, through the st
     await leaks('cleaned')
   })
 
+  // Task #2441: a host report the server refused failed nothing; its person waited out the 3 minutes and never read why.
+  it('fails at once when its host\'s report is refused, and its person reads why, no one else', async () => {
+    const f = await swarm()
+    const added = await add(f, 'peer-laptop')
+    const startId = String(added.result.startId)
+    const pool = (await poolRows(f.store, peer, 'peer-laptop')).find(p => p.tabId === f.tab)!
+    await f.execute({ type: 'agent.startDispatch', startId }, peer, undefined, 'peer-laptop')
+    const reason = 'This start does not belong to this machine contribution.'
+    await f.store.observeMachine(peer, f.tab, 'peer-laptop', { generation: pool.machine.generation, resources: { cpuPercent: 10, memoryTotalBytes: 16e9,
+      memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
+    quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [], refusedStarts: [{ startId, reason }] })
+    expect((await f.store.start(peer, f.tab, startId)).error).toBe(`Peer Laptop refused it: ${reason}`)
+    expect(JSON.stringify(await f.store.read(owner, f.tab))).not.toContain('peer-laptop')
+  })
+
   it('never reaches another reader when its Buddy never launched', async () => {
     const f = await swarm()
     const reads = new SwarmReads(f.store)
