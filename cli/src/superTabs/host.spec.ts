@@ -4128,6 +4128,14 @@ describe('ending a Buddy\'s thread sessions', () => {
 })
 
 describe('keeping a Swarm Lead alive', () => {
+  it('services a landed PM switch after the source is no longer marked as Lead', async () => {
+    const t = lifeFixture([leadRow({ lead: false, agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1',
+      switchLanded: { id: 'landed-switch', candidateAgentId: 'destination-agent' } })])
+    await t.poll()
+    const results = t.commands.map(command => command.command as Record<string, unknown>).filter(command => command.type === 'agent.switchResult')
+    expect(results).toContainEqual({ type: 'agent.switchResult', agentId: 'agent', switchId: 'landed-switch', ok: true })
+  })
+
   // The owner, 2026-10-23: a Lead whose session died (a machine restart, a kill) stalls its whole project until someone
   // reopens it by hand. Its host reopens it on its own conversation; a crash loop must not spin.
   it('reopens a Lead whose session is gone, backing off while it cannot, and leaves a live one alone', async () => {
