@@ -228,7 +228,7 @@ class SwarmYouPage extends StatelessWidget {
         children: [
           SwarmRow(
             key: const ValueKey('swarm-you-name'),
-            leading: const _Glyph(LucideIcons.user300),
+            leading: const SwarmRowGlyph(LucideIcons.user300),
             // How the Swarm shows them, the username until they set one;
             // nothing of a Swarm before it is read, or once it is taken away.
             title: me == null ? 'Name' : me.name ?? 'Add your name',
