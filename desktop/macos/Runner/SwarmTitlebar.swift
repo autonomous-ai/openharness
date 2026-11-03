@@ -1144,9 +1144,12 @@ private final class SwarmStoreButton: SwarmIconButton {
     let emphasized = hovered || hasKeyboardFocus || isHighlighted
     let iconRect = NSRect(x: (bounds.width - markSize) / 2, y: (bounds.height - markSize) / 2,
       width: markSize, height: markSize)
+    // The hint must be an NSNumber: a bare NSImageInterpolation reaches AppKit
+    // as a boxed __SwiftValue, and macOS 13 throws on it (SIGILL at launch).
     image?.draw(in: iconRect,
       from: .zero, operation: .sourceOver, fraction: !isEnabled ? 0.45 : emphasized ? 1 : 0.82,
-      respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
+      respectFlipped: true,
+      hints: [.interpolation: NSNumber(value: NSImageInterpolation.high.rawValue)])
     if hasKeyboardFocus && isEnabled {
       let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: 2.5, dy: 2.5), xRadius: 7, yRadius: 7)
       palette.accent.withAlphaComponent(0.85).setStroke()
