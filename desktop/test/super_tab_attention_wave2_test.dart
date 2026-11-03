@@ -1,8 +1,10 @@
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:flutter/services.dart';
 import 'package:harness/super_tabs/attention.dart';
@@ -379,6 +381,63 @@ void main() {
       },
       variant: TargetPlatformVariant.only(TargetPlatform.macOS),
     );
+
+    // Huy, #2342: in a chat's ⋮ menu the Notifications row had a rounded
+    // border no other row has. It draws as the row above it does, at rest and
+    // under the mouse, and keeps its submenu arrow, in each menu it is in.
+    for (final (menu, selected, neighbour) in const [
+      ('super-group-options', 'offline', 'Work details'),
+      ('super-project-menu', 'lead', 'Pull requests'),
+    ]) {
+      testWidgets('$menu: the Notifications row looks like $neighbour', (
+        tester,
+      ) async {
+        final (c, _) = await _show(tester, Brightness.dark, selected: selected);
+        await tester.tap(find.byKey(ValueKey(menu)));
+        await tester.pumpAndSettle();
+        final notify = find.byKey(const ValueKey('super-notify-menu'));
+        final other = find
+            .ancestor(
+              of: find.text(neighbour),
+              matching: find.byType(MenuItemButton),
+            )
+            .first;
+        Material material(Finder row) => tester.widget<Material>(
+          find.descendant(of: row, matching: find.byType(Material)).first,
+        );
+        InkWell ink(Finder row) => tester.widget<InkWell>(
+          find.descendant(of: row, matching: find.byType(InkWell)).first,
+        );
+        double inset(Finder row, String label) =>
+            tester.getTopLeft(find.text(label)).dx - tester.getTopLeft(row).dx;
+
+        expect(material(notify).shape, material(other).shape);
+        expect(material(notify).color, material(other).color);
+        expect(tester.getSize(notify), tester.getSize(other));
+        expect(inset(notify, 'Notifications'), inset(other, neighbour));
+        expect(
+          find.descendant(
+            of: notify,
+            matching: find.byIcon(AppIcons.chevronRight),
+          ),
+          findsOneWidget,
+        );
+        const hovered = {WidgetState.hovered};
+        expect(
+          ink(notify).overlayColor?.resolve(hovered),
+          ink(other).overlayColor?.resolve(hovered),
+        );
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(location: tester.getCenter(other));
+        await tester.pump();
+        final otherHovered = material(other).shape;
+        await mouse.moveTo(tester.getCenter(notify));
+        await tester.pump();
+        expect(material(notify).shape, otherHovered);
+        await mouse.removePointer();
+        await _done(tester, c);
+      }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+    }
   });
 
   for (final brightness in Brightness.values) {
