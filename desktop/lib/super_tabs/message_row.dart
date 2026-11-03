@@ -998,7 +998,9 @@ class _SuperTabThreadBarState extends State<_SuperTabThreadBar> {
               ),
             ),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              padding: const EdgeInsets.symmetric(
+                horizontal: grid.AppDesktop.menuInset,
+              ),
               child: ExcludeSemantics(child: widget.builder(active)),
             ),
           ),
