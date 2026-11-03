@@ -508,11 +508,14 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           }
           if (payload.action === 'cardRecap' && cardId(payload.tabId) && cardId(payload.leadId)) return { ok: true, ...await cards().recap(payload.tabId, payload.leadId, chat) }
           if (payload.action === 'cardSay' && cardId(payload.harnessId) && typeof payload.text === 'string' && payload.text.trim() && payload.text.length <= 32_000) {
+            // `threaded`: the dial speaks swarmThread and the words came from its face; `thread`: the root of the thread on the face
+            // then (null: none), which the words are held to.
+            const options = { ...(payload.threaded === true ? { threaded: true } : {}),
+              ...(payload.thread === null || cardId(payload.thread) ? { thread: payload.thread } : {}) }
             const pinned: [chatId?: string, reviewed?: boolean] = !cardId(payload.chatId) ? []
               : payload.reviewed === true ? [payload.chatId, true] : [payload.chatId]
-            // `threaded`: the dial speaks swarmThread, so words it says at top level may start the dial's thread.
-            const result = payload.threaded === true
-              ? await cards().say(payload.harnessId, payload.text.trim(), chat, cardId(payload.chatId) ? payload.chatId : undefined, payload.reviewed === true, true)
+            const result = Object.keys(options).length
+              ? await cards().say(payload.harnessId, payload.text.trim(), chat, cardId(payload.chatId) ? payload.chatId : undefined, cardId(payload.chatId) && payload.reviewed === true, options)
               : await cards().say(payload.harnessId, payload.text.trim(), chat, ...pinned)
             // A refusal travels with its code and message, which the dial shows instead of typing the words anywhere.
             return { ok: true, said: result.said, ...(!result.said && result.refused ? { refused: result.refused } : {}), ...(result.said && result.thread ? { thread: result.thread } : {}) }
@@ -522,8 +525,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             return { ok: true, worker: cards().worker(payload.machineId, payload.harnessId) }
           }
           if (payload.action === 'cardThreadLeave' && cardId(payload.tabId) && cardId(payload.leadId)) {
-            const left = cards().threadLeave(payload.tabId, payload.leadId)
-            return { ok: true, ...(left ? { projectId: left.projectId } : {}) }
+            const left = cards().threadLeave(payload.tabId, payload.leadId, chat)
+            return { ok: true, ...(left ? { conversationId: left.conversationId } : {}) }
           }
           if (payload.action === 'cardSide' && cardId(payload.tabId) && (payload.side === 'pm' || payload.side === 'buddy')) {
             cards().side(payload.tabId, payload.side)

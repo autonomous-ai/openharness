@@ -28,7 +28,7 @@ import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
 
 import { PLAYER_STATES, type PlayerSession } from './playerLibrary.js'
-import type { CardChat, CardSide, LeadRecap, SaidOnCard, SwarmCard } from '../superTabs/cards.js'
+import type { CardChat, CardSide, LeadRecap, SaidOnCard, SayOptions, SwarmCard } from '../superTabs/cards.js'
 import type { ActivitySnapshot, AppSwarms, SuperTabAsk, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, OpenReason, RouteDecision } from './cableSession.js'
 import type { WindowRoute } from './windowRoute.js'
 import type { SelectionCommand, SelectionResult } from './windowSelection.js'
@@ -113,13 +113,15 @@ export interface CableHostWiring {
   swarmCardOpen?: (session: string, tabId: string, leadId: string | null, chat?: CardChat) => void
   /** A round dial that speaks swarmBuddy swiped to a side of a Swarm (spec 2026-10-29-round-dial-pm-buddy). */
   swarmCardSide?: (tabId: string, side: CardSide) => void
-  /** A swarmThread dial left the thread on its face: the project whose thread the window should close, or null when it had none. */
-  swarmThreadLeave?: (tabId: string, leadId: string) => Promise<{ tabId: string; projectId: string } | null>
+  /** A swarmThread dial left the thread on its face: the conversation whose thread the window should close, or null when it had none. */
+  swarmThreadLeave?: (tabId: string, leadId: string, chat?: CardChat) => Promise<{ tabId: string; conversationId: string } | null>
   /** Words for a Lead that runs here, posted as the person in its Swarm chat; not `said` when the harness leads no project,
    *  `refused` with the backend's reason when it refused the post. */
-  swarmSay?: (harnessId: string, text: string, chat?: CardChat, chatId?: string, reviewed?: boolean, threaded?: boolean) => Promise<SaidOnCard>
+  swarmSay?: (harnessId: string, text: string, chat?: CardChat, chatId?: string, reviewed?: boolean, options?: SayOptions) => Promise<SaidOnCard>
   /** A device picked a Lead: the window opens that Swarm tab and project. */
-  superTabSelected?: (superTabId: string, projectId: string, chat?: CardSide, threadRoot?: string | null) => void
+  superTabSelected?: (superTabId: string, projectId: string, chat?: CardSide) => void
+  /** The dial's thread opened (a root) or closed (null) beside a conversation of a Swarm tab, with no project pick. */
+  superTabThread?: (superTabId: string, conversationId: string, threadRoot: string | null) => void
   /** A finger on the dial's glass, in pieces, while it is down; `superTabId` when it scrolls that Swarm's chat (a Pro's Lead view). */
   scrolled?: (phase: 'down' | 'move' | 'up', dy: number, velocity: number, superTabId?: string) => void
   /** The dial came, went, or started taking an update — see CableSession's onDialStatus. */
@@ -563,20 +565,23 @@ export class DaemonCableHost implements CableHost {
     this.wiring.swarmCardSide?.(tabId, side)
   }
 
-  swarmSay(harnessId: string, text: string, chat: CardChat = false, chatId?: string, reviewed = false, threaded = false): Promise<SaidOnCard> {
-    if (threaded) return this.wiring.swarmSay?.(harnessId, text, chat, chatId, reviewed, true) ?? Promise.resolve({ said: false })
+  swarmSay(harnessId: string, text: string, chat: CardChat = false, chatId?: string, reviewed = false, options?: SayOptions): Promise<SaidOnCard> {
+    if (options) return this.wiring.swarmSay?.(harnessId, text, chat, chatId, reviewed, options) ?? Promise.resolve({ said: false })
     const pinned: [chatId?: string, reviewed?: boolean] = chatId ? (reviewed ? [chatId, true] : [chatId]) : []
     return this.wiring.swarmSay?.(harnessId, text, chat, ...pinned) ?? Promise.resolve({ said: false })
   }
 
-  swarmThreadLeave(tabId: string, leadId: string): Promise<{ tabId: string; projectId: string } | null> {
-    return this.wiring.swarmThreadLeave?.(tabId, leadId) ?? Promise.resolve(null)
+  swarmThreadLeave(tabId: string, leadId: string, chat: CardChat = true): Promise<{ tabId: string; conversationId: string } | null> {
+    return this.wiring.swarmThreadLeave?.(tabId, leadId, chat) ?? Promise.resolve(null)
   }
 
-  superTabSelected(superTabId: string, projectId: string, chat?: CardSide, threadRoot?: string | null): void {
-    if (threadRoot !== undefined) this.wiring.superTabSelected?.(superTabId, projectId, chat, threadRoot)
-    else if (chat) this.wiring.superTabSelected?.(superTabId, projectId, chat)
+  superTabSelected(superTabId: string, projectId: string, chat?: CardSide): void {
+    if (chat) this.wiring.superTabSelected?.(superTabId, projectId, chat)
     else this.wiring.superTabSelected?.(superTabId, projectId)
+  }
+
+  superTabThread(superTabId: string, conversationId: string, threadRoot: string | null): void {
+    this.wiring.superTabThread?.(superTabId, conversationId, threadRoot)
   }
 
   /**

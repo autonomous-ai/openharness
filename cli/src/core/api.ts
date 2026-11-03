@@ -1287,7 +1287,10 @@ export type CardChat = boolean | 'buddy'
 /** What became of words spoken on a device for a Lead: posted, not a Lead here (`said` false, so the turn goes as before), or
  *  refused by the backend with its code and message, which must never become a terminal turn instead. */
 /** `thread`: set when the post started the dial's thread (spec 2026-11-03-dial-thread-face), so the window opens it. */
-export type SaidOnCard = { said: true; thread?: { tabId: string; projectId: string; root: string } } | { said: false; refused?: { code: string; message: string } }
+export type SaidOnCard = { said: true; thread?: { tabId: string; conversationId: string; root: string } } | { said: false; refused?: { code: string; message: string } }
+/** How words for a Lead relate to the dial's thread (a swarmThread dial only): `thread` is the root of the thread on its face when
+ *  they were spoken, null for none, and the post is held to it; `threaded`: they were spoken from the face, so they may start one. */
+export interface SayOptions { thread?: string | null; threaded?: boolean }
 /** The conversation the window has open in a Swarm tab. */
 /** `fromDevice`: the window moved there because a device picked it (a dial's swipe to the next project), so the move is
  *  that device's own and keeps the side it keeps (spec 2026-10-29-round-dial-pm-buddy, newest wins). */

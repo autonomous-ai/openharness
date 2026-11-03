@@ -730,28 +730,34 @@ describe('what the windows say, reaching the dial', () => {
       const answers: Array<Record<string, unknown>> = [
         { ok: true, text: 'on it', at: 3, none: false, chatId: 'lead-c1', thread: 'm9' },
         { ok: true, text: 'on it', at: 3, none: false, chatId: 'lead-c1', thread: 'bad id' },
-        { ok: true, said: true, thread: { tabId: 'st1', projectId: 'web', root: 'm9' } },
-        { ok: true, said: true, thread: { tabId: 'st1', projectId: 7, root: 'm9' } },
-        { ok: true, projectId: 'web' }, { ok: true }, { error: 'OWNER_REQUIRED' },
+        { ok: true, said: true, thread: { tabId: 'st1', conversationId: 'lead-c1', root: 'm9' } },
+        { ok: true, said: true, thread: { tabId: 'st1', conversationId: 7, root: 'm9' } },
+        { ok: true, conversationId: 'lead-c1' }, { ok: true }, { error: 'OWNER_REQUIRED' },
       ]
       const superTabRequest = vi.fn(async (_payload: Record<string, unknown>) => answers.shift()!)
       const { core } = withRequest(superTabRequest)
       expect(await seen.host.swarmCardRecap!('st1', 'lead1', true)).toEqual({ tabId: 'st1', leadId: 'lead1', text: 'on it', at: 3, none: false, chatId: 'lead-c1', thread: 'm9' })
       expect(await seen.host.swarmCardRecap!('st1', 'lead1', true)).not.toHaveProperty('thread')
-      expect(await seen.host.swarmSay!('h1', 'build it', true)).toEqual({ said: true, thread: { tabId: 'st1', projectId: 'web', root: 'm9' } })
+      expect(await seen.host.swarmSay!('h1', 'build it', true)).toEqual({ said: true, thread: { tabId: 'st1', conversationId: 'lead-c1', root: 'm9' } })
       expect(await seen.host.swarmSay!('h1', 'build it', true)).toEqual({ said: true })
       answers.unshift({ ok: true, said: true })
-      await seen.host.swarmSay!('h1', 'build it', true, undefined, false, true)
-      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardSay', harnessId: 'h1', text: 'build it', chat: true, threaded: true })
-      expect(await seen.host.swarmThreadLeave!('st1', 'lead1')).toEqual({ tabId: 'st1', projectId: 'web' })
-      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardThreadLeave', tabId: 'st1', leadId: 'lead1' })
+      await seen.host.swarmSay!('h1', 'build it', true, undefined, false, { threaded: true, thread: null })
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardSay', harnessId: 'h1', text: 'build it', chat: true, threaded: true, thread: null })
+      answers.unshift({ ok: true, said: true })
+      await seen.host.swarmSay!('h1', 'build it', true, 'lead-c1', true, { thread: 'm9' })
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardSay', harnessId: 'h1', text: 'build it', chat: true, chatId: 'lead-c1', reviewed: true, thread: 'm9' })
+      expect(await seen.host.swarmThreadLeave!('st1', 'lead1', 'buddy')).toEqual({ tabId: 'st1', conversationId: 'lead-c1' })
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardThreadLeave', tabId: 'st1', leadId: 'lead1', chat: 'buddy' })
       expect(await seen.host.swarmThreadLeave!('st1', 'lead1')).toBeNull()
       expect(await seen.host.swarmThreadLeave!('st1', 'lead1')).toBeNull()
-      // The window is told to open a thread beside the chat, or to close the open one.
-      seen.host.superTabSelected!('st1', 'proj1', undefined, 'm9')
-      expect(vi.mocked(core.clients.sendLocal)).toHaveBeenLastCalledWith({ type: 'dial_super_tab', payload: { superTabId: 'st1', projectId: 'proj1', threadRoot: 'm9' } })
-      seen.host.superTabSelected!('st1', 'proj1', 'buddy', null)
-      expect(vi.mocked(core.clients.sendLocal)).toHaveBeenLastCalledWith({ type: 'dial_super_tab', payload: { superTabId: 'st1', projectId: 'proj1', chat: 'buddy', threadRoot: null } })
+      // The window is told to open a thread beside a conversation, or to close the open one: no project, so an older window ignores it.
+      seen.host.superTabThread!('st1', 'lead-c1', 'm9')
+      expect(vi.mocked(core.clients.sendLocal)).toHaveBeenLastCalledWith({ type: 'dial_super_tab', payload: { superTabId: 'st1', conversationId: 'lead-c1', threadRoot: 'm9', threadOnly: true } })
+      seen.host.superTabThread!('st1', 'lead-c1', null)
+      expect(vi.mocked(core.clients.sendLocal)).toHaveBeenLastCalledWith({ type: 'dial_super_tab', payload: { superTabId: 'st1', conversationId: 'lead-c1', threadRoot: null, threadOnly: true } })
+      // An ordinary pick is untouched.
+      seen.host.superTabSelected!('st1', 'proj1', 'buddy')
+      expect(vi.mocked(core.clients.sendLocal)).toHaveBeenLastCalledWith({ type: 'dial_super_tab', payload: { superTabId: 'st1', projectId: 'proj1', chat: 'buddy' } })
     })
 
     it('reads a recap through the service, cut to 1,500 bytes on a character; anything unusable is null', async () => {

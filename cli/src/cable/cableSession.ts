@@ -365,7 +365,7 @@ import type { FormCommand, FormResult } from './windowForm.js'
 import { deriveLongRecap, extendShortRecap } from '../lib/deviceRecap.js'
 import type { TurnStatsFields } from './turnStats.js'
 import type { Tier } from '../lib/notifyTier.js'
-import type { CardChat, CardSide, LeadNotice, LeadRecap, SaidOnCard, SwarmBuddy, SwarmCard, SwarmChat, SwarmLead } from '../superTabs/cards.js'
+import type { CardChat, CardSide, LeadNotice, LeadRecap, SaidOnCard, SayOptions, SwarmBuddy, SwarmCard, SwarmChat, SwarmLead } from '../superTabs/cards.js'
 import { truncateUtf8 } from '../lib/deviceRecentTrim.js'
 
 export interface RouteDecision {
@@ -408,16 +408,19 @@ export interface CableHost {
   swarmCardOpen?(session: string, tabId: string, leadId: string | null, chat?: CardChat): void
   /** A round dial that speaks swarmBuddy swiped to a side of a Swarm: the cards show that side's face. */
   swarmCardSide?(tabId: string, side: CardSide): void
-  /** A swarmThread dial left the thread on its face: the cards forget it. The project whose thread the window should close, or
+  /** A swarmThread dial left the thread on its face: the cards forget it. The conversation whose thread the window should close, or
    *  null when the Lead's face was in none. */
-  swarmThreadLeave?(tabId: string, leadId: string): Promise<{ tabId: string; projectId: string } | null>
+  swarmThreadLeave?(tabId: string, leadId: string, chat?: CardChat): Promise<{ tabId: string; conversationId: string } | null>
   /** Words for a Lead that runs here: posted as the person in its Swarm chat. Not `said`: not a Lead, send the turn as before;
    *  `refused`: the backend refused the post, whose words are never typed anywhere instead. `chatId`: the chat they were
    *  spoken to, the only one they may be posted in. */
-  swarmSay?(harnessId: string, text: string, chat?: CardChat, chatId?: string, reviewed?: boolean, threaded?: boolean): Promise<SaidOnCard>
+  swarmSay?(harnessId: string, text: string, chat?: CardChat, chatId?: string, reviewed?: boolean, options?: SayOptions): Promise<SaidOnCard>
   /** A device picked a Lead: the window opens that Swarm tab and project. `chat` (a round dial that speaks swarmBuddy): the
    *  reader's Buddy chat there ('buddy') or the project's Lead chat ('pm'), so the desktop follows the dial's side. */
-  superTabSelected?(superTabId: string, projectId: string, chat?: CardSide, threadRoot?: string | null): void
+  superTabSelected?(superTabId: string, projectId: string, chat?: CardSide): void
+  /** The dial's thread opened (a root) or closed (null) beside a conversation of a Swarm tab: the window shows it without a project
+   *  pick, raising or refocusing nothing. */
+  superTabThread?(superTabId: string, conversationId: string, threadRoot: string | null): void
   /** The Swarm tab the window has on screen and the project open in it ('' when none is); null when the active tab is not a Swarm or there is no window. */
   activeSwarmProject?(): { superTabId: string; projectId: string; conversationId?: string; threadRoot?: string; fromDevice: boolean } | null
   appName(): string
@@ -895,6 +898,8 @@ export class CableSession {
     /** The chat on this dial's face for that agent's Swarm project as the person began to speak: the words go there or
      *  nowhere, and a Buddy chat's never reach a terminal (review of #2146). */
     swarmFace?: SwarmFace;
+    /** The words are said from the dial's own Swarm face, not for a Lead's terminal tile: only these may start its thread. */
+    onFace?: true;
     /** That Lead runs on another machine: named by its Swarm id, it has no terminal here. */
     swarmRemote?: true } | null = null
   private voiceSearch?: SelectionCommand
@@ -1777,6 +1782,7 @@ export class CableSession {
         this.voice = {
           agentId,
           ...(swarmFace ? { swarmFace } : {}),
+          ...(dialFace ? { onFace: true as const } : {}),
           ...((swarmFace && agentId && !this.swarmLeadHere(agentId)) || swarmId ? { swarmRemote: true } : {}),
           cmd: str('cmd'),
           lang: str('lang') ?? this.host.voiceLang(),
@@ -2392,10 +2398,10 @@ export class CableSession {
       const state = this.voiceDraft.create({ agentId: recipient, name: `${face.project} · ${face.name}`, text: transcript,
         context: 'Swarm chat',
         submit: async words => {
-          const [chat] = this.sayArgs(face)
-          const said = await say(recipient, turn.cmd ? `/${turn.cmd} ${words}` : words, chat, face.id, true, ...(this.swarmThread ? [true] as const : []))
+          const [chat] = this.sayArgs(face, turn.onFace)
+          const said = await say(recipient, turn.cmd ? `/${turn.cmd} ${words}` : words, chat, face.id, true, ...(this.swarmThread ? [this.sayOptions(face, turn.onFace)!] as const : []))
             .catch((): SaidOnCard => ({ said: false }))
-          if (said.said) { this.threadStarted(said, face.kind); return { ok: true } }
+          if (said.said) { this.threadStarted(said); return { ok: true } }
           return { ok: false, error: said.refused?.message ?? (face.kind === 'buddy' ? 'Could not reach your Buddy. Try again.' : 'Could not reach the Swarm. Try again.') }
         } })
       if (!state.ok) { await reply({ t: 'voice.error', message: state.error }); return }
@@ -2429,11 +2435,11 @@ export class CableSession {
     // refused post for a read-only Chat with PM was typed into the PM's terminal.
     if (turn.agentId && !carried && !selection?.ok && this.host.swarmSay) {
       const face = turn.swarmFace
-      const said = await this.host.swarmSay(agentId, instruction, ...this.sayArgs(face)).catch((): SaidOnCard => ({ said: false }))
+      const said = await this.host.swarmSay(agentId, instruction, ...this.sayArgs(face, turn.onFace)).catch((): SaidOnCard => ({ said: false }))
       if (!current()) return
       if (said.said) {
         this.log(`cable: voice → Swarm chat of ${agentId.slice(0, 8)}`)
-        this.threadStarted(said, face?.kind)
+        this.threadStarted(said)
         await reply({ t: 'voice.transcript', routeId: '', text: transcript, agentId, agentName, needsConfirm: false })
         return
       }
@@ -2782,6 +2788,8 @@ export class CableSession {
   /** The project this Pro itself picked last and when: the desktop's announce of it is no news, and a stale one of another is held off. */
   private picked: { key: string; at: number } | null = null
   private lastRecapGet: { key: string; at: number; read: Promise<LeadRecap | null> } | null = null
+  /** The root of the thread each Lead's face was last told to be in (`${tab}/${lead}`), so a change drops a recap read held for the other. */
+  private readonly leadThreads = new Map<string, string | undefined>()
   /** `${lead} ${why}` of each recap that came back with nothing and was logged (recapMissed). */
   private readonly recapsMissed = new Set<string>()
   /** A swarmChat dial's alerts (`${tab}:${lead}`): the notice it was last given or shown as already there, and whether it
@@ -2811,12 +2819,19 @@ export class CableSession {
   }
 
   /** The extra arguments of words spoken to a Swarm Lead: the dial's chat flag, and the chat they were spoken to. */
-  private sayArgs(face: SwarmFace | undefined): [chat?: CardChat, chatId?: string, reviewed?: boolean, threaded?: boolean] {
+  private sayArgs(face: SwarmFace | undefined, onFace?: true): [chat?: CardChat, chatId?: string, reviewed?: boolean, options?: SayOptions] {
     const [chat] = this.chatFlag()
     if (chat === undefined) return []
-    // A swarmThread dial's words may start its thread: the flag rides after the unreviewed slot.
-    if (this.swarmThread) return [chat, face?.id, false, true]
+    const options = this.sayOptions(face, onFace)
+    if (options) return [chat, face?.id, false, options]
     return face ? [chat, face.id] : [chat]
+  }
+
+  /** A swarmThread dial's words are held to the thread on the face as the person began to speak (none included), and may start
+   *  its thread only when spoken from the face (spec 2026-11-03-dial-thread-face). */
+  private sayOptions(face: SwarmFace | undefined, onFace?: true): SayOptions | undefined {
+    if (!this.swarmThread) return undefined
+    return { ...(face ? { thread: face.thread?.root ?? null } : {}), ...(onFace ? { threaded: true } : {}) }
   }
 
   /** The extra argument a swarmChat dial's requests carry ('buddy' for a swarmBuddy dial's); none for any other device, whose
@@ -2842,6 +2857,7 @@ export class CableSession {
     this.focusLogged = ''
     this.picked = null
     this.lastRecapGet = null
+    this.leadThreads.clear()
     this.notices.clear()
     this.noticesReplay = true
     if (this.openLead) this.host.swarmCardOpen?.(this.cardSession, this.openLead.tabId, null, ...this.chatFlag())
@@ -2904,6 +2920,12 @@ export class CableSession {
       // The desk tab of the same Swarm, when the window has one: empty when it is closed or never opened it.
       const tab = desk.find((s) => s.superTabId === card.id)?.id ?? ''
       // A swarmBuddy dial follows the Swarm's side as the daemon's (review of #2218); no other device hears one.
+      // A face that went into or out of a thread: a recap read held for the other is not handed out again.
+      for (const l of card.leads.slice(0, SWARM_LEADS_MAX)) {
+        const key = `${card.id}/${l.id}`, root = (this.swarmBuddy ? l.sideChat ?? l.chat : l.chat)?.thread?.root
+        if (this.leadThreads.has(key) && this.leadThreads.get(key) !== root && this.lastRecapGet?.key === key) this.lastRecapGet = null
+        this.leadThreads.set(key, root)
+      }
       const frame = { t: 'supertab', id: card.id, tab, name: card.name, count: card.count, ...(this.swarmBuddy ? { side: card.side ?? 'pm' } : {}),
         leads: card.leads.slice(0, SWARM_LEADS_MAX).map((l) => this.swarmBuddy ? buddyLead(l, this.swarmThread) : this.swarmChat ? chatLead(l, l.chat, this.swarmThread) : { id: l.id, projectId: l.projectId, project: l.project,
           engine: l.engine, owner: l.owner, local: l.local, state: l.state, order: l.order, ...(l.since === undefined ? {} : { since: l.since }) }) }
@@ -3078,31 +3100,25 @@ export class CableSession {
 
   /** Open a project's chat in its Swarm tab for this dial. Remembered before the window answers, so its announce of this very
    *  project is not sent back as a focus. */
-  private openSwarmChat(tab: string, projectId: string, chat: CardSide | undefined, threadRoot?: string | null): void {
+  private openSwarmChat(tab: string, projectId: string, chat: CardSide | undefined): void {
     this.focusedKey = `${tab}/${projectId}`
     this.picked = { key: this.focusedKey, at: Date.now() }
-    if (threadRoot !== undefined) this.host.superTabSelected?.(tab, projectId, chat, threadRoot)
-    else if (chat) this.host.superTabSelected?.(tab, projectId, chat)
+    if (chat) this.host.superTabSelected?.(tab, projectId, chat)
     else this.host.superTabSelected?.(tab, projectId)
   }
 
-  /** Words said on a swarmThread dial that started its thread: the window opens it beside the chat (a group has no chat to
-   *  open it beside). */
-  private threadStarted(said: SaidOnCard, kind: string | undefined): void {
-    if (!said.said || !said.thread || !this.swarmThread || kind === 'group') return
-    this.openSwarmChat(said.thread.tabId, said.thread.projectId, kind === 'buddy' ? 'buddy' : undefined, said.thread.root)
+  /** Words said on a swarmThread dial that started its thread: the window opens it beside the chat, with no project pick. */
+  private threadStarted(said: SaidOnCard): void {
+    if (!said.said || !said.thread || !this.swarmThread) return
+    this.lastRecapGet = null
+    this.host.superTabThread?.(said.thread.tabId, said.thread.conversationId, said.thread.root)
   }
 
   /** The dial left the thread on its face: the cards forget it, and the window closes its thread pane (the project stays). */
   private async threadLeave(tab: string, lead: string): Promise<void> {
-    const left = await this.host.swarmThreadLeave?.(tab, lead).catch((err: Error) => { this.log(`cable: thread leave failed (${err.message})`); return null })
-    if (left) this.openSwarmChat(tab, left.projectId, this.sideChatOf(tab, left.projectId), null)
-  }
-
-  /** The chat the window shows for a project on the dial's side: the reader's Buddy chat on the Buddy side, else the project's. */
-  private sideChatOf(tab: string, projectId: string): CardSide | undefined {
-    const card = this.host.swarmCards?.()?.find((c) => c.id === tab)
-    return this.swarmBuddy && card?.side === 'buddy' && this.buddyIn(card, projectId) ? 'buddy' : undefined
+    const left = await this.host.swarmThreadLeave?.(tab, lead, this.chatFlag()[0]).catch((err: Error) => { this.log(`cable: thread leave failed (${err.message})`); return null })
+    this.lastRecapGet = null
+    if (left) this.host.superTabThread?.(left.tabId, left.conversationId, null)
   }
 
   /** The reader's Buddy in a project of a card, when Buddies are on and they have one there. */
