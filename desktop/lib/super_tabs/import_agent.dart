@@ -141,31 +141,43 @@ class ImportHandoff {
   final ImportFile record, transcript;
 }
 
-/// Refuses an agent that any Swarm lists, open in this window or not: the
-/// backend's answer through this Mac's daemon (cli superTabs/service.ts
-/// `swarmRole`). A person may have added their own session to a Swarm, and its
-/// transcript may hold that Swarm's private project (security review of
-/// #2783). An answer that cannot be read refuses too: nothing is shared on a
-/// guess.
+/// Refuses an agent that any Swarm lists, open in this window or not, its
+/// chats archived or its stop asked: the backend's roster through this Mac's
+/// daemon (cli superTabs/service.ts `swarmListed`). A person may have added
+/// their own session to a Swarm, and its transcript may hold that Swarm's
+/// private project (security review of #2783). An answer that cannot be read
+/// refuses too: nothing is shared on a guess.
 Future<void> _notInAnySwarm(AppNotifier app, ImportableAgent agent) async {
   Map<String, dynamic> answer;
   try {
     answer = await app.superTabMachineRequest(agent.machineId, {
-      'action': 'swarmRole',
+      'action': 'swarmListed',
       'harnessId': agent.agent.id,
     });
+  } on SuperTabFailure catch (failure) {
+    // An older daemon takes the action it does not know for an agent's own
+    // request, which names no tab.
+    if (failure.code == 'INVALID_REQUEST') {
+      throw ImportFailure(
+        ImportStep.prepare,
+        'Update Harness on this Mac to import its agents.',
+        code: 'daemon-old',
+      );
+    }
+    answer = const {};
   } catch (_) {
     answer = const {};
   }
-  if (!answer.containsKey('role')) {
+  final listed = answer['listed'];
+  if (listed is! bool) {
     throw ImportFailure(
       ImportStep.prepare,
       'Harness could not check whether a Swarm already has this agent. Try '
       'again.',
-      code: 'role-unknown',
+      code: 'listed-unknown',
     );
   }
-  if (answer['role'] != null) {
+  if (listed) {
     throw ImportFailure(
       ImportStep.prepare,
       'This agent is already in a Swarm, so it is not imported.',

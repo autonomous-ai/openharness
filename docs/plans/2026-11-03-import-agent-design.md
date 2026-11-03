@@ -35,8 +35,9 @@ doing.
 ## How it works
 
 1. **Picker.** Desktop lists the agents of this Mac's own account (its own machine, never the Team account's or another
-   person's) whose engine is Claude Code or Codex, that are running or resumable, that no Swarm lists (no Swarm agent
-   with this machine and harness id in any open Swarm snapshot), that are not Buddies and were not started by the Swarm
+   person's) whose engine is Claude Code or Codex, that are running or resumable, that no Swarm lists (no Swarm roster
+   row with this machine and harness id, in any Swarm, open here or not, its chats archived or its stop asked: the
+   daemon's `swarmListed` reads the backend's roster, and an answer it cannot read refuses), that are not Buddies and were not started by the Swarm
    (`startedBy: 'agent'` without a parent, as the CLI tells a Swarm start, `superTabs/inCore/adoption.ts`). Desktop
    starts parsing the frame's `startedBy` for this.
 2. **Handoff.** Desktop asks this Mac's daemon for the existing Change agent handoff, `agent_handoff_prepare`

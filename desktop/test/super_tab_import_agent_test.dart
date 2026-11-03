@@ -43,8 +43,9 @@ class _Daemon extends WsConn {
 
   /// The daemon's answer to whether any Swarm lists an agent, from the backend
   /// (cli superTabs/service.ts `swarmListed`): none here unless a test says.
-  Map<String, dynamic> Function(Map<String, dynamic> payload) swarmListed =
-      (_) => {'ok': true, 'listed': false};
+  Map<String, dynamic> Function(Map<String, dynamic> payload) swarmListed = (
+    _,
+  ) => {'ok': true, 'listed': false};
 
   @override
   Future<Map<String, dynamic>> request(
