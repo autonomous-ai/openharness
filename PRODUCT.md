@@ -14,8 +14,8 @@ It describes the product we are heading for, not the product as it is today. How
 **Harness runs a crew of agents from every lab, on the machines you own, directed by a Product Manager agent, with
 work verified before it ships.**
 
-- **A person says what they want; the crew delivers verified work.** The Product Manager turns accepted requests into
-  tasks. Engineers build, Reviewers and Testers check, and the result is a merged change that works.
+- **A person says what they want; the crew delivers verified work.** A crew of agents led by a Product Manager agent
+  builds and checks it, and delivers a merged change that works.
 - **People give direction, taste and acceptance, from anywhere.** They answer questions and approve results at the desk,
   in the browser, on the phone or on the Harness device. Agents do the execution.
 - **Agents are the labs' real CLIs** (Claude Code, Codex, OpenCode and the rest) under each person's own login, so a
