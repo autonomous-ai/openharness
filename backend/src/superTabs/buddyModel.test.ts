@@ -70,7 +70,7 @@ describe('asking to switch a Buddy\'s model', () => {
   it('records the request for the Buddy\'s machine, with the window the serving machine reported', () => {
     const f = setup()
     f.run({ type: 'buddy.model', gridModel: MODEL })
-    expect(f.agent().modelRequest).toMatchObject({ gridModel: MODEL, contextWindow: 131072, requestedBy: 'peer' })
+    expect(f.agent().modelRequest).toMatchObject({ gridModel: MODEL, gridName: f.grid, contextWindow: 131072, requestedBy: 'peer' })
   })
 
   it('records a request back to the subscription', () => {
