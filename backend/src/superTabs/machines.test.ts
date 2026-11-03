@@ -298,7 +298,8 @@ it('the removal preview names only the agents and projects its owner reads', () 
   const s = richSwarm(NOW)
   s.contribute('host')
   const secretTask = s.group('Private task title', s.secret)
-  const secretPm = s.add('hidden-pm-harness', secretTask, true)
+  const secretLead = s.state.projects!.find(project => project.id === s.secret)!.leadConversationId
+  const secretPm = s.add('hidden-pm-harness', secretLead, true)
   const secretWorker = s.add('hidden-builder-harness', secretTask)
   s.run({ type: 'work.assign', conversationId: secretTask, agentId: secretWorker })
   s.edit(state => {
