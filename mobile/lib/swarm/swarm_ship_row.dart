@@ -159,7 +159,7 @@ class _SwarmShipRowState extends State<SwarmShipRow> {
     ];
     final credits = [
       if (requester != null)
-        ('Requested by', [(requester.id, requester.username)]),
+        ('Requested by', [(requester.id, requester.shownName)]),
       ('Built by', agents(ship.builderIds)),
       ('Reviewed by', agents(ship.reviewerIds)),
     ].where((credit) => credit.$2.isNotEmpty).toList();

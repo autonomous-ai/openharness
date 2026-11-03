@@ -295,14 +295,14 @@ String _time(DateTime at) {
   return fullDateTime(at);
 }
 
-/// The person a proposal speaks for, by username; "its owner" for one no
+/// The person a proposal speaks for, by the name they show by; "its owner" for one no
 /// longer in the Swarm (Desktop's `buddyPersonName`).
 String swarmProposalOwner(BuildContext context, SuperTabMessage message) {
   final id = message.proposalOwnerId!;
   return swarmReaderOf(
         context,
         message.conversationId,
-      )?.snapshot?.people.where((p) => p.id == id).firstOrNull?.username ??
+      )?.snapshot?.people.where((p) => p.id == id).firstOrNull?.shownName ??
       'its owner';
 }
 

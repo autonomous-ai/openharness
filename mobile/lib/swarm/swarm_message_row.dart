@@ -259,6 +259,7 @@ class SwarmMessageRow extends StatelessWidget {
     required this.mentions,
     this.tagged = const [],
     this.taggedAddresses = const {},
+    this.taggedLabels = const {},
     this.readerId = '',
     required this.grouped,
     required this.lit,
@@ -301,6 +302,10 @@ class SwarmMessageRow extends StatelessWidget {
   /// Their addresses, by username: a tag by full address is theirs only when
   /// it is this one.
   final Map<String, String> taggedAddresses;
+
+  /// What a tagged person's pill reads, by username: the name they set. The
+  /// text keeps `@username`; one with no name here reads as it is written.
+  final Map<String, String> taggedLabels;
 
   /// Who reads it: a message that tags them stands out.
   final String readerId;
@@ -456,6 +461,7 @@ class SwarmMessageRow extends StatelessWidget {
                 references: references,
                 tagged: tagged,
                 addresses: taggedAddresses,
+                labels: taggedLabels,
                 onTap: onTap,
                 onOpenConversation: onOpenConversation,
               ),

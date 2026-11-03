@@ -1012,6 +1012,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       mentions: view.mentions,
       tagged: _taggedOf(c, m).keys.toList(),
       taggedAddresses: _taggedOf(c, m),
+      taggedLabels: _labelsOf(c, m),
       readerId: c.reader.accountId,
       onOpenTask: _taskOpener(c, m),
       references: _numberedReferences(c, m.text).references,
@@ -1668,6 +1669,19 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         if (m.mentions.contains(person.id)) person.username: person.email,
   };
 
+  /// The names the tag pills of [m] read: each tagged person who set a name,
+  /// by their username. The text keeps `@username`; only the pill shows the
+  /// name.
+  static Map<String, String> _labelsOf(
+    SwarmConversation c,
+    SuperTabMessage m,
+  ) => {
+    if (m.mentions.isNotEmpty)
+      for (final person in c.reader.snapshot?.people ?? <SuperTabPerson>[])
+        if (m.mentions.contains(person.id) && person.name != null)
+          person.username: person.name!,
+  };
+
   /// The open task's steps, each read on its own, merged into its chat (task
   /// steps design): a step keeps its own conversation.
   final _steps = <String, SwarmConversation>{};
@@ -1722,13 +1736,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       (picture: agent?.avatar, status: null);
 
   /// Who gave a reaction, by name and never by email: "You", an agent's
-  /// name, another person's username.
+  /// name, another person's shown name.
   String _reactorName(SwarmConversation c, String kind, String id) {
     if (kind == 'person' && id == c.reader.accountId) return 'You';
     final snapshot = c.reader.snapshot;
     if (kind == 'agent') return snapshot?.agentName(id) ?? 'Agent';
     final person = snapshot?.people.where((p) => p.id == id).firstOrNull;
-    return person?.username ??
+    return person?.shownName ??
         (person == null ? 'Someone' : superTabPersonName(person.email));
   }
 
@@ -1916,6 +1930,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           final answerIn = pm && view.canPost ? view.buddyProject : null;
           final quoted = reply == null ? null : _quoted(c, reply);
           final tagged = _taggedOf(c, m);
+          final labels = _labelsOf(c, m);
           final lit = _lit == m.id, followed = _target == m.id;
           final acting = _acting == m.id;
           final reactions = c.reactionsOf(m);
@@ -1964,6 +1979,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               // account is drawn again.
               c.reader.accountId,
               [for (final e in tagged.entries) '${e.key}:${e.value}'].join(' '),
+              [for (final e in labels.entries) '${e.key}:${e.value}'].join(' '),
               reactions,
               answerIn,
               view.project,
@@ -1983,6 +1999,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               mentions: view.mentions,
               tagged: tagged.keys.toList(),
               taggedAddresses: tagged,
+              taggedLabels: labels,
               readerId: c.reader.accountId,
               onOpenTask: _taskOpener(c, m),
               references: references,
@@ -3337,8 +3354,10 @@ class _Ask extends StatelessWidget {
 }
 
 /// Over the composer, who the @ being typed can name, as Desktop offers
-/// them: the chat's people whose username holds what follows it, then its
-/// agents whose name starts with it, each with its role and what it is doing.
+/// them: the chat's people whose username or shown name holds what follows
+/// it (each by the name they show by, `@username` beside one who set a name;
+/// a pick still puts in `@username`), then its agents whose name starts with
+/// it, each with its role and what it is doing.
 class _MentionPicker extends StatelessWidget {
   const _MentionPicker({
     required this.people,
@@ -3366,7 +3385,9 @@ class _MentionPicker extends StatelessWidget {
     final prefix = query.toLowerCase();
     final shownPeople = [
       for (final person in people)
-        if (person.username.contains(prefix)) person,
+        if (person.username.toLowerCase().contains(prefix) ||
+            (person.name?.toLowerCase().contains(prefix) ?? false))
+          person,
     ];
     final shown = [
       for (final agent in agents)
@@ -3399,7 +3420,9 @@ class _MentionPicker extends StatelessWidget {
                 for (final person in shownPeople)
                   TtyTap(
                     key: ValueKey('swarm-pick-person-${person.id}'),
-                    semanticsLabel: person.username,
+                    semanticsLabel: person.name == null
+                        ? person.username
+                        : '${person.name}, @${person.username}',
                     minHeight: 52,
                     onTap: () => onPick(person.id),
                     child: Padding(
@@ -3409,18 +3432,42 @@ class _MentionPicker extends StatelessWidget {
                       child: Row(
                         children: [
                           SwarmChatAvatar(
-                            name: person.username,
+                            name: person.shownName,
                             id: person.id,
                             agent: false,
                             picture: person.avatar,
                           ),
                           const SizedBox(width: 10),
                           Expanded(
-                            child: Text(
-                              person.username,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: swarmChatText(16, weight: FontWeight.w500),
+                            child: Row(
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    person.shownName,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: swarmChatText(
+                                      16,
+                                      weight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ),
+                                // The handle a tag types, beside a name.
+                                if (person.name != null) ...[
+                                  const SizedBox(width: 6),
+                                  Flexible(
+                                    child: Text(
+                                      '@${person.username}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: swarmChatText(
+                                        13,
+                                        color: AppPalette.textSecondary,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ],
                             ),
                           ),
                         ],

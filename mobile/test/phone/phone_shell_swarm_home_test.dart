@@ -60,6 +60,9 @@ void main() {
   /// Row [row] of You, tapped.
   Future<void> youTo(WidgetTester tester, String row) async {
     await openYou(tester);
+    // You scrolls: on the test's short screen its last rows sit below.
+    await tester.ensureVisible(key(row));
+    await tester.pump();
     await tester.tap(key(row));
     await frames(tester);
   }
