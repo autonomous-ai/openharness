@@ -46,10 +46,13 @@ export interface TaskFolder { cwd: string; kind: 'git' | 'none' | 'missing' | 'u
 export interface MemberFrame { title: string | null; project: string | null; cwd: string | null; root: string | null; remote: string | null; branch: string | null; updatedAt: number | null }
 /** What a machine offers an agent. Each field is null when it could not be read; `freeDiskBytes` (the project's disk) and
  * `cpuPercent` are absent where the probe did not read them. */
-/** `freeMemoryBytes` and `freeDiskBytes` are what a new start can use: measured, less what starts still starting hold
- *  (`heldMemoryBytes`, routeCommand.ts heldByStarts). `slots` is the Swarm's free agent slots there. */
+/** What a new start on a machine can use, as its host admits it: the Swarm's free agent slots there, and free memory and disk
+ *  less what starts still starting hold (routeCommand.ts heldByStarts). */
+export interface MachineRoom { slots: number | null; freeMemoryBytes: number | null; heldMemoryBytes: number; freeDiskBytes: number | null }
+/** `freeMemoryBytes` and `freeDiskBytes` leave heavy starts in, which the machine fit holds itself (machineFit.ts
+ *  placedHeavyWork); `room` is what a start can use. */
 export interface MachineLoad { agents: number | null; freeMemoryBytes: number | null; hasFolder: boolean | null; freeDiskBytes?: number | null; cpuPercent?: number | null
-  slots?: number | null; heldMemoryBytes?: number }
+  room?: MachineRoom }
 export interface Probe {
   kind: 'member' | 'new'; agentId?: string; name?: string; machineId: string; machineName: string
   /** `quality` is the catalog's strength, 1 for a model it does not rate (`unrated`). */
@@ -493,11 +496,11 @@ function withEveryAccount<T extends Pick<Probe, 'machineId' | 'engine' | 'gridMo
 
 /** What the agent choosing reads of a row's machine: whether a start there would be admitted (River, 2026-11-03: starts
  *  failed on slots, memory and disk the rows did not show). */
-export function machineBrief(load: MachineLoad): string {
-  const slots = typeof load.slots === 'number' && Number.isFinite(load.slots) ? [`${load.slots} ${load.slots === 1 ? 'slot' : 'slots'} free`] : []
-  const memory = load.freeMemoryBytes === null ? 'free memory unknown'
-    : `${bytes(Math.max(0, load.freeMemoryBytes))} memory free${load.heldMemoryBytes ? ` (${bytes(load.heldMemoryBytes)} held by starts)` : ''}`
-  const disk = typeof load.freeDiskBytes === 'number' ? [`${bytes(Math.max(0, load.freeDiskBytes))} disk free`] : []
+export function machineBrief(room: MachineRoom): string {
+  const slots = room.slots === null ? [] : [`${room.slots} ${room.slots === 1 ? 'slot' : 'slots'} free`]
+  const memory = room.freeMemoryBytes === null ? 'free memory unknown'
+    : `${bytes(Math.max(0, room.freeMemoryBytes))} memory free${room.heldMemoryBytes ? ` (${bytes(room.heldMemoryBytes)} held by starts)` : ''}`
+  const disk = room.freeDiskBytes === null ? [] : [`${bytes(Math.max(0, room.freeDiskBytes))} disk free`]
   return [...slots, memory, ...disk].join(' · ')
 }
 

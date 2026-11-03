@@ -10,7 +10,7 @@ import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
 import { accountOf, API_BUILDERS, bytes, machineBrief, catalogFrom, catalogRow, choose, decide, gridStrength, parseAssessment, OLD_RECORD_MAX, quotaBrief, quotaOf2, slotOf, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type HeldModel, type MemberFrame, type Probe, type TaskFolder } from './route.js'
 import { makePlugins, ROUTE_PLUGIN_MAKERS, type PluginMaker } from './routePlugins.js'
-import { CI_HOLD_OPENING, CI_RETRY_MINUTES, MACHINE_FIT_MAKER } from './machineFit.js'
+import { CI_HOLD_OPENING, CI_RETRY_MINUTES, heavyOfStart, MACHINE_FIT_MAKER } from './machineFit.js'
 import { stat } from 'node:fs/promises'
 import { describeScmProject } from '../scm/scmProjects.js'
 
@@ -74,19 +74,21 @@ const READY: Unready = { all: [], engines: {}, push: null }
 /** What starts still starting on [machineId] hold of its memory and disk, as its host's reservations do (reservations.ts): one
  *  being created until a start's deadline, a launched one for its start window, a failed one nothing. 2026-11-03: 9 of 25 failed
  *  starts in 10 hours were refused for memory or disk set aside this way, which the route did not count. */
-export function heldByStarts(starts: Json[], machineId: string, now = Date.now()): { memoryBytes: number; diskBytes: number } {
-  let memoryBytes = 0, diskBytes = 0
+export function heldByStarts(starts: Json[], machineId: string, now = Date.now()) {
+  const held = { memoryBytes: 0, diskBytes: 0, heavyMemoryBytes: 0, heavyDiskBytes: 0 }
   for (const start of starts) {
     const request = object(start.request)
     if (request.machineId !== machineId || start.error) continue
+    // The host reserves when it is handed the start, which may be long after it was asked for (review).
     const launched = typeof start.harnessId === 'string'
-    const since = launched && finite(start.dispatchedAt) ? start.dispatchedAt : start.requestedAt
-    if (!finite(since) || now - since >= (launched ? START_WINDOW_MS : START_DEADLINE_MS)) continue
+    const times = [start.requestedAt, start.dispatchedAt].filter(finite)
+    if (!times.length || now - Math.max(...times) >= (launched ? START_WINDOW_MS : START_DEADLINE_MS)) continue
     const wanted = object(request.requirements)
-    memoryBytes += finite(wanted.memoryBytes) ? wanted.memoryBytes : 0
-    diskBytes += finite(wanted.diskBytes) ? wanted.diskBytes : 0
+    const memory = finite(wanted.memoryBytes) ? wanted.memoryBytes : 0, disk = finite(wanted.diskBytes) ? wanted.diskBytes : 0
+    held.memoryBytes += memory; held.diskBytes += disk
+    if (heavyOfStart(start)) { held.heavyMemoryBytes += memory; held.heavyDiskBytes += disk }
   }
-  return { memoryBytes, diskBytes }
+  return held
 }
 
 export function stalled(starts: Json[], machineId: string, pool: Json = {}, now = Date.now()): boolean {
@@ -400,7 +402,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // no new agent, shows no reading (review of #2426).
   const publicOf = (s: typeof verdict.pick) => ({ id: s.id, kind: s.kind, ...(s.agentId ? { agentId: s.agentId } : {}), machineId: s.machineId,
     engine: s.engine, model: s.model, effort: s.effort, title: s.title, ...(s.gridModel ? { gridModel: s.gridModel, gridName: s.gridName } : {}),
-    ...(s.unrated ? { unrated: true } : {}), quota: quotaBrief(s, now), ...(s.kind === 'new' && s.load ? { machine: machineBrief(s.load) } : {}), ...(s.notes.length ? { notes: s.notes } : {}) })
+    ...(s.unrated ? { unrated: true } : {}), quota: quotaBrief(s, now), ...(s.kind === 'new' && s.load?.room ? { machine: machineBrief(s.load.room) } : {}), ...(s.notes.length ? { notes: s.notes } : {}) })
   return {
     ok: true, ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : { unrecorded: true }),
     ...(instructions ? { instructions } : { instructionsUnreadable: true }),
@@ -552,7 +554,7 @@ function loadOf(resources: Json, agents: number | null, cwd: string | undefined)
     cpuPercent: finite(resources.cpuPercent) ? resources.cpuPercent : null }
 }
 
-async function probeMachine(machineId: string, { name: machineName, status, account, pool, folded, unready = READY, stalled: stuck = false, held = { memoryBytes: 0, diskBytes: 0 } }: { name: string; status: string; account: boolean; pool?: Json; folded?: boolean; unready?: Unready; stalled?: boolean; held?: ReturnType<typeof heldByStarts> },
+async function probeMachine(machineId: string, { name: machineName, status, account, pool, folded, unready = READY, stalled: stuck = false, held = heldByStarts([], machineId) }: { name: string; status: string; account: boolean; pool?: Json; folded?: boolean; unready?: Unready; stalled?: boolean; held?: ReturnType<typeof heldByStarts> },
   members: Json[], allModels: CatalogModel[], catalog: Catalog, a: Assessment, where: Where, open: typeof openDaemon): Promise<Probe[]> {
   const listedEngines = Array.isArray(pool?.engines) ? pool.engines.filter((engine): engine is string => typeof engine === 'string') : []
   const legacy = listedEngines.some(engine => !ENGINES.includes(engine))
@@ -589,8 +591,9 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
       return read(q, { why: text(object(observed.quotaReasons)[engine]) })
     }
     // What a new start can use, as its host admits it (reservations.ts): measured, less what starts still starting hold.
-    const freeMemory = finite(resources.memoryTotalBytes) && finite(resources.memoryUsedBytes) ? resources.memoryTotalBytes - resources.memoryUsedBytes - held.memoryBytes : null
-    const freeDisk = finite(resources.projectDiskFreeBytes) ? resources.projectDiskFreeBytes - held.diskBytes : null
+    const measuredMemory = finite(resources.memoryTotalBytes) && finite(resources.memoryUsedBytes) ? resources.memoryTotalBytes - resources.memoryUsedBytes : null
+    const measuredDisk = finite(resources.projectDiskFreeBytes) ? resources.projectDiskFreeBytes : null
+    const freeMemory = measuredMemory === null ? null : measuredMemory - held.memoryBytes, freeDisk = measuredDisk === null ? null : measuredDisk - held.diskBytes
     const setAside = (n: number) => n > 0 ? `, with ${bytes(n)} set aside for agents still starting` : ''
     const blocked = [...(!fresh ? [OFFLINE] : []), ...(pool.paused ? ['New work is paused on this machine.'] : [])]
     const tools = object(observed.tools)
@@ -608,9 +611,11 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
     const pushNote = unready.push ? [unready.push] : []
     // What the machine has, for new agents and members alike: heavy work runs on the machine whoever does it (machineFit.ts).
     const load: Probe['load'] = { agents: Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.length : null,
-      freeMemoryBytes: freeMemory, hasFolder: finite(resources.projectDiskFreeBytes), freeDiskBytes: freeDisk,
-      cpuPercent: finite(resources.cpuPercent) ? resources.cpuPercent : null, ...(finite(pool.availableSlots) ? { slots: pool.availableSlots } : {}),
-      ...(held.memoryBytes > 0 ? { heldMemoryBytes: held.memoryBytes } : {}) }
+      // Heavy starts stay in: the machine fit holds heavy work placed there itself (machineFit.ts placedHeavyWork, review).
+      freeMemoryBytes: measuredMemory === null ? null : measuredMemory - (held.memoryBytes - held.heavyMemoryBytes), hasFolder: finite(resources.projectDiskFreeBytes),
+      freeDiskBytes: measuredDisk === null ? null : measuredDisk - (held.diskBytes - held.heavyDiskBytes),
+      cpuPercent: finite(resources.cpuPercent) ? resources.cpuPercent : null,
+      room: { slots: finite(pool.availableSlots) ? pool.availableSlots : null, freeMemoryBytes: freeMemory, heldMemoryBytes: held.memoryBytes, freeDiskBytes: freeDisk } }
     return [...members.map(m => {
       const engine = String(object(m.configuration).engine), allowance = quota(engine)
       const running = Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.includes(m.harnessId) : null
