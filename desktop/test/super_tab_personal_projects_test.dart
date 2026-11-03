@@ -606,6 +606,28 @@ void main() {
       expect(PersonalProjects.of(f.app).knownForTest('owner', tabId), isEmpty);
     });
 
+    test('a refused rename of two repos of one name is logged by its code, not the repo', () async {
+      final lines = <String>[];
+      final previous = appLog;
+      appLog = _Recorder(lines);
+      addTearDown(() => appLog = previous);
+      final f = SuperTabLaunchFixture();
+      f.app.machineStates['m']!.agents = [
+        _agent('n1', remote: 'git@github.com:acme/api.git'),
+        _agent('n2', remote: 'git@github.com:kim/api.git'),
+      ];
+      _tab(f.app, 'one', [_pane('m', 'n1'), _pane('m', 'n2')]);
+      final c = await _personal(f);
+      f.connection.server.unknownCommand = (command) =>
+          command['type'] == 'project.rename';
+      await PersonalProjects.of(f.app).sync(c);
+      expect(lines.where((l) => l.contains('VALIDATION_ERROR')), isNotEmpty);
+      for (final line in lines) {
+        expect(line, isNot(contains('acme')), reason: line);
+        expect(line, isNot(contains('kim')), reason: line);
+      }
+    });
+
     test('two repos of one name become two projects told apart', () async {
       final f = SuperTabLaunchFixture();
       f.app.machineStates['m']!.agents = [
