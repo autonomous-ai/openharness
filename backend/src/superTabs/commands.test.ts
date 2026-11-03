@@ -3925,7 +3925,7 @@ describe('lost work (liveness.ts)', () => {
     limit()
     expect(marked().limitedUntil).not.toBeNull()
     f.run({ type: 'work.resume', conversationId: group, assignmentId: task().assignment!.id, lostAt: task().assignment!.lost!.at }, as(worker), { now: 3_600_000 })
-    f.run({ type: 'work.status', conversationId: group, assignmentId: 'current', status: 'working', result: 'Going on.' }, as(worker), { now: 3_600_001 })
+    f.run({ type: 'work.status', conversationId: group, assignmentId: task().assignment!.id, status: 'working', result: 'Going on.' }, as(worker), { now: 3_600_001 })
     expect(marked()).toMatchObject({ limitedUntil: null })
   })
 
