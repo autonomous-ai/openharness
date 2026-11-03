@@ -6,8 +6,9 @@ import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/team_account_setup.dart';
 
+import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 import 'support/rename_connection.dart';
-import 'swarm_state_test.dart' show createApp;
+import 'swarm_state_test.dart' show MemoryStore, createApp;
 
 /// Records what this Mac's daemon is asked; no socket is opened.
 class _Daemon extends RenameConnection {
@@ -15,6 +16,10 @@ class _Daemon extends RenameConnection {
   Map<String, dynamic> answer = {'ok': true, 'state': 'wanted'};
   /// Answers in turn before [answer]; a Completer's future is awaited.
   final queued = <Object>[];
+
+  /// What `teamSetupStatus` answers: what this Mac's daemon remembers of the
+  /// account's setup.
+  Map<String, dynamic> status = {'ok': true, 'state': 'none'};
 
   @override
   Future<Map<String, dynamic>> request(
@@ -25,6 +30,7 @@ class _Daemon extends RenameConnection {
     if (type == 'super_tabs' &&
         '${payload['action']}'.startsWith('teamSetup')) {
       asked.add(Map.of(payload));
+      if (payload['action'] == 'teamSetupStatus') return Future.value(status);
       if (queued.isNotEmpty) {
         final next = queued.removeAt(0);
         return next is Completer<Map<String, dynamic>>
@@ -55,8 +61,16 @@ void main() {
   /// Which daemon process answers this Mac: a new one after a restart, null
   /// when its status could not be read.
   String? running = 'pid-1';
-  AppNotifier make(_Daemon daemon) {
-    final app = createApp(connectionForTest: (_) => daemon, connected: true);
+  AppNotifier make(_Daemon daemon, {MemoryStore? store}) {
+    final app = createApp(
+      connectionForTest: (_) => daemon,
+      connected: true,
+      store: store,
+    );
+    app.currentUser = const CurrentUserProfile(
+      id: 'owner',
+      email: 'owner@example.com',
+    );
     app.machineStates['m']!.localOnly = true;
     app.teamAccountHereForTest = true;
     app.daemonIdentityForTest = () async => running;
@@ -71,19 +85,108 @@ void main() {
   });
   tearDown(() => app.dispose());
 
-  test('asks this Mac\'s own daemon whether it is wanted, and explains it only then', () async {
+  test('asks this Mac\'s own daemon whether it is wanted, for the Swarm joined or added to', () async {
     final explained = <String>[];
     final listening = app.teamSetupAsks.listen(explained.add);
     await app.offerTeamAccount('join', tabId: 'tab-1');
     daemon.answer = {'ok': true, 'state': 'declined'};
-    await app.offerTeamAccount('contribute');
+    await app.offerTeamAccount('contribute', tabId: 'tab-2');
     await pumpEventQueue();
     expect(daemon.asked, [
       {'action': 'teamSetupCheck', 'reason': 'join', 'tabId': 'tab-1'},
-      {'action': 'teamSetupCheck', 'reason': 'contribute'},
+      {'action': 'teamSetupCheck', 'reason': 'contribute', 'tabId': 'tab-2'},
     ]);
-    expect(explained, ['join']);
+    // A join or a contribution locks the app instead (team_account_setup.dart
+    // TeamAccountSetupLock): nothing is explained behind it.
+    expect(explained, isEmpty);
+    expect(app.teamSetupLocked, isTrue);
     await listening.cancel();
+  });
+
+  // Scholes 11-03: a Mac joined a Swarm and stayed "not set up" until someone
+  // found its row in Machines. The window now opens on join and stays.
+  test('a join locks the app once, however often it is asked, until the account exists', () async {
+    var changes = 0;
+    app.addListener(() => changes++);
+    expect(app.teamSetupLocked, isFalse);
+    await app.offerTeamAccount('join', tabId: 'tab-1');
+    expect(app.teamSetupLocked, isTrue);
+    final first = changes;
+    await app.offerTeamAccount('join', tabId: 'tab-1');
+    expect(changes, first, reason: 'the same Swarm again changes nothing');
+    await app.offerTeamAccount('join', tabId: 'tab-2');
+    expect(app.teamSetupLocked, isTrue);
+    await app.teamAccountMade();
+    expect(app.teamSetupLocked, isFalse);
+  });
+
+  test('a join on a Mac that has the account, or whose daemon cannot say, does not lock', () async {
+    for (final answer in [
+      {'ok': true, 'state': 'exists'},
+      {'ok': true, 'state': 'unsupported'},
+      {'ok': true, 'state': 'dedicated'},
+      {'error': 'UNKNOWN_ACTION'},
+    ]) {
+      daemon.answer = answer;
+      await app.offerTeamAccount('join', tabId: 'tab-1');
+      expect(app.teamSetupLocked, isFalse, reason: '$answer');
+    }
+  });
+
+  // A cancel remembered from before (the old "Not now", or macOS's prompt
+  // closed) kept every later join from asking.
+  test('a cancel or a failure remembered from before still locks a new join', () async {
+    for (final state in ['declined', 'waiting', 'running', 'no-prompt']) {
+      daemon.answer = {'ok': true, 'state': state};
+      await app.offerTeamAccount('join', tabId: 'tab-1');
+      expect(app.teamSetupLocked, isTrue, reason: state);
+      await app.teamAccountMade();
+    }
+  });
+
+  test('the start check never locks: only a join or a contribution does', () async {
+    await app.offerTeamAccount('startup');
+    expect(app.teamSetupLocked, isFalse);
+  });
+
+  test('the lock comes back after a restart, until the account exists', () async {
+    final store = MemoryStore();
+    final first = make(daemon, store: store);
+    await first.offerTeamAccount('join', tabId: 'tab-1');
+    expect(first.teamSetupLocked, isTrue);
+    first.dispose();
+
+    // Quit and opened again, the account still missing: locked as it connects.
+    final again = _Daemon()..answer = {'ok': true, 'state': 'not-shared'};
+    final second = make(again, store: store);
+    addTearDown(second.dispose);
+    expect(second.teamSetupLocked, isFalse);
+    second.onMachineConnectedForTest('m');
+    await until(() => second.teamSetupLocked);
+
+    // Set up meanwhile (in Terminal): the next start is not locked, and
+    // forgets it.
+    final made = _Daemon()
+      ..answer = {'ok': true, 'state': 'exists'}
+      ..status = {'ok': true, 'state': 'exists'};
+    final third = make(made, store: store);
+    addTearDown(third.dispose);
+    third.onMachineConnectedForTest('m');
+    await until(
+      () => made.asked.any((a) => a['action'] == 'teamSetupStatus'),
+    );
+    await pumpEventQueue();
+    expect(third.teamSetupLocked, isFalse);
+    expect(store.values.keys.where((k) => k.startsWith('team_setup_lock')), isEmpty);
+  });
+
+  test('another account signed in on this computer is not held by it', () async {
+    await app.offerTeamAccount('join', tabId: 'tab-1');
+    app.currentUser = const CurrentUserProfile(
+      id: 'other',
+      email: 'other@example.com',
+    );
+    expect(app.teamSetupLocked, isFalse);
   });
 
   test('sets it up when the person asks, and remembers "Not now"', () async {
@@ -190,10 +293,11 @@ void main() {
     await until(() => daemon.asked.length == 2);
     await pumpEventQueue();
     expect(explained, ['startup']);
-    // The person asking, by joining, is always explained.
-    await app.offerTeamAccount('join');
+    // The person joining is held by the lock instead, never explained again.
+    await app.offerTeamAccount('join', tabId: 'tab-1');
     await pumpEventQueue();
-    expect(explained, ['startup', 'join']);
+    expect(explained, ['startup']);
+    expect(app.teamSetupLocked, isTrue);
     await listening.cancel();
   });
 
@@ -483,5 +587,42 @@ void main() {
     expect(daemon.asked, [
       {'action': 'teamSetupDecline'},
     ]);
+  });
+
+  group('Remove this Mac from the Swarm, the one way out', () {
+    Future<SuperTabLaunchFixture> joined() async {
+      final f = SuperTabLaunchFixture();
+      f.app.teamAccountHereForTest = true;
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.teamCheck = {'state': 'wanted'};
+      await f.app.offerTeamAccount('join', tabId: tabId);
+      expect(f.app.teamSetupLocked, isTrue);
+      return f;
+    }
+
+    test('removes this Mac from the Swarm it joined, and ends the lock', () async {
+      final f = await joined();
+      expect(await f.app.removeLockedMachine(), isNull);
+      expect(
+        f.connection.server.posts.map((p) => p['command']),
+        contains({'type': 'machine.remove', 'machineId': 'm'}),
+      );
+      expect(f.app.teamSetupLocked, isFalse);
+      f.app.superTabs.dispose();
+    });
+
+    test('a removal the Swarm refuses says why and keeps the lock', () async {
+      final f = await joined();
+      f.connection.server.refuse = {
+        'code': 'FORBIDDEN',
+        'message': 'Only the Swarm owner can do that.',
+      };
+      expect(
+        await f.app.removeLockedMachine(),
+        'Only the Swarm owner can do that.',
+      );
+      expect(f.app.teamSetupLocked, isTrue);
+      f.app.superTabs.dispose();
+    });
   });
 }
