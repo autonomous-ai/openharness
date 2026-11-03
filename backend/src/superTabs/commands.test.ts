@@ -4764,7 +4764,8 @@ describe('lead.switch', () => {
     destination.observation!.capabilities = ['leadSwitch', 'leadStart']
     s.f.state.machines!.push(destination)
     s.f.run({ ...s.request, machineId: 'destination', model: 'gpt-5.1' })
-    const start = s.f.state.starts!.find(candidate => candidate.request.leadFor?.switchId === s.sid())!
+    const switchId = s.sid()
+    const start = s.f.state.starts!.find(candidate => candidate.request.leadFor?.switchId === switchId)!
     const contribution = { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }
 
     const started = s.f.run({ type: 'agent.started', startId: start.id, harnessId: 'destination-pm',
@@ -4772,7 +4773,7 @@ describe('lead.switch', () => {
 
     const candidateId = started.result.agentId as string
     expect(s.f.state.conversations.find(c => c.id === 'lead')!.leadId).toBe(candidateId)
-    expect(s.f.state.agents.find(a => a.id === s.pm)!.switchLanded).toMatchObject({ id: s.sid(), candidateAgentId: candidateId })
+    expect(s.f.state.agents.find(a => a.id === s.pm)!.switchLanded).toMatchObject({ id: switchId, candidateAgentId: candidateId })
   })
 
   it('lets only the PM itself claim, with a 15 minute lease', () => {

@@ -67,7 +67,7 @@ export interface Agent {
    *  `id` is the operation that asked; `claimedUntil` is set once the host took it (agent.switchClaim). */
   /** The switch request the last rebind settled, until its result arrives: that result is the one line the chat gets, and
    *  it still tells the machine owner who asked. */
-  switchLanded?: { id: string; requestedBy: string }
+  switchLanded?: { id: string; requestedBy: string; candidateAgentId?: string }
   switchRequest?: { id: string; engine: string; profileId: string; targetMachineId?: string; model?: string; effort?: string; requestedBy: string; at: string; claimedUntil?: string }
   /** The account it runs in on its machine once a switch moved it; absent for the machine's default account. */
   profileId?: string
@@ -161,6 +161,8 @@ export interface AgentStartRequest {
   /** The projects a Swarm-wide Buddy's folder holds, one read-only worktree each, made from that project's own checkout on its
    *  machine (spec: Folder). Ids, names and folders only. */
   buddyProjects?: Array<{ id: string; name: string; cwd: string }>
+  /** The offered account selected for a destination PM switch. */
+  profileId?: string
   /** A Buddy thread session's start (buddySessions.ts): written by message.send with newSession alone. Ids only, never text:
    *  starts are listed to the Lead. */
   buddySession?: BuddySession

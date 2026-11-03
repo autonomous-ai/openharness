@@ -45,7 +45,7 @@ import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRo
 import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, entryProject, liveSessions, mainBuddyOf, MAX_SESSION_WAITING, requireChatOwner, SESSION_ENDED_KIND, sessionAgentsOf, sessionOf, setSessions, type SessionEndReason } from './buddySessions.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, PROPOSAL_SENT_KIND, proposalSentText, proposalText, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL, CODEX_BUDDY_REFUSAL } from './buddyContract.js'
-import { launchRefusedLine, leadJoined, leadOvertaken, leadStartFailed, leadStarting, placeLead } from './leadStart.js'
+import { launchRefusedLine, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, LEAD_CAPABILITY, placeLead } from './leadStart.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 
@@ -1502,9 +1502,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (pm.switchRequest) fail('LEAD_SWITCHING', `The ${name} is already being moved.`, 409)
       let destination = pool
       if (command.machineId && command.machineId !== pool.machineId) {
+        const previousPlacement = project.lead
         const start = placeLead(state, project, person(state, project.ownerId), command.machineId,
           { engine: command.engine, ...(command.model ? { model: command.model } : {}), ...(command.effort ? { effort: command.effort } : {}) },
           stableId(operationId, 'switch-start'), { now: context.now, teamMachines: context.teamMachines, otherWorkspaceMachines: context.otherWorkspaceMachines })
+        if (previousPlacement) project.lead = previousPlacement
+        else delete project.lead
         destination = state.machines!.find(m => m.machineId === start.request.machineId)!
         if (!destination.observation?.capabilities?.includes(SWITCH_CAPABILITY)) {
           state.starts = state.starts!.filter(candidate => candidate.id !== start.id)
@@ -1518,6 +1521,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const profileId = command.profileId === 'default' ? defaultProfileId(destination.machineId, command.engine) : command.profileId
       if (profileId !== defaultProfileId(destination.machineId, command.engine) && !destination.observation!.profiles?.some(p => p.engine === command.engine && p.id === profileId)) {
         fail('PROFILE_UNKNOWN', `That account isn’t on ${destination.name} any more.`, 409)
+      }
+      if (destination.machineId !== pool.machineId) {
+        const start = state.starts!.find(candidate => candidate.request.leadFor?.switchId === operationId)!
+        start.request.profileId = profileId
       }
       const { type: _type, projectId: _projectId, ...asked } = command
       pm.switchRequest = { id: operationId, ...asked, profileId, ...(destination.machineId !== pool.machineId ? { targetMachineId: destination.machineId } : {}),
@@ -2387,8 +2394,17 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const group = open(state, start.request.conversationId)
       const agentId = stableId(start.request.machineId, command.harnessId)
       if (state.agents.some(a => a.id === agentId)) fail('ALREADY_SHARED', 'This native harness is already in the tab.')
+      const switchId = start.request.leadFor?.switchId
+      const switchSource = switchId && state.agents.find(a => a.switchRequest?.id === switchId)
+      if (switchId) {
+        const project = projectOf(state, start.request.leadFor!.projectId)
+        if (!switchSource || switchSource.switchRequest?.targetMachineId !== start.request.machineId
+          || conversation(state, project.leadConversationId).leadId !== switchSource.id) {
+          fail('STALE_SWITCH', 'This PM switch is no longer current.')
+        }
+      }
       // Answered, not refused: a refusal would take the row with it. Its host closes the session (cli superTabs/start.ts).
-      const overtaken = start.request.leadFor ? leadOvertaken(state, start, group) : null
+      const overtaken = start.request.leadFor && !switchId ? leadOvertaken(state, start, group) : null
       if (overtaken) {
         start.error = overtaken.reason
         result.refused = overtaken.reason
@@ -2411,6 +2427,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         ...(!start.request.gridModel && (start.request.model ?? 'default') === 'default' ? { launchedDefault: true as const } : {}),
         ...(start.request.buddyOf ? { buddyOf: start.request.buddyOf } : {}),
         ...(start.request.buddySession ? { buddySession: start.request.buddySession } : {}),
+        ...(start.request.profileId ? { profileId: storedProfileId(start.request.machineId, command.configuration.engine, start.request.profileId) } : {}),
         ...(teamAccountPool(machineContribution(state, start.request.machineId)) ? { teamAccount: true as const } : {}),
         ...(command.startedSession ? { startedSession: { ...command.startedSession, creationId: start.creationId } } : {}) })
       // A main Buddy stays first, as older clients take a Buddy chat's first agent for its Buddy (buddySessions.ts).
@@ -2437,11 +2454,20 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           author: { kind: 'person' as const, id: owner.id, generation: owner.generation } }))
       }
       if (start.request.leadFor) {
-        // Taking over from a Lead that left, as agent.add does.
-        if (group.leadId && !group.agentIds.includes(group.leadId)) keepLead(group, agentId)
-        // The people's to read: it answers the start a person asked for, whose "Waiting for a machine" line they read.
-        const joined = leadJoined(state, start, group, agentId)
-        message(group.id, joined.text, [], null, joined.source)
+        if (switchId && switchSource) {
+          const project = projectOf(state, start.request.leadFor.projectId)
+          const pool = state.machines?.find(m => m.machineId === start.request.machineId)
+          group.leadId = agentId
+          switchSource.switchLanded = { id: switchId, requestedBy: switchSource.switchRequest!.requestedBy, candidateAgentId: agentId }
+          delete switchSource.switchRequest
+          project.lead = { status: 'started', machineId: start.request.machineId, machineName: pool?.name ?? start.request.machineId }
+        } else {
+          // Taking over from a Lead that left, as agent.add does.
+          if (group.leadId && !group.agentIds.includes(group.leadId)) keepLead(group, agentId)
+          // The people's to read: it answers the start a person asked for, whose "Waiting for a machine" line they read.
+          const joined = leadJoined(state, start, group, agentId)
+          message(group.id, joined.text, [], null, joined.source)
+        }
       }
       // A Buddy always starts on a Swarm machine: its chat hears once it settles, as the Lead does for a worker.
       // Naming who started it, as any agent added to a chat is named with who added it (#2207).
