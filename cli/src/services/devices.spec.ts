@@ -692,6 +692,12 @@ describe('what the windows say, reaching the dial', () => {
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardOpen', session: 'c1', tabId: 'st1', leadId: null })
     })
 
+    // A refusal turned into null said nowhere why the dial's face stayed on the resting pet (Diego, 2026-11-03).
+    it('fails a refused recap with the service\'s code, so the dial\'s log says why', async () => {
+      withRequest(vi.fn(async () => ({ error: 'SERVICE_UNAVAILABLE' })))
+      await expect(seen.host.swarmCardRecap!('st1', 'lead1', true)).rejects.toThrow('SERVICE_UNAVAILABLE')
+    })
+
     it('asks for a swarmBuddy dial\'s face with the buddy flag, says so on its recap, and sends its side as cardSide', async () => {
       const answers: Array<Record<string, unknown>> = [
         { ok: true, text: 'from the Buddy', at: 3, none: false, chatId: 'b1', buddy: true },

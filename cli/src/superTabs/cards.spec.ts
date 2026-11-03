@@ -208,8 +208,10 @@ describe('lastAgentMessage', () => {
 })
 
 /** A fake backend: tabs by id with the time each last changed, a message store per conversation, and call counting. */
-function setup(tabs: Record<string, { lastChangedAt: number; state: Record<string, unknown> }>, extra: { activity?: Record<string, 'working' | 'idle'>; elapsed?: number; messages?: (path: string) => unknown; post?: () => { status: number; body: Record<string, unknown> } } = {}) {
+function setup(tabs: Record<string, { lastChangedAt: number; state: Record<string, unknown> }>, extra: { activity?: Record<string, 'working' | 'idle'>; elapsed?: number; messages?: (path: string) => unknown; post?: () => { status: number; body: Record<string, unknown> }; delayMs?: number } = {}) {
   const calls: string[] = []
+  // Message reads in flight now and at most, for a backend whose reads take `delayMs`.
+  let reading = 0, mostReading = 0
   const failing = new Map<string, number>()
   let listFails = false
   let pages: Record<string, { next: string | null }> = {}
@@ -235,7 +237,11 @@ function setup(tabs: Record<string, { lastChangedAt: number; state: Record<strin
       return { status: 200, body: { success: true, data: swarmReply(path, tabs[tab[1]].state, { lastChangedAt: tabs[tab[1]].lastChangedAt }) } }
     }
     // The real messages page: { messages, next }, `next` the (sequence, id) cursor of the page before.
-    return { status: 200, body: { success: true, data: { ...(extra.messages?.(path) ?? { messages: [], next: null }) as object } } }
+    reading++; mostReading = Math.max(mostReading, reading)
+    try {
+      if (extra.delayMs) await new Promise(resolve => setTimeout(resolve, extra.delayMs))
+      return { status: 200, body: { success: true, data: { ...(extra.messages?.(path) ?? { messages: [], next: null }) as object } } }
+    } finally { reading-- }
   })
   const core = fakeCore({
     account: { backend: call as unknown as CoreApi['account']['backend'], identity: vi.fn(async () => ({ accountId: 'me', email: 'me@x.io' })) },
@@ -248,7 +254,7 @@ function setup(tabs: Record<string, { lastChangedAt: number; state: Record<strin
   const cards = new SwarmCards(core, 'm1', { now: () => clock, intervalMs: 5000, log })
   const seen: SwarmCard[][] = []
   cards.onCards = c => seen.push(c)
-  return { cards, calls, seen, call, core, failing, tabs, log, paginate: (p: typeof pages) => { pages = p }, pageBy: (n: number) => { pageSize = n }, breakList: (v = true) => { listFails = v }, advance: (ms: number) => { clock += ms } }
+  return { cards, calls, seen, call, core, failing, tabs, log, mostReading: () => mostReading, paginate: (p: typeof pages) => { pages = p }, pageBy: (n: number) => { pageSize = n }, breakList: (v = true) => { listFails = v }, advance: (ms: number) => { clock += ms } }
 }
 /** Each read of a tab, named by the tab: a changes read, or a first load that no changes read of it asked for. */
 function detailReads(calls: string[]): string[] {
@@ -709,20 +715,6 @@ describe('SwarmCards open recaps and recap reads', () => {
     expect(pushed).toEqual(['m2'])
   })
 
-  it('has at most two recap reads in flight and refuses a third', async () => {
-    const release: Array<() => void> = []
-    const t = setup({ t1: { lastChangedAt: 1, state: swarm({ conversations: [conv('lead-web', 'a1', { projectId: 'web', lastMessageSequence: 4 }), conv('lead-mobile', 'a2', { projectId: 'mobile', lastMessageSequence: 4 })],
-      agents: [agent('a1'), agent('a2'), agent('a3')] }) } }, {
-      messages: () => new Promise(resolve => { release.push(() => resolve({ messages: [msg(4, 'a1'), msg(4, 'a2')], next: null })) }) as never })
-    // The fake backend returns the promise's value as data.
-    await t.cards.tick()
-    const a = t.cards.recap('t1', 'a1'), b = t.cards.recap('t1', 'a2')
-    await vi.waitFor(() => expect(release).toHaveLength(2))
-    await expect(t.cards.recap('t1', 'a1')).rejects.toThrow()
-    release.forEach(r => r())
-    await Promise.all([a, b])
-  })
-
   it('forgets the recap of a Lead whose tab is gone', async () => {
     const t = setup({ t1: { lastChangedAt: 1, state: withSequence(2) }, t2: { lastChangedAt: 1, state: swarm() } }, { messages: () => ({ messages: [msg(2, 'a1')], next: null }) })
     await t.cards.tick()
@@ -739,7 +731,7 @@ describe('SwarmCards open recaps and recap reads', () => {
 
 /** `web` with its three chats at the given sequences, each conversation's page served from `pages` (newest first or not: the code orders). */
 /** With `withBuddy`, the Swarm has Buddies on and the reader's Buddy (`y1`, "diego's Buddy" on Codex) is in their `web` chat. */
-function chatSwarm(pages: Record<string, unknown[] | (() => unknown[])>, withBuddy = false) {
+function chatSwarm(pages: Record<string, unknown[] | (() => unknown[])>, withBuddy = false, delayMs = 0) {
   const state = (lead = 1, pmSeq = 1, groupSeq = 1) => chats({
     ...(withBuddy ? { buddies: true, agents: [...chats().agents as object[], buddy()] } : {}),
     conversations: [
@@ -748,7 +740,7 @@ function chatSwarm(pages: Record<string, unknown[] | (() => unknown[])>, withBud
   const t = setup({ t1: { lastChangedAt: 1, state: state() } }, { messages: path => {
     const page = pages[/conversations\/([^/]+)\/messages/.exec(path)?.[1] ?? ''] ?? []
     return { messages: typeof page === 'function' ? page() : page, next: null }
-  } })
+  }, delayMs })
   const move = async (lead: number, pmSeq = 1, groupSeq = 1) => { t.tabs.t1.lastChangedAt++; t.tabs.t1.state = state(lead, pmSeq, groupSeq); await t.cards.tick() }
   const webLead = (cards = t.seen.at(-1)) => cards?.[0].leads.find(l => l.id === 'a1')
   const reads = (conversation: string) => t.calls.filter(c => c.includes(`/conversations/${conversation}/messages`)).length
@@ -1079,6 +1071,86 @@ describe('leadsOf Buddies', () => {
     // A group the window has open stays the PM screen's face on the PM side, and the Buddy side shows the Buddy chat.
     expect(web(on(), 'g-web').sideChat).toMatchObject({ kind: 'group', id: 'g-web' })
     expect(web(on(), 'g-web', 'buddy').sideChat).toMatchObject({ kind: 'buddy', id: 'pm-web' })
+  })
+})
+
+// Diego's dial, 2026-11-03: a switch to the PM or Buddy side showed the resting pet 5-6 s before the recap, the dial's own
+// read refused while the notices' and the pushes' two reads ran.
+describe('SwarmCards dial recap', () => {
+  const buddySays = [said(1, 'a1', { text: 'from the PM' }), said(2, 'y1', { text: 'from the Buddy' })]
+
+  it('answers the dial\'s recap while two background reads run', async () => {
+    const t = chatSwarm({ 'lead-web': [said(2, 'a1', { text: 'lead says' })], 'pm-web': buddySays, 'lead-mobile': [said(1, 'a2', { text: 'mobile says' })] }, true, 50)
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    t.cards.open('s1', 't1', 'a1', 'buddy')
+    // The Lead spoke: the poll reads its conversation for the notice.
+    const polled = t.move(2)
+    await vi.waitFor(() => expect(t.reads('lead-web')).toBe(1), { interval: 1 })
+    // The dial swiped: the push of its new face reads the Buddy chat.
+    t.cards.side('t1', 'buddy')
+    await vi.waitFor(() => expect(t.reads('pm-web')).toBe(1), { interval: 1 })
+    await expect(t.cards.recap('t1', 'a2', 'buddy')).resolves.toMatchObject({ text: 'mobile says', none: false, chatId: 'lead-mobile' })
+    await polled
+    t.cards.want(false)
+  })
+
+  it('answers a side switch from the held recap with no backend request', async () => {
+    const t = chatSwarm({ 'lead-web': [said(1, 'a1', { text: 'lead says' })], 'pm-web': buddySays }, true)
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    expect(await t.cards.recap('t1', 'a1', 'buddy')).toMatchObject({ text: 'lead says', chatId: 'lead-web' })
+    t.cards.side('t1', 'buddy')
+    expect(await t.cards.recap('t1', 'a1', 'buddy')).toMatchObject({ text: 'from the Buddy', chatId: 'pm-web' })
+    // A poll between the swipes keeps the recap of the side not shown.
+    await t.cards.tick()
+    t.calls.length = 0
+    t.cards.side('t1', 'pm')
+    expect(await t.cards.recap('t1', 'a1', 'buddy')).toMatchObject({ text: 'lead says', chatId: 'lead-web' })
+    expect(t.calls.filter(c => c.includes('/messages'))).toEqual([])
+    t.cards.want(false)
+  })
+
+  it('answers a held recap at once when its chat moved on, then pushes the newer one', async () => {
+    let latest = 1
+    const t = chatSwarm({ 'g-web': () => [said(latest, 'b1', { text: `group ${latest}` })] })
+    const pushed: string[] = []
+    t.cards.onRecap = r => pushed.push(r.text)
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'g-web' })
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    expect(await t.cards.recap('t1', 'a1', true)).toMatchObject({ text: 'group 1', chatId: 'g-web' })
+    latest = 2
+    await t.move(1, 1, 2)
+    expect(await t.cards.recap('t1', 'a1', true)).toMatchObject({ text: 'group 1', chatId: 'g-web' })
+    await vi.waitFor(() => expect(pushed).toEqual(['group 2']))
+    // The newer one is held: asked again, it is answered with no read.
+    const reads = t.reads('g-web')
+    expect(await t.cards.recap('t1', 'a1', true)).toMatchObject({ text: 'group 2' })
+    expect(t.reads('g-web')).toBe(reads)
+    t.cards.want(false)
+  })
+
+  it('answers from the Lead\'s notice for that chat before any recap was read, without waiting on a read', async () => {
+    let offline = false
+    const t = chatSwarm({ 'lead-web': () => { if (offline) throw new Error('offline'); return [said(2, 'a1', { text: 'lead says' })] } })
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    await t.move(2)
+    expect(t.webLead()?.notice).toMatchObject({ text: 'lead says', chatId: 'lead-web' })
+    // The read after the answer fails: the answer did not wait on it.
+    offline = true
+    expect(await t.cards.recap('t1', 'a1', true)).toMatchObject({ text: 'lead says', chatId: 'lead-web', none: false })
+    t.cards.want(false)
+  })
+
+  it('reads the dial\'s recaps one at a time, every one answered', async () => {
+    const t = chatSwarm({ 'lead-web': [said(1, 'a1', { text: 'web says' })], 'lead-mobile': [said(1, 'a2', { text: 'mobile says' })] }, false, 50)
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    const answers = await Promise.all([t.cards.recap('t1', 'a1', true), t.cards.recap('t1', 'a2', true), t.cards.recap('t1', 'a1')])
+    expect(answers.map(a => a.text)).toEqual(['web says', 'mobile says', 'web says'])
+    expect(t.mostReading()).toBe(1)
+    t.cards.want(false)
   })
 })
 
