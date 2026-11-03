@@ -8,6 +8,7 @@ import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/attention.dart';
+import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
@@ -220,6 +221,29 @@ void main() {
           inRow('super-group-lead', find.byType(SuperTabCountBadge)),
           findsNothing,
         );
+        await close(tester, c);
+      });
+
+      testWidgets('an unread tag in a listed read thread counts on the '
+          'project row and in Needs you', (tester) async {
+        final server = projectServer();
+        server.followedThreads = {
+          'unread': [],
+          'read': [readThread('message-1', 2, conversationId: 'lead')],
+          'more': false,
+        };
+        server.tag('message-1', threadId: 'message-1', messageSequence: 2);
+        final (c, attention) = await opened(server);
+        final activity = SuperTabActivity.of(c);
+        await activity.mentions.load();
+        await pumpSidebar(tester, c, attention);
+        expect(attention.mentionsIn('lead'), 1);
+        expect(attention.mentionsIn('offline'), 0);
+        expect(
+          activity.needsYou.where((need) => need.conversationId == 'lead'),
+          hasLength(1),
+        );
+        expect(inRow('super-group-lead', find.text('1')), findsOneWidget);
         await close(tester, c);
       });
 
