@@ -202,6 +202,7 @@ class _Preview {
 
   static _Preview parse(Object? raw) {
     if (raw is! Map ||
+        raw['previewVersion'] != 2 ||
         raw['agents'] is! List ||
         raw['soleSourceProjects'] is! List) {
       throw const FormatException('Invalid machine removal preview');
@@ -334,7 +335,7 @@ Future<void> removeSwarmMachine(
     preview = _Preview.parse(
       await reader.request(
         'GET',
-        '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/machines/${Uri.encodeComponent(machineId)}/removal',
+      '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/machines/${Uri.encodeComponent(machineId)}/removal/v2',
       ),
     );
   } on SuperTabFailure catch (failure) {
