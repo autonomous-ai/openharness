@@ -307,6 +307,23 @@ class MachineState {
   // connect. The CLI owns E2EE entirely now; this is just "is trust established yet", not a
   // crypto/pairing state the app has any data for.
   bool needsLink = false;
+
+  /// When this machine was first refused while the account's device key log named no key for it:
+  /// a computer that signed in a moment ago and has not put its key in yet, not one to pair by
+  /// hand. Null otherwise ([AppNotifier] `_awaitMachineKey`).
+  DateTime? keyAwaitedSince;
+
+  /// How long a machine with no key in the log is shown as connecting before its password form.
+  static const keyAwaitLimit = Duration(minutes: 3);
+
+  /// Refused only because its key is not in the log yet, and not for long: the screen says it is
+  /// connecting, never "locked" (owner, 2026-11-03: Intern 3, set up from this very phone, sat on
+  /// Unlock with a QR and a password it never needed, while its slow Wi-Fi kept its key out).
+  bool get awaitingKey =>
+      needsLink &&
+      keyAwaitedSince != null &&
+      DateTime.now().difference(keyAwaitedSince!) < keyAwaitLimit;
+
   List<Agent> agents = [];
 
   /// True while [agents] came from the last run's cache rather than from this
@@ -2425,6 +2442,8 @@ class AppNotifier extends ChangeNotifier {
     _forgetAllTrustSettles();
     _stopDeafPoll();
     _groupSyncedAt.clear();
+    _keyWatch?.cancel();
+    _keyWatch = null;
   }
 
   void _onLocalFailure(String machineId, int code, String reason) {
@@ -2464,6 +2483,7 @@ class AppNotifier extends ChangeNotifier {
     machine.needsLink = true;
     machine.agentLoadStatus = AgentLoadStatus.needsLink;
     launchMeasurement?.waiting(LaunchWait.locked);
+    unawaited(_awaitMachineKey(machine));
     // …unless the log already vouches for it and this phone's key is new to it: then the machine
     // has only not read that key yet — see [_redialOnceVouched].
     unawaited(_redialOnceVouched(machine.machine.machineId));
@@ -2603,6 +2623,50 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// Re-reads the log while a machine waits for its key to land ([MachineState.awaitingKey]), in
+  /// case its `device_keys_changed` reaches nobody, and turns the machine to its password form once
+  /// the wait is over. Null while no machine waits.
+  Timer? _keyWatch;
+
+  @visibleForTesting
+  Duration keyWatchEvery = const Duration(seconds: 10);
+
+  /// A machine just refused for want of trust ([_markNeedsLink]) whose key the log does not hold:
+  /// most likely one that signed in a moment ago and has not put its key in yet (its daemon could
+  /// not reach the backend: Intern 3 on a slow Wi-Fi, 2026-11-03). It reads as connecting, and the
+  /// log is read again until the key lands ([_redialNewlyTrusted] dials it then) or
+  /// [MachineState.keyAwaitLimit] runs out. A machine whose key the log holds refused this phone
+  /// for another reason: its password form, as before.
+  Future<void> _awaitMachineKey(MachineState machine) async {
+    final machineId = machine.machine.machineId;
+    if (_deviceLog == null || await _holdsMachineKey(machineId)) return;
+    if (_disposed || !machine.needsLink) return;
+    // Kept across refusals: the wait is from the first, not reset by every redial.
+    machine.keyAwaitedSince ??= DateTime.now();
+    _keyWatch ??= Timer.periodic(keyWatchEvery, (_) => _watchAwaitedKeys());
+    notifyListeners();
+  }
+
+  void _watchAwaitedKeys() {
+    var waiting = false;
+    for (final state in machineStates.values) {
+      if (state.keyAwaitedSince == null) continue;
+      if (!state.needsLink) {
+        state.keyAwaitedSince = null;
+        continue;
+      }
+      if (state.awaitingKey) waiting = true;
+    }
+    if (waiting) {
+      unawaited(_deviceLog?.refresh());
+    } else {
+      _keyWatch?.cancel();
+      _keyWatch = null;
+    }
+    // Every tick: the one past the limit is what turns a machine from connecting to locked.
+    if (!_disposed) notifyListeners();
+  }
+
   /// Dial [machineId] again from scratch: a refused connection is closed for good, so it is closed
   /// and replaced.
   void _redial(String machineId) {
@@ -2690,6 +2754,7 @@ class AppNotifier extends ChangeNotifier {
       _swarmRefused.remove(machineId);
       _refreshDeviceLogAfterReconnect();
       machine.needsLink = false;
+      machine.keyAwaitedSince = null;
       // Let in: a later refusal is a new story ([_redialOnceVouched], [_settleTrust]).
       _vouchedRedials.remove(machineId);
       _forgetTrustSettle(machineId);
