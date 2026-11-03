@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
+import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/swarm/swarm_style.dart';
 
 /// [child] at the top left of a screen, as big as it asks to be.
@@ -193,6 +194,31 @@ void main() {
     });
   });
 
+  group('a caption with a control', () {
+    testWidgets('has it at its right end, centred on its words, a thumb '
+        'tall', (tester) async {
+      const control = ValueKey('control');
+      await show(
+        tester,
+        const SwarmCaption(
+          'Projects',
+          trailing: SizedBox(key: control, width: 44, height: 44),
+        ),
+      );
+
+      final caption = find.byType(SwarmCaption);
+      expect(
+        tester.getTopRight(find.byKey(control)).dx,
+        tester.getTopRight(caption).dx,
+      );
+      expect(
+        tester.getCenter(find.text('Projects')).dy,
+        closeTo(tester.getCenter(find.byKey(control)).dy, .5),
+      );
+      expect(tester.getSize(caption).height, greaterThanOrEqualTo(44));
+    });
+  });
+
   group('a card row on its way', () {
     testWidgets("puts its mark 16 points in, as the real row's words are", (
       tester,
@@ -202,6 +228,25 @@ void main() {
       final row = find.byType(SwarmSkeletonRow);
       final mark = find.descendant(of: row, matching: find.byType(Skeleton));
       expect(tester.getTopLeft(mark.first).dx - tester.getTopLeft(row).dx, 16);
+    });
+
+    testWidgets("a project's on Home: its name's bar alone, 16 points in, on "
+        'one line a thumb tall', (tester) async {
+      await show(
+        tester,
+        SwarmSkeletonRows(id: 'rows', rows: 1, nameOnly: true),
+      );
+
+      final row = find.byType(SwarmSkeletonRow);
+      expect(
+        find.descendant(of: row, matching: find.byType(SkeletonText)),
+        findsOneWidget,
+        reason: 'no line under the name',
+      );
+      final bar = find.descendant(of: row, matching: find.byType(Skeleton));
+      expect(bar, findsOneWidget, reason: 'no mark before the name');
+      expect(tester.getTopLeft(bar).dx - tester.getTopLeft(row).dx, 16);
+      expect(tester.getSize(row).height, minTouchTarget);
     });
   });
 }

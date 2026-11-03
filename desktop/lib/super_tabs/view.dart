@@ -69,6 +69,7 @@ import 'switch_pm.dart';
 import 'task_line.dart';
 import 'pane_layout.dart';
 import 'view_room.dart';
+import 'swarm_type.dart';
 import 'visible_tick.dart';
 import '../widgets/dial_list_scroll.dart';
 import '../widgets/laid_out_list.dart';
@@ -1606,6 +1607,7 @@ class _SuperTabViewState extends State<SuperTabView>
 
   Widget _sidebar() => ProjectSidebar(
     controller: c,
+    compact: _phone,
     app: widget.app,
     onNewProject: widget.onNewProject,
     onNewSwarm: widget.onNewSwarm,
@@ -4152,14 +4154,15 @@ class _SuperTabViewState extends State<SuperTabView>
                                   inputFormatters: [_tagBackspace],
                                   keyboardType: TextInputType.multiline,
                                   textAlignVertical: TextAlignVertical.center,
-                                  style: DesktopChrome.text(),
+                                  style: SwarmType.composer(context),
                                   decoration: InputDecoration(
                                     // The row centers the line. Inheriting a decorated
                                     // field's minimum height leaves slack below its text.
                                     isCollapsed: true,
                                     constraints: const BoxConstraints(),
                                     visualDensity: VisualDensity.standard,
-                                    hintStyle: DesktopChrome.text(
+                                    hintStyle: SwarmType.composer(
+                                      context,
                                       color: DesktopChrome.muted,
                                     ),
                                     contentPadding: EdgeInsets.zero,
