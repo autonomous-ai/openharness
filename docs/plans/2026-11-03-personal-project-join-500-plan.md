@@ -4,7 +4,8 @@
 > request, one independent review step). No execution handoff.
 
 **Goal:** A harness started with a first message from a project chat joins the project instead of failing with an
-internal server error, and a join that is still refused tells the person why and what to do.
+internal server error; in a project with no coordinator it becomes the project's Product Manager; and a join that is
+still refused tells the person why and what to do.
 
 **Architecture:** `agent.add` (backend/src/superTabs/commands.ts) records two rows in the project chat in one command:
 the system row naming who added the harness (or a Product Manager's launch-refused note) and the person's first
@@ -37,6 +38,8 @@ here match its lines so the two merge cleanly.
 - Replaying the same operation id returns the same result and writes nothing twice.
 - Desktop, server error (HTTP 5xx): says the Harness server failed, the harness keeps running, Check status retries.
 - Desktop, refusal (HTTP 4xx with a reason): shows the reason, the harness keeps running, Discard request or Check status.
+- Desktop, a project chat with no coordinator: New Harness starts the PM (lead, PM prompt) and leaves the project's and
+  the Swarm's names and visibility alone; a project chat with a coordinator still joins a worker.
 
 ## Tasks
 
@@ -78,3 +81,24 @@ here match its lines so the two merge cleanly.
   still work as before. Run: they fail on today's copy. Commit the failing tests.
 - [ ] Change `_joinFailed`. Run the recovery tests and the style check. Commit.
 - [ ] Screenshot of both messages in the New Harness box (in-memory render), light and dark, for the PR.
+
+### Task 3: New Harness in a project with no coordinator starts its Product Manager (Desktop)
+
+River, 2026-11-03: "a project with no coordinator gets its PM from New Harness in its chat, and that person's first
+message goes to the PM."
+
+**Files:**
+- Test: `desktop/test/super_tab_launch_test.dart`
+- Modify: `desktop/lib/super_tabs/launch.dart`
+
+**Interfaces:**
+- Consumes: `SuperTabSnapshot.projectFor`, `leadOf` (no coordinator: null).
+- Produces: a launch journal with `lead: true` and `coordinator: true` for an existing project chat with no coordinator;
+  `agent.add` with `lead: true`; no `project.rename`, `tab.rename` or rebinding of the Swarm's name; no visibility field.
+
+- [ ] Tests: New Harness in a project chat with no coordinator sends `swarmRole: lead` and joins with `lead: true`, the
+  first message in that join, and posts no rename; with a coordinator it stays a worker (existing tests get a
+  coordinator in their fixture). Run: they fail. Commit the failing tests.
+- [ ] `SuperTabLaunch.open` reads the snapshot for a new journal in an existing Swarm and marks the coordinator start;
+  `complete` skips the renames and rebinding for it; the visibility field is for new Swarms and projects only.
+  Run the launch and recovery tests. Commit.
