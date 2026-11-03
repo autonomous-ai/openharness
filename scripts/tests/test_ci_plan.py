@@ -65,6 +65,8 @@ class SelectionTests(unittest.TestCase):
         saver = (workflows / "backend-cache.yml").read_text()
         self.assertRegex(saver, r"(?ms)^on:.*^  push:\n    branches: \[main\]")
         self.assertIn("actions/cache/save@", saver)
+        # A manual run from another branch would save a cache only that branch reads (review of #2822).
+        self.assertRegex(saver, r"(?m)^  mongod:\n    if: github\.ref == 'refs/heads/main'$")
         self.assertIn(f"key: {key}", saver)
         self.assertIn("path: /tmp/harness-super-tab-mongodb-binaries", job)
         self.assertIn("path: /tmp/harness-super-tab-mongodb-binaries", saver)

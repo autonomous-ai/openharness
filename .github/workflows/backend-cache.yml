@@ -19,6 +19,7 @@ concurrency:
 
 jobs:
   mongod:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
