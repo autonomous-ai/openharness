@@ -1107,6 +1107,24 @@ void main() {
           find.text('This machine runs the PM of a project.'),
           findsOneWidget,
         );
+        // It no longer asks for the Remove that was just refused.
+        expect(
+          find.textContaining('remove this Mac from the Swarm'),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const Key('team-account-lock-not-now-why')),
+          findsOneWidget,
+        );
+        if (shots != null) {
+          debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+          await tester.binding.setSurfaceSize(const Size(1000, 700));
+          await tester.pumpAndSettle();
+          await captureWindow(tester, shots, '7-remove-refused-not-now');
+          await tester.binding.setSurfaceSize(null);
+          debugDefaultTargetPlatformOverride = null;
+          await tester.pumpAndSettle();
+        }
 
         await tester.tap(find.byKey(const Key('team-account-lock-not-now')));
         await tester.pumpAndSettle();
