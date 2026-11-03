@@ -51,7 +51,8 @@ import { judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWE
 import { archivable, archiveLine, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
-import { memberSwarms } from './swarmRows.js'
+import { machineSwarms, memberSwarms } from './swarmRows.js'
+import type { MachineRename } from './machineRenames.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts, ms } from './parts/light.js'
 import { endSteps, stepEndedRows, stepsOf } from './steps.js'
@@ -103,6 +104,8 @@ const PROPOSED = 'This file already went with a proposal. Ask your owner to send
 const hash = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 /** The fields of a Swarm's row the store reads. A migrated row still keeps its whole old state (`legacyState`, about 1 MB
  *  for a busy Swarm) until the maintenance script removes it, and every command and read loads this row. */
+/** The most Swarms a rename reaches at once, as many as a host reads (read/host.ts FULL_TABS); its readings do the rest. */
+const MACHINE_RENAME_SWARMS = 500
 const SWARM_ROW = { id: true, ownerId: true, revision: true, format: true, deletedAt: true } satisfies Prisma.SuperTabSelect
 export type SwarmRow = Prisma.SuperTabGetPayload<{ select: typeof SWARM_ROW }>
 /** A Swarm whose state still waits for its split into parts (design section 6.1) is not served until it is split. */
@@ -3770,6 +3773,34 @@ export class SuperTabStore {
    *  needs `reviewOf`, the group the pass read as its task, which this write reads again: it stays open unless that task is
    *  done or cancelled and that task's pull requests are settled too. A review nobody is reviewing closes the same way
    *  (tidy.ts reviewClosable). True when it archived. */
+  /**
+   * A machine its owner renamed (machineRenames.ts): every Swarm it is in shows the name from its owner's account row now, its
+   * Mac's Team account pools with it (machines.ts followAccountName), as its next reading would. One Swarm at a time, each
+   * written only when its name differs; a Swarm that fails is logged and left to that reading. The Swarms renamed.
+   */
+  async machineRenamed({ machineId, ownerId, autonomousEnv }: MachineRename): Promise<number> {
+    const row = await this.db.machine.findFirst({ where: { machineId, userId: ownerId, autonomousEnv, ...machineAlive }, select: { name: true } })
+    const name = accountMachineName(row)
+    if (!name) return 0
+    let renamed = 0
+    for (const tabId of await machineSwarms(this.db, autonomousEnv, machineId, MACHINE_RENAME_SWARMS)) {
+      try {
+        if (await transaction(this.db, async tx => {
+          const swarm = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+          if (!swarm || swarm.deletedAt) return false
+          const loaded = await loadRow(tx, requireParts(swarm)), state = cloneData(loaded.state)
+          const pool = machineContribution(state, machineId)
+          if (!pool || pool.removal || !followAccountName(state, pool, name)) return false
+          await this.save(tx, loaded, state, clock.next())
+          return true
+        })) renamed++
+      } catch (error) {
+        logger.warn('[swarm] a machine rename did not reach a Swarm', { tabId, machineId, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+    return renamed
+  }
+
   async archiveFinished(tabId: string, groupId: string, checked: Readonly<Record<string, 'merged' | 'closed'>>, reviewOf?: string): Promise<boolean> {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
