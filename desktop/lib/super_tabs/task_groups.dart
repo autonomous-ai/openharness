@@ -48,3 +48,27 @@ SuperTabTaskGroup superTabTaskGroupOf(
     _ => SuperTabTaskGroup.rest,
   };
 }
+
+/// [tasks] in their groups, in the groups' order and each in the order given:
+/// how the sidebar lists them and how next unread walks them.
+Map<SuperTabTaskGroup, List<SuperTabConversation>> superTabGroupTasks(
+  Iterable<SuperTabConversation> tasks, {
+  required String readerId,
+  int Function(SuperTabConversation task)? mentions,
+  int Function(SuperTabConversation task)? needsHuman,
+}) {
+  final grouped = {
+    for (final group in SuperTabTaskGroup.values)
+      group: <SuperTabConversation>[],
+  };
+  for (final task in tasks) {
+    grouped[superTabTaskGroupOf(
+          task,
+          readerId: readerId,
+          mentions: mentions?.call(task) ?? 0,
+          needsHuman: needsHuman?.call(task) ?? 0,
+        )]!
+        .add(task);
+  }
+  return grouped;
+}

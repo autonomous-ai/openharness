@@ -823,20 +823,13 @@ class ProjectSidebar extends StatelessWidget {
   List<Widget> _workgroups(_ProjectReading reading) {
     final project = reading.project;
     final groups = _newestFirst(reading).where(_keptByFilter).toList();
-    final grouped = {
-      for (final group in SuperTabTaskGroup.values)
-        group: <SuperTabConversation>[],
-    };
-    for (final group in groups) {
-      grouped[superTabTaskGroupOf(
-            group,
-            readerId: controller.accountId,
-            mentions: attention?.mentionsIn(group.id) ?? 0,
-            // Asked once per build already (_ProjectReading).
-            needsHuman: reading.waiting.contains(group.id) ? 1 : 0,
-          )]!
-          .add(group);
-    }
+    final grouped = superTabGroupTasks(
+      groups,
+      readerId: controller.accountId,
+      mentions: (g) => attention?.mentionsIn(g.id) ?? 0,
+      // Asked once per build already (_ProjectReading).
+      needsHuman: (g) => reading.waiting.contains(g.id) ? 1 : 0,
+    );
     return groups.isEmpty
         ? [
             Padding(
@@ -1166,12 +1159,17 @@ List<SuperTabConversation> superTabOpenWorkgroups(
 /// The chats in the order the sidebar lists them, for Option+Shift+Down and
 /// Up (Slack's next unread): the reader's one Buddy chat (`# buddy`, first
 /// under Projects), each project from A to Z, its chat then its open
-/// workgroups newest first, then the reader's project Buddy chats.
-List<String> superTabSidebarOrder(SuperTabController controller) {
+/// workgroups in their groups (#2309), each newest first, then the reader's
+/// project Buddy chats. [needsHuman] is the sidebar's.
+List<String> superTabSidebarOrder(
+  SuperTabController controller, {
+  int Function(SuperTabConversation group)? needsHuman,
+}) {
   final snapshot = controller.snapshot;
   if (snapshot == null) return const [];
   final projects = [...snapshot.projects]
     ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+  final attention = SuperTabAttention.of(controller);
   return [
     if (controller.oneBuddy)
       if (controller.buddyChat(SuperTabController.kSwarmBuddyKey)
@@ -1180,7 +1178,13 @@ List<String> superTabSidebarOrder(SuperTabController controller) {
     for (final project in projects) ...[
       if (snapshot.conversation(project.leadConversationId) != null)
         project.leadConversationId,
-      for (final group in superTabOpenWorkgroups(controller, project)) group.id,
+      for (final tasks in superTabGroupTasks(
+        superTabOpenWorkgroups(controller, project),
+        readerId: controller.accountId,
+        mentions: (g) => attention.mentionsIn(g.id),
+        needsHuman: needsHuman,
+      ).values)
+        for (final group in tasks) group.id,
     ],
     for (final project in projects)
       if (controller.buddyChat(project.id) case final chat?) chat.id,
