@@ -714,6 +714,44 @@ void main() {
         expect(server.threadMarkPosts, isNotEmpty);
       });
 
+      // A thread left open behind another Swarm or an app in the background:
+      // the Swarm is still read, and its replies must stay unread.
+      test(
+        'a hidden thread pane marks no new reply read until it is shown again',
+        () async {
+          final server = threaded();
+          final c = server.controller();
+          addTearDown(c.dispose);
+          await c.refresh();
+          c.openThread('message-1');
+          await c.loadThread();
+          c.threadPaneShown();
+          await pumpEventQueue();
+          server.threadMarkPosts.clear();
+          c.threadPaneHidden();
+          server.append('A reply while the pane was hidden.');
+          server.messages.last
+            ..['thread'] = 'message-1'
+            ..['replyTo'] = 'message-1'
+            ..['author'] = {
+              'kind': 'person',
+              'id': 'member',
+              'name': 'member@example.com',
+            };
+          final reply = server.messages.last['sequence'] as int;
+          await c.refresh();
+          await pumpEventQueue();
+          expect(server.threadMarkPosts, isEmpty);
+          expect(c.threadUnread(c.thread('lead', 'message-1')!), isTrue);
+          c.threadPaneShown();
+          await pumpEventQueue();
+          expect(server.threadMarkPosts, [
+            {'conversationId': 'lead', 'root': 'message-1', 'sequence': reply},
+          ]);
+          expect(c.threadUnread(c.thread('lead', 'message-1')!), isFalse);
+        },
+      );
+
       // A Swarm's view can be built while hidden: the canvas stays Offstage on a utility tab, and the app can start in the background.
       Map<String, dynamic> savedOpen() => {
         'tabId': 'tab',
