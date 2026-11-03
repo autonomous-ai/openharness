@@ -57,8 +57,8 @@ const RATE_LIMIT_MAX = 60
  * Per day, counted only for calls that reach the model. The minute cap alone let one account spend all
  * day: 60 a minute is 86,400 calls. A person routing all day presses it a few hundred times; a loop does
  * not get far. The all-accounts ceiling bounds what Harness pays here in a day, under the same budget as
- * ⌘B routing and Hub translation. Past it, the CLI routes by its own heuristic (pickAgentHeuristic), so
- * routing degrades rather than stops. Both count in a UTC-day window shared through Redis (lib/rateLimit.ts).
+ * ⌘B routing and Hub translation. Past either, the CLI falls through to its own ladder (cli/src/lib/routeApi.ts,
+ * ending in pickAgentHeuristic), so routing degrades rather than stops. Both count in a UTC-day window shared through Redis (lib/rateLimit.ts).
  */
 const DAY_MS = 24 * 60 * 60_000
 const PER_ACCOUNT_PER_DAY = 1_000
@@ -262,12 +262,12 @@ export async function agentRouteRoutes(app: FastifyInstance): Promise<void> {
 
       // The account's own count first, so calls refused for one account never spend everyone's ceiling.
       if (!(await perAccountDay.allows(userId))) {
-        sendError(reply, "You've used today's routing limit. Routing picks by name until tomorrow (UTC).", 'RATE_LIMITED', 429)
+        sendError(reply, "You've used today's routing limit. It resets at midnight UTC.", 'RATE_LIMITED', 429)
         return
       }
       if (!(await allAccountsDay.allows('all'))) {
         logger.error('agent-route: daily ceiling reached', { ceiling: ALL_ACCOUNTS_PER_DAY })
-        sendError(reply, "Harness's routing budget for today has run out. Routing picks by name until tomorrow (UTC).", 'ROUTE_BUDGET', 503)
+        sendError(reply, "Harness's routing budget for today has run out. It resets at midnight UTC.", 'ROUTE_BUDGET', 503)
         return
       }
 
