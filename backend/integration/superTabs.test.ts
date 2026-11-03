@@ -3933,7 +3933,7 @@ describe('machine removal', () => {
 
     const legacy = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/machines/test-host/removal`, headers: { authorization: `Bearer ${host.sub}` } })
     expect(legacy.statusCode, legacy.body).toBe(426)
-    expect(legacy.json().message).toBe('Update Harness to remove this machine.')
+    expect(legacy.json().error).toEqual({ code: 'UPDATE_REQUIRED', message: 'Update Harness to remove this machine.' })
     for (const unreadable of [projectId, pmId, workerId, 'Secret Project', 'Secret PM', 'Secret Builder', 'Secret Task', '/secret/repository']) {
       expect(legacy.body).not.toContain(unreadable)
     }
