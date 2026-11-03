@@ -66,6 +66,24 @@ group, all in one transaction, so a retry or a second worker pass posts nothing 
 - **audience:** the message goes to the task's own Engineer in the task's own chat. Review and comment text is the
   public PR's, quoted up to 300 characters.
 
+## Standards (ENGINEERING.md, MongoDB skills)
+
+- **4, push over polling: broken on purpose.** No GitHub webhook reaches the backend, and the app has no webhook URL or
+  secret configured. Adding them is an app change that needs Ken's go. What replaces push: one pass a minute, conditional
+  reads, so an unchanged pull request costs a free 304 and posts nothing. It reads only open tasks active this week, and
+  at most `WATCH_GROUPS` (200) of them, the most recently active first. To be replaced by the app's `pull_request`,
+  `pull_request_review`, `issue_comment` and `check_suite` webhook events once Ken approves; the pass then goes.
+- **4, every query served by an index; nothing grows without a bound.** The pass's one read is an aggregate on
+  `[workFinished, archived, lastActivityAt]`: equality, equality, then the range, with `$sort` on the range field and
+  `$limit` (Equality, Sort, Range; the sort comes from the index). `data.*` and `deleted` filter the fetched documents.
+  A plan test pins IXSCAN and the documents examined (`integration/workerIndexPlans.test.ts`). No new index. Keys
+  stored: at most 50 per linked pull request, on the group, gone with it.
+- **6, failures are seen.** A pull request GitHub cannot read is counted, and each pass that could not read one, or
+  posted something, logs one `[swarm-pr-events] pass` line with `groups`, `pulls`, `unreadable` and `posted`. Every
+  GitHub call has the app's request timeout. A write runs once per event, however often it is retried.
+- **8, measurable:** that same line is the measure.
+- **10, platforms:** backend only (the worker). Clients draw the messages as any system line.
+
 ## Review Focus
 
 - A draft PR's stale failed `ci/required` must not post "CI failed" in the minute after the PR is marked ready, before the new runs exist. (Task 1 test `ignores a draft's failure on the same head`.)
