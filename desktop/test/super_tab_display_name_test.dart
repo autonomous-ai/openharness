@@ -1,4 +1,9 @@
+import 'dart:async';
+import 'dart:io';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -7,9 +12,27 @@ import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/leaderboard/model.dart';
 import 'package:harness/super_tabs/leaderboard/person_row.dart';
 import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/profile_sheet.dart';
 import 'package:harness/super_tabs/view.dart';
 
+import 'box_render_preview_test.dart' show loadPreviewFonts;
 import 'support/super_tab_fixture.dart';
+
+/// Set to a folder to write the PR's screenshots there.
+final shots = Platform.environment['SUPER_TAB_DISPLAY_NAME_SHOTS'];
+final _picture = GlobalKey();
+
+Future<void> _shot(WidgetTester tester, String name) async {
+  await tester.runAsync(() async {
+    final boundary =
+        _picture.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+    final image = await boundary.toImage();
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    await Directory(shots!).create(recursive: true);
+    await File('$shots/$name.png').writeAsBytes(bytes!.buffer.asUint8List());
+    image.dispose();
+  });
+}
 
 // A person sets the name the Swarm shows for them (backend personNames.ts):
 // it shows wherever a person shows, and their username stays the tag.
@@ -48,6 +71,9 @@ SuperTabMessage _from(String id, String email) => SuperTabMessage.fromJson({
 });
 
 void main() {
+  setUpAll(() async {
+    if (shots != null) await loadPreviewFonts();
+  });
   group('the model', () {
     final swarm = _swarm([
       _person(
@@ -114,13 +140,16 @@ void main() {
 
     Future<SuperTabController> show(
       WidgetTester tester,
-      ConversationServer server,
-    ) async {
+      ConversationServer server, {
+      Brightness brightness = Brightness.dark,
+    }) async {
       final c = server.controller();
       await c.refresh();
       await tester.pumpWidget(
         MaterialApp(
-          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          theme: grid.buildAppTheme(brightness: brightness),
+          builder: (context, child) =>
+              RepaintBoundary(key: _picture, child: child),
           home: Scaffold(
             body: SuperTabView(
               controller: c,
@@ -204,5 +233,50 @@ void main() {
       expect(c.mentions(c.selectedId), {'relay': '@wkpnjjhbnm'});
       await tester.pump(const Duration(seconds: 1));
     });
+
+    for (final brightness in Brightness.values) {
+      testWidgets('screenshots for review, ${brightness.name}', (tester) async {
+        await tester.binding.setSurfaceSize(const Size(1200, 720));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        grid.AppTheme.brightness.value = brightness;
+        addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
+        final s = server();
+        // The reader is the person who set the name, to show their profile.
+        final c = await show(tester, s, brightness: brightness);
+        await tester.tap(find.byKey(const ValueKey('super-members-button')));
+        await tester.pumpAndSettle();
+        await _shot(tester, 'chat-people-${brightness.name}');
+        await tester.tap(find.byKey(const ValueKey('super-members-close')));
+        await tester.pumpAndSettle();
+        await tester.tap(composer);
+        await tester.enterText(composer, 'Thanks @mi');
+        await tester.pumpAndSettle();
+        await _shot(tester, 'picker-${brightness.name}');
+        await tester.enterText(composer, '');
+        await tester.pumpAndSettle();
+        unawaited(
+          showSuperTabProfile(tester.element(find.byType(SuperTabView)), c),
+        );
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const ValueKey('super-name-field')),
+          'River Tran',
+        );
+        await tester.pump();
+        await _shot(tester, 'profile-${brightness.name}');
+        s.refuse = {
+          'code': 'NAME_TAKEN',
+          'message': 'Someone here already goes by that name.',
+        };
+        await tester.enterText(
+          find.byKey(const ValueKey('super-name-field')),
+          'Minh Nguyen',
+        );
+        await tester.pump();
+        await tester.tap(find.byKey(const ValueKey('super-name-save')));
+        await tester.pumpAndSettle();
+        await _shot(tester, 'profile-taken-${brightness.name}');
+      }, skip: shots == null);
+    }
   });
 }
