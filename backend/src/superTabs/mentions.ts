@@ -9,6 +9,7 @@ import { canReadGroup, groupProject, projectAgent, projectOf } from './projects.
 import { isSwarmBuddyChat } from './buddies.js'
 import { groupsBy, readBy } from './parts/indexed.js'
 import { deliveredCopies } from './pageReads.js'
+import { shownNameOf } from './personNames.js'
 import { usernameOf } from './usernames.js'
 
 type Tx = Prisma.TransactionClient
@@ -261,8 +262,8 @@ export async function listMentions(tx: Tx, tabId: string, state: SuperTabState, 
   return tagged.map(({ row, group }) => {
     const message = messages.find(m => m.id === row.messageId)
     const author = message?.author as { kind?: string; name?: string; displayName?: string } | undefined
-    // A person's name in a message is their email: the inbox shows their username, as everywhere in the Swarm.
-    const authorName = author?.kind === 'person' ? usernameOf(state, row.authorAgentId) ?? 'Someone' : author?.displayName ?? author?.name ?? 'Lead'
+    // A person's name in a message is their email: the inbox shows the name the Swarm shows for them (personNames.ts).
+    const authorName = author?.kind === 'person' ? shownNameOf(state, row.authorAgentId) ?? 'Someone' : author?.displayName ?? author?.name ?? 'Lead'
     return { id: row.id, projectId: row.projectId, projectName: projectOf(state, group.projectId ?? 'lead').name,
       conversationId: row.conversationId, conversationTitle: group.title, messageId: row.messageId,
       leadId: row.authorAgentId, leadName: authorName, text: (message?.text ?? '').slice(0, 200),
