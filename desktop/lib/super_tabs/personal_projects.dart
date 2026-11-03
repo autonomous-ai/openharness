@@ -440,6 +440,10 @@ class PersonalProjects extends ChangeNotifier {
       final id = projects[repo];
       if (!_isTab(repo) || id == null || name == kTabProjectName) continue;
       if (c.snapshot?.projectById(id)?.name != kTabProjectName) continue;
+      // A refused rename waits as a refused create does ([_failed]).
+      final key = '${c.accountId}/${c.tabId}/$repo/name';
+      final retryAt = _retryAt[key];
+      if (retryAt != null && clock.now().isBefore(retryAt)) continue;
       try {
         await c.request(
           'POST',
@@ -454,8 +458,11 @@ class PersonalProjects extends ChangeNotifier {
           },
         );
       } catch (_) {
+        _failed(key);
         continue;
       }
+      _failures.remove(key);
+      _retryAt.remove(key);
       if (!eligible(c)) return changed;
       changed = true;
     }
