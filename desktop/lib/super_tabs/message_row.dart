@@ -142,15 +142,19 @@ class SuperTabMessageRow extends StatefulWidget {
   static const avatarGap = 12.0;
   static const bodyInset = horizontalInset + avatarSize + avatarGap;
 
-  /// Compact only a few short updates. Reports and long runs retain their own
-  /// speaker identity, so scrolling through agent output does not lose the who.
+  /// A header at least every this many rows of one run, so the chat can cut
+  /// its oldest rows at a header and a page read in above regroups none of
+  /// the rows shown (view.dart).
+  static const groupLimit = 20;
+
+  /// The messages that join the one above them under its header: like Slack,
+  /// one sender's messages within five minutes of each other, whatever their
+  /// length (Huy, 2026-11-03, #2419), up to [groupLimit] to a group.
   static Set<String> consecutiveUpdates(List<SuperTabMessage> messages) {
     final joined = <String>{};
     var first = 0;
     for (var i = 1; i < messages.length; i++) {
-      if (i - first < 3 &&
-          groupsWith(messages[i], messages[i - 1]) &&
-          groupsWith(messages[i], messages[first])) {
+      if (i - first < groupLimit && groupsWith(messages[i], messages[i - 1])) {
         joined.add(messages[i].id);
       } else {
         first = i;
@@ -159,21 +163,22 @@ class SuperTabMessageRow extends StatefulWidget {
     return joined;
   }
 
-  static bool groupsWith(SuperTabMessage current, SuperTabMessage? previous) {
+  /// Whether [current] joins [previous]'s header: the same sender, within five
+  /// minutes on the same day. In the chat, a thread reply shown there stands
+  /// on its own with its Replied in thread line; [inThread], replies group.
+  static bool groupsWith(
+    SuperTabMessage current,
+    SuperTabMessage? previous, {
+    bool inThread = false,
+  }) {
     if (previous == null ||
         // A message that started a session stands on its own, with its line.
         current.sessionRoot ||
         previous.sessionRoot ||
-        current.replyTo != null ||
-        previous.replyTo != null ||
-        current.text.length > 280 ||
-        previous.text.length > 280 ||
-        current.text.contains('\n') ||
-        previous.text.contains('\n') ||
-        current.text.contains('?') ||
-        previous.text.contains('?') ||
-        current.text.contains('？') ||
-        previous.text.contains('？') ||
+        // An older reply keeps its quote under its own header.
+        (current.replyTo != null && !current.threadReply) ||
+        (previous.replyTo != null && !previous.threadReply) ||
+        (!inThread && (current.threadReply || previous.threadReply)) ||
         current.authorId.isEmpty ||
         current.authorId != previous.authorId ||
         current.authorName != previous.authorName ||
@@ -264,6 +269,32 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     );
   }
 
+  /// A grouped message's time, shown at its left while it is hovered or
+  /// focused, as Slack does: on its first line, right-aligned under the
+  /// avatars above, free to reach into the row's inset.
+  Widget? _groupedTime(BuildContext context, bool active) {
+    final time = widget.message.createdAt;
+    if (!active || time == null) return null;
+    final line = SwarmType.body(context);
+    return ExcludeSemantics(
+      child: SizedBox(
+        height: line.fontSize! * line.height!,
+        child: OverflowBox(
+          maxWidth:
+              SuperTabMessageRow.horizontalInset +
+              SuperTabMessageRow.avatarSize,
+          alignment: Alignment.centerRight,
+          child: Text(
+            TimeOfDay.fromDateTime(time.toLocal()).format(context),
+            key: ValueKey('super-row-time-${widget.message.id}'),
+            maxLines: 1,
+            style: SwarmType.time(context),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
@@ -349,7 +380,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                           width: SuperTabMessageRow.avatarSize,
                           padding: EdgeInsets.only(top: slack),
                           child: widget.grouped
-                              ? null
+                              ? _groupedTime(context, active)
                               : ExcludeSemantics(
                                   child: Tooltip(
                                     message: _identityDetails,

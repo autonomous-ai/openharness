@@ -35,7 +35,7 @@ void main() {
     'conversationId': 'lead',
     'sequence': n,
     'thread': thread ?? 'm$n',
-    if (thread != null) 'replyTo': thread,
+    'replyTo': ?thread,
     if (alsoInChat) 'alsoInChat': true,
     'text': text,
     'attachments': <dynamic>[],
@@ -66,6 +66,22 @@ void main() {
         'm5',
         'm6',
       });
+    });
+
+    test('a long run shows its name again every twenty rows', () {
+      // So the chat can cut its oldest rows at a name (view.dart).
+      final messages = [
+        for (var i = 0; i < 45; i++)
+          message(i, start.add(Duration(seconds: 10 * i))),
+      ];
+      final joined = SuperTabMessageRow.consecutiveUpdates(messages);
+      expect(
+        [
+          for (final m in messages)
+            if (!joined.contains(m.id)) m.id,
+        ],
+        ['m0', 'm20', 'm40'],
+      );
     });
 
     test('a gap over five minutes starts a header', () {

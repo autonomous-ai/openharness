@@ -442,8 +442,11 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                           widget.row(
                             reply,
                             index > 0 &&
-                                replies[index - 1].authorId == reply.authorId &&
-                                replies[index - 1].fromAgent == reply.fromAgent,
+                                SuperTabMessageRow.groupsWith(
+                                  reply,
+                                  replies[index - 1],
+                                  inThread: true,
+                                ),
                           ),
                         for (final sent in pending) widget.outgoing(sent),
                       ],

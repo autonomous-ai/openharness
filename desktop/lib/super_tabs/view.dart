@@ -3365,10 +3365,11 @@ class _SuperTabViewState extends State<SuperTabView>
     return data is SliverMultiBoxAdaptorParentData ? data.layoutOffset : null;
   }
 
-  /// The rows that join the one above them, without their name: runs of
-  /// one author's short updates, three to a group. Groups are counted from
-  /// the list's dividing row both ways, so a page read in above regroups
-  /// none of the rows already shown.
+  /// The rows that join the one above them, without their name: one
+  /// sender's messages within five minutes of each other, up to
+  /// [SuperTabMessageRow.groupLimit] to a group. Groups are counted from the
+  /// list's dividing row both ways, so a page read in above regroups none of
+  /// the rows already shown.
   static Set<String> _joined(
     List<SuperTabMessage> messages,
     SuperTabMessage? split,
@@ -3382,11 +3383,9 @@ class _SuperTabViewState extends State<SuperTabView>
     // oldest row.
     var group = [at - 1];
     for (var i = at - 2; i >= -1; i--) {
-      final newest = group.first;
       if (i >= 0 &&
-          newest - i < 3 &&
-          SuperTabMessageRow.groupsWith(messages[i + 1], messages[i]) &&
-          SuperTabMessageRow.groupsWith(messages[newest], messages[i])) {
+          group.first - i < SuperTabMessageRow.groupLimit &&
+          SuperTabMessageRow.groupsWith(messages[i + 1], messages[i])) {
         group.add(i);
         continue;
       }
