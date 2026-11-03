@@ -56,7 +56,8 @@ import { autoJoinSwarms, machineSwarms, memberSwarms } from './swarmRows.js'
 import type { MachineRename } from './machineRenames.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts, ms } from './parts/light.js'
-import { endSteps, stepEndedRows, stepsOf } from './steps.js'
+import { endSteps, ownerOf, stepEndedRows, stepsOf } from './steps.js'
+import { pullRequestEvents, type PullRequestWatch } from './pullRequestEvents.js'
 import { guardedWrite, partId } from './parts/write.js'
 import { retryable } from './retry.js'
 import { touchesFor } from './parts/touches.js'
@@ -485,8 +486,14 @@ const receiptOrder = (m: Pick<SuperTabMessage, 'recipientIds'>) => (a: PageDeliv
  *  its source (liveness.ts loseTask), a machine leaving the Swarm (machines.ts removalEnded, commands.ts removeMachine), and
  *  the machine a Product Manager started on (leadStart.ts leadJoined; Diego, 10-30) or a removed session is still held on
  *  (liveness.ts unpurged; review 2 of #2258). */
-function withoutMachineNames(m: SuperTabMessage): SuperTabMessage {
-  const source = m.source as { kind?: unknown; reason?: unknown; machine?: unknown } | null
+export function withoutMachineNames(m: SuperTabMessage): SuperTabMessage {
+  const source = m.source as { kind?: unknown; reason?: unknown; machine?: unknown; machines?: unknown } | null
+  // A Buddy model switch's line names every machine serving the model (buddyModel.ts).
+  if (source?.kind === 'system' && Array.isArray(source.machines)) {
+    const { machines, ...rest } = source
+    const names = (machines as unknown[]).filter((n): n is string => typeof n === 'string' && n.length > 0).sort((a, b) => b.length - a.length)
+    return { ...m, text: names.reduce((text, name) => text.split(name).join('a machine'), m.text), source: rest as SuperTabMessage['source'] }
+  }
   if (source?.kind === 'work-lost' && typeof source.reason === 'string') {
     const reason = lostReasonWithoutMachine(source.reason)
     return reason === source.reason ? m : { ...m, text: m.text.split(source.reason).join(reason), source: { ...source, reason } as SuperTabMessage['source'] }
@@ -3921,6 +3928,39 @@ export class SuperTabStore {
       }
     }
     return renamed
+  }
+
+  /**
+   * What GitHub says of [watch], a pull request linked to the task [groupId] (pullRequestEvents.ts): each event its Engineer
+   * was not told yet goes to it as a message in the task, and every event is recorded there, in one write, so a retry or a
+   * second pass posts none twice. A task with no Engineer in the Swarm records them and posts nothing. A step, an archived or
+   * a finished task, or a pull request it no longer links, is left alone. The messages posted.
+   */
+  async pullRequestSeen(tabId: string, groupId: string, watch: PullRequestWatch, botLogin: string | null): Promise<number> {
+    return transaction(this.db, async tx => {
+      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+      if (!row || row.deletedAt) return 0
+      const loaded = await loadRow(tx, requireParts(row), { groupIds: [groupId] }), state = cloneData(loaded.state)
+      const group = state.conversations.find(c => c.id === groupId)
+      // A task its agent left (no assignment) records what happens, so its next Engineer hears only what is new.
+      if (!group || group.archived || group.reviewOf || !group.pullRequestUrls?.includes(watch.url)
+        || ['done', 'cancelled'].includes(group.assignment?.status ?? '')) return 0
+      const now = this.now(), seen = group.pullRequestEvents?.[watch.url] ?? []
+      const { events, keys } = pullRequestEvents(watch, seen, botLogin, now)
+      if (keys.length === seen.length && keys.every((key, i) => key === seen[i])) return 0
+      group.pullRequestEvents = { ...group.pullRequestEvents, [watch.url]: keys }
+      const ownerId = ownerOf(state, group), owner = ownerId ? state.agents.find(a => a.id === ownerId) : undefined
+      // Written as its project's Lead, as the Swarm's own lines are (tidy.ts archiveLine); as the Engineer itself without one.
+      const leadId = state.conversations.find(c => c.id === groupProject(state, group).leadConversationId)?.leadId
+      const by = state.agents.find(a => a.id === leadId) ?? owner
+      const rows: MessageDraft[] = owner && by ? events.map(event => ({ id: stableId('pull-request-event', group.id, watch.url, event.key), conversationId: group.id,
+        author: { kind: 'agent', id: by.id, name: by.name, displayName: agentDisplayName(state.agents, by.id), membershipGeneration: by.membershipGeneration },
+        text: event.text, replyTo: null, recipients: [owner.id], source: { kind: 'system' } })) : []
+      const sequences = numberMessages(state, rows, now)
+      await this.save(tx, loaded, state, clock.next())
+      await this.writeMessages(tx, tabId, state, rows, sequences)
+      return rows.length
+    })
   }
 
   async archiveFinished(tabId: string, groupId: string, checked: Readonly<Record<string, 'merged' | 'closed'>>, reviewOf?: string): Promise<boolean> {

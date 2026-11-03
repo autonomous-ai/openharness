@@ -24,6 +24,9 @@ import { RebindSender, replacementObservations } from './replacements.js'
 import { TerminalHost } from './terminal.js'
 import { LimitResume } from './limitResume.js'
 import { LeadSwitchRequests, type SwitchRow } from './leadSwitchRequest.js'
+import { BuddyModelRequests, type BuddyModelRow } from './buddyModel.js'
+import { openDaemon } from '../agentClient/daemon.js'
+import { conversationTokens } from '../lib/conversationSize.js'
 import { isTeamDaemon } from './teamDaemon.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
@@ -203,6 +206,8 @@ export interface SuperTabHostOptions {
   sources?: SwarmSources
   /** What the contributed-machine executor reaches the local daemon with (superTabs/machines.ts), for a spec. */
   machines?: Partial<MachineDeps>
+  /** What carries out a Buddy's model switch here (superTabs/buddyModel.ts), for a spec. */
+  buddyModels?: Pick<BuddyModelRequests, 'serve'>
 }
 
 const defaultAgentCommand = (core: CoreApi, machineId: string) => agentCommandPrefix(core.daemon, machineId,
@@ -509,6 +514,8 @@ export class SuperTabHost {
   private readonly releases = new Set<string>()
   /** The switches the Swarm asked of this machine's PMs (leadSwitchRequest.ts). */
   private readonly leadSwitches: LeadSwitchRequests
+  /** The model switches the Swarm asked of this machine's Buddies (buddyModel.ts). */
+  private readonly buddyModels: Pick<BuddyModelRequests, 'serve'>
   private readonly rebinds: RebindSender
   /** Eligibility and failures belong to this stop and native runtime; a new runtime or stop gets a fresh decision. */
   /** `failures` counts final answers toward the five tries; `waits` the transient ones behind the current backoff. */
@@ -600,6 +607,11 @@ export class SuperTabHost {
         .some(a => a.tabId === tabId && a.assignmentId === assignmentId && a.harnessId === harnessId) })
     this.rebinds = new RebindSender((path, body) => backend(this.core, 'POST', path, body), this.now)
     this.leadSwitches = new LeadSwitchRequests(core, machineId, { now: this.now, log: this.log, team: isTeamDaemon })
+    // Over this machine's own daemon socket, which answers as the machine owner: the Buddy runs only on its owner's machine.
+    this.buddyModels = options.buddyModels ?? new BuddyModelRequests({ dataDir: core.dataDir, now: this.now, log: this.log,
+      open: () => openDaemon({ dataDir: core.dataDir, port: core.daemon.port, machineId }),
+      post: (tabId, agentId, operationId, command) => backend(core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId, asAgentId: agentId, command }),
+      transcript: harnessId => core.agents.byAgent(harnessId)?.transcriptPath, tokens: conversationTokens })
     this.sources = options.sources ?? { feed: new HostFeed(core, machineId, { now: this.now }), reads: new SwarmReads(core) }
     this.journal = { version: 1, machineId, entries: {} }
     if (existsSync(this.file)) {
@@ -779,6 +791,21 @@ export class SuperTabHost {
   }
 
   /** Re-read stop intent and native launch authority; require core evidence before confirming removal. */
+  /** A Buddy's model switch (buddyModel.ts): its main row carries the request, and its thread sessions on this machine move with
+   *  it. Not awaited: a move relaunches Claude Code and must not hold up this poll's deliveries. */
+  private serveBuddyModels(data: readonly unknown[]): void {
+    const rows = data.map(object).filter(row => identifier(row.tabId) && object(row.agent).machineId === this.machineId
+      && identifier(object(row.agent).harnessId) && object(row.agent).buddyOf)
+    const ownerOf = (row: Record<string, unknown>) => { const of = object(object(row.agent).buddyOf); return `${row.tabId}\0${of.personId}\0${of.generation}` }
+    for (const row of rows) {
+      const agent = object(row.agent)
+      if (agent.buddySession || !agent.modelRequest) continue
+      const sessions = rows.filter(other => object(other.agent).buddySession && ownerOf(other) === ownerOf(row))
+      void this.buddyModels.serve(row as unknown as BuddyModelRow, sessions as unknown as BuddyModelRow[])
+        .catch(error => this.log(`Buddy model: ${error instanceof Error ? error.name : typeof error}`))
+    }
+  }
+
   private async releaseWorker(target: HostAgent): Promise<void> {
     const { tabId, agent } = target
     const key = `${tabId}:${agent.id}`
@@ -1083,6 +1110,7 @@ export class SuperTabHost {
     const listed = new Set<string>()
     const running: HostAgent[] = []
     const leads = new Set<string>(), ended = new Set<string>()
+    this.serveBuddyModels(data)
     for (const item of data) {
       const row = object(item), agent = object(row.agent)
       if (!identifier(row.tabId) || !identifier(agent.id) || !identifier(agent.harnessId) || agent.machineId !== this.machineId) continue

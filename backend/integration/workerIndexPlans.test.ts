@@ -189,3 +189,30 @@ describe('the usage-receipt sweep\'s stuck check (lib/productUsageReceiptSweep.t
     expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(1)
   })
 })
+
+// Dee, #1891; ENGINEERING.md 4 and the MongoDB query skill: the minute's pull request watch reads open tasks through the finished
+// mark's index, equality on its first two fields and the activity range last, newest first and capped.
+describe('the pull request watch', () => {
+  it('reads the open tasks active this week by the finished mark index, the newest first, capped', async () => {
+    const { watchPullRequests } = await import('../src/superTabs/pullRequestEvents.js')
+    let n = 0
+    const group = (activeAt: number, patch: { workFinished?: boolean; data?: Record<string, unknown> } = {}) => {
+      const key = `g${++n}`
+      return { id: `tab-w:${key}`, tabId: 'tab-w', key, version: 1, changedAt: new Date(NOW), ordinal: n, agentIds: [], lastActivityAt: new Date(activeAt),
+        workFinished: patch.workFinished ?? false, data: { pullRequestUrls: [`https://github.com/acme/app/pull/${n}`], ...patch.data } }
+    }
+    // Finished work and work quiet for a month, which a read the index does not bound examines too; a step, which it filters.
+    await db.swarmGroup.createMany({ data: [
+      ...Array.from({ length: 20 }, () => group(NOW - DAY, { workFinished: true })), ...Array.from({ length: 20 }, () => group(NOW - 30 * DAY)),
+      group(NOW - 3 * 3_600_000), group(NOW - 2 * 3_600_000), group(NOW - 3_600_000, { data: { reviewOf: 'g1' } }), group(NOW - 60_000),
+    ] })
+    const asked: string[] = []
+    const reader = { watch: async (url: string) => { asked.push(url); return null }, botLogin: async () => null, done: async () => {} }
+    const entries = await profiled(db, () => watchPullRequests(db, { pullRequestSeen: async () => 0 }, reader, NOW, 2))
+    expect(asked).toEqual(['https://github.com/acme/app/pull/44', 'https://github.com/acme/app/pull/42'])
+    const rows = reads(entries, 'SwarmGroup', ['workFinished', 'lastActivityAt'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ workFinished: 1, archived: 1, lastActivityAt: 1/)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(3)
+  })
+})

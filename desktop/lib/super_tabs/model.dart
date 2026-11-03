@@ -177,6 +177,15 @@ class SuperTabAgent {
       switchRequest = row['switchRequest'] is Map
           ? Map.unmodifiable(superTabMap(row['switchRequest']))
           : null,
+      gridModel = row['gridModel'] as String?,
+      modelRequest = switch (row['modelRequest']) {
+        {'id': final String id} && final Map request => (
+          id: id,
+          gridModel: request['gridModel'] as String?,
+          name: request['name'] as String?,
+        ),
+        _ => null,
+      },
       profileId = row['profileId'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
@@ -199,6 +208,15 @@ class SuperTabAgent {
   /// A Product Manager's switch to another engine or account that is asked for
   /// and not yet done (backend `switchRequest`); null otherwise.
   final Map<String, dynamic>? switchRequest;
+
+  /// The model on the Swarm's grid it runs on; null on its own subscription
+  /// (backend Agent.gridModel).
+  final String? gridModel;
+
+  /// A person's switch of their Buddy's model that is asked for and not yet
+  /// done (backend buddyModel.ts `modelRequest`); null otherwise. A null
+  /// [gridModel] there is the way back to their subscription.
+  final ({String id, String? gridModel, String? name})? modelRequest;
 
   /// The account on its machine it runs in; `default` when none is chosen.
   /// Null until the backend reports it: the engine's default account.
@@ -833,6 +851,10 @@ class SuperTabSnapshot {
     return '${agentName(agentId)} is the ${coordinatorNameOf(project.id)} of project ${project.name}. Delete the project first.';
   }
 
+  /// The person [personId] by the name the Swarm shows: their username; null for someone not in it.
+  String? usernameOf(String personId) =>
+      people.where((p) => p.id == personId).firstOrNull?.username;
+
   String agentName(String id, {String fallback = 'Agent'}) =>
       agent(id)?.displayName ?? agent(id)?.name ?? fallback;
 
@@ -940,35 +962,40 @@ class SuperTabLocalModels {
   final String? error;
 }
 
-/// One model the Swarm's agents can run on now, as a machine's fresh reading says: on the Swarm's grid (`local`, a
-/// member's engine; `api`, an API a member shares), usable from any machine; or shared with the machine's owner and
-/// offered by them (`shared`), usable on that machine alone.
+/// One model a machine of the Swarm serves, as its reading says: on the Swarm's grid (`local`, a member's engine;
+/// `api`, an API a member shares), usable from any machine; or shared with the machine's owner and offered by them
+/// (`shared`), usable on that machine alone.
 typedef SuperTabLocalModelRow = ({
   String grid,
   String model,
   String name,
+  String machineId,
   String machine,
   String kind,
 });
 
-/// Every model the Swarm can use now, once each, from the machines' fresh readings (backend `MACHINE_FRESH_MS`).
+/// Every model the Swarm's machines serve now, once per machine, from their fresh readings (backend
+/// `MACHINE_FRESH_MS`); with [freshFor] null, from readings of any age. A Buddy-only machine is not one of the Swarm's
+/// (backend machines.ts `swarmMachines`).
 List<SuperTabLocalModelRow> superTabLocalModelRows(
   SuperTabSnapshot? snapshot, {
   required DateTime now,
-  Duration freshFor = const Duration(seconds: 45),
+  Duration? freshFor = const Duration(seconds: 45),
 }) {
   final local = snapshot?.localModels;
   if (local == null || !local.enabled) return const [];
   final rows = <SuperTabLocalModelRow>[];
   for (final pool in snapshot!.machines) {
     final observation = pool['observation'];
-    if (observation is! Map) continue;
+    if (pool['buddyOnly'] == true || observation is! Map) continue;
     final at = observation['receivedAt'];
     if (at is! num ||
-        now.difference(DateTime.fromMillisecondsSinceEpoch(at.toInt())) >
-            freshFor) {
+        (freshFor != null &&
+            now.difference(DateTime.fromMillisecondsSinceEpoch(at.toInt())) >
+                freshFor)) {
       continue;
     }
+    final machineId = pool['machineId'] as String? ?? '';
     for (final m
         in observation['localModels'] is List
             ? observation['localModels'] as List
@@ -981,11 +1008,16 @@ List<SuperTabLocalModelRow> superTabLocalModelRows(
         continue;
       }
       final grid = m['grid'] as String, model = m['model'] as String;
-      if (rows.any((r) => r.grid == grid && r.model == model)) continue;
+      if (rows.any(
+        (r) => r.machineId == machineId && r.grid == grid && r.model == model,
+      )) {
+        continue;
+      }
       rows.add((
         grid: grid,
         model: model,
         name: m['name'] is String ? m['name'] as String : model,
+        machineId: machineId,
         machine: pool['name'] as String? ?? 'A machine',
         kind: m['kind'] is String
             ? m['kind'] as String
