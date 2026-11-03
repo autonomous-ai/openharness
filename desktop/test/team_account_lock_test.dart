@@ -660,148 +660,174 @@ void main() {
   // the Machines view as the app shows it, this Mac joining, the window over
   // it at once, nothing behind it reachable, a wrong password, Try again, the
   // right one, and the Mac set up in Machines.
-  testWidgets(
-    'join → window at once → wrong password → Try again → set up, and Machines says so',
-    (tester) async {
-      Map<String, dynamic> pool(
-        String id, {
-        String? host,
-        Map<String, dynamic>? teamWork,
-      }) => {
-        'machineId': id,
-        'name': host == null ? 'Test host' : 'Test host · Team',
-        'contributorId': 'owner',
-        'scope': 'swarm',
-        'cwd': '/swarm',
-        'engines': ['codex'],
-        'maxAgents': 4,
-        'paused': false,
-        'observation': {'receivedAt': DateTime.now().millisecondsSinceEpoch},
-        'hostMachineId': ?host,
-        'teamWork': teamWork ?? {'allowed': true},
-      };
-      const notSetUp = {
-        'allowed': false,
-        'code': 'TEAM_ACCOUNT_REQUIRED',
-        'reason': 'Test host has no Harness Team account yet.',
-      };
-      final f = SuperTabLaunchFixture();
-      f.app.teamAccountHereForTest = true;
-      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
-      // A Swarm with a teammate, whose agents would run on this Mac.
-      (f.connection.server.state['people'] as List).add({
-        'id': 'peer',
-        'email': 'peer@example.com',
-        'role': 'collaborator',
-      });
-      f.connection.server.state['machines'] = [pool('m', teamWork: notSetUp)];
-      f.connection.teamCheck = {'state': 'wanted'};
-      final c = await f.app.superTabs.open(tabId);
-      await c.refresh();
-      var added = 0;
-      await tester.binding.setSurfaceSize(const Size(1000, 700));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      Future<void> openMachines() async {
-        await tester.pumpWidget(
-          MaterialApp(
-            builder: (context, child) => TeamAccountSetupLock(
-              app: f.app,
-              operatingSystem: 'macos',
-              child: child!,
+  for (final brightness in Brightness.values) {
+    testWidgets(
+      'join → window at once → wrong password → Try again → set up, and Machines says so (${brightness.name})',
+      (tester) async {
+        grid.AppTheme.brightness.value = brightness;
+        addTearDown(() => grid.AppTheme.brightness.value = Brightness.dark);
+        Map<String, dynamic> pool(
+          String id, {
+          String? host,
+          Map<String, dynamic>? teamWork,
+        }) => {
+          'machineId': id,
+          'name': host == null ? 'Test host' : 'Test host · Team',
+          'contributorId': 'owner',
+          'scope': 'swarm',
+          'cwd': '/swarm',
+          'engines': ['codex'],
+          'maxAgents': 4,
+          'paused': false,
+          'observation': {'receivedAt': DateTime.now().millisecondsSinceEpoch},
+          'hostMachineId': ?host,
+          'teamWork': teamWork ?? {'allowed': true},
+        };
+        const notSetUp = {
+          'allowed': false,
+          'code': 'TEAM_ACCOUNT_REQUIRED',
+          'reason': 'Test host has no Harness Team account yet.',
+        };
+        final f = SuperTabLaunchFixture();
+        f.app.teamAccountHereForTest = true;
+        f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+        // A Swarm with a teammate, whose agents would run on this Mac.
+        (f.connection.server.state['people'] as List).add({
+          'id': 'peer',
+          'email': 'peer@example.com',
+          'role': 'collaborator',
+        });
+        f.connection.server.state['machines'] = [pool('m', teamWork: notSetUp)];
+        f.connection.teamCheck = {'state': 'wanted'};
+        final c = await f.app.superTabs.open(tabId);
+        await c.refresh();
+        var added = 0;
+        await tester.binding.setSurfaceSize(const Size(1000, 700));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        Future<void> openMachines() async {
+          await tester.pumpWidget(
+            MaterialApp(
+              debugShowCheckedModeBanner: false,
+              theme: grid.buildAppTheme(brightness: brightness),
+              builder: (context, child) => TeamAccountSetupLock(
+                app: f.app,
+                operatingSystem: 'macos',
+                child: child!,
+              ),
+              home: Scaffold(
+                body: SuperTabMachines(
+                  controller: c,
+                  onAddAgent: (_) => added++,
+                ),
+              ),
             ),
-            home: Scaffold(
-              body: SuperTabMachines(controller: c, onAddAgent: (_) => added++),
-            ),
-          ),
+          );
+          await tester.pumpAndSettle();
+        }
+
+        await openMachines();
+        final problem = find.byKey(const ValueKey('super-machine-problem-m'));
+        expect(
+          tester.widget<Text>(problem).data,
+          "Teammates' agents paused: not set up",
         );
-        await tester.pumpAndSettle();
-      }
+        await captureWindow(
+          tester,
+          shots,
+          'walk-1-machines-not-set-up-${brightness.name}',
+        );
 
-      await openMachines();
-      final problem = find.byKey(const ValueKey('super-machine-problem-m'));
-      expect(
-        tester.widget<Text>(problem).data,
-        "Teammates' agents paused: not set up",
-      );
-
-      // Joined: the window is there at once, in the same frame.
-      await f.app.offerTeamAccount('join', tabId: tabId);
-      await tester.pump();
-      expect(find.byKey(const Key('team-account-lock')), findsOneWidget);
-      final lock = find.byKey(const Key('team-account-lock'));
-      bool inLock() {
-        final focused = FocusManager.instance.primaryFocus?.context;
-        return focused != null &&
-            lock.evaluate().any(
-              (e) =>
-                  e == focused ||
-                  (focused as Element).debugGetDiagnosticChain().contains(e),
-            );
-      }
-
-      // Nothing behind it: Tab, arrows and Escape stay in the window, a click
-      // on the machine row does nothing.
-      for (final key in [
-        LogicalKeyboardKey.tab,
-        LogicalKeyboardKey.arrowDown,
-        LogicalKeyboardKey.arrowUp,
-        LogicalKeyboardKey.arrowLeft,
-        LogicalKeyboardKey.arrowRight,
-        LogicalKeyboardKey.tab,
-        LogicalKeyboardKey.escape,
-      ]) {
-        await tester.sendKeyEvent(key);
+        // Joined: the window is there at once, in the same frame.
+        await f.app.offerTeamAccount('join', tabId: tabId);
         await tester.pump();
-        expect(inLock(), isTrue, reason: '$key');
-        expect(lock, findsOneWidget, reason: '$key');
-      }
-      final expanded = c.isMachineExpanded('m');
-      await tester.tap(
-        find.byKey(const ValueKey('super-machine-m')),
-        warnIfMissed: false,
-      );
-      await tester.pump();
-      expect(c.isMachineExpanded('m'), expanded);
-      expect(added, 0);
+        expect(find.byKey(const Key('team-account-lock')), findsOneWidget);
+        await captureWindow(tester, shots, 'walk-2-joined-${brightness.name}');
+        final lock = find.byKey(const Key('team-account-lock'));
+        bool inLock() {
+          final focused = FocusManager.instance.primaryFocus?.context;
+          return focused != null &&
+              lock.evaluate().any(
+                (e) =>
+                    e == focused ||
+                    (focused as Element).debugGetDiagnosticChain().contains(e),
+              );
+        }
 
-      // A wrong password: said, and Try again asks again.
-      f.connection.teamSetup = {'state': 'running'};
-      await tester.tap(find.byKey(const Key('team-account-lock-continue')));
-      await tester.pump();
-      f.connection.teamSetup = {'state': 'failed', 'detail': _wrongPassword};
-      await tester.pump(const Duration(seconds: 2));
-      await tester.pump();
-      expect(outcome(tester), 'macOS did not accept that password. Try again.');
-      await captureWindow(tester, shots, 'walk-wrong-password');
+        // Nothing behind it: Tab, arrows and Escape stay in the window, a click
+        // on the machine row does nothing.
+        for (final key in [
+          LogicalKeyboardKey.tab,
+          LogicalKeyboardKey.arrowDown,
+          LogicalKeyboardKey.arrowUp,
+          LogicalKeyboardKey.arrowLeft,
+          LogicalKeyboardKey.arrowRight,
+          LogicalKeyboardKey.tab,
+          LogicalKeyboardKey.escape,
+        ]) {
+          await tester.sendKeyEvent(key);
+          await tester.pump();
+          expect(inLock(), isTrue, reason: '$key');
+          expect(lock, findsOneWidget, reason: '$key');
+        }
+        final expanded = c.isMachineExpanded('m');
+        await tester.tap(
+          find.byKey(const ValueKey('super-machine-m')),
+          warnIfMissed: false,
+        );
+        await tester.pump();
+        expect(c.isMachineExpanded('m'), expanded);
+        expect(added, 0);
 
-      // The right one: setup finishes, and the window goes.
-      f.connection.teamSetup = {'state': 'running'};
-      await tester.tap(find.byKey(const Key('team-account-lock-retry')));
-      await tester.pump();
-      expect(find.byType(CircularProgressIndicator), findsOneWidget);
-      f.connection.teamSetup = {'state': 'exists'};
-      await tester.pump(const Duration(seconds: 2));
-      await tester.pump();
-      expect(find.byKey(const Key('team-account-lock')), findsNothing);
-      expect(f.app.teamSetupLocked, isFalse);
+        // A wrong password: said, and Try again asks again.
+        f.connection.teamSetup = {'state': 'running'};
+        await tester.tap(find.byKey(const Key('team-account-lock-continue')));
+        await tester.pump();
+        f.connection.teamSetup = {'state': 'failed', 'detail': _wrongPassword};
+        await tester.pump(const Duration(seconds: 2));
+        await tester.pump();
+        expect(
+          outcome(tester),
+          'macOS did not accept that password. Try again.',
+        );
+        await captureWindow(
+          tester,
+          shots,
+          'walk-3-wrong-password-${brightness.name}',
+        );
 
-      // Its Team account reports in, and Machines shows the Mac set up.
-      f.connection.server.state['machines'] = [
-        pool('m', teamWork: notSetUp),
-        pool('m-team', host: 'm'),
-      ];
-      await c.refresh();
-      // Machines, opened again: the Mac's row no longer says it is paused.
-      await tester.pumpWidget(const SizedBox());
-      await openMachines();
-      expect(problem, findsNothing);
-      await captureWindow(tester, shots, 'walk-machines-set-up');
+        // The right one: setup finishes, and the window goes.
+        f.connection.teamSetup = {'state': 'running'};
+        await tester.tap(find.byKey(const Key('team-account-lock-retry')));
+        await tester.pump();
+        expect(find.byType(CircularProgressIndicator), findsOneWidget);
+        f.connection.teamSetup = {'state': 'exists'};
+        await tester.pump(const Duration(seconds: 2));
+        await tester.pump();
+        expect(find.byKey(const Key('team-account-lock')), findsNothing);
+        expect(f.app.teamSetupLocked, isFalse);
 
-      await tester.pumpWidget(const SizedBox());
-      await c.flush();
-      f.app.superTabs.dispose();
-      f.dispose();
-      await tester.pump();
-    },
-  );
+        // Its Team account reports in, and Machines shows the Mac set up.
+        f.connection.server.state['machines'] = [
+          pool('m', teamWork: notSetUp),
+          pool('m-team', host: 'm'),
+        ];
+        await c.refresh();
+        // Machines, opened again: the Mac's row no longer says it is paused.
+        await tester.pumpWidget(const SizedBox());
+        await openMachines();
+        expect(problem, findsNothing);
+        await captureWindow(
+          tester,
+          shots,
+          'walk-4-machines-set-up-${brightness.name}',
+        );
+
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        f.app.superTabs.dispose();
+        f.dispose();
+        await tester.pump();
+      },
+    );
+  }
 }
