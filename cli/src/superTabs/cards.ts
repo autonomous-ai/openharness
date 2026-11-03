@@ -228,17 +228,22 @@ export function lastAgentMessage(messages: Json[], agentIds: ReadonlySet<string>
 }
 
 interface TabCache { lastChangedAt: number | null; state: Json }
-interface Cached { sequence: number; recap: LeadRecap }
+/** A recap read, and the thread it is of when one was on the face. */
+interface Cached { sequence: number; recap: LeadRecap; thread?: string }
+/** The window's focus, with the thread whose pane is on screen beside its conversation (Desktop's app_swarms `threadRoot`). */
+type Focus = CardFocus & { threadRoot?: string }
 /** A Lead some Harness Pro has the recap of open, and the sessions (one per Pro) that have it open. With `chat` (a round dial
  *  that speaks `swarmChat`, or 'buddy' for one that speaks swarmBuddy), the recap is that dial's face chat's, and `chatId`
  *  the chat it was last told of. */
-interface Opened { tabId: string; leadId: string; chat: CardChat; chatId: string | null; sequence: number | null; sessions: Set<string> }
+interface Opened { tabId: string; leadId: string; chat: CardChat; chatId: string | null; thread: string | null; sequence: number | null; sessions: Set<string> }
 /** Where a recap is read, or talk is posted: a conversation, how far it has gone, and whose messages are its recap; `buddy`
- *  when it is a swarmBuddy dial's Buddy face, whose notice is the Buddy's. */
-interface Target { id: string; sequence: number; voices: Set<string>; chatId?: string; buddy?: true }
+ *  when it is a swarmBuddy dial's Buddy face, whose notice is the Buddy's; `thread` the root of the thread open on the face. */
+interface Target { id: string; sequence: number; voices: Set<string>; chatId?: string; buddy?: true; thread?: string }
 const recapKey = (tabId: string, leadId: string, chatId?: string) => chatId === undefined ? `${tabId}:${leadId}` : `${tabId}:${leadId}:${chatId}`
-/** A recap's cache key: an older dial's and a swarmBuddy dial's recap of one Buddy chat hear different voices. */
-const cachedKey = (tabId: string, leadId: string, chatId: string | undefined, chat: CardChat) => `${recapKey(tabId, leadId, chatId)}${chat === 'buddy' ? ':buddy' : ''}`
+/** A recap's cache key: an older dial's and a swarmBuddy dial's recap of one Buddy chat hear different voices, and a thread on
+ *  the face is apart from its chat. */
+const cachedKey = (tabId: string, leadId: string, target: Pick<Target, 'chatId' | 'thread'>, chat: CardChat) =>
+  `${recapKey(tabId, leadId, target.chatId)}${target.thread === undefined ? '' : `#${target.thread}`}${chat === 'buddy' ? ':buddy' : ''}`
 const isSide = (v: unknown): v is CardSide => v === 'pm' || v === 'buddy'
 /** Spec 2026-11-02-poll-cost Part 4.3: the list was read every 5 s whatever changed (prod 2026-11-02: about 200 list reads a
  *  minute). While the server says it pushes this account's Swarm changes (`swarm_changed` naming none, repeated every 4
@@ -276,7 +281,7 @@ export class SwarmCards {
   private me: string | undefined
   private include: string[] = []
   /** The conversation the window has open in a Swarm tab: that project's face follows it. */
-  private focus: CardFocus | null = null
+  private focus: Focus | null = null
   private opened = new Map<string, Opened>()
   private openBy = new Map<string, string>()
   /** Background reads of recaps and notices in flight, at most MAX_RECAPS_IN_FLIGHT. */
@@ -315,7 +320,7 @@ export class SwarmCards {
   /** Poll while a capable Pro is attached; none otherwise (no request at all). `include`: the Swarms the desktop has tabs for,
    *  read first. `focus`: the conversation the window has open in a Swarm tab; a change rebuilds the cards at once from the
    *  last reads, with no request. */
-  want(on: boolean, include: string[] = [], focus: CardFocus | null = null): void {
+  want(on: boolean, include: string[] = [], focus: Focus | null = null): void {
     if (!on) {
       if (this.timer) clearInterval(this.timer)
       this.timer = undefined
@@ -331,8 +336,10 @@ export class SwarmCards {
     const moved = wanted.join(',') !== this.include.join(',')
     this.include = wanted
     const next = focus && cardId(focus.tabId) && cardId(focus.conversationId)
-      ? { tabId: focus.tabId, conversationId: focus.conversationId, ...(focus.fromDevice === true ? { fromDevice: true as const } : {}) } : null
-    const refocused = `${next?.tabId}/${next?.conversationId}` !== `${this.focus?.tabId}/${this.focus?.conversationId}`
+      ? { tabId: focus.tabId, conversationId: focus.conversationId, ...(cardId(focus.threadRoot) ? { threadRoot: focus.threadRoot } : {}),
+        ...(focus.fromDevice === true ? { fromDevice: true as const } : {}) } : null
+    // A thread opened or closed beside the conversation moves the face too.
+    const refocused = `${next?.tabId}/${next?.conversationId}/${next?.threadRoot}` !== `${this.focus?.tabId}/${this.focus?.conversationId}/${this.focus?.threadRoot}`
     this.focus = next
     // The desktop's own move clears the dial's side; the move a dial's pick caused is the dial's, and keeps it.
     if (refocused && !next?.fromDevice) this.sides.clear()
@@ -386,8 +393,8 @@ export class SwarmCards {
     if (!entry) {
       // From what the Pro was shown when there is a recap read, else from the first read of the tab: the next change is pushed.
       const target = this.target(tabId, leadId, chat)
-      entry = { tabId, leadId, chat, chatId: target?.chatId ?? null,
-        sequence: target ? this.recaps.get(cachedKey(tabId, leadId, target.chatId, chat))?.sequence ?? target.sequence : null, sessions: new Set() }
+      entry = { tabId, leadId, chat, chatId: target?.chatId ?? null, thread: target?.thread ?? null,
+        sequence: target ? this.recaps.get(cachedKey(tabId, leadId, target, chat))?.sequence ?? target.sequence : null, sessions: new Set() }
       this.opened.set(key, entry)
     }
     entry.sessions.add(session)
@@ -637,14 +644,19 @@ export class SwarmCards {
     const found = leadProjects(state).find(p => p.leadId === leadId)
     if (!found || !identifier(found.lead.id)) return null
     if (!chat) return { id: found.lead.id, sequence: sequenceOf(found.lead), voices: new Set([leadId]) }
-    const focus = this.focus?.tabId === tabId ? this.focus.conversationId : undefined
+    const open = this.focus?.tabId === tabId ? this.focus : null, focus = open?.conversationId
     const conversations = list(state.conversations), projectId = projectKey(found.project), buddies = state.buddies === true
     const face = chat === 'buddy' && buddies ? sideFaceOf(conversations, projectId, found.lead, focus, this.me, this.sideOf(tabId, state))
       : faceOf(conversations, projectId, found.lead, focus, this.me, buddies)
     if (!face) return null
     const id = face.conversation.id as string
-    return { id, sequence: sequenceOf(face.conversation), voices: voicesOf(face, leadId, list(state.agents), this.me), chatId: id,
-      ...(face.kind === 'buddy' ? { buddy: true as const } : {}) }
+    // The thread open beside the window's conversation, while that conversation is the one on the face: any agent's reply
+    // there is its recap (a worker answering in the Lead's thread, the Buddy's thread session).
+    const thread = open?.threadRoot !== undefined && open.conversationId === id ? open.threadRoot : undefined
+    const voices = thread === undefined ? voicesOf(face, leadId, list(state.agents), this.me)
+      : new Set(list(state.agents).map(a => a.id).filter((a): a is string => typeof a === 'string'))
+    return { id, sequence: sequenceOf(face.conversation), voices, chatId: id,
+      ...(face.kind === 'buddy' ? { buddy: true as const } : {}), ...(thread === undefined ? {} : { thread }) }
   }
 
   /** What the Lead last said: the newest page of its conversation, then one page back; `none` when neither holds a row of its own.
@@ -674,8 +686,9 @@ export class SwarmCards {
   private held(tabId: string, leadId: string, chat: CardChat): { recap: LeadRecap; sequence: number; stale: boolean } | null {
     const found = this.target(tabId, leadId, chat)
     if (!found) return null
-    const kept = this.recaps.get(cachedKey(tabId, leadId, found.chatId, chat))
-    const notice = (found.buddy ? this.buddyNotices : this.notices).get(recapKey(tabId, leadId))
+    const kept = this.recaps.get(cachedKey(tabId, leadId, found, chat))
+    // A notice is of the chat, never of a thread on the face.
+    const notice = found.thread === undefined ? (found.buddy ? this.buddyNotices : this.notices).get(recapKey(tabId, leadId)) : undefined
     const heard = notice && notice.chatId === found.id && this.inChat.has(notice) ? notice : undefined
     if (kept && (!heard || heard.at <= kept.recap.at)) return { recap: kept.recap, sequence: kept.sequence, stale: kept.sequence !== found.sequence }
     if (!heard) return null
@@ -686,9 +699,10 @@ export class SwarmCards {
   private refresh(tabId: string, leadId: string, chat: CardChat, shown: LeadRecap): void {
     void this.asked(() => this.read(tabId, leadId, chat, 'device')).then(recap => {
       // Its open sessions are told this one: their next push is for the chat's next move.
-      const target = this.target(tabId, leadId, chat), kept = target && this.recaps.get(cachedKey(tabId, leadId, target.chatId, chat))
+      const target = this.target(tabId, leadId, chat), kept = target && this.recaps.get(cachedKey(tabId, leadId, target, chat))
       for (const open of this.opened.values()) {
-        if (kept && open.tabId === tabId && open.leadId === leadId && open.chat === chat && open.chatId === (target.chatId ?? null)) open.sequence = kept.sequence
+        if (kept && open.tabId === tabId && open.leadId === leadId && open.chat === chat && open.chatId === (target.chatId ?? null)
+          && open.thread === (target.thread ?? null)) open.sequence = kept.sequence
       }
       if (recap.text !== shown.text || recap.at !== shown.at || recap.none !== shown.none || recap.chatId !== shown.chatId) this.onRecap?.(recap)
     }, () => { /* read again at the next push or ask */ })
@@ -711,23 +725,27 @@ export class SwarmCards {
     }
     if (!found) return { tabId, leadId, text: '', at: 0, none: true }
     const target = found, named = namedFor(target, chat)
-    const key = cachedKey(tabId, leadId, target.chatId, chat), held = this.recaps.get(key)
+    const key = cachedKey(tabId, leadId, target, chat), held = this.recaps.get(key)
     if (held && held.sequence === target.sequence) return held.recap
     const reader = this.me
+    // A thread on the face is read by its root, as Desktop reads it (super_tabs/controller.dart loadThread).
+    const place: MessagePlace = target.thread === undefined ? 'chat' : { thread: target.thread }
+    const thread = target.thread === undefined ? '' : `thread=${encodeURIComponent(target.thread)}`
     return slot(async () => {
       const path = `/api/super-tabs/${tabId}/conversations/${target.id}/messages`
-      const newest = object(await backend(this.core, 'GET', path))
-      let said = lastAgentMessage(list(newest.messages), target.voices, 'chat')
+      const newest = object(await backend(this.core, 'GET', thread ? `${path}?${thread}` : path))
+      let said = lastAgentMessage(list(newest.messages), target.voices, place)
       // The page before, from the page's own (sequence, id) cursor: a page edge inside equal sequences skips nothing (design 4.6).
       const before = object(newest.next)
       if (!said && typeof before.sequence === 'number' && identifier(before.id)) {
-        said = lastAgentMessage(list(object(await backend(this.core, 'GET', `${path}?before=${before.sequence}&beforeId=${before.id}`)).messages), target.voices, 'chat')
+        said = lastAgentMessage(list(object(await backend(this.core, 'GET', `${path}?${thread ? `${thread}&` : ''}before=${before.sequence}&beforeId=${before.id}`)).messages), target.voices, place)
       }
       // Access to the Swarm ended, another person signed in, or the face moved on while the read was out: the answer is not
       // this reader's to have now (a Buddy chat is its owner's alone), so it is neither given nor kept.
-      if (this.me !== reader || this.target(tabId, leadId, chat)?.id !== target.id) return { tabId, leadId, text: '', at: 0, none: true }
+      const now = this.target(tabId, leadId, chat)
+      if (this.me !== reader || now?.id !== target.id || now.thread !== target.thread) return { tabId, leadId, text: '', at: 0, none: true }
       const recap: LeadRecap = said ? { tabId, leadId, text: cut(said.text, RECAP_BYTES), at: said.at, none: false, ...named } : { tabId, leadId, text: '', at: 0, none: true, ...named }
-      this.recaps.set(key, { sequence: target.sequence, recap })
+      this.recaps.set(key, { sequence: target.sequence, recap, ...(target.thread === undefined ? {} : { thread: target.thread }) })
       return recap
     })
   }
@@ -750,9 +768,11 @@ export class SwarmCards {
       const to = chatId === undefined || found.id === chatId ? found.id
         : reviewed && this.chatOfLead(state, agent!.id as string, chatId) ? chatId : null
       if (!to) return { said: false, refused: { code: 'CHAT_MOVED', message: 'That chat is no longer on the dial. Say it again.' } }
+      // A thread on the face as the words are sent, in that chat, is where they go: a reply to its root.
+      const replyTo = to === found.id ? found.thread ?? null : null
       try {
         await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `pro-voice-${randomUUID()}`,
-          command: { type: 'message.send', conversationId: to, text, replyTo: null, recipientIds: [] } })
+          command: { type: 'message.send', conversationId: to, text, replyTo, recipientIds: [] } })
       } catch (error) {
         if (error instanceof SuperTabHostError && error.status >= 400 && error.status < 500) return { said: false, refused: { code: error.code, message: error.message } }
         throw error
@@ -777,9 +797,11 @@ export class SwarmCards {
    *  face: a swipe back to the other side, or the window back on a chat, is answered from it at once. */
   private prune(): void {
     for (const [key, held] of this.recaps) {
-      const { tabId, leadId, chatId } = held.recap
+      const { tabId, leadId, chatId, buddy } = held.recap
       const state = this.tabs.get(tabId)?.state
       if (!state || !leadProjects(state).some(p => p.leadId === leadId) || (chatId !== undefined && !this.chatOfLead(state, leadId, chatId))) this.recaps.delete(key)
+      // A thread's only while it is on the face.
+      else if (held.thread !== undefined && this.target(tabId, leadId, buddy ? 'buddy' : true)?.thread !== held.thread) this.recaps.delete(key)
     }
   }
 
@@ -794,14 +816,17 @@ export class SwarmCards {
     for (const open of [...this.opened.values()]) {
       const target = this.target(open.tabId, open.leadId, open.chat)
       if (!target) continue
-      if (open.sequence === null) { open.sequence = target.sequence; open.chatId = target.chatId ?? null; continue }
-      if (open.sequence === target.sequence && open.chatId === (target.chatId ?? null)) continue
-      // Another chat on the face (a swipe, the window's move): what is held for it is pushed at once, and read again after.
-      const quick = open.chatId !== (target.chatId ?? null) ? this.held(open.tabId, open.leadId, open.chat) : null
+      const thread = target.thread ?? null
+      if (open.sequence === null) { open.sequence = target.sequence; open.chatId = target.chatId ?? null; open.thread = thread; continue }
+      if (open.sequence === target.sequence && open.chatId === (target.chatId ?? null) && open.thread === thread) continue
+      // Another chat or thread on the face (a swipe, the window's move): what is held for it is pushed at once, and read again after.
+      const moved = open.chatId !== (target.chatId ?? null) || open.thread !== thread
+      const quick = moved ? this.held(open.tabId, open.leadId, open.chat) : null
       const recap = quick?.recap ?? await this.read(open.tabId, open.leadId, open.chat, 'background').catch(() => null)
       if (!recap) continue
       open.sequence = quick ? quick.sequence : target.sequence
       open.chatId = target.chatId ?? null
+      open.thread = thread
       this.onRecap?.(recap)
       if (quick?.stale) this.refresh(open.tabId, open.leadId, open.chat, recap)
     }

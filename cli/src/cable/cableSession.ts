@@ -333,6 +333,8 @@ export interface AppSwarms {
     superTabId?: string; projectId?: string
     /** The conversation the window has open in that Swarm tab, when it is one (its Lead's, Chat with PM or a group). */
     conversationId?: string
+    /** The root of the thread whose pane is on screen beside that conversation, which the round dial's face follows. */
+    threadRoot?: string
   }>
   /** The ACTIVE swarm's grid. Empty from a window that predates the field, or one with no panes. */
   tiles: CableTile[]
@@ -411,7 +413,7 @@ export interface CableHost {
    *  reader's Buddy chat there ('buddy') or the project's Lead chat ('pm'), so the desktop follows the dial's side. */
   superTabSelected?(superTabId: string, projectId: string, chat?: CardSide): void
   /** The Swarm tab the window has on screen and the project open in it ('' when none is); null when the active tab is not a Swarm or there is no window. */
-  activeSwarmProject?(): { superTabId: string; projectId: string; conversationId?: string; fromDevice: boolean } | null
+  activeSwarmProject?(): { superTabId: string; projectId: string; conversationId?: string; threadRoot?: string; fromDevice: boolean } | null
   appName(): string
   voiceLang(): string
   /** The window's latest selected pane, including selections made before this dial attached. */

@@ -874,7 +874,17 @@ class SuperTabController extends ChangeNotifier {
     if (!_threadUnshown) return;
     _threadUnshown = false;
     if (openedThread case final open?) _seeThread(open.root);
+    // The round dial follows a thread whose pane is on screen.
+    _changed();
   }
+
+  /// The root of the thread open beside the selected conversation while its
+  /// pane is on screen, which the round dial's face follows; null otherwise.
+  String? get threadOnScreen => switch (openedThread) {
+    final open? when open.conversationId == selectedId && !_threadUnshown =>
+      open.root,
+    _ => null,
+  };
 
   final _attachments = <String, HarnessAttachments>{};
 
