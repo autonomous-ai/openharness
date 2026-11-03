@@ -452,12 +452,42 @@ void main() {
       outcome(tester),
       'Harness Team cannot be set up on this Mac right now.',
     );
+    List<Object?> removals() => [
+      for (final p in f.connection.server.posts)
+        if ((p['command'] as Map?)?['type'] == 'machine.remove') p['command'],
+    ];
+
+    // Security review of #2779: removing deletes data. Nothing has focus on
+    // Remove, so Enter does nothing, and one press only asks, naming the
+    // Swarm.
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await tester.pumpAndSettle();
+    expect(removals(), isEmpty);
     await tester.tap(find.byKey(const Key('team-account-lock-remove')));
     await tester.pumpAndSettle();
+    expect(removals(), isEmpty);
     expect(
-      f.connection.server.posts.map((p) => p['command']),
-      contains(equals({'type': 'machine.remove', 'machineId': 'm'})),
+      tester
+          .widget<Text>(find.byKey(const Key('team-account-lock-confirm')))
+          .data,
+      'Remove this Mac from Pilot? Its agents there stop, and teammates\' '
+      'work no longer runs on it. You can add it again from Machines.',
     );
+    // Back asks nothing, and is where focus waits: Enter there removes nothing.
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(removals(), isEmpty);
+    expect(find.byKey(const Key('team-account-lock-confirm')), findsNothing);
+    expect(find.byKey(const Key('team-account-lock-remove')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('team-account-lock-remove')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('team-account-lock-remove-confirm')));
+    await tester.pumpAndSettle();
+    expect(removals(), [
+      {'type': 'machine.remove', 'machineId': 'm'},
+    ]);
     expect(find.byKey(const Key('team-account-lock')), findsNothing);
     await tester.pumpWidget(const SizedBox());
     f.app.superTabs.dispose();
@@ -486,6 +516,8 @@ void main() {
     await tester.tap(find.byKey(const Key('team-account-lock-continue')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('team-account-lock-remove')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('team-account-lock-remove-confirm')));
     await tester.pumpAndSettle();
     expect(find.text('Only the Swarm owner can do that.'), findsOneWidget);
     expect(find.byKey(const Key('team-account-lock')), findsOneWidget);
