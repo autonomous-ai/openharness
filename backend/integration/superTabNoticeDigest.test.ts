@@ -714,8 +714,8 @@ describe('with the update request', () => {
   })
 })
 
-// Three more kinds (docs/plans/2026-11-02-pm-digest-more-kinds-design.md): a step's Stuck, the coordinator's own skills notices,
-// and usage-limit or failing-model alerts. Each was delivered at once until then.
+// Two more kinds (docs/plans/2026-11-02-pm-digest-more-kinds-design.md): the coordinator's own skills notices, and usage-limit or
+// failing-model alerts. Each was delivered at once until then. A step's Stuck still is: a person must act on it (review of #2797).
 describe('a step\'s Stuck, skills notices and quiet alerts', () => {
   /** A review step of the task, assigned to a Reviewer on the worker's machine. */
   async function stepOf(f: Awaited<ReturnType<typeof swarm>>) {
@@ -737,12 +737,12 @@ describe('a step\'s Stuck, skills notices and quiet alerts', () => {
   const alert = (f: Awaited<ReturnType<typeof swarm>>, active: boolean) =>
     f.execute({ type: 'agent.alert', agentId: f.worker, alert: 'limit', active }, host, f.worker)
 
-  it('a step\'s Stuck is gathered for the coordinator and goes at once to the task\'s owner', async () => {
+  it('a step\'s Stuck goes at once to the coordinator and to the task\'s owner: a person must act on it (review of #2797)', async () => {
     const f = await swarm()
     const s = await stepOf(f)
     await s.status('blocked')
     const row = await statusRow(f.tab, s.step, 'Stuck')
-    expect((await deliveryOf(row.id, f.lead)).status).toBe('gathered')
+    expect((await deliveryOf(row.id, f.lead)).status).toBe('queued')
     expect((await deliveryOf(row.id, f.worker)).status).toBe('queued')
   })
 
