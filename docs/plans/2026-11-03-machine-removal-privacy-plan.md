@@ -4,7 +4,7 @@
 
 **Goal:** The machine removal preview names only agents and projects the machine owner may read, counts hidden entries, and keeps removal blocked when an unreadable project's PM runs on the machine.
 
-**Architecture:** Filter preview details with the existing project access rules in the backend. Return aggregate counts for hidden agents and sole source projects, and a generic blocking reason when the PM's project is unreadable. Update the Desktop confirmation to display those aggregate counts without exposing hidden names.
+**Architecture:** Filter preview details with the existing project access rules in the backend. Return aggregate counts for hidden agents and sole source projects, and a generic blocking reason when the PM's project is unreadable. Update the Desktop and Mobile removal confirmations to display those aggregate counts without exposing hidden names.
 
 **Tech Stack:** TypeScript, Vitest, Fastify integration tests, Dart, Flutter widget tests.
 
@@ -25,7 +25,7 @@
 - A direct removal command refused for a hidden PM must not expose its name or project.
 - Hidden sole source projects contribute to an aggregate count without exposing IDs or names.
 - Visible agents, projects and PMs retain their existing details.
-- Desktop shows aggregate counts while preserving the current visible-entry presentation.
+- Desktop and Mobile show aggregate counts while preserving the current visible-entry presentation.
 
 ---
 
@@ -77,14 +77,32 @@
 - [ ] **Step 4: Rerun the named widget test** and confirm it passes.
 - [ ] **Step 5: Commit** the failing widget test, then commit the passing UI implementation separately.
 
-### Task 4: Run required verification
+### Task 4: Keep the Mobile removal prompt in sync
+
+Added after the independent security review found that the phone rejected a reason-only block and omitted hidden counts; the coordinator approved this client update on 2026-11-03.
+
+**Files:**
+- Modify: `mobile/lib/swarm/swarm_machine_menu.dart`
+- Test: `mobile/test/swarm/swarm_machines_test.dart`
+
+**Interfaces:**
+- Consumes the same two hidden counts and either readable-project or generic-reason form of `blockedBy` as Desktop.
+- Displays aggregate count lines with no private identifiers and shows a generic block without offering confirmation.
+
+- [x] **Step 1: Write failing Mobile tests** for hidden counts in the removal warning and the generic reason for an unreadable PM.
+- [x] **Step 2: Run each new test before implementation** and confirm it fails because the counts are absent and the reason-only block is rejected.
+- [x] **Step 3: Parse non-negative counts and both `blockedBy` forms; render the aggregate lines and the generic block.**
+- [x] **Step 4: Rerun the affected Mobile test file** and confirm it passes after the fix.
+- [x] **Step 5: Commit** the failing tests separately from the implementation.
+
+### Task 5: Run required verification
 
 **Files:**
 - No additional files.
 
 **Interfaces:**
-- Consumes: Tasks 1–3.
+- Consumes: Tasks 1–4.
 
 - [ ] **Step 1: Run affected backend unit tests and the full Super Tab integration suite.**
-- [ ] **Step 2: Run the affected Desktop test and analyze changed Dart code.**
+- [ ] **Step 2: Run the affected Desktop and Mobile tests and analyze changed Dart code.**
 - [ ] **Step 3: Record red/green evidence in a PR comment and request two independent security reviews.**
