@@ -4701,7 +4701,6 @@ class AppNotifier extends ChangeNotifier {
     String tabId,
     String projectId, {
     bool buddy = false,
-    Object? thread,
   }) async {
     final open = swarms.where((s) => s.superTabId == tabId).firstOrNull;
     final name = open?.name ?? _superTabNames[tabId];
@@ -4745,12 +4744,6 @@ class AppNotifier extends ChangeNotifier {
         if (_disposed || _devicePick != pick) return;
       } else {
         await controller.select(project.leadConversationId);
-        if (_disposed || _devicePick != pick) return;
-      }
-      if (thread == '') {
-        controller.closeThread();
-      } else if (thread is String) {
-        await _openDialThread(controller, thread, pick);
         if (_disposed || _devicePick != pick) return;
       }
       // Selecting what is already selected announces nothing by itself.
@@ -22580,11 +22573,6 @@ class AppNotifier extends ChangeNotifier {
             tabId,
             projectId,
             buddy: payload['chat'] == 'buddy',
-            // A string opens that thread, null closes the pane, absent keeps
-            // today's pick (the dial's thread face, 2026-11-03).
-            thread: payload.containsKey('threadRoot')
-                ? (payload['threadRoot'] as Object?) ?? ''
-                : null,
           );
         }
         break;
