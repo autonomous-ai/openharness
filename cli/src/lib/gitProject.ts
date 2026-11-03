@@ -449,6 +449,10 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
     // A retry starts clean. The folder is this start's own (reserved above), and so is the branch it made.
     await removePartialWorktree(source, destination, made, admin, registered)
     if (added.diskFull) throw new GitProjectError('WORKTREE_FAILED', worktreeDiskFull)
+    // Offline in a blob-less clone: files `fetchStartBase` could not bring, which this start may not fetch itself.
+    if (options.offline && /promisor remote|lazy fetching disabled/i.test(added.stderr)) {
+      throw new GitProjectError('WORKTREE_FAILED', "This branch's files could not be fetched for the start. Check the connection, then retry.")
+    }
     throw new GitProjectError('WORKTREE_FAILED', `Could not create the worktree at ${destination}. Check Git and folder permissions, then retry.`)
   }
   // Harness made this branch: its cleanup may remove it, and a made-up name gives way to the session's.
