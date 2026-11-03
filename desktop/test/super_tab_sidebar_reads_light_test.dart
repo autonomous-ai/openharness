@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:flutter/gestures.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/swarm_type.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
@@ -19,9 +20,10 @@ void main() {
 
   Future<SuperTabController> show(
     WidgetTester tester,
-    ConversationServer server,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(1300, 900));
+    ConversationServer server, {
+    Size size = const Size(1300, 900),
+  }) async {
+    await tester.binding.setSurfaceSize(size);
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final controller = server.controller(
       account: 'peer',
@@ -217,20 +219,107 @@ void main() {
     final server = humansSwarm();
     addNumberedWorkgroups(server, 1);
     working(server);
-    final controller = await show(tester, server);
+    // A title longer than the room right of the list: the tooltip stays
+    // compact and wraps, rather than being pushed back over the list.
+    (server.state['conversations'] as List)
+            .cast<Map<String, dynamic>>()
+            .firstWhere((g) => g['id'] == 'g1')['title'] =
+        'Workgroup 1 ${'with a very long title that goes on ' * 8}';
+    final controller = await show(tester, server, size: const Size(800, 700));
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     addTearDown(mouse.removePointer);
     await mouse.addPointer(location: Offset.zero);
     await mouse.moveTo(tester.getCenter(g1));
     await tester.pumpAndSettle(const Duration(seconds: 2));
-    final tip = find.textContaining('Workgroup 1\n');
+    final tip = find.textContaining('goes on \n');
     expect(tip, findsOneWidget);
-    final row = tester.getRect(g1), box = tester.getRect(tip);
+    // The tooltip's whole box, its padding and border included, clears the row and its state mark.
+    final bubble = find
+        .ancestor(of: tip, matching: find.byType(DecoratedBox))
+        .first;
+    final row = tester.getRect(g1), box = tester.getRect(bubble);
     expect(box.left, greaterThanOrEqualTo(row.right));
+    expect(
+      box.left,
+      greaterThanOrEqualTo(
+        tester.getRect(find.byKey(const ValueKey('super-task-mark-g1'))).right,
+      ),
+    );
     // Level with its row, not hanging below it.
     expect(box.center.dy, closeTo(row.center.dy, row.height));
     await mouse.moveTo(Offset.zero);
     await tester.pumpAndSettle(const Duration(seconds: 2));
     await close(tester, controller);
+  }, variant: TargetPlatformVariant.all());
+
+  // The screenshot's case (review of the first after-shot): a 300-point
+  // sidebar in a 620-point window had too little room right of the list
+  // for a one-line tooltip, and keeping it on screen pushed it back over
+  // the rows. A compact tooltip wraps instead.
+  testWidgets('a compact tooltip wraps beside a narrow window\'s list', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(620, 500));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final server = humansSwarm();
+    addNumberedWorkgroups(server, 1);
+    working(server);
+    (server.state['conversations'] as List)
+            .cast<Map<String, dynamic>>()
+            .firstWhere((g) => g['id'] == 'g1')['title'] =
+        'Desktop: a machine\'s Team account setup prompt';
+    final controller = server.controller(
+      account: 'peer',
+      initial: {
+        'tabId': 'tab',
+        'accountId': 'peer',
+        'selectedId': 'lead',
+        'expandedProjects': ['lead'],
+      },
+    );
+    await controller.refresh();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.dark),
+        home: Scaffold(
+          body: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 300,
+                child: ProjectSidebar(
+                  controller: controller,
+                  onSelect: controller.select,
+                  needsHuman: (_) => 0,
+                ),
+              ),
+              const Expanded(child: SizedBox()),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(g1));
+    await tester.pumpAndSettle(const Duration(seconds: 2));
+    final bubble = find
+        .ancestor(
+          of: find.textContaining('setup prompt\n'),
+          matching: find.byType(DecoratedBox),
+        )
+        .first;
+    expect(
+      tester.getRect(bubble).left,
+      greaterThanOrEqualTo(tester.getRect(g1).right),
+    );
+    expect(tester.getRect(bubble).right, lessThanOrEqualTo(620));
+    await mouse.moveTo(Offset.zero);
+    await tester.pumpAndSettle(const Duration(seconds: 2));
+    await tester.pumpWidget(const SizedBox());
+    await controller.flush();
+    controller.dispose();
   });
 }
