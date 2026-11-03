@@ -452,6 +452,29 @@ describe('reading a usage limit off a screen', () => {
   ])('reads the %s screen', (name, limit) => {
     expect(limitOf(fixture(name), now)).toEqual(limit)
   })
+  // Task #2321 (Ken, 11-03): River was listed limited while it worked, as it had just printed another agent's screen,
+  // which showed Codex's limit line. Only the engine's own notice marks an agent limited, never text it prints.
+  it.each([
+    ['claude-printed-codex-limit', 'a screen Claude Code printed, the limit line further down its tool output'],
+    ['claude-printed-limit-first-line', 'the limit line first in its tool output, right above the prompt'],
+  ])('reads no limit off %s: %s', name => {
+    expect(limitOf(fixture(name), now)).toBeNull()
+  })
+  it('reads no limit off a log a tool printed, quoted or indented, near the prompt', () => {
+    expect(limitOf('⏺ Read(logs/codex.log)\n  ⎿  Read 3 lines\n     5-hour limit reached ∙ resets 3pm\n\n❯ ', now)).toBeNull()
+    expect(limitOf('• Ran cat codex.log\n  └ ■ You\'ve hit your usage limit. Try again at 4:05 PM.\n\n› ', now)).toBeNull()
+    expect(limitOf('⏺ Update(notes.md)\n  ⎿  Added 1 line\n       1 + You\'ve hit your session limit · resets 3pm\n\n❯ ', now)).toBeNull()
+  })
+  it('still reads Claude Code\'s limit dialog', () => {
+    expect(limitOf([
+      '╭──────────────────────────────────────────────────────────╮',
+      '│ You\'ve hit your limit · resets 3pm (Asia/Saigon)         │',
+      '│                                                          │',
+      '│ ❯ 1. Stop and wait for limit to reset                    │',
+      '│   2. Upgrade your plan                                   │',
+      '╰──────────────────────────────────────────────────────────╯',
+    ].join('\n'), now)).toEqual({ resetAt: new Date(2026, 9, 23, 15, 0).toISOString() })
+  })
   it('knows a limit without a reset time, and ignores the words in an agent\'s own prose or far above the prompt', () => {
     expect(limitOf('⎿  API Error: Usage limit reached\n> ', now)).toEqual({})
     expect(limitOf('I will add a check for when the usage limit reached message shows.\n> ', now)).toBeNull()
