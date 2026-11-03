@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/message_text.dart';
+import 'package:harness/super_tabs/ship_row.dart';
 import 'package:harness/super_tabs/thread_panel.dart';
 
 import 'box_render_preview_test.dart' show loadPreviewFonts;
@@ -232,6 +233,34 @@ void main() {
       },
     );
   }
+
+  testWidgets('a legacy task root keeps its recorded ship message visible', (
+    tester,
+  ) async {
+    final server = _server('task-line', legacy: true);
+    server.messages.add({
+      'id': 'ship',
+      'conversationId': 'lead',
+      'thread': 'ship',
+      'sequence': 3,
+      'text': 'Shipped: Offline drafts',
+      'createdAt': '2026-11-03T09:02:00Z',
+      'author': {'kind': 'agent', 'id': 'buddy', 'name': 'Draft Buddy'},
+      'source': {
+        'kind': 'ship',
+        'conversationId': 'offline',
+        'title': 'Offline drafts',
+        'requesterId': 'requester',
+        'builderIds': ['buddy'],
+      },
+    });
+    (server.state['conversations'] as List).first['lastMessageSequence'] = 3;
+    await showView(tester, server);
+    expect(find.text('Save offline drafts · in review'), findsOneWidget);
+    expect(find.byType(SuperTabShipRow), findsOneWidget);
+    expect(find.text('Shipped: Offline drafts'), findsOneWidget);
+    expect(find.text('Built by'), findsOneWidget);
+  });
 
   testWidgets('plain proposal and task thread screenshot fixture', (
     tester,
