@@ -307,7 +307,9 @@ void main() {
   });
 
   testWidgets(
-    'a task row in the sidebar shows its line under its name and its mark at its right, naming the person',
+    // One line per task (Huy, 11-03, #2427): its state is the mark at its right, the tooltip and what a screen reader
+    // hears; no line under its name.
+    'a task row in the sidebar is one line, its mark at its right, its state in the tooltip and spoken, naming the person',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1300, 900));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -351,18 +353,21 @@ void main() {
         ),
       );
       final row = find.byKey(const ValueKey('super-group-offline'));
-      final line = find.descendant(
-        of: row,
-        matching: find.byKey(const ValueKey('super-task-line-offline')),
+      expect(
+        find.descendant(
+          of: row,
+          matching: find.byKey(const ValueKey('super-task-line-offline')),
+        ),
+        findsNothing,
       );
       expect(
-        tester
-            .widgetList<Text>(
-              find.descendant(of: line, matching: find.byType(Text)),
-            )
-            .map((text) => text.data)
-            .join(),
-        'Waiting on ken · mockup OK? · 12m',
+        find.descendant(
+          of: row,
+          matching: find.bySemanticsLabel(
+            RegExp('Waiting on ken · mockup OK\\? · 12m'),
+          ),
+        ),
+        findsOneWidget,
       );
       expect(
         find.descendant(

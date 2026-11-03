@@ -72,6 +72,7 @@ final _picker = find.byKey(const ValueKey('swarm-machine-picker'));
 
 class _RemovalServer extends ConversationServer {
   Map<String, dynamic> preview = {
+    'previewVersion': 2,
     'blockedBy': null,
     'agents': <dynamic>[],
     'soleSourceProjects': <dynamic>[],
@@ -85,7 +86,7 @@ class _RemovalServer extends ConversationServer {
     String path, {
     Map<String, dynamic>? body,
   }) async {
-    if (method == 'GET' && path.endsWith('/machines/studio/removal')) {
+    if (method == 'GET' && path.contains('/machines/studio/removal')) {
       previewReads.add(path);
       if (failPreview) {
         throw const SuperTabFailure(
@@ -1522,6 +1523,7 @@ void main() {
         server.state['machines'] = [machine('owner')];
         server.state['agents'] = [agent('a1', 'owner'), agent('a2', 'owner')];
         server.preview = {
+          'previewVersion': 2,
           'blockedBy': null,
           'agents': [
             {
@@ -1548,7 +1550,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('Remove Studio from this Swarm?'), findsOneWidget);
         expect(server.previewReads, [
-          '/api/super-tabs/tab/machines/studio/removal',
+          '/api/super-tabs/tab/machines/studio/removal/v2',
         ]);
         expect(find.textContaining('Mira'), findsWidgets);
         expect(find.textContaining('River'), findsWidgets);
@@ -1611,6 +1613,7 @@ void main() {
         final server = _RemovalServer();
         server.state['machines'] = [machine('owner')];
         server.preview = {
+          'previewVersion': 2,
           'blockedBy': null,
           'agents': [
             {'id': 'a1', 'name': 'Wren', 'projectName': ''},
@@ -2020,6 +2023,7 @@ void main() {
       final server = _RemovalServer();
       server.state['machines'] = [machine('owner')];
       server.preview = {
+        'previewVersion': 2,
         'blockedBy': {'projectId': 'hidden', 'projectName': 'Hidden Pilot'},
         'agents': <dynamic>[],
         'soleSourceProjects': <dynamic>[],
@@ -2038,6 +2042,94 @@ void main() {
         find.textContaining('Product Manager of project Hidden Pilot'),
         findsOneWidget,
       );
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const ValueKey('super-machine-remove-confirm')),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(server.posts, isEmpty);
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    });
+
+    testWidgets('removal preview counts projects the viewer cannot see', (
+      tester,
+    ) async {
+      final server = _RemovalServer();
+      server.state['machines'] = [machine('owner')];
+      server.preview = {
+        'previewVersion': 2,
+        'blockedBy': {'reason': "A Product Manager of a project you can't see runs on this machine."},
+        'agents': <dynamic>[],
+        'hiddenAgentCount': 2,
+        'soleSourceProjects': <dynamic>[],
+        'hiddenSoleSourceProjectCount': 1,
+      };
+      final c = server.controller();
+      await c.refresh();
+      await mount(tester, c);
+      await openMachineDetails(
+        tester,
+        find.byKey(const ValueKey('super-machine-studio')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-machine-remove')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text("A Product Manager of a project you can't see runs on this machine."),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining("2 agents of projects you can't see"),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining(
+          "1 project you can't see has code only on this machine",
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Secret Project'), findsNothing);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const ValueKey('super-machine-remove-confirm')),
+            )
+            .onPressed,
+        isNull,
+      );
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    });
+
+    testWidgets('fails closed when the backend lacks the versioned preview', (
+      tester,
+    ) async {
+      final server = _RemovalServer()
+        ..state['machines'] = [machine('owner')]
+        ..preview = {
+          'blockedBy': null,
+          'agents': <dynamic>[],
+          'soleSourceProjects': <dynamic>[],
+        };
+      final c = server.controller();
+      await c.refresh();
+      await mount(tester, c);
+      await openMachineDetails(
+        tester,
+        find.byKey(const ValueKey('super-machine-studio')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-machine-remove')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Could not check this machine.'), findsOneWidget);
       expect(
         tester
             .widget<FilledButton>(
@@ -2605,49 +2697,52 @@ void main() {
   );
 
   // Task #2195: a Swarm that isn't showing reads no machine's usage.
-  testWidgets('reads nothing while its Swarm is away, and reads at once on its return', (tester) async {
-    final f = SuperTabLaunchFixture();
-    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
-    f.connection.server.state['machines'] = [
-      {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 8},
-    ];
-    final c = await f.app.superTabs.open(tabId);
-    await c.refresh();
-    var reads = 0;
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: SizedBox(
-            width: 300,
-            height: 400,
-            child: SuperTabMachines(
-              controller: c,
-              app: f.app,
-              onAddAgent: (_) {},
-              readLocal: (_) async {
-                reads++;
-                return null;
-              },
+  testWidgets(
+    'reads nothing while its Swarm is away, and reads at once on its return',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 8},
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      var reads = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 300,
+              height: 400,
+              child: SuperTabMachines(
+                controller: c,
+                app: f.app,
+                onAddAgent: (_) {},
+                readLocal: (_) async {
+                  reads++;
+                  return null;
+                },
+              ),
             ),
           ),
         ),
-      ),
-    );
-    await tester.pump(const Duration(seconds: 1));
-    expect(reads, greaterThan(0));
-    c.away = true;
-    await tester.pump(const Duration(seconds: 16));
-    final atAway = reads;
-    await tester.pump(const Duration(seconds: 40));
-    expect(reads, atAway);
-    c.away = false;
-    await tester.pump(const Duration(seconds: 1));
-    expect(reads, greaterThan(atAway));
-    await tester.pumpWidget(const SizedBox());
-    await c.flush();
-    f.app.superTabs.dispose();
-    await tester.pump();
-  });
+      );
+      await tester.pump(const Duration(seconds: 1));
+      expect(reads, greaterThan(0));
+      c.away = true;
+      await tester.pump(const Duration(seconds: 16));
+      final atAway = reads;
+      await tester.pump(const Duration(seconds: 40));
+      expect(reads, atAway);
+      c.away = false;
+      await tester.pump(const Duration(seconds: 1));
+      expect(reads, greaterThan(atAway));
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
 
   testWidgets(
     'machine settings show its name, Agents as memory allows, and Remove from this Swarm',
