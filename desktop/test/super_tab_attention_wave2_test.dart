@@ -395,6 +395,8 @@ void main() {
         final (c, _) = await _show(tester, Brightness.dark, selected: selected);
         await tester.tap(find.byKey(ValueKey(menu)));
         await tester.pumpAndSettle();
+        // The PR's pictures: the menu is a route of its own.
+        if (shotsOn) await captureWindow(tester, shots, 'notify-row-$menu');
         final notify = find.byKey(const ValueKey('super-notify-menu'));
         final other = find
             .ancestor(
@@ -433,7 +435,18 @@ void main() {
         final otherHovered = material(other).shape;
         await mouse.moveTo(tester.getCenter(notify));
         await tester.pump();
+        if (shotsOn) {
+          await tester.pumpAndSettle();
+          await captureWindow(tester, shots, 'notify-row-$menu-hover');
+        }
         expect(material(notify).shape, otherHovered);
+        // Its submenu's rows are rows of the same kind (they had the border too).
+        await tester.pumpAndSettle();
+        for (final level in SuperTabNotify.values) {
+          final row = find.byKey(ValueKey('super-notify-${level.name}'));
+          expect(material(row).shape, material(other).shape);
+          expect(tester.getSize(row).height, tester.getSize(other).height);
+        }
         await mouse.removePointer();
         await _done(tester, c);
       }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
