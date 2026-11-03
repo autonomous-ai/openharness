@@ -726,6 +726,34 @@ describe('what the windows say, reaching the dial', () => {
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardSide', tabId: 'st1', side: 'buddy' })
     })
 
+    it('carries a thread on the recap, on a post that started one, and leaves a thread through the service', async () => {
+      const answers: Array<Record<string, unknown>> = [
+        { ok: true, text: 'on it', at: 3, none: false, chatId: 'lead-c1', thread: 'm9' },
+        { ok: true, text: 'on it', at: 3, none: false, chatId: 'lead-c1', thread: 'bad id' },
+        { ok: true, said: true, thread: { tabId: 'st1', projectId: 'web', root: 'm9' } },
+        { ok: true, said: true, thread: { tabId: 'st1', projectId: 7, root: 'm9' } },
+        { ok: true, projectId: 'web' }, { ok: true }, { error: 'OWNER_REQUIRED' },
+      ]
+      const superTabRequest = vi.fn(async (_payload: Record<string, unknown>) => answers.shift()!)
+      const { core } = withRequest(superTabRequest)
+      expect(await seen.host.swarmCardRecap!('st1', 'lead1', true)).toEqual({ tabId: 'st1', leadId: 'lead1', text: 'on it', at: 3, none: false, chatId: 'lead-c1', thread: 'm9' })
+      expect(await seen.host.swarmCardRecap!('st1', 'lead1', true)).not.toHaveProperty('thread')
+      expect(await seen.host.swarmSay!('h1', 'build it', true)).toEqual({ said: true, thread: { tabId: 'st1', projectId: 'web', root: 'm9' } })
+      expect(await seen.host.swarmSay!('h1', 'build it', true)).toEqual({ said: true })
+      answers.unshift({ ok: true, said: true })
+      await seen.host.swarmSay!('h1', 'build it', true, undefined, false, true)
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardSay', harnessId: 'h1', text: 'build it', chat: true, threaded: true })
+      expect(await seen.host.swarmThreadLeave!('st1', 'lead1')).toEqual({ tabId: 'st1', projectId: 'web' })
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardThreadLeave', tabId: 'st1', leadId: 'lead1' })
+      expect(await seen.host.swarmThreadLeave!('st1', 'lead1')).toBeNull()
+      expect(await seen.host.swarmThreadLeave!('st1', 'lead1')).toBeNull()
+      // The window is told to open a thread beside the chat, or to close the open one.
+      seen.host.superTabSelected!('st1', 'proj1', undefined, 'm9')
+      expect(vi.mocked(core.clients.sendLocal)).toHaveBeenLastCalledWith({ type: 'dial_super_tab', payload: { superTabId: 'st1', projectId: 'proj1', threadRoot: 'm9' } })
+      seen.host.superTabSelected!('st1', 'proj1', 'buddy', null)
+      expect(vi.mocked(core.clients.sendLocal)).toHaveBeenLastCalledWith({ type: 'dial_super_tab', payload: { superTabId: 'st1', projectId: 'proj1', chat: 'buddy', threadRoot: null } })
+    })
+
     it('reads a recap through the service, cut to 1,500 bytes on a character; anything unusable is null', async () => {
       const answers: Array<Record<string, unknown> | 'throw'> = [
         { ok: true, tabId: 'st1', leadId: 'lead1', text: 'é'.repeat(1000), at: 1792560000, none: false },

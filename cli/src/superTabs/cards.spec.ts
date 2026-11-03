@@ -770,7 +770,7 @@ describe('SwarmCards open recaps and recap reads', () => {
 /** `web` with its three chats at the given sequences, each conversation's page served from `pages` (newest first or not: the code orders);
  *  a thread's page from `${conversation}#${root}`. */
 /** With `withBuddy`, the Swarm has Buddies on and the reader's Buddy (`y1`, "diego's Buddy" on Codex) is in their `web` chat. */
-function chatSwarm(pages: Record<string, unknown[] | (() => unknown[])>, withBuddy = false, delayMs = 0) {
+function chatSwarm(pages: Record<string, unknown[] | (() => unknown[])>, withBuddy = false, delayMs = 0, post?: () => { status: number; body: Record<string, unknown> }) {
   const state = (lead = 1, pmSeq = 1, groupSeq = 1) => chats({
     ...(withBuddy ? { buddies: true, agents: [...chats().agents as object[], buddy()] } : {}),
     conversations: [
@@ -779,8 +779,9 @@ function chatSwarm(pages: Record<string, unknown[] | (() => unknown[])>, withBud
   const t = setup({ t1: { lastChangedAt: 1, state: state() } }, { messages: path => {
     const id = /conversations\/([^/]+)\/messages/.exec(path)?.[1] ?? '', thread = /[?&]thread=([^&]+)/.exec(path)?.[1]
     const page = pages[thread ? `${id}#${thread}` : id] ?? []
-    return { messages: typeof page === 'function' ? page() : page, next: null }
-  }, delayMs })
+    const rows = typeof page === 'function' ? page() : page
+    return { messages: rows, next: null, ...((rows as { threads?: unknown }).threads ? { threads: (rows as { threads?: unknown }).threads } : {}) }
+  }, delayMs, post })
   const move = async (lead: number, pmSeq = 1, groupSeq = 1) => { t.tabs.t1.lastChangedAt++; t.tabs.t1.state = state(lead, pmSeq, groupSeq); await t.cards.tick() }
   const webLead = (cards = t.seen.at(-1)) => cards?.[0].leads.find(l => l.id === 'a1')
   const reads = (conversation: string) => t.calls.filter(c => c.includes(`/conversations/${conversation}/messages`)).length
@@ -1263,6 +1264,122 @@ describe('SwarmCards chat recap and threads', () => {
     await t.move(2)
     expect(t.webLead()?.notice).toMatchObject({ text: 'in the thread' })
     expect(await t.cards.recap('t1', 'a1', true)).toMatchObject({ text: 'top', chatId: 'lead-web' })
+    t.cards.want(false)
+  })
+})
+
+describe('the face thread', () => {
+  const posted = () => ({ status: 200, body: { success: true, data: { result: { messageId: 'm9' } } } })
+  const root = (id: string, text: string) => said(3, 'me', { id, text, author: { kind: 'person', id: 'me' }, thread: id })
+  const pages = {
+    'lead-web#m9': [root('m9', 'build it\nplease'), said(5, 'a1', { text: 'on it', thread: 'm9' })],
+    'lead-web#x1': Object.assign([root('x1', 'fix login\nmore'), said(5, 'a1', { text: 'done', thread: 'x1' })], { threads: [{ id: 'x1', replies: 2 }] }),
+  }
+  const onThread = { tabId: 't1', conversationId: 'lead-web', threadRoot: 'x1' }
+  const started = async (withBuddy = false) => {
+    const t = chatSwarm(pages, withBuddy, 0, posted)
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    return t
+  }
+  const posts = (t: { call: { mock: { calls: unknown[][] } } }) =>
+    t.call.mock.calls.filter(c => c[0] === 'POST').map(c => (c[2] as { command: { conversationId: string; replyTo: string | null } }).command)
+
+  it('words said at top level start the dial\'s thread', async () => {
+    const t = await started()
+    expect(t.webLead()?.chat).not.toHaveProperty('thread')
+    expect(await t.cards.say('h-a1', 'build it\nplease', true, undefined, false, true)).toEqual({ said: true, thread: { tabId: 't1', projectId: 'web', root: 'm9' } })
+    expect(t.webLead()?.chat?.thread).toEqual({ root: 'm9', title: 'build it' })
+    expect(await t.cards.recap('t1', 'a1', true)).toMatchObject({ text: 'on it', chatId: 'lead-web', thread: 'm9' })
+    t.cards.want(false)
+  })
+
+  it('cuts the dial\'s thread title to 80 bytes on a character', async () => {
+    const t = await started()
+    await t.cards.say('h-a1', 'é'.repeat(60), true, undefined, false, true)
+    expect(t.webLead()?.chat?.thread?.title).toBe('é'.repeat(40))
+    t.cards.want(false)
+  })
+
+  it('words said by a dial without swarmThread start no thread', async () => {
+    const t = await started()
+    expect(await t.cards.say('h-a1', 'build it', true)).toEqual({ said: true })
+    expect(t.webLead()?.chat).not.toHaveProperty('thread')
+    expect(await t.cards.recap('t1', 'a1', true)).not.toHaveProperty('thread')
+    t.cards.want(false)
+  })
+
+  it('swiping to the Buddy side forgets the PM\'s thread', async () => {
+    const t = await started(true)
+    await t.cards.say('h-a1', 'build it', 'buddy', undefined, false, true)
+    expect(t.webLead()?.sideChat?.thread?.root).toBe('m9')
+    t.cards.side('t1', 'buddy')
+    t.cards.side('t1', 'pm')
+    expect(t.webLead()?.sideChat).not.toHaveProperty('thread')
+    expect(t.webLead()?.chat).not.toHaveProperty('thread')
+    t.cards.want(false)
+  })
+
+  it('starts no thread when the answer has no message id', async () => {
+    const t = chatSwarm(pages, false, 0, () => ({ status: 200, body: { success: true, data: {} } }))
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    expect(await t.cards.say('h-a1', 'hello', true, undefined, false, true)).toEqual({ said: true })
+    expect(t.webLead()?.chat).not.toHaveProperty('thread')
+    t.cards.want(false)
+  })
+
+  it('words said in a thread reply in it and start nothing', async () => {
+    const t = await started()
+    t.cards.want(true, [], onThread)
+    expect(await t.cards.say('h-a1', 'more', true, undefined, false, true)).toEqual({ said: true })
+    expect(posts(t).map(p => [p.conversationId, p.replyTo])).toEqual([['lead-web', 'x1']])
+    t.cards.want(false)
+  })
+
+  it('the app\'s thread is the face\'s, titled from its root and counted from the read', async () => {
+    const t = await started()
+    t.cards.want(true, [], onThread)
+    expect(t.webLead()?.chat?.thread).toMatchObject({ root: 'x1' })
+    expect(await t.cards.recap('t1', 'a1', true)).toMatchObject({ text: 'done', thread: 'x1' })
+    await vi.waitFor(() => expect(t.webLead()?.chat?.thread).toEqual({ root: 'x1', title: 'fix login', replies: 2 }))
+    t.cards.want(false)
+  })
+
+  it('a focus move clears the dial\'s thread', async () => {
+    const t = await started()
+    await t.cards.say('h-a1', 'build it', true, undefined, false, true)
+    // The move the dial's own thread caused keeps it.
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'lead-web', threadRoot: 'm9', fromDevice: true })
+    expect(t.webLead()?.chat?.thread?.root).toBe('m9')
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'lead-web' })
+    expect(t.webLead()?.chat).not.toHaveProperty('thread')
+    expect(await t.cards.recap('t1', 'a1', true)).not.toHaveProperty('thread')
+    t.cards.want(false)
+  })
+
+  it('threadLeave clears the dial\'s thread and names the project', async () => {
+    const t = await started()
+    await t.cards.say('h-a1', 'build it', true, undefined, false, true)
+    expect(t.cards.threadLeave('t1', 'a1')).toEqual({ tabId: 't1', projectId: 'web' })
+    expect(t.webLead()?.chat).not.toHaveProperty('thread')
+    expect(t.cards.threadLeave('t1', 'a1')).toBeNull()
+    // The app's thread too: the dial is off it until the app moves again.
+    t.cards.want(true, [], onThread)
+    expect(t.cards.threadLeave('t1', 'a1')).toEqual({ tabId: 't1', projectId: 'web' })
+    expect(t.webLead()?.chat).not.toHaveProperty('thread')
+    expect(t.cards.threadLeave('t1', 'zz')).toBeNull()
+    t.cards.want(false)
+  })
+
+  it('a thread lives only while its conversation is on the face', async () => {
+    const t = await started(true)
+    expect(await t.cards.say('h-a1', 'build it', 'buddy', undefined, false, true)).toMatchObject({ said: true, thread: { root: 'm9' } })
+    expect(t.webLead()?.sideChat?.thread?.root).toBe('m9')
+    t.cards.side('t1', 'buddy')
+    expect(t.webLead()?.sideChat).toMatchObject({ kind: 'buddy' })
+    expect(t.webLead()?.sideChat).not.toHaveProperty('thread')
+    expect(await t.cards.recap('t1', 'a1', 'buddy')).not.toHaveProperty('thread')
     t.cards.want(false)
   })
 })

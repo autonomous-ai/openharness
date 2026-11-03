@@ -864,7 +864,7 @@ it('documents finished worker decisions and explains an older backend without re
 
 describe('the Swarm cards the devices ask for', () => {
   function withCards() {
-    const cards = { want: vi.fn(), open: vi.fn(), side: vi.fn(), say: vi.fn(async (): Promise<SaidOnCard> => ({ said: true })), worker: vi.fn((machineId: string, harnessId: string) => machineId === 'm2' && harnessId === 'h-r1'), recap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'Shipped', at: 5, none: false })), onCards: undefined as unknown, onRecap: undefined as unknown }
+    const cards = { want: vi.fn(), open: vi.fn(), side: vi.fn(), threadLeave: vi.fn((): { tabId: string; projectId: string } | null => null), say: vi.fn(async (): Promise<SaidOnCard> => ({ said: true })), worker: vi.fn((machineId: string, harnessId: string) => machineId === 'm2' && harnessId === 'h-r1'), recap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'Shipped', at: 5, none: false })), onCards: undefined as unknown, onRecap: undefined as unknown }
     const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
     const core = fakeCore({ superTabs })
     const make = vi.fn(() => cards as never)
@@ -965,6 +965,23 @@ describe('the Swarm cards the devices ask for', () => {
     expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', 'buddy', 'pm1', true)
     await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', reviewed: true }, owner)
     expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', 'buddy')
+  })
+  it('cardThreadLeave tells the cards and answers the project; cardSay answers the thread its words started', async () => {
+    const t = withCards()
+    t.cards.threadLeave.mockReturnValueOnce({ tabId: 't1', projectId: 'web' })
+    expect(await t.ask({ action: 'cardThreadLeave', tabId: 't1', leadId: 'l1' }, owner)).toEqual({ ok: true, projectId: 'web' })
+    expect(t.cards.threadLeave).toHaveBeenLastCalledWith('t1', 'l1')
+    expect(await t.ask({ action: 'cardThreadLeave', tabId: 't1', leadId: 'l1' }, owner)).toEqual({ ok: true })
+    for (const bad of [{ tabId: 'bad id', leadId: 'l1' }, { tabId: 't1', leadId: 'x'.repeat(48) }, { tabId: 't1' }]) {
+      expect(await t.ask({ action: 'cardThreadLeave', ...bad }, owner)).toEqual({ error: 'INVALID_REQUEST' })
+    }
+    expect(await t.ask({ action: 'cardThreadLeave', tabId: 't1', leadId: 'l1' }, visitor)).toEqual({ error: 'OWNER_REQUIRED' })
+    expect(t.cards.threadLeave).toHaveBeenCalledTimes(2)
+    await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true, threaded: true }, owner)
+    expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', true, undefined, false, true)
+    t.cards.say.mockResolvedValueOnce({ said: true, thread: { tabId: 't1', projectId: 'web', root: 'm9' } })
+    expect(await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true }, owner))
+      .toEqual({ ok: true, said: true, thread: { tabId: 't1', projectId: 'web', root: 'm9' } })
   })
   it('cardSay passes a refused post\'s code and message on, and says nothing of a refusal otherwise', async () => {
     const t = withCards()

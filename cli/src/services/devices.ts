@@ -174,7 +174,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** What became of words for a Lead, as the service answered: a refusal keeps its code and its message, cut to what a dial
    *  shows in a voice error. */
   const saidOf = (answer: Record<string, unknown>): SaidOnCard => {
-    if (answer.said === true) return { said: true }
+    if (answer.said === true) {
+      const t = answer.thread && typeof answer.thread === 'object' ? answer.thread as Record<string, unknown> : {}
+      const ids = [t.tabId, t.projectId, t.root]
+      return ids.every((v): v is string => typeof v === 'string' && CHAT_ID.test(v)) ? { said: true, thread: { tabId: ids[0], projectId: ids[1], root: ids[2] } } : { said: true }
+    }
     const refused = answer.refused && typeof answer.refused === 'object' ? answer.refused as Record<string, unknown> : {}
     if (typeof refused.code !== 'string' || typeof refused.message !== 'string') return { said: false }
     return { said: false, refused: { code: refused.code, message: truncateUtf8(refused.message, VOICE_ERROR_BYTES) } }
@@ -259,17 +263,23 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (r.ok !== true || typeof r.text !== 'string' || typeof r.at !== 'number' || !Number.isInteger(r.at) || r.at < 0 || typeof r.none !== 'boolean') return null
       if (chat && !(typeof r.chatId === 'string' && CHAT_ID.test(r.chatId))) return null
       return { tabId, leadId, text: truncateUtf8(r.text, 1500), at: r.at, none: r.none, ...(chat ? { chatId: r.chatId as string } : {}),
-        ...(chat === 'buddy' ? { buddy: true as const } : {}) }
+        ...(chat === 'buddy' ? { buddy: true as const } : {}), ...(chat && typeof r.thread === 'string' && CHAT_ID.test(r.thread) ? { thread: r.thread } : {}) }
     },
     swarmCardOpen: (session, tabId, leadId, chat) => { void askCards({ action: 'cardOpen', session, tabId, leadId, ...chatFlag(chat) }) },
     swarmCardSide: (tabId, side) => { void askCards({ action: 'cardSide', tabId, side }) },
+    // The project whose thread the window should close, or null when the Lead's face was in none (or the service is away).
+    swarmThreadLeave: async (tabId, leadId) => {
+      const r = await askCards({ action: 'cardThreadLeave', tabId, leadId })
+      return r.ok === true && typeof r.projectId === 'string' && CHAT_ID.test(r.projectId) ? { tabId, projectId: r.projectId } : null
+    },
     // An error (no service, a refused post) is not `said`: the words go to the harness instead, never lost.
-    swarmSay: async (harnessId, text, chat, chatId, reviewed) => saidOf(await askCards({ action: 'cardSay', harnessId, text, ...chatFlag(chat),
-      ...(chatId ? { chatId, ...(reviewed ? { reviewed: true } : {}) } : {}) })),
+    swarmSay: async (harnessId, text, chat, chatId, reviewed, threaded) => saidOf(await askCards({ action: 'cardSay', harnessId, text, ...chatFlag(chat),
+      ...(chatId ? { chatId, ...(reviewed ? { reviewed: true } : {}) } : {}), ...(threaded ? { threaded: true } : {}) })),
     // The Pro picked a Lead: the window opens that Swarm tab and project. Harmless with no window. `chat`, from a round dial
     // that keeps sides: the Buddy chat or the Lead chat there; a window from before it opens the project's Lead chat.
-    superTabSelected: (superTabId, projectId, chat) =>
-      core.clients.sendLocal({ type: 'dial_super_tab', payload: { superTabId, projectId, ...(chat ? { chat } : {}) } }),
+    // `threadRoot`: a thread to open beside that chat, or null to close the open one (spec 2026-11-03-dial-thread-face).
+    superTabSelected: (superTabId, projectId, chat, threadRoot) =>
+      core.clients.sendLocal({ type: 'dial_super_tab', payload: { superTabId, projectId, ...(chat ? { chat } : {}), ...(threadRoot !== undefined ? { threadRoot } : {}) } }),
     scrolled: (phase, dy, velocity, superTabId) => core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity, ...(superTabId ? { superTabId } : {}) } }),
     // Gestures stay at this desk. The device inventory and its settings also reach the owner's other
     // machines, through the encrypted device-management event.
