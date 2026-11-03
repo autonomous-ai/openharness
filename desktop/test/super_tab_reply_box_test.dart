@@ -461,11 +461,16 @@ void main() {
       );
       expectUnderBox(tester);
       final before = tester.getRect(surface);
+      final line = tester.getRect(alsoLine);
       await tester.tap(newSession);
       await tester.pump();
       // Hidden, its place kept.
       expect(alsoSend.hitTestable(), findsNothing);
       expect(tester.getRect(surface), before);
+      // The note takes Also send's line: the two never show together, so no
+      // empty band opens between the box and the note.
+      expect(tester.getRect(note).top, lessThan(line.bottom));
+      expect(tester.getRect(note).top, greaterThanOrEqualTo(before.bottom));
       await tester.tap(newSession);
       await tester.pump();
       expectUnderBox(tester);
