@@ -98,7 +98,7 @@ class _SuperTabBacklogViewState extends State<SuperTabBacklogView> {
         Padding(
           padding: const EdgeInsets.fromLTRB(
             grid.AppDesktop.groupGap,
-            0,
+            grid.AppDesktop.controlGap,
             grid.AppDesktop.groupGap,
             grid.AppDesktop.controlGap,
           ),
