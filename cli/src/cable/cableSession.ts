@@ -206,11 +206,13 @@ const NAME_CUTS = [24, 12, 6, 3, 1, 0]
  * doubles, past it even with no Buddy names at all (review of #2146). Last, whole Buddy blocks go, from the least urgent Lead
  * up: engines of control characters (six bytes each in JSON) leave a Buddy frame at 8,275 bytes with every name empty, and
  * without its Buddies a frame is today's swarmChat one, about 5.3 KB at most. A frame that fits is sent as it is.
- * With `tokens`, as for the Harness Pro, whose guard refuses a JSON frame over 512 tokens, a frame fits only if it is also
- * within that many JSON tokens. Shorter names do not lower that count, so only the Buddy blocks go for it.
- * Returns how many Buddy blocks went, for the caller's log.
+ * With `tokens`, as for every dial, whose guard refuses a JSON frame over 512 tokens whole (firmware cable_json_guard.h), a
+ * frame fits only if it is also within that many JSON tokens. Shorter names do not lower that count, so for it the threads of
+ * every Lead but the one the dial has open (`open`) go first, then the Buddy blocks (task #2525: 12 Leads in the Swarm chat's
+ * thread came to 513 tokens, and the dial dropped every frame).
+ * Returns how many threads and Buddy blocks went, for the caller's log.
  */
-function fitFrame(frame: { name: string; leads: Array<Record<string, unknown>> }, tokens?: number): number {
+function fitFrame(frame: { name: string; leads: Array<Record<string, unknown>> }, tokens?: number, open?: string): { threads: number; buddies: number } {
   const small = () => Buffer.byteLength(JSON.stringify(frame)) < CABLE_MAX_PAYLOAD
   const fits = () => small() && (tokens === undefined || jsonTokens(frame) <= tokens)
   type Named = { [key: string]: unknown }
@@ -222,9 +224,15 @@ function fitFrame(frame: { name: string; leads: Array<Record<string, unknown>> }
       for (const [holder, key] of fields) holder[key] = truncateUtf8(String(holder[key]), bytes)
     }
   }
-  let dropped = 0
-  for (let i = frame.leads.length - 1; i >= 0 && !fits(); i--) if (frame.leads[i].buddy !== undefined) { delete frame.leads[i].buddy; dropped++ }
-  return dropped
+  let threads = 0, blocks = 0
+  if (!fits()) {
+    for (const l of frame.leads) {
+      if (l.id === open || !('thread' in l)) continue
+      delete l.thread; delete l.threadTitle; delete l.threadReplies; threads++
+    }
+  }
+  for (let i = frame.leads.length - 1; i >= 0 && !fits(); i--) if (frame.leads[i].buddy !== undefined) { delete frame.leads[i].buddy; blocks++ }
+  return { threads, buddies: blocks }
 }
 /** A Lead's new message as the round dial's alert, sized as the recap is. */
 function noticeFrame(tab: string, lead: string, n: LeadNotice): Message {
@@ -240,6 +248,9 @@ function fitText(full: string, make: (text: string) => Message): Message {
 let nextCardSession = 0
 const SWARM_IDS_MAX = 24
 const SWARM_TOKENS_MAX = 480
+/** The firmware's JSON guard itself (cable_json_guard.h): a frame of more tokens is dropped whole. A round dial's frames carry
+ *  no seq, so they are fitted to it; a Pro's keep SWARM_TOKENS_MAX's margin for theirs. */
+const GUARD_TOKENS_MAX = 512
 /** The models a dial's picker holds (ui_habitat.c): more are never sent. */
 const MODELS_MAX = 48
 
@@ -2982,12 +2993,15 @@ export class CableSession {
       const frame = { t: 'supertab', id: card.id, tab, name: card.name, count: card.count, ...(this.swarmBuddy ? { side: card.side ?? 'pm' } : {}),
         leads: card.leads.slice(0, SWARM_LEADS_MAX).map((l) => this.swarmBuddy ? buddyLead(l, this.swarmThread) : this.swarmChat ? chatLead(l, l.chat, this.swarmThread) : { id: l.id, projectId: l.projectId, project: l.project,
           engine: l.engine, owner: l.owner, local: l.local, state: l.state, order: l.order, ...(l.since === undefined ? {} : { since: l.since }) }) }
-      const buddiesDropped = fitFrame(frame, this.seqOn ? SWARM_TOKENS_MAX : undefined)
+      // Every dial's guard drops a frame over 512 tokens whole, a round dial's too (task #2525).
+      const dropped = fitFrame(frame, this.seqOn ? SWARM_TOKENS_MAX : GUARD_TOKENS_MAX, this.openLead?.tabId === card.id ? this.openLead.leadId : undefined)
       const key = JSON.stringify(frame)
       if (this.cardKeys.get(card.id) === key) continue
       this.cardKeys.set(card.id, key)
-      // Once per frame sent: those Leads show "No Buddy here yet" though they have one (spec 2026-10-30-harness-pro-swarm-parity, Scale).
-      if (buddiesDropped) this.log(`cable: supertab ${card.id.slice(0, 8)} too large — ${buddiesDropped} Buddy block(s) dropped`)
+      // Once per frame sent: those Leads show "No Buddy here yet" though they have one (spec 2026-10-30-harness-pro-swarm-parity,
+      // Scale), and the other Leads read their chat's main stream.
+      const cuts = [dropped.threads && `${dropped.threads} thread(s)`, dropped.buddies && `${dropped.buddies} Buddy block(s)`].filter(Boolean)
+      if (cuts.length) this.log(`cable: supertab ${card.id.slice(0, 8)} too large — ${cuts.join(', ')} dropped`)
       await this.send(frame)
     }
     if (this.swarmChat) await this.pushNotices(cards, force)

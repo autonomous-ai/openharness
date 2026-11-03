@@ -4925,22 +4925,20 @@ describe('swarm cards', () => {
       } finally { await session.stop() }
     })
 
-    // Task #2525: the firmware's guard (cable_json_guard.h) drops any JSON frame over 512 tokens whole, a round dial's too,
-    // so every dial gets the budget a Pro's frame had.
-    it('a round\'s swarmBuddy supertab frame keeps the same budget, and 11 Leads without a thread go unchanged', async () => {
-      for (const [count, cut] of [[12, true], [11, false]] as const) {
+    // Task #2525: the firmware's guard (cable_json_guard.h) drops any JSON frame over 512 tokens whole, a round dial's too.
+    // A round frame carries no seq, so the guard's 512 is its budget: 12 Leads with a Buddy each (483) and 11 go unchanged.
+    it('a round\'s swarmBuddy supertab frame of 12 or 11 Leads without a thread is unchanged by the token budget', async () => {
+      for (const count of [12, 11]) {
         const log = vi.fn()
         const { session, port } = await connect(cardHost({ cards: [card('st1', Array.from({ length: count }, (_, i) => big(i + 1)))] }, { log }))
         try {
           port.say(BUDDY)
           await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
           const frame = ofType(port, 'supertab')[0], leads = frame.leads as Array<Record<string, unknown>>
-          expect(tokens(frame)).toBeLessThanOrEqual(480)
+          expect(tokens(frame)).toBeLessThanOrEqual(512)
           expect(leads).toHaveLength(count)
-          expect(leads.every((l) => 'buddy' in l)).toBe(!cut)
-          expect(leads.every((l) => String(l.project).length === 48 && String(l.chatName).length === 48)).toBe(true)
-          if (cut) expect(log).toHaveBeenCalledWith(expect.stringMatching(/supertab st1 too large — \d+ Buddy block\(s\) dropped/))
-          else expect(log).not.toHaveBeenCalledWith(expect.stringContaining('too large'))
+          expect(leads.every((l) => 'buddy' in l && String(l.project).length === 48 && String(l.chatName).length === 48)).toBe(true)
+          expect(log).not.toHaveBeenCalledWith(expect.stringContaining('too large'))
         } finally { await session.stop() }
       }
     })
