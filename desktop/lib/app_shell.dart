@@ -25,6 +25,7 @@ import 'screens/login_screen.dart';
 import 'screens/swarm_menu_bus.dart';
 import 'state/app_state.dart';
 import 'stats/stats_lifecycle.dart';
+import 'super_tabs/team_account_setup.dart';
 import 'viewer/viewer_services.dart';
 import 'ws/terminal_transport_plugin.dart';
 import 'shared/theme/app_theme.dart' as grid;
@@ -164,7 +165,7 @@ class HarnessApp extends StatelessWidget {
       // surfaces own their no-scaling boundary alongside terminal zoom.
       builder: (context, child) {
         final app = child ?? const SizedBox.shrink();
-        final framed = frame?.call(app) ?? app;
+        final framed = _TeamSetupHold(child: frame?.call(app) ?? app);
         return _GridTokenScope(
           child: keymap == null
               ? framed
@@ -176,6 +177,19 @@ class HarnessApp extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The whole window, every route and dialog included, waits while this
+/// computer's Harness Team account must be set up after it joined a Swarm
+/// (super_tabs/team_account_setup.dart).
+class _TeamSetupHold extends ConsumerWidget {
+  const _TeamSetupHold({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) =>
+      TeamAccountSetupLock(app: ref.watch(appStateProvider), child: child);
 }
 
 /// Carries Grid's design tokens past this app's `const` chrome.
@@ -317,7 +331,11 @@ class _RootShellState extends ConsumerState<RootShell>
   /// ([InWindowMenuBar]) fires the same strings directly, so one switch serves
   /// every platform.
   Future<void> runAppMenuAction(String action) async {
-    if (!mounted) return;
+    // The Harness Team account's setup holds the whole window
+    // (super_tabs/team_account_setup.dart). AppKit's own Quit and About panel
+    // never come here; every action that does waits, the Linux and Windows
+    // strip's About included.
+    if (!mounted || ref.read(appStateProvider).teamSetupLocked) return;
     switch (action) {
       case 'settings':
         final app = ref.read(appStateProvider);

@@ -503,6 +503,12 @@ class ConversationServer {
   /// refuses a machine that cannot take the Product Manager (leadStart.ts).
   Map<String, String>? leadRefusal;
   final receipts = <String, Map<String, dynamic>>{};
+
+  /// As the backend (store.ts): a request id used again for another command is
+  /// refused with OPERATION_REUSED instead of answered from its receipt. Off by
+  /// default, as most tests resend one request id freely.
+  bool refuseReusedOperations = false;
+  final receiptCommands = <String, String>{};
   final messages = <Map<String, dynamic>>[];
   // Route decisions by id, answered by GET .../route-decisions/:id.
   final routeDecisions = <String, Map<String, dynamic>>{};
@@ -1029,6 +1035,16 @@ class ConversationServer {
         );
       }
       final operationId = body['operationId'] as String;
+      final earlier = refuseReusedOperations
+          ? receiptCommands[operationId]
+          : null;
+      if (earlier != null && earlier != jsonEncode(body['command'])) {
+        throw const SuperTabFailure(
+          'OPERATION_REUSED',
+          'Use a new operation ID for a different request.',
+          statusCode: 400,
+        );
+      }
       if (receipts[operationId] case final receipt?) {
         if (loseResentReplies > 0) {
           loseResentReplies--;
@@ -1461,6 +1477,7 @@ class ConversationServer {
         'lastChangedAt': parts.clock,
       };
       receipts[operationId] = result;
+      receiptCommands[operationId] = jsonEncode(body['command']);
       if (loseReply) {
         loseReply = false;
         throw StateError('Connection lost after commit');

@@ -17,6 +17,14 @@ spec.loader.exec_module(planner)
 
 
 class SelectionTests(unittest.TestCase):
+    def test_backend_changes_run_the_integration_shards_and_nothing_else_does(self):
+        # Task #2459: the Super Tab integration suite runs in PR CI for backend changes only.
+        self.assertEqual(planner.JOBS["backend"], {"backend-desk", "backend-integration"})
+        self.assertEqual(planner.select(["backend/integration/superTabs.test.ts"])[0], {"backend"})
+        others = set().union(*(jobs for suite, jobs in planner.JOBS.items() if suite != "backend"))
+        self.assertNotIn("backend-integration", others)
+        self.assertNotIn("backend", planner.NOT_READ)
+
     def test_docs_workflows_scripts_and_unknown_paths_need_only_process_checks(self):
         for path in ["docs/guide.md", "README.md", "docs/images/poster.png", "scripts/ci-plan.py",
                      ".github/workflows/ci.yml", "Makefile", "store/tools/runtimes.sh", "surprise.py"]:
@@ -337,11 +345,18 @@ class ReuseTests(ReuseFixture):
         self.assertIn("backend/src/other.ts", plan["reuse"]["rerun"]["backend"])
 
     def test_tests_outside_the_pr_suite_do_not_rerun_it(self):
-        # backend-desk runs src/**/*.test.ts only; cli-tests and cli-typecheck cover cli/src only.
-        _, main, head = self.scenario(["backend/src/app.ts", "cli/src/a.ts"], ["backend/integration/teams.test.ts", "cli/e2e/run.e2e.ts"])
+        # cli-tests and cli-typecheck cover cli/src only; cli/e2e runs in its own workflow.
+        _, main, head = self.scenario(["backend/src/app.ts", "cli/src/a.ts"], ["cli/e2e/run.e2e.ts"])
         plan = self.plan(head, main)
         self.assertEqual(list(plan["reused"]), ["backend", "cli"])
-        self.assertEqual(planner.select(["backend/integration/teams.test.ts"])[0], {"backend"})
+
+    def test_a_main_integration_test_change_reruns_the_backend_suite(self):
+        # backend-integration runs backend/integration (task #2459), so main's change there was never tested with this PR.
+        _, main, head = self.scenario(["backend/src/app.ts"], ["backend/integration/teams.test.ts"])
+        plan = self.plan(head, main)
+        self.assertEqual(plan["reused"], {})
+        self.assertIn("backend/integration/teams.test.ts", plan["reuse"]["rerun"]["backend"])
+        self.assertEqual(plan["required_jobs"], sorted({"process-checks", "backend-desk", "backend-integration"}))
 
     def test_a_style_allowlist_main_changed_reruns_the_suite_that_checks_it(self):
         # mobile-checks runs the mobile style check: a list main shrank can fail with this PR's code.
@@ -738,10 +753,10 @@ class CrossReadTests(unittest.TestCase):
         self.assertEqual(planner.undeclared_reads(self.root, "cli"), [])
 
     def test_a_read_into_a_folder_the_suite_skips_is_found(self):
-        self.write("backend/integration/helpers.ts", "export const x = 1")
-        self.write("backend/src/a.test.ts", "import { x } from '../integration/helpers'")
-        self.write("backend/integration/b.test.ts", "import { y } from './helpers'; import '../src/a'")
-        self.assertEqual(planner.undeclared_reads(self.root, "backend"), [("backend/src/a.test.ts", "backend/integration/")])
+        self.write("cli/e2e/helpers.ts", "export const x = 1")
+        self.write("cli/src/a.spec.ts", "import { x } from '../e2e/helpers'")
+        self.write("cli/e2e/b.e2e.ts", "import { y } from './helpers'; import '../src/a'")
+        self.assertEqual(planner.undeclared_reads(self.root, "cli"), [("cli/src/a.spec.ts", "cli/e2e/")])
 
     def test_a_read_built_at_run_time_needs_its_whole_folder_declared(self):
         self.write("tui/src/a.rs", 'include_str!("../../backend/src/types/productUsage.ts"); let p = "../../backend/src/";')
@@ -932,6 +947,29 @@ class GitHubEvidenceTests(unittest.TestCase):
         self.assertEqual(gate["url"], "https://github.com/o/r/actions/runs/12")
         self.assertEqual(gate["receipt"]["suites"], ["backend", "mobile"])
         self.assertIn("actions/jobs/120", self.github.reads)
+
+    def test_a_receipt_from_a_planner_that_adds_a_job_passes_the_older_helper(self):
+        # The merge helper runs from main; a PR that adds a CI job (#2804: backend-integration) brings a receipt listing a
+        # job main's JOBS does not know yet. Every job main requires ran and passed, so it may merge (batch #2815 refused).
+        self.github.add_run(12, self.head, self.tree, ["mobile", "backend"])
+        receipt = self.github.receipts[12]
+        receipt["required_jobs"] = sorted(receipt["required_jobs"] + ["backend-new-shards"])
+        receipt["results"]["backend-new-shards"] = "success"
+        gate = self.evidence.passed_gate(self.head)
+        self.assertIn("backend-new-shards", gate["receipt"]["required_jobs"])
+
+    def test_a_receipt_missing_a_job_main_requires_or_with_a_failed_extra_job_is_refused(self):
+        self.github.add_run(12, self.head, self.tree, ["mobile", "backend"])
+        receipt = self.github.receipts[12]
+        receipt["required_jobs"] = [job for job in receipt["required_jobs"] if job != "backend-desk"]
+        with self.assertRaisesRegex(ValueError, "does not run every suite"):
+            self.evidence.passed_gate(self.head)
+        self.github.add_run(13, self.head, self.tree, ["mobile", "backend"])
+        receipt = self.github.receipts[13]
+        receipt["required_jobs"] = sorted(receipt["required_jobs"] + ["backend-new-shards"])
+        receipt["results"]["backend-new-shards"] = "failure"
+        with self.assertRaisesRegex(ValueError, "inconsistent"):
+            self.evidence.passed_gate(self.head)
 
     def test_a_failed_latest_check_is_not_rescued_by_an_older_pass(self):
         self.github.add_run(12, self.head, self.tree, ["mobile"], conclusion="failure")
