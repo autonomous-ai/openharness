@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isCoordinator, mineText, openWorkOf, taskText } from './agentContext.js'
+import { isCoordinator, mineText, openWorkOf, taskText, unknownAgents } from './agentContext.js'
 
 const NOW = Date.parse('2026-11-02T10:00:00.000Z')
 const MIN = 60_000
@@ -207,5 +207,31 @@ describe('a linked task with no step name', () => {
       task('g13', 13, 'Test: PR #7', 'rev1', 'working', { reviewOf: 'g12' })])
     expect(mineText(state, changed({}), 'dev1', NOW)).toBe('#12 Fix login (conversation g12) — working\n  steps: Test: PR #7 (Rev1): working')
     expect(mineText(state, changed({}), 'rev1', NOW)).toBe('#12 Fix login · Test: PR #7 (conversation g13) — working')
+  })
+})
+
+// Diego, 2026-11-03 (#2311): a Tester and a Reviewer record the same check; each one's latest verdict is kept, and a failure
+// wins until its own checker passes it.
+describe('a check with several checkers', () => {
+  const verdict = (by: string, passed: boolean, evidence: string, at: number) => ({ by, passed, evidence, at })
+  const withCheck = (check: Group) => task('g1', 1, 'Fix login', 'dev1', 'review',
+    { checks: [{ id: 'c', description: 'Signs in offline', independent: true, ...check }] })
+
+  it('shows each checker\'s verdict, a failure first', () => {
+    const group = withCheck({ evidence: 'Crashes offline\nlog', passedBy: null,
+      verdicts: [verdict('agent:rev1', true, 'Diff reads right', 1), verdict('person:owner', false, 'Crashes offline\nlog', 2)] })
+    const state = swarm([group], { people: [{ id: 'owner', email: 'owner@example.com' }] })
+    expect(taskText(group, state, [], changed({}), NOW)).toContain('✗ Signs in offline — failed by owner@example.com: Crashes offline; passed by Rev1')
+  })
+
+  it('names every checker that passed it', () => {
+    const group = withCheck({ evidence: 'Works', passedBy: 'agent:dev1',
+      verdicts: [verdict('agent:rev1', true, 'Diff reads right', 1), verdict('agent:dev1', true, 'Works', 2)] })
+    expect(taskText(group, swarm([group]), [], changed({}), NOW)).toContain('✓ Signs in offline — by Rev1, Dev1')
+  })
+
+  it('names a stopped checker', () => {
+    const group = withCheck({ evidence: 'Crashes', passedBy: null, verdicts: [verdict('agent:gone', false, 'Crashes', 1)] })
+    expect(unknownAgents(group, swarm([group]), [])).toContain('gone')
   })
 })
