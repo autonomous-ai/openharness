@@ -282,15 +282,23 @@ function logAttempt(owner: string, name: string, url: string, outcome: string): 
   console.info(`[project] clone ${owner}/${name} over ${via}: ${outcome}`)
 }
 
+/** Every branch a fetch sees, as a full clone's `origin` has: a single-branch clone writes only its own. */
+const ALL_BRANCHES = '+refs/heads/*:refs/remotes/origin/*'
+
 /** No shell interpolation or interactive password prompt. Diagnostics stay
- * bounded and private; only actionable, credential-free messages reach the UI. */
-function cloneRepository(url: string, destination: string, gitEnv?: NodeJS.ProcessEnv): Promise<void> {
+ * bounded and private; only actionable, credential-free messages reach the UI.
+ *
+ * Blob-less and single-branch: the default branch with its whole history, file contents fetched as they are needed (the
+ * checkout's own, then whatever `blame` or another branch's checkout reads). lampOS (576 MB pack, about 4,400 branches)
+ * took 48 s in full on MACs-Mac-Studio and longer than the 5 minutes allowed on a slower Mac; blob-less, 6 s. The fetch
+ * rule is then widened to every branch, so `git fetch origin X && git checkout X` works as it does in a full clone. */
+export function cloneRepository(url: string, destination: string, gitEnv?: NodeJS.ProcessEnv): Promise<void> {
   return new Promise((resolve, reject) => {
     const base = gitEnv ?? process.env
-    const child = spawn('git', ['clone', '--', url, destination], {
-      stdio: ['ignore', 'ignore', 'pipe'],
-      env: { ...base, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never',
-        GIT_SSH_COMMAND: base.GIT_SSH_COMMAND ?? 'ssh -oBatchMode=yes -oConnectTimeout=20' },
+    const env = { ...base, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never',
+      GIT_SSH_COMMAND: base.GIT_SSH_COMMAND ?? 'ssh -oBatchMode=yes -oConnectTimeout=20' }
+    const child = spawn('git', ['clone', '--progress', '--filter=blob:none', '--single-branch', '--', url, destination], {
+      stdio: ['ignore', 'ignore', 'pipe'], env,
     })
     let diagnostic = '', timedOut = false
     let forceKill: ReturnType<typeof setTimeout> | undefined
@@ -310,8 +318,11 @@ function cloneRepository(url: string, destination: string, gitEnv?: NodeJS.Proce
       clearTimeout(deadline)
       clearTimeout(forceKill)
       if (timedOut) reject(new ProjectFolderError('CLONE_TIMEOUT', 'Cloning took too long. Check the connection and retry.'))
-      else if (code === 0) resolve()
-      else reject(cloneFailure(diagnostic))
+      else if (code !== 0) reject(cloneFailure(diagnostic))
+      else {
+        execFile('git', ['-C', destination, 'config', 'remote.origin.fetch', ALL_BRANCHES], { env, timeout: 10_000, killSignal: 'SIGKILL' },
+          error => error ? reject(new ProjectFolderError('CLONE_FAILED', 'Could not clone the repository. Check the URL and connection, then retry.')) : resolve())
+      }
     })
   })
 }
