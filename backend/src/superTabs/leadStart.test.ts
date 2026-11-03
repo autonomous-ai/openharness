@@ -705,3 +705,99 @@ describe('a Team account hosting a Product Manager', () => {
       { contribution: { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null } }).result.startId).toBeTruthy()
   })
 })
+
+// Security reviews of #2705 (destination access, Team accounts): moving a running Product Manager to another machine is a new
+// start there, so it follows a new start's placement, placed and recorded as the person who asked, and only the project's
+// owner asks it. The PM machine's owner still switches the engine or account on that machine itself.
+describe('moving a running Product Manager to another machine', () => {
+  const contributionOf = (machineOwnerId: string) => ({ contribution: { machineOwnerId, contributorId: machineOwnerId, hostGrant: null } })
+  /** The owner's Swarm with its Product Manager running on [on], every host able to start and switch one. */
+  const moving = (on = 'owner-mac', prepare: (f: ReturnType<typeof swarm>) => void = () => {}) => {
+    const f = swarm()
+    // A project the teammate reads, so its refusals are about who may move it, not who may see it.
+    f.project().visibility = 'public'
+    for (const pool of f.state.machines!) pool.observation = { ...pool.observation!, capabilities: ['leadStart', 'leadSwitch'] }
+    prepare(f)
+    const startId = f.lead(on).result.startId as string
+    const machineOwnerId = f.machine(on).contributorId
+    const pm = f.run({ type: 'agent.started', startId, harnessId: 'pm-1', configuration: config }, owner, contributionOf(machineOwnerId)).result.agentId as string
+    f.run({ type: 'agent.startSettled', startId, warning: null }, owner, contributionOf(machineOwnerId))
+    const move = (machineId: string, actor: Actor = owner, context: Partial<CommandContext> = {}) =>
+      f.run({ type: 'lead.switch', projectId: f.app.projectId, engine: 'claude', profileId: 'default', machineId } as Command, actor, context)
+    const candidates = () => (f.state.starts ?? []).filter(s => s.request.leadFor?.switchId)
+    const agent = () => f.state.agents.find(a => a.id === pm)!
+    return { f, pm, move, candidates, agent }
+  }
+
+  it('places the move in a teammate\'s Team account, as a new start would, recorded as the person who asked', () => {
+    const s = moving()
+    s.move('mate-mac')
+    expect(s.candidates()).toEqual([expect.objectContaining({ actorKey: 'person:owner', machineOwnerId: 'mate',
+      request: expect.objectContaining({ machineId: 'mate-team', leadFor: expect.objectContaining({ personId: 'owner', switchId: s.agent().switchRequest!.id }) }) })])
+    expect(s.agent().switchRequest).toMatchObject({ targetMachineId: 'mate-team', requestedBy: 'owner' })
+  })
+
+  it('refuses the PM machine\'s owner who does not own the project, on any other machine, and records nothing', () => {
+    // Its Team account cannot take it, so it runs on the Mac itself, as its owner.
+    const s = moving('mate-mac', f => { f.machine('mate-team').observation = { ...reading('team', FAILED), capabilities: ['leadStart', 'leadSwitch'] } })
+    expect(s.agent()).toMatchObject({ machineId: 'mate-mac', machineOwnerId: 'mate' })
+    for (const machineId of ['owner-mac', 'mate-team']) {
+      expect(refusal(() => s.move(machineId, mate))?.code).toBe('PROJECT_OWNER_REQUIRED')
+    }
+    expect(s.candidates()).toEqual([])
+    expect(s.agent().switchRequest).toBeUndefined()
+    // On the machine it runs on, its owner still switches the engine or account.
+    s.move('mate-mac', mate)
+    expect(s.agent().switchRequest).toMatchObject({ requestedBy: 'mate' })
+    expect(s.agent().switchRequest).not.toHaveProperty('targetMachineId')
+  })
+
+  it('refuses a member who owns neither the project nor the PM\'s machine', () => {
+    const s = moving()
+    expect(refusal(() => s.move('mate-mac', mate))?.code).toBe('PROJECT_OWNER_REQUIRED')
+    expect(s.candidates()).toEqual([])
+  })
+
+  it('takes a teammate\'s Team account only while Team accounts take work: with none, the Mac itself, and the account named is refused', () => {
+    const idle = { teamAccountsIdle: true }
+    const named = moving()
+    expect(refusal(() => named.move('mate-team', owner, idle))?.code).toBe('TEAM_ACCOUNT_REQUIRED')
+    expect(named.candidates()).toEqual([])
+    const mac = moving()
+    mac.move('mate-mac', owner, idle)
+    expect(mac.candidates().map(s => s.request.machineId)).toEqual(['mate-mac'])
+  })
+
+  it('does not put it in a Team account that runs another project\'s agents', () => {
+    const s = moving()
+    const web = s.f.run({ type: 'project.create', name: 'Web', visibility: 'public', brief: '' }).result as { projectId: string }
+    const group = s.f.run({ type: 'conversation.create', projectId: web.projectId, title: 'Work', brief: 'Build it.', checks: [] }).result.conversationId as string
+    s.f.run({ type: 'agent.start', request: { conversationId: group, machineId: 'mate-mac', engine: 'claude', name: 'Builder', cwd: `/swarm/${web.projectId}`,
+      worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } }, owner, contributionOf('mate'))
+    expect(refusal(() => s.move('mate-team'))?.code).toBe('TEAM_ACCOUNT_BUSY')
+    expect(s.candidates()).toEqual([])
+    // Named by its Mac, the Mac takes it itself.
+    s.move('mate-mac')
+    expect(s.candidates().map(c => c.request.machineId)).toEqual(['mate-mac'])
+  })
+
+  it('refuses a machine that is not in the Swarm, withdrawn, failing its privacy check or too old to switch, and records nothing', () => {
+    const unlisted = moving()
+    expect(refusal(() => unlisted.move('nowhere'))?.code).toBe('MACHINE_NOT_LISTED')
+    const withdrawn = moving()
+    withdrawn.f.machine('mate-mac').membershipGeneration = 'an earlier membership'
+    expect(refusal(() => withdrawn.move('mate-mac'))?.code).toBe('CONTRIBUTION_REVOKED')
+    const failing = moving()
+    failing.f.machine('mate-team').observation = { ...reading('team', FAILED), capabilities: ['leadStart', 'leadSwitch'] }
+    expect(refusal(() => failing.move('mate-team'))?.code).toBe('PRIVACY_CHECK_FAILED')
+    const old = moving()
+    old.f.machine('mate-team').observation = { ...reading('team', PASSED), capabilities: ['leadStart'] }
+    const lead = structuredClone(old.f.project().lead)
+    expect(refusal(() => old.move('mate-team'))?.code).toBe('HOST_OUTDATED')
+    for (const s of [unlisted, withdrawn, failing, old]) {
+      expect(s.candidates()).toEqual([])
+      expect(s.agent().switchRequest).toBeUndefined()
+    }
+    expect(old.f.project().lead).toEqual(lead)
+  })
+})
