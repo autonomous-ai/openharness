@@ -7,6 +7,7 @@ import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
 import { agentOnly, author, fail, groupForBuddy, isLeads, seenMachineIds, stableId, SuperTabError, visibleState, type Actor, type AgentStart, type SuperTabState } from '../model.js'
+import { logger } from '../../utils/logger.js'
 import { mentionsDigest, resolveRead, swarmsWithTags, waitingMentions, waitingTagConversations } from '../mentions.js'
 import { decisionsWaiting } from '../decisions.js'
 import { readMarks, readThreadMarks, writeThreadFollow, writeThreadMark } from '../readMarks.js'
@@ -225,6 +226,13 @@ export class SwarmReads {
     })
   }
 
+  /** The stored mark is the answer: a failed tag resolve is only logged, since the client never resends a mark at or below it. */
+  private async resolveTags(input: Parameters<typeof resolveRead>[1]): Promise<void> {
+    try { await resolveRead(this.db, input) } catch (error) {
+      logger.warn('[swarm-read] tags not resolved', { tabId: input.tabId, conversationId: input.conversationId, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
   /** Moves the person's read mark in a conversation they can read forward, never past its newest message (readMarks.ts). Only a
    *  person reading as themselves has marks: an agent, or a Team session, is refused before anything is written. Reading the
    *  chat never reads a reply only in a thread: first, each such thread of theirs between the old mark and the new one with no
@@ -234,7 +242,7 @@ export class SwarmReads {
     const { group, state } = await this.readGroup(user, tabId, conversationId)
     const next = Math.min(sequence, group.data!.lastMessageSequence), now = this.now()
     const stored = await moveChatMark(this.db, { tabId, state, personId: user.sub, conversationId, next, now })
-    await resolveRead(this.db, { tabId, personId: user.sub, conversationId, threadId: null, sequence: stored, now })
+    await this.resolveTags({ tabId, personId: user.sub, conversationId, threadId: null, sequence: stored, now })
     return { sequence: stored }
   }
 
@@ -249,7 +257,7 @@ export class SwarmReads {
     const stored = await writeThreadMark(this.db, { tabId, personId: user.sub, conversationId, threadId, sequence: Math.min(sequence, newest), now })
     // The thread's replies the mark passes are read in Activity too (activity.ts).
     await markActivityThreadRead(this.db, { tabId, personId: user.sub, conversationId, threadId, sequence: stored, now })
-    await resolveRead(this.db, { tabId, personId: user.sub, conversationId, threadId, sequence: stored, now })
+    await this.resolveTags({ tabId, personId: user.sub, conversationId, threadId, sequence: stored, now })
     return { sequence: stored }
   }
 

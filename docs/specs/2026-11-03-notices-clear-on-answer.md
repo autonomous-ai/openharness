@@ -43,6 +43,11 @@ When a person's read mark moves past a tag's message, that tag resolves with `re
 
 This is the rule Desktop's `mentionUnread` already uses, so Activity, the menu bar, the phone and the badges agree.
 
+Mark all read (Desktop, phone) moves every chat mark to its newest message, so it resolves every tag those marks pass, as
+Slack's does. Desktop's Undo still works: it holds the marks back until its time is up (controller.dart `markAllRead`),
+so nothing is resolved before then. A tag held for a task's
+no-worker grace (`holdUntil`) that is read or answered before its time is never listed, as a reply already does today.
+
 ### Answering an agent clears its tags (server)
 
 When a person posts (`message.send`), besides today's same-conversation rule, every open tag of theirs in the Swarm made by
@@ -63,13 +68,21 @@ before the server's next answer.
 
 ### A person's message closes the question it answers (CLI)
 
-When a Swarm message **from a person** is due for a Claude Code session whose pane shows a question
-(`messageHold === 'question_open'`), the host presses Escape once, reads the pane again, and delivers the message if
-nothing else holds it. Claude Code ends the question as declined and the message arrives as the answer; the daemon's
-`question_close` drops the Ready row everywhere.
+When a Swarm message from **the machine's own person** is due for a Claude Code session whose pane shows a question, the
+host presses Escape once, waits for the pane to redraw, and delivers the message if nothing else holds it. Claude Code
+ends the question as declined and the message arrives as the answer; the daemon's `question_close` drops the Ready row
+everywhere.
 
-Never for a permission prompt (`permission_open`), never for a message from an agent, never for another engine (Codex and
-the others keep waiting, as today).
+Escape is pressed only when all of these hold, checked again under the pane's writer lock just before the key:
+
+- the pane reads `question_open` and shows the same question as the reading that decided it;
+- the core holds a pending AskUserQuestion record for that agent (not only the screen heuristic);
+- the message was written after that question opened (a message from before it answers something else);
+- the core may still write the delivery (`canWrite`), and no question answer (dial, card, phone) holds the terminal;
+- the question's free-text row holds no typed answer.
+
+Never for a permission prompt (`permission_open`), never for a message from an agent or from another person of the Swarm
+(they keep waiting, as today), never for another engine (Codex and the others keep waiting).
 
 ### A hidden thread pane marks nothing read (Desktop, #15)
 
@@ -80,8 +93,9 @@ reply that comes while it is hidden is marked when the pane shows again.
 
 - **Growth:** no new rows. Two more ways to set `resolvedAt` on existing `SuperTabMention` rows, which the 30-day TTL
   index already deletes.
-- **Concurrency:** each resolve is one `updateMany` on the person's own rows, inside the read-mark write (`markRead`,
-  `markThreadRead`) or the command transaction (`message.send`). Resolving is idempotent: `waiting` in the filter.
+- **Concurrency:** each resolve is one `updateMany` on the person's own rows: right after the read-mark write (`markRead`,
+  `markThreadRead`, not in its transaction) or inside the command transaction (`message.send`). Resolving is idempotent:
+  `waiting` in the filter.
 - **Read cost:** a read-mark write reads the person's waiting tags in that one conversation (indexed by tabId, personId,
   createdAt, capped at 500 as `tagRows`) and their messages by id; most marks find none and stop after the first read. A post
   adds one `updateMany` keyed by the person and the answered agent ids.
@@ -94,7 +108,9 @@ reply that comes while it is hidden is marked when the pane shows again.
 - **Audience:** the server resolves only the acting person's own tags (`personId = user.sub`); a Team session has no marks
   and is refused as today.
 - **Identity:** the person's own account, never the machine owner's.
-- **Failure:** a resolve that fails fails the read-mark write or the command, as their other writes do; the client retries
-  the mark. The Escape is logged (`[inject] … question closed for a person's message`); if the pane still holds after it,
-  the delivery is withheld as today and retried.
+- **Failure:** a resolve after a read mark is best-effort: a failure is logged as a warning and the mark still answers
+  (the tag stays waiting until a later mark passes it, and the new Desktop menu bar already hides it). A resolve in a post
+  fails the command with its other writes. Escape is logged either way (`question closed for a person's message` or
+  `Escape sent, question still open`); if the pane still holds after it, the delivery is withheld as today and retried.
+  A Team session resolves nothing, by read or by post.
 - **Platforms:** server for every client; Desktop macOS/Linux/Windows menu bar; the CLI change is engine `claude` only.

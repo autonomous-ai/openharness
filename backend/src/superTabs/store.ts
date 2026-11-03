@@ -1764,7 +1764,7 @@ export class SuperTabStore {
       if (effects.lateDeliveries?.length) await this.writeLateDeliveries(tx, tabId, effects.state, effects.lateDeliveries)
       if (command.type === 'message.send' && actor.kind === 'person') await resolveByReply(tx, tabId, command.conversationId, actor.userId, context.now)
       // Answering an agent settles its tags in other conversations too (mentions.ts answeredAgents).
-      if (command.type === 'message.send' && actor.kind === 'person') {
+      if (command.type === 'message.send' && actor.kind === 'person' && !isTeamSession(user)) {
         const sent = effects.messages.filter(m => m.conversationId === command.conversationId && m.author.kind === 'person' && m.author.id === actor.userId && !m.source)
         await resolveByAnswer(tx, tabId, actor.userId, answeredAgents(effects.state, actor, effects.state.conversations.find(c => c.id === command.conversationId)!,
           sent.flatMap(m => m.recipients)), context.now)

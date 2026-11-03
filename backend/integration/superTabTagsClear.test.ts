@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import Fastify, { type FastifyInstance } from 'fastify'
@@ -156,6 +156,19 @@ describe('reading clears tags', () => {
     await markChat(s, await sequenceOf(tag), peer)
     expect(await listed(s.tabId, peer)).toEqual([])
     expect((await tagFor(tag, peer)).resolvedBy).toBe('read')
+  })
+
+  it('a failed tag resolve still stores and answers the read mark', async () => {
+    const s = await scene()
+    const tag = await say(s.tabId, s.web, agentAuthor(s.pm), { tags: [peer] })
+    const sequence = await sequenceOf(tag)
+    const real = db.superTabMention.findMany.bind(db.superTabMention) as (args: { select?: object }) => Promise<unknown>
+    // Only resolveRead's capped read (the first, before the answer is built) fails.
+    const spy = vi.spyOn(db.superTabMention, 'findMany').mockImplementation(((args: { select?: object }) => Object.keys(args.select ?? {}).join() === 'id,messageId' ? Promise.reject(new Error('boom')) : real(args)) as never)
+    const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${s.tabId}/conversations/${s.web}/read`, headers: { authorization: `Bearer ${peer.sub}` }, payload: { sequence } })
+    spy.mockRestore()
+    expect(response.statusCode).toBe(200)
+    expect(response.json().data.sequence).toBe(sequence)
   })
 
   it('another person\'s read leaves my tag', async () => {

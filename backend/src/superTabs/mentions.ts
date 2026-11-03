@@ -157,17 +157,18 @@ export async function resolveByReply(tx: Tx, tabId: string, conversationId: stri
 }
 
 /** A read mark moved to [sequence] resolves the person's waiting tags it passes: in the chat (threadId null) those shown there, in a
- *  thread those shown only in it (threadsOf, as Desktop's mentionUnread reads them). Most marks find no tag and stop after one read. */
+ *  thread those shown only in it (threadsOf, as Desktop's mentionUnread reads them). Most marks find no tag and stop after one read.
+ *  A held tag (holdUntil) resolved before its time is never listed, as in resolveByReply (intended). */
 export async function resolveRead(db: Tx | PrismaClient, input: { tabId: string; personId: string; conversationId: string; threadId: string | null;
   sequence: number; now: number }): Promise<number> {
   const { tabId, personId, conversationId, threadId, sequence, now } = input, tx = db as Tx
   const rows = await tx.superTabMention.findMany({ where: { tabId, personId, conversationId, createdAt: { gt: new Date(now - MENTION_EXPIRY_MS) }, ...waiting },
-    select: { id: true, messageId: true }, take: 500 })
+    select: { id: true, messageId: true }, orderBy: { createdAt: 'desc' }, take: 500 })
   if (!rows.length) return 0
-  const messages = await tx.superTabMessage.findMany({ where: { tabId, id: { in: rows.map(r => r.messageId) } },
+  const messages = await tx.superTabMessage.findMany({ where: { tabId, id: { in: rows.map(r => r.messageId) }, sequence: { lte: sequence } },
     select: { id: true, conversationId: true, thread: true, alsoInChat: true, sequence: true } })
   const threads = await threadsOf(tx, tabId, messages)
-  const passed = new Set(messages.filter(m => m.sequence <= sequence && (threads.get(m.id) ?? null) === threadId).map(m => m.id))
+  const passed = new Set(messages.filter(m => (threads.get(m.id) ?? null) === threadId).map(m => m.id))
   const ids = rows.filter(r => passed.has(r.messageId)).map(r => r.id)
   if (!ids.length) return 0
   return (await tx.superTabMention.updateMany({ where: { tabId, personId, id: { in: ids }, ...waiting }, data: { resolvedAt: new Date(now), resolvedBy: 'read' } })).count
@@ -182,7 +183,8 @@ export function answeredAgents(state: SuperTabState, actor: Extract<Actor, { kin
   return [...new Set([...recipients.filter(id => state.agents.some(a => a.id === id)), ...coordinators.filter((id): id is string => !!id)])]
 }
 
-/** A post to an agent answers every tag that agent made for the person, in any conversation. */
+/** A post to an agent answers every tag that agent made for the person, in any conversation. A held tag (holdUntil) resolved
+ *  before its time is never listed, as in resolveByReply (intended). */
 export async function resolveByAnswer(tx: Tx, tabId: string, personId: string, agentIds: readonly string[], now: number): Promise<void> {
   if (!agentIds.length) return
   await tx.superTabMention.updateMany({ where: { tabId, personId, authorAgentId: { in: [...agentIds] }, createdAt: { lte: new Date(now) }, ...waiting },
