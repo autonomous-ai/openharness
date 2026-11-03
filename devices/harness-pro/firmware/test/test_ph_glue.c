@@ -2323,19 +2323,19 @@ static void pill_tap_sends_side(void) {
     o = tap_(285, 38, 5000);   // PM
     CHECK(o.fx == POD_FX_NONE && take() == 1 && !strcmp(Q[0].t, "supertab.side") && !strcmp(Q[0].side, "pm"));
 }
-static void pill_tap_never_talks(void) {
+static void pill_tap_never_talks(void) {   // the PM segment: a Buddy press shows the Buddy side, where nothing talks (buddy_screen_never_talks)
     buddy_lead_open();
-    t_(true, 435, 38, 4000);
+    t_(true, 285, 38, 4000);
     CHECK(!U.talk_armed);
-    pod_out_t o = t_(false, 435, 38, 4050);
+    pod_out_t o = t_(false, 285, 38, 4050);
     CHECK(o.fx == POD_FX_NONE && top()->view == POD_V_LEAD && !U.hands_free);
     take();
     render(4200);
     t_(true, MID_X, MID_Y, 5000);   // an armed talk on the body ...
     CHECK(U.talk_armed);
-    t_(true, 435, 38, 5100);   // ... is dropped when the finger leaves for the pill
+    t_(true, 285, 38, 5100);   // ... is dropped when the finger leaves for the pill
     CHECK(!U.talk_armed);
-    o = t_(false, 435, 38, 5150);
+    o = t_(false, 285, 38, 5150);
     CHECK(o.fx == POD_FX_NONE && top()->view == POD_V_LEAD && !U.hands_free);
     // and the body still talks
     take();

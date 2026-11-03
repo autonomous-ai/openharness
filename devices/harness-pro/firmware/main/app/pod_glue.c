@@ -295,10 +295,10 @@ static const char *talk_target(const pod_ui_t *u)
     if (u->hit_valid && (u->hit.action == POD_A_BACK || u->hit.action == POD_A_INBOX || u->hit.action == POD_A_SIDE)) return NULL;
     const char *id = f->view == POD_V_AGENT || f->view == POD_V_RECAP || f->view == POD_V_LEAD ? f->agent : NULL;   // a Lead view's agent is its local harness (empty for a remote Lead: no talk)
     const pod_agent_t *a = id ? pod_model_find(&u->model, id) : NULL;
-    if (f->view == POD_V_LEAD) {   // the Buddy side of a Lead that has none says "No Buddy here yet": nothing there talks (the words would reach the Lead's shared chat)
-        const pod_swarm_t *sw = NULL;
+    if (f->view == POD_V_LEAD) {   // nothing on the Buddy side talks, nor a Lead whose face is the Buddy chat: a Pro's words post in the Lead's shared chat
+        const pod_swarm_t *sw = NULL;   // until voice comes to the face chat (Swarm parity part 3; review of #2299)
         const pod_lead_t *l = pod_nav_lead(&u->nav, &u->model, &sw);
-        if (l && sw && pod_model_no_buddy(&u->model, sw, l)) return NULL;
+        if (l && sw && (pod_model_side_shown(&u->model, sw) == POD_SIDE_BUDDY || l->chat == POD_CHAT_BUDDY)) return NULL;
     }
     return a && !asks_here(&u->model, a) ? id : NULL;
 }
