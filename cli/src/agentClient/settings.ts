@@ -10,6 +10,7 @@
  */
 import { AGENT_SETTING_NAMES, askThePersonFirst, PERSON_SAID_YES, type AgentSettings } from '../lib/agentSettings.js'
 import { localCredentialHeaders } from '../lib/localCredential.js'
+import { daemonFetch } from '../lib/localTransport.js'
 import { env } from '../config/env.js'
 import { daemonUnreachableText } from '../lib/daemonState.js'
 import { outsideCaller } from './model.js'
@@ -38,6 +39,8 @@ computers, and each off until you turn it on:
   agent-messages-hide-summary
                         keep the one-line summary of what a harness does from a shared tab's other accounts
                         (on hides it; it is shared while this is off)
+  programs-reply        a program acting for you (not an agent) may give more work to an idle harness of yours in a
+                        pane (harness reply), as you could by typing to it
 
 An agent turns one on only for the person: it asks them first, with its tool for asking them (Claude Code:
 AskUserQuestion; Codex: request_user_input) or in its reply, and adds ${PERSON_SAID_YES} once they said yes.
@@ -49,6 +52,7 @@ const ABOUT: Record<keyof AgentSettings, string> = {
   pullRequestLine: 'a harness another agent starts says so in the pull requests it opens',
   agentMessages: 'agents in the same tab may message each other',
   agentMessagesHideSummary: 'the one-line summary of what a harness does is kept from a shared tab\'s other accounts',
+  programsReply: 'a program acting for you may give more work to an idle harness of yours',
 }
 
 export const SETTINGS_SIGNED_OUT = 'Signed out: these are experiments of your account. Sign in (harness login) to turn them on.'
@@ -94,7 +98,7 @@ export async function settingsCommand(argv: readonly string[], deps: SettingsDep
   }
   let answer: Answer
   try {
-    const response = await (deps.fetch ?? fetch)(`http://127.0.0.1:${deps.port}/api/agent-settings`, {
+    const response = await (deps.fetch ?? daemonFetch(deps.dataDir ?? env.ADAPTER_DATA_DIR, deps.port))(`http://127.0.0.1:${deps.port}/api/agent-settings`, {
       method: change ? 'PATCH' : 'GET',
       // The local API's CSRF gate: a write must say it comes from this computer.
       headers: { 'x-adapter-local': '1', ...localCredentialHeaders(deps.dataDir ?? env.ADAPTER_DATA_DIR), ...(change ? { 'content-type': 'application/json' } : {}) },

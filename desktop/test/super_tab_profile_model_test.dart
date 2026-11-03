@@ -55,21 +55,24 @@ void main() {
         read({'kind': 'upload', 'url': 'https://elsewhere.example/a.png'}),
         isNull,
       );
-      // A server without an avatar bucket keeps them with the chat files and
-      // links them on the chat files' CDN (Ken, 2026-10-28): that host too.
+      // A server without an avatar bucket keeps pictures with the chat files,
+      // in their avatars folder, on the chat files' CDN (Ken, 2026-10-28):
+      // that folder there, and nothing else on the CDN.
+      const cdn = 'https://cdn.harness.autonomous.ai/avatars/tab/0123/avatar';
       expect(
-        (read({
-                  'kind': 'upload',
-                  'url': 'https://cdn.harness.autonomous.ai/avatars/t/a/avatar',
-                })!
-                as SuperTabUploadedAvatar)
-            .url,
-        Uri.parse('https://cdn.harness.autonomous.ai/avatars/t/a/avatar'),
+        (read({'kind': 'upload', 'url': cdn})! as SuperTabUploadedAvatar).url,
+        Uri.parse(cdn),
       );
-      expect(
-        read({'kind': 'upload', 'url': 'http://cdn.harness.autonomous.ai/a'}),
-        isNull,
-      );
+      for (final url in [
+        'https://cdn.harness.autonomous.ai/a.png',
+        'https://cdn.harness.autonomous.ai/super-tabs/tab/0123/photo.png',
+        'http://cdn.harness.autonomous.ai/avatars/tab/0123/avatar',
+        'https://cdn.harness.autonomous.ai/avatars-old/tab/0123/avatar',
+        'https://cdn.harness.autonomous.ai/avatars/',
+        'https://cdn.harness.autonomous.ai/avatars/%2E%2E/super-tabs/photo.png',
+      ]) {
+        expect(read({'kind': 'upload', 'url': url}), isNull, reason: url);
+      }
       // An upload whose signed link has not come yet shows the default face.
       expect(read({'kind': 'upload'}), isNull);
       expect(read('fox'), isNull);

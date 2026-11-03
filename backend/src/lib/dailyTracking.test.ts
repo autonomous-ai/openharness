@@ -1,10 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 const record = vi.hoisted(() => vi.fn())
 const mark = vi.hoisted(() => vi.fn())
+const machineUpdate = vi.hoisted(() => vi.fn())
 vi.mock('./productUsage.js', () => ({ recordRelayUsage: record, markActivity: mark }))
+vi.mock('./prisma.js', () => ({ prisma: { machine: { update: machineUpdate } } }))
 import { CLIENT_SURFACES, TUI_SURFACES, mobileOpenMetrics, presenceTracker, presenceWriteDue, recordRemoteUsage, recordTurnStarted, touchClientOnlineDay, touchDeviceOnlineDay, touchMachineOnlineDay, touchUserOnlineDay } from './dailyTracking.js'
 
-beforeEach(() => { record.mockReset(); record.mockResolvedValue(undefined); mark.mockReset(); mark.mockResolvedValue(undefined) })
+beforeEach(() => {
+  record.mockReset(); record.mockResolvedValue(undefined); mark.mockReset(); mark.mockResolvedValue(undefined)
+  machineUpdate.mockReset(); machineUpdate.mockResolvedValue({})
+})
 it('forwards only the choice identity and a fixed metric, never device, agent or location', async () => {
   const now = new Date('2026-10-13T12:00:00Z')
   await touchUserOnlineDay('account', 'PRIVATE_MACHINE', now, { isNewConnection: true })
@@ -71,6 +76,30 @@ it('idle heartbeats add no relay totals but keep the person active', async () =>
   await touchMachineOnlineDay('a', 'm', now, { isNewConnection: false })
   expect(record).not.toHaveBeenCalled()
   expect(mark.mock.calls).toEqual([['a', now, { surface: 'desktop' }], ['a', now, { surface: 'tui' }]])
+})
+
+describe('a machine\'s last-seen time', () => {
+  const now = new Date('2026-10-28T09:00:00Z')
+
+  it('is stamped on the machine\'s own record on a connect and on every write after it', async () => {
+    await touchMachineOnlineDay('account', 'machine-1', now, { isNewConnection: true, countryCode: 'VN' })
+    await touchMachineOnlineDay('account', 'machine-1', now, { isNewConnection: false })
+    expect(machineUpdate.mock.calls).toEqual([
+      [{ where: { machineId: 'machine-1' }, data: { lastSeenAt: now } }],
+      [{ where: { machineId: 'machine-1' }, data: { lastSeenAt: now } }],
+    ])
+  })
+
+  it('rejects when the stamp fails, so the socket\'s next heartbeat tries again', async () => {
+    machineUpdate.mockRejectedValue(new Error('mongo down'))
+    await expect(touchMachineOnlineDay('account', 'machine-1', now, { isNewConnection: false })).rejects.toThrow('mongo down')
+  })
+
+  it('is stamped even when the connect total fails', async () => {
+    record.mockRejectedValue(new Error('totals down'))
+    await expect(touchMachineOnlineDay('account', 'machine-1', now, { isNewConnection: true })).rejects.toThrow('totals down')
+    expect(machineUpdate).toHaveBeenCalledWith({ where: { machineId: 'machine-1' }, data: { lastSeenAt: now } })
+  })
 })
 
 it('marks the person, not the machine, agent or device', async () => {

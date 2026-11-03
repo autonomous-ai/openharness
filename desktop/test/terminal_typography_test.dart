@@ -207,4 +207,32 @@ void main() {
     );
     expect(const TerminalStyle().toTextStyle().fontWeight, FontWeight.normal);
   });
+
+  test('a Nerd Font is known by the suffix its patcher names it with', () {
+    for (final family in [
+      'JetBrainsMono Nerd Font',
+      'FiraCode Nerd Font Mono',
+      'Hack Nerd Font Propo',
+      'CaskaydiaCove Nerd Font',
+      'JetBrainsMono NF',
+      'JetBrainsMono NFM',
+      'JetBrainsMono NFP',
+      'MesloLGS NF',
+      'Cascadia Code NF',
+      'Maple Mono NF CN',
+    ]) {
+      expect(isNerdFontFamily(family), isTrue, reason: family);
+    }
+    for (final family in [
+      'JetBrains Mono',
+      'Cascadia Code',
+      'Menlo',
+      'Nerdy Mono',
+      'NFL Mono',
+      'Conf Mono',
+      'Mono nf',
+    ]) {
+      expect(isNerdFontFamily(family), isFalse, reason: family);
+    }
+  });
 }

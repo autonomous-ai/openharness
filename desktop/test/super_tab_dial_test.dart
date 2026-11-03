@@ -122,7 +122,7 @@ void main() {
   });
 
   test('a pick for a closed Swarm opens it first', () async {
-    final (f, c) = await open();
+    final (f, closed) = await open();
     f.app.newSwarm(newTabPage: true);
     await f.app.closeSwarm(
       f.app.swarms.firstWhere((s) => s.superTabId == tabId).id,
@@ -132,6 +132,9 @@ void main() {
     await settle();
     final tab = f.app.swarms.singleWhere((s) => s.superTabId == tabId);
     expect(f.app.activeSwarmId, tab.id);
+    // Closing let go of the Swarm: it opened again with a fresh read.
+    final c = f.app.superTabs.peek(tabId)!;
+    expect(c, isNot(same(closed)));
     expect(c.selectedId, 'design-lead');
     // Opening the Swarm announces too, with the tab's old project; each of
     // those is the pick's, up to the one that names the picked project.
@@ -228,5 +231,258 @@ void main() {
     f.app.announceWindowForeground();
     await settle();
     expect(announces(f).last.containsKey('fromDevice'), isFalse);
+  });
+
+  // The round dial's face follows the chat the window has open (design
+  // 2026-10-28-round-dial-swarm-chat): the Lead's, Chat with PM or a group.
+  Future<(SuperTabLaunchFixture, SuperTabController)> openChats() async {
+    final f = SuperTabLaunchFixture(local: true);
+    final server = f.connection.server;
+    server.state['projects'] = [
+      projectFixture('lead', 'Lamp OS', 'lead'),
+      projectFixture('design', 'Design', 'design-lead'),
+    ];
+    (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
+      {...conversationFixture('design-lead', 'Lead'), 'projectId': 'design'},
+      // The reader's Buddy chat, where the PM's private lines land.
+      {
+        ...conversationFixture('design-pm', "owner's Buddy"),
+        'projectId': 'design',
+        'kind': 'buddy',
+        'buddyOwnerId': 'owner',
+      },
+      {
+        ...conversationFixture('design-fix', 'Fix login'),
+        'projectId': 'design',
+      },
+    ]);
+    f.app.adoptPoolConnectionForTest('m', f.connection);
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+    final c = await f.app.superTabs.open(tabId);
+    await c.refresh();
+    return (f, c);
+  }
+
+  // The desktop follows the round dial into Buddy chats (Diego, 10-30): the
+  // dial's side, and a tap on its Buddy's notification, open the chat in the
+  // Swarm tab, never a terminal tab of its own.
+  Future<void> follow(
+    SuperTabLaunchFixture f,
+    String project,
+    String chat, {
+    String tab = tabId,
+  }) => f.app.handleEventForTest('m', {
+    'type': 'dial_super_tab',
+    'payload': {'superTabId': tab, 'projectId': project, 'chat': chat},
+  });
+
+  test('the dial\'s Buddy side opens the project\'s Buddy chat in the Swarm tab, with no new tab', () async {
+    final (f, c) = await openChats();
+    final swarm = f.app.activeSwarmId;
+    f.app.newSwarm(newTabPage: true);
+    final count = f.app.swarms.length;
+    final before = announces(f).length;
+    await follow(f, 'design', 'buddy');
+    await settle();
+    expect(f.app.activeSwarmId, swarm);
+    expect(f.app.swarms, hasLength(count));
+    expect(c.selectedId, 'design-pm');
+    final after = announces(f).skip(before).toList();
+    expect(after, isNotEmpty);
+    // Each announce is the dial's own move: the daemon keeps the dial's side
+    // and sends no focus back.
+    expect(after.every((a) => a['fromDevice'] == true), isTrue);
+    expect(row(after.last)['conversationId'], 'design-pm');
+    f.app.announceWindowForeground();
+    await settle();
+    expect(announces(f).last.containsKey('fromDevice'), isFalse);
+  });
+
+  test('the dial\'s PM side opens the project\'s Lead chat', () async {
+    final (f, c) = await openChats();
+    final count = f.app.swarms.length;
+    await follow(f, 'design', 'buddy');
+    await settle();
+    expect(c.selectedId, 'design-pm');
+    final before = announces(f).length;
+    await follow(f, 'design', 'pm');
+    await settle();
+    expect(c.selectedId, 'design-lead');
+    expect(f.app.swarms, hasLength(count));
+    final after = announces(f).skip(before).toList();
+    expect(after.every((a) => a['fromDevice'] == true), isTrue);
+    expect(row(after.last)['conversationId'], 'design-lead');
+  });
+
+  // Diego, 11-02: with one Buddy per Swarm the reader's Buddy chat is the
+  // Swarm's (kind swarm-buddy, no project). The dial's Buddy side, a swipe or a
+  // tap on its Buddy used to look for a chat of the project and land on the
+  // earlier project chat (history) or the Lead chat.
+  Future<(SuperTabLaunchFixture, SuperTabController)> openOneBuddy() async {
+    final (f, c) = await openChats();
+    final server = f.connection.server;
+    server.state['swarmBuddy'] = true;
+    (server.state['conversations'] as List).add(
+      {
+        ...conversationFixture('swarm-buddy-owner', "owner's Buddy"),
+        'kind': 'swarm-buddy',
+        'buddyOwnerId': 'owner',
+      }..remove('projectId'),
+    );
+    await c.refresh();
+    return (f, c);
+  }
+
+  test('with one Buddy per Swarm the dial\'s Buddy side opens the Swarm chat, from any project, never the earlier project chat', () async {
+    final (f, c) = await openOneBuddy();
+    expect(c.oneBuddy, isTrue);
+    for (final project in ['design', 'lead']) {
+      c.select('design-fix');
+      await settle();
+      await follow(f, project, 'buddy');
+      await settle();
+      expect(c.selectedId, 'swarm-buddy-owner');
+    }
+    // Back to the PM side from there: the project's Lead chat.
+    await follow(f, 'design', 'pm');
+    await settle();
+    expect(c.selectedId, 'design-lead');
+  });
+
+  test('another person\'s Swarm Buddy chat is never opened, and the Lead chat opens instead', () async {
+    final (f, c) = await openOneBuddy();
+    final server = f.connection.server;
+    for (final row in (server.state['conversations'] as List).cast<Map>()) {
+      if (row['kind'] == 'swarm-buddy') row['buddyOwnerId'] = 'sam';
+    }
+    (server.state['conversations'] as List).removeWhere(
+      (row) => (row as Map)['id'] == 'design-pm',
+    );
+    await c.refresh();
+    await follow(f, 'design', 'buddy');
+    await settle();
+    expect(c.selectedId, 'design-lead');
+  });
+
+  test(
+    'an older Swarm keeps the project\'s Buddy chat for the dial\'s Buddy side',
+    () async {
+      final (f, c) = await openChats();
+      expect(c.oneBuddy, isFalse);
+      await follow(f, 'design', 'buddy');
+      await settle();
+      expect(c.selectedId, 'design-pm');
+    },
+  );
+
+  test('a Buddy side where the reader has no Buddy chat opens the Lead chat and makes none', () async {
+    final (f, c) = await openChats();
+    final server = f.connection.server;
+    // Another person's Buddy chat in the project is never the reader's.
+    (server.state['conversations'] as List).add({
+      ...conversationFixture('lead-sam', "sam's Buddy"),
+      'projectId': 'lead',
+      'kind': 'buddy',
+      'buddyOwnerId': 'sam',
+    });
+    await c.refresh();
+    c.select('design-fix');
+    await settle();
+    await follow(f, 'lead', 'buddy');
+    await settle();
+    expect(c.selectedId, 'lead');
+    final ids = [
+      for (final g in (server.state['conversations'] as List).cast<Map>())
+        g['id'],
+    ];
+    expect(ids.where((id) => '$id'.startsWith('buddy-')), isEmpty);
+  });
+
+  test('access revoked while the dial\'s Buddy open is in flight opens nothing', () async {
+    final (f, c) = await openChats();
+    final server = f.connection.server;
+    final hold = server.holdReads = Completer<void>();
+    // The Swarm's rows are gone when the pick arrives; its read is answered
+    // with the access already removed.
+    c.revokeAccess('Access removed.');
+    server.state['conversations'] = <Map<String, dynamic>>[];
+    server.state['projects'] = <Map<String, dynamic>>[];
+    final picking = follow(f, 'design', 'buddy');
+    await settle();
+    server.holdReads = null;
+    hold.complete();
+    await picking;
+    await settle();
+    expect(c.selectedId, isNot('design-pm'));
+    expect(c.buddyChat('design'), isNull);
+    // The device's mark does not outlive the pick that found nothing.
+    f.app.announceWindowForeground();
+    await settle();
+    expect(announces(f).last.containsKey('fromDevice'), isFalse);
+  });
+
+  test('an unknown chat, tab or project from the dial opens nothing new', () async {
+    final (f, c) = await openChats();
+    final count = f.app.swarms.length;
+    await follow(f, 'design', 'terminal');
+    await settle();
+    // An unknown chat reads as the older pick: the project's Lead chat.
+    expect(c.selectedId, 'design-lead');
+    await follow(f, 'nope', 'buddy');
+    await follow(f, 'design', 'buddy', tab: 'ffffffffffffffffffffffff');
+    await settle();
+    expect(c.selectedId, 'design-lead');
+    expect(f.app.swarms, hasLength(count));
+  });
+
+  test('a Swarm tab announces the open conversation\'s id', () async {
+    final (f, c) = await openChats();
+    f.app.announceWindowForeground();
+    await settle();
+    expect(row(announces(f).last)['conversationId'], 'lead');
+    for (final id in ['design-lead', 'design-pm', 'design-fix']) {
+      c.select(id);
+      await settle();
+      expect(row(announces(f).last)['conversationId'], id);
+      expect(row(announces(f).last)['projectId'], 'design');
+    }
+  });
+
+  test('selecting another conversation re-announces', () async {
+    final (f, c) = await openChats();
+    c.select('design-pm');
+    await settle();
+    final before = announces(f).length;
+    // Another chat of the same project: the project is unchanged, the chat is news.
+    c.select('design-fix');
+    await settle();
+    final after = announces(f).skip(before).toList();
+    expect(after, isNotEmpty);
+    expect(row(after.last)['conversationId'], 'design-fix');
+  });
+
+  test('a decisions view or an unloaded Swarm leaves conversationId out', () async {
+    final (f, c) = await openChats();
+    c.select('design-pm');
+    await settle();
+    // The Swarm's machines view (the one view here that is no conversation; its
+    // decisions are a panel beside the chat, which keeps the chat selected).
+    c.selectDevices();
+    f.app.announceWindowForeground();
+    await settle();
+    expect(row(announces(f).last).containsKey('conversationId'), isFalse);
+
+    // A Swarm tab shown before its Swarm loaded names no conversation.
+    final g = SuperTabLaunchFixture(local: true);
+    g.app.adoptPoolConnectionForTest('m', g.connection);
+    final hold = g.connection.server.holdReads = Completer<void>();
+    g.app.bindSuperTab(g.app.activeSwarmId, tabId, 'Pilot');
+    await g.app.superTabs.open(tabId);
+    g.app.announceWindowForeground();
+    await settle();
+    expect(row(announces(g).last).containsKey('conversationId'), isFalse);
+    g.connection.server.holdReads = null;
+    hold.complete();
+    await settle();
   });
 }

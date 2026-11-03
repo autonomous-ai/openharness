@@ -12,6 +12,37 @@ class RunnerTests: XCTestCase {
 
 }
 
+/// App Nap: hidden, Harness keeps its timers and sockets running, and the Mac still sleeps when idle.
+final class AppNapTests: XCTestCase {
+  /// The power assertions this process holds that keep an idle Mac awake.
+  private func sleepPreventingAssertions() throws -> [String] {
+    let pmset = Process()
+    let pipe = Pipe()
+    pmset.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
+    pmset.arguments = ["-g", "assertions"]
+    pmset.standardOutput = pipe
+    try pmset.run()
+    let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    pmset.waitUntilExit()
+    let pid = ProcessInfo.processInfo.processIdentifier
+    return output.split(separator: "\n").map(String.init)
+      .filter { $0.contains("pid \(pid)(") && $0.contains("PreventUserIdleSystemSleep") }
+  }
+
+  func testTheRunningAppHoldsTheActivity() {
+    XCTAssertNotNil((NSApp.delegate as? AppDelegate)?.appNapActivity)
+  }
+
+  func testLaunchHoldsTheActivityAndQuitEndsIt() throws {
+    let app = AppDelegate()
+    app.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+    XCTAssertNotNil(app.appNapActivity)
+    XCTAssertEqual(try sleepPreventingAssertions(), [], "the activity must still let an idle Mac sleep")
+    app.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
+    XCTAssertNil(app.appNapActivity)
+  }
+}
+
 /// The native tab row: it scrolls only sideways, and each tab's × sits in the middle of the tab's body.
 final class SwarmTabStripTests: XCTestCase {
   private func verticalSwipe(_ dy: Int32) -> NSEvent {

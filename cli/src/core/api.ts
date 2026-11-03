@@ -359,7 +359,7 @@ export interface CoreApi {
   /** The Super Tab service's door into the core (superTabs/attention.ts): absent from a core or a process that offers it none. */
   superTabs?: SuperTabsCore
   /** The devices' way to the Super Tab service's `super_tabs` requests, for the Swarm cards alone (`cardsWanted`, `cardRecap`,
-   *  `cardOpen`; core/devicesLink.ts refuses any other action): its answer, or SERVICE_UNAVAILABLE. Absent from a core or a
+   *  `cardOpen`, `cardSay`, `cardSide`, `cardWorker`; superTabs/inCore/cards.ts refuses any other action): its answer, or SERVICE_UNAVAILABLE. Absent from a core or a
    *  process that offers none. */
   superTabRequest?: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>
   /** The Wi-Fi device's doors into the core (services/wifi.ts): each one call it made when it ran here. */
@@ -729,6 +729,7 @@ export const MODELS_REQUESTS = [
   'grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop',
   'grid_fleet_run', 'grid_fleet_cancel', 'grid_swarm_sync', 'grid_swarm_api_share', 'grid_swarm_api_shares', 'grid_swarm_offer', 'grid_swarm_offers', 'grid_swarm_heal',
   'api_connections', 'codex_profiles_list', 'codex_profile_link',
+  'claude_profiles_list', 'claude_profile_link', 'swarm_account_offer',
 ] as const
 
 const MINUTE = 60_000
@@ -867,7 +868,11 @@ export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[];
   memory: { requests: MEMORY_REQUESTS, state: [] },
   // Request-only too: it keeps nothing, and asks Jev only when a client asks it.
   router: { requests: ROUTER_REQUESTS, state: [] },
-  superTabs: { requests: SUPER_TAB_REQUESTS, state: ['super-tabs/host-*.json'] },
+  // A Swarm host here, or the Harness Team account's relay grant (team/relay.ts TEAM_RELAY_GRANT_FILE), kept while a Team
+  // account exists on this Mac: the relay runs in this service, and running Team agents need it back at once after an
+  // update. Woken by the journal alone, a Mac that only lent its Team account restarted it at the first request that
+  // happened to come, and its Team agents got "Connection refused" for four hours (Pro-9 and Pro-10, 2026-11-03).
+  superTabs: { requests: SUPER_TAB_REQUESTS, state: ['super-tabs/host-*.json', 'team-relay-grant.json'] },
   // Cloud agents. Its harnesses: one was started here, and is watched again as the daemon starts. A New Harness
   // for one, an answer or a message to one wakes it too (its port's calls, core/agents/cloud.ts).
   cloud: { requests: CLOUD_REQUESTS, state: ['cloud/harnesses.json'] },
@@ -940,6 +945,10 @@ export interface RecapSession {
    *  where a turn ends, a cancel or a forget (reading it reads the orchestrator); absent, the recaps keep
    *  what they were last told. */
   subagent?: boolean
+  /** Its finished turns are silent on the devices (the dial, the phone): its news reaches people another way. The core
+   *  only carries this; who says it is outside the core (a Swarm agent's, through the Swarm's door: superTabs/inCore.ts).
+   *  Said with every event, since the recaps in their own process have no agent list to look it up in (#2540's review). */
+  quietOnDevices?: boolean
 }
 
 /** Who watches this machine's turn cards: a device at all (through the backend or on the cable), and one
@@ -1209,20 +1218,74 @@ export interface SwarmLaunch {
   mode(value: unknown): value is NonNullable<SwarmSkill['mode']>
   prepare(cwd: string, skill: SwarmSkill): { instructions: string }
   github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
+  /** The engine's arguments for a session the Swarm starts, never for a person's own (lib/swarmEngineArgs.ts). */
+  args(engine: string): string[]
 }
 
 /** Fill a missing Swarm role of an older Swarm session at its restart or resume (superTabs/inCore/adoption.ts): the row
  *  to launch, or null when the launch is no longer this one's. Absent while the Swarm is off. */
-export type AdoptSwarmSkill = (session: RegisteredSession, current: () => boolean) => Promise<RegisteredSession | null>
+export type AdoptSwarmSkill = ((session: RegisteredSession, current: () => boolean) => Promise<RegisteredSession | null>) & {
+  /** One role read, for a relaunch that cannot wait (boot restore, a model switch, a host move): the row to launch with
+   *  its role, written to the registry only by `commit`; `unavailable` when the role could not be read, which the caller
+   *  holds or refuses, never launching without it; null when the launch is no longer this one's. */
+  lookup?(session: RegisteredSession, current: () => boolean): Promise<{ row: RegisteredSession; commit(): void } | 'unavailable' | null>
+  /** Whether a relaunch of this row asks the Swarm for its role first (restore's `needs`). */
+  needed?(session: RegisteredSession): boolean
+}
 
 export type LeadState = 'ask' | 'stuck' | 'work' | 'done'
 /** One Swarm's Lead on a Harness Pro's card (superTabs/cards.ts). `order`: the project's index in the Swarm (the app's
  *  order), so a dial can show the Leads as the app does whatever their urgency. */
-export interface SwarmLead { id: string; projectId: string; project: string; engine: string; owner: string; local: string; state: LeadState; order: number; since?: number }
+export interface SwarmLead {
+  id: string; projectId: string; project: string; engine: string; owner: string; local: string; state: LeadState; order: number; since?: number
+  /** The face of a round dial without swarmBuddy: today's rule, whatever a newer dial swiped to. */
+  chat?: SwarmChat
+  notice?: LeadNotice
+  /** While the Swarm has Buddies on: the face of a dial that speaks swarmBuddy, on the side it keeps for this Swarm. */
+  sideChat?: SwarmChat
+  /** Present only while the Swarm has Buddies on. */
+  buddies?: true
+  /** The reader's own Buddy in this project, when it has one. */
+  buddy?: SwarmBuddy
+  /** The newest message the reader's Buddy wrote in its chat since the baseline: the dial's quiet alert. */
+  buddyNotice?: LeadNotice
+}
 /** One Swarm this account is in, as a Harness Pro's card: its Leads, most urgent first. */
-export interface SwarmCard { id: string; name: string; count: number; leads: SwarmLead[] }
-/** A Lead's last message, for its card. */
-export interface LeadRecap { tabId: string; leadId: string; text: string; at: number; none: boolean }
+/** `side` 'buddy' while a swarmBuddy dial keeps the Swarm on its Buddy side (spec 2026-10-29-round-dial-pm-buddy): the dial
+ *  follows it as the daemon's, which a face alone cannot tell where no project has a Buddy chat (review of #2218). */
+export interface SwarmCard { id: string; name: string; count: number; leads: SwarmLead[]; side?: 'buddy' }
+/** A Lead's last message, for its card; `chatId` when it is the last message of the chat on the round dial's face, and
+ *  `buddy` when that face is a swarmBuddy dial's (`CardChat` 'buddy'), so each dial takes only the recaps it asked for. */
+export interface LeadRecap { tabId: string; leadId: string; text: string; at: number; none: boolean; chatId?: string; buddy?: true }
+/** A project's places to chat (designs 2026-10-28-round-dial-swarm-chat and 2026-10-29-round-dial-pm-buddy): its Lead
+ *  conversation, the reader's Buddy chat, and a group. A dial without swarmBuddy calls the Buddy chat `pm`, where the PM's
+ *  private lines land since Buddies replaced Chat with PM; a swarmBuddy dial calls it `buddy` and hears the Buddy there. */
+export type ChatKind = 'lead' | 'pm' | 'group' | 'buddy'
+/** The chat on a project's face on the round dial: the Lead's, unless the window has the project's Buddy chat or a group
+ *  open (or a swarmBuddy dial's side says the Buddy's). `working` only for a working group, `since` from one of its agents'
+ *  turn here. */
+export interface SwarmChat { kind: ChatKind; id: string; name: string; working: boolean; since?: number }
+/** The newest message the project's Lead wrote in its Lead conversation or the reader's Buddy chat since the baseline (the
+ *  dial's alert), or the reader's Buddy wrote in its chat (`buddy`, the quiet one). */
+export interface LeadNotice { chat: 'lead' | 'pm' | 'buddy'; chatId: string; id: string; text: string; at: number }
+/** The reader's own Buddy in a project, for a round dial's Buddy screen: its chat, name and engine, Desktop's pattern for
+ *  its name (`cells`, the 15 half bits; `color`, `#rrggbb`), and `live` false while it is down. */
+export interface SwarmBuddy { chatId: string; name: string; engine: string; cells: number; color: string; live: boolean
+  /** Its session id when it runs on this computer: how a tap on its notification is told from any other agent's. Never sent
+   *  to a device. */
+  local?: string }
+/** The screen a round dial shows of each project of a Swarm: the PM's (today's face) or the reader's Buddy's. */
+export type CardSide = 'pm' | 'buddy'
+/** Which chat a card request is about: the Lead's conversation (false, the Pro), today's face (true, a swarmChat dial), or
+ *  the face on a swarmBuddy dial's side ('buddy'). */
+export type CardChat = boolean | 'buddy'
+/** What became of words spoken on a device for a Lead: posted, not a Lead here (`said` false, so the turn goes as before), or
+ *  refused by the backend with its code and message, which must never become a terminal turn instead. */
+export type SaidOnCard = { said: true } | { said: false; refused?: { code: string; message: string } }
+/** The conversation the window has open in a Swarm tab. */
+/** `fromDevice`: the window moved there because a device picked it (a dial's swipe to the next project), so the move is
+ *  that device's own and keeps the side it keeps (spec 2026-10-29-round-dial-pm-buddy, newest wins). */
+export interface CardFocus { tabId: string; conversationId: string; fromDevice?: true }
 
 /** The Super Tab service's door into the core (superTabs/inCore/attention.ts): the waits of its members here. */
 export interface SuperTabsCore {
@@ -1242,6 +1305,9 @@ export interface SuperTabsCore {
   screen(agentId: string, scrollback: number): Promise<SuperTabScreen>
   /** Text, then each key by its tmux name, typed into a member's terminal under the pane's write lock. */
   input(agentId: string, text: string, keys: string[]): Promise<SuperTabTyped>
+  /** The same keys, sent only if the visible screen, read again under the pane's write lock, is exactly `screen` (superTabs/inCore/
+   *  terminal.ts): for a caller that read the screen earlier and must not type into a different one. */
+  inputIfScreen(agentId: string, keys: string[], screen: string): Promise<SuperTabTyped>
 }
 export type SuperTabScreen = { ok: true; text: string; hold: MessageHold | null } | { ok: false; error: string }
 export type SuperTabTyped = { ok: true } | { ok: false; error: string }
@@ -1481,6 +1547,26 @@ export const WIFI_FALLBACKS: PortFallbacks<WifiPort> = {
 /** What a remote client proved with its E2EE session: an owner's app or browser, or a device. */
 export type RemoteRole = 'web' | 'device'
 
+/**
+ * What the account's own apps away from this desk may ask of this machine and hear from it, beyond what an owner may
+ * (backendSocket.ts `remoteAppPolicy`). Set only on a Harness Team daemon, by the Swarm (superTabs/inCore/teamApps.ts):
+ * there the account is the Mac's owner's, and another person's Product Manager may run, holding people's private chats.
+ */
+export interface RemoteAppPolicy {
+  /** Why a request is refused, or null to answer it as for any owner. */
+  refuse(type: string, payload: Record<string, unknown>): { error: string; message: string } | null
+  /** A reply's payload as the apps may see it. */
+  reply(type: string, payload: Record<string, unknown>): Record<string, unknown>
+  /** An up-frame as the apps may hear it, or null to withhold it. */
+  event<F extends { agentId?: unknown; payload?: unknown }>(frame: F): F | null
+  /** Whether the apps' terminal streams only watch now: no input, paste or resize reaches a terminal, binary frames included
+   *  (lib/terminalStreamManager.ts `watchOnly`). */
+  watchOnly(): boolean
+  /** Whether a session, by its agent id or its engine's session id, is closed to the apps: its open terminal streams close
+   *  (lib/terminalStreamManager.ts `closedTo`). */
+  isConfidential(id: string): boolean
+}
+
 /** A remote client the gateway holds a session with, as the core may know it: its role, the label its
  *  identity was paired under (null for none) for naming it to the person, its identity's public key (the
  *  Wi-Fi device's requests are kept apart by it), and whether it is on a device's direct link rather than
@@ -1513,6 +1599,15 @@ export type BackendNotice =
   /** Work waits for an agent of this machine's (backend lib/adapterWs.ts): its Swarm host reads that agent's deliveries now.
    *  Naming none, the server says it pushes them, and every list is read once (superTabs/host.ts PUSH_LEASE_MS). */
   | { type: 'super_tab_deliveries'; tabId?: string; agentId?: string }
+  /** A Lead's terminal request waits for an agent of this machine (backend lib/swarmDeliveryPushes.ts): its Swarm host picks
+   *  it up now rather than at its next poll (superTabs/terminal.ts). The backend's `__` frame, kept by name. */
+  | { type: '__terminal_waiting'; tabId: string; agentId: string }
+  /** A commit changed what this machine's Swarm host reads (backend lib/swarmHostPushes.ts): it reads its changes now. Naming
+   *  none, the server says it pushes them, and the host reads only when told (superTabs/hostFeed.ts HOST_PUSH_LEASE_MS). */
+  | { type: 'swarm_host_changed'; tabId?: string; lastChangedAt?: number }
+  /** A Swarm the account is in changed (backend lib/swarmClientPushes.ts): this computer's windows read it again. Naming none,
+   *  the server says it pushes them (desktop super_tabs/swarm_pushes.dart). */
+  | { type: 'swarm_changed'; tabId?: string; lastChangedAt?: number; parts?: Array<'main' | 'machine'> }
 
 /** What a person has open on this computer, per surface (lib/windowSurfaces.ts). */
 export type { LocalWindows, WindowSurface } from '../lib/windowSurfaces.js'
@@ -1633,13 +1728,15 @@ export interface LaneSeal {
   rekey(machineId: string, payload: Record<string, unknown>): Promise<void>
   /** A frame for the machine, sealed as its session seals that type (a type it does not seal goes as it is). */
   seal(machineId: string, frame: Record<string, unknown>): Promise<LaneSealed>
-  /** A sealed frame from the machine, opened; `unreadable` when it does not open (stale, forged, garbled). */
+  /** A sealed frame from the machine, opened; `unreadable` when it does not open (stale, forged, garbled);
+   *  `unknownEpoch` when it is sealed under a group epoch none of the machine's sessions here ever held: the
+   *  far daemon restarted, and the session here is with a process that is gone. */
   open(machineId: string, frame: Record<string, unknown>): Promise<LaneOpened>
   /** The lane is done with the machine's session. */
   drop(machineId: string): void
 }
 export type LaneSealed = { frame: Record<string, unknown> } | { lost: true }
-export type LaneOpened = { frame: Record<string, unknown> } | { unreadable: true } | { lost: true }
+export type LaneOpened = { frame: Record<string, unknown> } | { unreadable: true } | { unknownEpoch: true } | { lost: true }
 /** A service with no lane of the core's: it starts no session and seals nothing, never sends in the clear. */
 export const LANE_OFF: LaneSeal = {
   hello: () => Promise.reject(new Error('no lane: this process holds no E2EE identity')),
@@ -1654,6 +1751,8 @@ export const LANE_OFF: LaneSeal = {
 export interface HttpAnswer {
   status: number
   body: Record<string, unknown>
+  /** A busy or failing answer's Retry-After, when it had one (gateway/accountHttp.ts). */
+  retryAfterMs?: number
 }
 
 /** What the core's status reads of the relay: the machine's E2EE fingerprint, its pairings and the one

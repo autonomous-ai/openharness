@@ -84,3 +84,27 @@ describe("Claude Code's composer on Windows", () => {
     expect(read(claudeScreen('❯'))).toEqual({ pane: { idle: true, plan: false, dialog: false, draft: false }, hold: null })
   })
 })
+
+describe("Devin's composer, 3000.11", () => {
+  // Measured on devin 3000.11.228 (Linux, 2026-10-29): a fresh pane read as a dialog, from the footer's "available
+  // models", and as a draft, from a placeholder greyed in truecolor alone, so `show` said needs-input and the mailbox
+  // held every message to it.
+  const devinRule = '─'.repeat(50)
+  const devinScreen = (composer: string) => ['  Devin CLI', '  v3000.11.228', ' ⏺ ~/work', devinRule, composer, devinRule,
+    'SWE-2 High                        Press alt+m to switch between available models', ''].join('\n')
+  const placeholder = '\u001b[39m❭ \u001b[38;2;124;124;124mAsk Devin to build features, fix bugs, or work on your code\u001b[39m'
+  const devin = (capture: string) => ({ pane: inspectPane('devin', capture), hold: teamHold('devin', capture, inspectPane('devin', capture), null) })
+
+  it('reads a fresh pane, its placeholder greyed in truecolor and its footer naming the models, as idle', () => {
+    expect(devin(devinScreen(placeholder))).toEqual({ pane: { idle: true, plan: false, dialog: false, draft: false }, hold: null })
+  })
+
+  it('still reads text the person typed as a draft, and a list headed "Available models" as a dialog', () => {
+    expect(devin(devinScreen('\u001b[39m❭ fix the parser'))).toMatchObject({ pane: { idle: false, draft: true }, hold: 'team_waiting_draft' })
+    const typedBesideHint = '\u001b[39m❭ fix \u001b[38;2;124;124;124m(hint)\u001b[39m'
+    expect(devin(devinScreen(typedBesideHint)).pane.draft).toBe(true)
+    // Only "switch between available models", the footer's hint, is let go: the heading still reads as a dialog.
+    const listed = devinScreen(placeholder).replace(/SWE-2 High .*$/m, '  Available models')
+    expect(devin(listed)).toMatchObject({ pane: { dialog: true }, hold: 'team_waiting_user' })
+  })
+})

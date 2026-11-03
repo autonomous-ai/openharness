@@ -56,7 +56,7 @@ it('old Lead and worker restarts and stopped resume gain only their skill; perso
     const launch = await until('restarted engine argv', () => argv().slice(before).find(row => row.engine === engine) ?? null, 30_000)
     if (role) {
       expect(launch.args.join(' ')).toContain(`swarm-${role}/SKILL.md`)
-      expect(saved(ids[name]!).swarmSkill).toEqual({ role, key: ids[name], mode: 'orchestration' })
+      expect(saved(ids[name]!).swarmSkill).toEqual({ role: role === 'lead' ? 'coordinator' : 'agent', key: ids[name], mode: 'orchestration' })
     } else {
       expect(launch.args.join(' ')).not.toContain('/swarm/skills/')
       expect(saved(ids[name]!).swarmSkill).toBeUndefined()
@@ -68,7 +68,7 @@ it('old Lead and worker restarts and stopped resume gain only their skill; perso
   expect(resumed.error, JSON.stringify(resumed)).toBeUndefined()
   const launch = await until('resumed worker argv', () => argv().slice(before).find(row => row.engine === 'claude') ?? null, 30_000)
   expect(launch.args.join(' ')).toContain('swarm-dev/SKILL.md')
-  expect(saved(ids.resumed!).swarmSkill).toEqual({ role: 'dev', key: ids.resumed, mode: 'orchestration' })
+  expect(saved(ids.resumed!).swarmSkill).toEqual({ role: 'agent', key: ids.resumed, mode: 'orchestration' })
   expect(readFileSync(join(cwd, '.harness', '.gitignore'), 'utf8')).toContain('runtime/')
   expect(readFileSync(join(cwd, 'AGENTS.md'), 'utf8')).toBe('Project rules stay here\n')
   expect(readdirSync(join(cwd, '.harness', 'runtime'))).toHaveLength(3)

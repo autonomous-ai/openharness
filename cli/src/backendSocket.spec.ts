@@ -2679,6 +2679,21 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
+  it('sends apps away from this desk a slim transcript event, and the windows here the whole one', async () => {
+    const socket = relaySocket('token')
+    const broadcast = vi.spyOn(gatewayOf(socket), 'broadcast')
+    const frames: Record<string, unknown>[] = []
+    socket.registerLocalClient('local:window', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    const ended = { type: 'tool_end', agentId: 'a1', dbSessionId: 's1', payload: { id: 'u1', tool: 'Bash', output: 'the whole output',
+      isError: false, summary: 'ok', agentId: 'a1', sessionId: 's1' } }
+    const whole = structuredClone(ended)
+    socket.send(ended)
+    expect(frames.filter((frame) => frame.type === 'tool_end')).toEqual([whole])
+    expect(broadcast).toHaveBeenCalledExactlyOnceWith({ ...ended, payload: { id: 'u1', tool: 'Bash', isError: false, agentId: 'a1', sessionId: 's1' } }, undefined)
+    await socket.unregisterLocalClient('local:window')
+    await socket.stop()
+  })
+
   it('says whether an app away from this desk holds a session: a web one, never a device', async () => {
     const socket = relaySocket('token')
     expect(socket.hasRemoteApp()).toBe(false)
@@ -2767,6 +2782,29 @@ describe('desk_changed relay', () => {
     await socket.stop()
   })
 
+  // WS roadmap Phase 2a: a Swarm the account is in changed (backend lib/swarmClientPushes.ts); the window reads it again.
+  it('hands the backend\'s swarm_changed to the window, only the backend\'s, and only an id, a time and its parts', async () => {
+    const socket = relaySocket('token')
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:swarm', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    ws.message({ t: 'down', connId: '', frame: { type: 'swarm_changed', payload: { tabId: 'tab-1', lastChangedAt: 5, parts: ['main'], text: 'x' } } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'swarm_changed', payload: {} } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'swarm_changed', payload: { tabId: 'tab-2', lastChangedAt: 5, parts: ['all'] } } })
+    await vi.waitFor(() => expect(frames.filter((f) => f.type === 'swarm_changed')).toEqual([
+      { type: 'swarm_changed', payload: { tabId: 'tab-1', lastChangedAt: 5, parts: ['main'] } },
+      { type: 'swarm_changed', payload: {} }, { type: 'swarm_changed', payload: {} }]))
+    // A relayed client, or a local one, is not the backend: nothing is relayed.
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'swarm_changed', payload: { tabId: 'tab-3', lastChangedAt: 1, parts: ['main'] } } })
+    socket.handleLocalFrame('local:swarm', { type: 'swarm_changed', payload: { tabId: 'tab-4', lastChangedAt: 1, parts: ['main'] } })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(frames.filter((f) => f.type === 'swarm_changed')).toHaveLength(3)
+    await socket.unregisterLocalClient('local:swarm')
+    await socket.stop()
+  })
+
   it('hands the backend\'s connectors_changed on, for the connectors service to merge, and only the backend\'s', async () => {
     const socket = relaySocket('token')
     const heard: unknown[] = []
@@ -2783,6 +2821,33 @@ describe('desk_changed relay', () => {
     await new Promise((r) => setTimeout(r, 20))
     expect(heard).toHaveLength(1)
     await socket.unregisterLocalClient('local:vault')
+    await socket.stop()
+  })
+
+  // WS roadmap Phase 2a: the server says over this socket when a commit changed what this machine's host reads
+  // (backend lib/swarmHostPushes.ts).
+  it('hands the backend\'s swarm_host_changed to the Swarm host, never to the windows, and only the backend\'s', async () => {
+    const socket = relaySocket('token')
+    const heard: unknown[] = []
+    const frames: Array<Record<string, unknown>> = []
+    socket.onAccountNotice = (notice) => { heard.push(notice) }
+    socket.registerLocalClient('local:swarm', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    ws.message({ t: 'down', connId: '', frame: { type: 'swarm_host_changed', payload: { tabId: 'tab-1', lastChangedAt: 1_700 } } })
+    // Naming no Swarm, or naming one wrongly, it only says the server pushes.
+    ws.message({ t: 'down', connId: '', frame: { type: 'swarm_host_changed', payload: { tabId: 'tab-1', lastChangedAt: 'soon' } } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'swarm_host_changed', payload: {} } })
+    await vi.waitFor(() => expect(heard).toEqual([{ type: 'swarm_host_changed', tabId: 'tab-1', lastChangedAt: 1_700 },
+      { type: 'swarm_host_changed' }, { type: 'swarm_host_changed' }]))
+    // A client relayed with its own connId, or a local one, is not the backend.
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'swarm_host_changed', payload: { tabId: 'tab-2', lastChangedAt: 1 } } })
+    socket.handleLocalFrame('local:swarm', { type: 'swarm_host_changed', payload: { tabId: 'tab-3', lastChangedAt: 1 } })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(heard).toHaveLength(3)
+    expect(frames.filter((f) => f.type === 'swarm_host_changed')).toEqual([])
+    await socket.unregisterLocalClient('local:swarm')
     await socket.stop()
   })
 
@@ -2806,6 +2871,30 @@ describe('desk_changed relay', () => {
     await new Promise((r) => setTimeout(r, 20))
     expect(heard).toHaveLength(2)
     expect(frames.filter((f) => f.type === 'super_tab_deliveries')).toEqual([])
+    await socket.unregisterLocalClient('local:swarm')
+    await socket.stop()
+  })
+
+  // Spec 2026-11-02-poll-cost Part 4.2: the server says a Lead's terminal request waits for this machine.
+  it('hands the backend\'s __terminal_waiting to the Swarm host, never to the windows, and only the backend\'s', async () => {
+    const socket = relaySocket('token')
+    const heard: unknown[] = []
+    const frames: Array<Record<string, unknown>> = []
+    socket.onAccountNotice = (notice) => { heard.push(notice) }
+    socket.registerLocalClient('local:swarm', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    ws.message({ t: 'down', connId: '', frame: { type: '__terminal_waiting', payload: { tabId: 'tab-1', agentId: 'agent-1' } } })
+    // One that names no agent is no request.
+    ws.message({ t: 'down', connId: '', frame: { type: '__terminal_waiting', payload: { tabId: 'tab-1' } } })
+    await vi.waitFor(() => expect(heard).toEqual([{ type: '__terminal_waiting', tabId: 'tab-1', agentId: 'agent-1' }]))
+    // A client relayed with its own connId, or a local one, is not the backend.
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: '__terminal_waiting', payload: { tabId: 'tab-1', agentId: 'agent-2' } } })
+    socket.handleLocalFrame('local:swarm', { type: '__terminal_waiting', payload: { tabId: 'tab-1', agentId: 'agent-3' } })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(heard).toHaveLength(1)
+    expect(frames.filter((f) => f.type === '__terminal_waiting')).toEqual([])
     await socket.unregisterLocalClient('local:swarm')
     await socket.stop()
   })
@@ -4080,6 +4169,36 @@ describe('machines_changed relay', () => {
     expect(frames.filter((f) => f.type === 'machines_changed')).toHaveLength(1)
     await socket.unregisterLocalClient('local:machines')
     await socket.stop()
+  })
+
+  it('hands a shares notice on at a random moment within 10 s, and a burst of them once', async () => {
+    // Prod 2026-10-28: one invitation told every computer of its recipient at once, and each window read the shares list
+    // in the same second; across a Swarm's members those reads came in waves that held the backend at its pod limit.
+    vi.useFakeTimers()
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    const socket = relaySocket('token')
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:machines', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    const shares = () => frames.filter((f) => f.type === 'machines_changed')
+    for (let i = 0; i < 3; i++) ws.message({ t: 'down', connId: '', frame: { type: 'machines_changed', payload: { reason: 'harness_shares' } } })
+    await vi.advanceTimersByTimeAsync(4_900)
+    expect(shares()).toEqual([])
+    await vi.advanceTimersByTimeAsync(200)
+    expect(shares()).toEqual([{ type: 'machines_changed', payload: { reason: 'harness_shares' } }])
+    // A notice after that one was handed on is handed on again: its read must come after the change it tells.
+    ws.message({ t: 'down', connId: '', frame: { type: 'machines_changed', payload: { reason: 'harness_shares' } } })
+    await vi.advanceTimersByTimeAsync(5_100)
+    expect(shares()).toHaveLength(2)
+    // Another reason is not held back.
+    ws.message({ t: 'down', connId: '', frame: { type: 'machines_changed', payload: { reason: 'renamed' } } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(shares()).toHaveLength(3)
+    await socket.unregisterLocalClient('local:machines')
+    await socket.stop()
+    vi.useRealTimers()
   })
 
   it('relays a reason it can show and nothing else from the payload', async () => {

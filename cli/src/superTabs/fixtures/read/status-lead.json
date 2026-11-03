@@ -115,21 +115,6 @@
      "pullRequestUrls": []
     },
     {
-     "id": "c00000000000000000000000",
-     "kind": "leads",
-     "title": "Leads",
-     "leadId": null,
-     "agentIds": [
-      "a00000000000000000000001"
-     ],
-     "archived": false,
-     "brief": "",
-     "checks": [],
-     "assignment": null,
-     "lastMessageSequence": 213950,
-     "pullRequestUrls": []
-    },
-    {
      "id": "c00000000000000000000002",
      "projectId": "5000000000000000000000aa",
      "number": 2,
@@ -283,7 +268,6 @@
      "creationId": "super-e00000000000000000000002"
     }
    ],
-   "leadsConversationId": "c00000000000000000000000",
    "otherProjectsWork": [
     {
      "conversationId": "c0000000000000000000000f",

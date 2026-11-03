@@ -48,6 +48,66 @@ def preflight(client, root, number, head, base, ready=False):
             "url": pr["html_url"]}
 
 
+HARNESS_NAME, HARNESS_EMAIL = "Harness by Autonomous", "noreply@autonomous.ai"
+# The app's bot address, on commits made before Harness had a line of its own (task #2136). Any other bot keeps its own.
+HARNESS_OLD_ADDRESS = re.compile(r"^\d+\+harness[a-z0-9-]*\[bot\]@users\.noreply\.github\.com$", re.I)
+CO_AUTHOR = re.compile(r"^co-authored-by:\s*(.*?)\s*<([^<>\s]+)>\s*$", re.I)
+MAX_COMMITS = 250
+
+
+def squash_message(pr, commits):
+    """The squash's title and message, as GitHub writes them for this repository, with each co-author named once.
+
+    GitHub adds a line per commit author only when it writes the message itself, so it would keep the old bot address.
+    """
+    number, author = pr["number"], ((pr.get("user") or {}).get("login") or "").lower()
+    named, bodies = {}, []
+
+    def name(who, email):
+        email = email.strip()
+        if email.lower() == HARNESS_EMAIL or HARNESS_OLD_ADDRESS.match(email):
+            who, email = HARNESS_NAME, HARNESS_EMAIL
+        named.setdefault(email.lower(), f"Co-authored-by: {who} <{email}>")
+
+    for commit in commits:
+        lines = []
+        for line in commit["commit"]["message"].splitlines():
+            found = CO_AUTHOR.match(line)
+            if found:
+                name(found.group(1), found.group(2))
+            else:
+                lines.append(line)
+        body = "\n".join(lines).strip()
+        if body:
+            bodies.append(body)
+        written = commit["commit"]["author"]
+        if ((commit.get("author") or {}).get("login") or "").lower() != author or not author:
+            name(written["name"], written["email"])
+    if len(commits) == 1 and bodies:
+        title, _, body = bodies[0].partition("\n")
+        title, text = f"{title.strip()} (#{number})", body.strip()
+    else:
+        title, text = f"{pr['title']} (#{number})", "\n\n".join(f"* {body}" for body in bodies)
+    message = "\n\n".join(part for part in (text, "\n".join(named.values())) if part)
+    return title, message
+
+
+def squash_fields(client, number, output):
+    """The merge request's message fields. The message is never worth a merge: anything unread leaves it to GitHub."""
+    pr, commits = client.api(f"pulls/{number}"), []
+    for page in range(1, 4):
+        listed = client.api(f"pulls/{number}/commits?per_page=100&page={page}")
+        commits += listed
+        if len(listed) < 100:
+            break
+    if not commits or len(commits) >= MAX_COMMITS:
+        raise ValueError(f"{len(commits)} commits read")
+    title, message = squash_message(pr, commits)
+    path = Path(output) / "squash-message.txt"
+    path.write_text(message + "\n")
+    return ["-f", f"commit_title={title}", "-F", f"commit_message=@{path.resolve()}"]
+
+
 def confirm_merge(client, number, head, expected_tree, response, tested_tree=None):
     # A successful write can outlive an HTTP timeout. Observe the same PR;
     # never submit the mutation twice or assume that a timeout rejected it.
@@ -112,7 +172,7 @@ def finish(client, root, number, run_id, scope, head, base, output, *, merge=Fal
         evidence_dir = output / "ci"
         evidence_dir.mkdir()
         if automatic:
-            evidence = phase("collection", lambda: queue.gate_evidence(client, observed, evidence_dir))
+            evidence = phase("collection", lambda: queue.gate_evidence(client, observed, evidence_dir, root, base))
             record["pr_evidence"] = evidence
             if (evidence["source_sha"] != head
                     or evidence["source_tree"] != record["reviewed_source"]["tree"]):
@@ -134,13 +194,18 @@ def finish(client, root, number, run_id, scope, head, base, output, *, merge=Fal
         record["status"] = "ready"
         save()
         if merge:
+            fields = []
+            try:
+                fields = squash_fields(client, number, output)
+            except (OSError, RuntimeError, subprocess.SubprocessError, ValueError, KeyError, TypeError, AttributeError) as error:
+                record["squash_message_error"] = str(error)
             record.update(status="merge_requested", merge_requested_at=ci.utc_now())
             save()  # Retain the exact intended mutation before sending it.
             response = None
             try:
                 response = phase("merge_request", lambda: client.command(
                     "api", "--method", "PUT", f"repos/{client.repository}/pulls/{number}/merge",
-                    "-f", f"sha={head}", "-f", "merge_method=squash"))
+                    "-f", f"sha={head}", "-f", "merge_method=squash", *fields))
                 record["merge_response"] = response
             except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as error:
                 record["merge_request_error"] = str(error)
@@ -165,6 +230,8 @@ def finish(client, root, number, run_id, scope, head, base, output, *, merge=Fal
     if evidence is not None:
         if automatic:
             lines += ["", f"Verified [automatic PR CI]({evidence['url']}) for `{evidence['source_sha']}`."]
+            lines += [f"- reused {suite} from {record['run_url']} (attempt {record['run_attempt']}, `{record['origin_sha']}`), "
+                      f"re-derived with main's planner: {record['reason']}" for suite, record in sorted(evidence.get("reused", {}).items())]
         else:
             lines += ["", ci.markdown(evidence)]
     (output / "merge.md").write_text("\n".join(lines) + "\n")

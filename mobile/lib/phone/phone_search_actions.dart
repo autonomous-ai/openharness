@@ -57,8 +57,7 @@ List<PhoneCommand> phoneSearchCommands(
         id: 'swarm.open',
         title: 'Swarm',
         detail: 'Experimental · your Swarms',
-        run: () =>
-            Navigator.of(context).push(phoneRoute((_) => const SwarmPage())),
+        run: () => openSwarmHome(context),
       ),
     PhoneCommand(
       id: 'app.settings',

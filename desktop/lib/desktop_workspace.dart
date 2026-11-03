@@ -5,6 +5,7 @@ import 'state/app_state.dart';
 import 'ws/terminal_transport_plugin.dart';
 import 'community/fork_host.dart';
 import 'super_tabs/join_dialog.dart';
+import 'super_tabs/message_link_host.dart';
 
 /// The signed-in screen of a native build. A browser build compiles
 /// `web/web_entry.dart` in its place (the conditional import in `main.dart`),
@@ -13,7 +14,10 @@ Widget authenticatedWorkspace(AppNotifier app) => CommunityForkHost(
   app: app,
   child: SwarmJoinHost(
     app: app,
-    child: SwarmScreen(notifier: app),
+    child: SwarmMessageLinkHost(
+      app: app,
+      child: SwarmScreen(notifier: app),
+    ),
   ),
 );
 

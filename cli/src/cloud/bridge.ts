@@ -3,7 +3,8 @@
  * connection's credential, so this service holds none (services/AGENTS.md, "Do not hold credentials").
  * A connection is found by where it points (Fo's MCP server, Devin's API), not by what the person named it.
  */
-import { bridgePort, harnessKey } from '../lib/connectors/agents.js'
+import { bridgePort, bridgeSocketPath, harnessKey, readBridgePipe } from '../lib/connectors/agents.js'
+import { fetchOverPipe, fetchOverSocket } from '../lib/localTransport.js'
 import { Store } from '../lib/connectors/store.js'
 import { CLOUD_AGENTS, type CloudAgentId } from '../lib/cloudAgents.js'
 import { CloudError } from './types.js'
@@ -14,22 +15,48 @@ export interface Bridge {
   connections(): Promise<Connection[]>
   /** The bridge's MCP address for a connection. */
   mcpUrl(code: string): string
+  /** How to reach [mcpUrl]: over the bridge's socket where it has one. */
+  fetch?: typeof fetch
   /** One call to a key-only connection's API, as JSON. A non-2xx status is the answer, not a throw. */
   api(code: string, method: string, path: string, body?: unknown, timeoutMs?: number): Promise<{ status: number; json: Record<string, unknown> }>
 }
 
-/** Through Harness's own key (agents.ts `harnessKey`), never the one in the agents' configurations. */
-export function connectionsBridge(base: () => string = () => `http://127.0.0.1:${bridgePort()}/${harnessKey(new Store())}`): Bridge {
+/** Where the bridge is, and how to reach it. */
+export interface BridgeRoute { base: string; fetch: typeof fetch }
+
+/**
+ * Through Harness's own key (agents.ts `harnessKey`), never the one in the agents' configurations, and over the bridge's 0600 socket
+ * where it can have one, or on Windows its pipe: whoever holds a port hears what is sent to it and can answer it (audit H1; on
+ * Windows the Team account from boot, task #2162). The pipe is read for each request, dialled only while the bridge's process runs,
+ * and its answer must prove the token (agents.ts `readBridgePipe`). With the socket or pipe gone Connections is down, and nothing
+ * goes to the port. The address's host is then only a name, one that resolves nowhere (RFC 6761), so the key cannot leave if the
+ * address ever reached plain `fetch`.
+ */
+export function bridgeRoute(vault: Store = new Store(), platform: NodeJS.Platform = process.platform): BridgeRoute {
+  const socket = bridgeSocketPath(vault, platform)
+  if (socket) return { base: `http://connections.invalid/${harnessKey(vault)}`, fetch: fetchOverSocket(socket) }
+  if (platform === 'win32') return { base: `http://connections.invalid/${harnessKey(vault)}`, fetch: fetchOverPipe(() => readBridgePipe(vault)) }
+  return { base: `http://127.0.0.1:${bridgePort(process.env, vault)}/${harnessKey(vault)}`, fetch: (input, init) => fetch(input, init) }
+}
+
+export function connectionsBridge(target: () => string | BridgeRoute = () => bridgeRoute()): Bridge {
+  const route = (): BridgeRoute => {
+    const got = target()
+    return typeof got === 'string' ? { base: got, fetch: (input, init) => fetch(input, init) } : got
+  }
   return {
     async connections() {
-      const answer = await fetch(`${base()}/connections`, { signal: AbortSignal.timeout(10_000) })
+      const { base, fetch: send } = route()
+      const answer = await send(`${base}/connections`, { signal: AbortSignal.timeout(10_000) })
       if (!answer.ok) throw new CloudError('CONNECTIONS_UNAVAILABLE', 'Connections is not running here.')
       const body = await answer.json() as { connections?: unknown }
       return Array.isArray(body.connections) ? body.connections as Connection[] : []
     },
-    mcpUrl: (code) => `${base()}/${code}/mcp`,
+    mcpUrl: (code) => `${route().base}/${code}/mcp`,
+    fetch: (input, init) => route().fetch(input, init),
     async api(code, method, path, body, timeoutMs = 30_000) {
-      const answer = await fetch(`${base()}/${code}/api${path}`, {
+      const { base, fetch: send } = route()
+      const answer = await send(`${base}/${code}/api${path}`, {
         method,
         headers: { accept: 'application/json', ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
         body: body === undefined ? undefined : JSON.stringify(body),

@@ -11,7 +11,10 @@ import 'controller.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
 import 'pane.dart';
+import 'personal_machines.dart';
+import 'personal_projects.dart';
 import 'sharing.dart';
+import 'swarm_switcher.dart' show PersonalSwarm;
 import 'terminal_unavailable.dart';
 import 'view.dart';
 
@@ -24,11 +27,13 @@ class SuperTabWorkspace extends StatefulWidget {
     required this.canvas,
     required this.onAddAgent,
     this.onNewProject,
+    this.onNewSwarm,
   });
   final AppNotifier app;
   final Widget canvas;
   final ValueChanged<SuperTabConversation> onAddAgent;
   final VoidCallback? onNewProject;
+  final VoidCallback? onNewSwarm;
 
   @override
   State<SuperTabWorkspace> createState() => _SuperTabWorkspaceState();
@@ -37,8 +42,8 @@ class SuperTabWorkspace extends StatefulWidget {
 class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
   final _canvasKey = GlobalKey();
   AppNotifier get app => widget.app;
-  (String, String, String?, String, bool)? _terminalRequest;
-  (String, String, String?, String, bool)? _readyRequest;
+  (String, String, String?, String, bool, String)? _terminalRequest;
+  (String, String, String?, String, bool, String)? _readyRequest;
   // Navigation never undoes a person's stop. Only the pane's explicit Resume
   // action may restart a saved session, with the Swarm's native context.
   (String, String)? _resumeRequest;
@@ -102,7 +107,15 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
     super.dispose();
   }
 
+  /// The person's own panes a Personal project shows behind its [term]: the
+  /// panes their tabs hold, never a copy (personal_projects.dart).
+  List<TerminalPane> _localPanes(SuperTabController controller) =>
+      controller.groupTerminalsOpen(controller.selectedId)
+      ? PersonalProjects.of(app).panesFor(controller, controller.selectedId)
+      : const [];
+
   void _syncTerminal(SuperTabController controller, String swarmId) {
+    final local = _localPanes(controller);
     final devices =
         controller.devicesSelected &&
         app.devicesEnabled &&
@@ -124,6 +137,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                 .join(','),
       controller.accountId,
       controller.canWrite,
+      local.map((p) => '${p.machineId}/${p.agentId}').join(','),
     );
     if (_terminalRequest == request) return;
     _clearNativeContext();
@@ -161,11 +175,26 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
           // Keep only the dashboard when revisiting Devices, also removing
           // the chat slot or session restored from its former split layout.
           if (devices && pane.isDevices) continue;
-          if (!agents.any(
-            (a) => a.machineId == pane.machineId && a.harnessId == pane.agentId,
-          )) {
+          final shown =
+              agents.any(
+                (a) =>
+                    a.machineId == pane.machineId &&
+                    a.harnessId == pane.agentId,
+              ) ||
+              local.any(
+                (p) =>
+                    p.machineId == pane.machineId && p.agentId == pane.agentId,
+              );
+          if (!shown) {
             if (!current()) return;
-            await app.closePane(pane.id, swarmId: swarmId);
+            // One of the person's own panes leaves this view only: its tab
+            // keeps it, or its tab's close already put it in recently closed.
+            if (_isPersonsOwn(pane, swarmId) || _shownFromTab[pane] == true) {
+              _shownFromTab[pane] = null;
+              await app.releaseSuperTabView(swarmId, pane.id);
+            } else {
+              await app.closePane(pane.id, swarmId: swarmId);
+            }
           }
         }
         if (devices) {
@@ -185,10 +214,32 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
             resume == (request.$2, agent.id),
           );
         }
+        for (final pane in local) {
+          if (!current()) return;
+          // The very pane its tab shows, as it is there: same session, same
+          // input and composer. No Swarm terminal sharing is asked for.
+          _shownFromTab[pane] = true;
+          await app.assignAgentToPane(
+            null,
+            pane.machineId,
+            pane.agentId!,
+            swarmId: swarmId,
+            inputContext: pane.inputContext,
+            watchOnly: pane.watchOnly,
+            autoTile: true,
+            focus: false,
+            intent: AttachIntent.automatic,
+          );
+        }
+        if (current() && agents.isEmpty && tab != null) {
+          if (PersonalProjects.of(app).soleTab(local) case final source?) {
+            app.copySuperTabLayout(swarmId, source);
+          }
+        }
         if (current()) {
           if (tab != null) tab.zoomedPaneId = null;
           final focused = agents.where((a) => a.id == focus?.$2).firstOrNull;
-          if (focused != null || agents.length == 1) {
+          if (focused != null || agents.length + local.length == 1) {
             if ((focused == null
                     ? tab?.panes.firstOrNull
                     : tab?.panes
@@ -208,6 +259,21 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
       });
     });
   }
+
+  /// The person's own panes this view showed from their tabs. One of them
+  /// stays theirs after its tab closes: that close already went into recently
+  /// closed, so the view lets the pane go without a second entry. Weak, so a
+  /// pane gone everywhere is forgotten with it.
+  static final _shownFromTab = Expando<bool>('shownFromTab');
+
+  /// Whether [pane] in Swarm tab [swarmId] is one of the person's own panes,
+  /// held by one of their other tabs too.
+  bool _isPersonsOwn(TerminalPane pane, String swarmId) => app.swarms.any(
+    (tab) =>
+        tab.id != swarmId &&
+        !tab.isSuperTab &&
+        tab.panes.any((p) => identical(p, pane)),
+  );
 
   Future<void> _open(
     SuperTabAgent agent,
@@ -466,15 +532,24 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
         return ListenableBuilder(
           listenable: controller,
           builder: (context, _) {
+            if (PersonalSwarm.of(app).id == controller.tabId) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) {
+                  unawaited(PersonalProjects.of(app).sync(controller));
+                  unawaited(PersonalMachines.of(app).sync(controller));
+                }
+              });
+            }
             _syncTerminal(controller, tab.id);
             final agents = controller.terminalAgents(controller.selectedId);
+            final local = _localPanes(controller);
             final devices =
                 controller.devicesSelected &&
                 app.devicesEnabled &&
                 !controller.accessRevoked;
             final showTerminal =
                 _readyRequest == _terminalRequest &&
-                (devices || agents.isNotEmpty) &&
+                (devices || agents.isNotEmpty || local.isNotEmpty) &&
                 tab.panes.isNotEmpty;
             // The terminal canvas is mounted either way; whether a person can see it is this.
             WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -486,8 +561,21 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
             final terminal = SuperPane(
               machineId: lead?.machineId ?? '',
               harnessId: lead?.harnessId ?? '',
-              title: 'Product Manager',
+              title: lead == null
+                  ? kDefaultCoordinatorName
+                  : controller.snapshot!.coordinatorNameOf(
+                      controller.snapshot!.leadProjectForAgent(lead.id)?.id ??
+                          '',
+                    ),
               titles: {
+                for (final p in local)
+                  if (app
+                          .stateOf(p.machineId)
+                          ?.agents
+                          .where((a) => a.id == p.agentId)
+                          .firstOrNull
+                      case final agent?)
+                    (p.machineId, p.agentId!): agent.name,
                 for (final a in agents)
                   (a.machineId, a.harnessId): controller.snapshot!.agentName(
                     a.id,
@@ -534,6 +622,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                       unawaited(showSuperTabPeople(context, controller)),
                   onAddAgent: widget.onAddAgent,
                   onNewProject: widget.onNewProject,
+                  onNewSwarm: widget.onNewSwarm,
                   onOpenTerminal: (agent) => _focusAgent(
                     controller,
                     tab.id,
@@ -544,7 +633,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                       unawaited(_chooseAgentGroup(controller, tab.id, agent)),
                   onOpenGroupTerminals: () =>
                       controller.selectGroupTerminals(controller.selectedId),
-                  terminalsVisible: agents.isNotEmpty,
+                  terminalsVisible: agents.isNotEmpty || local.isNotEmpty,
                   app: app,
                   machineName: (machine) =>
                       app.stateOf(machine)?.machine.displayName ??
@@ -553,7 +642,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                       app.stateOf(machine)?.isLocalMachine == true,
                   terminal: showTerminal
                       ? terminal
-                      : devices || agents.isNotEmpty
+                      : devices || agents.isNotEmpty || local.isNotEmpty
                       ? const Center(child: CircularProgressIndicator())
                       : null,
                   onCloseTerminal: () {

@@ -2100,6 +2100,7 @@ function onePerPage(backend: FakeBackend): void {
 describe('DeviceLogSyncer — a log longer than a usual read', () => {
   const many = (n: number) => Array.from({ length: n }, (_, i) => key(10 + i))
 
+  // #2340: verifying 25 signed entries exceeded Vitest's default 5s timeout on a busy CI runner.
   it('a first read goes past the usual page cap, so nothing on the account is announced', async () => {
     const t = setup()
     for (const k of many(25)) t.backend.add(k, 'viewer', '', 'app')
@@ -2115,7 +2116,7 @@ describe('DeviceLogSyncer — a log longer than a usual read', () => {
     await t.syncer.refresh()
     expect(t.backend.fetch).toHaveBeenCalledTimes(20)
     expect(t.store.read().state?.head.seq).toBe(45)
-  })
+  }, 10_000)
 
   it('a review reads a list longer than the usual page cap', async () => {
     const t = setup()

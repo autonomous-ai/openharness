@@ -134,4 +134,77 @@ void main() {
       'autonomousEnv': 'prod',
     });
   });
+
+  group('a native build holds a Harness session in place of SSO tokens', () {
+    late DirectAuthApi native;
+    setUp(() {
+      native = DirectAuthApi(
+        config: AppConfig.dev,
+        clientId: 'harness-desktop',
+        harnessSessionLabel: 'Dee’s Mac',
+        dio: Dio(BaseOptions(baseUrl: 'https://h.invalid'))
+          ..httpClientAdapter = backend,
+      );
+      backend.reply = {
+        'success': true,
+        'data': {'token': 'issued'},
+      };
+    });
+
+    const ask = {'kind': 'viewer', 'label': 'Dee’s Mac'};
+
+    test('it asks for one when it signs in', () async {
+      await native.exchange(code: 'c', state: 's', tx: 't');
+      expect(backend.sent.single.body, {
+        'code': 'c',
+        'state': 's',
+        'tx': 't',
+        'harnessSession': ask,
+      });
+    });
+
+    test('a sign-in from before the upgrade asks on its next renewal, '
+        'and a Harness session renews as one', () async {
+      await native.refresh('sso-refresh', autonomousEnv: 'prod');
+      expect(backend.sent.last.body, {
+        'refreshToken': 'sso-refresh',
+        'autonomousEnv': 'prod',
+        'harnessSession': ask,
+      });
+      await native.refresh('hnr_session', autonomousEnv: 'prod');
+      expect(backend.sent.last.body, {
+        'refreshToken': 'hnr_session',
+        'autonomousEnv': 'prod',
+      });
+    });
+
+    test('a session SSO has not confirmed for 7 days says "sign in again", '
+        'and is not signed out', () async {
+      backend.reply = {
+        'success': false,
+        'error': {'code': 'SIGN_IN_AGAIN', 'message': 'Sign in again'},
+      };
+      await expectLater(
+        native.refresh('hnr_session', autonomousEnv: 'prod'),
+        throwsA(
+          isA<DirectAuthException>()
+              .having((e) => e.signedOut, 'signedOut', isFalse)
+              .having((e) => e.message, 'message', contains('Sign in again')),
+        ),
+      );
+    });
+
+    test('signing out ends a Harness session on the server, and asks '
+        'nothing for an SSO one', () async {
+      backend.reply = {
+        'success': true,
+        'data': {'revoked': true},
+      };
+      expect(await native.revoke('hnr_session'), isTrue);
+      expect(backend.sent.single.path, '/api/auth/revoke');
+      expect(backend.sent.single.body, {'refreshToken': 'hnr_session'});
+      expect(await native.revoke('sso-refresh'), isFalse);
+      expect(backend.sent, hasLength(1));
+    });
+  });
 }

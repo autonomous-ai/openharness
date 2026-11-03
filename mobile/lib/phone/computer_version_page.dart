@@ -349,6 +349,7 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
               ? 'The new Harness OS needs a restart: $_name restarts by itself once it is in.'
               : 'The new Harness OS needs a restart: restart $_name when it is in.',
           'Harnesses running there stop, and start again after the restart.',
+          'Do not turn $_name off until the update is done.',
           if (encrypted)
             'After the restart it waits for its password: unlock it from this phone near it, on its Wi-Fi "$hotspot".',
         ].join(' '),
@@ -505,6 +506,15 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
                           ),
                         ],
                       ),
+                    // Cut off mid-update, a computer can be left half old and half new.
+                    if (_started.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        'Do not turn $_name off until the update is done.',
+                        key: const Key('version-keep-on'),
+                        style: tty.style(color: tty.red),
+                      ),
+                    ],
                     if (_finished.isNotEmpty)
                       Text(
                         _finished,

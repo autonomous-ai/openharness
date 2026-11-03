@@ -204,22 +204,25 @@ wait_eq "picking a window on the dial selects it" 0 hn display -p '#{window_inde
 tmux_ send-keys -t t C-b 1
 tmux_ send-keys -t t C-b 0
 wait_eq "C-b 0: back to window 0 (its harness idle: ·)" "0 ·" hn display -p '#{window_index} #{window_agent_icon}'
-# A harness at work, then done, as the daemon's events say it: its line, the counts, C-b a.
+# A harness at work, then done, as the daemon's events say it: its row's status, C-b a.
 claude=$(dial "d.agents.find(a => a.name === 'Mock Claude').id")
 csess=$(dial "d.agents.find(a => a.name === 'Mock Claude').sessionId")
 ev() { push "{\"type\":\"$1\",\"agentId\":\"$claude\",\"dbSessionId\":\"$csess\",\"payload\":{\"agentId\":\"$claude\",\"sessionId\":\"$csess\"$2}}"; }
+# Its C-b s row: the status in a word by how long (`working 3s`).
+claude_status() { screen | grep -F "Mock Claude" | grep -oE '(working|done|idle) [0-9]+[smhd]' | head -n 1 | cut -d' ' -f1; }
 ev turn_started ',"userMessage":"run the tests"'
 ev tool_start ',"id":"t1","tool":"Bash","input":{"command":"npm test","description":"Run the unit tests"}'
 wait_eq "a working harness is counted (#{fleet_working})" 1 hn display -p '#{fleet_working}'
 tmux_ send-keys -t t C-b s
-expect "C-b s: a working harness's line says what it is doing" "Run the unit tests"
+wait_eq "C-b s: a working harness's row says working by its time" working claude_status
 tmux_ send-keys -t t Escape
 ev text_delta ',"content":"All 42 tests pass.\\n\\nNothing else changed."'
 ev turn_ended ''
 wait_eq "its turn done where you were not looking: done and unread (#{fleet_done})" 1 hn display -p '#{fleet_done}'
-expect "the status line counts it" "✓1"
+screen | tail -n 1 | grep -qF "✓1" && fail "the status line counts the harnesses by state"
+echo "✓ the status line does not count the harnesses by state"
 tmux_ send-keys -t t C-b s
-expect "C-b s: a done harness's line is what it did" "All 42 tests pass."
+wait_eq "C-b s: a done harness's row says done by its time" done claude_status
 tmux_ send-keys -t t Escape
 tmux_ send-keys -t t C-b a
 expect "C-b a goes to the harness that needs you" "Mock Claude (mock)"

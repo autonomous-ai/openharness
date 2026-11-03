@@ -317,7 +317,10 @@ class _Body extends StatelessWidget {
             ? 'nothing running'
             : '$count harness${count == 1 ? '' : 'es'}',
       ),
-      PhoneMachineStatus.connecting => (tty.faint, 'one moment…'),
+      PhoneMachineStatus.connecting => (
+        tty.faint,
+        state.awaitingKey ? 'setting up its secure link…' : 'one moment…',
+      ),
       PhoneMachineStatus.needsPassword => (
         tty.yellow,
         'tap to unlock: scan its code',
@@ -545,7 +548,10 @@ class _ConnectBarState extends State<_ConnectBar> {
                       label: 'Set up Intern 3',
                       onPressed: () => Navigator.of(context).push(
                         phoneRoute(
-                          (_) => AddDevicePage(notifier: widget.notifier),
+                          (_) => AddDevicePage(
+                            notifier: widget.notifier,
+                            overComputers: true,
+                          ),
                         ),
                       ),
                     ),

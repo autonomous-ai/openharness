@@ -51,20 +51,30 @@ static bool device_mac_str(char *o,size_t n) { snprintf(o,n,"aa:bb");return true
 static void msg_settings(cJSON **root) { (void)root; }
 static size_t pet_store_held(char ids[][17],size_t max) { (void)ids;(void)max;return 0; }
 
-static unsigned beeps, ids_calls, card_calls, recap_calls, focus_calls, wait_calls, close_calls, question_calls, qclose_calls;
+static unsigned beeps, ids_calls, card_calls, recap_calls, focus_calls, wait_calls, close_calls, question_calls, qclose_calls, notice_calls, read_calls;
 static bool beep_next;
 static void audio_notify_done(void) { beeps++; }
 static char got_ids[HT_SUPERTABS_MAX][ID_MAX]; static int got_id_n;
 static ht_supertab_t got_card;
 static char got_tab[ID_MAX], got_lead[ID_MAX], got_text[2048], got_agent[ID_MAX], got_request[80], got_swarm[80];
+static char got_chat_id[ID_MAX]; static ht_chat_kind_t got_chat;
 static uint32_t got_at; static bool got_none, got_stuck, got_text_null;
 static void ui_supertabs_ids(const char ids[][ID_MAX],int n) {
     ids_calls++;got_id_n=n;memcpy(got_ids,ids,(size_t)n*ID_MAX);
 }
 static bool ui_supertab(const ht_supertab_t *in) { card_calls++;got_card=*in;return beep_next; }
-static void ui_supertab_recap(const char *tab,const char *lead,const char *text,uint32_t at,bool none) {
+static void ui_supertab_recap(const char *tab,const char *lead,const char *chat_id,const char *text,uint32_t at,bool none) {
     recap_calls++;snprintf(got_tab,sizeof got_tab,"%s",tab);snprintf(got_lead,sizeof got_lead,"%s",lead);
+    snprintf(got_chat_id,sizeof got_chat_id,"%s",chat_id);
     snprintf(got_text,sizeof got_text,"%s",text?text:"");got_at=at;got_none=none;
+}
+static bool ui_supertab_notice(const char *tab,const char *lead,ht_chat_kind_t chat,const char *chat_id,const char *text,uint32_t at) {
+    notice_calls++;snprintf(got_tab,sizeof got_tab,"%s",tab);snprintf(got_lead,sizeof got_lead,"%s",lead);got_chat=chat;
+    snprintf(got_chat_id,sizeof got_chat_id,"%s",chat_id);snprintf(got_text,sizeof got_text,"%s",text);got_at=at;return beep_next;
+}
+static void ui_supertab_notice_read(const char *tab,const char *lead,const char *chat_id) {
+    read_calls++;snprintf(got_tab,sizeof got_tab,"%s",tab);snprintf(got_lead,sizeof got_lead,"%s",lead);
+    snprintf(got_chat_id,sizeof got_chat_id,"%s",chat_id);
 }
 static void ui_supertab_focus(const char *tab,const char *lead) {
     focus_calls++;snprintf(got_tab,sizeof got_tab,"%s",tab);snprintf(got_lead,sizeof got_lead,"%s",lead);
@@ -84,7 +94,8 @@ static void ui_question_close(const char *a,const char *r) { (void)a;(void)r;qcl
 '''
 for name in ['str_of', 'msg', 'msg_check', 'msg_string', 'msg_number', 'msg_array', 'send_hello', 'id_fits',
              'handle_supertabs', 'handle_supertab', 'handle_supertab_recap', 'handle_supertab_focus',
-             'handle_question', 'handle_question_close', 'cable_client_supertab_send']:
+             'handle_supertab_notice', 'handle_supertab_notice_read',
+             'handle_question', 'handle_question_close', 'cable_client_supertab_send', 'cable_client_supertab_side']:
     code += function(name)
 code += r'''
 static cJSON *parse(const char *json) { cJSON *p=cJSON_Parse(json);assert(p);return p; }
@@ -102,6 +113,13 @@ int main(void) {
     send_hello();
     assert(sends==1 && !strcmp(field(wire[0],"swarmCard"),"v1") && !strcmp(field(wire[0],"superTab"),"wait-v1"));
     assert(!strcmp(field(wire[0],"product"),"harness"));
+    // hello says swarmChat v1: the daemon sends the chat on each face and the Lead/PM notices.
+    assert(!strcmp(field(wire[0],"swarmChat"),"v1"));
+    // and swarmBuddy v1: each Lead's Buddy block, a Buddy face and the Buddy's quiet notice.
+    assert(!strcmp(field(wire[0],"swarmBuddy"),"v1"));
+    // and no swarmReview: words for a Swarm chat are sent as any harness's are, reviewed only when held (Diego's dial,
+    // 2026-10-29), and a daemon that heard it would refuse every word not reviewed.
+    assert(!strcmp(field(wire[0],"swarmReview"),"<absent>"));
 
     // supertabs: ids in order, the bad and the repeated skipped, at most 16.
     feed(handle_supertabs,"{\"ids\":[\"s1\",\"\",7,\"s2\",\"s1\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]}");
@@ -140,13 +158,95 @@ int main(void) {
     beep_next=true;feed(handle_supertab,big);beep_next=false;
     assert(card_calls==3 && got_card.lead_n==12 && got_card.count==12 && beeps==1);
 
+    // supertab with chat fields parses; a Lead without them is the Lead chat.
+    feed(handle_supertab,"{\"id\":\"s1\",\"name\":\"openharness\",\"leads\":["
+        "{\"id\":\"L1\",\"state\":\"work\",\"since\":9,\"order\":0,\"chat\":\"group\",\"chatId\":\"g1\",\"chatName\":\"Fix login\"},"
+        "{\"id\":\"L2\",\"state\":\"done\",\"order\":1,\"chat\":\"pm\",\"chatId\":\"pm1\",\"chatName\":\"PM\"},"
+        "{\"id\":\"L3\",\"state\":\"done\",\"order\":2}]}");
+    assert(card_calls==4 && got_card.lead_n==3);
+    assert(got_card.leads[0].chat==HT_CHAT_GROUP && !strcmp(got_card.leads[0].chat_id,"g1") && !strcmp(got_card.leads[0].chat_name,"Fix login"));
+    assert(got_card.leads[1].chat==HT_CHAT_PM && !strcmp(got_card.leads[1].chat_id,"pm1") && !strcmp(got_card.leads[1].chat_name,"PM"));
+    assert(got_card.leads[2].chat==HT_CHAT_LEAD && !got_card.leads[2].chat_id[0]);
+
+    // supertab from a swarmBuddy daemon: `buddies`, the Buddy block (#rrggbb colour, 15-bit cells) and a Buddy face.
+    feed(handle_supertab,"{\"id\":\"s1\",\"name\":\"openharness\",\"leads\":["
+        "{\"id\":\"L1\",\"state\":\"done\",\"order\":0,\"chat\":\"buddy\",\"chatId\":\"b1\",\"chatName\":\"diego's Buddy\",\"buddies\":true,"
+        "\"buddy\":{\"chatId\":\"b1\",\"name\":\"diego's Buddy\",\"engine\":\"codex\",\"cells\":25513,\"color\":\"#d6a79a\",\"live\":true}},"
+        "{\"id\":\"L2\",\"state\":\"done\",\"order\":1,\"chat\":\"lead\",\"chatId\":\"lead-docs\",\"chatName\":\"Lead\",\"buddies\":true},"
+        "{\"id\":\"L3\",\"state\":\"done\",\"order\":2,\"buddies\":true,"
+        "\"buddy\":{\"chatId\":\"b3\",\"name\":\"x\",\"engine\":\"claude\",\"cells\":32768,\"color\":\"#d6a79a\",\"live\":true}},"
+        "{\"id\":\"L4\",\"state\":\"done\",\"order\":3,\"buddies\":true,"
+        "\"buddy\":{\"chatId\":\"b4\",\"name\":\"x\",\"engine\":\"claude\",\"cells\":7,\"color\":\"red\",\"live\":false}},"
+        "{\"id\":\"L5\",\"state\":\"done\",\"order\":4,\"buddies\":true,"
+        "\"buddy\":{\"chatId\":\"b5\",\"name\":\"x\",\"engine\":\"claude\",\"cells\":\"7\",\"color\":\"#000000\"}},"
+        "{\"id\":\"L6\",\"state\":\"done\",\"order\":5,\"buddies\":true,\"buddy\":\"b6\"}]}");
+    assert(got_card.lead_n==6);
+    l=&got_card.leads[0];
+    assert(l->chat==HT_CHAT_BUDDY && !strcmp(l->chat_id,"b1") && l->buddies && l->buddy.has && l->buddy.live);
+    assert(l->buddy.cells==25513 && l->buddy.color==0xd6a79a && !strcmp(l->buddy.engine,"codex") && !strcmp(l->buddy.name,"diego's Buddy"));
+    assert(got_card.leads[1].buddies && !got_card.leads[1].buddy.has && got_card.leads[1].chat==HT_CHAT_LEAD);
+    // Cells past 15 bits, a colour that is not #rrggbb, cells that are not a number, a block that is not an object: no Buddy.
+    for (int i=2;i<6;i++) assert(got_card.leads[i].buddies && !got_card.leads[i].buddy.has);
+    // `live` absent is a down Buddy only when the block is drawn at all; a swarmChat frame has no Buddies.
+    assert(!got_card.leads[1].buddy.live);
+    feed(handle_supertab,"{\"id\":\"s1\",\"name\":\"openharness\",\"leads\":[{\"id\":\"L1\",\"state\":\"done\",\"chat\":\"lead\",\"chatId\":\"c\"}]}");
+    assert(!got_card.leads[0].buddies && !got_card.leads[0].buddy.has);
+    // The Swarm's side, which a swarmBuddy daemon says on every frame: none from an older one or an unknown value.
+    assert(got_card.side == HT_SIDE_NONE);
+    feed(handle_supertab,"{\"id\":\"s1\",\"name\":\"n\",\"side\":\"buddy\",\"leads\":[]}");
+    assert(got_card.side == HT_SIDE_BUDDY);
+    feed(handle_supertab,"{\"id\":\"s1\",\"name\":\"n\",\"side\":\"pm\",\"leads\":[]}");
+    assert(got_card.side == HT_SIDE_PM);
+    feed(handle_supertab,"{\"id\":\"s1\",\"name\":\"n\",\"side\":\"left\",\"leads\":[]}");
+    assert(got_card.side == HT_SIDE_NONE);
+    feed(handle_supertab,"{\"id\":\"s1\",\"name\":\"n\",\"side\":1,\"leads\":[]}");
+    assert(got_card.side == HT_SIDE_NONE);
+
+    // supertab.notice and supertab.notice.read reach the ui calls with their fields; the UI decides the beep.
+    const unsigned beeps_before=beeps;
+    beep_next=true;
+    feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"pm\",\"chatId\":\"pm1\",\"id\":\"m9\",\"text\":\"Ready to ship.\",\"at\":1792560000}");
+    beep_next=false;
+    assert(notice_calls==1 && beeps==beeps_before+1 && !strcmp(got_tab,"s1") && !strcmp(got_lead,"L2") && got_chat==HT_CHAT_PM);
+    assert(!strcmp(got_chat_id,"pm1") && !strcmp(got_text,"Ready to ship.") && got_at==1792560000u);
+    feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L1\",\"chat\":\"lead\",\"chatId\":\"lead-web\",\"id\":\"m10\",\"text\":\"Done.\",\"at\":5}");
+    assert(notice_calls==2 && got_chat==HT_CHAT_LEAD && beeps==beeps_before+1);
+    // The Buddy's word: chat "buddy" reaches the UI as HT_CHAT_BUDDY; the UI says it is quiet.
+    feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L1\",\"chat\":\"buddy\",\"chatId\":\"b1\",\"id\":\"m11\",\"text\":\"Cache it.\",\"at\":6}");
+    assert(notice_calls==3 && got_chat==HT_CHAT_BUDDY && !strcmp(got_chat_id,"b1") && !strcmp(got_text,"Cache it.") && beeps==beeps_before+1);
+    notice_calls=2;
+    feed(handle_supertab_notice_read,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chatId\":\"pm1\"}");
+    assert(read_calls==1 && !strcmp(got_tab,"s1") && !strcmp(got_lead,"L2") && !strcmp(got_chat_id,"pm1"));
+    // a notice with a non-id chatId or no lead is ignored, and so is one of a group, with no id, or no text.
+    char longer_id[ID_MAX+8];memset(longer_id,'c',ID_MAX);longer_id[ID_MAX]=0;
+    char bad[256];snprintf(bad,sizeof bad,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"pm\",\"chatId\":\"%s\",\"id\":\"m1\",\"text\":\"x\",\"at\":1}",longer_id);
+    feed(handle_supertab_notice,bad);
+    feed(handle_supertab_notice,"{\"tab\":\"s1\",\"chat\":\"pm\",\"chatId\":\"pm1\",\"id\":\"m1\",\"text\":\"x\",\"at\":1}");
+    feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"group\",\"chatId\":\"g1\",\"id\":\"m1\",\"text\":\"x\",\"at\":1}");
+    feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"pm\",\"chatId\":\"pm1\",\"text\":\"x\",\"at\":1}");
+    feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"pm\",\"chatId\":\"pm1\",\"id\":\"m1\",\"at\":1}");
+    feed(handle_supertab_notice,"{\"tab\":\"\",\"lead\":\"L2\",\"chat\":\"pm\",\"chatId\":\"pm1\",\"id\":\"m1\",\"text\":\"x\",\"at\":1}");
+    assert(notice_calls==2);
+    feed(handle_supertab_notice_read,"{\"tab\":\"s1\",\"lead\":\"L2\"}");
+    feed(handle_supertab_notice_read,"{\"tab\":\"s1\",\"chatId\":\"pm1\"}");
+    assert(read_calls==1);
+    beeps=beeps_before;   // the waits below count from here
+
     // supertab.recap and supertab.focus.
     feed(handle_supertab_recap,"{\"tab\":\"s1\",\"lead\":\"L1\",\"text\":\"Shipped.\",\"at\":1792560000,\"none\":false}");
     assert(recap_calls==1 && !strcmp(got_text,"Shipped.") && got_at==1792560000u && !got_none && !strcmp(got_lead,"L1"));
+    // From an old daemon it names no chat.
+    assert(!got_chat_id[0]);
     feed(handle_supertab_recap,"{\"tab\":\"s1\",\"lead\":\"L1\",\"none\":true}");
     assert(recap_calls==2 && got_none && !got_text[0] && got_at==0);
     feed(handle_supertab_recap,"{\"tab\":\"s1\",\"text\":\"x\"}");
     assert(recap_calls==2);
+    // A chat's recap names its chat; one whose chatId cannot be held is not one.
+    feed(handle_supertab_recap,"{\"tab\":\"s1\",\"lead\":\"L1\",\"text\":\"Green.\",\"at\":3,\"none\":false,\"chatId\":\"g1\"}");
+    assert(recap_calls==3 && !strcmp(got_chat_id,"g1") && !strcmp(got_text,"Green."));
+    snprintf(bad,sizeof bad,"{\"tab\":\"s1\",\"lead\":\"L1\",\"text\":\"x\",\"at\":3,\"chatId\":\"%s\"}",longer_id);
+    feed(handle_supertab_recap,bad);
+    assert(recap_calls==3);
     feed(handle_supertab_focus,"{\"tab\":\"s1\",\"lead\":\"L2\"}");
     assert(focus_calls==1 && !strcmp(got_tab,"s1") && !strcmp(got_lead,"L2"));
     feed(handle_supertab_focus,"{\"tab\":\"s1\"}");
@@ -197,7 +297,18 @@ int main(void) {
     cable_client_supertab_send("focus","s1","L1");
     cable_client_supertab_send(NULL,"s1","L1");
     assert(sends==3);
-    puts("Swarm frames: hello capabilities, supertabs/supertab/recap/focus parsing, malformed Leads skipped, Super Tab waits kept off the question screen, exact requests PASS");
+    // supertab.side: the side the dial swiped to, for a Swarm id it can hold.
+    sends=0;
+    cable_client_supertab_side("t1",true);
+    cable_client_supertab_side("t1",false);
+    assert(sends==2);
+    assert(!strcmp(wire[0],"{\"t\":\"supertab.side\",\"tab\":\"t1\",\"side\":\"buddy\"}"));
+    assert(!strcmp(wire[1],"{\"t\":\"supertab.side\",\"tab\":\"t1\",\"side\":\"pm\"}"));
+    cable_client_supertab_side(longer,true);
+    cable_client_supertab_side("",true);
+    cable_client_supertab_side(NULL,false);
+    assert(sends==2);
+    puts("Swarm frames: hello capabilities, supertabs/supertab/recap/focus parsing, chats, Buddies and Lead/PM/Buddy notices, supertab.side, malformed Leads skipped, Super Tab waits kept off the question screen, exact requests PASS");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='harness-supertab-') as folder:

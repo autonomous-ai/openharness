@@ -127,6 +127,9 @@ cc "${cc_flags[@]}" -I"$fw/main/sys" -o "$out/test_fw_update" "$here/test_fw_upd
 cc "${cc_flags[@]}" -Wframe-larger-than=1024 -c -o "$out/crash_record.o" "$fw/main/sys/crash_record.c"
 cc "${cc_flags[@]}" -I"$fw/main/sys" -o "$out/test_crash_record" "$here/test_crash_record.c" "$out/crash_record.o"
 "$out/test_crash_record"
+# wdt_pc: the bootloader hook that saves each core's PC and SP after a watchdog reset, on a fake register file.
+cc "${cc_flags[@]}" -I"$fw/main/sys" -o "$out/test_wdt_pc_hook" "$here/test_wdt_pc_hook.c" "$fw/bootloader_components/wdt_pc/wdt_pc.c"
+"$out/test_wdt_pc_hook"
 
 # The app layer: pro_app.c, pod_glue.c and pro_touch.c with the cable, the recorder and the clock as host stubs,
 # replayed. It builds its own fonts and objects.

@@ -4,7 +4,7 @@
 // edit the same file; load-flows.mjs reads every file in this folder.
 const toStore = {
   wide: [['exact', 'Harness Store']],
-  compact: [['exact', 'Menu'], ['exact', 'Store']],
+  compact: [['exact', 'New'], ['exact', 'Store']],
 };
 const claude = ['text', 'Work with Claude directly'];
 // The rail's entry on a computer and a tablet, its chip on a phone.

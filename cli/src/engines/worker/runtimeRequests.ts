@@ -1,5 +1,6 @@
 import type { ServiceRequests } from '../../core/api.js'
 import type { EngineRuntime } from '../facets/runtime.js'
+import { fillConfiguredEffort } from '../kit/runtime.js'
 import { type ReaderEngine } from './protocol.js'
 import { runtimeContext, runtimeOperation, RUNTIME_CAPABILITIES, RUNTIME_IN_FLIGHT, RUNTIME_READ,
   RUNTIME_REPLY_BYTES, RUNTIME_REQUEST_BYTES, RUNTIME_VERSION, RUNTIME_WAIT_MS, type RuntimeAnswer } from './runtimeProtocol.js'
@@ -40,10 +41,8 @@ export function engineRuntimeRequests(engine: ReaderEngine, deps: RuntimeRequest
         const extra: Partial<RuntimeAnswer> = {}
         if (operation.kind === 'records') for (const evidence of operation.records) adapter.reduce(context, evidence)
         else if (operation.kind === 'pane') adapter.pane(context, operation.text)
-        else if (operation.kind === 'config' && adapter.configuredEffort) {
-          state.effort = await adapter.configuredEffort(session)
-          state.observedAt = Date.now()
-        } else if (operation.kind === 'models') extra.models = await adapter.models(session, state)
+        else if (operation.kind === 'config' && adapter.configuredEffort) fillConfiguredEffort(state, await adapter.configuredEffort(session))
+        else if (operation.kind === 'models') extra.models = await adapter.models(session, state)
         else if (operation.kind === 'catalog') extra.catalog = await adapter.catalog?.(session) ?? []
         else if (operation.kind === 'effort') extra.effortAllowed = adapter.effortAllowed?.(operation.model, operation.effort, operation.listed) ?? false
         if (closed?.aborted) return failure('ENGINE_UNAVAILABLE')

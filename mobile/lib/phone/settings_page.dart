@@ -18,6 +18,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/appearance_prefs_store.dart';
 import 'package:harness_mobile/shared/theme/color_palette.dart';
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/swarm/swarm_start.dart' show SwarmIntroPage;
 import 'package:harness_mobile/terminal/terminal_font_store.dart';
 import 'package:harness_mobile/terminal/terminal_theme_store.dart';
 
@@ -27,6 +28,7 @@ import 'connectors_page.dart';
 import 'devices_page.dart';
 import 'machine_profile_picker.dart';
 import 'machines_tab.dart';
+import 'out_of_sight.dart';
 import 'phone_navigation.dart' show phoneRoute;
 import 'phone_name_store.dart';
 import 'phone_sheet.dart';
@@ -95,10 +97,12 @@ class SettingsPage extends StatelessWidget {
   /// back chevron a large header does not draw.
   final bool large;
 
+  // While out of sight (the You tab under another), it follows the app no more, and catches up
+  // once shown.
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
+  Widget build(BuildContext context) => ListenWhileInSight(
     listenable: notifier,
-    builder: (context, _) {
+    builder: (context) {
       AppTheme.watch(context);
       final tty = Tty.of(context);
       return Scaffold(
@@ -679,6 +683,13 @@ class _ExperimentRow extends StatelessWidget {
       final on = store.isOn(experiment);
       void toggle(bool next) {
         HapticFeedback.selectionClick();
+        // Swarm is turned on from its page, which says first what it does; off, it goes at once.
+        if (next && experiment == PhoneExperiment.swarm) {
+          unawaited(
+            Navigator.of(context).push(phoneRoute((_) => SwarmIntroPage(features: store))),
+          );
+          return;
+        }
         unawaited(store.set(experiment, next));
       }
 

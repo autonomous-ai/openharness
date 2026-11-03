@@ -22,11 +22,40 @@ const envSchema = z.object({
   // manager socket may land on different backend instances; Redis pub/sub bridges them
   // (channels up:{machineId} / down:{machineId}) plus an agent→manager presence key. See lib/bus.ts.
   REDIS_URL: z.string().default('redis://localhost:6379'),
+  // The longest one Redis command may take on the shared command connection (lib/bus.ts). Redis answers in well under a
+  // millisecond; past this it is stuck, and a request should not wait on it (Stability 3.5).
+  REDIS_COMMAND_TIMEOUT_MS: z.coerce.number().int().positive().default(1_000),
+  // Signed-in requests per route, across every pod (middlewares/routeRateLimit.ts). Far above what a working client
+  // sends, so only a loop meets them. 0 turns one off. Revisit with per-route counts from the ingress logs.
+  // Per caller and second: the agent or machine the route names (with its person), else the person.
+  ROUTE_RATE_LIMIT_PER_CALLER_SECOND: z.coerce.number().int().min(0).default(50),
+  // Per person and minute, whatever agents or machines the calls name. The busiest working client is an older CLI's
+  // delivery poll, one call a second per running agent. A late poll can land in the next minute, so a minute can see an
+  // agent 61 times: 200 agents are 12200. 15000 leaves room above that.
+  ROUTE_RATE_LIMIT_PER_PERSON_MINUTE: z.coerce.number().int().min(0).default(15_000),
+  // Per person and second, whatever agents or machines the calls name, so made-up ids cannot spend the minute's budget
+  // at once. 200 agents polling once a second can land up to 400 in one second when polls arrive late: 500 is above it.
+  ROUTE_RATE_LIMIT_PER_PERSON_SECOND: z.coerce.number().int().min(0).default(500),
   // What each process keeps of the Swarms it read, by their stamps in Redis (superTabs/cache.ts). 'off' is the kill switch:
   // every read goes to Mongo again, while writes still bump the stamps, so processes that keep theirs on stay right.
   SWARM_READ_CACHE: z.enum(['on', 'off']).default('on'),
+  // The read cache patches what it holds from the parts that changed (superTabs/cache.ts, spec 2026-11-02); off: a bump drops it.
+  SWARM_CACHE_DELTA: z.enum(['on', 'off']).default('on'),
+  // The share of patches checked against a full load in the background: the drift alarm in the `swarm cache` log.
+  SWARM_CACHE_VERIFY_RATE: z.coerce.number().min(0).max(1).default(0.01),
+  // A frame an adapter sends for one viewer goes to the process holding that viewer (lib/terminalRoute.ts), found by its
+  // record in Redis, instead of to every process with a viewer of the machine. 'off' is the kill switch: such frames go
+  // through the machine's channels again; a viewer on the adapter's own process is still served directly.
+  TERMINAL_POD_ROUTES: z.enum(['on', 'off']).default('on'),
+  // `__clients` tells each daemon it may hold a machine's live events while no app views it (lib/hub.ts). 'off' is the
+  // kill switch: the frame stops saying so, and daemons send every event again with no release of their own.
+  RELAY_UI_GATE: z.enum(['on', 'off']).default('on'),
   // Its size per process, counted as the JSON size of what it holds.
   SWARM_CACHE_MB: z.string().default('64').transform(Number),
+  // The worker's hourly move of finished deliveries older than 14 days into their messages' receipts
+  // (superTabs/deliveryCompaction.ts). 'off' is the kill switch: set it before rolling back to a release whose pages do not
+  // read compacted receipts.
+  SWARM_DELIVERY_COMPACTION: z.enum(['on', 'off']).default('on'),
 
   // This backend instance's stable id (used to route manager-command replies via Redis in a
   // multi-instance deploy). Defaults to the pm2 instance index or a per-process fallback.
@@ -126,6 +155,11 @@ const envSchema = z.object({
   // How long a token the profile API just accepted is trusted without asking again (0 = ask every
   // time). This is also the longest a token revoked at the SSO keeps working here.
   SSO_PROFILE_CACHE_TTL_MS: z.coerce.number().int().min(0).default(60_000),
+  // While the profile service cannot answer (down, slow, circuit open), a token this process validated up to this long
+  // past its TTL keeps working, so an SSO outage does not sign out people who are working (lib/ssoProfileCache.ts).
+  // Never past the token's own expiry, never for a token the service rejected. The cost: during an outage a token revoked
+  // at the SSO keeps working this long. Off (0) until the owner decides; 600000 (10 min) is the value it was built for.
+  SSO_PROFILE_STALE_GRACE_MS: z.coerce.number().int().min(0).default(0),
   // Forces the SSO account picker so users can switch accounts (not silently auto-login the last one).
   // Set to '' to disable, or 'login' to force re-entering credentials.
   SSO_PROMPT: z.string().default('select_account'),

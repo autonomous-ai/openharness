@@ -28,6 +28,17 @@ void main() {
         ),
       )!;
       expect((device.machineId, device.agentId), ('@device', 'pub+k='));
+      // A Swarm tag's toast: its Swarm tab and tag survive the link.
+      final tag = NotificationLink.parse(
+        NotificationLink.build(
+          SystemNotifications.mentionNoticeMachine,
+          '0123456789abcdef01234567/5f0c2a',
+        ),
+      )!;
+      expect((tag.machineId, tag.agentId), (
+        '@mention',
+        '0123456789abcdef01234567/5f0c2a',
+      ));
     });
 
     test('the bare link names no agent', () {

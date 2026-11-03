@@ -38,7 +38,9 @@ abstract final class AppIcons {
   static const arrowDown = LucideIcons.arrowDown400;
   static const arrowUpRight = LucideIcons.arrowUpRight400;
   static const bell = LucideIcons.bell400;
+  static const bellOff = LucideIcons.bellOff400;
   static const bellRing = LucideIcons.bellRing400;
+  static const book = LucideIcons.book400;
   static const bookOpen = LucideIcons.bookOpen400;
   static const bot = LucideIcons.bot400;
   static const box = LucideIcons.box400;
@@ -122,6 +124,7 @@ abstract final class AppIcons {
   static const info = LucideIcons.info400;
   static const keyboard = LucideIcons.keyboard400;
   static const laptop = LucideIcons.laptop400;
+  static const mail = LucideIcons.mail400;
   static const layers = LucideIcons.layers400;
   static const layoutGrid = LucideIcons.layoutGrid400;
   static const link2 = LucideIcons.link2400;

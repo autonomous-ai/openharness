@@ -77,7 +77,7 @@ describe('approvals', () => {
       findFirst: vi.fn(async ({ where }: { where: { autonomousEnv: string; tabId: string; repository: string; projectId: { in: string[] } } }) =>
         rows.find(r => r.autonomousEnv === where.autonomousEnv && r.tabId === where.tabId && r.repository === where.repository && where.projectId.in.includes(r.projectId!)) ?? null),
       upsert: vi.fn(async ({ create }: { create: Record<string, string> }) => { rows.push(create); return create }),
-    } }
+    }, gitHubApprovalRefusal: { deleteMany: vi.fn(async () => ({ count: 0 })) } }
     const approvals = new PrismaApprovals(db as never)
     expect(await approvals.approved('prod', 'tab', 'p1', 'alice/a')).toBe(false)
     await approvals.approve(request, 'alice')
@@ -88,5 +88,47 @@ describe('approvals', () => {
     expect(rows.at(-1)!.projectId).toBe(WHOLE_SWARM)
     expect(await approvals.approved('prod', 'tab', 'p2', 'alice/a')).toBe(true)
     expect(await approvals.approved('prod', 'other-tab', 'p2', 'alice/a')).toBe(false)
+  })
+
+  // Design 2026-10-30: the app shows "You can push" to someone who allowed the repository before, and asks someone GitHub
+  // refused to send it on, instead of offering the same sign-in again.
+  it('remember what GitHub said about the reader, and forget a refusal once the repository is allowed', async () => {
+    const approved: Array<Record<string, string>> = [], refused: Array<Record<string, string>> = []
+    const same = (r: Record<string, string>, w: Record<string, unknown>) => Object.entries(w).every(([k, v]) => r[k] === v)
+    const db = {
+      gitHubRepositoryApproval: {
+        findFirst: vi.fn(async ({ where }: { where: Record<string, unknown> }) => approved.find(r => same(r, where)) ?? null),
+        upsert: vi.fn(async ({ create }: { create: Record<string, string> }) => { approved.push(create); return create }),
+      },
+      gitHubApprovalRefusal: {
+        findUnique: vi.fn(async ({ where }: { where: { autonomousEnv_tabId_repository_projectId_userId: Record<string, string> } }) =>
+          refused.find(r => same(r, where.autonomousEnv_tabId_repository_projectId_userId)) ?? null),
+        upsert: vi.fn(async ({ where, update, create }: { where: { autonomousEnv_tabId_repository_projectId_userId: Record<string, string> };
+          update: Record<string, unknown>; create: Record<string, string> }) => {
+          const row = refused.find(r => same(r, where.autonomousEnv_tabId_repository_projectId_userId))
+          if (row) Object.assign(row, update); else refused.push(create)
+        }),
+        deleteMany: vi.fn(async ({ where }: { where: Record<string, unknown> }) => {
+          for (let i = refused.length - 1; i >= 0; i--) if (same(refused[i]!, where)) refused.splice(i, 1)
+        }),
+      },
+    }
+    const approvals = new PrismaApprovals(db as never)
+    expect(await approvals.reader('prod', 'tab', 'p1', 'alice/a', 'alice')).toBeNull()
+    await approvals.refuse(request, 'bob-gh')
+    await approvals.refuse(request, 'bob-gh2')
+    expect(refused).toHaveLength(1)
+    expect(await approvals.reader('prod', 'tab', 'p1', 'Alice/A', 'alice')).toEqual({ canPush: false, githubLogin: 'bob-gh2' })
+    expect(await approvals.reader('prod', 'tab', 'p1', 'alice/a', 'someone-else')).toBeNull()
+    // Someone else allows it: the refusal goes, and whoever allowed it reads as able to push, in the Swarm's other projects and
+    // in their other Swarms too.
+    await approvals.approve({ ...request, userId: 'user-2' }, 'carol')
+    expect(refused).toHaveLength(0)
+    expect(await approvals.reader('prod', 'tab', 'p2', 'alice/a', 'user-2')).toEqual({ canPush: true, githubLogin: 'carol' })
+    expect(await approvals.reader('prod', 'another-swarm', 'p9', 'alice/a', 'user-2')).toEqual({ canPush: true, githubLogin: 'carol' })
+    expect(await approvals.reader('dev', 'another-swarm', 'p9', 'alice/a', 'user-2')).toBeNull()
+    await approvals.refuse({ ...request, projectId: 'p2' }, 'bob-gh')
+    await approvals.approve({ ...request, scope: 'swarm', userId: 'user-2' }, 'carol')
+    expect(refused).toHaveLength(0)
   })
 })

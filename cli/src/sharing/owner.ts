@@ -98,8 +98,10 @@ export class HarnessShareOwner {
   private authorized(observer: Observer): boolean {
     if (observer.linkId) {
       const link = this.deps.collaboration?.active(observer.linkId, this.deps.machineId())
+      // A session that turns confidential closes its links' viewers too, as it refuses them at open (`receive`).
       return !!link && !!this.deps.resolveAgent(link.agentId) && (link.visibility === 'public'
         || observer.author?.owner === true || this.invited(link.agentId, observer.grant.recipientEmail))
+        && (this.deps.allowsGrant?.(observer.grant) ?? true)
     }
     return !!this.deps.grants.active(observer.grant.id, observer.grant.recipientEmail, this.deps.machineId())
       && (this.deps.allowsGrant?.(observer.grant) ?? true)

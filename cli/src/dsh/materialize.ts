@@ -81,6 +81,7 @@ export async function materializeWorkspace(dsh: InstalledDsh, workspace: string,
       env: { HARNESS_DSH: dsh.id, HARNESS_DSH_DIR: dsh.realDir, HARNESS_WORKSPACE: workspace, ...dshAccountEnv(account) },
       onLine: (line) => result.initLines.push(line),
       timeoutMs: 5 * 60_000,
+      purpose: 'workspace init',
     })
     if (init.code !== 0 || init.timedOut) {
       result.warnings.push(`init exited ${init.timedOut ? 'by timeout' : init.code ?? init.signal}`)

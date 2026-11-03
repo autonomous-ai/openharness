@@ -1,25 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
-import type { ChildProcess } from 'node:child_process'
+import { dirname, join, win32 } from 'node:path'
+import { spawnSync, type ChildProcess } from 'node:child_process'
 
 // Two switches, both off by default: `sh` makes commands run under plain `/bin/sh -c` (as when no user
 // shell is known) so output is exactly the command's; `fakeChild` hands runDshCommand a scripted child.
-const seams = vi.hoisted(() => ({ sh: false, fakeChild: null as null | (() => ChildProcess) }))
+// `started` collects the pid of each real process spawned, for a test that needs the shell's own.
+const seams = vi.hoisted(() => ({ sh: false, fakeChild: null as null | (() => ChildProcess), started: [] as Array<number | undefined> }))
 vi.mock('../lib/engineLaunch.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/engineLaunch.js')>()
   return { ...actual, interactiveEngineShell: (shell?: string) => (seams.sh ? null : actual.interactiveEngineShell(shell)) }
 })
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>()
-  const spawn = ((...args: Parameters<typeof actual.spawn>) => (seams.fakeChild ? seams.fakeChild() : actual.spawn(...args))) as typeof actual.spawn
+  const spawn = ((...args: Parameters<typeof actual.spawn>) => {
+    if (seams.fakeChild) return seams.fakeChild()
+    const child = actual.spawn(...args)
+    seams.started.push(child.pid)
+    return child
+  }) as typeof actual.spawn
   return { ...actual, spawn, default: { ...actual, spawn } }
 })
 
 const { managedNodePath } = await import('../lib/nodeRuntime.js')
-const { dshNodeFallback, dshShellArgv, isKilledJobReport, isShellNoise, killProcessGroup, runDshCommand, spawnDshCommand } = await import('./shell.js')
+const { dshNodeFallback, dshShellArgv, dshShellAvailable, isKilledJobReport, isShellNoise, killProcessGroup, runDshCommand, spawnDshCommand } = await import('./shell.js')
 
 describe('dshShellArgv', () => {
   const original = process.env.SHELL
@@ -42,6 +48,72 @@ describe('dshShellArgv', () => {
     } finally {
       seams.sh = false
     }
+  })
+})
+
+describe('dshShellArgv on Windows', () => {
+  const gitBash = () => 'C:\\Program Files\\Git\\bin\\bash.exe'
+
+  it('runs setup and doctor through Git Bash as a login shell, never /bin/sh, which Windows has not', () => {
+    const { path, args } = dshShellArgv('./doctor.sh', { platform: 'win32', gitBash })
+    expect(path).toBe('C:\\Program Files\\Git\\bin\\bash.exe')
+    expect(args).toHaveLength(2)
+    expect(args[0]).toBe('-lic')
+    expect(args[1].endsWith('\n./doctor.sh')).toBe(true)
+  })
+
+  it('says to install Git for Windows when there is no Git Bash, instead of trying a shell that is not there', () => {
+    expect(() => dshShellArgv('./doctor.sh', { platform: 'win32', gitBash: () => null }))
+      .toThrow('This harness runs a setup or check script, which needs Git Bash on Windows, and it was not found. Install Git for Windows from https://git-scm.com/download/win (or run: winget install --id Git.Git -e), then try again.')
+  })
+
+  it('names what could not start when it is a viewer or a workspace init, which are not setup or check scripts', () => {
+    expect(() => dshShellArgv('./viewer.sh', { platform: 'win32', gitBash: () => null }, 'viewer'))
+      .toThrow("This harness's viewer needs Git Bash on Windows, and it was not found. Install Git for Windows")
+    expect(() => dshShellArgv('./init.sh', { platform: 'win32', gitBash: () => null }, 'workspace init'))
+      .toThrow("This harness's workspace init needs Git Bash on Windows, and it was not found. Install Git for Windows")
+  })
+
+  describe('the script it runs, in a real bash', () => {
+    let dir: string
+    beforeEach(() => { dir = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-gitbash-'))) })
+    afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
+
+    it('ignores a profile\'s `node` alias and finds Harness\'s Node through cygpath when PATH has none', () => {
+      // Git Bash profiles can say `alias node='winpty node.exe'`, and winpty fails without a terminal ("stdin is not a
+      // tty"). Harness's Node is a C:\ folder, which Git Bash's PATH cannot hold until cygpath writes it as /c/....
+      const home = join(dir, 'home'); const stubs = join(dir, 'stubs'); const runtime = join(dir, 'runtime')
+      for (const folder of [home, stubs, runtime]) mkdirSync(folder)
+      writeFileSync(join(home, '.bash_profile'), "alias node='echo winpty-node'\n")
+      writeFileSync(join(runtime, 'node'), '#!/bin/sh\necho harness-node\n', { mode: 0o755 })
+      writeFileSync(join(stubs, 'cygpath'), `#!/bin/sh\n[ "$1" = -u ] && [ "$2" = -- ] || exit 9\nprintf '%s\\n' "$3" > '${join(dir, 'asked')}'\nprintf '%s\\n' '${runtime}'\n`, { mode: 0o755 })
+      const { args } = dshShellArgv('node', { platform: 'win32', gitBash: () => '/bin/bash' })
+      const ran = spawnSync('/bin/bash', args, { cwd: dir, encoding: 'utf8', env: { HOME: home, PATH: stubs } })
+      expect(ran.stdout).toBe('harness-node\n')
+      expect(readFileSync(join(dir, 'asked'), 'utf8')).toBe(`${win32.dirname(managedNodePath())}\n`)
+    })
+
+    it('runs setup and doctor in the harness folder, though a login Git Bash goes home', async () => {
+      // Git for Windows' /etc/profile changes to $HOME in a login shell unless CHERE_INVOKING is set; this profile
+      // does the same, so the command would otherwise run in the home folder, not the harness's.
+      const home = join(dir, 'home'); const stubs = join(dir, 'stubs'); const harness = join(dir, 'harness')
+      for (const folder of [home, stubs, harness]) mkdirSync(folder)
+      writeFileSync(join(home, '.bash_profile'), '[ -n "$CHERE_INVOKING" ] || cd "$HOME"\n')
+      writeFileSync(join(stubs, 'cygpath'), `#!/bin/sh\nprintf '%s\\n' '${stubs}'\n`, { mode: 0o755 })
+      const result = await runDshCommand('echo "ran in $(pwd)"', { cwd: harness, env: { HOME: home, PATH: stubs }, host: { platform: 'win32', gitBash: () => '/bin/bash' } })
+      // Only the script's own line: this is a real login bash, and the host's /etc/profile says what it likes (Ubuntu's
+      // CI runner: 'run-parts: command not found', with the PATH the test gives it).
+      expect(result.lines.filter((line) => line.startsWith('ran in '))).toEqual([`ran in ${harness}`])
+    })
+  })
+})
+
+describe('dshShellAvailable', () => {
+  it('is on wherever there is a shell for setup and doctor: a POSIX system, or Windows with Git Bash', () => {
+    expect(dshShellAvailable({ platform: 'darwin' })).toBe(true)
+    expect(dshShellAvailable({ platform: 'linux', gitBash: () => null })).toBe(true)
+    expect(dshShellAvailable({ platform: 'win32', gitBash: () => 'C:\\Program Files\\Git\\bin\\bash.exe' })).toBe(true)
+    expect(dshShellAvailable({ platform: 'win32', gitBash: () => null })).toBe(false)
   })
 })
 
@@ -85,6 +157,15 @@ describe('isShellNoise', () => {
     expect(isShellNoise('logout')).toBe(true)
     expect(isShellNoise('  ok   bash: no job control in this shell')).toBe(false)
     expect(isShellNoise('logout failed')).toBe(false)
+  })
+
+  it('keeps a line that names some other bash: only bash itself, or the paths it is installed at, says the notice', () => {
+    // Review of #2025: any `<path>/bash: no job control in this shell` was dropped, a script's own line included.
+    expect(isShellNoise('scripts/bash: no job control in this shell')).toBe(false)
+    expect(isShellNoise('./bash: no job control in this shell')).toBe(false)
+    expect(isShellNoise('/home/ana/project/bash: cannot set terminal process group (-1): Inappropriate ioctl for device')).toBe(false)
+    expect(isShellNoise('mybash: no job control in this shell')).toBe(false)
+    expect(isShellNoise('/bin/bash: cannot set terminal process group (4242): Inappropriate ioctl for device')).toBe(true)
   })
 })
 
@@ -131,6 +212,26 @@ describe('runDshCommand', () => {
     expect(result.timedOut).toBe(true)
     expect(result.lines).toEqual(['started'])
     expect(Date.now() - started).toBeLessThan(10_000)
+  })
+
+  it('on Windows, ends the whole tree of a Git Bash run that outlives its timeout, not the shell alone', async () => {
+    // Windows has no process groups: a signal to the group reached nothing, and the one to the shell ended Git Bash's
+    // launcher alone, leaving what the doctor started running (review of #2025). Here a real bash stands in for Git
+    // Bash, and the stand-in for the tree killer ends its group, as TerminateProcess down the tree does there.
+    const ended: number[] = []
+    const endTree = async (pid: number): Promise<void> => { ended.push(pid); process.kill(-pid, 'SIGKILL') }
+    // The shell's pid is taken from the spawn, not from what the shell prints: a login bash reads the host's profile
+    // first, and on the Linux runner that outlived the timeout, so the script never printed it (#2069 in CI). This
+    // home's profile is as slow, so every host takes the same path.
+    writeFileSync(join(dir, '.bash_profile'), 'sleep 5\n')
+    seams.started = []
+    const result = await runDshCommand('sleep 30 & wait', {
+      cwd: dir, timeoutMs: 300, env: { HOME: dir, PATH: '/usr/bin:/bin' },
+      host: { platform: 'win32', gitBash: () => '/bin/bash', endTree },
+    })
+    expect(result.timedOut).toBe(true)
+    expect(seams.started).toHaveLength(1)
+    expect(ended).toEqual(seams.started)
   })
 
   it('does not take the shell\'s report of the job its stop ended for the command\'s output', async () => {

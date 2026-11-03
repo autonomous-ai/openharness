@@ -77,9 +77,10 @@ These defaults hold for every command; the table adds what is specific.
   `H`, which holds the role sets, so a concurrent `project.role.*` conflicts.
 - **D10 Delivery rows follow group rules (rule b).** `conversation.archive`, `conversation.agent` (`present:false`) and
   `conversation.audience` change what `deliveryAllowed` (`store.ts:1410-1425`) accepts without cancelling rows today.
-  They must bump `updatedAt` on the affected queued/claimed/uncertain delivery rows (no status change; archive keeps
-  today's "comes back when reopened" behavior), so a concurrent claim conflicts on the row (section 3.5).
-  `conversation.audience` additionally cancels rows authored by people it removes.
+  They must write the affected queued/claimed/uncertain delivery rows, so a concurrent claim conflicts on the row
+  (section 3.5). Archive and `present:false` cancel them (2026-10-28: kept for a reopening, deliveries in archived
+  groups waited unread for days; `superTabs/deliverySettle.ts` ends any other open delivery that can no longer move);
+  `conversation.audience` bumps `updatedAt` and additionally cancels rows authored by people it removes.
 - Side writes into existing collections (`SuperTabRun`, session scopes, configurations, role texts, route decisions,
   terminal requests, mentions, attachments, attempts, native contexts) are unchanged from today's `executeOnce`
   (`store.ts:661-838`) and are not repeated below.

@@ -5,22 +5,21 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/pm_chat_rows.dart';
+import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/humans_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
-/// The sidebar's rows: a direct message click highlights only that row; a
-/// project's name opens its chat and only the chevron at its right end shows
-/// or hides its conversations (Dee, 2026-10-28); a machine click expands it,
-/// and its details are in the right-click menu.
+/// The sidebar's rows: a Buddy chat click highlights only that row; a
+/// project's row opens its chat and a second click shows or hides its
+/// conversations (Quiet Swarm); in Manage, a machine click
+/// expands it, and its details are in the right-click menu.
 void main() {
-  final dm = find.byKey(const ValueKey('super-pm-chat-lead'));
+  final dm = find.byKey(const ValueKey('super-buddy-lead'));
   final project = find.byKey(const ValueKey('super-group-lead'));
   final workgroup = find.byKey(const ValueKey('super-group-offline'));
   final machine = find.byKey(const ValueKey('super-machine-studio'));
-  final toggle = find.byKey(const ValueKey('super-project-toggle-lead'));
   final more = find.byKey(const ValueKey('super-project-more-lead'));
 
   Future<SuperTabController> show(
@@ -68,35 +67,67 @@ void main() {
   );
 
   testWidgets(
-    'a direct message click highlights only that row and leaves projects collapsed',
+    'a Buddy chat click highlights only that row and leaves projects collapsed',
     (tester) async {
       final controller = await show(tester, humansSwarm());
       // Its chat exists already: opening it again is a plain selection.
-      await controller.openPmChat('lead');
+      await controller.openBuddyChat('lead');
       await controller.select('lead');
       controller.expandedProjects.clear();
       await tester.pumpAndSettle();
 
       await tester.tap(dm);
       await tester.pumpAndSettle();
-      expect(controller.selectedId, controller.pmChat('lead')!.id);
+      expect(controller.selectedId, controller.buddyChat('lead')!.id);
       expect(controller.expandedProjects, isEmpty);
       expect(workgroup, findsNothing);
-      expect(tester.widget<SuperTabPmChatRow>(dm).selected, isTrue);
+      expect(tester.widget<SuperTabBuddyRow>(dm).selected, isTrue);
       await close(tester, controller);
     },
   );
 
   testWidgets(
-    'a direct message opened for the first time leaves projects collapsed',
+    'a Buddy chat opened for the first time leaves projects collapsed',
     (tester) async {
       final controller = await show(tester, humansSwarm());
       controller.expandedProjects.clear();
       await tester.pumpAndSettle();
       await tester.tap(dm);
       await tester.pumpAndSettle();
-      expect(controller.selectedId, controller.pmChat('lead')!.id);
+      expect(controller.selectedId, controller.buddyChat('lead')!.id);
       expect(controller.expandedProjects, isEmpty);
+      await close(tester, controller);
+    },
+  );
+
+  testWidgets(
+    'a Buddy click leaves a collapsed project collapsed and an expanded one expanded',
+    (tester) async {
+      final controller = await show(tester, humansSwarm());
+      // A task of the project is open, and its list was then hidden: the
+      // project shows as selected, as in the report.
+      await controller.select('offline');
+      controller.toggleProject('lead');
+      await tester.pumpAndSettle();
+      expect(controller.expandedProjects, isEmpty);
+      expect(controller.selectedId, 'offline');
+
+      await tester.tap(dm);
+      await tester.pumpAndSettle();
+      expect(controller.selectedId, controller.buddyChat('lead')!.id);
+      expect(controller.expandedProjects, isEmpty);
+      expect(workgroup, findsNothing);
+
+      // Open, and a task selected: the Buddy click leaves the list showing.
+      controller.toggleProject('lead');
+      await tester.pumpAndSettle();
+      await controller.select('offline');
+      await tester.pumpAndSettle();
+      await tester.tap(dm);
+      await tester.pumpAndSettle();
+      expect(controller.selectedId, controller.buddyChat('lead')!.id);
+      expect(controller.expandedProjects, {'lead'});
+      expect(workgroup, findsOneWidget);
       await close(tester, controller);
     },
   );
@@ -105,7 +136,7 @@ void main() {
     'a project name click opens its chat and leaves its list as it was',
     (tester) async {
       final controller = await show(tester, humansSwarm());
-      await controller.openPmChat('lead');
+      await controller.openBuddyChat('lead');
       controller.expandedProjects.clear();
       await tester.pumpAndSettle();
 
@@ -115,9 +146,9 @@ void main() {
       expect(controller.expandedProjects, isEmpty);
       expect(workgroup, findsNothing);
 
-      // Open, and the chat left for a direct message: the name comes back to
+      // Open, and the chat left for the Buddy chat: the name comes back to
       // it without closing the list.
-      await tester.tap(toggle);
+      controller.toggleProject('lead');
       await tester.tap(dm);
       await tester.pumpAndSettle();
       await tester.tap(find.text('Pilot'));
@@ -130,56 +161,164 @@ void main() {
   );
 
   testWidgets(
-    'the chevron at the far right of a project toggles its list and leaves the chat open',
+    'a second click on the open project toggles its list and leaves its chat open',
     (tester) async {
       final controller = await show(tester, humansSwarm());
-      await controller.openPmChat('lead');
+      await controller.openBuddyChat('lead');
       controller.expandedProjects.clear();
       await tester.tap(dm);
       await tester.pumpAndSettle();
-      final chat = controller.selectedId;
-      Icon chevron() => tester.widget<Icon>(chevronIn(toggle));
-      expect(chevron().icon, AppIcons.chevronRight);
-      expect(
-        tester.getCenter(toggle).dx,
-        greaterThan(tester.getRect(project).right),
-      );
+      expect(chevronIn(project), findsNothing);
 
-      await tester.tap(toggle);
+      // The first opens its chat, and leaves its list.
+      await tester.tap(project);
+      await tester.pumpAndSettle();
+      expect(controller.selectedId, 'lead');
+      expect(controller.expandedProjects, isEmpty);
+
+      await tester.tap(project);
       await tester.pumpAndSettle();
       expect(controller.expandedProjects, {'lead'});
       expect(workgroup, findsOneWidget);
-      expect(chevron().icon, AppIcons.chevronDown);
-      expect(controller.selectedId, chat);
+      expect(controller.selectedId, 'lead');
 
-      await tester.tap(toggle);
+      await tester.tap(project);
       await tester.pumpAndSettle();
       expect(controller.expandedProjects, isEmpty);
       expect(workgroup, findsNothing);
-      expect(controller.selectedId, chat);
+      expect(controller.selectedId, 'lead');
       await close(tester, controller);
     },
   );
 
-  testWidgets('an unread project shows its dot just left of the chevron', (
+  // Unread is a bold name and nothing else drawn (Dee, 2026-10-29): no dot
+  // beside it, so nothing in the status column to line up.
+  Finder unreadDot(Finder row) => find.descendant(
+    of: row,
+    matching: find.byWidgetPredicate(
+      (w) =>
+          w is Container &&
+          w.decoration is BoxDecoration &&
+          (w.decoration! as BoxDecoration).shape == BoxShape.circle &&
+          // A dot holds nothing; an avatar holds its initial.
+          w.child == null,
+    ),
+  );
+  // What a screen reader says for the row, its children merged into it.
+  String spoken(WidgetTester tester, Finder row) =>
+      tester.getSemantics(row).getSemanticsData().label;
+  FontWeight? weightOf(WidgetTester tester, Finder row, String text) => tester
+      .widget<RichText>(
+        find
+            .descendant(
+              of: row,
+              matching: find.byWidgetPredicate(
+                (w) => w is RichText && w.text.toPlainText() == text,
+              ),
+            )
+            .first,
+      )
+      .text
+      .style
+      ?.fontWeight;
+
+  testWidgets(
+    'an unread project and workgroup show their names in bold, with no dot',
+    (tester) async {
+      // Not "Offline editing": it waits for a person, which shows "?" there.
+      final server = humansSwarm();
+      addNumberedWorkgroups(server, 1);
+      final controller = await show(tester, server);
+      controller.toggleProject('lead');
+      await tester.pumpAndSettle();
+      final g1 = find.byKey(const ValueKey('super-group-g1'));
+      final name = tester
+          .widget<RichText>(
+            find.descendant(of: g1, matching: find.byType(RichText)).first,
+          )
+          .text
+          .toPlainText();
+      // Read: the project open (medium), the workgroup in ordinary weight.
+      expect(weightOf(tester, project, 'Pilot'), isNot(grid.AppFont.semibold));
+      expect(weightOf(tester, g1, name), grid.AppFont.regular);
+
+      server.append('New work', conversationId: 'g1');
+      await controller.select('offline');
+      await controller.refresh();
+      await tester.pumpAndSettle();
+      // Open, the project's row is its own chat's, as in Slack: only the
+      // workgroup with news is bold (Dee, 10-31).
+      expect(weightOf(tester, project, 'Pilot'), isNot(grid.AppFont.semibold));
+      expect(weightOf(tester, g1, name), grid.AppFont.semibold);
+      expect(unreadDot(project), findsNothing);
+      expect(unreadDot(g1), findsNothing);
+      // Collapsed, it is bold for what it hides.
+      controller.toggleProject('lead');
+      await tester.pumpAndSettle();
+      expect(weightOf(tester, project, 'Pilot'), grid.AppFont.semibold);
+      await close(tester, controller);
+    },
+  );
+
+  testWidgets(
+    'a screen reader hears an unread row as unread, and a read one not',
+    (tester) async {
+      final semantics = tester.ensureSemantics();
+      final server = humansSwarm();
+      addNumberedWorkgroups(server, 2);
+      final controller = await show(tester, server);
+      controller.toggleProject('lead');
+      await tester.pumpAndSettle();
+      final g1 = find.byKey(const ValueKey('super-group-g1'));
+      final g2 = find.byKey(const ValueKey('super-group-g2'));
+      expect(spoken(tester, project), isNot(contains('Unread messages')));
+      expect(spoken(tester, g1), isNot(contains('Unread messages')));
+
+      server.append('New work', conversationId: 'g1');
+      await controller.select('offline');
+      await controller.refresh();
+      await tester.pumpAndSettle();
+      expect(spoken(tester, project), isNot(contains('Unread messages')));
+      expect(spoken(tester, g1), contains('Unread messages'));
+      expect(spoken(tester, g2), isNot(contains('Unread messages')));
+      // Collapsed, the project is heard as unread for what it hides.
+      controller.toggleProject('lead');
+      await tester.pumpAndSettle();
+      expect(spoken(tester, project), contains('Unread messages'));
+      semantics.dispose();
+      await close(tester, controller);
+    },
+  );
+
+  testWidgets('an unread Buddy row is bold with no dot, and heard as unread', (
     tester,
   ) async {
-    // Not "Offline editing": it waits for a person, which shows "?" there.
-    final server = humansSwarm();
-    addNumberedWorkgroups(server, 1);
-    final controller = await show(tester, server);
-    server.append('New work', conversationId: 'g1');
-    await controller.refresh();
-    await tester.pumpAndSettle();
-    final dot = find.descendant(
-      of: project,
-      matching: find.byWidgetPredicate(
-        (w) => w is Semantics && w.properties.label == 'Unread messages',
+    final semantics = tester.ensureSemantics();
+    Future<void> row({required bool unread}) => tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.light),
+        home: Scaffold(
+          body: SuperTabBuddyRow(
+            key: const ValueKey('pm'),
+            agentId: null,
+            name: 'Buddy',
+            tooltip: 'Your Buddy · Pilot',
+            unread: unread,
+            onTap: () {},
+          ),
+        ),
       ),
     );
-    expect(dot, findsOneWidget);
-    expect(tester.getCenter(dot).dx, lessThan(tester.getRect(toggle).left));
-    await close(tester, controller);
+    final pm = find.byKey(const ValueKey('pm'));
+    final tappable = find.descendant(of: pm, matching: find.byType(InkWell));
+    await row(unread: false);
+    expect(weightOf(tester, pm, 'Buddy'), grid.AppFont.regular);
+    expect(spoken(tester, tappable), isNot(contains('Unread messages')));
+    await row(unread: true);
+    expect(weightOf(tester, pm, 'Buddy'), grid.AppFont.semibold);
+    expect(unreadDot(pm), findsNothing);
+    expect(spoken(tester, tappable), contains('Unread messages'));
+    semantics.dispose();
   });
 
   testWidgets(
@@ -189,7 +328,7 @@ void main() {
       var controller = await show(tester, server);
       expect(controller.expandedProjects, isEmpty);
       expect(workgroup, findsNothing);
-      await tester.tap(toggle);
+      controller.toggleProject('lead');
       await tester.pumpAndSettle();
       await close(tester, controller);
 
@@ -215,7 +354,6 @@ void main() {
 
       controller = await reopen('peer');
       expect(workgroup, findsOneWidget);
-      expect(tester.widget<Icon>(chevronIn(toggle)).icon, AppIcons.chevronDown);
       await close(tester, controller);
 
       controller = await reopen('owner');
@@ -230,7 +368,7 @@ void main() {
       final server = humansSwarm();
       addNumberedWorkgroups(server, 11);
       final controller = await show(tester, server);
-      await tester.tap(toggle);
+      controller.toggleProject('lead');
       await tester.pumpAndSettle();
 
       Finder row(String id) => find.byKey(ValueKey('super-group-$id'));
@@ -296,7 +434,7 @@ void main() {
       final controller = await show(tester, server);
       server.append('New work', conversationId: 'g1');
       await controller.refresh();
-      await tester.tap(toggle);
+      controller.toggleProject('lead');
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('super-group-g1')), findsOneWidget);
       expect(find.byKey(const ValueKey('super-group-g2')), findsOneWidget);
@@ -321,12 +459,12 @@ void main() {
       await tester.pumpAndSettle();
       expect(projectFill(), Colors.transparent);
 
-      await tester.tap(toggle);
+      controller.toggleProject('lead');
       await tester.pumpAndSettle();
       expect(controller.selectedId, 'g1');
       expect(projectFill(), grid.AppSurface.selectedFill);
 
-      await tester.tap(toggle);
+      controller.toggleProject('lead');
       await tester.pumpAndSettle();
       expect(projectFill(), Colors.transparent);
       await close(tester, controller);
@@ -337,20 +475,18 @@ void main() {
     tester,
   ) async {
     final controller = await show(tester, humansSwarm());
-    await tester.tap(toggle);
+    controller.toggleProject('lead');
     await tester.pumpAndSettle();
     expect(controller.expandedProjects, {'lead'});
     Focus.of(tester.element(find.text('Pilot'))).requestFocus();
     await tester.pumpAndSettle();
 
-    // Already open: → goes on to the chevron beside the name.
+    final name = primaryFocus;
+    // Already open: → goes on from the name.
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pumpAndSettle();
     expect(controller.expandedProjects, {'lead'});
-    expect(
-      primaryFocus?.context?.findAncestorWidgetOfExactType<InkWell>()?.key,
-      const ValueKey('super-project-toggle-lead'),
-    );
+    expect(primaryFocus, isNot(same(name)));
     await close(tester, controller);
   });
 
@@ -358,7 +494,7 @@ void main() {
     'Enter on a project name opens it; → and ← show and hide its conversations',
     (tester) async {
       final controller = await show(tester, humansSwarm());
-      await controller.openPmChat('lead');
+      await controller.openBuddyChat('lead');
       controller.expandedProjects.clear();
       await tester.tap(dm);
       await tester.pumpAndSettle();
@@ -386,13 +522,14 @@ void main() {
     },
   );
 
-  testWidgets('the focused chevron toggles with Enter and with Space', (
+  testWidgets('the focused open project toggles with Enter and with Space', (
     tester,
   ) async {
     final controller = await show(tester, humansSwarm());
     controller.expandedProjects.clear();
     await tester.pumpAndSettle();
-    Focus.of(tester.element(chevronIn(toggle))).requestFocus();
+    expect(controller.selectedId, 'lead');
+    Focus.of(tester.element(find.text('Pilot'))).requestFocus();
     await tester.pumpAndSettle();
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
@@ -407,6 +544,8 @@ void main() {
     'a machine click expands and collapses it; Details is in its right-click menu',
     (tester) async {
       final controller = await show(tester, humansSwarm());
+      await tester.tap(find.byKey(const ValueKey('super-manage')));
+      await tester.pumpAndSettle();
       expect(chevronIn(machine), findsNothing);
       expect(controller.isMachineExpanded('studio'), isFalse);
 

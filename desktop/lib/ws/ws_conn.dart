@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../core/app_version.dart';
 import '../core/sleep_aware.dart';
 import '../core/test_run.dart';
 import '../logging/app_log.dart';
@@ -43,10 +44,65 @@ Duration reconnectDelay(int attempt, Random random) {
   );
 }
 
+/// How many times a Desktop connection that has never been up retries quickly while it opens
+/// ([firstConnectRetryDelay]). It says connecting through them: nothing has been lost yet, and
+/// `reconnecting` is what marks a machine offline. Few, because each can cost the daemon a backend
+/// dial, and only once per connection: the socket that fails at once for good goes on to the backoff.
+const firstConnectRetries = 3;
+
+/// The wait before the [attempt]th retry of a first connect, of [firstConnectRetries]. Opening used
+/// to spend these tries on the backoff's 0.5 to 7 s, on top of the 1 and 2 s the daemon itself holds a
+/// failed machine for (a retry inside that hold is answered from its memory, without a dial).
+Duration firstConnectRetryDelay(int attempt) => attempt <= 1
+    ? const Duration(milliseconds: 500)
+    : const Duration(seconds: 1);
+
+/// How long a Desktop connection that has never been up goes on saying connecting, past its quick
+/// tries. `reconnecting` marks a machine offline, and a daemon just started has its backend some
+/// seconds later (6 s on 10-30): those seconds are not a computer that is off. As long as the
+/// daemon's own wait for one dial. A relay that says the machine is off is believed at once ([_park]).
+const firstConnectWindow = Duration(seconds: 15);
+
 /// How long a connection has to stay up before its next drop starts the backoff over. Resetting it
 /// the moment a socket was up made a socket the backend dropped right after its handshake redial
 /// every second, for good: about 54 dials a minute from one browser tab (prod, 2026-10-28).
 const connectionStableAfter = Duration(minutes: 1);
+
+/// This build's version, which every backend socket it dials says (`?v=`), read once at start-up
+/// ([rememberAppVersionForSockets]). Null until then, and a socket dialled before says no version.
+String? declaredAppVersion;
+
+/// The read behind [declaredAppVersion] while it is out; null natively before start-up and in tests.
+Future<void>? appVersionRead;
+
+/// Reads this build's version for [declaredAppVersion]; a build that cannot say leaves it null.
+Future<void> rememberAppVersionForSockets() {
+  final read = () async {
+    try {
+      declaredAppVersion = await runningAppVersion();
+    } catch (_) {
+      // Sockets go on saying what they are, without a version.
+    }
+  }();
+  appVersionRead = read;
+  return read;
+}
+
+/// How long a backend dial waits for [appVersionRead]: the browser reads its version from the
+/// host's release file, and a socket dialled before that read lands would carry none.
+const _appVersionWait = Duration(seconds: 1);
+
+/// The backend's refusals of a `machine_select` that no redial can change: the machine left the
+/// account or was never shared with it, it belongs to another environment, or its subscription stops
+/// it (`backend/src/lib/webWs.ts`). Through this computer's daemon they arrive as the relay's close,
+/// with the code for its reason (`cli/src/localWsServer.ts`). Prod, 2026-10-28: a laptop removed in
+/// September was still selected every few seconds.
+const finalSelectRefusals = {
+  'NOT_YOUR_MACHINE',
+  'MACHINE_ENV_MISMATCH',
+  'MACHINE_PAYMENT_PENDING',
+  'MACHINE_SUBSCRIPTION_REQUIRED',
+};
 
 /// A `request()` call got no reply within its timeout — distinct from other request-level errors
 /// (an explicit `{error: ...}` response) so callers can tell "the peer is unresponsive" apart from
@@ -99,6 +155,27 @@ class WsRequestFailure implements Exception {
 
 /// One SSO-authenticated, machine-scoped connection to `/api/web-ws`.
 class WsConn {
+  /// Above this a frame decodes in an isolate. Starting one holds this thread about 3 ms itself, the time of a decode of about
+  /// this size on a current Mac (566 KB took 7 ms, measured for #2195), so below it the isolate would cost more than it saves.
+  static const largeFrameChars = 256 * 1024;
+
+  /// How a large frame decodes; tests hold it to see the order.
+  @visibleForTesting
+  static Future<Object?> Function(String raw) decodeLargeFrame =
+      decodeInIsolate;
+
+  /// The decoded frame, or null for what will not parse. `compute` hands the result back without a copy, and runs inline on the web.
+  static Future<Object?> decodeInIsolate(String raw) =>
+      compute(_decodeOrNull, raw);
+
+  static Object? _decodeOrNull(String raw) {
+    try {
+      return jsonDecode(raw);
+    } catch (_) {
+      return null;
+    }
+  }
+
   final String wsBaseUrl;
   final String autonomousEnv;
   final String machineId;
@@ -160,6 +237,9 @@ class WsConn {
   @visibleForTesting
   final CloudSocketFactory? cloudSocket;
 
+  /// [firstConnectWindow]; a test's own.
+  final Duration firstConnectFor;
+
   /// The reconnect jitter's source. Null is a fresh [Random].
   final Random _random;
 
@@ -183,6 +263,12 @@ class WsConn {
   bool _connecting = false;
   bool _ready = false;
   int _attempt = 0;
+
+  /// Has been up at least once. Until then, a Desktop connection is still on its first connect.
+  bool _everReady = false;
+
+  /// From the first dial to the first time up, for the log: what opening the app waited for.
+  Stopwatch? _firstConnect;
   Timer? _reconnectTimer;
   Timer? _stableTimer;
   Timer? _observerHandshakeTimer;
@@ -199,6 +285,56 @@ class WsConn {
   Future<void> _inboundTail = Future<void>.value();
 
   bool get isReady => _ready && _channel != null;
+
+  /// Waiting for its machine, which the daemon's relay said is off ([_park]).
+  bool get isParked => _parked;
+  bool _parked = false;
+
+  /// The rechecks dialled in a row on their own, each parked again: what doubles the next wait.
+  int _parkedRechecks = 0;
+  static const _recheck = 'recheck';
+
+  /// The wait before a parked connection dials again on its own after [rechecks] of them in a
+  /// row: 30 s, then a minute, 2, 4, 8, and 15 at most. Anything that says the machine is back
+  /// [wake]s it. The first is the relay's own retry-after for an offline machine (backend
+  /// `OFFLINE_RETRY_AFTER_MS`): a wake that reaches the daemon while it still answers from that
+  /// refusal parks again, and a machine back online must not then wait a minute more.
+  static Duration parkedRecheckAfter(int rechecks) {
+    final wait = const Duration(seconds: 30) * (1 << min(max(rechecks, 0), 5));
+    return wait > const Duration(minutes: 15)
+        ? const Duration(minutes: 15)
+        : wait;
+  }
+
+  /// The daemon's relay refused this machine as off (`MACHINE_OFFLINE`): wait for it.
+  ///
+  /// ⚠️ **Why (prod, 2026-10-28).** Daemon relays made 2,304 of 2,308 backend socket opens in 15
+  /// minutes, living a median 0.4 s. A relayed machine that was off was redialled on the 15–30 s
+  /// backoff for as long as the app ran, and each dial cost the daemon a backend socket refused at
+  /// once: about 2.7 a minute for every machine that was off, in every window.
+  void _park() {
+    _parked = true;
+    _reconnectTimer?.cancel();
+    final wait = parkedRecheckAfter(_parkedRechecks);
+    _reconnectTimer = Timer(wait, () => wake(_recheck));
+    onStatus(ConnectionStatus.reconnecting);
+    appLog.info(
+      'ws',
+      'parked $machineId · the relay says it is off; recheck in ${wait.inSeconds}s',
+    );
+  }
+
+  /// Dial a parked connection now: the machine is reported back, or somebody asks for it. Its own
+  /// recheck makes the next wait longer; anything else starts the waits over.
+  void wake(String reason) {
+    if (!_parked || _closing) return;
+    _parked = false;
+    _parkedRechecks = reason == _recheck ? _parkedRechecks + 1 : 0;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _attempt = 0;
+    unawaited(connect());
+  }
 
   /// Wait for this machine's handshake without queuing a request or changing
   /// its timeout. Callers can then start independent RPCs with their own budgets.
@@ -272,6 +408,7 @@ class WsConn {
     this.transportPlugins,
     this.cloudSocket,
     Random? random,
+    @visibleForTesting this.firstConnectFor = firstConnectWindow,
   }) : _random = random ?? Random();
 
   /// The socket to dial, decided afresh on every connect: whether the file is
@@ -328,20 +465,26 @@ class WsConn {
     if (Platform.isWindows && !(kUnderTest && allowLocalTcpFixture)) {
       throw StateError('The local daemon pipe is unavailable');
     }
-    final transport =
-        localTransport ??
-        LocalDaemonTransport(
-          credential: kUnderTest ? null : readDaemonCredential,
-        );
+    final transport = localTransport ?? LocalDaemonTransport.detect(uri);
+    if (!transport.portAllowed) {
+      throw StateError('The local daemon socket is unavailable');
+    }
     return IOWebSocketChannel.connect(uri, headers: transport.tcpHeaders());
   }
 
   Future<void> connect() async {
     if (_closing || _connecting) return;
+    // A dial asked for while parked (a forced redial) is the recheck's too.
+    if (_parked) {
+      _parked = false;
+      _reconnectTimer?.cancel();
+      _reconnectTimer = null;
+    }
     _connecting = true;
     _ready = false;
+    _firstConnect ??= Stopwatch()..start();
     onStatus(
-      _attempt == 0
+      _attempt == 0 || _saysConnecting
           ? ConnectionStatus.connecting
           : ConnectionStatus.reconnecting,
     );
@@ -385,6 +528,17 @@ class WsConn {
         }
         uri = local;
       } else {
+        final versionRead = appVersionRead;
+        if (versionRead != null && declaredAppVersion == null) {
+          await versionRead.timeout(
+            _appVersionWait,
+            // Waited out once: a read that never ends must not hold every later dial too.
+            onTimeout: () {
+              if (identical(appVersionRead, versionRead)) appVersionRead = null;
+            },
+          );
+          if (_closing) return;
+        }
         final base = Uri.parse(
           '$wsBaseUrl/api/${_directObserver ? 'observer-ws' : 'web-ws'}',
         );
@@ -395,8 +549,10 @@ class WsConn {
             if (_directObserver)
               (observerLink ? 'link' : 'share'): observerShareId!,
             // The browser counts its person as on the web today (backend
-            // user_daily_client_presence). Not other viewer builds: they are not the web.
-            if (!_directObserver && kIsWeb) 'client': 'web',
+            // user_daily_client_presence). Other viewer builds say they are the desktop app,
+            // which counts no presence. Both say which build (WebSocket roadmap Phase 0).
+            'client': kIsWeb ? 'web' : 'desktop',
+            'v': ?declaredAppVersion,
           },
         );
       }
@@ -469,8 +625,44 @@ class WsConn {
     }
   }
 
+  /// Frames behind a large one wait for it, whatever their kind, so nothing overtakes it.
+  Future<void> _decodeTail = Future<void>.value();
+  int _decoding = 0;
+
   void _onRaw(dynamic raw) {
-    final codec = _codec;
+    // A frame belongs to the connection it came on, sealed or not, whenever its turn comes: once
+    // that connection has gone, it reaches nothing, and its seal is never read afresh.
+    final channel = _channel, codec = _codec;
+    if (_decoding == 0 && !(raw is String && raw.length >= largeFrameChars)) {
+      _handleRaw(raw, codec);
+      return;
+    }
+    _decoding++;
+    _decodeTail = _decodeTail
+        .then((_) async {
+          bool gone() => _closing || !identical(_channel, channel);
+          if (gone()) return;
+          if (raw is String && raw.length >= largeFrameChars) {
+            Object? decoded;
+            try {
+              decoded = await decodeLargeFrame(raw);
+            } catch (_) {
+              // No isolate to be had: as it always was, on this thread.
+              decoded = _decodeOrNull(raw);
+            }
+            if (gone()) return;
+            if (decoded is Map<String, dynamic>) _handleMessage(decoded, codec);
+          } else {
+            _handleRaw(raw, codec);
+          }
+        })
+        .catchError((Object _) {
+          // Keep the queue alive: one frame that fails is dropped, as a bad frame always was.
+        })
+        .whenComplete(() => _decoding--);
+  }
+
+  void _handleRaw(dynamic raw, RelayCodec? codec) {
     if (raw is List<int>) {
       final bytes = Uint8List.fromList(raw);
       _inboundTail = _inboundTail
@@ -491,6 +683,11 @@ class WsConn {
     } catch (_) {
       return;
     }
+    _handleMessage(message, codec);
+  }
+
+  void _handleMessage(Map<String, dynamic> message, RelayCodec? codec) {
+    if (message['type'] == 'machine_select_error') _selectRefused(message);
     if (codec != null) {
       _inboundTail = _inboundTail
           .then((_) => _onRelayFrame(codec, message))
@@ -525,7 +722,17 @@ class WsConn {
 
   void _markReady() {
     _observerHandshakeTimer?.cancel();
+    _parkedRechecks = 0;
     _ready = true;
+    if (!_everReady) {
+      _everReady = true;
+      // The short id and the times only: what a person's opening really took, on their own Mac.
+      appLog.debug(
+        'ws',
+        'first connect ${machineId.length > 8 ? machineId.substring(0, 8) : machineId} '
+            'in ${_firstConnect?.elapsedMilliseconds ?? 0} ms, $_attempt retries',
+      );
+    }
     _refreshedToken = null;
     _stableTimer?.cancel();
     _stableTimer = Timer(connectionStableAfter, () => _attempt = 0);
@@ -998,6 +1205,17 @@ class WsConn {
     }
     final code = channel.closeCode;
     if (isLocal) {
+      if (channel.closeReason == 'MACHINE_OFFLINE') {
+        _park();
+        return;
+      }
+      if (finalSelectRefusals.contains(channel.closeReason)) {
+        // The relay could not select the machine, for good: told as a 4404 is, never redialled.
+        _closing = true;
+        onLocalFailure?.call(code ?? 1011, channel.closeReason!);
+        onStatus(ConnectionStatus.disconnected);
+        return;
+      }
       if (code == 4404 || (observerShareId != null && code == 4403)) {
         _closing = true;
         // needsLink first: AppNotifier's onStatus handler reads machine.needsLink
@@ -1045,6 +1263,24 @@ class WsConn {
     _scheduleReconnect();
   }
 
+  /// The backend refused this socket's select. The app still hears it ([onEvent]); a refusal no
+  /// redial can change also ends the connection, which would otherwise sit open and unselected.
+  void _selectRefused(Map<String, dynamic> message) {
+    final payload = message['payload'];
+    if (payload is! Map || payload['machineId'] != machineId) return;
+    if (_closing || _ready || !finalSelectRefusals.contains(payload['error'])) {
+      return;
+    }
+    _closing = true;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _disposePlugin();
+    onStatus(ConnectionStatus.disconnected);
+    final channel = _channel;
+    _channel = null;
+    unawaited(channel?.sink.close().catchError((Object _) {}));
+  }
+
   Future<void> _refreshAndReconnect() async {
     onStatus(ConnectionStatus.reconnecting);
     try {
@@ -1065,12 +1301,38 @@ class WsConn {
     }
   }
 
+  /// A Desktop connection that has not been up yet, within its quick retries. A browser's sockets
+  /// each reach the backend itself, so it keeps the plain backoff.
+  bool get _onFirstConnect =>
+      isLocal && !_everReady && _attempt <= firstConnectRetries;
+
+  /// Nothing has been lost yet: its quick tries, or the seconds of [firstConnectFor].
+  bool get _saysConnecting =>
+      _onFirstConnect ||
+      (isLocal &&
+          !_everReady &&
+          (_firstConnect?.elapsed ?? Duration.zero) < firstConnectFor);
+
   void _scheduleReconnect() {
     if (_closing) return;
     _attempt++;
-    onStatus(ConnectionStatus.reconnecting);
+    onStatus(
+      _saysConnecting
+          ? ConnectionStatus.connecting
+          : ConnectionStatus.reconnecting,
+    );
     _reconnectTimer?.cancel();
-    final delay = fixedReconnectDelay ?? reconnectDelay(_attempt, _random);
+    final delay =
+        fixedReconnectDelay ??
+        (_onFirstConnect
+            ? firstConnectRetryDelay(_attempt)
+            // The backoff starts from its beginning once the quick tries are spent.
+            : reconnectDelay(
+                isLocal && !_everReady
+                    ? _attempt - firstConnectRetries
+                    : _attempt,
+                _random,
+              ));
     _reconnectTimer = Timer(delay, connect);
   }
 

@@ -78,6 +78,10 @@ class HarnessFileStore implements BatchLocalKeyValueStore {
     });
   }
 
+  /// The keys the document holds, without their values.
+  Future<Set<String>> keys() =>
+      _serialized(() async => (await _readDocument()).keys.toSet());
+
   @override
   Future<void> write(String key, String value) => _serialized(() async {
     final values = await _readDocument();

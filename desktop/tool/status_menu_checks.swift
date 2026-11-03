@@ -256,7 +256,7 @@ do {
   let bindings: [[String: Any]] = [
     ["keys": ["cmd+shift+k"], "command": "harnesses.list", "hint": "⇧⌘K", "repeatable": false, "menuAction": "sessions"],
   ]
-  let map = HarnessNativeKeymap(["version": 1, "contexts": ["workspace": bindings, "terminal": [], "picker": [], "project": []]])!
+  let map = HarnessNativeKeymap(["version": 1, "contexts": ["workspace": bindings, "terminal": [], "picker": [], "project": [], "swarmChat": []]])!
   status.updateKeymap(map, context: "workspace")
   status.update(["enabled": true, "statusMenuEntries": []])
   try check(status.item("sessions").keyEquivalent == "k" &&

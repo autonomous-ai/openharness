@@ -16,6 +16,13 @@ export function workHolds(state: Pick<SuperTabState, 'agents' | 'conversations'>
   })
 }
 
+/** The holds [after] has that [before] did not: a task newly in progress, or one in progress again (resumed after a
+ *  usage limit lost it, under the same id). */
+export function startedHolds(before: Pick<SuperTabState, 'agents' | 'conversations'>, after: Pick<SuperTabState, 'agents' | 'conversations'>): WorkHold[] {
+  const was = new Set(workHolds(before).map(hold => `${hold.agentId}:${hold.assignmentId}`))
+  return workHolds(after).filter(hold => !was.has(`${hold.agentId}:${hold.assignmentId}`))
+}
+
 /** The holds in [before] that [after] no longer has: the task ended, went to another agent or attempt, or its agent left. */
 export function endedHolds(before: Pick<SuperTabState, 'agents' | 'conversations'>, after: Pick<SuperTabState, 'agents' | 'conversations'>): WorkHold[] {
   const still = new Set(workHolds(after).map(hold => `${hold.agentId}:${hold.assignmentId}`))

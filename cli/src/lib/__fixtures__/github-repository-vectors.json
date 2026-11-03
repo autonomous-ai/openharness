@@ -1,0 +1,290 @@
+{
+  "about": "What a pasted GitHub repository address means, held to by both cli/src/lib/githubRepository.spec.ts and desktop/test/github_repository_vectors_test.dart, so the daemon and the desktop app clone the same way. Hand-written: change it deliberately, then both implementations.",
+  "parse": [
+    {
+      "input": "https://github.com/autonomous-ai/openharness",
+      "expect": {
+        "url": "https://github.com/autonomous-ai/openharness.git",
+        "owner": "autonomous-ai",
+        "name": "openharness",
+        "transport": "https"
+      }
+    },
+    {
+      "input": "  https://github.com/Org/Repo.git/  ",
+      "expect": {
+        "url": "https://github.com/Org/Repo.git",
+        "owner": "Org",
+        "name": "Repo",
+        "transport": "https"
+      }
+    },
+    {
+      "input": "github.com/org/repo",
+      "expect": {
+        "url": "https://github.com/org/repo.git",
+        "owner": "org",
+        "name": "repo",
+        "transport": "https"
+      }
+    },
+    {
+      "input": "org/repo",
+      "expect": {
+        "url": "https://github.com/org/repo.git",
+        "owner": "org",
+        "name": "repo",
+        "transport": "https"
+      }
+    },
+    {
+      "input": "git@github.com:org/repo.git",
+      "expect": {
+        "url": "git@github.com:org/repo.git",
+        "owner": "org",
+        "name": "repo",
+        "transport": "ssh"
+      }
+    },
+    {
+      "input": "git@github.com:org/repo",
+      "expect": {
+        "url": "git@github.com:org/repo.git",
+        "owner": "org",
+        "name": "repo",
+        "transport": "ssh"
+      }
+    },
+    {
+      "input": "git@gh-kelvin1295:autonomous-ai/autonomous-grid-be.git",
+      "expect": {
+        "url": "git@gh-kelvin1295:autonomous-ai/autonomous-grid-be.git",
+        "owner": "autonomous-ai",
+        "name": "autonomous-grid-be",
+        "transport": "alias",
+        "alias": "gh-kelvin1295"
+      }
+    },
+    {
+      "input": "git@work.github:org/repo",
+      "expect": {
+        "url": "git@work.github:org/repo.git",
+        "owner": "org",
+        "name": "repo",
+        "transport": "alias",
+        "alias": "work.github"
+      }
+    },
+    {
+      "input": "git@-oProxyCommand=evil:org/repo",
+      "expect": null
+    },
+    {
+      "input": "git@.hidden:org/repo",
+      "expect": null
+    },
+    {
+      "input": "me@gh-kelvin1295:org/repo",
+      "expect": null
+    },
+    {
+      "input": "git@gh-kelvin1295:org",
+      "expect": null
+    },
+    {
+      "input": "git@gh-kelvin1295:org/repo/extra",
+      "expect": null
+    },
+    {
+      "input": "https://github.com/autonomous-ai",
+      "expect": null
+    },
+    {
+      "input": "https://github.com/org/repo/tree/main",
+      "expect": null
+    },
+    {
+      "input": "https://user:token@github.com/org/repo",
+      "expect": null
+    },
+    {
+      "input": "https://gitlab.com/org/repo",
+      "expect": null
+    },
+    {
+      "input": "http://github.com/org/repo",
+      "expect": null
+    },
+    {
+      "input": "https://github.com/org/repo?tab=readme",
+      "expect": null
+    },
+    {
+      "input": "https://github.com/org/..",
+      "expect": null
+    },
+    {
+      "input": "ssh://git@github.com/org/repo.git",
+      "expect": null
+    },
+    {
+      "input": "~/Projects/repo",
+      "expect": null
+    },
+    {
+      "input": "",
+      "expect": null
+    },
+    {
+      "input": "https://github.com/org/repo?",
+      "expect": null
+    },
+    {
+      "input": "https://github.com/org/repo#",
+      "expect": null
+    },
+    {
+      "input": "https://github.com/org/re%70o",
+      "expect": null
+    },
+    {
+      "input": "https://github.com/org/re\tpo",
+      "expect": null
+    }
+  ],
+  "identity": [
+    {
+      "address": "https://github.com/Org/Repo.git",
+      "hosts": {},
+      "expect": "github.com/org/repo"
+    },
+    {
+      "address": "git@github.com:org/repo.git",
+      "hosts": {},
+      "expect": "github.com/org/repo"
+    },
+    {
+      "address": "git@gh-kelvin1295:Org/Repo.git",
+      "hosts": {
+        "gh-kelvin1295": "github.com"
+      },
+      "expect": "github.com/org/repo"
+    },
+    {
+      "address": "git@gh-kelvin1295:org/repo.git",
+      "hosts": {},
+      "expect": "gh-kelvin1295/org/repo"
+    },
+    {
+      "address": "git@gitlab-work:org/repo.git",
+      "hosts": {
+        "gitlab-work": "gitlab.com"
+      },
+      "expect": "gitlab.com/org/repo"
+    },
+    {
+      "address": "/Users/me/repo",
+      "hosts": {},
+      "expect": null
+    },
+    {
+      "address": "ssh://git@gh-kelvin1295/Org/Repo.git",
+      "hosts": {
+        "gh-kelvin1295": "github.com"
+      },
+      "expect": "github.com/org/repo"
+    },
+    {
+      "address": "git+ssh://git@gh-kelvin1295/org/repo",
+      "hosts": {
+        "gh-kelvin1295": "github.com"
+      },
+      "expect": "github.com/org/repo"
+    },
+    {
+      "about": "An https host is a real host name, never an SSH alias.",
+      "address": "https://gh-kelvin1295/org/repo",
+      "hosts": {
+        "gh-kelvin1295": "github.com"
+      },
+      "expect": "gh-kelvin1295/org/repo"
+    },
+    {
+      "about": "GitHub's SSH over port 443 is GitHub.",
+      "address": "git@gh-443:org/repo.git",
+      "hosts": {
+        "gh-443": "ssh.github.com"
+      },
+      "expect": "github.com/org/repo"
+    }
+  ],
+  "attempts": [
+    {
+      "about": "A browser link: the other transport, then the computer's GitHub aliases.",
+      "input": "https://github.com/org/repo",
+      "aliases": [
+        "gh-a",
+        "gh-b"
+      ],
+      "expect": [
+        "https://github.com/org/repo.git",
+        "git@github.com:org/repo.git",
+        "git@gh-a:org/repo.git",
+        "git@gh-b:org/repo.git"
+      ]
+    },
+    {
+      "input": "git@github.com:org/repo.git",
+      "aliases": [],
+      "expect": [
+        "git@github.com:org/repo.git",
+        "https://github.com/org/repo.git"
+      ]
+    },
+    {
+      "about": "A pasted alias goes first and is not tried twice.",
+      "input": "git@gh-b:org/repo.git",
+      "aliases": [
+        "gh-a",
+        "gh-b"
+      ],
+      "expect": [
+        "git@gh-b:org/repo.git",
+        "https://github.com/org/repo.git",
+        "git@github.com:org/repo.git",
+        "git@gh-a:org/repo.git"
+      ]
+    },
+    {
+      "about": "At most three aliases.",
+      "input": "https://github.com/org/repo",
+      "aliases": [
+        "a1",
+        "a2",
+        "a3",
+        "a4"
+      ],
+      "expect": [
+        "https://github.com/org/repo.git",
+        "git@github.com:org/repo.git",
+        "git@a1:org/repo.git",
+        "git@a2:org/repo.git",
+        "git@a3:org/repo.git"
+      ]
+    },
+    {
+      "about": "An alias list never holds github.com itself or an unsafe name.",
+      "input": "https://github.com/org/repo",
+      "aliases": [
+        "github.com",
+        "-oX",
+        "gh-a"
+      ],
+      "expect": [
+        "https://github.com/org/repo.git",
+        "git@github.com:org/repo.git",
+        "git@gh-a:org/repo.git"
+      ]
+    }
+  ]
+}

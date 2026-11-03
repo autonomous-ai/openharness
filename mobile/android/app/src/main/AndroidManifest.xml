@@ -13,7 +13,7 @@
          request, which Android confirms with its own sheet. Neither is a runtime permission. -->
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <!-- Taking a picture to send to an agent. Picking an EXISTING picture needs
+    <!-- Taking a picture to send to an agent or into a Swarm chat. Picking an EXISTING picture needs
          no permission at all: image_picker goes through ACTION_GET_CONTENT / the
          photo picker, which hands back one item the user chose rather than
          opening the library — hence no READ_MEDIA_IMAGES here. -->
@@ -52,6 +52,21 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- harness://swarm/<tab>/<conversation>/<message>: the message link Desktop's Copy
+                 link to message makes. MainActivity hands it to Dart over `harness/links`, which
+                 opens the chat at that message; the link names ids only and grants nothing. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="harness" android:host="swarm" />
+            </intent-filter>
+            <!-- Off: a message link goes through `harness/links`, never Flutter's own route push,
+                 which this app's navigator has no route for. -->
+            <meta-data
+              android:name="flutter_deeplinking_enabled"
+              android:value="false"
+              />
         </activity>
         <!-- "Back to Harness" on the last page of "Continue with Google / Apple": brings the app
              back over the Custom Tab the sign-in ran in, and takes the tab down with it (see

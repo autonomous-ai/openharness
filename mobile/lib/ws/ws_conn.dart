@@ -506,6 +506,46 @@ class WsConn {
     unawaited(channel.sink.close().catchError((Object _) {}));
   }
 
+  /// Refusals no redial can change: the machine left the account or was never shared with it, it
+  /// belongs to another environment, or its subscription stops it. Every code the relay's
+  /// `machine_select` answers with besides these may pass (`backend/src/lib/webWs.ts`).
+  static const _finalSelectRefusals = {
+    'NOT_YOUR_MACHINE',
+    'MACHINE_ENV_MISMATCH',
+    'MACHINE_PAYMENT_PENDING',
+    'MACHINE_SUBSCRIPTION_REQUIRED',
+  };
+
+  /// The relay refused this connection's select. The app still hears the refusal ([onEvent]); the
+  /// connection stops here for good when no redial can change it, or else waits out its backoff.
+  ///
+  /// ⚠️ **Why (prod, 2026-10-28).** Nothing here read the refusal, so [_armSelectWatchdog] took the
+  /// silence after it for a relay gone quiet and redialled six seconds later, for as long as the app
+  /// was open: a laptop removed from the account in September was still selected every ~7 s, about
+  /// 20 dials in ten minutes from one phone, each a fresh credential, key and TLS dial.
+  void _selectRefused(Map<String, dynamic> message) {
+    final payload = message['payload'];
+    if (payload is! Map || payload['machineId'] != machineId) return;
+    if (_closing || _ready) return;
+    _selectWatchdog?.cancel();
+    _selectWatchdog = null;
+    final code = '${payload['error'] ?? ''}';
+    appLog.info('ws', 'machine_select refused for $machineId: $code');
+    if (!_finalSelectRefusals.contains(code)) {
+      _abandonDial(_channel);
+      _scheduleReconnect();
+      return;
+    }
+    _closing = true;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _disposePlugin();
+    onStatus(ConnectionStatus.disconnected);
+    final channel = _channel;
+    _channel = null;
+    unawaited(channel?.sink.close().catchError((Object _) {}));
+  }
+
   void _signOut(String message) {
     _closing = true;
     onStatus(ConnectionStatus.disconnected);
@@ -623,6 +663,7 @@ class WsConn {
     } catch (_) {
       return;
     }
+    if (message['type'] == 'machine_select_error') _selectRefused(message);
     if (codec != null) {
       _inboundTail = _inboundTail
           .then((_) {

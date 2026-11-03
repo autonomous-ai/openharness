@@ -17,8 +17,8 @@ import { resign, shareIdOf } from './sharedTabsFixtures.js'
 import type { TaskReader, TaskResult } from './tasks.js'
 import { ACTIVITY_IDLE_KEEP_MS, ACTIVITY_LEASE_MS, ACTIVITY_REFUSED_MS } from './tabActivity.js'
 import { VERSION } from '../version.js'
-import { POLL_MS } from './directory.js'
-import { HELD_LEFT_REASON, HELD_OUTSIDE_MS, LEFT_AFTER_HANDOVER_REASON, LEFT_TAB_REASON, SHARES_COALESCE_MS, startAgentMessages, TASKS_WAIT_MS, TICK_MS, WHO_MS, WHO_WAIT_MS } from './service.js'
+import { SAFETY_NET_MS } from './directory.js'
+import { HELD_LEFT_REASON, HELD_OUTSIDE_MS, LEFT_AFTER_HANDOVER_REASON, LEFT_TAB_REASON, MISSED_TAB_READ_MS, SHARES_COALESCE_MS, startAgentMessages, TASKS_WAIT_MS, TICK_MS, WHO_MS, WHO_WAIT_MS } from './service.js'
 
 /* The service's side of shared tabs (sharedTabs.ts has its own spec): when they run, what reaches them, and how the
  * owner's panes and machines' keys are read for them. */
@@ -1782,7 +1782,7 @@ describe('messages across accounts, through a shared tab\'s relay', () => {
         t.service.stop()
       })
 
-      it('reads the desk again for a tab it does not know at most once in POLL_MS, so made-up ids cannot drive backend reads', async () => {
+      it('reads the desk again for a tab it does not know at most once in MISSED_TAB_READ_MS, so made-up ids cannot drive backend reads', async () => {
         let clock = Date.now()
         const { t } = await unshared({ now: () => clock })
         const reads = () => t.calls.filter((c) => c === 'GET /api/agent-messages').length
@@ -1792,7 +1792,7 @@ describe('messages across accounts, through a shared tab\'s relay', () => {
           clock += 3_000
         }
         expect(reads() - before).toBeLessThanOrEqual(1)
-        clock += POLL_MS
+        clock += MISSED_TAB_READ_MS
         const mid = reads()
         for (const id of ['y1', 'y2']) {
           expect(await t.ask({ action: 'tab_activity', tabId: id })).toMatchObject({ error: 'NOT_A_TAB' })
@@ -2088,18 +2088,18 @@ describe('messages across accounts, through a shared tab\'s relay', () => {
     // The tabs change, the leader does not: the shares are not read for it.
     let before = shareReads()
     desk.push({ machineId: 'm1', agentId: 'late' })
-    await tick(POLL_MS)
+    await tick(SAFETY_NET_MS)
     expect(shareReads()).toBe(before)
     // The leader changed, and no `desk_changed` came: the next read of the tabs has the roster follow it.
     before = shareReads()
     t.leaders.set('app', { machineId: 'm1', agentId: 'lead' })
-    await tick(POLL_MS)
+    await tick(SAFETY_NET_MS)
     expect(shareReads()).toBe(before + 1)
     expect(leaderPut(t)).toEqual({ machineId: 'm1', agentId: 'lead' })
     // Followed: the tabs read again with nothing new read the shares no more.
     before = shareReads()
     desk.push({ machineId: 'm1', agentId: 'later' })
-    await tick(POLL_MS)
+    await tick(SAFETY_NET_MS)
     expect(shareReads()).toBe(before)
     t.service.stop()
   }))

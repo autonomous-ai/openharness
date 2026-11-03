@@ -17,6 +17,12 @@ harness_node 22.12 >/dev/null || true
 venv=0
 .venv/bin/python -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1 \
   || { echo "miss .venv (the pipeline's Python >= 3.10) — run toolchain/setup.sh"; venv=1; }
+# New Codex projects run the contract-first team, whose jobs are `codex exec --output-schema`; an older
+# Codex starts the tile and then fails the first team job.
+codex=0
+if command -v codex >/dev/null 2>&1 && ! codex exec --help 2>/dev/null | grep -q -- '--output-schema'; then
+  echo "miss codex $(codex --version 2>/dev/null | head -1) has no \`exec --output-schema\` — the KiCad team cannot run; update Codex"; codex=1
+fi
 kicad=0
 have="$(harness_kicad_version || true)"
 if [ "$have" = "$KICAD_VERSION" ]; then
@@ -29,4 +35,4 @@ CIRCUIT_TOOLCHAIN="${CIRCUIT_TOOLCHAIN:-$PWD/upstream/toolchain}" CIRCUIT_PYTHON
   KICADPY_CLI="${KICADPY_CLI:-$KICAD_CLI}" KICADPY_PYTHON="${KICADPY_PYTHON:-$KICAD_PYTHON}" CIRCUIT_KICAD_CLI="${CIRCUIT_KICAD_CLI:-$KICAD_CLI}" \
   upstream/harness/kicad/toolchain/doctor.sh
 code=$?
-exit $((code ? code : venv ? venv : kicad))
+exit $((code ? code : venv ? venv : kicad ? kicad : codex))

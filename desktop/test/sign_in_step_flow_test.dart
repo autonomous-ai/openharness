@@ -1,9 +1,12 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/auth/cli_login.dart';
+import 'package:harness/auth/phone_sign_in.dart';
 import 'package:harness/auth/sign_in_provider.dart';
 import 'package:harness/bootstrap/environment_provisioner.dart';
 import 'package:harness/core/config.dart';
@@ -34,8 +37,42 @@ class _Login extends CliLogin {
   @override
   Future<void> logout() async => loggedIn = false;
 
+  /// Each phone scan or code sign-in begun: what it shows, the account question, and its end.
+  final approvals = <_Approval>[];
+
   @override
-  void cancel() => cancels++;
+  void cancel() {
+    cancels++;
+    // What the real one does to the attempt it stops: its process is killed and its wait throws.
+    for (final approval in approvals) {
+      if (!approval.done.isCompleted) {
+        approval.done.completeError(StateError('Sign-in was cancelled.'));
+      }
+    }
+  }
+
+  @override
+  Future<void> loginWithPhone({
+    required void Function(String link, int expiresIn) onQr,
+    required Future<bool> Function(String email) onConfirm,
+  }) => _approve(ApprovalSignIn.phone, onQr, onConfirm);
+
+  @override
+  Future<void> loginWithCode({
+    required void Function(String code, int expiresIn) onCode,
+    required Future<bool> Function(String email) onConfirm,
+  }) => _approve(ApprovalSignIn.code, onCode, onConfirm);
+
+  Future<void> _approve(
+    ApprovalSignIn method,
+    void Function(String, int) show,
+    Future<bool> Function(String) confirm,
+  ) async {
+    final approval = _Approval(method, show, confirm);
+    approvals.add(approval);
+    await approval.done.future;
+    loggedIn = true;
+  }
 
   @override
   Future<void> login({
@@ -48,6 +85,16 @@ class _Login extends CliLogin {
     if (fail) throw StateError('The sign-in page could not be reached.');
     loggedIn = true;
   }
+}
+
+/// One phone scan or code sign-in as the CLI runs it: [show] is its QR link or code (again each time
+/// it is kept alive), [confirm] asks whose account approved it, [done] is how it ends.
+class _Approval {
+  _Approval(this.method, this.show, this.confirm);
+  final ApprovalSignIn method;
+  final void Function(String shown, int expiresIn) show;
+  final Future<bool> Function(String email) confirm;
+  final done = Completer<void>();
 }
 
 class _Api extends ApiClient {
@@ -363,5 +410,292 @@ void main() {
     app.selectEnvironmentSetupMode(EnvironmentSetupMode.manual);
     expect(app.setupTourShowing, isFalse);
     expect(app.signInStepShowing, isTrue);
+  });
+
+  group('Sign in on another device and Scan with your phone', () {
+    test('the code shows, another device approves it, and the person here '
+        'says whose account it is', () async {
+      final app = _Desktop(_Login());
+      addTearDown(app.dispose);
+      await app.bootstrap();
+      app.finishSetupTour();
+
+      final signIn = app.approveFromStep(ApprovalSignIn.code);
+      await _settle();
+      final attempt = app.cli.approvals.single;
+      expect(attempt.method, ApprovalSignIn.code);
+      expect(app.approvalSignIn, ApprovalSignIn.code);
+      // Nothing to show until the CLI has its code.
+      expect(app.pendingSignInCode, isNull);
+      expect(app.signInStepShowing, isTrue);
+
+      attempt.show('12345678', 120);
+      expect(app.pendingSignInCode, '12345678');
+      expect(app.pendingQrLink, isNull);
+      expect(app.signInStepShowing, isTrue);
+
+      // Machines ▸ Approve a device on a signed-in computer (faked): the CLI asks whose account.
+      final answer = attempt.confirm('dee@example.com');
+      expect(app.pendingConfirmEmail, 'dee@example.com');
+      app.confirmPhoneSignIn(true);
+      expect(await answer, isTrue);
+      attempt.done.complete();
+      await signIn;
+      expect(app.signedIn, isTrue);
+      expect(app.signInStepShowing, isFalse);
+      expect(app.pendingSignInCode, isNull);
+      expect(app.approvalSignIn, isNull);
+    });
+
+    test('Scan with your phone shows the QR on the same page', () async {
+      final app = _Desktop(_Login());
+      addTearDown(app.dispose);
+      await app.bootstrap();
+      app.finishSetupTour();
+
+      unawaited(app.approveFromStep(ApprovalSignIn.phone));
+      await _settle();
+      app.cli.approvals.single.show(
+        'https://harness.autonomous.ai/signin#k=hnq_x',
+        120,
+      );
+      expect(app.approvalSignIn, ApprovalSignIn.phone);
+      expect(app.pendingQrLink, 'https://harness.autonomous.ai/signin#k=hnq_x');
+      expect(app.pendingSignInCode, isNull);
+      expect(app.signInStepShowing, isTrue);
+
+      // Back: the ways in again, and nothing left running.
+      app.cancelLogin();
+      expect(app.signingIn, isFalse);
+      expect(app.approvalSignIn, isNull);
+      expect(app.pendingQrLink, isNull);
+      expect(app.signInStepShowing, isTrue);
+      expect(app.isGuest, isTrue);
+    });
+
+    test('another way in ends the one under way, browser or code', () async {
+      final app = _Desktop(_Login());
+      addTearDown(app.dispose);
+      await app.bootstrap();
+      app.finishSetupTour();
+
+      unawaited(app.signInFromStep(SignInProvider.google));
+      await _settle();
+      unawaited(app.approveFromStep(ApprovalSignIn.code));
+      await _settle();
+      expect(app.cli.cancels, 1);
+      expect(app.cli.approvals.single.method, ApprovalSignIn.code);
+      app.cli.approvals.single.show('12345678', 120);
+
+      unawaited(app.approveFromStep(ApprovalSignIn.phone));
+      await _settle();
+      expect(app.cli.cancels, 2);
+      expect(app.cli.approvals.map((a) => a.method), [
+        ApprovalSignIn.code,
+        ApprovalSignIn.phone,
+      ]);
+      // The old code is gone with its attempt, and a late one cannot come back.
+      expect(app.pendingSignInCode, isNull);
+      app.cli.approvals.first.show('99999999', 120);
+      expect(app.pendingSignInCode, isNull);
+      expect(app.approvalSignIn, ApprovalSignIn.phone);
+    });
+  });
+
+  group('the code and QR never run out on screen', () {
+    /// A desktop on the sign-in step, in fake time.
+    _Desktop onStep(FakeAsync async) {
+      final app = _Desktop(_Login());
+      unawaited(app.bootstrap());
+      async.flushMicrotasks();
+      app.finishSetupTour();
+      return app;
+    }
+
+    test(
+      "a new code takes the old one's place shortly before its life ends",
+      () {
+        fakeAsync((async) {
+          final app = onStep(async);
+          unawaited(app.approveFromStep(ApprovalSignIn.code));
+          async.flushMicrotasks();
+          final started = clock.now();
+          app.cli.approvals.single.show('11111111', 120);
+          expect(
+            app.approvalRefreshAt,
+            started.add(
+              AppNotifier.approvalCodeLife - AppNotifier.approvalRefreshLead,
+            ),
+          );
+          // The CLI keeps the same code alive meanwhile.
+          for (var i = 1; i <= 4; i++) {
+            async.elapse(const Duration(seconds: 90));
+            app.cli.approvals.single.show('11111111', 120);
+          }
+          async.elapse(const Duration(minutes: 3, seconds: 44));
+          expect(app.cli.approvals, hasLength(1));
+          expect(app.pendingSignInCode, '11111111');
+
+          async.elapse(const Duration(seconds: 1));
+          async.flushMicrotasks();
+          expect(app.cli.approvals, hasLength(2));
+          expect(app.cli.approvals.first.done.isCompleted, isTrue);
+          expect(app.cli.approvals.last.method, ApprovalSignIn.code);
+          // Still signing in on the same page; the old code is not shown while the next one comes.
+          expect(app.signingIn, isTrue);
+          expect(app.signInStepShowing, isTrue);
+          expect(app.pendingSignInCode, isNull);
+          expect(app.lastError, isNull);
+          app.cli.approvals.last.show('22222222', 120);
+          expect(app.pendingSignInCode, '22222222');
+          // A late word from the replaced attempt changes nothing.
+          app.cli.approvals.first.show('11111111', 120);
+          expect(app.pendingSignInCode, '22222222');
+          app.dispose();
+        });
+      },
+    );
+
+    test('a code reported with less than its usual time is near its end: '
+        'replaced before then', () {
+      fakeAsync((async) {
+        final app = onStep(async);
+        unawaited(app.approveFromStep(ApprovalSignIn.phone));
+        async.flushMicrotasks();
+        app.cli.approvals.single.show(
+          'https://harness.autonomous.ai/signin#k=a',
+          120,
+        );
+        async.elapse(const Duration(minutes: 2));
+        // The backend has less life left than a full extension.
+        app.cli.approvals.single.show(
+          'https://harness.autonomous.ai/signin#k=a',
+          40,
+        );
+        expect(
+          app.approvalRefreshAt,
+          clock.now().add(
+            const Duration(seconds: 40) - AppNotifier.approvalRefreshLead,
+          ),
+        );
+        async.elapse(const Duration(seconds: 25));
+        async.flushMicrotasks();
+        expect(app.cli.approvals, hasLength(2));
+        expect(app.cli.approvals.last.method, ApprovalSignIn.phone);
+        expect(app.pendingQrLink, isNull);
+        app.dispose();
+      });
+    });
+
+    test('no new code while the person is answering whose account it is', () {
+      fakeAsync((async) {
+        final app = onStep(async);
+        unawaited(app.approveFromStep(ApprovalSignIn.code));
+        async.flushMicrotasks();
+        final attempt = app.cli.approvals.single;
+        attempt.show('11111111', 120);
+        unawaited(attempt.confirm('dee@example.com'));
+        async.elapse(AppNotifier.approvalCodeLife);
+        async.flushMicrotasks();
+        expect(app.cli.approvals, hasLength(1));
+        expect(app.pendingConfirmEmail, 'dee@example.com');
+        app.dispose();
+      });
+    });
+
+    test('a code the CLI says ran out is replaced at once, a bounded number '
+        'of times, then the page says so and shows no code', () {
+      fakeAsync((async) {
+        final app = onStep(async);
+        unawaited(app.approveFromStep(ApprovalSignIn.code));
+        async.flushMicrotasks();
+        for (var i = 0; i <= AppNotifier.maxApprovalRefreshes; i++) {
+          expect(app.cli.approvals, hasLength(i + 1));
+          app.cli.approvals.last.show('$i' * 8, 120);
+          app.cli.approvals.last.done.completeError(
+            const PhoneSignInException('EXPIRED', 'The code expired.'),
+          );
+          async.flushMicrotasks();
+        }
+        // One person's first try plus the bounded refreshes; then it stops asking.
+        expect(
+          app.cli.approvals,
+          hasLength(AppNotifier.maxApprovalRefreshes + 1),
+        );
+        async.elapse(const Duration(hours: 1));
+        expect(
+          app.cli.approvals,
+          hasLength(AppNotifier.maxApprovalRefreshes + 1),
+        );
+        expect(app.signingIn, isFalse);
+        expect(app.pendingSignInCode, isNull);
+        expect(app.approvalSignIn, isNull);
+        expect(app.lastError, contains('ran out'));
+        expect(app.signInStepShowing, isTrue);
+
+        // Asked again by hand: a fresh run of codes.
+        unawaited(app.approveFromStep(ApprovalSignIn.code));
+        async.flushMicrotasks();
+        expect(
+          app.cli.approvals,
+          hasLength(AppNotifier.maxApprovalRefreshes + 2),
+        );
+        expect(app.lastError, isNull);
+        app.dispose();
+      });
+    });
+
+    test('Cancel, sign-out and closing the app stop the refresh', () {
+      fakeAsync((async) {
+        final app = onStep(async);
+        unawaited(app.approveFromStep(ApprovalSignIn.code));
+        async.flushMicrotasks();
+        app.cli.approvals.single.show('11111111', 120);
+        app.cancelLogin();
+        async.elapse(const Duration(minutes: 30));
+        expect(app.cli.approvals, hasLength(1));
+        expect(app.approvalRefreshAt, isNull);
+
+        unawaited(app.approveFromStep(ApprovalSignIn.code));
+        async.flushMicrotasks();
+        app.cli.approvals.last.show('22222222', 120);
+        unawaited(app.logout());
+        async.flushMicrotasks();
+        async.elapse(const Duration(minutes: 30));
+        expect(app.cli.approvals, hasLength(2));
+        expect(app.pendingSignInCode, isNull);
+
+        unawaited(app.approveFromStep(ApprovalSignIn.code));
+        async.flushMicrotasks();
+        app.cli.approvals.last.show('33333333', 120);
+        app.dispose();
+        async.elapse(const Duration(minutes: 30));
+        expect(app.cli.approvals, hasLength(3));
+      });
+    });
+  });
+
+  group('whether the sign-in page calls this computer set up', () {
+    test('not on the launch that first installs Harness', () async {
+      final app = _Desktop(_Login());
+      addTearDown(app.dispose);
+      await app.bootstrap();
+      expect(app.harnessSetUpBefore, isFalse);
+    });
+
+    test('yes on a relaunch, which installs nothing', () async {
+      final app = _Desktop(_Login(), installed: true);
+      addTearDown(app.dispose);
+      await app.bootstrap();
+      expect(app.signInStepShowing, isTrue);
+      expect(app.harnessSetUpBefore, isTrue);
+    });
+
+    test('yes when only a repair ran on a computer that had Harness', () async {
+      final app = _Desktop(_Login())..harnessInstalledBefore = () => true;
+      addTearDown(app.dispose);
+      await app.bootstrap();
+      expect(app.harnessSetUpBefore, isTrue);
+    });
   });
 }

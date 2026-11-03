@@ -25,6 +25,7 @@ import 'package:harness/update/desktop_updater.dart';
 import 'package:harness/update/manual_update_check.dart';
 import 'package:harness/widgets/shortcuts_sheet.dart';
 import 'package:harness/widgets/update_notice.dart';
+import 'package:harness/widgets/laid_out_list.dart';
 
 import 'support/experimental_settings.dart';
 import 'support/real_fonts.dart';
@@ -264,7 +265,7 @@ void main() {
                 200,
                 scrollable: find
                     .descendant(
-                      of: find.byType(ListView),
+                      of: find.byType(LaidOutListView),
                       matching: find.byType(Scrollable),
                     )
                     .last,

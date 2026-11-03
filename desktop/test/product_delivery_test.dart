@@ -17,9 +17,14 @@ void main() {
   late ProductMeasurement usage;
   late List<Map<String, dynamic>> attempts, accepted;
   var status = 200;
-  String? code, vocabulary;
+  String? code, vocabulary, retryAfter;
   Completer<void>? hold;
+  late DateTime clock;
+  var random = 0.5;
   setUp(() async {
+    clock = DateTime.utc(2026, 10, 28, 6);
+    random = 0.5;
+    retryAfter = null;
     attempts = [];
     accepted = [];
     status = 200;
@@ -35,8 +40,11 @@ void main() {
       expect(request.headers.value('x-adapter-local'), '1');
       attempts.add(report);
       final responseStatus = status, responseCode = code;
-      final responseVocabulary = vocabulary;
+      final responseVocabulary = vocabulary, responseRetryAfter = retryAfter;
       await hold?.future;
+      if (responseRetryAfter != null) {
+        request.response.headers.set('retry-after', responseRetryAfter);
+      }
       if (responseStatus == 200) accepted.add(report);
       if (responseVocabulary != null) {
         request.response.headers.set(
@@ -75,6 +83,8 @@ void main() {
     usage = ProductMeasurement(
       surface: 'desktop',
       automatic: false,
+      now: () => clock,
+      random: () => random,
       context: ProductUsageContext(
         release: '1.2.77',
         platform: 'macos',
@@ -135,6 +145,7 @@ void main() {
     final first = jsonEncode(attempts.single);
     usage.begin(ProductFlow.connectUser)(ProductOutcome.ok);
     status = 200;
+    clock = clock.add(const Duration(minutes: 30));
     await usage.flush();
     expect(jsonEncode(attempts.last), first);
     await usage.flush();
@@ -142,6 +153,69 @@ void main() {
     expect(totals()['ui_desktop_connect_user_ok'], 1);
     expect(totals()['health_desktop_report_failure_write_conflict'], 1);
     expect(jsonEncode(accepted), isNot(contains('PRIVATE_')));
+  });
+
+  test('a busy answer holds the next report until its Retry-After', () async {
+    (status, code, retryAfter) = (429, 'USAGE_BUSY', '90');
+    usage.begin(ProductFlow.viewerLoad)(ProductOutcome.ok);
+    await usage.flush();
+    final first = attempts.single['id'];
+    (status, code, retryAfter) = (200, null, null);
+    // Without Retry-After this draw would wait 60 s; the answer asked for 90.
+    clock = clock.add(const Duration(seconds: 89));
+    await usage.flush();
+    expect(attempts, hasLength(1));
+    clock = clock.add(const Duration(seconds: 1));
+    await usage.flush();
+    expect(attempts, hasLength(2));
+    expect(attempts.last['id'], first);
+    expect(totals()['ui_desktop_viewer_load_ok'], 1);
+  });
+
+  test(
+    'refusals in a row wait under a doubling ceiling up to half an hour',
+    () async {
+      (status, code) = (503, 'USAGE_UNAVAILABLE');
+      random = 0.75;
+      usage.begin(ProductFlow.viewerLoad)(ProductOutcome.ok);
+      // 0.75 of 2, 4, 8 and 16 minutes, then of the 30-minute ceiling.
+      for (final wait in const [90, 180, 360, 720, 1350, 1350]) {
+        final before = attempts.length;
+        await usage.flush();
+        expect(attempts, hasLength(before + 1));
+        clock = clock.add(Duration(seconds: wait - 1));
+        await usage.flush();
+        expect(attempts, hasLength(before + 1), reason: 'held for $wait s');
+        clock = clock.add(const Duration(seconds: 1));
+      }
+      // An answer ends the run: the next refusal waits from the start again.
+      (status, code) = (200, null);
+      await usage.flush();
+      expect(totals()['ui_desktop_viewer_load_ok'], 1);
+      (status, code) = (503, 'USAGE_UNAVAILABLE');
+      usage.begin(ProductFlow.connectUser)(ProductOutcome.ok);
+      await usage.flush();
+      final refused = attempts.length;
+      clock = clock.add(const Duration(seconds: 90));
+      await usage.flush();
+      expect(attempts, hasLength(refused + 1));
+    },
+  );
+
+  test('an unreachable CLI is a refusal to wait out as well', () async {
+    await server.close(force: true);
+    await expectLater(
+      api.productUsageReport({'counters': {}}),
+      throwsA(
+        isA<ProductReportFailure>()
+            .having(
+              (e) => e.measure,
+              'category',
+              ProductHealthMeasure.reportFailureUnreachable,
+            )
+            .having((e) => e.backOff, 'waits', true),
+      ),
+    );
   });
 
   test(
@@ -236,6 +310,18 @@ void main() {
     (401, 'PRIVATE_CODE', ProductHealthMeasure.reportFailureAuth),
     (403, null, ProductHealthMeasure.reportFailureAuth),
     (429, 'USAGE_BUSY', ProductHealthMeasure.reportFailureRateLimited),
+    // A busy backend answers these 429 since 2026-10-28: the cause is kept.
+    (
+      429,
+      'USAGE_WRITE_CONFLICT',
+      ProductHealthMeasure.reportFailureWriteConflict,
+    ),
+    (
+      429,
+      'USAGE_TRANSACTION_FAILED',
+      ProductHealthMeasure.reportFailureTransaction,
+    ),
+    (503, 'AUTH_SERVICE_UNAVAILABLE', ProductHealthMeasure.reportFailureAuth),
     (504, 'BACKEND_TIMEOUT', ProductHealthMeasure.reportFailureTimeout),
     (502, 'BACKEND_UNREACHABLE', ProductHealthMeasure.reportFailureUnreachable),
     (
@@ -258,6 +344,7 @@ void main() {
             isA<ProductReportFailure>()
                 .having((e) => e.measure, 'category', measure)
                 .having((e) => e.permanent, 'retryable', false)
+                .having((e) => e.backOff, 'waits', http == 429 || http >= 500)
                 .having(
                   (e) => e.toString(),
                   'safe error',

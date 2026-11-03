@@ -89,7 +89,7 @@ class SetupHotspot {
     );
     final list = (res.data is Map ? (res.data as Map)['networks'] : null);
     if (res.statusCode != 200 || list is! List) {
-      throw const SetupException('The device did not send its Wi-Fi list.');
+      throw const SetupException('Intern 3 did not send its Wi-Fi list.');
     }
     return [
       for (final row in list)
@@ -119,13 +119,13 @@ class SetupHotspot {
       );
     } on DioException {
       throw const SetupException(
-        'Lost the device\'s Wi-Fi. Stay close to it and try again.',
+        'Lost Intern 3\'s Wi-Fi. Stay close to it and try again.',
       );
     }
     if (res.statusCode == 200) return null;
     final body = res.data is Map ? res.data as Map : const {};
     return body['message'] as String? ??
-        'The device said no (${res.statusCode}).';
+        'Intern 3 said no (${res.statusCode}).';
   }
 
   /// The computer's password, for a device still locked as it starts: its disk opens with it, and
@@ -155,7 +155,7 @@ class SetupHotspot {
       // The page could not even be reached: the phone is off its hotspot.
       if (e.type == DioExceptionType.connectionTimeout) {
         throw const SetupException(
-          'Lost the device\'s Wi-Fi. Stay close to it and try again.',
+          'Lost Intern 3\'s Wi-Fi. Stay close to it and try again.',
         );
       }
       // Sent, and the hotspot went before the answer: most likely it opened, and the device is
@@ -165,7 +165,7 @@ class SetupHotspot {
     if (res.statusCode == 200) return null;
     final body = res.data is Map ? res.data as Map : const {};
     return body['message'] as String? ??
-        'The device said no (${res.statusCode}).';
+        'Intern 3 said no (${res.statusCode}).';
   }
 
   /// Hands the device the Wi-Fi and the ticket, or on a cable ([ssid] empty) the ticket alone.
@@ -185,13 +185,13 @@ class SetupHotspot {
       );
     } on DioException {
       throw const SetupException(
-        'Lost the device\'s Wi-Fi. Stay close to it and try again.',
+        'Lost Intern 3\'s Wi-Fi. Stay close to it and try again.',
       );
     }
     final body = res.data is Map ? res.data as Map : const {};
     if (res.statusCode != 202) {
       throw SetupException(
-        body['message'] as String? ?? 'The device said no (${res.statusCode}).',
+        body['message'] as String? ?? 'Intern 3 said no (${res.statusCode}).',
       );
     }
     return (body['run'] as num?)?.toInt() ?? 0;

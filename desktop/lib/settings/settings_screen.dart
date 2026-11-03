@@ -3,6 +3,10 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
+import '../shortcuts/app_keymap.dart';
+import '../shortcuts/keymap.dart';
+import '../shortcuts/keymap_commands.dart';
+import '../shortcuts/keymap_keyboard.dart';
 import '../state/app_state.dart';
 import '../widgets/harness_customize_pane.dart';
 import 'experimental_features.dart';
@@ -154,14 +158,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   bool get _compact => MediaQuery.sizeOf(context).width < widget.compactBelow;
 
+  /// Escape, or Close Tab's key (⌘W unless the person moved it), leaves
+  /// Settings as Back to app does. Signed out there is no workspace under it
+  /// to hear ⌘W, so Settings hears it itself (Scholes's end-to-end test).
   KeyEventResult _key(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent ||
-        event.logicalKey != LogicalKeyboardKey.escape ||
-        HardwareKeyboard.instance.isControlPressed ||
-        HardwareKeyboard.instance.isAltPressed ||
-        HardwareKeyboard.instance.isMetaPressed ||
-        HardwareKeyboard.instance.isShiftPressed ||
-        ModalRoute.of(context)?.isCurrent == false) {
+        ModalRoute.of(context)?.isCurrent == false ||
+        !(_isEscape(event) || _isCloseTab(event))) {
       return KeyEventResult.ignored;
     }
     final editing = FocusManager.instance.primaryFocus?.context
@@ -176,6 +179,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     Navigator.of(context).maybePop();
     return KeyEventResult.handled;
+  }
+
+  bool _isEscape(KeyEvent event) {
+    final keys = HardwareKeyboard.instance;
+    return event.logicalKey == LogicalKeyboardKey.escape &&
+        !keys.isControlPressed &&
+        !keys.isAltPressed &&
+        !keys.isMetaPressed &&
+        !keys.isShiftPressed;
+  }
+
+  bool _isCloseTab(KeyEvent event) {
+    final stroke = keyStrokeForEvent(event);
+    if (stroke == null) return false;
+    final keymap =
+        KeymapTheme.of(context, listen: false)?.current ?? harnessDefaultKeymap;
+    return keymap
+        .bindingsFor(KeymapContext.workspace)
+        .any(
+          (binding) =>
+              binding.command == 'swarm.close' &&
+              binding.keys.length == 1 &&
+              binding.keys.single == stroke,
+        );
   }
 
   /// Move to another pane, from the settings rail.
@@ -209,7 +236,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         body: body,
       );
     }
-    return Focus(
+    // A scope, not a plain Focus: a click that takes the keyboard off a field
+    // leaves it here, where Escape and ⌘W are still heard, rather than on the
+    // route above this page.
+    return FocusScope(
       onKeyEvent: _key,
       child: Scaffold(
         backgroundColor: grid.AppPalette.windowBg,

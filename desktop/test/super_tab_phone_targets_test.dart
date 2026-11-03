@@ -30,10 +30,11 @@ void _agentMessages(ConversationServer server) {
     attachments: [
       {
         'id': 'a1',
-        'name': 'fixture-375.png',
-        'mime': 'image/png',
+        // A file that stays a chip: a picture shows in place.
+        'name': 'fixture-375.pdf',
+        'mime': 'application/pdf',
         'size': 2048,
-        'url': 'https://cdn.harness.autonomous.ai/a1/fixture-375.png',
+        'url': 'https://cdn.harness.autonomous.ai/a1/fixture-375.pdf',
       },
     ],
   );
@@ -142,7 +143,7 @@ void main() {
       seed: _agentMessages,
     );
     expect(find.byKey(const ValueKey('super-terminals')), findsOneWidget);
-    expect(find.byKey(const ValueKey('super-pull-requests')), findsOneWidget);
+    expect(find.byTooltip('Project options'), findsOneWidget);
     const mouse = {
       'Reply': Size(32, 32),
       'Copy message': Size(32, 32),
@@ -165,7 +166,7 @@ void main() {
     );
     await _openReply(tester);
     expect(tester.getSize(find.byTooltip('Cancel reply')), const Size(32, 32));
-    await tester.tap(find.byTooltip('Members and machines'));
+    await tester.tap(find.byTooltip('Members'));
     await tester.pumpAndSettle();
     expect(
       tester.getSize(find.byKey(const ValueKey('super-person-owner'))).height,

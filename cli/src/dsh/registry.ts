@@ -64,6 +64,12 @@ export const DshRegistryEntrySchema = z.strictObject({
   tier: z.union([z.literal(0), z.literal(1), z.literal(2)]).optional(),
   /** Shared viewer dependency, so the Store can show reverse dependencies before installation. */
   viewerUse: z.string().regex(DSH_ID_RE).optional(),
+  /**
+   * The package runs a setup or doctor script, which a computer with no shell for them (Windows, dsh/shell.ts
+   * `dshShellAvailable`) cannot: the CLI refuses it from this entry, before downloading anything. On 2026-10-28 a
+   * Windows install was refused only once downloaded and placed, and its files stayed on disk.
+   */
+  runsScripts: z.literal(true).optional(),
   verified: z.boolean().optional(),
   /** The store's product page: where the thing lives, whose it is, what it is licensed under. */
   homepage: z.string().url().max(2048).optional(),
@@ -120,6 +126,8 @@ export function storeEntry(path: string, manifest: Record<string, unknown>, fact
   if (manifest.engine !== undefined) entry.engines = dshSupportedEngines(manifest as DshManifest)
   const viewer = manifest.viewer as { use?: unknown } | undefined
   if (typeof viewer?.use === 'string') entry.viewerUse = viewer.use
+  const toolchain = manifest.toolchain as { setup?: unknown; doctor?: unknown } | undefined
+  if (toolchain?.setup || toolchain?.doctor) entry.runsScripts = true
   entry.tier = manifest.viewer ? 2 : manifest.verdict ? 1 : 0
   entry.verified = true
   return entry

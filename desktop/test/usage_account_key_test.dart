@@ -24,4 +24,15 @@ void main() {
       isNot(usageAccountKey(UsageProvider.codex, 'same')),
     );
   });
+
+  test(
+    'a Swarm profile id is the first 16 hex of sha256(machine:engine:path)',
+    () {
+      expect(swarmProfileId('m', 'claude', 'default'), '71dc90339553114c');
+      expect(
+        swarmProfileId('m', 'codex', '/home/me/.codex-b'),
+        '77103ab28be2ebd0',
+      );
+    },
+  );
 }

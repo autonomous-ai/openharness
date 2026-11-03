@@ -151,6 +151,11 @@ class Machine {
   /// Set when another account shares this whole machine with this one; null for the account's own.
   final MachineShare? machineShare;
 
+  /// How its computer signed in on its last connect, as the machine list says
+  /// (`team` for a Harness Team account, `computer` otherwise, null when an
+  /// older backend sends none).
+  final String? sessionKind;
+
   const Machine({
     required this.machineId,
     this.apiKey = '',
@@ -164,7 +169,13 @@ class Machine {
     this.sharedHarnesses = const [],
     this.status,
     this.machineShare,
+    this.sessionKind,
   });
+
+  /// A Harness Team account's machine: the account's, but its daemon signs in
+  /// with a team session, which the server never lets act as the person. The
+  /// person's own Swarm requests never go through it.
+  bool get isTeamAccount => sessionKind == 'team';
 
   /// Another account's machine, shared with this one: this account is a guest there, with its own space and
   /// harnesses; the machine is managed (renamed, removed, shared on) by its owner alone.
@@ -214,6 +225,7 @@ class Machine {
     machineShare: j['share'] is Map
         ? MachineShare.fromJson(Map<String, dynamic>.from(j['share'] as Map))
         : null,
+    sessionKind: j['sessionKind'] as String?,
   );
 
   Machine copyWith({String? name}) => Machine(
@@ -229,6 +241,7 @@ class Machine {
     sharedHarnesses: sharedHarnesses,
     status: status,
     machineShare: machineShare,
+    sessionKind: sessionKind,
   );
 }
 
@@ -416,6 +429,9 @@ class Agent {
   final String? engineIconHint;
   final String? codexHome;
 
+  /// The Claude account folder (`CLAUDE_CONFIG_DIR`) this agent runs in; null for the default account.
+  final String? claudeHome;
+
   /// Model observed in this session by the daemon, when available. Independent
   /// of [gridModel], which determines subscription versus local-model routing.
   final String? modelName;
@@ -550,6 +566,7 @@ class Agent {
     this.engineDisplayName,
     this.engineIconHint,
     this.codexHome,
+    this.claudeHome,
     this.modelName,
     this.modelEffort,
     this.gridModel,
@@ -715,6 +732,9 @@ class Agent {
       engineDisplayName: _safeLabel(j['engineDisplayName']),
       engineIconHint: _safeLabel(j['engineIconHint']),
       codexHome: j['engine'] == 'codex' ? _safeCodexHome(j['codexHome']) : null,
+      claudeHome: j['engine'] == 'claude'
+          ? _safeCodexHome(j['claudeHome'])
+          : null,
       modelName: model?.name,
       modelEffort: model?.effort,
       gridModel: _safeLabel(grid?['model']),
@@ -795,6 +815,7 @@ class Agent {
     engineDisplayName: engineDisplayName,
     engineIconHint: engineIconHint,
     codexHome: codexHome,
+    claudeHome: claudeHome,
     modelName: modelName,
     modelEffort: modelEffort,
     gridModel: gridModel,

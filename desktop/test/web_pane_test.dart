@@ -8,12 +8,15 @@ import 'package:flutter/material.dart';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/open_in_browser.dart';
+import 'package:harness/core/runtime_platform.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_monitor_controller.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/widgets/web_pane_panel.dart';
+import 'package:harness/widgets/pane_menu.dart';
+import 'package:harness/widgets/transient_menus.dart';
 import 'package:webview_flutter_platform_interface/webview_flutter_platform_interface.dart';
 
 import 'support/fake_webview.dart';
@@ -333,6 +336,43 @@ void main() {
     expect(app.panes.map((p) => p.isWeb), [true, false]);
   });
 
+  testWidgets(
+    'Linux viewer hides beneath dialogs and returns after dismissal',
+    (tester) async {
+      final app = createApp();
+      addTearDown(app.dispose);
+      app.stateOf('m')!.nodeOnline = true;
+      app.adoptSessionForTest(terminal('a0', <TerminalBinaryFrame>[]));
+      await mount(tester, app);
+      await _synced(app, 'a0', viewerUrl: 'http://127.0.0.1:4179/');
+      await tester.pump();
+      final context = tester.element(find.byType(WebPanePanel));
+      final placeholder = find.byKey(const ValueKey('web-pane-placeholder'));
+      expect(placeholder, findsOneWidget);
+      final dialog = showDialog<void>(
+        context: context,
+        builder: (_) => const AlertDialog(title: Text('Close tab?')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Close tab?'), findsOneWidget);
+      if (RuntimePlatform.isLinux) {
+        expect(placeholder, findsNothing);
+        expect(
+          find.byKey(
+            const ValueKey('web-pane-placeholder'),
+            skipOffstage: false,
+          ),
+          findsNothing,
+        );
+      }
+      Navigator.of(tester.element(find.text('Close tab?'))).pop();
+      await dialog;
+      await tester.pumpAndSettle();
+      expect(placeholder, findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('the tile renders a header and, under test, the URL in words', (
     tester,
   ) async {
@@ -346,6 +386,24 @@ void main() {
     await tester.pump();
     expect(WebPanePanel.webviewAvailable, isFalse);
     expect(find.byType(WebPanePanel), findsOneWidget);
+    if (RuntimePlatform.isLinux) {
+      // The native GTK overlay hides itself under any rounded ancestor clip.
+      expect(
+        find.ancestor(
+          of: find.byType(WebPanePanel),
+          matching: find.byType(ClipRRect),
+        ),
+        findsNothing,
+      );
+      expect(
+        find.ancestor(
+          of: find.byType(WebPanePanel),
+          matching: find.byType(ClipRect),
+        ),
+        findsWidgets,
+      );
+    }
+
     expect(find.byKey(const ValueKey('web-pane-placeholder')), findsOneWidget);
     expect(find.textContaining('http://127.0.0.1:4179/'), findsOneWidget);
     // With no embedded webview the page opens in the browser instead
@@ -546,6 +604,79 @@ void main() {
       return app;
     }
 
+    testWidgets('Linux pane menu detaches the viewer and restores its page', (
+      tester,
+    ) async {
+      await open(tester);
+      final controller = platform.controllers.single;
+      controller.delegate!.onPageFinished!(controller.loads.single.toString());
+      await tester.pump();
+      final initialLoads = controller.loads.length;
+      final context = tester.element(find.byType(WebPanePanel));
+      final menu = showPaneMenu<String>(
+        context: context,
+        position: const RelativeRect.fromLTRB(20, 100, 20, 0),
+        children: (close) => [
+          paneMenuItem(
+            onTap: () => close('keep'),
+            child: const Text('Keep viewer open'),
+          ),
+        ],
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('pane-menu-surface')), findsOneWidget);
+      expect(transientMenusVisible.value, isTrue);
+      if (RuntimePlatform.isLinux) {
+        expect(find.byKey(const ValueKey('fake-webview')), findsNothing);
+      }
+      await tester.tap(find.text('Keep viewer open'));
+      expect(await menu, 'keep');
+      await tester.pumpAndSettle();
+      expect(transientMenusVisible.value, isFalse);
+      expect(find.byKey(const ValueKey('fake-webview')), findsOneWidget);
+      expect(platform.controllers, [controller]);
+      expect(controller.loads, hasLength(initialLoads));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('Linux dialogs and routes preserve the loaded controller', (
+      tester,
+    ) async {
+      await open(tester);
+      final controller = platform.controllers.single;
+      controller.delegate!.onPageFinished!(controller.loads.single.toString());
+      await tester.pump();
+      final initialLoads = controller.loads.length;
+      final context = tester.element(find.byType(WebPanePanel));
+      final navigator = Navigator.of(context);
+      final dialog = showDialog<void>(
+        context: context,
+        builder: (_) => const AlertDialog(title: Text('Close tab?')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Close tab?'), findsOneWidget);
+      if (RuntimePlatform.isLinux) {
+        expect(find.byKey(const ValueKey('fake-webview')), findsNothing);
+      }
+      navigator.pop();
+      await dialog;
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('fake-webview')), findsOneWidget);
+      final route = navigator.push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => const Scaffold(body: Text('Other page')),
+        ),
+      );
+      await tester.pumpAndSettle();
+      navigator.pop();
+      await route;
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('fake-webview')), findsOneWidget);
+      expect(platform.controllers, [controller]);
+      expect(controller.loads, hasLength(initialLoads));
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets(
       'Harness Monitor loads its page once, though the tile rebuilds while its channel is added',
       (tester) async {
@@ -564,6 +695,110 @@ void main() {
         await tester.pump(const Duration(milliseconds: 300));
       },
     );
+
+    testWidgets(
+      'Harness Monitor is told when it is out of sight, so its page stops reading the fleet',
+      (tester) async {
+        final app = await open(tester, dsh: harnessMonitorId);
+        final controller = platform.controllers.single;
+        const url = 'http://127.0.0.1:4179/';
+        controller.delegate!
+          ..onPageStarted!(url)
+          ..onPageFinished!(url);
+        await tester.pump();
+        // What the page last heard: `data-host-visible` on its root, then the event it listens for.
+        bool? told() {
+          for (final script in controller.scripts.reversed) {
+            final match = RegExp(
+              r"dataset\.hostVisible='(true|false)';document\.dispatchEvent\(new Event\('harness-host-visibility'\)\)",
+            ).firstMatch(script);
+            if (match != null) return match[1] == 'true';
+          }
+          return null;
+        }
+
+        expect(told(), isTrue, reason: 'a page that loads in front is told so');
+        final monitorTab = app.activeSwarm.id;
+
+        app.newSwarm(name: 'Other');
+        await tester.pump();
+        expect(told(), isFalse, reason: 'another tab in front');
+
+        app.selectSwarm(monitorTab);
+        await tester.pump();
+        expect(told(), isTrue);
+
+        app.appLifecycleChanged(AppLifecycleState.inactive);
+        await tester.pump();
+        expect(
+          told(),
+          isTrue,
+          reason: 'a window behind another app can still be seen',
+        );
+        app.appLifecycleChanged(AppLifecycleState.hidden);
+        await tester.pump();
+        expect(told(), isFalse, reason: 'a minimised or hidden window cannot');
+        app.appLifecycleChanged(AppLifecycleState.resumed);
+        await tester.pump();
+        expect(told(), isTrue);
+
+        final stamps = controller.scripts.length;
+        app.notifyListeners();
+        await tester.pump();
+        expect(
+          controller.scripts,
+          hasLength(stamps),
+          reason: 'nothing new to say, nothing said',
+        );
+
+        // A reload is a new page: it hears where it stands.
+        controller.delegate!
+          ..onPageStarted!(url)
+          ..onPageFinished!(url);
+        await tester.pump();
+        expect(controller.scripts.length, greaterThan(stamps));
+        expect(told(), isTrue);
+        await tester.pump(const Duration(milliseconds: 300));
+      },
+    );
+
+    testWidgets(
+      "closing the Monitor's tab takes its page down, and with it the page's connection",
+      (tester) async {
+        final app = await open(tester, dsh: harnessMonitorId);
+        expect(find.byKey(const ValueKey('fake-webview')), findsOneWidget);
+        final tab = app.activeSwarm;
+        unawaited(app.requestCloseSwarm(tab.id));
+        await tester.pumpAndSettle();
+        expect(app.swarms, isNot(contains(tab)));
+        expect(find.byType(WebPanePanel), findsNothing);
+        expect(find.byKey(const ValueKey('fake-webview')), findsNothing);
+        expect(
+          app.stateOf('m')!.agents.firstWhere((a) => a.id == 'a0').isStopped,
+          isFalse,
+          reason: 'its assistant stays for the next open',
+        );
+      },
+    );
+
+    testWidgets('a viewer other than the Monitor is not told anything', (
+      tester,
+    ) async {
+      final app = await open(tester);
+      final controller = platform.controllers.single;
+      const url = 'http://127.0.0.1:4179/';
+      controller.delegate!
+        ..onPageStarted!(url)
+        ..onPageFinished!(url);
+      await tester.pump();
+      app.newSwarm(name: 'Other');
+      await tester.pump();
+      expect(
+        controller.scripts.where((s) => s.contains('hostVisible')),
+        isEmpty,
+      );
+      await tester.pump(const Duration(milliseconds: 300));
+    });
 
     testWidgets(
       'a viewer that refuses is tried again by itself; a cancelled navigation shows nothing',

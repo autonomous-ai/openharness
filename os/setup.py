@@ -65,6 +65,11 @@ USER = 'me'
 HOME = Path('/home') / USER
 SESSION = HOME / '.harness/auth/session.json'
 COMPUTER_ID = HOME / '.harness/computer-id'
+# A sign-in the backend did not answer is tried this many times in all, this many seconds apart.
+SIGN_IN_ATTEMPTS = 4
+SIGN_IN_PAUSE = 5
+# `harness login --ticket` answers that trying again cannot change (cli.ts ticketSignIn).
+FINAL_SIGN_IN = ('TICKET_INVALID', 'ALREADY_SIGNED_IN')
 HOTSPOT = 'harness-setup'
 ADDRESS = '10.42.0.1'
 PORT = 80
@@ -160,7 +165,13 @@ def hotspot_name(device=None):
 
 
 def signed_in():
-    return SESSION.is_file()
+    """A session the CLI has not marked signed out (cli authSession.ts readAuthSession). A sign-in the
+    backend refused stays on disk with its mark, and a computer signed in by that alone took no
+    ticket: the Dell, 2026-11-03, said signed in to the phone with an account it could not use."""
+    try:
+        return not json.loads(SESSION.read_text()).get('signedOut')
+    except (OSError, ValueError, AttributeError):
+        return False
 
 
 def rows(*args, wait=3):
@@ -369,7 +380,18 @@ def sign_in(ticket):
         FROM_PHONE.touch()
     except OSError:
         pass
-    ok, message = run_sign_in(ticket)
+    # A computer that joined the Wi-Fi a moment ago may not reach the backend on its first try: the MSI's
+    # sign-in failed with "fetch failed" two seconds after it joined (2026-11-03), and the phone was left
+    # with a computer on the Wi-Fi and signed out. A refused ticket is final, and so is a computer signed in.
+    for attempt in range(SIGN_IN_ATTEMPTS):
+        if attempt:
+            log(f'sign-in failed ({message}); trying again')
+            time.sleep(SIGN_IN_PAUSE)
+        ok, message, again = run_sign_in(ticket)
+        if ok or not again:
+            break
+    # A try whose answer was lost may have signed in all the same: the next then hears ALREADY_SIGNED_IN.
+    ok = ok or signed_in()
     if not ok:
         FROM_PHONE.unlink(missing_ok=True)
         return ok, message
@@ -380,6 +402,8 @@ def sign_in(ticket):
 
 
 def run_sign_in(ticket):
+    """(signed in, why not, whether trying again may help): only the backend's answer about the ticket
+    or this computer is final; one that never arrived is not."""
     try:
         result = subprocess.run(['/usr/bin/runuser', '-u', USER, '--', '/usr/bin/harness', 'login', '--json',
                                  '--ticket=' + ticket],
@@ -388,16 +412,17 @@ def run_sign_in(ticket):
                                          PATH='/usr/local/bin:/usr/bin:/bin',
                                          XDG_RUNTIME_DIR=f'/run/user/{pwd.getpwnam(USER).pw_uid}'))
     except (OSError, KeyError, subprocess.TimeoutExpired) as error:
-        return False, str(error)
+        return False, str(error), True
     if result.returncode == 0:
-        return True, ''
-    message = ''
+        return True, '', False
+    message, code = '', ''
     for line in result.stdout.splitlines():
         try:
-            message = json.loads(line).get('message') or message
+            answer = json.loads(line)
+            message, code = answer.get('message') or message, answer.get('code') or code
         except (ValueError, AttributeError):
             pass
-    return False, message or result.stderr.strip()[-200:] or 'The sign-in failed.'
+    return False, message or result.stderr.strip()[-200:] or 'The sign-in failed.', code not in FINAL_SIGN_IN
 
 
 def join(request, networks, device):
@@ -781,6 +806,11 @@ HN = '/usr/lib/harness/harness-tui'
 # The account's daemon on this computer (cli hookServer), for the desk.
 DAEMON = 'http://127.0.0.1:18473'
 RESET_UNIT = 'harness-factory-reset'
+# The recovery partition and its GRUB entry (installer.py RECOVERY_*), on a computer installed with one.
+RECOVERY_CONF = Path('/etc/harness-os/recovery.conf')
+RECOVERY_DEVICE = Path('/dev/disk/by-label/HN_RECOVERY')
+RECOVERY_ENTRY = 'harness-recovery'
+GRUBENV = Path('/boot/grub/grubenv')
 SIGN_OUT_UNIT = 'harness-sign-out'
 # The password as installed (installer.py INITIAL_ACCOUNT): root's, inside the encrypted disk.
 INITIAL_ACCOUNT = STATE / 'initial-account.json'
@@ -1048,13 +1078,14 @@ def install_gh():
     return {'installed': False, 'message': 'The GitHub CLI could not be installed: ' + reason[0][:200]}
 
 
-def factory_reset(keep_wifi=False, keep_ssh=False):
+def factory_reset(keep_wifi=False, keep_ssh=False, reboot=False):
     """This computer as just installed: off its account and a new computer to it (a new computer id and
     device key), everything of the person gone — /home/me as the installer made it, so its projects,
     the engines' sign-ins and the hn/CLI updates it downloaded too — its Wi-Fi forgotten, SSH off, the
     password as installed, and its setup hotspot open for a phone. The installed Harness OS stays.
-    For `harness factory-reset` at the computer (and, later, its reset button). [keep_wifi], [keep_ssh]:
-    for a test machine reached over them."""
+    For `harness factory-reset` at the computer and its power button (button.py). [keep_wifi], [keep_ssh]:
+    for a test machine reached over them. [reboot]: started again instead, as the power button asks, so
+    an encrypted computer waits for its password (the installation's again) before anyone sets it up."""
     log('factory reset: everything of the person goes')
     # While signed in and its daemon up: off the account, then signed out.
     forget_desk()
@@ -1080,6 +1111,11 @@ def factory_reset(keep_wifi=False, keep_ssh=False):
         subprocess.run(['systemctl', 'disable', '--now', SSHD], capture_output=True, timeout=60)
     if not keep_wifi:
         forget_wifi()
+    if reboot:
+        # Not signed in, it opens its setup hotspot as it starts (hotspot_wait).
+        log('factory reset done; starting again')
+        subprocess.run(['systemctl', 'reboot'], capture_output=True, timeout=60)
+        return
     # Started again as at boot: the person's daemon (lingering), and the screen's first use.
     subprocess.run(['systemctl', 'start', f'user@{account.pw_uid}.service'], capture_output=True, timeout=120)
     subprocess.run(['systemctl', 'restart', 'getty@tty1.service'], capture_output=True, timeout=60)
@@ -1087,20 +1123,38 @@ def factory_reset(keep_wifi=False, keep_ssh=False):
     log('factory reset done')
 
 
+def recover():
+    """The power button's reset (button.py): off its account first, which the recovery cannot reach, then
+    started in its recovery (installer.py recover), which installs it again as it came — the same as a
+    reset while its disk is locked (unlock/button). Installed before there was a recovery: reset here,
+    and started again."""
+    if not (RECOVERY_CONF.is_file() and RECOVERY_DEVICE.exists()):
+        log('factory reset: no recovery on this computer; resetting it here')
+        factory_reset(reboot=True)
+        return
+    log('factory reset: starting again in the recovery')
+    forget_desk()
+    remove_from_account()
+    as_user('/usr/bin/harness', 'logout', timeout=60)
+    subprocess.run(['grub-editenv', str(GRUBENV), 'set', f'next_entry={RECOVERY_ENTRY}'], check=True, timeout=30)
+    subprocess.run(['systemctl', 'reboot'], capture_output=True, timeout=60)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('command', nargs='?', choices=['watch', 'now', 'name', 'join', 'reset', 'sign-out',
+    parser.add_argument('command', nargs='?', choices=['watch', 'now', 'name', 'join', 'reset', 'sign-out', 'recover',
                                                        'password', 'ssh', 'install-gh'], default='watch')
     parser.add_argument('action', nargs='?', choices=['status', 'on', 'off'], help='ssh: status, on or off')
     parser.add_argument('--keep-wifi', action='store_true', help='reset, sign-out: keep the saved Wi-Fi')
     parser.add_argument('--keep-ssh', action='store_true', help='reset: leave SSH as it is')
+    parser.add_argument('--reboot', action='store_true', help='reset: start again once done')
     parser.add_argument('--here', action='store_true', help=argparse.SUPPRESS)
     arguments = parser.parse_args()
     if arguments.command in ('reset', 'sign-out'):
         reset = arguments.command == 'reset'
         if arguments.here:
             if reset:
-                factory_reset(keep_wifi=arguments.keep_wifi, keep_ssh=arguments.keep_ssh)
+                factory_reset(keep_wifi=arguments.keep_wifi, keep_ssh=arguments.keep_ssh, reboot=arguments.reboot)
             else:
                 sign_out(keep_wifi=arguments.keep_wifi)
             return
@@ -1112,6 +1166,8 @@ def main():
             command.append('--keep-wifi')
         if arguments.keep_ssh:
             command.append('--keep-ssh')
+        if arguments.reboot:
+            command.append('--reboot')
         started = subprocess.run(command, capture_output=True, text=True)
         if started.returncode:
             raise SystemExit('Could not start: ' + (started.stderr.strip() or 'systemd-run failed'))
@@ -1123,6 +1179,10 @@ def main():
                   'in about a minute.')
         else:
             print('Signing out. Its harnesses and projects stay; it opens its setup hotspot to be set up again.')
+        return
+    if arguments.command == 'recover':
+        # From button.py, root's own service: nothing it runs from goes with the Wi-Fi.
+        recover()
         return
     if arguments.command == 'password':
         # From the daemon, through sudo: both passwords as JSON on stdin, never in argv; the answer on stdout.

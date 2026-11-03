@@ -118,9 +118,6 @@ void main() {
     test('parses every number the column shows', () {
       final board = SuperTabLeaderboard.fromJson(answer());
       expect(board.week, week);
-      expect(board.goal.openRequests, 7);
-      expect(board.goal.thisWeek.medianAskToShipMs, 3 * hour);
-      expect(board.goal.lastWeek.shipped, 12);
       final ken = board.people.first;
       expect(
         [ken.personId, ken.points, ken.rank, ken.medal],
@@ -260,10 +257,176 @@ void main() {
       await reader.show('lead');
       await reader.showWeek(week - 7 * 86400000);
       expect(requests.paths, [
-        'GET /api/super-tabs/tab%201/leaderboard?projectId=lead',
+        // Answered as a server before periods answers: by week, from then on.
+        'GET /api/super-tabs/tab%201/leaderboard?projectId=lead&period=7d&scope=all',
         'GET /api/super-tabs/tab%201/leaderboard?projectId=lead&week=${week - 7 * 86400000}',
       ]);
       expect(reader.board?.week, week);
+    });
+
+    group('the rolling periods', () {
+      Map<String, dynamic> rolling(String name, {bool all = true}) => {
+        ...answer(),
+        'period': {'name': name, 'start': 1, 'end': 2},
+        if (all) 'allProjects': true,
+      };
+      const older = SuperTabFailure(
+        'VALIDATION',
+        'Unrecognized key',
+        statusCode: 400,
+      );
+
+      test(
+        'reads Last 7d of All projects first, and another by name',
+        () async {
+          final paths = <String>[];
+          final reader = SuperTabLeaderboardReader(
+            tabId: 't',
+            request: (method, path, {body}) async {
+              paths.add(path);
+              return rolling(
+                path.contains('period=30d') ? '30d' : '7d',
+                all: path.contains('scope=all'),
+              );
+            },
+          );
+          addTearDown(reader.dispose);
+          await reader.show('lead');
+          expect(reader.period, '7d');
+          expect(reader.board?.period, '7d');
+          expect(reader.board?.allProjects, isTrue);
+          var cleared = false;
+          reader.addListener(() => cleared = cleared || reader.board == null);
+          await reader.showPeriod('30d');
+          expect(
+            cleared,
+            isTrue,
+            reason: "another period's numbers never wear this one's name",
+          );
+          final narrowed = reader.showAllProjects(false);
+          expect(
+            reader.board,
+            isNull,
+            reason: 'whole-Swarm numbers under one project',
+          );
+          await narrowed;
+          expect(reader.board?.allProjects, isFalse);
+          expect(paths, [
+            '/api/super-tabs/t/leaderboard?projectId=lead&period=7d&scope=all',
+            '/api/super-tabs/t/leaderboard?projectId=lead&period=30d&scope=all',
+            '/api/super-tabs/t/leaderboard?projectId=lead&period=30d',
+          ]);
+        },
+      );
+
+      test('a server before periods keeps the weeks, after one refusal, and asks no scope', () async {
+        final paths = <String>[];
+        final reader = SuperTabLeaderboardReader(
+          tabId: 't',
+          request: (method, path, {body}) async {
+            paths.add(path);
+            if (path.contains('period=')) {
+              throw older;
+            }
+            return answer();
+          },
+        );
+        addTearDown(reader.dispose);
+        await reader.show('lead');
+        expect(reader.period, isNull);
+        expect(reader.error, isNull);
+        expect(reader.board?.week, week);
+        await reader.refresh();
+        expect(paths, [
+          '/api/super-tabs/t/leaderboard?projectId=lead&period=7d&scope=all',
+          '/api/super-tabs/t/leaderboard?projectId=lead',
+          '/api/super-tabs/t/leaderboard?projectId=lead',
+        ]);
+      });
+
+      test('a failed first read leaves the periods on, and recovers', () async {
+        var fail = true;
+        final reader = SuperTabLeaderboardReader(
+          tabId: 't',
+          request: (method, path, {body}) async {
+            if (fail) {
+              throw const SuperTabFailure(
+                'OFFLINE',
+                'No connection.',
+                statusCode: 503,
+              );
+            }
+            return rolling('7d');
+          },
+        );
+        addTearDown(reader.dispose);
+        await reader.show('lead');
+        expect(reader.period, '7d');
+        expect(reader.error, 'No connection.');
+        fail = false;
+        await reader.refresh();
+        expect(reader.board?.period, '7d');
+        expect(reader.error, isNull);
+      });
+
+      test('an answer or a refusal left behind changes nothing', () async {
+        final slow = Completer<Map<String, dynamic>>(),
+            refused = Completer<Map<String, dynamic>>();
+        final reader = SuperTabLeaderboardReader(
+          tabId: 't',
+          request: (method, path, {body}) {
+            if (path.contains('period=7d')) return slow.future;
+            if (path.contains('period=24h')) return refused.future;
+            return Future.value(rolling('30d'));
+          },
+        );
+        addTearDown(reader.dispose);
+        final first = reader.show('lead');
+        final second = reader.showPeriod('24h');
+        await reader.showPeriod('30d');
+        slow.complete(rolling('7d'));
+        refused.completeError(older);
+        await first;
+        await second;
+        expect(reader.board?.period, '30d');
+        expect(reader.period, '30d');
+      });
+
+      test(
+        'access lost: a read in flight is dropped and the board forgotten',
+        () async {
+          final slow = Completer<Map<String, dynamic>>();
+          final reader = SuperTabLeaderboardReader(
+            tabId: 't',
+            request: (method, path, {body}) => slow.future,
+          );
+          addTearDown(reader.dispose);
+          final first = reader.show('lead');
+          reader.clear();
+          slow.complete(rolling('7d'));
+          await first;
+          expect(reader.board, isNull);
+        },
+      );
+
+      test('a period says itself in a person\'s words; a week as before', () {
+        final score = SuperTabLeaderboard.fromJson(rolling('24h')).people.first;
+        expect(score.spanName, 'in the last 24 hours');
+        expect(score.earlierName, 'the 24 hours before');
+        expect(
+          SuperTabLeaderboard.fromJson(answer()).people.first.spanName,
+          'this week',
+        );
+        expect(
+          SuperTabLeaderboard.fromJson(rolling('7d')).spanName,
+          'in the last 7 days',
+        );
+        expect(leaderboardPeriods.map(leaderboardPeriodLabel), [
+          'Last 24h',
+          'Last 7d',
+          'Last 30d',
+        ]);
+      });
     });
 
     test('shows no numbers while another week is read, so one week never wears another\'s name', () async {
@@ -313,6 +476,48 @@ void main() {
         await reader.show('lead');
         expect(reader.board, isNull);
         expect(reader.error, isNull);
+      },
+    );
+
+    test('forgets the board once the reader may not read the project, without naming why', () async {
+      final requests = FakeRequests();
+      final reader = SuperTabLeaderboardReader(
+        tabId: 'tab',
+        request: requests.call,
+      );
+      addTearDown(reader.dispose);
+      await reader.show('lead');
+      expect(reader.board, isNotNull);
+      requests.respond = (_) => const SuperTabFailure(
+        'FORBIDDEN',
+        'Not a member of Pilot.',
+        statusCode: 403,
+      );
+      await reader.refresh();
+      expect(reader.board, isNull);
+      expect(reader.error, isNull);
+    });
+
+    test(
+      'clears the board and drops a read in flight once no project is shown',
+      () async {
+        final late = Completer<Map<String, dynamic>>();
+        var reads = 0;
+        final reader = SuperTabLeaderboardReader(
+          tabId: 'tab',
+          request: (method, path, {body}) async {
+            reads++;
+            return reads == 1 ? answer() : late.future;
+          },
+        );
+        addTearDown(reader.dispose);
+        await reader.show('lead');
+        final inFlight = reader.refresh();
+        reader.clear();
+        expect(reader.board, isNull);
+        late.complete(answer());
+        await inFlight;
+        expect(reader.board, isNull);
       },
     );
 

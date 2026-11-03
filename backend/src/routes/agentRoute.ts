@@ -24,7 +24,7 @@ import { validateBody } from '../middlewares/validation.js'
 import { sendSuccess, sendError } from '../utils/response.js'
 import { logger } from '../utils/logger.js'
 import { callHarnessLlm, harnessLlmConfigured, replyJson } from '../lib/harnessLlm.js'
-import { createWindowLimiter } from '../lib/windowLimiter.js'
+import { createRateLimiter } from '../lib/rateLimit.js'
 
 export const AGENT_ROUTE_PATH = '/api/route/agents'
 
@@ -53,11 +53,11 @@ const BUDGET_MS_RANGE = { min: 3_000, max: 20_000, fallback: 10_000 } as const
 const RATE_LIMIT_WINDOW_MS = 60_000
 const RATE_LIMIT_MAX = 60
 
-const rateLimiter = createWindowLimiter(RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX)
+const rateLimiter = createRateLimiter('agent-route', RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX)
 
-export const routeRateLimitAllows = (userId: string, now = Date.now()): boolean => rateLimiter.allows(userId, now)
+export const routeRateLimitAllows = (userId: string, now = Date.now()): Promise<boolean> => rateLimiter.allows(userId, now)
 
-/** Test seam: process-local by design, like the analytics limiter it copies. */
+/** Test seam: forgets this process' counts (lib/rateLimit.ts). */
 export const resetRouteRateLimits = (): void => rateLimiter.reset()
 
 const agentSchema = z.object({
@@ -224,7 +224,7 @@ export async function agentRouteRoutes(app: FastifyInstance): Promise<void> {
 
       const body = req.body
       const userId = req.user?.sub ?? ''
-      if (!routeRateLimitAllows(userId)) {
+      if (!(await routeRateLimitAllows(userId))) {
         sendError(reply, 'Too many routing requests', 'RATE_LIMITED', 429)
         return
       }

@@ -1,5 +1,8 @@
 # Swarm local models
 
+> Replaced by [2026-10-30-project-instructions-design.md](2026-10-30-project-instructions-design.md): the instruction document and agents' direct messages
+> replace what this describes. Replaced in part: the grid models, their hosting and the add-on stay; the routing rules about them (grid first, limits on what grid models may build, hiding small or slow models) go.
+
 **Goal.** A Swarm's members can serve local models from their machines, and the Lead (Product Manager) can start
 Builders on them when that fits the work. It is an add-on: nothing calls grid until the Swarm's owner turns it on.
 

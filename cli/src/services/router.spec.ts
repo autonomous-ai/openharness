@@ -154,7 +154,7 @@ describe('the router', () => {
     const jev = vi.fn(async () => ({ target: said('s0', 0.8, ['s0', 's1', 'new']) }))
     const { router: made, lines } = router({ jev })
     expect(await startRouter(fakeCore(), made).route_decide!({ text: 'refund it', sessions: DESK }, OWNER))
-      .toEqual({ decided: 'session', id: 'a1', via: 'jev' })
+      .toEqual({ decided: 'session', id: 'a1', via: 'jev', p: 0.8, trace: '2 sessions · jev: "billing retries" 0.80, then "Prometheus alerts" 0.10' })
     expect(lines).toEqual(['session — 2 sessions · jev: "billing retries" 0.80, then "Prometheus alerts" 0.10'])
     // Jev was asked the task as the client sent it, trimmed.
     expect(jev).toHaveBeenCalledWith({ message: 'refund it' }, expect.objectContaining({ target: expect.any(Object) }), undefined)

@@ -1,11 +1,14 @@
+import 'dart:async';
+
 import '../api/access_token_source.dart';
+import '../logging/app_log.dart';
 import '../auth/auth_session.dart';
 import 'direct_auth_api.dart';
 
 /// A viewer build's SSO session — authSession.ts's `AuthSessionManager`, moved into the app because
 /// a device with no harness CLI has nobody else to hold it: the tokens `/api/auth/exchange` issued,
 /// kept in [AuthSession], refreshed [_refreshSkew] before they lapse, one refresh at a time.
-class DirectAuth implements AccessTokenSource {
+class DirectAuth implements AccessTokenSource, SignInRevision {
   DirectAuth({required this.session, required this.api});
 
   final AuthSession session;
@@ -15,6 +18,11 @@ class DirectAuth implements AccessTokenSource {
   int _revision = 0;
 
   static const _refreshSkew = Duration(seconds: 60);
+
+  /// Moves with every sign-in and sign-out here: a request signed before it
+  /// moved is not retried as whoever is signed in now.
+  @override
+  int get signInRevision => _revision;
 
   /// Browser adapters release their cross-tab session listener here.
   void dispose() {}
@@ -60,10 +68,35 @@ class DirectAuth implements AccessTokenSource {
     });
   }
 
-  Future<void> signOut() {
+  /// Signs this device out, and ends a Harness session on the server too. The server's part is
+  /// best effort and not waited on: signing out never waits on, or fails over, the network.
+  Future<void> signOut() async {
     final revision = ++_revision;
     _refreshing = null;
-    return _write(revision, session.clear);
+    String? ended;
+    await _write(revision, () async {
+      ended = await session.refreshToken();
+      await session.clear();
+    });
+    final refreshToken = ended;
+    if (refreshToken != null &&
+        DirectAuthApi.isHarnessRefreshToken(refreshToken)) {
+      unawaited(_endOnServer(refreshToken));
+    }
+  }
+
+  Future<void> _endOnServer(String refreshToken) async {
+    var ended = false;
+    try {
+      ended = await api.revoke(refreshToken);
+    } catch (_) {}
+    if (!ended) {
+      appLog.warn(
+        'auth',
+        'Could not end this sign-in on the server; it can no longer be used from here, '
+            'and ends on its own after 90 days unused.',
+      );
+    }
   }
 
   // A stale request is no longer allowed to decide that the CURRENT account

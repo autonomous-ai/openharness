@@ -120,9 +120,32 @@ class UploadProgress {
 /// Completers rather than one, since "the daemon accepted the announcement" and "the transfer is
 /// over (however it ended)" are resolved at different points and by different frames.
 class _ActiveUpload {
-  final Completer<bool> beginAccepted = Completer<bool>();
+  Completer<bool> beginAccepted = Completer<bool>();
   final Completer<bool> finished = Completer<bool>();
+
+  /// Why the daemon refused the last begin, as it said it.
+  String? refusal;
+
+  /// Bytes the daemon has confirmed holding (`terminal_chunked_upload_progress`).
+  int acked = 0;
+  Completer<void>? _ackWaiter;
+
+  void ack(int bytes) {
+    if (bytes <= acked) return;
+    acked = bytes;
+    final waiter = _ackWaiter;
+    _ackWaiter = null;
+    waiter?.complete();
+  }
+
+  /// Completes when the daemon next confirms more of the upload.
+  Future<void> nextAck() => (_ackWaiter ??= Completer<void>()).future;
 }
+
+/// What a daemon answers a begin while it still holds an upload for the same pane. This pane runs
+/// one upload at a time, so that one is an upload it already gave up on.
+const _uploadAlreadyInProgress =
+    'an upload is already in progress on this pane';
 
 /// One controller stream for one remote Harness agent.
 ///
@@ -152,6 +175,13 @@ class TerminalSession extends ChangeNotifier {
   final TerminalBinarySender sendBinary;
 
   final Duration resyncTimeout;
+
+  /// How long an upload may wait for the daemon to confirm another chunk before it is taken as
+  /// lost on the way and given up (see [_uploadBytes]).
+  final Duration uploadStallTimeout;
+
+  /// The progress of the last upload given up because it stalled; null once another starts.
+  UploadProgress? lastStalledUpload;
   final bool _readOnly;
   bool get readOnly => _readOnly || _watchOnly;
   String? _inputContext;
@@ -223,6 +253,7 @@ class TerminalSession extends ChangeNotifier {
     String? inputContext,
     bool watchOnly = false,
     this.resyncTimeout = const Duration(seconds: 4),
+    this.uploadStallTimeout = const Duration(seconds: 30),
     DateTime Function()? now,
   }) : _now = now ?? DateTime.now,
        // ignore: prefer_initializing_formals
@@ -651,6 +682,9 @@ class TerminalSession extends ChangeNotifier {
         if (!_matchesStream(payload)) return true;
         final accepted = payload['accepted'] == true;
         if (_activeUpload?.beginAccepted.isCompleted == false) {
+          _activeUpload!.refusal = accepted
+              ? null
+              : payload['reason']?.toString();
           _activeUpload!.beginAccepted.complete(accepted);
         }
         // Older daemons only sent this text. A vanished stream cannot accept input or upload
@@ -666,6 +700,7 @@ class TerminalSession extends ChangeNotifier {
         if (!_matchesStream(payload)) return true;
         final bytesWritten = (payload['bytesWritten'] as num?)?.toInt();
         final totalBytes = (payload['totalBytes'] as num?)?.toInt();
+        if (bytesWritten != null) _activeUpload?.ack(bytesWritten);
         if (bytesWritten != null &&
             totalBytes != null &&
             uploadProgress != null) {
@@ -1189,6 +1224,7 @@ class TerminalSession extends ChangeNotifier {
     final upload = _activeUpload;
     final currentStreamId = streamId;
     if (upload == null) return;
+    if (!upload.beginAccepted.isCompleted) upload.beginAccepted.complete(false);
     if (!upload.finished.isCompleted) upload.finished.complete(false);
     _clearUpload();
     if (currentStreamId != null) {
@@ -1211,6 +1247,13 @@ class TerminalSession extends ChangeNotifier {
   /// philosophy (`autonomous-harness/cli/src/cable/fwPush.ts`). Only one upload runs at a time per
   /// pane — a second call while one is active is refused immediately, matching the daemon's own
   /// "an upload is already in progress" rejection.
+  ///
+  /// The same ACKs pace the chunks: at most [terminalUploadWindowBytes] go out ahead of them. A
+  /// chunk lost on the way (a P2P link dropped with chunks in its buffer, say) is never asked for
+  /// again, and the daemon waits for it for as long as the stream lives; without an ACK for
+  /// [uploadStallTimeout], the upload is given up rather than left showing its last percentage.
+  /// Every upload given up is cancelled on the daemon too: one it still held refused every later
+  /// upload on the pane.
   Future<bool> _uploadBytes({
     required String uploadKind,
     required String? filename,
@@ -1227,6 +1270,7 @@ class TerminalSession extends ChangeNotifier {
     bool current() =>
         _isCurrent(generation) && identical(_activeUpload, upload);
     _activeUpload = upload;
+    lastStalledUpload = null;
     uploadProgress = UploadProgress(
       label: filename ?? 'image',
       bytesWritten: 0,
@@ -1234,24 +1278,40 @@ class TerminalSession extends ChangeNotifier {
     );
     notifyListeners();
 
-    final sentBegin = await send('terminal_chunked_upload_begin', {
-      'streamId': currentStreamId,
-      'uploadKind': uploadKind,
-      'totalBytes': bytes.length,
-      'filename': ?filename,
-    });
-    if (!current()) return false;
-    if (!sentBegin) {
-      transportLost('Terminal upload request was not sent');
-      _clearUpload();
-      return false;
+    var accepted = false;
+    // A daemon may still hold an upload an older build gave up on without cancelling it. Cancel
+    // that one and ask once more.
+    for (var attempt = 0; attempt < 2 && !accepted; attempt++) {
+      if (attempt > 0) {
+        upload.beginAccepted = Completer<bool>();
+        await send('terminal_chunked_upload_cancel', {
+          'streamId': currentStreamId,
+        });
+        if (!current()) return false;
+      }
+      final sentBegin = await send('terminal_chunked_upload_begin', {
+        'streamId': currentStreamId,
+        'uploadKind': uploadKind,
+        'totalBytes': bytes.length,
+        'filename': ?filename,
+      });
+      if (!current()) return false;
+      if (!sentBegin) {
+        transportLost('Terminal upload request was not sent');
+        _clearUpload();
+        return false;
+      }
+      accepted = await upload.beginAccepted.future.timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => false,
+      );
+      if (!current()) return false;
+      // An unanswered begin may still have been accepted.
+      if (!accepted && !upload.beginAccepted.isCompleted) {
+        return _abandonUpload(currentStreamId);
+      }
+      if (upload.refusal != _uploadAlreadyInProgress) break;
     }
-
-    final accepted = await upload.beginAccepted.future.timeout(
-      const Duration(seconds: 10),
-      onTimeout: () => false,
-    );
-    if (!current()) return false;
     if (!accepted) {
       _clearUpload();
       return false;
@@ -1259,7 +1319,14 @@ class TerminalSession extends ChangeNotifier {
 
     var offset = 0;
     var seq = 0;
-    while (offset < bytes.length) {
+    while (offset < bytes.length && !upload.finished.isCompleted) {
+      while (offset - upload.acked >= terminalUploadWindowBytes &&
+          !upload.finished.isCompleted) {
+        final moved = await _awaitUploadAck(upload);
+        if (!current()) return false;
+        if (!moved) return _abandonUpload(currentStreamId, stalled: true);
+      }
+      if (upload.finished.isCompleted) break;
       final end = min(offset + terminalUploadChunkBytes, bytes.length);
       final frame = TerminalBinaryFrame(
         kind: binaryKind,
@@ -1279,13 +1346,55 @@ class TerminalSession extends ChangeNotifier {
       seq++;
     }
 
+    while (upload.acked < bytes.length && !upload.finished.isCompleted) {
+      final moved = await _awaitUploadAck(upload);
+      if (!current()) return false;
+      if (!moved) return _abandonUpload(currentStreamId, stalled: true);
+    }
+    // Every byte is there: what remains is the daemon's own paste (a clipboard write, a file).
     final finished = await upload.finished.future.timeout(
       const Duration(minutes: 2),
       onTimeout: () => false,
     );
     if (!current()) return false;
+    if (!finished) return _abandonUpload(currentStreamId);
     _clearUpload();
-    return finished;
+    return true;
+  }
+
+  /// True once the daemon confirms more of [upload] or it ends; false after [uploadStallTimeout]
+  /// with neither.
+  Future<bool> _awaitUploadAck(_ActiveUpload upload) async {
+    try {
+      await Future.any([upload.nextAck(), upload.finished.future])
+          .timeout(uploadStallTimeout);
+      return true;
+    } on TimeoutException {
+      return false;
+    }
+  }
+
+  /// Gives up the active upload here and on the daemon. The cancel is queued before the upload is
+  /// cleared, so it reaches the daemon ahead of any upload this pane starts next.
+  Future<bool> _abandonUpload(
+    String uploadStreamId, {
+    bool stalled = false,
+  }) async {
+    final progress = uploadProgress;
+    if (stalled) {
+      lastStalledUpload = progress;
+      appLog.warn(
+        'terminal',
+        'upload stalled machine=$machineId agent=$agentId '
+            'confirmed=${progress?.bytesWritten}/${progress?.totalBytes}',
+      );
+    }
+    final cancelled = send('terminal_chunked_upload_cancel', {
+      'streamId': uploadStreamId,
+    });
+    _clearUpload();
+    await cancelled;
+    return false;
   }
 
   void _clearUpload() {

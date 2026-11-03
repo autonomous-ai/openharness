@@ -258,8 +258,14 @@ void ui_swarms_replace(const cable_swarm_t *rows, int count, const char *selecte
 void ui_supertabs_ids(const char ids[][ID_MAX], int n);
 // One Swarm's card. True when the caller should beep: a Lead started needing a person, off the face.
 bool ui_supertab(const ht_supertab_t *in);
-void ui_supertab_recap(const char *tab, const char *lead, const char *text, uint32_t at, bool none);
+// `chat_id`: the chat the text is the last message of, "" from a daemon without swarmChat. Dropped for another chat.
+void ui_supertab_recap(const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t at, bool none);
 void ui_supertab_focus(const char *tab, const char *lead);
+// The Lead's new message in its Lead conversation or Chat with PM (`supertab.notice`): that Lead's one inbox entry, read at
+// once when its chat is on the face. True when the caller should beep.
+bool ui_supertab_notice(const char *tab, const char *lead, ht_chat_kind_t chat, const char *chat_id, const char *text, uint32_t at);
+// The desktop opened that chat (`supertab.notice.read`): the entry goes.
+void ui_supertab_notice_read(const char *tab, const char *lead, const char *chat_id);
 // A Super Tab wait from harness `agent_id` (some Lead's `local`). It only sets that Lead's inbox text and face;
 // it never opens the question screen. True when the caller should beep.
 bool ui_supertab_wait(const char *agent_id, const char *request, const char *swarm_name, bool stuck, const char *text);

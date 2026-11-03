@@ -4,7 +4,7 @@
 pipeline of [Autonomous Circuit](https://github.com/autonomous-ai/autonomous-circuit): describe a board
 in the chat pane and get a real KiCad project — a wired schematic, copper KiCad's own ERC/DRC has
 checked, a prototype packet a fab can quote — with the project's own live board view in the pane beside
-the agent. Runs on Codex (GPT-6 Astra) with the upstream tile's exact arguments: approvals off, sandbox
+the agent. Runs on Codex (GPT-6.1 Sol) with the upstream tile's exact arguments: approvals off, sandbox
 off (kicad-cli, pcbnew and Freerouting do not survive it), and Circuit's Stop hook that finishes a build
 and asks once for the firmware. What the person flashes, they flash from the pane's Flash button.
 
@@ -36,7 +36,13 @@ a 1.4 GB download, 1.3 GB on disk; the manifest points the pipeline at it with `
 firmware toolchain** (Arm GNU 14.2, pico-sdk 2.2.0, picotool, plus cmake and ninja from PyPI wheels —
 ~1.1 GB more; the manifest exports `PICO_SDK_PATH`, `PICO_TOOLCHAIN_PATH`, `CMAKE_PREFIX_PATH`,
 `KICAD_HARNESS_CMAKE`, `KICAD_HARNESS_NINJA`, because since 2026-10-01 the Firmware phase is done only
-when the recipe's binary exists), and the built viewer. git is optional: without it the pinned commit arrives as GitHub's tarball. On Linux there is
+when the recipe's binary exists), **CadQuery 2.7** for the Case phase (in its own venv under `upstream/toolchain/case`, ~870 MB, built
+with the uv `runtimes.sh` fetches; the manifest exports `KICAD_CASE_PYTHON`), and the built viewer —
+about 4 GB in all. What it does not carry is `arduino-cli` with the esp32 core: an ESP32 board's
+firmware builds only on a machine that has them (`brew install arduino-cli`, then
+`arduino-cli core install esp32:esp32`), and the doctor warns when they are missing. New Codex
+projects run the contract-first team, whose jobs are `codex exec --output-schema`; the doctor
+reports a Codex too old for that as a miss. git is optional: without it the pinned commit arrives as GitHub's tarball. On Linux there is
 no relocatable KiCad artifact, so KiCad stays a system install (apt/dnf/flatpak) named by
 `KICADPY_CLI` / `KICADPY_PYTHON`, and the doctor says so.
 

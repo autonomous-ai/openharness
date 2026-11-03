@@ -90,6 +90,11 @@ cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bou
 "$out/test_arc_bounds"
 
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
+   -o "$out/test_arc_inner" "$here/test_arc_inner.c" \
+   "$here/../main/ui/habitat/focus_faces.c" "$here/../main/ui/habitat/lvgl_fonts.c" "$here/../main/ui/habitat/fonts.c"
+"$out/test_arc_inner"
+
+cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
    -I "$here/../main/ui/habitat" -o "$out/test_arc_ring" "$here/test_arc_ring.c" \
    "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c" -lm
 "$out/test_arc_ring"

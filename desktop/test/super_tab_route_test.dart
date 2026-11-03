@@ -42,7 +42,10 @@ Map<String, dynamic> routeRow({
   },
 };
 
-Map<String, dynamic> decision({String? overrideTo}) => {
+/// The decision's record as the backend keeps it. A record from before
+/// floors went still carries `floor` and `notes`, which nothing shows; with
+/// [revision] null, a record from before it named the instructions revision.
+Map<String, dynamic> decision({String? overrideTo, int? revision = 7}) => {
   'id': 'd1',
   'conversationId': 'offline',
   'record': {
@@ -65,8 +68,9 @@ Map<String, dynamic> decision({String? overrideTo}) => {
     ],
     'excluded': const [],
     'floor': 3,
-    'notes': false,
+    'notes': true,
     'pick': 'c0',
+    'instructionsRevision': ?revision,
   },
   'override': overrideTo == null ? null : {'candidateId': overrideTo},
 };
@@ -173,15 +177,12 @@ void main() {
     expect(parse({'decisionId': 4}), isNull);
   });
 
+  const ranked = 'Ranked by strength, price and quota';
   for (final c in [
     (via: 'jev', fallback: null, text: 'Jev 82%'),
-    (via: 'order', fallback: null, text: 'Policy order'),
-    (via: 'order', fallback: 'unsure', text: 'Policy order (Jev unsure)'),
-    (
-      via: 'order',
-      fallback: 'unavailable',
-      text: 'Policy order (Jev unavailable)',
-    ),
+    (via: 'order', fallback: null, text: ranked),
+    (via: 'order', fallback: 'unsure', text: ranked),
+    (via: 'order', fallback: 'unavailable', text: ranked),
     (via: 'only', fallback: null, text: 'Only available candidate'),
   ]) {
     testWidgets('keeps ${c.via} ${c.fallback ?? ''} explanation in Details', (
@@ -203,7 +204,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Selection: ${c.text}'), findsOneWidget);
       expect(find.text('schema change, high risk'), findsOneWidget);
-      expect(find.text('Quality floor 3'), findsOneWidget);
+      expect(find.text('Relied on instructions revision 7'), findsOneWidget);
       expect(find.textContaining('Opus, deepest review'), findsOneWidget);
       await tester.tap(find.text('Hide details'));
       await tester.pumpAndSettle();
@@ -212,13 +213,38 @@ void main() {
     });
   }
 
-  testWidgets('quality warning stays visible without opening Details', (
-    tester,
-  ) async {
-    final message = SuperTabMessage.fromJson(routeRow(belowFloor: true));
-    await tester.pumpWidget(rowOf(message, controller(ConversationServer())));
-    expect(find.text('Below quality floor'), findsOneWidget);
-    expect(find.text('schema change, high risk'), findsNothing);
+  testWidgets('shows what a route relied on, never floors', (tester) async {
+    for (final (revision, line) in [
+      (7, 'Relied on instructions revision 7'),
+      (0, 'Relied on the built-in instructions'),
+      (null, null),
+    ]) {
+      final server = ConversationServer();
+      server.routeDecisions['d1'] = decision(revision: revision);
+      // An older backend's route: below the floor, decided by policy order.
+      final message = SuperTabMessage.fromJson(
+        routeRow(via: 'order', belowFloor: true, fallback: 'unsure'),
+      );
+      await tester.pumpWidget(rowOf(message, controller(server)));
+      expect(find.text('Below quality floor'), findsNothing);
+      await tester.tap(find.text('Details'));
+      await tester.pumpAndSettle();
+      for (final gone in [
+        'Below quality floor',
+        'Policy order',
+        'Quality floor',
+        'Policy notes applied',
+      ]) {
+        expect(find.textContaining(gone), findsNothing, reason: gone);
+      }
+      expect(find.text('Selection: $ranked'), findsOneWidget);
+      if (line == null) {
+        expect(find.textContaining('Relied on'), findsNothing);
+      } else {
+        expect(find.text(line), findsOneWidget);
+      }
+      await tester.pumpWidget(const SizedBox());
+    }
   });
 
   for (final c in [
@@ -268,7 +294,7 @@ void main() {
     await tester.tap(find.text('Retry'));
     await tester.pumpAndSettle();
     expect(find.text('Could not load this decision.'), findsNothing);
-    expect(find.text('Quality floor 3'), findsOneWidget);
+    expect(find.text('Relied on instructions revision 7'), findsOneWidget);
     expect(server.posts, isEmpty);
   });
 
@@ -297,11 +323,11 @@ void main() {
     response.complete(decision());
     await tester.pumpAndSettle();
     expect(find.text('Details'), findsOneWidget);
-    expect(find.text('Quality floor 3'), findsNothing);
+    expect(find.text('Relied on instructions revision 7'), findsNothing);
     await tester.tap(find.text('Details'));
     await tester.pumpAndSettle();
     expect(reads, 1);
-    expect(find.text('Quality floor 3'), findsOneWidget);
+    expect(find.text('Relied on instructions revision 7'), findsOneWidget);
   });
 
   for (final brightness in Brightness.values) {

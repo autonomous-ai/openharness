@@ -218,6 +218,8 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
         // adopting them globally would refresh a held package's hooks at boot
         // before its Store dependencies are ready.
         if ((engine === 'claude' || engine === 'codex') && home === implicitHome) deps.confirmHome?.(engine, home)
+        // A Claude profile is adopted too, or its transcripts fall outside every root and the agent never binds.
+        else if (engine === 'claude' && source.claudeHome === home) deps.confirmHome?.(engine, home)
         if (!executable.current() || !owner() || [...dependencies, ...confirmed].some(proof => !proof.current())) return false
         // The command locations and the proofs become dispatch authority together.
         // A failed or pending replacement can never expose B with A's proof set.

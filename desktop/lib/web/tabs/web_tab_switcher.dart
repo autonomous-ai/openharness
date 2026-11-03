@@ -4,20 +4,19 @@ import 'package:flutter/material.dart';
 import 'package:xterm/xterm.dart' show TerminalTheme;
 
 import '../../shared/theme/app_theme.dart' as grid;
-import '../../shared/theme/workspace_bar_style.dart';
 import '../../state/app_state.dart';
 import '../../state/harness_activity.dart';
 import '../../state/workspace_chrome.dart';
 import '../../state/workspace_status.dart';
-import '../../super_tabs/pm_chat.dart' show countText;
+import '../../super_tabs/buddy_chat.dart' show countText;
 import '../../terminal/terminal_theme.dart';
 import '../../terminal/terminal_theme_store.dart';
 import '../../widgets/finger_target.dart';
 import '../../widgets/pane_menu.dart';
 import '../../widgets/pane_grid.dart' show soloPaneId;
 import '../shell/web_dropdown_control.dart';
+import '../shell/web_new_menu.dart';
 import 'web_tab_menu.dart';
-import '../../widgets/workspace_bar_control.dart';
 
 /// The tab list on a phone: the current tab as one control; its harnesses and
 /// every tab one tap away in a menu. A row of tabs leaves room for one, and a
@@ -52,13 +51,18 @@ class WebTabSwitcher extends StatelessWidget {
     ].join(' ');
     return Row(
       children: [
-        Flexible(
-          child: fingerTarget(
-            enabled: true,
-            _switcher(context, label, enabled, theme),
+        // All the room the name leaves: + stays beside the other icons, however
+        // short the name is.
+        Expanded(
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: fingerTarget(
+              enabled: true,
+              _switcher(context, label, enabled, theme),
+            ),
           ),
         ),
-        fingerTarget(enabled: true, _newTabButton(context, enabled, theme)),
+        phoneBarCell(WebNewMenuButton(app: app, commands: commands)),
       ],
     );
   }
@@ -74,28 +78,6 @@ class WebTabSwitcher extends StatelessWidget {
     tooltip: 'Tabs',
     color: theme.foreground,
     onPressed: enabled ? () => _open(context) : null,
-  );
-
-  /// Desktop's `+` beside the tabs: a new tab, which opens on "Start an agent".
-  Widget _newTabButton(
-    BuildContext context,
-    bool enabled,
-    TerminalTheme theme,
-  ) => WorkspaceBarControl(
-    key: const ValueKey('web-new-tab-button'),
-    label: 'New Tab',
-    tooltip: 'New Tab',
-    foreground: theme.foreground,
-    onPressed: enabled && commands.canRun('swarm.new')
-        ? () => commands.run('swarm.new')
-        : null,
-    builder: (context, emphasized) => SizedBox(
-      width: workspaceBarCellSizeOf(context).width * 3,
-      height: workspaceBarControlHeight(context),
-      child: Center(
-        child: Text('+', style: workspaceBarTextStyle(emphasized: emphasized)),
-      ),
-    ),
   );
 
   Future<void> _open(BuildContext context) async {

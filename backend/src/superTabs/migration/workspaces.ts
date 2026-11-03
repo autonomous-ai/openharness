@@ -124,7 +124,7 @@ async function machinesInTwoWorkspaces(db: PrismaClient, owners: Map<string, Pen
   const pools = await db.swarmMachine.findMany({ where: { deleted: false, contributed: true }, select: { tabId: true, machineId: true } })
   const workspaceOf = new Map<string, string>()
   for (const [workspaceId, swarms] of owners) for (const swarm of swarms) workspaceOf.set(swarm.id, workspaceId)
-  for (const row of await db.superTab.findMany({ where: { id: { in: pools.map(p => p.tabId) } }, select: { id: true, workspaceId: true } })) {
+  for (const row of pools.length ? await db.superTab.findMany({ where: { id: { in: pools.map(p => p.tabId) } }, select: { id: true, workspaceId: true } }) : []) {
     if (row.workspaceId) workspaceOf.set(row.id, row.workspaceId)
   }
   const byMachine = new Map<string, string[]>()

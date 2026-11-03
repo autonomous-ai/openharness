@@ -24,6 +24,7 @@ import 'engine_identity.dart';
 import 'search_result_text.dart' show SessionSnippetText;
 import 'session_tail_view.dart';
 import 'swarm_preview_scroll.dart';
+import 'laid_out_list.dart';
 
 typedef _PreviewAgent = ({MachineState machine, Agent agent});
 
@@ -466,7 +467,7 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
           return Semantics(
             container: true,
             label: 'Command preview',
-            child: ListView(
+            child: LaidOutListView(
               key: ValueKey('preview-content:${row.id}'),
               controller: _scroll,
               padding: padding,
@@ -514,7 +515,7 @@ class _SwarmSearchPreviewState extends State<SwarmSearchPreview> {
         final agents = _agents(app, row);
         if (row.isGroup || agents.length != 1) _scroll.reversed = false;
         final content = row.isGroup || agents.length != 1
-            ? ListView.builder(
+            ? LaidOutListView.builder(
                 key: ValueKey('preview-content:${row.id}'),
                 controller: _scroll,
                 padding: padding,

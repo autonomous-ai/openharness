@@ -283,7 +283,7 @@ void main() {
   );
 
   test(
-    'main stays unavailable and a delayed Git read revalidates before creating',
+    'no default stays unavailable and a delayed Git read revalidates before creating',
     () async {
       final fixture = _Fixture();
       final pending = Completer<Map<String, dynamic>>();
@@ -293,14 +293,13 @@ void main() {
       expect(box.busy, isTrue);
       pending.complete({
         'isGit': true,
-        'branch': 'trunk',
         'branches': [
           {'ref': 'refs/heads/trunk', 'name': 'trunk'},
         ],
         'refreshed': true,
       });
       expect(await creating, NewHarnessOutcome.failed);
-      expect(box.branchLabel, 'main · unavailable');
+      expect(box.branchLabel, 'default · unavailable');
       expect(box.worktree, isTrue);
       expect(box.field, NewHarnessField.branch);
       expect(box.error, contains('Choose a branch'));

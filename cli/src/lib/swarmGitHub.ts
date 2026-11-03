@@ -16,7 +16,7 @@
  *
  * The variable `GIT_CONFIG_KEY_n` is not used: Codex leaves out of its commands every variable whose name contains KEY.
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
 import { daemonCommand } from './daemonCommand.js'
@@ -167,8 +167,21 @@ const GH_CONFIG = 'version: "1"\n'
 const TOKEN = /^[A-Za-z0-9_][A-Za-z0-9_.-]{19,4095}$/
 
 /** Who a session's commits are by, as the server names the Harness GitHub App's bot account; nothing else is written. */
-const COMMIT_NAME = /^[a-z0-9][a-z0-9-]{0,99}\[bot\]$/
-const COMMIT_EMAIL = /^[0-9]{1,20}\+[a-z0-9][a-z0-9-]{0,99}\[bot\]@users\.noreply\.github\.com$/
+/** Who a Team account's commits are by: "Harness" (2026-11-02), or an older backend's name for the app's bot account. */
+const COMMIT_NAME = /^(?:Harness by Autonomous|Harness|[a-z0-9][a-z0-9-]{0,99}\[bot\])$/
+const COMMIT_EMAIL = /^(?:noreply@autonomous\.ai|[0-9]{1,20}\+[a-z0-9][a-z0-9-]{0,99}\[bot\]@users\.noreply\.github\.com)$/
+
+/**
+ * Revoke a Harness GitHub App installation token with the token itself (GitHub's `DELETE /installation/token`): the
+ * read-only one a machine cloned a teammate's project with, done with once the clone and the fetch are (local Team account
+ * run, 2026-10-28: it stayed good for its hour). Best effort: a token GitHub does not revoke still expires within the hour.
+ */
+export async function revokeGitHubToken(token: string, send: typeof fetch = fetch): Promise<void> {
+  if (!TOKEN.test(token)) return
+  const answer = await send('https://api.github.com/installation/token', { method: 'DELETE', signal: AbortSignal.timeout(10_000),
+    headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`, 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'harness' } })
+  if (answer.status !== 204 && answer.status !== 401) throw new Error(`GitHub answered ${answer.status} to revoking the token`)
+}
 
 /** The session's gh login: [token] for github.com, or none. And, when given, the trailers its commits get and who they are
  *  by ([commitAs]: the app's bot account, which the server gives a Harness Team account, as it has no git identity of its
@@ -205,6 +218,10 @@ export function swarmGitHubLaunch(key: string, tools: SwarmGitHubTools = default
   if (platform === 'win32' || !dir) return null
   const { helper, hooks } = writeSwarmGitHubTools(tools)
   if (!existsSync(join(dir, 'gh', 'hosts.yml'))) writeSessionGitHub(dir, null)
+  // Marked as just used: a start held before its session is registered must not look like a folder left behind
+  // (superTabs/github.ts removes those once untouched for 15 minutes; review of #1998).
+  const now = new Date()
+  utimesSync(dir, now, now)
   return {
     env: {
       GIT_CONFIG_PARAMETERS: gitConfigParameters(helper, hooks, join(dir, 'gitconfig')),

@@ -1171,6 +1171,86 @@ describe('TerminalStreamManager', () => {
   // hn with no terminal (its server, kept for the sessions a closed window left) reads every pane of the desk. On
   // 2026-10-14 it reopened first after each daemon restart, took the terminals at its 80x24 layout and left the
   // window the person was using watching a shrunken agent until they typed. It opens with `watch: true` now.
+  // A Harness Team daemon running a Swarm Product Manager (#895, superTabs/inCore/teamApps.ts): the Mac owner's apps only
+  // watch, and keystrokes arrive as binary frames that no request gate sees (security review 1 of #2089).
+  describe('a connection held to watching', () => {
+    let held: boolean
+    beforeEach(() => {
+      held = true
+      manager = newManager({ watchOnly: (connId) => held && connId === 'owner-app' })
+    })
+    const ready = (connId: string) => sent.findLast((frame) => frame.connId === connId && frame.type === 'terminal_ready')!
+    const type = (streamId: string, text: string) => manager.handleBinary('owner-app', { kind: TerminalBinaryKind.input, streamId, seq: 0,
+      bytes: Buffer.from(text), compressed: false })
+
+    it('opens as a watcher though it asks to take the terminal, and its keystrokes, pastes and resizes reach nothing', async () => {
+      await manager.handleFrame('owner-app', 'terminal_open', { requestId: 'open-1', protocolVersion: 3, agentId: 'agent-1', cols: 80, rows: 24 })
+      expect(ready('owner-app').payload.readOnly).toBe(true)
+      const streamId = ready('owner-app').payload.streamId as string
+      await type(streamId, 'cat ~/.claude/projects/*\r')
+      await manager.handleBinary('owner-app', { kind: TerminalBinaryKind.paste, streamId, seq: 0, bytes: Buffer.from('ls'), compressed: false })
+      await manager.handleFrame('owner-app', 'terminal_resize', { streamId, resizeSeq: 1, cols: 30, rows: 10 })
+      expect(sent.at(-1)?.payload.code).toBe('VIEW_ONLY')
+      expect([stream.writes, stream.sizes]).toEqual([[], []])
+    })
+
+    it('drops the input of a stream it opened before it was held, from then on', async () => {
+      held = false
+      await manager.handleFrame('owner-app', 'terminal_open', { requestId: 'open-1', protocolVersion: 3, agentId: 'agent-1', cols: 80, rows: 24 })
+      expect(ready('owner-app').payload.readOnly).toBe(false)
+      const streamId = ready('owner-app').payload.streamId as string
+      await type(streamId, 'a')
+      await vi.waitFor(() => expect(stream.writes).toHaveLength(1))
+      held = true
+      await type(streamId, 'b')
+      await manager.handleFrame('owner-app', 'terminal_resize', { streamId, resizeSeq: 1, cols: 30, rows: 10 })
+      expect(sent.at(-1)?.payload.code).toBe('VIEW_ONLY')
+      expect(stream.writes).toHaveLength(1)
+      expect(stream.sizes).toEqual([])
+    })
+
+    it('leaves every other connection as it was', async () => {
+      await manager.handleFrame('desktop-1', 'terminal_open', { requestId: 'open-2', protocolVersion: 3, agentId: 'agent-1', cols: 80, rows: 24 })
+      expect(ready('desktop-1').payload.readOnly).toBe(false)
+    })
+  })
+
+  // Security review 2 of #2089: a session that turned confidential (a Swarm Product Manager, superTabs/inCore/teamApps.ts)
+  // after the Mac owner's app opened it went on streaming people's chats to that app.
+  describe('a stream on a session that turned confidential', () => {
+    let closed: boolean
+    beforeEach(() => {
+      closed = false
+      manager = newManager({ closedTo: (connId, agentId) => closed && connId === 'owner-app' && agentId === 'agent-1' })
+    })
+    const output = () => binarySent.filter(({ connId, frame }) => connId === 'owner-app' && frame.kind === TerminalBinaryKind.output)
+
+    it('opened before, is closed and sent nothing more, its resync included', async () => {
+      await manager.handleFrame('owner-app', 'terminal_open', { requestId: 'open-1', protocolVersion: 3, agentId: 'agent-1', cols: 80, rows: 24 })
+      const streamId = sent.findLast(f => f.type === 'terminal_ready')!.payload.streamId as string
+      sink!.onData(Buffer.from('before'))
+      await vi.advanceTimersByTimeAsync(8)
+      const before = output().length
+      expect(before).toBeGreaterThan(0)
+      closed = true
+      sink!.onData(Buffer.from('Only for the PM: the launch slips a week.'))
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(output()).toHaveLength(before)
+      expect(sent.find(f => f.connId === 'owner-app' && f.type === 'terminal_closed')?.payload).toMatchObject({ code: 'SWARM_CONFIDENTIAL', streamId })
+      const sentBefore = binarySent.length
+      await manager.handleFrame('owner-app', 'terminal_resync', { streamId })
+      await vi.advanceTimersByTimeAsync(100)
+      expect(binarySent).toHaveLength(sentBefore)
+    })
+
+    it('is not opened again', async () => {
+      closed = true
+      await manager.handleFrame('owner-app', 'terminal_open', { requestId: 'open-1', protocolVersion: 3, agentId: 'agent-1', cols: 80, rows: 24 })
+      expect(sent.at(-1)).toMatchObject({ connId: 'owner-app', payload: expect.objectContaining({ code: 'SWARM_CONFIDENTIAL' }) })
+      expect(sent.some(f => f.type === 'terminal_ready')).toBe(false)
+    })
+  })
+
   describe('a watch-only open', () => {
     let readOnlyOpens: boolean[]
     beforeEach(() => {

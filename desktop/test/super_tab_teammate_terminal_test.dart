@@ -110,7 +110,8 @@ Future<(SuperTabLaunchFixture, _Machines, SuperTabController)> _swarm({
       'configuration': {'engine': 'claude'},
     },
   ];
-  (state['conversations'] as List)[0]['agentIds'] = ['river'];
+  // A workgroup: the project chat shows its coordinator's terminal alone (#2207).
+  (state['conversations'] as List)[1]['agentIds'] = ['river'];
   final c = await f.app.superTabs.open(tabId);
   await c.refresh();
   return (f, api, c);
@@ -275,10 +276,10 @@ void main() {
       );
       expect(
         text,
-        'River runs on $_computer, scholes@autonomous.ai’s computer. Its '
+        'River runs on $_computer, scholes’s computer. Its '
         'terminal is not shared with you yet: Harness there shares it with '
         'Swarm members once it is up to date and running. Ask '
-        'scholes@autonomous.ai to update and restart Harness, then Retry.',
+        'scholes to update and restart Harness, then Retry.',
       );
       expect(text, isNot(contains('must be online')));
     });
@@ -288,11 +289,16 @@ void main() {
       final heard = now
           .subtract(const Duration(seconds: 4))
           .millisecondsSinceEpoch;
-      // River (Ken's Lead, 2026-10-28): a Product Manager reads people's private chats, so no share ever opens it.
+      // Every member watches the current Product Manager, view only (Ken, 2026-10-28), though the backend marks it
+      // confidential: until its invitation arrives, its computer is the one to update.
+      final pm = snapshot(receivedAt: heard, lead: true, confidential: true);
+      expect(superTabTerminalPrivate(pm, pm.agent('river')!), isFalse);
       expect(
-        reason(snapshot(receivedAt: heard, lead: true), 'river'),
-        'River is the Product Manager and reads private chats, so only '
-        'scholes@autonomous.ai can watch its terminal.',
+        reason(pm, 'river'),
+        'River runs on $_computer, scholes’s computer. Its '
+        'terminal is not shared with you yet: Harness there shares it with '
+        'Swarm members once it is up to date and running. Ask '
+        'scholes to update and restart Harness, then Retry.',
       );
       // Marked confidential by the backend: in a private chat, or a Product Manager before.
       final private = reason(
@@ -301,7 +307,7 @@ void main() {
       );
       expect(
         private,
-        'River reads private chats, so only scholes@autonomous.ai can watch '
+        'River reads private chats, so only scholes can watch '
         'its terminal.',
       );
       // Its computer offline changes nothing: the terminal stays private once it is back.
@@ -321,7 +327,7 @@ void main() {
           .millisecondsSinceEpoch;
       expect(
         reason(snapshot(receivedAt: silent), 'river'),
-        'River runs on $_computer, scholes@autonomous.ai’s computer, which is '
+        'River runs on $_computer, scholes’s computer, which is '
         'offline. Its terminal shows here once that computer is back.',
       );
       expect(reason(snapshot(), 'river'), contains('which is offline'));
@@ -366,14 +372,13 @@ void main() {
     (tester) async {
       final (f, api, c) = await _swarm();
       await _show(tester, f);
-      c.selectTerminal('lead', 'river');
+      c
+        ..select('offline')
+        ..selectTerminal('offline', 'river');
       await _settle(tester);
       await _shoot(tester, 'teammate-without-invitation');
       expect(find.textContaining('must be online'), findsNothing);
-      expect(
-        find.textContaining('scholes@autonomous.ai’s computer'),
-        findsOneWidget,
-      );
+      expect(find.textContaining('scholes’s computer'), findsOneWidget);
       expect(find.text('Retry'), findsOneWidget);
       expect(find.byType(SharedHarnessPanel), findsNothing);
 
@@ -405,12 +410,11 @@ void main() {
       final (f, api, c) = await _swarm(confidential: true);
       await _show(tester, f);
       final reads = api.reads;
-      c.selectTerminal('lead', 'river');
+      c
+        ..select('offline')
+        ..selectTerminal('offline', 'river');
       await _settle(tester);
-      expect(
-        find.textContaining('only scholes@autonomous.ai can watch'),
-        findsOneWidget,
-      );
+      expect(find.textContaining('only scholes can watch'), findsOneWidget);
       expect(find.textContaining('update and restart'), findsNothing);
       expect(find.byType(SharedHarnessPanel), findsNothing);
       expect(api.reads, reads);
@@ -426,7 +430,9 @@ void main() {
       api.list = [_own, _teammate(21)];
       await f.app.refreshMachines();
       await _show(tester, f);
-      c.selectTerminal('lead', 'river');
+      c
+        ..select('offline')
+        ..selectTerminal('offline', 'river');
       await _settle(tester);
       final panel = tester.state(find.byType(SharedHarnessPanel));
       final pane = f.app.panes.single;
@@ -457,7 +463,9 @@ void main() {
         ..['machineOwnerId'] = 'owner';
       await c.refresh();
       await _show(tester, f);
-      c.selectTerminal('lead', 'river');
+      c
+        ..select('offline')
+        ..selectTerminal('offline', 'river');
       await _settle(tester);
       expect(find.text(superTabTerminalOffline), findsOneWidget);
       expect(find.text('Retry'), findsOneWidget);

@@ -11,7 +11,7 @@ import { communityLimits } from '../lib/communityContract.js'
 import { translateDraft, TranslationTooLong } from '../lib/communityTranslate.js'
 import { acceptGzipJson } from '../lib/gzipJson.js'
 import { harnessLlmConfigured } from '../lib/harnessLlm.js'
-import { createWindowLimiter } from '../lib/windowLimiter.js'
+import { createRateLimiter } from '../lib/rateLimit.js'
 import { validateBody } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
 import { logger } from '../utils/logger.js'
@@ -19,7 +19,7 @@ import { logger } from '../utils/logger.js'
 export const COMMUNITY_TRANSLATE_PATH = '/api/community/translate'
 
 /** A draft is translated once as it arrives, and again only when its author asks. */
-const limiter = createWindowLimiter(10 * 60_000, 10)
+const limiter = createRateLimiter('community-translate', 10 * 60_000, 10)
 export const resetTranslateRateLimits = (): void => limiter.reset()
 
 const bodySchema = z.object({
@@ -36,7 +36,7 @@ export async function communityTranslateRoutes(app: FastifyInstance): Promise<vo
       return sendError(reply, 'Translation is not available right now.', 'LLM_NOT_CONFIGURED', 503)
     }
     const userId = req.user!.sub
-    if (!limiter.allows(userId)) return sendError(reply, 'Please wait before translating again.', 'RATE_LIMITED', 429)
+    if (!(await limiter.allows(userId))) return sendError(reply, 'Please wait before translating again.', 'RATE_LIMITED', 429)
     const started = Date.now()
     try {
       const result = await translateDraft(req.body)

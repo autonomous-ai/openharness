@@ -23,10 +23,9 @@ api_url='https://harness-api.autonomous.ai'
 # lucide_icons_flutter lists seven fonts and the browser fetches every one on first load, but
 # the app draws only weight 400 (lib/shared/theme/app_icons.dart): the other six are 1.5 MB
 # compressed. Dropped here, not in pubspec.yaml, so the Desktop bundle is unchanged.
-# Roboto Mono, the terminal's face, leaves the manifest too but stays in the release: the engine
-# waits for every font the manifest lists before its first frame, and the sign-in page draws no
-# terminal, so a first visit waited for 0.23 MB it never used. The workspace part loads it
-# (lib/web/parts/terminal_fonts.dart).
+# Roboto Mono and Symbols Nerd Font Mono leave the manifest too but stay in the release: the
+# engine waits for every font the manifest lists before its first frame, and the sign-in page
+# draws no terminal. The workspace part loads both (lib/web/parts/terminal_fonts.dart).
 python3 - <<'PY'
 import json
 from pathlib import Path
@@ -34,11 +33,11 @@ import sys
 
 package = 'packages/lucide_icons_flutter/'
 used = package + 'Lucide400'
-late = 'Roboto Mono'
+late = ('Roboto Mono', 'Symbols Nerd Font Mono')
 assets = Path('build/web-release/assets')
 manifest_path = assets / 'FontManifest.json'
 manifest = json.loads(manifest_path.read_text())
-for family in (used, late):
+for family in (used, *late):
     if family not in {entry['family'] for entry in manifest}:
         sys.exit(f'{family} is not in the font manifest; update the font step in build-web-release.sh.')
 unused = [e for e in manifest if e['family'].startswith(package) and e['family'] != used]
@@ -46,8 +45,8 @@ for entry in unused:
     for font in entry['fonts']:
         (assets / font['asset']).unlink()
 manifest_path.write_text(json.dumps(
-    [e for e in manifest if e not in unused and e['family'] != late], separators=(',', ':')))
-print(f"Dropped {len(unused)} unused icon fonts from the web release; {late} loads with the workspace.")
+    [e for e in manifest if e not in unused and e['family'] not in late], separators=(',', ':')))
+print(f"Dropped {len(unused)} unused icon fonts from the web release; {', '.join(late)} load with the workspace.")
 PY
 
 # Flutter asks for the font manifest, then its fonts, only once main.dart.js has run: a step in

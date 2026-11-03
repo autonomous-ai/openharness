@@ -2,8 +2,9 @@ import { EventEmitter } from 'node:events'
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 const m = vi.hoisted(() => ({
   auth: vi.fn(), grant: vi.fn(), up: vi.fn(), changed: vi.fn(), swarm: vi.fn(), down: vi.fn(), live: vi.fn(),
-  upgrade: vi.fn(), link: vi.fn(), profile: vi.fn(),
+  upgrade: vi.fn(), link: vi.fn(), profile: vi.fn(), info: vi.fn(),
 }))
+vi.mock('../utils/logger.js', () => ({ logger: { info: m.info, warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }))
 vi.mock('./ssoAuth.js', () => ({ authenticateAccessToken: m.auth }))
 vi.mock('./prisma.js', () => ({ prisma: { user: { findUnique: m.profile } } }))
 vi.mock('../routes/harnessLinks.js', () => ({ recipientLink: m.link }))
@@ -38,6 +39,21 @@ describe('isolated observer WebSocket boundary', () => {
   afterEach(() => { ws.close(); vi.useRealTimers() })
   const attach = () => attachObserver(ws as never, user, share as never)
   const hello = () => ws.message('observer_hello', { ephemeral: Buffer.alloc(32, 1).toString('base64') })
+  // WebSocket roadmap Phase 0: which client watched, how its socket ended and after how long. Never the share or link
+  // id, which for a link is the address that opens it.
+  it('logs the client it declared, and how and when its socket closed, without the share id', async () => {
+    const socket = { destroyed: false, destroy: vi.fn() }
+    handleObserverUpgrade({ url: `/api/observer-ws?share=${share.id}&client=relay&v=0.9.1`, headers: { 'sec-websocket-protocol': 'tok' } } as never,
+      socket as never, Buffer.alloc(0))
+    await flush()
+    vi.advanceTimersByTime(700)
+    ws.emit('close', 1012, Buffer.from('Owner is offline'))
+    const lines = m.info.mock.calls.filter(c => c[0] === 'observer disconnected').map(c => c[1])
+    expect(lines).toEqual([expect.objectContaining({ endpoint: 'observer', client: 'relay', version: '0.9.1', userId: 'ken', machineId: 'm',
+      code: 1012, reason: 'Owner is offline', aliveMs: 700 })])
+    expect(JSON.stringify(m.info.mock.calls)).not.toContain(share.id)
+  })
+
   it('admits anonymous public links, passes only authenticated comment identity and rechecks link access', async () => {
     const socket = { destroyed: false, destroy: vi.fn() }
     const req = (token?: string) => ({ url: `/api/observer-ws?link=${share.id}`, headers: token ? { 'sec-websocket-protocol': token } : {} })

@@ -29,6 +29,7 @@ class TerminalStyle {
     this.height = _kDefaultHeight,
     this.fontFamily = _kDefaultFontFamily,
     this.fontFamilyFallback = _kDefaultFontFamilyFallback,
+    this.symbolFontFamily,
   });
 
   factory TerminalStyle.fromTextStyle(TextStyle textStyle) {
@@ -50,6 +51,10 @@ class TerminalStyle {
   final String fontFamily;
 
   final List<String> fontFamilyFallback;
+
+  /// Face for private-use icons (a Nerd Font). Null keeps those code points on
+  /// [fontFamily], which usually has no glyph for them.
+  final String? symbolFontFamily;
 
   TextStyle toTextStyle({
     Color? color,
@@ -79,12 +84,14 @@ class TerminalStyle {
     double? height,
     String? fontFamily,
     List<String>? fontFamilyFallback,
+    String? symbolFontFamily,
   }) {
     return TerminalStyle(
       fontSize: fontSize ?? this.fontSize,
       height: height ?? this.height,
       fontFamily: fontFamily ?? this.fontFamily,
       fontFamilyFallback: fontFamilyFallback ?? this.fontFamilyFallback,
+      symbolFontFamily: symbolFontFamily ?? this.symbolFontFamily,
     );
   }
 }

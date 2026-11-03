@@ -1,5 +1,9 @@
+import 'dart:async';
+import 'dart:typed_data';
+
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/client.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/notifications.dart';
@@ -63,16 +67,42 @@ class _Backend {
       paths.where((p) => Uri.parse(p).path == '/api/super-tabs/list').length;
 }
 
+/// Holds the next read of a Swarm's saved state until [release]d: an open
+/// that has not landed yet.
+class _HeldStore extends MemoryStore {
+  Completer<void>? _held;
+  bool _holdsNext = false;
+
+  void holdNextOpen() {
+    _held = Completer<void>();
+    _holdsNext = true;
+  }
+
+  void release() => _held!.complete();
+
+  @override
+  Future<String?> read(String key) async {
+    if (_holdsNext && key == 'super_tab.owner.tab') {
+      _holdsNext = false;
+      await _held!.future;
+    }
+    return super.read(key);
+  }
+}
+
 SuperTabClient _client(
   _Backend backend, {
+  MemoryStore? storage,
   SuperTabReading? reading,
-  void Function(SuperTabMention)? onMention,
+  void Function(String tabId, SuperTabMention mention)? onMention,
+  void Function(SuperTabController)? onSnapshot,
 }) {
   final client = SuperTabClient(
     transport: backend.call,
-    storage: MemoryStore(),
+    storage: storage ?? MemoryStore(),
     onTabs: (_, _) {},
     onMention: onMention,
+    onSnapshot: onSnapshot,
     discoveryInterval: const Duration(seconds: 15),
   );
   if (reading != null) client.reading = reading;
@@ -80,6 +110,143 @@ SuperTabClient _client(
 }
 
 void main() {
+  _pushGroup();
+
+  // Files are bytes, so only this running app keeps them: a Swarm let go gives them to its next controller.
+  group('pasted files across a Swarm being let go', () {
+    HarnessAttachment file(String name) =>
+        HarnessAttachment(name, Uint8List.fromList([1]));
+    List<String> names(HarnessAttachments files) => [
+      for (final f in files.files) f.name,
+    ];
+    SuperTabController opened(
+      SuperTabClient client,
+      FakeAsync async,
+      String id,
+    ) {
+      late SuperTabController c;
+      client.open(id).then((value) => c = value);
+      async.elapse(const Duration(seconds: 1));
+      return c;
+    }
+
+    SuperTabClient started(_Backend backend) =>
+        _client(backend, reading: SuperTabReading.desktop)..bind('owner');
+
+    test('come back to the chat and the thread they were for', () {
+      fakeAsync((async) {
+        final client = started(_Backend());
+        final first = opened(client, async, 'tab');
+        first.attachments('lead').add([file('chat.png')]);
+        first.threadAttachments('lead', 'message-1').add([file('thread.png')]);
+        client.release('tab');
+        async.flushMicrotasks();
+        final second = opened(client, async, 'tab');
+        expect(identical(first, second), isFalse);
+        expect(names(second.attachments('lead')), ['chat.png']);
+        expect(names(second.threadAttachments('lead', 'message-1')), [
+          'thread.png',
+        ]);
+        client.dispose();
+      });
+    });
+
+    test(
+      'are given once: a second close and open finds them again, not twice',
+      () {
+        fakeAsync((async) {
+          final client = started(_Backend());
+          opened(client, async, 'tab').attachments('lead').add([file('a.png')]);
+          client.release('tab');
+          async.flushMicrotasks();
+          opened(client, async, 'tab');
+          client.release('tab');
+          async.flushMicrotasks();
+          expect(names(opened(client, async, 'tab').attachments('lead')), [
+            'a.png',
+          ]);
+          client.dispose();
+        });
+      },
+    );
+
+    test('never reach another account', () {
+      fakeAsync((async) {
+        final client = started(_Backend());
+        opened(client, async, 'tab').attachments('lead').add([file('a.png')]);
+        client.release('tab');
+        async.flushMicrotasks();
+        client.bind('someone-else');
+        async.flushMicrotasks();
+        expect(
+          opened(client, async, 'tab').attachments('lead').isEmpty,
+          isTrue,
+        );
+        client.dispose();
+      });
+    });
+
+    test('are not kept once access has gone', () {
+      fakeAsync((async) {
+        final client = started(_Backend());
+        final first = opened(client, async, 'tab');
+        first.attachments('lead').add([file('a.png')]);
+        first.revokeAccess('Access went.', keepSaved: true);
+        client.release('tab');
+        async.flushMicrotasks();
+        expect(
+          opened(client, async, 'tab').attachments('lead').isEmpty,
+          isTrue,
+        );
+        client.dispose();
+      });
+    });
+
+    test('go with a conversation that left while the Swarm was closed', () {
+      fakeAsync((async) {
+        final backend = _Backend();
+        final client = started(backend);
+        final first = opened(client, async, 'tab');
+        first.attachments('offline').add([file('a.png')]);
+        first.threadAttachments('offline', 'message-1').add([file('b.png')]);
+        client.release('tab');
+        async.flushMicrotasks();
+        (backend.servers['tab']!.state['conversations'] as List).removeWhere(
+          (g) => (g as Map)['id'] == 'offline',
+        );
+        final second = opened(client, async, 'tab');
+        expect(second.attachments('offline').isEmpty, isTrue);
+        expect(
+          second.threadAttachments('offline', 'message-1').isEmpty,
+          isTrue,
+        );
+        client.dispose();
+      });
+    });
+
+    test('the newest eight Swarms keep theirs, so closed ones cannot hold memory for good', () {
+      fakeAsync((async) {
+        final client = started(_Backend());
+        for (var n = 0; n < 9; n++) {
+          opened(
+            client,
+            async,
+            'tab$n',
+          ).attachments('lead').add([file('$n.png')]);
+          client.release('tab$n');
+          async.flushMicrotasks();
+        }
+        expect(
+          opened(client, async, 'tab0').attachments('lead').isEmpty,
+          isTrue,
+        );
+        expect(names(opened(client, async, 'tab1').attachments('lead')), [
+          '1.png',
+        ]);
+        client.dispose();
+      });
+    });
+  });
   test('only the Swarm tab on screen polls; the others wait until shown', () {
     fakeAsync((async) {
       final backend = _Backend();
@@ -157,7 +324,7 @@ void main() {
           final client = _client(
             backend,
             reading: reading,
-            onMention: (m) => told.add(m.id),
+            onMention: (_, m) => told.add(m.id),
           )..bind('owner');
           client.show('tab');
           client.open('tab');
@@ -186,7 +353,7 @@ void main() {
       final client = _client(
         backend,
         reading: _web,
-        onMention: (m) => told.add(m.id),
+        onMention: (_, m) => told.add(m.id),
       )..bind('owner');
       final other = backend.servers['other']!..append('First.');
       other.tag(other.messages.last['id'] as String);
@@ -253,6 +420,344 @@ void main() {
       expect(backend.states('tab'), 10);
       expect(backend.states('other'), 10);
       client.dispose();
+    });
+  });
+
+  test('Desktop: a released Swarm reads and rebuilds nothing; opening it '
+      'again reads afresh', () {
+    fakeAsync((async) {
+      final backend = _Backend();
+      var snapshots = 0;
+      final client = _client(
+        backend,
+        reading: SuperTabReading.desktop,
+        onSnapshot: (_) => snapshots++,
+      )..bind('owner');
+      SuperTabController? first;
+      client.open('tab').then((c) => first = c);
+      async.elapse(const Duration(seconds: 1));
+      expect(snapshots, greaterThan(0));
+      client.release('tab');
+      async.flushMicrotasks();
+      backend.servers['tab']!.append('Said after the tab closed');
+      backend.paths.clear();
+      snapshots = 0;
+      async.elapse(const Duration(seconds: 10));
+      expect(backend.paths, isEmpty);
+      expect(snapshots, 0);
+      expect(client.peek('tab'), isNull);
+      SuperTabController? second;
+      client.open('tab').then((c) => second = c);
+      async.elapse(const Duration(seconds: 1));
+      expect(second, isNot(same(first)));
+      expect(backend.states('tab'), greaterThan(0));
+      expect(snapshots, greaterThan(0));
+      client.dispose();
+    });
+  });
+
+  // Task #2169: the saved view of the account signed in draws at once; another account's is never read.
+  test('Desktop: the same account opens to its saved view before any read, and another account never does', () {
+    fakeAsync((async) {
+      final backend = _Backend(), storage = MemoryStore();
+      backend.servers['tab']!.append('For the owner only');
+      final first = _client(backend, storage: storage, reading: SuperTabReading.desktop)
+        ..bind('owner')
+        ..show('tab');
+      first.open('tab');
+      async.elapse(const Duration(seconds: 1));
+      first.show(null);
+      async.flushMicrotasks();
+      first.dispose();
+      backend.servers['tab']!.holdReads = Completer<void>();
+
+      final same = _client(backend, storage: storage, reading: SuperTabReading.desktop)
+        ..bind('owner')
+        ..show('tab');
+      SuperTabController? shown;
+      same.open('tab').then((c) => shown = c);
+      async.elapse(const Duration(seconds: 1));
+      expect(shown!.showingSaved, isTrue);
+      expect(shown!.snapshot, isNotNull);
+      same.dispose();
+      async.flushMicrotasks();
+
+      final other = _client(backend, storage: storage, reading: SuperTabReading.desktop)..bind('someone-else');
+      async.flushMicrotasks();
+      SuperTabController? theirs;
+      other.open('tab').then((c) => theirs = c);
+      async.elapse(const Duration(seconds: 1));
+      expect(theirs!.showingSaved, isFalse);
+      expect(theirs!.snapshot, isNull);
+      expect(theirs!.messages('lead'), isEmpty);
+      other.dispose();
+      backend.servers['tab']!.holdReads!.complete();
+      backend.servers['tab']!.holdReads = null;
+      async.flushMicrotasks();
+    });
+  });
+
+  test('a Swarm released while it opens never reads; its open fails', () {
+    fakeAsync((async) {
+      final backend = _Backend();
+      final client = _client(backend, reading: SuperTabReading.desktop)
+        ..bind('owner');
+      Object? failure;
+      client.open('tab').then<void>((_) {}, onError: (Object e) => failure = e);
+      client.release('tab');
+      async.elapse(const Duration(seconds: 10));
+      expect(backend.states('tab'), 0);
+      expect(
+        failure,
+        isA<SuperTabFailure>().having((f) => f.code, 'code', 'CLOSED'),
+      );
+      expect(client.peek('tab'), isNull);
+      client.dispose();
+    });
+  });
+
+  test('a Swarm closed and opened again before its first open lands polls '
+      'once, with the new view', () {
+    fakeAsync((async) {
+      final backend = _Backend();
+      final storage = _HeldStore()..holdNextOpen();
+      final client = _client(
+        backend,
+        reading: SuperTabReading.desktop,
+        storage: storage,
+      )..bind('owner');
+      // The Swarm in front polls every 3 s; one behind it only every 15 s.
+      client.show('tab');
+      client.open('tab').ignore();
+      async.flushMicrotasks();
+      client.release('tab');
+      SuperTabController? reopened;
+      client.open('tab').then((c) => reopened = c);
+      async.elapse(const Duration(seconds: 1));
+      storage.release();
+      async.elapse(const Duration(seconds: 1));
+      expect(reopened, isNotNull);
+      expect(client.peek('tab'), same(reopened));
+      backend.paths.clear();
+      async.elapse(const Duration(seconds: 9));
+      expect(backend.states('tab'), 3);
+      client.dispose();
+    });
+  });
+
+  test('a Swarm closed again before its reopen lands still protects its '
+      'Product Manager', () {
+    fakeAsync((async) {
+      final backend = _Backend();
+      final server = backend.servers['tab']!;
+      server.state['agents'] = [
+        {
+          'id': 'pm',
+          'name': 'Quinn',
+          'machineId': 'm',
+          'harnessId': 'native-pm',
+          'contributorId': 'owner',
+          'configuration': {'engine': 'claude'},
+        },
+      ];
+      (server.state['conversations'] as List)[0]['leadId'] = 'pm';
+      final storage = _HeldStore();
+      final client = _client(
+        backend,
+        reading: SuperTabReading.desktop,
+        storage: storage,
+      )..bind('owner');
+      client.open('tab');
+      async.elapse(const Duration(seconds: 1));
+      client.release('tab');
+      expect(
+        client.leadProtectionReasonForHarness('m', 'native-pm'),
+        isNotNull,
+      );
+      storage.holdNextOpen();
+      client.open('tab').ignore();
+      async.flushMicrotasks();
+      client.release('tab');
+      storage.release();
+      async.elapse(const Duration(seconds: 10));
+      expect(client.peek('tab'), isNull);
+      expect(
+        client.leadProtectionReasonForHarness('m', 'native-pm'),
+        isNotNull,
+      );
+      client.dispose();
+    });
+  });
+}
+
+/// WS roadmap Phase 2a: the server's pushes (backend lib/swarmClientPushes.ts)
+/// as the app hands them on (`AppNotifier`, a `swarm_changed` frame).
+void _heard(SuperTabClient client, [Map<String, dynamic> payload = const {}]) =>
+    client.swarmChanged(payload);
+
+/// Each change newer than the last: a push no read has covered yet.
+var _changedAt = DateTime.utc(2100).millisecondsSinceEpoch;
+Map<String, dynamic> _change(
+  String id, [
+  List<String> parts = const ['main'],
+]) => {'tabId': id, 'lastChangedAt': ++_changedAt, 'parts': parts};
+
+void _pushGroup() {
+  group('Swarms the server pushes', () {
+    test('discovery reads every 2 minutes, and a second after a change, once per burst', () {
+      fakeAsync((async) {
+        final backend = _Backend();
+        final client = _client(backend)..bind('owner');
+        async.elapse(const Duration(seconds: 1));
+        _heard(client);
+        // The word that it pushes asked for one discovery, at the 15 s gap.
+        async.elapse(const Duration(seconds: 16));
+        backend.paths.clear();
+        async.elapse(const Duration(seconds: 60));
+        expect(backend.discoveries, 0);
+        for (final id in ['tab', 'other', 'tab']) {
+          _heard(client, _change(id));
+        }
+        async.elapse(const Duration(seconds: 1));
+        expect(backend.discoveries, 1);
+        async.elapse(const Duration(seconds: 118));
+        expect(backend.discoveries, 1);
+        // The safety net is checked on the 15 s tick: the first after 2 minutes.
+        async.elapse(const Duration(seconds: 15));
+        expect(backend.discoveries, 2);
+        client.dispose();
+      });
+    });
+
+    test(
+      'a change reads the Swarm open here at once, and nothing of one not open',
+      () {
+        fakeAsync((async) {
+          final backend = _Backend();
+          final client = _client(backend)..bind('owner');
+          client.open('tab');
+          async.elapse(const Duration(seconds: 1));
+          _heard(client);
+          // The word that it pushes read the open Swarm once, at the 3 s gap.
+          async.elapse(const Duration(seconds: 5));
+          backend.paths.clear();
+          _heard(client, _change('tab'));
+          _heard(client, _change('other'));
+          async.flushMicrotasks();
+          expect(backend.states('tab'), 1);
+          expect(backend.states('other'), 0);
+          client.dispose();
+        });
+      },
+    );
+
+    test('a machine\'s reading alone neither discovers nor reads at once', () {
+      fakeAsync((async) {
+        final backend = _Backend();
+        final client = _client(backend)..bind('owner');
+        client.open('tab');
+        async.elapse(const Duration(seconds: 1));
+        _heard(client);
+        backend.paths.clear();
+        _heard(client, _change('tab', ['machine']));
+        async.elapse(const Duration(milliseconds: 1500));
+        expect(backend.discoveries, 0);
+        expect(backend.states('tab'), 0);
+        async.elapse(const Duration(seconds: 3));
+        expect(backend.states('tab'), 1);
+        client.dispose();
+      });
+    });
+
+    test(
+      'a Swarm opened after the server said it pushes reads only when told',
+      () {
+        fakeAsync((async) {
+          final backend = _Backend();
+          final client = _client(backend)..bind('owner');
+          async.elapse(const Duration(seconds: 1));
+          _heard(client);
+          client.open('other');
+          async.elapse(const Duration(seconds: 1));
+          backend.paths.clear();
+          async.elapse(const Duration(seconds: 30));
+          expect(backend.states('other'), 0);
+          client.dispose();
+        });
+      },
+    );
+
+    test('everything polls as before once the server\'s word is over 5 minutes old', () {
+      fakeAsync((async) {
+        final backend = _Backend();
+        final client = _client(backend)..bind('owner');
+        client.open('tab');
+        async.elapse(const Duration(seconds: 1));
+        _heard(client);
+        async.elapse(kSwarmPushLease);
+        backend.paths.clear();
+        async.elapse(const Duration(seconds: 30));
+        expect(backend.discoveries, 2);
+        expect(backend.states('tab'), 10);
+        client.dispose();
+      });
+    });
+
+    // Review of #2121, 5: the list read about once a second in a busy Swarm.
+    test('discovery reads no more often than every 15 s, however busy', () {
+      fakeAsync((async) {
+        final backend = _Backend();
+        final client = _client(backend)..bind('owner');
+        async.elapse(const Duration(seconds: 1));
+        _heard(client);
+        async.elapse(const Duration(seconds: 30));
+        backend.paths.clear();
+        for (var i = 0; i < 60; i++) {
+          _heard(client, _change(i.isEven ? 'tab' : 'other'));
+          async.elapse(const Duration(seconds: 1));
+        }
+        expect(backend.discoveries, inInclusiveRange(4, 5));
+        client.dispose();
+      });
+    });
+
+    // Review of #2121, 6: a daemon that reconnects only says it pushes again;
+    // what changed meanwhile was not pushed.
+    test('the server saying it pushes again reads the open Swarm and the list once', () {
+      fakeAsync((async) {
+        final backend = _Backend();
+        final client = _client(backend)..bind('owner');
+        client.open('tab');
+        async.elapse(const Duration(seconds: 1));
+        _heard(client);
+        async.elapse(const Duration(seconds: 50));
+        backend.paths.clear();
+        _heard(client);
+        async.elapse(const Duration(seconds: 2));
+        expect(backend.states('tab'), 1);
+        expect(backend.discoveries, 1);
+        client.dispose();
+      });
+    });
+
+    test('a frame that names a Swarm wrongly changes nothing', () {
+      fakeAsync((async) {
+        final backend = _Backend();
+        final client = _client(backend)..bind('owner');
+        client.open('tab');
+        async.elapse(const Duration(seconds: 1));
+        _heard(client);
+        async.elapse(const Duration(seconds: 16));
+        backend.paths.clear();
+        _heard(client, {
+          'tabId': 7,
+          'parts': ['main'],
+        });
+        _heard(client, {'tabId': 'tab', 'parts': 'main'});
+        async.elapse(const Duration(seconds: 2));
+        expect(backend.paths, isEmpty);
+        client.dispose();
+      });
     });
   });
 }

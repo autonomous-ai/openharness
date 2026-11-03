@@ -79,6 +79,9 @@ const Set<String> encryptedDownTypes = {
   // A Harness OS computer managed from here (`AppNotifier.osDevice`, CLI services/osDevice.ts): its
   // update, and its Wi-Fi with the password. A `MACHINE_REQUESTS` type in the CLI.
   'os_device',
+  // Swarm (`AppNotifier.swarmRequest`, CLI superTabs/service.ts): the machine forwards the call to the
+  // backend, and the answer is the Swarm's conversations and decisions. A `MACHINE_REQUESTS` type in the CLI.
+  'super_tabs',
   'codex_profiles_list',
   'codex_profile_link',
   // Asks the machine to read its OWN agent accounts' usage (cli/src/lib/accountUsage.ts). Missing

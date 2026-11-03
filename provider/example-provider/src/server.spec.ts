@@ -15,7 +15,7 @@ import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
-import { createProviderServer } from './server.js'
+import { createProviderServer, start } from './server.js'
 import { projectDir } from './jsonl.js'
 import type { Config } from './config.js'
 import type { ProviderEvent } from './types.js'
@@ -162,6 +162,24 @@ beforeAll(() => {
   mkdirSync(PROJECTS, { recursive: true })
 })
 afterAll(() => rmSync(ROOT, { recursive: true, force: true }))
+
+describe('startup', () => {
+  let running: Awaited<ReturnType<typeof start>>
+  beforeAll(async () => {
+    running = await start(config(fakeClaude('claude-startup.sh', [resultLine()])))
+  })
+  afterAll(async () => { await running.close() })
+
+  it('resolves with a reachable server on an available port', async () => {
+    const { agents } = await rpc<{ agents: Array<{ id: string }> }>(Number(new URL(running.url).port), 'agent.list', {})
+    expect(agents.map((agent) => agent.id)).toEqual(['scratch', 'agent-2'])
+  })
+
+  it('rejects when the requested port is already in use', async () => {
+    await expect(start(config('unused-claude'), Number(new URL(running.url).port)))
+      .rejects.toMatchObject({ code: 'EADDRINUSE' })
+  }, 1_000)
+})
 
 describe('agents', () => {
   it('serves no descriptor — there is nothing to discover', async () => {

@@ -27,7 +27,7 @@ export type HeadProject = Omit<SwarmProject, 'progress'>
 
 /** The head: everything in `SuperTabState` that is not one of the other parts. */
 export type HeadData = Omit<SuperTabState, 'people' | 'agents' | 'conversations' | 'parkedConversations' | 'starts' | 'machines'
-  | 'harnessReservations' | 'releasedHarnesses' | 'closingSessions' | 'machineCleanups' | 'otherProjectsWork' | 'projects'
+  | 'harnessReservations' | 'releasedHarnesses' | 'closingSessions' | 'removedSessions' | 'machineCleanups' | 'otherProjectsWork' | 'projects'
   | 'groupCounter' | 'sequenceBase'> & { projects?: HeadProject[]
     /** Which optional lists the state had, so an empty one comes back as `[]` and an absent one stays absent. */
     presentLists?: string[] }
@@ -45,8 +45,10 @@ export interface MachineData {
   reservations: Array<{ harnessId: string; generation: string; renewed: boolean }>
   /** Harnesses a host proved stopped, oldest first, at most RELEASED_CAP. */
   released: string[]
-  closingSessions: Array<{ agentId: string; harnessId: string; machineOwnerId: string }>
-  cleanups: Array<{ removalId: string; machineOwnerId: string }>
+  closingSessions: Array<Omit<NonNullable<SuperTabState['closingSessions']>[number], 'machineId'>>
+  cleanups: Array<{ removalId: string; machineOwnerId: string; requestedAt?: string; buddyOnly?: true }>
+  /** Absent on a part with none, as on every part from before it. */
+  removedSessions?: Array<Omit<NonNullable<SuperTabState['removedSessions']>[number], 'machineId'>>
 }
 
 /** One project's report watermark (section 3.6). Group sequences are per group; floors carry pre-split tab revisions. */

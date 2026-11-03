@@ -3,8 +3,8 @@ library;
 
 // In a browser a chat file is the browser's: a text file opens in a new tab
 // rather than being fetched into a popup (a page cannot refuse a redirect or
-// stop a download part way), and a viewer offers no Download, since a page
-// cannot write a chosen path.
+// stop a download part way), a picture stays a chip for the same reason, and
+// a viewer offers no Download, since a page cannot write a chosen path.
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -41,7 +41,7 @@ void main() {
       'url': 'https://cdn.harness.autonomous.ai/a1/spec.md',
     });
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: SuperTabAttachmentChips([file]))),
+      MaterialApp(home: Scaffold(body: SuperTabAttachments([file]))),
     );
 
     await tester.tap(find.byKey(const ValueKey('super-attachment:a1')));
@@ -69,5 +69,23 @@ void main() {
 
     expect(find.text('Open in browser'), findsOneWidget);
     expect(find.text('Download'), findsNothing);
+  });
+
+  testWidgets('a picture stays a chip: a browser cannot refuse a redirect', (
+    tester,
+  ) async {
+    final file = SuperTabAttachment.fromJson({
+      'id': 'a1',
+      'name': 'shot.png',
+      'mime': 'image/png',
+      'size': 5,
+      'url': 'https://cdn.harness.autonomous.ai/a1/shot.png',
+    });
+    await tester.pumpWidget(
+      MaterialApp(home: Scaffold(body: SuperTabAttachments([file]))),
+    );
+
+    expect(find.byKey(const ValueKey('super-attachment:a1')), findsOneWidget);
+    expect(find.byType(Image), findsNothing);
   });
 }

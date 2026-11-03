@@ -2,6 +2,7 @@ import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../shared/theme/workspace_bar_style.dart';
+import 'finger_target.dart';
 import 'workspace_bar_control.dart';
 
 /// A fixed-width bell; changes to its count never move the neighboring ribbon.
@@ -42,7 +43,7 @@ class WorkspaceNotificationsButton extends StatelessWidget {
           ),
           child: Icon(
             AppIcons.bell,
-            size: 16,
+            size: workspaceIsCompact(context) ? kPhoneBarIcon : 16,
             color: foreground.withValues(
               alpha: onPressed == null
                   ? .28

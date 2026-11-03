@@ -61,6 +61,37 @@ foreground. Creating or deleting a harness updates its desk membership; explicit
 also live in `PhoneDesk`. The current swarm and position remain device-local. `lib/phone/desk_groups.dart`
 resolves the swarm’s harnesses for navigation.
 
+## Swarm (Settings ▸ Experimental)
+
+`lib/swarm/` brings a Swarm (the desktop's collaborative tab, not the desk groups above) to the
+phone: what needs the person first (decisions, the Product Manager's tags, work waiting on them),
+the Swarms and their projects, a project's conversations, posting with @mentions, and decisions
+answered with one tap. Reads and writes go straight to the backend using the phone's own sign-in
+(`AppNotifier.swarmRequest`), so posting and answering decisions work while every account machine
+is offline. Command retries keep the same operation ID, including after a bearer refresh or a
+fallback through an account machine (`super_tabs`, end-to-end encrypted). Writes fall back only
+when the direct transport or server is unavailable; authentication, access and rate-limit refusals
+stand. The backend enforces what the signed-in person may read and change. Operations that run on
+a computer still need that computer, and regular terminals keep their end-to-end encrypted path
+through the machine. `model.dart` and `parts.dart` are copies of the desktop's, held to them by
+`test/swarm/desktop_parity_test.dart`.
+
+- **Cost.** One `SwarmSession` per signed-in account while Swarm is on. In the foreground it reads
+  what needs the person every 15 seconds, and an open Swarm's changes (first load, then `/changes`)
+  every 5 seconds while a screen shows it. In the background it reads nothing.
+- **Notices** are local only: a foreground read that finds something new posts one while no Swarm
+  screen is open (Home, a terminal). They say who asks and in which project, never the question or
+  the message (`swarm_notices.dart`), because a locked phone may show them; notices to a closed or
+  backgrounded app need push from the backend.
+- **Choices.** `swarm_choices.dart` holds the six UX answers (the way in, the first screen, a
+  project's layout, posting, notices, Undo), each the recommended one until the app's owner decides.
+
+`integration_test/swarm_local_review_test.dart` walks the real shell's ways in (Settings ▸
+Experimental, the mark on Home, Find) and these screens on a simulator against an isolated local
+backend (fake SSO, in-memory MongoDB and Redis, no daemon), through the app's own Swarm path to a
+stand-in machine, for review screenshots. It skips without `SWARM_LOCAL_BACKEND` and reads only
+127.0.0.1.
+
 ## It is a VIEWER build, always
 
 No harness CLI runs beside this app and no agent is ever hosted here. It holds its own SSO session and

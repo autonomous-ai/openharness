@@ -240,8 +240,10 @@ Future<GroupSyncOutcome> syncTrustGroup({
       identity: identity,
       peerPub: pin.pub,
     );
-    final uri = Uri.parse('$wsBaseUrl/api/web-ws')
-        .replace(queryParameters: {'autonomousEnv': autonomousEnv});
+    // It says what it is (`?client=`; backend lib/wsAttribution.ts, WebSocket roadmap Phase 0).
+    final uri = Uri.parse('$wsBaseUrl/api/web-ws').replace(
+      queryParameters: {'autonomousEnv': autonomousEnv, 'client': 'group-sync'},
+    );
     final ch = channel = socket(uri, [accessToken]);
     final reply = await () async {
       await ch.ready;

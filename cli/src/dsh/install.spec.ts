@@ -6,7 +6,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
-import { DOCTOR_TIMEOUT_MS, installDsh, isTransientGitFailure, removeDsh, resolveInstallSource, runDshDoctor, type DshInstallProgress } from './install.js'
+import { DOCTOR_TIMEOUT_MS, gitStartFailure, installDsh, isTransientGitFailure, removeDsh, resolveInstallSource, runDshDoctor, type DshInstallProgress } from './install.js'
 import { dshInstallDir, installedDsh, invalidateInstalledDsh, listInstalledDsh, readInstalledIndex, type InstalledDsh } from './installed.js'
 import { HARNESS_MONOREPO, type DshRegistryEntry } from './registry.js'
 
@@ -359,13 +359,30 @@ describe('installDsh, every way it can go', () => {
       expect(await installDsh({ source: 'https://example.com/thing.git' })).toEqual({ ok: false, error: 'CLONE_FAILED', detail: 'git clone exited 1: Receiving objects: 20%' })
     })
 
-    it('no git at all is a failed clone that says so', async () => {
+    it('no git at all is its own refusal, said in words, whichever way the package is fetched', async () => {
+      // The Windows installer does not install Git: 7 of the 11 Windows installs of 2026-10-28 failed in under a
+      // second as a bare `spawn git ENOENT` clone failure.
       const empty = join(root, 'empty-bin')
       mkdirSync(empty)
       process.env.PATH = empty
-      const result = await installDsh({ source: 'https://example.com/thing.git' })
-      expect(result).toMatchObject({ ok: false, error: 'CLONE_FAILED' })
-      expect(!result.ok && result.detail).toContain('ENOENT')
+      const detail = 'Git is not installed on this computer, and installing a harness needs it. Install Git, then try again.'
+      for (const [ref, path] of [[undefined, undefined], ['a'.repeat(40), undefined], [undefined, 'store/agents/thing']] as const) {
+        const frames: DshInstallProgress[] = []
+        const result = await installDsh({ source: 'https://example.com/thing.git', ref, path, onProgress: (p) => frames.push(p) })
+        expect(result, `${ref} ${path}`).toEqual({ ok: false, error: 'GIT_UNAVAILABLE', detail })
+        expect(frames.at(-1)).toEqual({ id: null, phase: 'failed', error: 'GIT_UNAVAILABLE', detail })
+      }
+      expect(leftovers()).toEqual([])
+    })
+
+    it('on Windows, where git does not come with the system, no git says to install Git for Windows', () => {
+      const missing = Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' })
+      expect(gitStartFailure(missing, 'win32')).toBe('Git is not installed on this computer, and harnesses are installed with it. Install Git for Windows from https://git-scm.com/download/win (or run: winget install --id Git.Git -e), then try again.')
+      // Elsewhere, the plain sentence; any other failure to start, what Node said.
+      const plain = 'Git is not installed on this computer, and installing a harness needs it. Install Git, then try again.'
+      expect(gitStartFailure(missing, 'darwin')).toBe(plain)
+      expect(gitStartFailure(missing, 'linux')).toBe(plain)
+      expect(gitStartFailure(Object.assign(new Error('spawn git EACCES'), { code: 'EACCES' }), 'win32')).toBe('spawn git EACCES')
     })
 
     it('a clone still running after ten minutes is stopped, and said to have been', async () => {
@@ -461,6 +478,41 @@ describe('installDsh, every way it can go', () => {
   })
 
   describe('setup, the used viewer, and the doctor', () => {
+    describe('on a computer with no shell for them (Windows)', () => {
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+      // Only the check reads the platform here: the fixture's clone and its harness folder are the real ones.
+      beforeEach(() => { Object.defineProperty(process, 'platform', { ...platform, value: 'win32' }) })
+      afterEach(() => { Object.defineProperty(process, 'platform', platform) })
+
+      it('a harness with a setup or a doctor is refused once fetched, before it is placed, and nothing stays on disk', async () => {
+        // 2026-10-28: every Store install on Windows failed; their setup and doctor ran through a /bin/sh Windows lacks.
+        // The review of #2026 found the refusal came after the package was placed, so its files stayed, unrecorded.
+        // They run in Git Bash now; this computer, taken for Windows, has none (no Program Files, no git.exe on PATH).
+        const detail = 'This harness runs a setup or check script, which needs Git Bash on Windows, and it was not found. Install Git for Windows from https://git-scm.com/download/win (or run: winget install --id Git.Git -e), then try again.'
+        const placed = (): boolean => { try { lstatSync(dshInstallDir('acme/thing')); return true } catch { return false } }
+        for (const [toolchain, link] of [[{ setup: 'setup.sh' }, false], [{ doctor: 'doctor.sh' }, false], [{ setup: 'setup.sh' }, true]] as const) {
+          rmSync(join(root, 'src'), { recursive: true, force: true })
+          const repo = thing({ toolchain }, { 'setup.sh': '#!/bin/sh\ntouch set-up\n', 'doctor.sh': '#!/bin/sh\ntouch checked\n' })
+          const frames: DshInstallProgress[] = []
+          const result = await installDsh({ source: repo, link, onProgress: (p) => frames.push(p) })
+          const what = `${JSON.stringify(toolchain)} link=${link}`
+          expect(result, what).toEqual({ ok: false, error: 'SHELL_UNAVAILABLE', detail })
+          expect(frames.at(-1)).toEqual({ id: 'acme/thing', phase: 'failed', error: 'SHELL_UNAVAILABLE', detail })
+          expect(frames.map((f) => f.phase)).toEqual(['clone', 'failed'])
+          expect(placed(), what).toBe(false)
+          expect(leftovers(), what).toEqual([])
+          expect(existsSync(join(repo, 'set-up'))).toBe(false)
+          expect(readInstalledIndex()).toEqual([])
+        }
+      })
+
+      it('a harness with neither installs as before', async () => {
+        const result = await installDsh({ source: thing() })
+        expect(result.ok, JSON.stringify(result)).toBe(true)
+        expect(readInstalledIndex().map((record) => record.id)).toEqual(['acme/thing'])
+      })
+    })
+
     it('a bare script name is the harness\'s own script, as `harness dsh check` reads it, not a PATH lookup', async () => {
       // Found by this spec: `"setup": "setup.sh"` (the shape spec/README.md shows for a viewer package)
       // passed the check, which looks for the file, and then failed install with "command not found".

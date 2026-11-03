@@ -3,14 +3,15 @@ import type { Prisma, SuperTabNativeContext } from '@prisma/client'
 import { z } from 'zod'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
-import { activeWork, agent, author, conversation, fail, isLeads, stableId, SuperTabError,
+import { activeWork, agent, appendPullRequestUrls, author, conversation, fail, stableId, SuperTabError,
   type Actor, type Agent, type Author, type Conversation, type SuperTabState } from './model.js'
-import { canReadGroup, groupProject, readConversation, watchersLost } from './projects.js'
+import { accessInputs, canReadGroup, readConversation, watchersLost } from './projects.js'
 import { mayDrive } from './terminal.js'
-import { noteProjectReports } from './projectUpdates.js'
+import { CANCELLABLE_DELIVERY } from './pageReads.js'
+import { cloneData } from './cloneData.js'
 import { numberMessages, type Touch } from './parts/commit.js'
 import { redactCredentials } from './credentials.js'
-import type { DeliveriesWaiting } from './store.js'
+import type { DeliveriesEnding, DeliveriesWaiting } from './store.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 export const openNativeSchema = z.object({ operationId: id, conversationId: id, agentId: id }).strict()
@@ -59,6 +60,19 @@ const gapReasons = {
   prompt_missing: 'A terminal answer was observed without its recorded prompt.',
 }
 
+/** A required recovery's notice: what happened to [target]'s recording on [group]'s task, and the last checkpoint, with no next
+ *  step and no change to the task (project instructions, phase 4: the instructions say what the coordinator does). */
+export function recoveryText(target: { name: string; displayName?: string }, group: { title: string }, reason: string, checkpointAt: string | null): string {
+  return `${target.displayName ?? target.name}'s terminal recording on "${group.title}" has a gap. ${reason}\n\n`
+    + `Last recorded checkpoint: ${checkpointAt ?? 'time unavailable'}. Input and commands before the gap may already have taken effect.`
+}
+
+/** Who a recorded terminal turn reaches: its task's coordinator for a required recovery, and nobody for a typed prompt, its
+ *  answer or any other gap, which name no one (phase 1's deferred ruling); never the coordinator for its own terminal. */
+export function turnRecipients(group: { leadId: string | null }, target: { id: string }, required: boolean): string[] {
+  return required && group.leadId && group.leadId !== target.id ? [group.leadId] : []
+}
+
 /** A host reports what its native engine observed; it cannot create human-authored
  * messages. The human attached to the source is the authenticated opener of that
  * terminal context, not an inference from a device name or the machine owner. */
@@ -73,7 +87,8 @@ export class SuperTabNativeStore {
     const group = readConversation(state, { kind: 'person', userId: binding.operator.id, email: binding.operator.name }, record.conversationId)
     // A terminal drives its session and its answers land in the conversation: only those who may drive it may use it.
     try { mayDrive(state, { kind: 'person', userId: binding.operator.id, email: binding.operator.name }, target) } catch (error) {
-      if (error instanceof SuperTabError) fail('NATIVE_CONTEXT_REVOKED', 'Only this agent\'s machine\'s owner can use its terminal now.', 403)
+      // The driving rule's own reason (read-only, the agent's project gone, a Lead or a private session), under the code clients reopen on.
+      if (error instanceof SuperTabError) fail('NATIVE_CONTEXT_REVOKED', error.message, 403)
       throw error
     }
     if (operator.membershipGeneration !== binding.operator.membershipGeneration || group.archived || !group.agentIds.includes(target.id)
@@ -105,7 +120,8 @@ export class SuperTabNativeStore {
       const operator = author(state, { kind: 'person', userId: user.sub, email: user.email }, true)
       const target = agent(state, request.agentId)
       const group = readConversation(state, { kind: 'person', userId: user.sub, email: user.email }, request.conversationId)
-      groupProject(state, group) // A terminal opens only in a project's conversation, never in the Leads conversation.
+      // A terminal opens in a project's conversation or a person's own Buddy chat; readConversation refuses the removed Leads
+      // conversation (model.ts leadsRemoved).
       if (group.archived || !group.agentIds.includes(target.id)) fail('AGENT_UNAVAILABLE', 'Choose an agent in this conversation.')
       await this.deps.agentGrant(tx, state, target)
       const grant = await this.deps.contribution(tx, state, { kind: 'person', userId: user.sub, email: user.email }, target)
@@ -185,12 +201,8 @@ export class SuperTabNativeStore {
       detectedAt: event.gap.detectedAt, checkpoint, required }
     const reason = assignment.status === 'review' && event.gap.reason === 'recording_restarted'
       ? 'Terminal recording restarted while the task was in review.' : gapReasons[event.gap.reason]
-    const next = assignment.status === 'review' ? 'Keep this task in review while you check the agent’s session.'
-      : 'Check the agent’s session, then ask it to continue from the checkpoint and report working.'
-    const text = `Recovery needed for ${target.displayName ?? target.name} on “${group.title}”. ${reason}\n\n`
-      + `Last recorded checkpoint: ${checkpoint.recordedAt ?? 'time unavailable'}.\n\n`
-      + `${next} Do not replay earlier input or commands; they may already have taken effect.`
-    if (required && assignment.status === 'working') { assignment.status = 'blocked'; assignment.result = text }
+    // What happened, for the coordinator; its task keeps its status (project instructions, phase 4).
+    const text = recoveryText(target, group, reason, checkpoint.recordedAt)
     if (!prior) await tx.superTabOperation.create({ data: { id: receiptId, tabId, actorKey: `agent:${target.id}`,
       requestHash: digest([assignment.id, incidentId]), revision: 0, result: json({ eventId, recovery }) } })
     return { source: recovery, text }
@@ -200,7 +212,7 @@ export class SuperTabNativeStore {
     const event = nativeEventSchema.parse(input)
     return this.deps.transaction(async tx => {
       const { loaded, record, binding, team } = await this.hosted(tx, user, tabId, contextId)
-      const state = structuredClone(loaded.state)
+      const state = cloneData(loaded.state)
       const target = agent(state, record.agentId), group = conversation(state, record.conversationId)
       const eventId = stableId('native-event', contextId, event.turnId, event.kind), requestHash = digest(event)
       const prior = await tx.superTabOperation.findUnique({ where: { id: eventId } })
@@ -218,12 +230,13 @@ export class SuperTabNativeStore {
       // What a person typed in the terminal, or the agent answered, is recorded without any credential in it.
       const text = recovery?.source.required ? recovery.text : event.kind === 'gap'
         ? 'Some terminal activity could not be recorded. Check the native session for the full conversation.' : redactCredentials(event.text).text
-      // Inform the coordinating lead without replaying this input into the agent
-      // that already received it. Its resulting programmatic turn is not native input.
-      const recipients = (event.kind !== 'gap' || recovery?.source.required) && group.leadId && group.leadId !== target.id ? [group.leadId] : []
+      // Leave a legacy group's list absent so the next read can recover its older links too.
+      if (group.pullRequestUrls !== undefined) appendPullRequestUrls(group, [text])
+      // A required recovery reaches the coordinator; a typed prompt, its answer or any other gap names no one (phase 1).
+      const recipients = turnRecipients(group, target, !!recovery?.source.required)
       const draft = { id: eventId, conversationId: group.id, author: observedBy, text, replyTo: null, recipients }
+      // A terminal turn is an ordinary message: it never wakes the coordinator (projectUpdates.ts noteWorkChanges).
       const now = Date.now(), sequences = numberMessages(state, [draft], now), sequence = sequences.get(eventId)!
-      noteProjectReports(state, [draft], sequences, now)
       // The turn touches its agent (spec ruling 2). The person who opened the terminal is guarded by this context's row,
       // which the turn writes: removing that person, or taking away their access, revokes the context (rule b,
       // revokeNativeContexts). Touching the person instead would make one person's terminals in different groups conflict.
@@ -231,7 +244,7 @@ export class SuperTabNativeStore {
       await tx.superTabMessage.create({ data: { id: eventId, tabId, conversationId: group.id, sequence,
         author: json(observedBy), source: json({ kind: 'native', phase: event.kind, turnId: event.turnId,
           operator: binding.operator, truncated: event.truncated, interrupted: event.interrupted, ...(recovery ? { recovery: recovery.source } : {}) }),
-        text, replyTo: event.kind === 'answer' ? promptId : null, recipientIds: recipients } })
+        text, replyTo: event.kind === 'answer' ? promptId : null, recipientIds: recipients, thread: eventId } })
       for (const recipient of recipients) {
         const lead = agent(state, recipient)
         await tx.superTabDelivery.create({ data: { id: stableId(eventId, recipient), tabId, conversationId: group.id,
@@ -256,26 +269,48 @@ export class SuperTabNativeStore {
 /** Removal followed by rejoining must not revive an old terminal binding. Only what this change ended is revoked: what
  *  ended earlier was revoked by the change that ended it, and no context opens without access (open; validate checks it
  *  again at every use). Most commands change no access and read nothing here: rebuilding every viewer and every member
- *  outside every private conversation on each command kept prod Mongo busy (2026-10-28). */
-export async function revokeNativeContexts(tx: Transaction, before: SuperTabState, after: SuperTabState) {
+ *  outside every private conversation on each command kept prod Mongo busy (2026-10-28). Returns those who lost sight of
+ *  an agent (watchersLost), for the observers to check again. */
+/** `ending` (store.ts endDeliveries) runs the cancel of the revoked contexts' waiting deliveries, so a host holding one hears. */
+export async function revokeNativeContexts(tx: Transaction, before: SuperTabState, after: SuperTabState,
+  ending: (holds: DeliveriesEnding, end: () => Promise<{ count: number }>) => Promise<{ count: number }> = (_, end) => end()) {
+  const { conditions, watchersLost } = revokeConditions(before, after)
+  if (conditions.length) {
+    const where = { tabId: before.id, revoked: false, OR: conditions }
+    const revoked = await tx.superTabNativeContext.findMany({ where, select: { id: true } })
+    await tx.superTabNativeContext.updateMany({ where, data: { revoked: true } })
+    if (revoked.length) await ending({ matches: row => revoked.some(r => r.id === row.nativeContextId) }, () => tx.superTabDelivery.updateMany({ where: { tabId: before.id,
+      nativeContextId: { in: revoked.map(r => r.id) }, status: { in: [...CANCELLABLE_DELIVERY] } },
+      data: { status: 'cancelled', holdReason: null, holdSince: null } }))
+  }
+  return watchersLost
+}
+
+/** Which contexts a commit revokes, and who lost sight of which agent. A command that changes no access input checks
+ *  nothing: rebuilding every check on each one cost a 480-group Swarm about 5 ms of every command (item 7, 2026-10-28). */
+export function revokeConditions(before: SuperTabState, after: SuperTabState) {
   const conditions: Prisma.SuperTabNativeContextWhereInput[] = []
+  if (accessInputs(before) === accessInputs(after)) return { conditions, watchersLost: [] }
+  const people = new Map(after.people.map(p => [p.id, p])), agents = new Map(after.agents.map(a => [a.id, a]))
+  const groups = new Map(after.conversations.map(c => [c.id, c]))
   for (const member of before.people) {
-    const current = after.people.find(p => p.id === member.id)
+    const current = people.get(member.id)
     if (!current || current.generation !== member.generation || (current.role === 'viewer' && member.role !== 'viewer')) conditions.push({ userId: member.id })
   }
   // A removed agent's contexts, and those of an agent given a replacement terminal: they name the old terminal, and its
   // waiting turns are cancelled with them, so a claim racing the change conflicts on their rows (rule b).
   for (const target of before.agents) {
-    const current = after.agents.find(a => a.id === target.id)
+    const current = agents.get(target.id)
     if (!current || current.harnessId !== target.harnessId) conditions.push({ agentId: target.id })
   }
   // Those who may no longer watch an agent, such as everyone but its machine's owner once it reads private chats.
-  for (const { agentId, personIds } of watchersLost(before, after)) conditions.push({ agentId, userId: { in: personIds } })
+  const lost = watchersLost(before, after)
+  for (const { agentId, personIds } of lost) conditions.push({ agentId, userId: { in: personIds } })
   for (const group of before.conversations) {
-    const current = after.conversations.find(c => c.id === group.id)
+    const current = groups.get(group.id)
     if (!current || (current.archived && !group.archived)) conditions.push({ conversationId: group.id })
-    // No terminal opens in the Leads conversation (open), so it holds no context to revoke.
-    else if (!isLeads(current)) {
+    // The removed Leads conversation is nobody's to read (model.ts leadsRemoved), so whoever read a group that turns into one loses it.
+    else {
       for (const member of after.people) {
         const reader = { kind: 'person' as const, userId: member.id, email: member.email }
         if (canReadGroup(before, reader, group) && !canReadGroup(after, reader, current)) conditions.push({ conversationId: group.id, userId: member.id })
@@ -284,12 +319,5 @@ export async function revokeNativeContexts(tx: Transaction, before: SuperTabStat
       if (removed.length) conditions.push({ conversationId: group.id, agentId: { in: removed } })
     }
   }
-  if (conditions.length) {
-    const where = { tabId: before.id, revoked: false, OR: conditions }
-    const revoked = await tx.superTabNativeContext.findMany({ where, select: { id: true } })
-    await tx.superTabNativeContext.updateMany({ where, data: { revoked: true } })
-    if (revoked.length) await tx.superTabDelivery.updateMany({ where: { tabId: before.id,
-      nativeContextId: { in: revoked.map(r => r.id) }, status: { in: ['queued', 'claimed', 'uncertain'] } },
-      data: { status: 'cancelled', holdReason: null, holdSince: null } })
-  }
+  return { conditions, watchersLost: lost }
 }

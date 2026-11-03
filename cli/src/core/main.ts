@@ -50,6 +50,7 @@ import { warmLoginShellEnvironment } from '../lib/loginShellEnv.js'
 import { enableOffThreadExec } from '../lib/offThreadExec.js'
 import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
+import { claudeHomeOffered } from '../lib/claudeProfiles.js'
 import { registry, projectDisplayName, validTranscriptPath, type RegisteredSession } from '../lib/registry.js'
 import { engineSessionTitle } from '../lib/sessionTitle.js'
 import { machineNames } from '../lib/machineNames.js'
@@ -200,7 +201,6 @@ import { createGuestCreate } from './agents/guestCreate.js'
 import { createStoreLink } from './storeLink.js'
 import { createModelsLink } from './modelsLink.js'
 import { createRecapsLink } from './recapsLink.js'
-import { HOSTED_JEV_PATH } from '../lib/jev/jevClient.js'
 import { createAgentCleanupLink } from './agentCleanupLink.js'
 import { AGENT_CLEANUP_FALLBACKS, RECAPS_FALLBACKS, TERMINALS_OFF } from './api.js'
 import { answerAgentQuery } from './agentQueries.js'
@@ -365,7 +365,10 @@ function startMasterHere(): void {
 const coreLink = connectToMaster()
 /** When the devices' process starts: once there is a device, a dial's port, a Wi-Fi device or a request for one
  *  (core/devicesWake.ts). Asked of the master through the channel above. */
-const devicesWake = createDevicesWake({ want: (service) => coreLink.want(service), dataDir: env.ADAPTER_DATA_DIR, cableDisabled: env.CABLE_DISABLE, testDialPort: harnessdEnv().HARNESSD_TEST_DIAL_PORT })
+/** A Harness Team daemon runs no devices, the Wi-Fi device's service or the dials' (security re-check 1 of #2089): set as
+ *  it decides it is one (runForeground), before anything is wired to them. */
+let devicesOff = false
+const devicesWake = createDevicesWake({ want: (service) => { if (!devicesOff) coreLink.want(service) }, dataDir: env.ADAPTER_DATA_DIR, cableDisabled: env.CABLE_DISABLE, testDialPort: harnessdEnv().HARNESSD_TEST_DIAL_PORT })
 
 const daemonBoot: {
   /** Stops the updater this core runs beside itself under a master too old to run it (core/updaterBeside.ts). */
@@ -700,8 +703,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The Swarm switch (harnessd/services.ts `HARNESS_SWARM`, on unless set off): its code in this process comes from one
   // entry, loaded only while it is on (superTabs/inCore.ts), and its service is left off with it.
   const swarm = swarmOn(harnessd) ? await import('../superTabs/inCore.js') : null
+  // Decided once, as it starts: whether this daemon is a Harness Team account's (superTabs/inCore/teamApps.ts isTeamDaemon).
+  const teamDaemon = !!swarm?.isTeamDaemon()
+  devicesOff = teamDaemon
   const knownServices = servicesOn(harnessd, KNOWN_SERVICES)
   const outOfProcess = servicesTheMasterRuns(harnessd, knownServices)
+  // A Harness Team daemon is there for its Swarms: its Swarm service starts with it. Left on demand it never started: its
+  // owner's requests to it are refused until a Swarm roster has marked its sessions (superTabs/inCore/teamApps.ts), and only
+  // that service reads the roster (2026-10-30, the Mac Studio: a new Team account answered every "add it to the Swarm"
+  // TEAM_READ_ONLY and never joined; its log never showed the Swarm service connecting).
+  if (teamDaemon && outOfProcess.has('superTabs')) coreLink.want('superTabs')
   // The viewers' process (the viewers and the Store) runs once something needs it (core/viewersWake.ts).
   const viewersWake = createViewersWake({ want: (service) => coreLink.want(service), outOfProcess })
   const liveHosted = masterRunsLiveEngines(harnessd, process.ppid)
@@ -881,6 +892,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The prompt of each agent's last turn start: what the one-line summary of a working agent says (turns/summaries.ts).
   const turnPrompts = new Map<string, string>()
   const nativeTurns = createNativeTurnObservations({ resolve: id => nativeTurnBinding(registry.byAgent(id)) })
+  /** A Team daemon's purge of an ended confidential member's session data (superTabs/inCore/teamApps.ts); null elsewhere. */
+  let teamPurge: ((agentId: string) => Promise<Record<string, unknown>>) | null = null
   const coreApi = createCoreApi({
     nativeTurns: async (agentId, cursor) => nativeTurns.read(agentId, cursor),
     cloud: cloudDoors,
@@ -889,7 +902,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         // In the core's own process Share was started with it; out of it, the master starts Share's process.
         shareObservers: () => { if (outOfProcess.has('sharing')) coreLink.want('sharing') },
         screen: (agentId, scrollback) => swarmDoors.terminal.screen(agentId, scrollback),
-        input: (agentId, text, keys) => swarmDoors.terminal.input(agentId, text, keys) },
+        input: (agentId, text, keys) => swarmDoors.terminal.input(agentId, text, keys),
+        inputIfScreen: (agentId, keys, screen) => swarmDoors.terminal.inputIfScreen(agentId, keys, screen) },
       // The devices' `cardsWanted`, `cardRecap` and `cardOpen`, and no other action of the Super Tab service (superTabs/inCore/cards.ts `ask`).
       superTabRequest: (payload) => swarmDoors.cards.ask(payload),
     } : {}),
@@ -1005,7 +1019,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     resumeAgent: async (agentId) => lifecycle.resumeAgent(agentId),
     // What it may close and reopen is decided in this process, on what its host retains (superTabs/inCore/agents.ts).
     ...(swarm ? { swarmAgents: (agentDeps) => swarm.createSwarmAgents({ ...agentDeps,
-      members: { leads: () => swarm.retainedLeads(env.ADAPTER_DATA_DIR), harnesses: () => swarm.retainedHarnesses(env.ADAPTER_DATA_DIR) } }) } : {}),
+      members: { leads: () => swarm.retainedLeads(env.ADAPTER_DATA_DIR), harnesses: () => swarm.retainedHarnesses(env.ADAPTER_DATA_DIR) },
+      // On a Team daemon, an ended confidential member's session data goes (set below, with the Team daemon's policy).
+      purgeEnded: async (agentId) => teamPurge ? teamPurge(agentId) : { skipped: true } }) } : {}),
     dsh: (session) => backendRef?.dshFrameProvider?.(session) ?? null,
     windows: (frame) => backendRef?.sendLocal(frame),
     daemon: { command: daemonCommand(), port: env.PORT, machineId: () => backendRef?.machineId ?? '', autonomousEnv: session?.autonomousEnv ?? env.AUTONOMOUS_ENV },
@@ -1132,6 +1148,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     machines: ({ body }) => ports.models?.machines(body, computerId()),
   })
   backend.useGateway(gateway.port)
+  // A Harness Team daemon serves no Wi-Fi device: its frames are sealed past the Team guard and its doors reach every agent,
+  // a Swarm Product Manager's included (security re-check 2 of #2089).
+  if (teamDaemon) backend.disableWifi()
   backend.useWifi(wifiCore.fromGateway)
   const gatewayOps = gateway.ops
   daemonBoot.openRequests = () => backend.openRequests()
@@ -1190,6 +1209,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     sendTarget: (connId, type, payload) => backend.sendTerminalTo(connId, type, payload),
     sendBinaryTarget: (connId, frame) => backend.sendTerminalBinaryTo(connId, frame),
     isLoopback: isLocalClientId,
+    // The Mac owner's apps on a Team daemon running a Swarm Product Manager only watch (superTabs/inCore/teamApps.ts).
+    watchOnly: (connId) => backend.appWatchOnly(connId),
+    closedTo: (connId, agentId) => backend.appClosedTo(connId, agentId),
     // For a client that did not introduce itself on `terminal_open` (an older build). A loopback
     // window can only be this computer's desktop; a paired peer is named by its pairing label unless
     // that label is one of the placeholders pairing hands out — those name nothing.
@@ -1425,6 +1447,21 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     cloudFrames: () => cloud.frames(),
   }).agentsList
   backend.agentGuest = (agentId) => registry.resolve(agentId)?.guest ?? null
+  // On a Harness Team daemon the account is the Mac's owner's, and another person's Product Manager may run here: the
+  // owner's own apps never reach the Swarm's confidential sessions, and only watch the rest while one runs (#895).
+  // Decided once, as it starts: only a Team daemon has it (security review 1 of #2089), and it reads the stopped sessions too.
+  if (swarm && teamDaemon) {
+    // The purges still to finish, kept across restarts: the account stays held until each has (superTabs/inCore/teamPurge.ts).
+    const purges = swarm.purgeRecord(join(env.ADAPTER_DATA_DIR, 'super-tabs', 'team-purges.json'))
+    const policy = swarm.teamAppPolicyFor(env.ADAPTER_DATA_DIR, () => coreApi.daemon.machineId(), () => registry.list(), () => stoppedAgents.list(), purges)
+    backend.remoteAppPolicy = policy
+    // What it doesn't finish is tried again, here and after a restart (superTabs/inCore/teamPurge.ts withPurgeRetries).
+    const purgeSessions = () => ({ live: registry.list(), stopped: stoppedAgents.list() })
+    teamPurge = swarm.withPurgeRetries(swarm.createConfidentialPurge({ sessions: purgeSessions, confidential: (agentId) => policy.isConfidential(agentId), home: homedir(), record: purges,
+      session: (agentId) => registry.byAgent(agentId) ?? stoppedAgents.get(agentId),
+      purge: async (request) => backend.purgeAgentService ? await backend.purgeAgentService.request(request as never) : { error: 'UNSUPPORTED' } }),
+      { record: purges, sessions: purgeSessions, report: swarm.teamPurgeReport(), log: (line) => console.warn(`[super-tabs] ${line}`) })
+  }
   const questionWatcher = asking.questionWatcher
 
 
@@ -1442,6 +1479,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     bySession: (sessionId) => registry.bySession(sessionId), resolve: (id) => registry.resolve(id), live: () => registry.list(),
     stopped: (agentId) => stoppedAgents.get(agentId),
     orchestratorRoleOf: (agentId) => ports.orchestrator?.roleOf(agentId) ?? null,
+    quietOnDevices: (session) => swarm?.quietOnDevices(session) ?? false,
   })
   asking.hearQuestions(recaps.question) // a turn waiting on the person is not announced as done
   const isSubagentSession = recaps.isSubagentSession
@@ -1512,6 +1550,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (notice.type === 'machines_changed' && outOfProcess.has('sharedMachines')) {
       serviceLinks.notify('sharedMachines', { type: 'service_event', payload: { kind: 'notice', notice } })
     }
+    // The devices' fleet reads the machine list on `machines_changed` (services/fleet.ts); in its own process it hears it
+    // only through this (services/devicesProcess.ts), in the core's through `account.onNotice`.
+    if (notice.type === 'machines_changed' && outOfProcess.has('devices')) {
+      serviceLinks.notify('devices', { type: 'service_event', payload: { kind: 'notice', notice } })
+    }
   }
   // What shared machines in their own process reach through the core: this machine's sharing on the
   // backend, signed in here, and the gateway's trust stores (core/sharedMachinesQueries.ts).
@@ -1548,8 +1591,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (outOfProcess.has('wifi')) ports.wifi = wifiLink.port
   // What the core tells the recaps in their own process, and reads back from what they said (core/recapsLink.ts).
   const recapsLink = createRecapsLink({ notify: (frame, opts) => serviceLinks.notify('recaps', frame, opts), buffered: () => serviceLinks.buffered('recaps'),
-    call: (type, payload) => serviceLinks.call('recaps', type, payload), clients: coreApi.clients, lastTurn: coreApi.transcripts.lastTurn,
-    jev: (body) => proxyBackend('POST', HOSTED_JEV_PATH, body) })
+    call: (type, payload) => serviceLinks.call('recaps', type, payload), clients: coreApi.clients, lastTurn: coreApi.transcripts.lastTurn })
   // What the core tells the agent cleanup in its own process, and answers it (core/agentCleanupLink.ts).
   const agentCleanupLink = createAgentCleanupLink(coreApi, (frame, opts) => serviceLinks.notify('agentCleanup', frame, opts))
   const usageLink = createUsageLink({ call: payload => ports.usage?.read(payload.target as AgentUsageTarget) ?? Promise.resolve({}), changed: agentEvents.onTokenUsageChanged })
@@ -1965,7 +2007,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Account HTTP and the persistent machine cache belong to the gateway. The core routes the request
   // and keeps only state reported by that service, so a backend outage cannot stall an agent's loop.
-  function proxyBackend(method: string, path: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
+  function proxyBackend(method: string, path: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown>; retryAfterMs?: number }> {
     return gatewayOps.backend(method, path, body)
   }
 
@@ -2080,6 +2122,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // Until the pieces below are built; after, a piece that could not be is refused by the requests
       // that need it, and the rest (list, status, revoke) answer from the pairings.
       if (!devicePartsBuilt) return { status: 503, body: { error: { code: 'UNAVAILABLE', message: 'Autonomous device service is starting' } } }
+      // A Harness Team daemon pairs no Wi-Fi device and serves none (backendSocket.ts disableWifi).
+      if (teamDaemon) return { status: 403, body: { error: { code: 'TEAM_ACCOUNT', message: 'A Harness Team account does not serve a Wi-Fi device.' } } }
       // The Wi-Fi device's pairings and direct links are the gateway's (gateway/start.ts); its receipts its
       // service's, with the dials (services/wifi.ts).
       const viaGateway = async (request: Parameters<GatewayOps['wifi']>[0]): Promise<Record<string, unknown>> => {
@@ -2166,7 +2210,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onProductFeedback: (body) => proxyBackend('POST', '/api/product-usage/feedback', body),
     onSignInAnswer: (action, body) => proxyBackend('POST', `/api/auth/qr/${action}`, body),
     ...(swarm ? { onSuperTabAttachment: (req, res, path) => swarm.forwardAttachmentUpload(req, res, path,
-      { accessToken: () => auth.accessToken(), environment: autonomousEnv, base: backendHttpBase() }) } : {}),
+      { accessToken: () => auth.accessToken(), environment: autonomousEnv, base: backendHttpBase() }),
+      // A file over 10 MB: its signed link and its completion, with the account's token; the bytes go straight to storage.
+      onSuperTabAttachmentUpload: (path, body) => proxyBackend('POST', path, body) } : {}),
     onProductUsageReport: (body) => proxyBackend('POST', '/api/product-usage/report', body),
     onProductUsageRead: () => proxyBackend('GET', '/api/product-usage/settings'),
     onProductUsageWrite: (body) => proxyBackend('POST', '/api/product-usage/settings', body),
@@ -2460,6 +2506,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     label: (engine) => buildHarnessSessionLabel(engine),
   })
   const restoreLaunch = createRestoreLaunch({
+    adoptSwarmSkill,
     workspaceMissing, relaunchOverrides, prepareSessionResume, refreshGridWebSearch,
     downgradedPermission: (entry, native) => downgradedPermission(entry, entry.bypassPermission === true, 'restore', native),
     launch: (entry, opts, overrides, permission) => {
@@ -2541,7 +2588,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       triggerHint: async (runtime, engine) => { await agentReconciler.triggerHint(runtime, engine) },
       log: (message) => console.log(message),
       // A grid's or a saved API's launch asks models: not before the core is ready (core/agents/heldLaunches.ts).
-      needs: (entry) => [...(externalResumePending(entry.externalResume) ? ['search'] : []), ...(entry.gridLaunch ? ['models'] : []), ...(entry.dsh ? ['store'] : []), ...(!isTerminalEngine(entry.engine) ? ['native'] : [])],
+      // An older Swarm session's role (core/agents/restoreLaunch.ts): one unanswered read holds the rest of the pass unasked.
+      needs: (entry) => [...(externalResumePending(entry.externalResume) ? ['search'] : []), ...(entry.gridLaunch ? ['models'] : []), ...(entry.dsh ? ['store'] : []), ...(!isTerminalEngine(entry.engine) ? ['native'] : []), ...(adoptSwarmSkill?.needed?.(entry) ? ['superTabs'] : [])],
       waitingLaunch: (entry, held) => ({ argv: heldPaneArgv(held.detail, entry.externalResume?.token ?? held.nativeToken) }),
       killPane: restoreOn.killPane,
     }
@@ -2779,6 +2827,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Moving a running agent onto a grid, or back to its own login (core/agents/retarget.ts).
   backend.onRetargetAgent = createAgentRetargeter({
     noBackendCode: createUnavailable,
+    adoptSwarmSkill,
     sessionTurnOpen,
     // A retarget swaps the engine too: not of an agent a stopped move may still run beside (`moveHeld`).
     purgeBusy: (agentId) => restorePanes.busy(agentId) || backend.purgeAgentService?.busy(agentId) || moveHeld.has(registry.resolve(agentId)?.agentId ?? agentId),
@@ -2837,7 +2886,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     stopped: (agentId) => ports.agentCleanup?.closed(agentId),
     moveHeld: (agentId) => moveHeld.has(agentId),
     // The Lead of an active Swarm project is never stopped (owner, 2026-10-23); its host keeps the list (superTabs/retention.ts).
-    ...(swarm ? { leadProtected: (agentId: string) => swarm.mayBeLead(env.ADAPTER_DATA_DIR, agentId) } : {}),
+    ...(swarm ? { leadProtected: (agentId: string, leadSwitch?: string) => swarm.mayBeLead(env.ADAPTER_DATA_DIR, agentId, leadSwitch) } : {}),
   })
   const stopJobs = lifecycle.stopJobs
   launchCancelled = id => stopJobs.has(id)
@@ -2863,7 +2912,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     announceSession,
     engineReady: (engine, ms) => engineLinks.ready(engine, ms),
     stoppedAgents,
-    ...(swarm ? { leadProtected: (agentId: string) => swarm.mayBeLead(env.ADAPTER_DATA_DIR, agentId) } : {}),
+    // A Swarm Buddy keeps running when a window closes its view (Diego, 10-30); Stop Harness above still stops it.
+    ...(swarm ? {
+      leadProtected: (agentId: string, changeId?: string) => swarm.leadCloseProtected(env.ADAPTER_DATA_DIR, agentId, changeId),
+      leadSwitching: (agentId: string, changeId: string) => swarm.leadSwitching(env.ADAPTER_DATA_DIR, agentId, changeId),
+      leadSwitchEnded: (agentId: string, changeId: string, stopped: boolean) => swarm.leadSwitchEnded(env.ADAPTER_DATA_DIR, agentId, changeId, stopped),
+      buddyProtected: (agentId: string) => swarm.mayBeBuddy(env.ADAPTER_DATA_DIR, agentId),
+    } : {}),
   })
   backend.closeAgentService = closing.closeAgentService
   backend.closeAgentService.start()
@@ -2962,6 +3017,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (core/agents/launches.ts). The orchestrator and the cable create and fork through the socket's slots.
   const launches = createLaunchRequests({
     ...(swarm ? { swarmLaunch: swarm.SWARM_LAUNCH } : {}),
+    claudeHomeOffered: (home) => claudeHomeOffered(home, machineIdNow()),
     receipts: new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations')),
     createAgent: () => backend.onCreateAgent, forkAgent: () => backend.onForkAgent,
     prepareCreate: creator.prepare, prepareEngine: prepareNativeLaunch,
@@ -3179,7 +3235,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // In their own process they are told everything the windows said as they connect (core/devicesLink.ts):
   // said here too, it reached a dial still opening its port, before its greeting.
   // The Swarm cards the Super Tab service sent before this line had no devices to reach: they are shown now.
-  if (outOfProcess.has('devices')) { ports.devices = devicesLink.port; swarmDoors?.cards.replay() }
+  // A Harness Team daemon runs neither the dials nor the Wi-Fi device: every card goes to them before the Team guard could
+  // filter it (security re-check 1 of #2089).
+  if (teamDaemon) { /* no devices */ } else if (outOfProcess.has('devices')) { ports.devices = devicesLink.port; swarmDoors?.cards.replay() }
   else {
     serviceHost.start('devices', (core, started) => inline!.startDevices(core, started, {
       logsDir: env.HARNESS_LOGS_DIR, testDialPort: harnessd.HARNESSD_TEST_DIAL_PORT,
@@ -3192,7 +3250,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // The Wi-Fi device (services/wifi.ts), with the dials: in their process by default (core/wifiLink.ts,
   // resumed there as its link connects), or here.
-  if (!outOfProcess.has('wifi')) {
+  if (!teamDaemon && !outOfProcess.has('wifi')) {
     serviceHost.start('wifi', inline!.startWifi, coreApi, WIFI_FALLBACKS)
     if (ports.wifi) wifiCore.started(appVoiceFocus ?? null)
   }
@@ -3210,7 +3268,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // site: a new kind of card reaches the dial the day it reaches the socket. The tee runs before the frame
   // is queued for the Wi-Fi device (BackendSocket.sendCommander): a device fault here must cost neither
   // that frame nor whoever is sending it, which the guards and the devices' port see to.
-  backend.onOutboundCommander = (frame) => {
+  // Not on a Harness Team daemon: there it would hand every card to the dials and the Wi-Fi device past the Team guard.
+  if (!teamDaemon) backend.onOutboundCommander = (frame) => {
     const card = frame as Record<string, unknown>
     // The Pro's extras ride to the devices alone: the Wi-Fi device gets the card as it always did, and a
     // summary reaches the dial with the turn's whole answer, as it does the Wi-Fi device.

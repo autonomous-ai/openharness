@@ -144,7 +144,7 @@ void main() {
   });
 
   Finder messageList() => find.byWidgetPredicate(
-    (w) => w is ListView && '${w.key}'.contains('super-messages-'),
+    (w) => w is ScrollView && '${w.key}'.contains('super-messages-'),
   );
   ScrollPosition listPosition(WidgetTester tester) => tester
       .state<ScrollableState>(
@@ -214,18 +214,23 @@ void main() {
     tester,
   ) async {
     final server = chat(250, replyTo: 'message-10');
-    await show(tester, server);
+    final c = await show(tester, server);
     server.holdReads = Completer<void>();
     await dragToTop(tester);
     expect(earlierLoading, findsOneWidget);
     // The reader moves on while the page is slow.
     await tester.drag(messageList(), const Offset(0, -300));
     await settle(tester);
-    final dragged = listPosition(tester).pixels;
+    // The first row the reader sees, where they left it.
+    final reading = c
+        .messages('lead')
+        .map((m) => m.id)
+        .firstWhere((id) => row(id).hitTestable().evaluate().isNotEmpty);
+    final dragged = tester.getTopLeft(row(reading));
     server.holdReads!.complete();
     server.holdReads = null;
     await tester.pumpAndSettle();
-    expect(listPosition(tester).pixels, dragged);
+    expect(tester.getTopLeft(row(reading)), dragged);
   });
 
   testWidgets('a quote whose original is not loaded reads it and shows it', (

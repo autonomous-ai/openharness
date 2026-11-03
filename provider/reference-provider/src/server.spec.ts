@@ -63,6 +63,12 @@ const send = async (text: string, extra: Record<string, unknown> = {}): Promise<
 const kinds = (events: Event[]): string[] => events.map((e) => e.kind ?? '(none)')
 const TERMINAL = ['turn_completed', 'turn_failed', 'turn_cancelled', 'turn_input_required']
 
+describe('startup', () => {
+  it('rejects when the requested port is already in use', async () => {
+    await expect(start(Number(new URL(base).port))).rejects.toMatchObject({ code: 'EADDRINUSE' })
+  }, 1_000)
+})
+
 describe('there is nothing to discover', () => {
   it('serves no descriptor — one URL, one credential header, eight methods', async () => {
     // The endpoint that used to exist is gone rather than deprecated: a client that still fetches it

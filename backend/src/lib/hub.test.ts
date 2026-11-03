@@ -16,7 +16,9 @@ vi.mock('./bus.js', () => bus)
 vi.mock('./providerLink.js', () => ({ routeDown: async (_m: string, _d: unknown, fallback: () => Promise<number>) => fallback() }))
 vi.mock('../utils/logger.js', () => ({ logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } }))
 
-const { attachHubClient, deliverUpLocal, sendClientsControl } = await import('./hub.js')
+const { attachHubClient, deliverUpLocal, recomputeAndSendClients, sendClientsControl } = await import('./hub.js')
+const registry = await import('./registry.js')
+const { env } = await import('../config/env.js')
 const { SEND_HIGH_WATER, SEND_KILL_WATER } = await import('./wsSend.js')
 
 function socket(out: unknown[], bufferedAmount = 0): WebSocket {
@@ -111,5 +113,42 @@ describe('sendClientsControl coalescing', () => {
     sendClientsControl(b)
     await flush()
     expect(bus.setAgentClientCount).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('the __clients frame', () => {
+  // A daemon holds a machine's live events while no UI client views it only when the backend says it may
+  // (`uiGate`); RELAY_UI_GATE=off withdraws that without a daemon release (spec 2026-11-02-swarm-cache-delta-design, Part 4).
+  it('__clients carries uiGate, and none with RELAY_UI_GATE=off', async () => {
+    const machineId = `hub-uigate-${Date.now()}`
+    const sent: string[] = []
+    const control = socket(sent)
+    registry.bindControlSocket(machineId, control)
+    const saved = env.RELAY_UI_GATE
+    try {
+      await recomputeAndSendClients(machineId)
+      env.RELAY_UI_GATE = 'off'
+      await recomputeAndSendClients(machineId)
+    } finally {
+      env.RELAY_UI_GATE = saved
+      registry.unbindControlSocket(machineId, control)
+    }
+    const payloads = sent.map((s) => JSON.parse(s).frame.payload)
+    expect(payloads[0]).toEqual({ ui: 0, commander: 0, commanderActive: 0, uiGate: true })
+    expect(payloads[1]).toEqual({ ui: 0, commander: 0, commanderActive: 0 })
+  })
+
+  it('a count it could not read never offers the gate: a Redis blip must not tell the daemon nobody is viewing', async () => {
+    const machineId = `hub-uigate-failed-${Date.now()}`
+    const sent: string[] = []
+    const control = socket(sent)
+    registry.bindControlSocket(machineId, control)
+    vi.mocked(bus.getAgentClientState).mockResolvedValueOnce({ totals: { ui: 0, commander: 0, commanderActive: 0 }, commanderJoinGeneration: undefined, failed: true } as never)
+    try {
+      await recomputeAndSendClients(machineId)
+    } finally {
+      registry.unbindControlSocket(machineId, control)
+    }
+    expect(JSON.parse(sent[0]!).frame.payload).toEqual({ ui: 0, commander: 0, commanderActive: 0 })
   })
 })

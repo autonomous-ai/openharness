@@ -17,6 +17,9 @@ export interface RuntimeState {
   mode: 'default' | 'plan' | 'unknown'
   cliVersion: string | null
   observedAt: number | null
+  /** The effort the settings last filled in. While [effort] is still that one, the session has shown none of its own, and
+   * a later settings read may change it; an effort the session showed is never replaced by the settings. */
+  settingsEffort?: string
 }
 
 export type RuntimeField = 'model' | 'effort' | 'mode'
@@ -54,6 +57,8 @@ export interface EngineRuntime {
   reduce(context: RuntimeContext, record: RuntimeRecord): void
   transcript(context: RuntimeContext, record: Record<string, unknown>): void
   pane(context: RuntimeContext, text: string): void
+  /** The effort the engine's settings start a session with: a default, which fills an effort the session has not shown
+   * and never replaces one it has (a reply's, a pane's), as `fillConfiguredEffort` applies it. */
   configuredEffort?(session: RuntimeSession): Promise<string>
   selectedModel(session: RuntimeSession, state: RuntimeState): string | null
   models(session: RuntimeSession, state: RuntimeState | undefined): Promise<RuntimeModelOption[]>

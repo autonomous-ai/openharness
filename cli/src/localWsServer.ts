@@ -9,6 +9,7 @@ import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
 import { isTrustedLocal, pipeProofOf } from './lib/localSocket.js'
 import { PIPE_PROOF_HEADER } from './lib/windows/pipeAuth.js'
 import { localCredentialMatches } from './lib/localCredential.js'
+import { peerIsThisAccount, type PeerAccount } from './lib/peerAccount.js'
 import type { Frame, LocalClientSink } from './backendSocket.js'
 import {
   decodeTerminalLocal,
@@ -56,6 +57,8 @@ export interface LocalWsServerOptions {
   /** The daemon's local credential (lib/localCredential.ts). Given, a TCP upgrade must carry it: the
    *  loopback port takes any local OS user's process, the Unix socket only this user's. */
   localCredential?: string
+  /** Whether a TCP caller runs as this OS account (lib/peerAccount.ts). A test's stand-in for another account. */
+  peerAccount?: PeerAccount
   /** Serves a `machine_select` for any OTHER machine this signed-in user owns, by relaying to
    *  backend's `/api/web-ws` — see lib/remoteRelay.ts — and one for a harness shared with this account
    *  (`shareId`, sharing/relay.ts). Both are the gateway's. Omit to keep today's own-machine-only behavior. */
@@ -253,7 +256,10 @@ function appSwarmsFrom(payload: unknown): AppSwarms | null {
     // links to the tab by the first and follows the second. Ids only: anything else is dropped, not trusted.
     const superTabId = typeof r.superTabId === 'string' && CARD_ID.test(r.superTabId) ? r.superTabId : undefined
     const projectId = typeof r.projectId === 'string' && CARD_ID.test(r.projectId) ? r.projectId : undefined
-    swarms.push({ id: r.id, name: r.name.slice(0, 80), agentIds, panes, ...(superTabId ? { superTabId } : {}), ...(projectId ? { projectId } : {}) })
+    // And the conversation it has open (its Lead's, the person's Buddy chat or a group), which the round dial's face follows.
+    const conversationId = typeof r.conversationId === 'string' && CARD_ID.test(r.conversationId) ? r.conversationId : undefined
+    swarms.push({ id: r.id, name: r.name.slice(0, 80), agentIds, panes, ...(superTabId ? { superTabId } : {}), ...(projectId ? { projectId } : {}),
+      ...(conversationId ? { conversationId } : {}) })
     if (swarms.length === 24) break   // the window's own ceiling
   }
   if (swarms.length === 0) return null
@@ -352,7 +358,20 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
       rejectUpgrade(socket, 401, 'Unauthorized')
       return
     }
-    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))
+    if (options.localCredential === undefined) {
+      wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))
+      return
+    }
+    // A credential another account heard while it held this port during a restart (audit H1) must open nothing.
+    // Nothing else listens on this socket until the upgrade: a client's reset while the lookup runs would be uncaught.
+    const ignoreReset = (): void => {}
+    socket.on('error', ignoreReset)
+    void (options.peerAccount ?? peerIsThisAccount)(req.socket).then((mine) => {
+      socket.off('error', ignoreReset)
+      if (socket.destroyed) return
+      if (!mine) { rejectUpgrade(socket, 401, 'Unauthorized'); return }
+      wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))
+    }, () => { socket.off('error', ignoreReset); rejectUpgrade(socket, 401, 'Unauthorized') })
   }
   const servers = [server, ...(options.localSocketServer ? [options.localSocketServer] : [])]
   for (const each of servers) each.on('upgrade', onUpgrade)

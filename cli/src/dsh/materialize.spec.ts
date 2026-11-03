@@ -169,6 +169,19 @@ describe('materializeWorkspace, on harnesses other than the starter', () => {
     expect((await materializeWorkspace(killed, workspace)).warnings).toEqual(['init exited SIGKILL'])
   })
 
+  it('on Windows without Git Bash, says the workspace init could not start, not that a setup or check script needs it', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    // A Mac or Linux PATH has no git.exe, and the Windows install folders are unset here: no Git Bash is found.
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+    try {
+      const result = await materializeWorkspace(install({ engine: 'codex', workspace: { marker: 'done', init: 'echo hi' } }), workspace)
+      expect(result.initLines).toEqual(["could not start: This harness's workspace init needs Git Bash on Windows, and it was not found. Install Git for Windows from https://git-scm.com/download/win (or run: winget install --id Git.Git -e), then try again."])
+      expect(result.warnings).toEqual(['init exited 127'])
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+    }
+  })
+
   it('an init that is still running after five minutes is stopped and said to have timed out', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     const slow = install({ engine: 'codex', workspace: { marker: 'done', init: 'sleep 30' } })

@@ -1,6 +1,6 @@
 //! The status bar down a side, its footer: what tmux's status line shows on its right (the
-//! subscription left, the harnesses' counts, the daemon, where you are, the time), which has no
-//! line of its own while the bar stands in for it.
+//! subscription left, the daemon, where you are, the time), which has no line of its own while
+//! the bar stands in for it.
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -8,13 +8,12 @@ use ratatui::style::Style;
 use crate::app::App;
 use crate::theme;
 
-/// The footer's lines, each one thing: the daemon when it is down, the subscription left, the
-/// harnesses' counts on one line. (Where you are — the machine, which names the session too — is
-/// the bar's own heading, and the folder each pane's title: not said again.)
-const LINES: [&str; 3] = [
+/// The footer's lines, each one thing: the daemon when it is down, the subscription left. (Where
+/// you are — the machine, which names the session too — is the bar's own heading, and the folder
+/// each pane's title; the harnesses' states are their rows' marks: not said again.)
+const LINES: [&str; 2] = [
     "#{?daemon_down,#[fg=red#,bold]daemon down#[default],}",
     "#{?usage_remaining,#{usage_remaining_icons},}",
-    "#{?fleet,#{s/ /  /:fleet},}",
 ];
 
 fn items(app: &App) -> Vec<String> {
@@ -67,6 +66,21 @@ mod tests {
         app.fleet.local_id = "local".into();
         app.fleet.machines.push(crate::fleet::Machine { shared: false, id: "local".into(), name: "studio".into(), local: true, status: "online".into(), reach: crate::fleet::Reach::Ready });
         app
+    }
+
+    /// Neither the bar's footer nor the status line counts the harnesses by state (`⠋1`): each
+    /// harness's row and window mark say how it is.
+    #[test]
+    fn no_harness_counts_by_the_subscription() {
+        let mut app = app();
+        app.fleet.merge_roster("local", &[serde_json::json!({"id": "a1", "name": "fix login", "engine": "claude"})]);
+        app.fleet.agents.values_mut().for_each(|a| a.working = true);
+        let counts = crate::format::expand(&app, "#{fleet}", app.active, app.focused(), true);
+        assert!(!counts.is_empty(), "a harness is working");
+        assert!(!items(&app).iter().any(|l| l.contains(&counts)), "{:?}", items(&app));
+        let right = app.options.get("status-right", "", None).unwrap_or_default();
+        let line = crate::format::expand(&app, &right, app.active, app.focused(), true);
+        assert!(!line.contains(&counts), "{line}");
     }
 
     /// The footer says one thing a line and nothing twice: the daemon when down (bold) — no machine,

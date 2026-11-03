@@ -220,6 +220,7 @@ jobs:
           DESTINATION: ${{ needs.version.outputs.artifact_prefix }}
           SCRATCH_PREFIX: ${{ needs.version.outputs.scratch_prefix }}
           TEST_REUSE: ${{ inputs.test_candidate_reuse }}
+          WINDOWS_SIGNING: ${{ vars.WINDOWS_SIGNING }}
         run: |
           args=()
           [[ "$TEST_REUSE" != true ]] || args+=(--require-candidate)
@@ -348,7 +349,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev
+            clang cmake ninja-build pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev liblzma-dev libstdc++-12-dev
 
       # Flutter has no Linux ARM64 SDK archive. Its action installs the same
       # pinned SDK from Git, verifies the revision, and reuses main's native cache.
@@ -389,7 +390,7 @@ jobs:
         run: bash scripts/upload-desktop-linux.sh "$VERSION"
 
   # Each architecture on its own runner, like Linux (docs/superpowers/specs/2026-10-19-windows-installer-design.md
-  # §2.2). Not signed: there is no signing service yet. The x64 job also builds harness-install.exe, one x64
+  # §2.2). sign-windows signs what these build. The x64 job also builds harness-install.exe, one x64
   # program for every PC. upload-windows publishes the files from ubuntu, so these runners need no gcloud.
   build-windows:
     # The name desktop-release-candidate.py's check_jobs requires: without it GitHub would add the target too.
@@ -472,8 +473,92 @@ jobs:
           path: windows-release/
           if-no-files-found: error
 
-  upload-windows:
+  # Authenticode through Azure Artifact Signing (docs/windows-code-signing.md), once the repository variable
+  # WINDOWS_SIGNING is `required`; until then this is skipped and Windows ships unsigned, as before. One x64 job for
+  # both architectures: the signing action does not run on Windows Arm. Each zip is opened, its .exe and .dll files
+  # signed, and written again in package-windows.ps1's layout under the same artifact name, so upload-windows and
+  # check-windows-zip.py see the shape they always have, and the published sha256 is the signed bytes'.
+  sign-windows:
     needs: [version, build-windows]
+    if: vars.WINDOWS_SIGNING == 'required'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    environment: release
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /.github/actions/windows-signing/
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-windows-*
+          path: windows-release
+      - name: Open the zips
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($arch in 'x64', 'arm64') {
+            $zip = "windows-release/desktop-windows-$arch/Harness-windows-$arch.zip"
+            if (-not (Test-Path -LiteralPath $zip -PathType Leaf)) { throw "$zip is missing" }
+            Expand-Archive -LiteralPath $zip -DestinationPath "windows-sign/$arch"
+            Remove-Item -LiteralPath $zip
+          }
+          Move-Item -LiteralPath 'windows-release/desktop-windows-x64/harness-install.exe' -Destination 'windows-sign/harness-install.exe'
+      - uses: ./.github/actions/windows-signing
+        with:
+          path: windows-sign
+          publisher: ${{ vars.WINDOWS_SIGNING_PUBLISHER || 'AUTONOMOUS INC.' }}
+          azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          endpoint: ${{ vars.SIGNING_ENDPOINT }}
+          account: ${{ vars.SIGNING_ACCOUNT }}
+          profile: ${{ vars.SIGNING_PROFILE }}
+      # The same entries package-windows.ps1 writes: files only, relative, with forward slashes.
+      - name: Write the signed zips
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -AssemblyName System.IO.Compression
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          foreach ($arch in 'x64', 'arm64') {
+            $stage = (Resolve-Path -LiteralPath "windows-sign/$arch").Path.TrimEnd([char[]]@('\', '/')) + '\'
+            $zip = Join-Path (Resolve-Path -LiteralPath "windows-release/desktop-windows-$arch").Path "Harness-windows-$arch.zip"
+            $archive = [System.IO.Compression.ZipFile]::Open($zip, [System.IO.Compression.ZipArchiveMode]::Create)
+            try {
+              foreach ($file in Get-ChildItem -LiteralPath $stage -Recurse -File -Force) {
+                $entry = $file.FullName.Substring($stage.Length).Replace('\', '/')
+                [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                  $archive, $file.FullName, $entry, [System.IO.Compression.CompressionLevel]::Optimal
+                ) | Out-Null
+              }
+            } finally {
+              $archive.Dispose()
+            }
+            Write-Output "$zip $((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant())"
+          }
+          Move-Item -LiteralPath 'windows-sign/harness-install.exe' -Destination 'windows-release/desktop-windows-x64/harness-install.exe'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows-x64
+          path: windows-release/desktop-windows-x64/
+          if-no-files-found: error
+          overwrite: true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows-arm64
+          path: windows-release/desktop-windows-arm64/
+          if-no-files-found: error
+          overwrite: true
+
+  upload-windows:
+    needs: [version, build-windows, sign-windows]
+    # Signed when WINDOWS_SIGNING is `required`, and then never without it; unsigned only while signing is off.
+    if: ${{ !cancelled() && needs.build-windows.result == 'success' && (needs.sign-windows.result == 'success' || (needs.sign-windows.result == 'skipped' && vars.WINDOWS_SIGNING != 'required')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -713,7 +798,9 @@ jobs:
   # its full producer source tree, Desktop build inputs, version, run and attempt.
   candidate:
     needs: [version, build-macos, build-linux, upload-windows]
-    if: ${{ inputs.prepare_only }}
+    # Explicit results: an implicit success() also inspects skipped ancestors, and sign-windows is skipped while
+    # WINDOWS_SIGNING is off.
+    if: ${{ !cancelled() && inputs.prepare_only && needs.version.result == 'success' && needs.build-macos.result == 'success' && needs.build-linux.result == 'success' && needs.upload-windows.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
