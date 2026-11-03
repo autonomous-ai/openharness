@@ -155,12 +155,9 @@ class SuperTabAttention extends ChangeNotifier {
         controller.notifyOf(conversationId) == SuperTabNotify.muted) {
       return 0;
     }
-    final asked = decisions.open
+    return decisions.open
         .where((decision) => decision.conversationId == conversationId)
         .length;
-    if (asked == 0) return 0;
-    final group = controller.snapshot?.conversation(conversationId);
-    return group != null && controller.unreadShown(group) ? asked : 0;
   }
 
   /// The red number of [conversationId]: tags and decisions Activity shows
