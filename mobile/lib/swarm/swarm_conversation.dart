@@ -894,7 +894,14 @@ class SwarmConversation extends ChangeNotifier
       final again = _outbox.unconfirmed;
       return again != null && await retry(again);
     }
-    if (conversation == null) return false;
+    final group = conversation;
+    if (group == null) return false;
+    // As the desktop's, before any file goes up.
+    if (namesAgentGone(_draft, group.agentIds)) {
+      error = swarmMentionedAgentLeft;
+      _tell();
+      return false;
+    }
     final ids = await _uploadAll(outgoing);
     if (ids == null || _disposed) return false;
     final body = _compose(ids);
@@ -1492,6 +1499,12 @@ class _Changes extends ChangeNotifier {
   void changed() => notifyListeners();
 }
 
+/// The desktop's words (`controller.dart` `send`, `sendThreadReply`) for a
+/// draft that still names an agent picked for it who has left the chat since.
+const swarmMentionedAgentLeft =
+    'A mentioned agent is no longer in this conversation. '
+    'Remove its mention or choose another agent.';
+
 /// The @ of a box — the chat's composer, a thread's reply box
 /// ([SwarmThread]): the name typed after an @, and the agents and people
 /// picked for the draft while its text still names them.
@@ -1559,12 +1572,34 @@ mixin SwarmMentioning {
   /// text.
   void mention(String id) => _name(id, draft);
 
+  /// The token that names [id] in a draft: a person's username or an
+  /// agent's name, after an @. Null before the Swarm is read.
+  String? _tokenOf(String id) {
+    final snapshot = reader.snapshot;
+    if (snapshot == null) return null;
+    final person = snapshot.people.where((p) => p.id == id).firstOrNull;
+    return '@${person?.username ?? snapshot.agentName(id)}';
+  }
+
+  /// Those a sent [command] named, by id with their tokens as [text] still
+  /// says them: what a kept post puts back in the box when it is refused.
+  Map<String, String> mentionsSent(Map<String, dynamic> command, String text) {
+    final ids = {
+      ...?(command['recipientIds'] as List?)?.whereType<String>(),
+      ...?(command['mentions'] as List?)?.whereType<String>(),
+    };
+    return {
+      for (final id in ids)
+        if (_tokenOf(id) case final token?
+            when SwarmConversation.containsMention(text, token))
+          id: token,
+    };
+  }
+
   /// [id]'s name after [before], as the draft.
   void _name(String id, String before) {
-    final snapshot = reader.snapshot;
-    if (snapshot == null) return;
-    final person = snapshot.people.where((p) => p.id == id).firstOrNull;
-    final token = '@${person?.username ?? snapshot.agentName(id)}';
+    final token = _tokenOf(id);
+    if (token == null) return;
     final spaced = before.isEmpty || RegExp(r'\s$').hasMatch(before);
     // Picked first: the draft keeps only those its text names.
     _mentions[id] = token;
@@ -1575,6 +1610,19 @@ mixin SwarmMentioning {
   /// (`_tagsSaid`): the people still in the Swarm, tagged, and the agents of
   /// [agentIds], its recipients. The backend checks each again, and refuses
   /// a person who cannot read the chat.
+  /// Whether [text] still names an agent picked for it that is not one of
+  /// [agentIds] any more: left the chat since. As the desktop's `_tagsSaid`,
+  /// whoever is not a person of the Swarm counts as an agent.
+  bool namesAgentGone(String text, List<String> agentIds) {
+    final people = {...?reader.snapshot?.people.map((p) => p.id)};
+    return _mentions.entries.any(
+      (entry) =>
+          SwarmConversation.containsMention(text, entry.value) &&
+          !people.contains(entry.key) &&
+          !agentIds.contains(entry.key),
+    );
+  }
+
   ({List<String> tagged, List<String> addressed}) mentionsSaid(
     String text,
     List<String> agentIds,

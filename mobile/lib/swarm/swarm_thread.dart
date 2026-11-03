@@ -67,15 +67,22 @@ class SwarmThread extends ChangeNotifier
     final posts = [
       for (final row
           in reader.kept?.posts(reader.tabId, chat.id, root) ?? const [])
-        ?SwarmPost.fromKept(row, _heldOf),
+        ?SwarmPost.fromKept(row, (text) => _heldOf(text, row)),
     ];
     if (posts.isNotEmpty) _outbox.restore(posts);
   }
 
-  /// What a kept reply puts back in the box if it is refused: only its words.
-  static Object? _heldOf(String text) => (
+  /// What a kept reply puts back in the box if it is refused: its words and
+  /// those they named ([mentionsSent]), so they go with it again.
+  Object? _heldOf(String text, Map<String, dynamic> row) => (
     draft: text,
-    mentions: const <String, String>{},
+    mentions: switch (row['body']) {
+      {'command': final Map<String, dynamic> command} => mentionsSent(
+        command,
+        text,
+      ),
+      _ => const <String, String>{},
+    },
     alsoSend: false,
     newSession: false,
   );
@@ -661,7 +668,15 @@ class SwarmThread extends ChangeNotifier
       final again = _outbox.unconfirmed;
       return again != null && await retry(again);
     }
-    if (chat.conversation == null) return false;
+    final listed = chat.conversation;
+    if (listed == null) return false;
+    // As the desktop's, before any file goes up: an agent picked for the
+    // reply who has left the chat since is never dropped without a word.
+    if (namesAgentGone(_draft, listed.agentIds)) {
+      error = swarmMentionedAgentLeft;
+      _tell();
+      return false;
+    }
     if (_namesAgentInSession) {
       // As the desktop's, before any file goes up.
       error =
