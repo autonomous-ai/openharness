@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -191,7 +192,7 @@ void main() {
     await mount(tester, c);
     await tester.tap(find.byTooltip('Project options'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(MenuItemButton, 'Pull requests'));
+    await tester.tap(find.widgetWithText(AppMenuItem, 'Pull requests'));
     await tester.pumpAndSettle();
     expect(find.text('example/lamp #12'), findsOneWidget);
     expect(find.text('example/design #8'), findsNothing);
@@ -200,7 +201,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Project options'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(MenuItemButton, 'Pull requests'));
+    await tester.tap(find.widgetWithText(AppMenuItem, 'Pull requests'));
     await tester.pumpAndSettle();
     expect(find.text('example/design #8'), findsOneWidget);
     expect(find.text('example/lamp #12'), findsNothing);
@@ -249,9 +250,7 @@ void main() {
       await mount(tester, c);
       await tester.tap(find.byTooltip('Project options'));
       await tester.pumpAndSettle();
-      await tester.tap(
-        find.widgetWithText(MenuItemButton, 'Project settings…'),
-      );
+      await tester.tap(find.widgetWithText(AppMenuItem, 'Project settings…'));
       await tester.pumpAndSettle();
       expect(find.text('Project details'), findsOneWidget);
       expect(find.text('Update cadence'), findsNothing);

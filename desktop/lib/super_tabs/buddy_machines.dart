@@ -145,9 +145,9 @@ class _BuddyMachineFieldState extends State<BuddyMachineField> {
     width: width,
     child: Padding(
       padding: EdgeInsets.fromLTRB(
-        AppMenuRowMetrics.roomy.padding.left + grid.AppDesktop.menuInset,
+        AppMenuRowMetrics.compact.padding.left + grid.AppDesktop.menuInset,
         grid.AppDesktop.menuInset,
-        AppMenuRowMetrics.roomy.padding.right + grid.AppDesktop.menuInset,
+        AppMenuRowMetrics.compact.padding.right + grid.AppDesktop.menuInset,
         grid.AppDesktop.listRowGap,
       ),
       child: Semantics(
@@ -162,35 +162,36 @@ class _BuddyMachineFieldState extends State<BuddyMachineField> {
 
   Widget _row(BuddyMachine m, double width, String? focusId) {
     final block = buddyMachineBlock(m);
-    return Padding(
-      padding: const EdgeInsets.symmetric(
-        horizontal: grid.AppDesktop.menuInset,
-        vertical: grid.AppDesktop.listRowGap / 2,
-      ),
-      child: SizedBox(
-        width: width - 2 * grid.AppDesktop.menuInset,
-        child: MenuItemButton(
+    final choose = widget.busy || block != null
+        ? null
+        : () => widget.onChanged(m.id);
+    // The app's one menu row, as every dropdown draws; AppMenuItem brings its
+    // own gutter, so the row is the menu's full width.
+    return SizedBox(
+      width: width,
+      child: Semantics(
+        button: true,
+        enabled: choose != null,
+        selected: m.id == widget.value,
+        onTap: choose,
+        label: [m.name, ?block].join(', '),
+        excludeSemantics: true,
+        child: AppMenuItem(
           key: ValueKey('super-buddy-machine-option-${m.id}'),
           autofocus: m.id == focusId,
-          overflowAxis: Axis.vertical,
-          semanticsLabel: [m.name, ?block].join(', '),
-          style: ButtonStyle(
-            side: const WidgetStatePropertyAll(BorderSide.none),
-            padding: WidgetStatePropertyAll(AppMenuRowMetrics.roomy.padding),
-          ),
-          onPressed: widget.busy || block != null
-              ? null
-              : () => widget.onChanged(m.id),
+          closesMenu: true,
+          expandLabel: true,
+          leadingSlot: false,
+          label: m.name,
+          selected: block == null && m.id == widget.value,
           // In words, never by its grey alone (design system, Color and state).
-          trailingIcon: block != null
-              ? Text(
+          trailing: block == null
+              ? null
+              : Text(
                   block,
                   style: DesktopChrome.metadata(color: DesktopChrome.muted),
-                )
-              : m.id == widget.value
-              ? const Icon(AppIcons.check, size: grid.AppControl.iconSize)
-              : null,
-          child: Text(m.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                ),
+          onPressed: choose,
         ),
       ),
     );

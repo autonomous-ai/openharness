@@ -39,11 +39,16 @@ class AppMenuRowMetrics {
       padding.vertical +
       2;
 
-  /// A context menu's row: the macOS control scale.
+  /// A context menu's row: the macOS control scale, with the New Harness
+  /// agent chooser's 10-point sides — the one row recipe every dropdown in the
+  /// app now shares (owner, 2026-11-03).
   static const compact = AppMenuRowMetrics(
     iconSize: 16,
-    padding: EdgeInsets.symmetric(horizontal: 9, vertical: 8),
+    padding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
   );
+
+  /// Between the leading glyph's slot and the label: the agent chooser's 10.
+  static const double leadingGap = 10;
 
   /// A picker's row has more padding, with the same font as a context menu.
   static const roomy = AppMenuRowMetrics(
@@ -82,7 +87,26 @@ class AppMenuItem extends StatefulWidget {
     this.metrics = AppMenuRowMetrics.compact,
     this.textStyle,
     this.expandLabel = false,
+    this.leadingSlot = true,
+    this.autofocus = false,
+    this.closesMenu = false,
   });
+
+  /// Close the whole menu this row is in — through any [AppSubmenuItem] above
+  /// it — before [onPressed] runs, as a Material menu button does. Off for a
+  /// caller that closes its own menu (the Windows ☰ closes all of its panels
+  /// itself).
+  final bool closesMenu;
+
+  /// Take focus as the panel opens — the current choice in a picker, so the
+  /// arrow keys start from it.
+  final bool autofocus;
+
+  /// Keep the fixed leading column even with no [icon] or [leading]. True for
+  /// a row in a panel where other rows carry a glyph, so labels line up; false
+  /// for a panel that never has one (the Windows ☰'s section names), where the
+  /// empty column only pushed every label off to the right.
+  final bool leadingSlot;
 
   /// The leading glyph. Null for a row in a list that PICKS one of several — the
   /// slot is still reserved, so labels line up whether a row is ticked or not.
@@ -137,7 +161,9 @@ class AppMenuItem extends StatefulWidget {
   /// these two greys, and a tick alone is easy to miss in a long list.
   final bool selected;
 
-  final VoidCallback onPressed;
+  /// Null draws the row disabled: muted ink, no hover fill, no hand cursor,
+  /// and it cannot take focus — an offline machine in a machine picker.
+  final VoidCallback? onPressed;
 
   /// Red at rest for a destructive action. Active rows retain the common
   /// white-on-blue selection so pointer and keyboard feedback remain legible.
@@ -151,14 +177,32 @@ class _AppMenuItemState extends State<AppMenuItem> {
   bool _hovered = false;
   bool _focused = false;
 
+  VoidCallback? get _onTap {
+    final action = widget.onPressed;
+    if (action == null || !widget.closesMenu) return action;
+    return () {
+      _AppMenuRoot.of(context)?.close();
+      // After the frame, as MenuItemButton does: the menu has handed focus
+      // back to what held it before, so an action that opens a dialog or
+      // moves focus starts from there.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        FocusManager.instance.applyFocusChangesIfNeeded();
+        action();
+      });
+    };
+  }
+
   @override
   Widget build(BuildContext context) {
     // Lives in the MenuAnchor's overlay, so it watches for itself.
     AppTheme.watch(context);
     final error = Theme.of(context).colorScheme.error;
-    final active = _hovered || _focused;
+    final enabled = widget.onPressed != null;
+    final active = enabled && (_hovered || _focused);
     final tint = active
         ? AppDesktop.onSelection
+        : !enabled
+        ? AppPalette.textSecondary.withValues(alpha: .6)
         : widget.danger
         ? error
         : AppPalette.textSecondary;
@@ -172,10 +216,13 @@ class _AppMenuItemState extends State<AppMenuItem> {
         borderRadius: BorderRadius.circular(AppDesktop.rowRadius),
         child: InkWell(
           focusNode: widget.focusNode,
-          onTap: widget.onPressed,
+          autofocus: widget.autofocus && enabled,
+          onTap: _onTap,
           onHover: (hovered) => setState(() => _hovered = hovered),
           onFocusChange: (focused) => setState(() => _focused = focused),
-          mouseCursor: SystemMouseCursors.click,
+          mouseCursor: enabled
+              ? SystemMouseCursors.click
+              : SystemMouseCursors.basic,
           borderRadius: BorderRadius.circular(AppDesktop.rowRadius),
           hoverColor: Colors.transparent,
           focusColor: Colors.transparent,
@@ -195,25 +242,29 @@ class _AppMenuItemState extends State<AppMenuItem> {
                 // Fixed slot: these glyphs differ in width, and without it every
                 // label would start at a slightly different column — and a
                 // ticked row would sit a few pixels off an unticked one.
-                SizedBox(
-                  width: widget.metrics.iconSize,
-                  child: widget.leading != null
-                      ? IconTheme.merge(
-                          data: IconThemeData(
-                            color: tint,
-                            size: widget.metrics.iconSize,
-                          ),
-                          child: widget.leading!,
-                        )
-                      : (glyph == null
-                            ? null
-                            : Icon(
-                                glyph,
-                                size: widget.metrics.iconSize,
-                                color: tint,
-                              )),
-                ),
-                const SizedBox(width: 9),
+                if (widget.leadingSlot ||
+                    widget.leading != null ||
+                    glyph != null) ...[
+                  SizedBox(
+                    width: widget.metrics.iconSize,
+                    child: widget.leading != null
+                        ? IconTheme.merge(
+                            data: IconThemeData(
+                              color: tint,
+                              size: widget.metrics.iconSize,
+                            ),
+                            child: widget.leading!,
+                          )
+                        : (glyph == null
+                              ? null
+                              : Icon(
+                                  glyph,
+                                  size: widget.metrics.iconSize,
+                                  color: tint,
+                                )),
+                  ),
+                  const SizedBox(width: AppMenuRowMetrics.leadingGap),
+                ],
                 Flexible(
                   fit: widget.expandLabel ? FlexFit.tight : FlexFit.loose,
                   child: Column(
@@ -227,6 +278,8 @@ class _AppMenuItemState extends State<AppMenuItem> {
                         style: (widget.textStyle ?? AppType.body()).copyWith(
                           color: active
                               ? AppDesktop.onSelection
+                              : !enabled
+                              ? AppPalette.textSecondary
                               : widget.danger
                               ? error
                               : AppPalette.textPrimary,
@@ -288,6 +341,118 @@ class _AppMenuItemState extends State<AppMenuItem> {
       ),
     );
   }
+}
+
+/// An [AppMenuItem] that opens a submenu beside its panel.
+///
+/// The app's one submenu: the Windows ☰'s sections and the conversation
+/// menu's Notifications both draw with it, where they used to be a hand-placed
+/// [MenuAnchor] and a Material [SubmenuButton] that looked nothing alike.
+///
+/// Pointing at the row opens it, a click toggles it. The submenu is placed
+/// from the row's top END — the panel's measured inner edge — [gap] across and
+/// up by the panel's top padding, so its first row lines up with this one;
+/// [MenuAnchor] mirrors it to the left when the window has no room.
+class AppSubmenuItem extends StatefulWidget {
+  const AppSubmenuItem({
+    super.key,
+    this.itemKey,
+    required this.label,
+    required this.menuChildren,
+    this.controller,
+    this.icon,
+    this.trailing,
+    this.leadingSlot = true,
+    this.style,
+    this.minWidth = 180,
+    this.onOpen,
+    this.onClose,
+  });
+
+  /// The row's own key, for a caller that finds or taps the row itself.
+  final Key? itemKey;
+  final String label;
+  final List<Widget> menuChildren;
+
+  /// Supplied when the caller coordinates several submenus (closes the others
+  /// in [onOpen]); otherwise the item keeps its own.
+  final MenuController? controller;
+  final IconData? icon;
+  final Widget? trailing;
+  final bool leadingSlot;
+
+  /// The submenu panel's style before placement; [AppMenu.style] by default.
+  final MenuStyle? style;
+  final double minWidth;
+  final VoidCallback? onOpen;
+  final VoidCallback? onClose;
+
+  /// The air between the two panels' rims: side by side, as a cascading menu
+  /// sits on Windows.
+  static const double gap = 2;
+
+  @override
+  State<AppSubmenuItem> createState() => _AppSubmenuItemState();
+}
+
+class _AppSubmenuItemState extends State<AppSubmenuItem> {
+  MenuController? _own;
+
+  MenuController get _controller =>
+      widget.controller ?? (_own ??= MenuController());
+
+  void _open() {
+    if (!_controller.isOpen) _controller.open();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final base = widget.style ?? AppMenu.style();
+    // The panel this row sits in, or the top of the chain it hangs from: what
+    // a [AppMenuItem.closesMenu] row in the submenu closes.
+    final root = _AppMenuRoot.of(context);
+    return MenuAnchor(
+      controller: _controller,
+      style: base.copyWith(
+        alignment: AlignmentDirectional.topEnd,
+        minimumSize: WidgetStatePropertyAll(Size(widget.minWidth, 0)),
+      ),
+      alignmentOffset: Offset(AppSubmenuItem.gap, -AppMenu.panelPadding.top),
+      onOpen: widget.onOpen,
+      onClose: widget.onClose,
+      menuChildren: [
+        for (final child in widget.menuChildren)
+          root == null ? child : _AppMenuRoot(controller: root, child: child),
+      ],
+      child: MouseRegion(
+        onHover: (_) => _open(),
+        child: AppMenuItem(
+          key: widget.itemKey,
+          icon: widget.icon,
+          label: widget.label,
+          trailing: widget.trailing,
+          leadingSlot: widget.leadingSlot,
+          onPressed: () =>
+              _controller.isOpen ? _controller.close() : _controller.open(),
+        ),
+      ),
+    );
+  }
+}
+
+/// The top menu of an [AppSubmenuItem] chain, handed down to the submenu's
+/// rows; outside any submenu, the nearest [MenuAnchor]'s own controller.
+class _AppMenuRoot extends InheritedWidget {
+  const _AppMenuRoot({required this.controller, required super.child});
+
+  final MenuController controller;
+
+  static MenuController? of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<_AppMenuRoot>()?.controller ??
+      MenuController.maybeOf(context);
+
+  @override
+  bool updateShouldNotify(_AppMenuRoot old) => controller != old.controller;
 }
 
 /// The rule that sets a destructive row apart from the ordinary ones.

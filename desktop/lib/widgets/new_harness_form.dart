@@ -12,6 +12,7 @@ import 'package:xterm/xterm.dart' show TerminalTheme;
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../core/dsh_catalog.dart';
+import '../core/runtime_platform.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_menu.dart';
 import '../terminal/terminal_text.dart';
@@ -1661,7 +1662,16 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                             policy: OrderedTraversalPolicy(),
                             child: SingleChildScrollView(
                               controller: _fieldsScroll,
-                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              // On a Windows new tab the form is the page
+                              // under the caption row, and 12 put its pickers
+                              // right against the tabs (owner, 2026-11-03).
+                              padding: EdgeInsets.only(
+                                top:
+                                    widget.embedded && RuntimePlatform.isWindows
+                                    ? 32
+                                    : 12,
+                                bottom: 12,
+                              ),
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
@@ -2115,7 +2125,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         if (!m.own) m,
     ];
     Widget heading(String text) => Padding(
-      padding: const EdgeInsets.fromLTRB(10, 6, 10, 4),
+      // At the rows' label column: AppMenuItem's 6 gutter + 10 padding.
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 4),
       child: Semantics(
         header: true,
         child: Text(
@@ -2139,17 +2150,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         setState(() {});
         _focusEditor();
       },
-      style: MenuStyle(
-        alignment: Alignment.bottomLeft,
-        backgroundColor: WidgetStatePropertyAll(DesktopChrome.surface),
-        surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
-        elevation: const WidgetStatePropertyAll(grid.AppMenu.elevation),
-        maximumSize: const WidgetStatePropertyAll(Size(264, 460)),
-        padding: const WidgetStatePropertyAll(EdgeInsets.all(6)),
-        shape: WidgetStatePropertyAll(
-          DesktopChrome.shape(radius: DesktopChrome.menuRadius),
-        ),
-      ),
+      style: _machineMenuStyle(maxHeight: 460),
       menuChildren: [
         if (yours.isNotEmpty) heading('Your machines'),
         for (final machine in yours) _desktopLeadMachineRow(machine),
@@ -2164,113 +2165,64 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     final chosen = machine.id == box.leadMachine?.id;
     final enabled = machine.startable && !box.locked;
     final status = _leadStatusWord(machine);
+    final choose = enabled ? () => box.chooseLeadMachine(machine.id) : null;
     return KeyedSubtree(
       key: ValueKey('new-harness-lead-machine-${machine.id}'),
-      child: MenuItemButton(
-        autofocus: chosen && enabled,
-        onPressed: enabled ? () => box.chooseLeadMachine(machine.id) : null,
-        style:
-            MenuItemButton.styleFrom(
-              foregroundColor: DesktopChrome.foreground,
-              disabledForegroundColor: DesktopChrome.muted,
-              enabledMouseCursor: SystemMouseCursors.click,
-              disabledMouseCursor: SystemMouseCursors.basic,
-              side: BorderSide.none,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              textStyle: DesktopChrome.text(size: 13),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-              ),
-            ).copyWith(
-              foregroundColor: WidgetStateProperty.resolveWith(
-                (states) => states.contains(WidgetState.disabled)
-                    ? DesktopChrome.muted
-                    : states.contains(WidgetState.focused) ||
-                          states.contains(WidgetState.hovered)
-                    ? DesktopChrome.onSelection
-                    : DesktopChrome.foreground,
-              ),
-              iconColor: WidgetStateProperty.resolveWith(
-                (states) => states.contains(WidgetState.disabled)
-                    ? DesktopChrome.muted
-                    : states.contains(WidgetState.focused) ||
-                          states.contains(WidgetState.hovered)
-                    ? DesktopChrome.onSelection
-                    : DesktopChrome.muted,
-              ),
-              backgroundColor: WidgetStateProperty.resolveWith(
-                (states) => states.contains(WidgetState.disabled)
-                    ? Colors.transparent
-                    : states.contains(WidgetState.focused) ||
-                          states.contains(WidgetState.hovered)
-                    ? DesktopChrome.activeSelection
-                    : chosen
-                    ? DesktopChrome.selection
-                    : Colors.transparent,
-              ),
-            ),
-        // Inside the button, so it keeps its press action and enabled state
-        // (review of #2237); assistive technology hears the full reason where
-        // the row shows one word.
-        child: Semantics(
+      // The press action stays on the semantics node (review of #2237), and
+      // assistive technology hears the full reason where the row shows one
+      // word.
+      child: Semantics(
+        button: true,
+        enabled: enabled,
+        selected: chosen,
+        onTap: choose,
+        label: machine.startable
+            ? machine.name
+            : '${machine.name}, ${leadMachineDetail(machine, box.cloudRepository)}',
+        excludeSemantics: true,
+        // The app's one menu row, as every dropdown draws.
+        child: AppMenuItem(
+          autofocus: chosen,
+          closesMenu: true,
+          expandLabel: true,
           selected: chosen,
-          label: machine.startable
-              ? machine.name
-              : '${machine.name}, ${leadMachineDetail(machine, box.cloudRepository)}',
-          excludeSemantics: true,
-          child: SizedBox(
-            width: 232,
-            child: Row(
-              children: [
-                if (machine.owner case final owner?)
-                  Opacity(
-                    opacity: enabled ? 1 : .55,
-                    child: SuperTabAvatar.person(owner, size: 16),
-                  )
-                else
-                  Icon(
-                    box.app.stateOf(machine.id)?.isLocalMachine == true
-                        ? AppIcons.laptop
-                        : AppIcons.monitor,
-                    size: 16,
-                  ),
-                const SizedBox(width: 10),
-                Expanded(
-                  flex: 3,
+          leading: machine.owner == null
+              ? null
+              : Opacity(
+                  opacity: enabled ? 1 : .55,
+                  child: SuperTabAvatar.person(machine.owner!, size: 16),
+                ),
+          icon: box.app.stateOf(machine.id)?.isLocalMachine == true
+              ? AppIcons.laptop
+              : AppIcons.monitor,
+          label: machine.name,
+          // Enlarged text shortens the word rather than the row overflowing.
+          trailing: status == null
+              ? null
+              : ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 90),
                   child: Text(
-                    machine.name,
+                    status,
                     maxLines: 1,
+                    softWrap: false,
                     overflow: TextOverflow.ellipsis,
+                    style: grid.AppType.caption(height: 1.35),
                   ),
                 ),
-                // Enlarged text shortens the word rather than the row overflowing.
-                if (status != null) ...[
-                  const SizedBox(width: 8),
-                  Flexible(
-                    flex: 2,
-                    fit: FlexFit.tight,
-                    child: Text(
-                      status,
-                      maxLines: 1,
-                      softWrap: false,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.end,
-                      style: grid.AppType.caption(height: 1.35),
-                    ),
-                  ),
-                ],
-                const SizedBox(width: 8),
-                SizedBox(
-                  width: 16,
-                  child: chosen ? Icon(AppIcons.check, size: 16) : null,
-                ),
-              ],
-            ),
-          ),
+          onPressed: choose,
         ),
       ),
     );
   }
+
+  /// Both computer menus' panel: the app's one menu panel at the width these
+  /// pickers always had, hanging from the pill's bottom-left.
+  MenuStyle _machineMenuStyle({required double maxHeight}) =>
+      grid.AppMenu.style(
+        minWidth: 264,
+        maxWidth: 264,
+        maxHeight: maxHeight,
+      ).copyWith(alignment: Alignment.bottomLeft);
 
   Widget _desktopTaskBox() => ListenableBuilder(
     listenable: _taskFocus,
@@ -3777,121 +3729,30 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       _chooserTraversal = null;
       _focusEditor();
     },
-    style: MenuStyle(
-      alignment: Alignment.bottomLeft,
-      backgroundColor: WidgetStatePropertyAll(DesktopChrome.surface),
-      surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
-      elevation: const WidgetStatePropertyAll(grid.AppMenu.elevation),
-      maximumSize: const WidgetStatePropertyAll(Size(264, 420)),
-      padding: const WidgetStatePropertyAll(EdgeInsets.all(6)),
-      shape: WidgetStatePropertyAll(
-        DesktopChrome.shape(radius: DesktopChrome.menuRadius),
-      ),
-    ),
+    style: _machineMenuStyle(maxHeight: 420),
     menuChildren: [
       for (final option in box.machineChoices)
-        MenuItemButton(
+        // The app's one menu row, as every dropdown draws.
+        AppMenuItem(
           key: ValueKey('new-harness-machine-option-${option.id}'),
-          autofocus: option.id == box.machineId && option.enabled,
-          onPressed: option.enabled && !box.locked
-              ? () {
-                  _selectRepoMachine(option.id);
-                }
+          autofocus: option.id == box.machineId,
+          closesMenu: true,
+          expandLabel: true,
+          selected: option.id == box.machineId,
+          icon: box.app.stateOf(option.id)?.isLocalMachine == true
+              ? AppIcons.laptop
+              : AppIcons.monitor,
+          label: _repoMachineLabel(option.id),
+          detail: !option.enabled
+              ? box.app.stateOf(option.id)?.needsLink == true
+                    ? 'Not linked'
+                    : 'Offline'
+              : box.app.stateOf(option.id)?.isLocalMachine == true
+              ? option.title
               : null,
-          style:
-              MenuItemButton.styleFrom(
-                foregroundColor: DesktopChrome.foreground,
-                disabledForegroundColor: DesktopChrome.muted,
-                enabledMouseCursor: SystemMouseCursors.click,
-                disabledMouseCursor: SystemMouseCursors.basic,
-                side: BorderSide.none,
-                backgroundColor: option.id == box.machineId
-                    ? DesktopChrome.selection
-                    : Colors.transparent,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 8,
-                ),
-                textStyle: DesktopChrome.text(size: 13),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-                ),
-              ).copyWith(
-                foregroundColor: WidgetStateProperty.resolveWith(
-                  (states) => states.contains(WidgetState.disabled)
-                      ? DesktopChrome.muted
-                      : states.contains(WidgetState.focused) ||
-                            states.contains(WidgetState.hovered)
-                      ? DesktopChrome.onSelection
-                      : DesktopChrome.foreground,
-                ),
-                iconColor: WidgetStateProperty.resolveWith(
-                  (states) => states.contains(WidgetState.disabled)
-                      ? DesktopChrome.muted
-                      : states.contains(WidgetState.focused) ||
-                            states.contains(WidgetState.hovered)
-                      ? DesktopChrome.onSelection
-                      : DesktopChrome.muted,
-                ),
-                backgroundColor: WidgetStateProperty.resolveWith(
-                  (states) => states.contains(WidgetState.disabled)
-                      ? Colors.transparent
-                      : states.contains(WidgetState.focused) ||
-                            states.contains(WidgetState.hovered)
-                      ? DesktopChrome.activeSelection
-                      : option.id == box.machineId
-                      ? DesktopChrome.selection
-                      : Colors.transparent,
-                ),
-              ),
-          child: SizedBox(
-            width: 232,
-            child: Row(
-              children: [
-                Icon(
-                  box.app.stateOf(option.id)?.isLocalMachine == true
-                      ? AppIcons.laptop
-                      : AppIcons.monitor,
-                  size: 16,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _repoMachineLabel(option.id),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      if (!option.enabled ||
-                          box.app.stateOf(option.id)?.isLocalMachine ==
-                              true) ...[
-                        const SizedBox(height: 3),
-                        Text(
-                          !option.enabled
-                              ? box.app.stateOf(option.id)?.needsLink == true
-                                    ? 'Not linked'
-                                    : 'Offline'
-                              : option.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: grid.AppType.caption(height: 1.35),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                SizedBox(
-                  width: 16,
-                  child: option.id == box.machineId
-                      ? Icon(AppIcons.check, size: 16)
-                      : null,
-                ),
-              ],
-            ),
-          ),
+          onPressed: option.enabled && !box.locked
+              ? () => _selectRepoMachine(option.id)
+              : null,
         ),
     ],
     child: child,

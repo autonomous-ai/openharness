@@ -13,6 +13,7 @@ import '../screens/swarm_menu_bus.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_menu.dart';
 import 'engine_identity.dart';
+import '../shared/widgets/app_icon_button.dart';
 import 'terminal_edit_actions.dart';
 
 /// Runs one app-menu action — the same strings the macOS application menu
@@ -232,14 +233,27 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
     // The compact panel hangs off a button inside the 40px tab strip, so that
     // is the air it must keep above itself; 36 is the strip it replaced, which
     // is not the row it opens from.
-    final style = grid.AppMenu.style(
+    return grid.AppMenu.style(
       maxHeight: height - (widget.compact ? 40 : 36) - 24,
     );
-    return widget.compact
-        ? style.copyWith(
-            minimumSize: const WidgetStatePropertyAll(Size(280, 0)),
-          )
-        : style;
+  }
+
+  /// The narrowest the compact panel and its submenus draw. Seven one-word
+  /// section names alone made a 100-point sliver; this gives them a panel's
+  /// proportions without the empty right half a 220 column had.
+  static const double _compactMenuMinWidth = 180;
+
+  /// The compact button's own panel: a short column of section names, not the
+  /// whole app's commands in one list. It fits its labels (above the minimum);
+  /// the submenus place themselves from its measured edge ([AppSubmenuItem]),
+  /// so no width here has to agree with an offset somewhere else.
+  MenuStyle get _parentPanelStyle {
+    final height =
+        MediaQuery.sizeOf(context).height - (widget.compact ? 40 : 36) - 24;
+    return grid.AppMenu.style(
+      maxHeight: height,
+      minWidth: _compactMenuMinWidth,
+    );
   }
 
   @override
@@ -333,37 +347,35 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
     );
   }
 
-  /// The compact bar: one ☰, and every command in one panel grouped the way the
-  /// strip grouped them. Windows hosts this in the workspace tab strip, the row
-  /// its window controls sit in, now that it has no menu row of its own.
+  /// The compact bar: one menu button that opens a short menu of the seven
+  /// section names, each opening its own submenu. One flat panel holding every
+  /// row in the app outgrew the window and wore a scrollbar; a menu of menus
+  /// keeps the same reachability inside the screen, the way Slack and VS Code
+  /// do.
   Widget _buildCompact(BuildContext context) {
+    // Somebody must own the app actions: the host's handler, or the shell's
+    // sink. Without either the panel would open onto rows that do nothing.
+    assert(
+      widget.onAction != null || appMenuActionSink != null,
+      'InWindowMenuBar(compact: true) needs onAction or appMenuActionSink',
+    );
     grid.AppTheme.watch(context);
     final controller = _controllers.putIfAbsent('app-menu', MenuController.new);
     final isOpen = identical(_openMenu, controller);
-    final sections = <Widget>[];
-    var first = true;
-    void section(String label, List<Widget> rows) {
-      // The divider separates sections; the panel ends with its last row, not
-      // with a rule under it.
-      if (!first) sections.add(const AppMenuDivider());
-      first = false;
-      sections
-        ..add(_SectionHeading(label))
-        ..addAll(rows);
-    }
-
-    section('Harness', _buildHarnessMenu());
-    section('File', _buildFileMenu());
-    section('Edit', _buildEditMenu());
-    // View reads the window's full-screen state as it opens, as the strip does.
-    section('View', _buildViewMenu());
-    section('History', _buildHistoryMenu());
-    section('Window', _buildWindowMenu());
-    section('Help', _buildHelpMenu());
+    final sections = <(String, List<Widget>)>[
+      ('Harness', _buildHarnessMenu()),
+      ('File', _buildFileMenu()),
+      ('Edit', _buildEditMenu()),
+      // View reads the window's full-screen state as it opens, as the strip does.
+      ('View', _buildViewMenu()),
+      ('History', _buildHistoryMenu()),
+      ('Window', _buildWindowMenu()),
+      ('Help', _buildHelpMenu()),
+    ];
     return _menuFocusRegion(
       MenuAnchor(
         controller: controller,
-        style: _panelStyle,
+        style: _parentPanelStyle,
         // The same air every other menu keeps from the control it hangs off.
         alignmentOffset: const Offset(0, grid.AppControl.menuGap),
         onOpen: () {
@@ -374,48 +386,79 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
           if (identical(_openMenu, controller)) {
             setState(() => _openMenu = null);
           }
+          for (final entry in _controllers.entries) {
+            if (entry.key.startsWith('section-')) entry.value.close();
+          }
         },
         // The panel takes focus as it opens, so Escape and the menu keys
         // reach MenuAnchor's own bindings with the pointer never having left
-        // the ☰. Without this the panel opened with focus on the button and
-        // Escape did nothing.
+        // the button. Without this the panel opened with focus on the button
+        // and Escape did nothing.
         menuChildren: [
           Focus(
             autofocus: true,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [for (final child in sections) _menuFocusRegion(child)],
+              children: [
+                for (final (label, rows) in sections)
+                  _compactSection(label, rows),
+              ],
             ),
           ),
         ],
-        child: Tooltip(
-          message: 'Menu',
-          child: TextButton(
-            key: const Key('app-menu-button'),
-            onPressed: () {
-              // Read at press time: the button does not rebuild between a panel
-              // closing and the click that reopens it.
-              final wasOpen = controller.isOpen;
-              _closeAll();
-              if (!wasOpen) controller.open();
-            },
-            style: TextButton.styleFrom(
-              foregroundColor: isOpen
-                  ? grid.AppPalette.textPrimary
-                  : grid.AppPalette.textSecondary,
-              // Icon-only controls keep a 32-point target in this system: the
-              // drawn box IS the hit area, not a 28px button with dead rows
-              // either side of the glyph.
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              minimumSize: const Size(32, 32),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              shape: const RoundedRectangleBorder(),
-            ),
-            child: const Icon(AppIcons.menu, size: AppIcons.inlineSize),
-          ),
+        // A plain glyph with no rim and no capsule: the same quiet icon the
+        // opposite end of this row uses, on the 32-point target the icon
+        // system gives an independently clickable control. The TextButton this
+        // replaced inherited the app's capsule button style, so the button read
+        // as a bordered pill sitting in the tab strip.
+        child: AppIconButton(
+          key: const Key('app-menu-button'),
+          icon: AppIcons.galleryVerticalEnd,
+          tooltip: 'Menu',
+          selected: isOpen,
+          onPressed: () {
+            // Read at press time: the button does not rebuild between a panel
+            // closing and the click that reopens it.
+            final wasOpen = controller.isOpen;
+            _closeAll();
+            if (!wasOpen) controller.open();
+          },
         ),
       ),
+    );
+  }
+
+  /// One section of the compact menu: the section name is a plain [AppMenuItem]
+  /// row — the component, ink, gutter and hover the submenu's own rows use,
+  /// with no arrow and no second border — and pointing at it opens the rows the
+  /// strip drew for it beside the panel.
+  Widget _compactSection(String label, List<Widget> rows) {
+    final slug = label.toLowerCase();
+    final controller = _controllers.putIfAbsent(
+      'section-$slug',
+      MenuController.new,
+    );
+    // The app's one submenu row, placed from this row's measured edge; this
+    // menu only adds that moving across the sections switches the open one
+    // instead of stacking panels.
+    return AppSubmenuItem(
+      itemKey: Key('app-menu-section-$slug'),
+      controller: controller,
+      label: label,
+      // Section names never carry a glyph: no empty icon column before them.
+      leadingSlot: false,
+      style: _panelStyle,
+      minWidth: _compactMenuMinWidth,
+      onOpen: () {
+        for (final entry in _controllers.entries) {
+          if (entry.key.startsWith('section-') &&
+              !identical(entry.value, controller)) {
+            entry.value.close();
+          }
+        }
+      },
+      menuChildren: [for (final row in rows) _menuFocusRegion(row)],
     );
   }
 
@@ -1160,32 +1203,6 @@ class _MenuFocusRegion extends InheritedWidget {
 
   @override
   bool updateShouldNotify(_MenuFocusRegion oldWidget) => false;
-}
-
-/// The name over one group of a compact panel's rows: quiet, sentence case and
-/// not a row — it never takes focus or a press. Sentence case rather than caps:
-/// that is how Windows 11's own menus, Slack and Figma label a group, and this
-/// panel is the app's menu bar, not a settings list.
-class _SectionHeading extends StatelessWidget {
-  const _SectionHeading(this.label);
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    grid.AppTheme.watch(context);
-    return Padding(
-      key: Key('app-menu-section-${label.toLowerCase()}'),
-      padding: const EdgeInsets.fromLTRB(14, 8, 14, 2),
-      child: Text(
-        label,
-        style: grid.AppType.caption(
-          color: grid.AppPalette.textFaint,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    );
-  }
 }
 
 /// A non-interactive menu row, matched to [AppMenuItem]'s metrics so a

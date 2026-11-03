@@ -95,14 +95,16 @@ void main() {
             alignment: Alignment.centerLeft,
             child: SizedBox(
               width: appMenuButtonWidth,
-              child: const InWindowMenuBar(compact: true),
+              // A handler, as every host passes one: without it the bar
+              // asserts before it draws the button this test measures.
+              child: InWindowMenuBar(compact: true, onAction: (_) async {}),
             ),
           ),
         ),
       ),
     );
 
-    expect(tester.getSize(find.byIcon(AppIcons.menu)).width, 16);
+    expect(tester.getSize(find.byIcon(AppIcons.galleryVerticalEnd)).width, 16);
     // The drawn box is the hit area (design note UI-WAM-001: Z1 x H3).
     expect(
       tester.getSize(find.byKey(const Key('app-menu-button'))),
@@ -146,17 +148,17 @@ void main() {
     ]) {
       expect(find.text(section), findsOneWidget, reason: 'section $section');
     }
-    // A representative row from the sections that used to be top-level text
-    // buttons, including the app rows (Harness) and the swarm rows (File).
+    // Each section name is now the row that opens its own submenu of the rows
+    // the strip drew, instead of one flat panel of every command.
+    await tap(tester, 'app-menu-section-harness');
     expect(find.text('About Harness'), findsOneWidget);
-    expect(find.text('New Tab'), findsOneWidget);
-    expect(find.text('Layout…'), findsOneWidget);
-    expect(find.text('Back'), findsWidgets);
+    expect(find.text('Settings…'), findsOneWidget);
   });
 
   testWidgets('an app row dispatches its action string', (tester) async {
     await pumpCompact(tester);
     await tap(tester, 'app-menu-button');
+    await tap(tester, 'app-menu-section-harness');
     await tap(tester, 'menu-bar-about');
 
     expect(appActions, ['showAbout']);
@@ -168,6 +170,7 @@ void main() {
     appMenuActionSink = (action) async => sinkActions.add(action);
     await pumpCompact(tester, defaultHandler: false);
     await tap(tester, 'app-menu-button');
+    await tap(tester, 'app-menu-section-help');
     await tap(tester, 'menu-bar-export-logs');
 
     expect(sinkActions, ['exportLogs']);
@@ -194,7 +197,42 @@ void main() {
     final calls = <MethodCall>[];
     swarmMenuBus.setHandler((call) async => calls.add(call));
     addTearDown(() => swarmMenuBus.setHandler(null));
+    await tap(tester, 'app-menu-section-file');
     await tap(tester, 'menu-bar-close-tab');
     expect(calls.map((call) => call.method), contains('closeActive'));
+  });
+
+  testWidgets('a section name starts at the row inset, with no empty icon '
+      'column before it', (tester) async {
+    await pumpCompact(tester);
+    await tap(tester, 'app-menu-button');
+
+    final row = find.byKey(const Key('app-menu-section-harness'));
+    final label = find.descendant(of: row, matching: find.text('Harness'));
+    // AppMenuItem's 6 gutter + 10 padding — every dropdown's label column. The
+    // 16-point leading slot and its gap are gone (they put it at 42).
+    expect(tester.getTopLeft(label).dx - tester.getTopLeft(row).dx, 16);
+  });
+
+  testWidgets('a section opens its submenu flush beside the panel, its first '
+      'row level with the section', (tester) async {
+    await pumpCompact(tester);
+    await tap(tester, 'app-menu-button');
+    final section = find.byKey(const Key('app-menu-section-harness'));
+    await tester.tap(section);
+    await tester.pumpAndSettle();
+
+    // The submenu is placed from the row's measured edge, not from a panel
+    // width stated elsewhere: it opened a hundred points off when the two
+    // disagreed.
+    final first = find.byKey(const Key('menu-bar-about'));
+    expect(
+      tester.getTopLeft(first).dx,
+      moreOrLessEquals(tester.getTopRight(section).dx + 2),
+    );
+    expect(
+      tester.getTopLeft(first).dy,
+      moreOrLessEquals(tester.getTopLeft(section).dy),
+    );
   });
 }

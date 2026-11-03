@@ -11,6 +11,7 @@ import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_icon_button.dart';
+import '../shared/widgets/app_menu.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/finger_target.dart';
 import '../widgets/new_harness_attachments.dart';
@@ -1629,6 +1630,10 @@ class _SuperTabViewState extends State<SuperTabView>
     needsHuman: (group) => _needsHuman(group).length,
     onSelect: (id) {
       setState(() => _showNotifications = _showManage = false);
+      // Choosing a conversation leaves the Manage pane: its Devices page left
+      // the controller's flag set, so the sidebar's Manage row stayed lit while
+      // a conversation was open.
+      c.leaveDevices();
       c.select(id);
       _closeSidebar();
     },
@@ -1640,6 +1645,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// none yet: the sidebar's way in and ⇧⌘K's
   /// ([SuperTabController.buddyChatOpener]).
   Future<bool> _openBuddyChat(String projectId) {
+    c.leaveDevices();
     setState(() {
       _showNotifications = _showManage = false;
       _showPullRequests = false;
@@ -1674,6 +1680,7 @@ class _SuperTabViewState extends State<SuperTabView>
   void _openActivity({SuperTabController? from}) {
     if (!mounted || (from != null && from != c)) return;
     _closeSidebar();
+    c.leaveDevices();
     setState(() {
       _showNotifications = true;
       _showManage = false;
@@ -2604,63 +2611,61 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  static const _menuStyle = MenuStyle(
-    minimumSize: WidgetStatePropertyAll(Size(220, 0)),
-    padding: WidgetStatePropertyAll(EdgeInsets.all(grid.AppDesktop.menuInset)),
-  );
+  /// The panel these menus open in: the app's one menu panel, at their width.
+  static MenuStyle get _menuStyle => grid.AppMenu.style(minWidth: 220);
 
-  ButtonStyle _menuRowStyle({bool finger = false}) => ButtonStyle(
-    minimumSize: WidgetStatePropertyAll(Size(208, finger ? kFingerTarget : 32)),
-    side: WidgetStatePropertyAll(BorderSide.none),
-    padding: WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 12)),
-    alignment: Alignment.centerLeft,
-    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-  );
-
-  /// A menu's row, a finger's height on a phone.
+  /// A menu's row: the app's one menu row ([AppMenuItem]), a finger's height
+  /// on a phone. It closes the menu before its action runs, as the Material
+  /// row it replaced did.
   Widget _menuItem(
     String label,
     VoidCallback? action, {
+    Key? key,
     bool finger = false,
     Widget? trailing,
-  }) => MenuItemButton(
-    style: _menuRowStyle(finger: finger),
-    trailingIcon: trailing,
-    onPressed: action,
-    child: Text(label),
+    bool selected = false,
+  }) => fingerTarget(
+    enabled: finger,
+    AppMenuItem(
+      key: key,
+      label: label,
+      trailing: trailing,
+      selected: selected,
+      leadingSlot: false,
+      expandLabel: true,
+      closesMenu: true,
+      onPressed: action,
+    ),
   );
 
   /// The reader's own setting for a chat, kept on every device (Slack's channel
-  /// notifications); a viewer has one too.
-  Widget _notifyMenu(SuperTabConversation group, {bool asRow = false}) =>
-      SubmenuButton(
-        key: const ValueKey('super-notify-menu'),
-        style: asRow ? _menuRowStyle(finger: _phone) : null,
-        submenuIcon: asRow
-            ? const WidgetStatePropertyAll(
-                Icon(AppIcons.chevronRight, size: 14),
-              )
-            : null,
-        menuChildren: [
-          for (final (level, label) in const [
-            (SuperTabNotify.all, 'All new messages'),
-            (SuperTabNotify.mentions, 'Mentions only'),
-            (SuperTabNotify.muted, 'Muted'),
-          ])
-            MenuItemButton(
-              key: ValueKey('super-notify-${level.name}'),
-              leadingIcon: SizedBox(
-                width: 16,
-                child: c.notifyOf(group.id) == level
-                    ? const Icon(AppIcons.check, size: 14)
-                    : null,
-              ),
-              onPressed: () => unawaited(_setNotify(group.id, level)),
-              child: Text(label),
-            ),
-        ],
-        child: const Text('Notifications'),
-      );
+  /// notifications); a viewer has one too. The app's one submenu row, so it
+  /// opens beside the panel exactly as the Windows ☰'s sections do.
+  Widget _notifyMenu(SuperTabConversation group) => fingerTarget(
+    enabled: _phone,
+    AppSubmenuItem(
+      itemKey: const ValueKey('super-notify-menu'),
+      label: 'Notifications',
+      leadingSlot: false,
+      trailing: const Icon(AppIcons.chevronRight, size: 14),
+      style: _menuStyle,
+      minWidth: 220,
+      menuChildren: [
+        for (final (level, label) in const [
+          (SuperTabNotify.all, 'All new messages'),
+          (SuperTabNotify.mentions, 'Mentions only'),
+          (SuperTabNotify.muted, 'Muted'),
+        ])
+          _menuItem(
+            label,
+            () => unawaited(_setNotify(group.id, level)),
+            key: ValueKey('super-notify-${level.name}'),
+            finger: _phone,
+            selected: c.notifyOf(group.id) == level,
+          ),
+      ],
+    ),
+  );
 
   /// Until all of the project's closed groups are read, it may have archived
   /// ones: the list reads them when it opens.
@@ -2703,8 +2708,8 @@ class _SuperTabViewState extends State<SuperTabView>
           item('Instructions', () => _groupAction('instructions', group)),
         if (editable && owner)
           item('Sharing', () => _groupAction('sharing', group)),
-        _notifyMenu(group, asRow: true),
-        const Divider(height: 9),
+        _notifyMenu(group),
+        const AppMenuDivider(),
         item(
           'Project settings…',
           () => unawaited(_projectSettings(group, project)),
@@ -2777,7 +2782,7 @@ class _SuperTabViewState extends State<SuperTabView>
             _openTerminals(group),
           ),
           item('Pull requests', _openPullRequests),
-          const Divider(height: 9),
+          const AppMenuDivider(),
         ],
         if (_isBuddyChat(group)) ...[
           // A Buddy chat is the reader's own: the Buddy itself to name, any

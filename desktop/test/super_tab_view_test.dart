@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/controller.dart';
@@ -154,9 +155,7 @@ void main() {
       Future<void> openList() async {
         await tester.tap(find.byTooltip('Project options'));
         await tester.pumpAndSettle();
-        await tester.tap(
-          find.widgetWithText(MenuItemButton, 'Project settings…'),
-        );
+        await tester.tap(find.widgetWithText(AppMenuItem, 'Project settings…'));
         await tester.pumpAndSettle();
         await tester.tap(find.text('Archived conversations'));
         await tester.pumpAndSettle();
@@ -215,7 +214,7 @@ void main() {
     expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
     await tester.tap(find.byTooltip('Project options'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(MenuItemButton, 'Project settings…'));
+    await tester.tap(find.widgetWithText(AppMenuItem, 'Project settings…'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Archived conversations'));
     await tester.pumpAndSettle();

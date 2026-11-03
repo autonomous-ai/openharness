@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -109,7 +110,7 @@ void main() {
   Future<void> openMenu(WidgetTester tester) async {
     await tester.tap(find.byTooltip('Project options'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(MenuItemButton, 'Project settings…'));
+    await tester.tap(find.widgetWithText(AppMenuItem, 'Project settings…'));
     await tester.pumpAndSettle();
   }
 
