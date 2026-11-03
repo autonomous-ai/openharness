@@ -482,6 +482,8 @@ describe('reading a usage limit off a screen', () => {
     expect(limitOf('> ', now)).toBeNull()
     // A full context is not a usage limit; a workspace out of credits is one.
     expect(limitOf('  ⎿  Context limit reached · /compact or /clear to continue\n> ', now)).toBeNull()
+    // A notice under Claude Code's reply whose start has scrolled off the screen is still its own.
+    expect(limitOf('  ⎿  You\'ve hit your session limit · resets 3pm\n\n❯ ', now)).toEqual({ resetAt: new Date(2026, 9, 23, 15, 0).toISOString() })
     expect(limitOf('■ You\'ve reached your workspace credit limit\n› ', now)).toEqual({})
   })
 })
