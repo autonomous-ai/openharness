@@ -67,10 +67,12 @@ describe('the row that says so', () => {
     expect(actorLabel(state, 'person:gone')).toBeUndefined()
   })
 
-  it('names a person by the name they set, when they set one', () => {
+  it('names a person by the name they set, when they set one, as plain words', () => {
     const state = swarm([], [])
     state.people[0]!.name = 'Ken Nguyen'
     expect(actorLabel(state, 'person:ken')).toBe('Ken Nguyen')
+    state.people[0]!.name = '[Ken](https://ev.il)'
+    expect(actorLabel(state, 'person:ken')).toBe('\\[Ken\\]\\(https://ev.il\\)')
   })
 })
 

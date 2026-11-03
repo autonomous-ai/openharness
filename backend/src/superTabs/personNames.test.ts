@@ -4,7 +4,8 @@ import { createSuperTab, visibleState, type Actor } from './model.js'
 import { split } from './parts/shape.js'
 import { touchesFor } from './parts/touches.js'
 import { readerView } from './read/views.js'
-import { MAX_NAME_LENGTH, shownNameOf } from './personNames.js'
+import { MAX_NAME_LENGTH, shownNameOf, writtenNameOf } from './personNames.js'
+import { usernameOf } from './usernames.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'Ken15@autonomous.ai' }
 const NOW = Date.parse('2026-11-03T10:00:00.000Z')
@@ -132,5 +133,33 @@ describe('member.name', () => {
     expect(touchesFor(command, relay, before, effects)).toEqual(expect.arrayContaining([
       { kind: 'member', key: 'owner' }, { kind: 'member', key: 'relay' }, { kind: 'member', key: 'peer' }, { kind: 'head', key: 'head' },
     ]))
+  })
+
+  it('refuses a role’s or the Swarm’s own name, numbered too (review 1 of #2794)', () => {
+    const f = fixture()
+    for (const name of ['Product Manager', 'PM', 'pm 2', 'Lead', 'Engineer', 'Reviewer', 'Tester', 'Harness', 'System', 'Admin',
+      'Everyone', 'Swarm', 'You', 'Someone']) {
+      expect(() => f.setName(name), name).toThrow(expect.objectContaining({ code: 'NAME_RESERVED', status: 400 }))
+    }
+    f.setName('Leading Light')
+    expect(f.name('relay')).toBe('Leading Light')
+  })
+
+  it('numbers a later joiner’s default around a name someone set, never the person’s own (review 1 of #2794)', () => {
+    const f = fixture()
+    f.setName('Bob')
+    f.join(person('bob', 'bob@example.com'))
+    expect(usernameOf(f.state, 'bob')).toBe('bob2')
+    // One's own name never moves one's own default.
+    f.setName('WKPNJJHBNM')
+    expect(usernameOf(f.state, 'relay')).toBe('wkpnjjhbnm')
+  })
+
+  it('writes a name into server-written text as plain words, never Markdown (review 1 of #2794)', () => {
+    const f = fixture()
+    f.setName('[Ken](https://ev.il) *x*')
+    expect(writtenNameOf(f.state, 'relay')).toBe('\\[Ken\\]\\(https://ev.il\\) \\*x\\*')
+    // A username is written as it is today.
+    expect(writtenNameOf(f.state, 'peer')).toBe('dee')
   })
 })

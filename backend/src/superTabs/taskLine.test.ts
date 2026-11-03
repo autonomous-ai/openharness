@@ -83,6 +83,12 @@ describe('a task\'s one line in its project chat', () => {
     const effects = f.status(id, builder, 'needs_human', 'Keep drafts after a restart?', {
       ask: { personId: 'owner', options: ['Keep', 'Drop'], recommended: 0, unblocks: 'The release' } })
     expect(effects.edits).toEqual([expect.objectContaining({ text: 'Offline drafts · waiting on Dee Tran' })])
+    // As plain words: a name never turns the line into a link (review 1 of #2794).
+    f.run({ type: 'member.name', name: '[Dee](https://ev.il)' })
+    f.status(id, builder, 'working', null)
+    const again = f.status(id, builder, 'needs_human', 'Still?', {
+      ask: { personId: 'owner', options: ['Keep', 'Drop'], recommended: 0, unblocks: 'The release' } })
+    expect(again.edits).toEqual([expect.objectContaining({ text: 'Offline drafts · waiting on \\[Dee\\]\\(https://ev.il\\)' })])
   })
 
   it('reads done, never shipped, for work Done with no pull request', () => {
