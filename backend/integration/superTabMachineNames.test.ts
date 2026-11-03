@@ -7,7 +7,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
-import { SuperTabStore } from '../src/superTabs/store.js'
+import { SuperTabStore, type SwarmChanged } from '../src/superTabs/store.js'
+import { localReportMemory, machineReportLine } from '../src/superTabs/machineReports.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { poolRows } from './hostRows.test-support.js'
 
@@ -17,6 +18,7 @@ import { poolRows } from './hostRows.test-support.js'
 let replica: MongoMemoryReplSet
 let db: PrismaClient
 let store: SuperTabStore
+let pushes: SwarmChanged[] = []
 const TEAM_COMPUTER = 'tttttttttttttttttttttttttttttttt'
 const dee: AuthUser = { sub: '400000000000000000000001', email: 'dee@example.com', autonomousEnv: 'prod', role: 'user' }
 const huy: AuthUser = { sub: '400000000000000000000002', email: 'huy@example.com', autonomousEnv: 'prod', role: 'user' }
@@ -31,9 +33,11 @@ const contribute = (tab: string, machineId: string, name: string, user: AuthUser
 const nameIn = async (tab: string, machineId: string, user: AuthUser = dee) =>
   (await store.read(user, tab)).state.machines!.find(m => m.machineId === machineId)!.name
 /** The machine's host reports once, as its own session. */
-const report = async (tab: string, machineId: string, user: AuthUser = dee) => {
+const report = async (tab: string, machineId: string, user: AuthUser = dee): Promise<'fast' | 'full'> => {
   const generation = (await poolRows(store, user, machineId)).find(p => p.tabId === tab)!.machine.generation
+  machineReportLine(0)
   await store.observeMachine(user, tab, machineId, reading(generation))
+  return machineReportLine(0).fast ? 'fast' : 'full'
 }
 
 beforeAll(async () => {
@@ -44,7 +48,10 @@ beforeAll(async () => {
     env: { ...process.env, DATABASE_URL: uri }, timeout: 60000,
   })
   db = new PrismaClient({ datasources: { db: { url: uri } } })
-  store = new SuperTabStore(db)
+  // Sweeps never due, so a report takes the fast path whenever its reading alone changed (machineReports.ts).
+  const memory = localReportMemory(Date.now)
+  store = new SuperTabStore(db, Date.now, null, { reports: { get: (t, m) => memory.get(t, m), set: (t, m, r) => memory.set(t, m, r), sweepDue: async () => false },
+    swarmChanged: change => pushes.push(change) })
   for (const user of [dee, huy]) await db.user.create({ data: { id: user.sub, externalId: `fixture-${user.sub}`, email: user.email, autonomousEnv: 'prod' } })
   const machine = (machineId: string, userId: string, computerId: string, sessionKind: string, hostMachineId?: string) => db.machine.create({ data: {
     machineId, userId, computerId, sessionKind, ...hostMachineId ? { hostMachineId } : {}, hostname: 'Macs-Mac-Studio-2.local',
@@ -97,5 +104,51 @@ describe('a machine joins under the name its owner gave it', () => {
     const tab = await swarm()
     await contribute(tab, 'huy-mini', 'huys-mac-mini.local', huy)
     expect(await nameIn(tab, 'huy-mini', dee)).toBe('Huy Mini')
+  })
+})
+
+describe('a rename after joining', () => {
+  it('shows in the Swarm on its machine\'s next reading, and the one after is fast again', async () => {
+    const tab = await swarm()
+    await contribute(tab, 'studio-2', 'Macs-Mac-Studio-2')
+    await report(tab, 'studio-2')
+    expect(await report(tab, 'studio-2')).toBe('fast')
+    await rename('studio-2', 'Mac 3')
+    pushes = []
+    expect(await report(tab, 'studio-2')).toBe('full')
+    expect(await nameIn(tab, 'studio-2')).toBe('Mac 3')
+    expect(await nameIn(tab, 'studio-2', huy)).toBe('Mac 3')
+    // Its members' clients are told, so the next refresh reads it.
+    expect(pushes.find(p => p.tabId === tab)?.userIds).toEqual(expect.arrayContaining([dee.sub, huy.sub]))
+    expect(await report(tab, 'studio-2')).toBe('fast')
+  })
+
+  it('renames it in every Swarm it is in', async () => {
+    const [one, two] = [await swarm(), await swarm()]
+    for (const tab of [one, two]) await contribute(tab, 'studio-2', 'Macs-Mac-Studio-2')
+    await rename('studio-2', 'Mac 3')
+    for (const tab of [one, two]) await report(tab, 'studio-2')
+    expect([await nameIn(one, 'studio-2'), await nameIn(two, 'studio-2')]).toEqual(['Mac 3', 'Mac 3'])
+  })
+
+  it('renames its Mac\'s Team account with it, which its own reading never renames to its account\'s name', async () => {
+    const tab = await swarm()
+    await contribute(tab, 'studio-2', 'Macs-Mac-Studio-2')
+    await contribute(tab, 'studio-2-team', 'Macs-Mac-Studio-2 · Team', dee, { ifMissing: true, maxAgents: 1 })
+    expect(await nameIn(tab, 'studio-2-team')).toBe('Macs-Mac-Studio-2.local')
+    await rename('studio-2', 'Mac 3')
+    await report(tab, 'studio-2')
+    expect(await nameIn(tab, 'studio-2-team')).toBe('Mac 3')
+    await report(tab, 'studio-2-team', deeTeam)
+    expect(await nameIn(tab, 'studio-2-team')).toBe('Mac 3')
+  })
+
+  it('keeps the Swarm\'s name when its owner clears it back to none', async () => {
+    const tab = await swarm()
+    await rename('studio-2', 'Mac 3')
+    await contribute(tab, 'studio-2', 'Macs-Mac-Studio-2')
+    await rename('studio-2', null)
+    await report(tab, 'studio-2')
+    expect(await nameIn(tab, 'studio-2')).toBe('Mac 3')
   })
 })
