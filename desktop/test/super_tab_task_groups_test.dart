@@ -7,15 +7,13 @@ import 'support/super_tab_fixture.dart';
 /// A project's open tasks in the sidebar, in four foldable groups (Huy, #2309): Needs you, Working, Waiting on
 /// others, The rest.
 void main() {
-  SuperTabConversation task({
-    String? status,
-    Map<String, dynamic>? liveness,
-  }) => SuperTabConversation.fromJson({
-    ...conversationFixture('t', 'Task'),
-    if (status != null)
-      'assignment': {'agentId': 'a1', 'status': status, 'progressAt': 1},
-    'liveness': ?liveness,
-  });
+  SuperTabConversation task({String? status, Map<String, dynamic>? liveness}) =>
+      SuperTabConversation.fromJson({
+        ...conversationFixture('t', 'Task'),
+        if (status != null)
+          'assignment': {'agentId': 'a1', 'status': status, 'progressAt': 1},
+        'liveness': ?liveness,
+      });
   Map<String, dynamic> waiting(String why, {String? personId}) => {
     'state': 'waiting',
     'why': why,
@@ -42,26 +40,36 @@ void main() {
         'Waiting on others',
         'The rest',
       ]);
-      expect(
-        SuperTabTaskGroup.values.where((g) => g.foldedByDefault),
-        [SuperTabTaskGroup.rest],
-      );
+      expect(SuperTabTaskGroup.values.where((g) => g.foldedByDefault), [
+        SuperTabTaskGroup.rest,
+      ]);
     });
 
-    test('a task that tags the reader needs them, whatever else it waits on', () {
-      expect(of(task(), mentions: 1), SuperTabTaskGroup.needsYou);
-      expect(
-        of(
-          task(status: 'needs_human', liveness: waiting('person', personId: 'other')),
-          mentions: 2,
-        ),
-        SuperTabTaskGroup.needsYou,
-      );
-    });
+    test(
+      'a task that tags the reader needs them, whatever else it waits on',
+      () {
+        expect(of(task(), mentions: 1), SuperTabTaskGroup.needsYou);
+        expect(
+          of(
+            task(
+              status: 'needs_human',
+              liveness: waiting('person', personId: 'other'),
+            ),
+            mentions: 2,
+          ),
+          SuperTabTaskGroup.needsYou,
+        );
+      },
+    );
 
     test('a wait on the reader, or on no one named, needs them', () {
       expect(
-        of(task(status: 'needs_human', liveness: waiting('person', personId: 'me'))),
+        of(
+          task(
+            status: 'needs_human',
+            liveness: waiting('person', personId: 'me'),
+          ),
+        ),
         SuperTabTaskGroup.needsYou,
       );
       expect(
@@ -71,18 +79,28 @@ void main() {
     });
 
     test('a question in a working task\'s terminal needs the reader', () {
-      expect(of(task(status: 'working'), needsHuman: 1), SuperTabTaskGroup.needsYou);
+      expect(
+        of(task(status: 'working'), needsHuman: 1),
+        SuperTabTaskGroup.needsYou,
+      );
     });
 
     test('a wait on another person, a review, a revision, a block or a machine waits on others', () {
       for (final g in [
-        task(status: 'needs_human', liveness: waiting('person', personId: 'other')),
+        task(
+          status: 'needs_human',
+          liveness: waiting('person', personId: 'other'),
+        ),
         task(status: 'review', liveness: waiting('review')),
         task(status: 'working', liveness: waiting('revision')),
         task(status: 'blocked', liveness: waiting('blocked')),
         task(status: 'working', liveness: waiting('queued')),
       ]) {
-        expect(of(g, needsHuman: 1), SuperTabTaskGroup.waitingOnOthers, reason: '${g.liveness}');
+        expect(
+          of(g, needsHuman: 1),
+          SuperTabTaskGroup.waitingOnOthers,
+          reason: '${g.liveness}',
+        );
       }
     });
 
@@ -92,7 +110,12 @@ void main() {
         SuperTabTaskGroup.waitingOnOthers,
       );
       expect(
-        of(task(status: 'working', liveness: {'state': 'orphaned', 'why': 'lost', 'since': 1})),
+        of(
+          task(
+            status: 'working',
+            liveness: {'state': 'orphaned', 'why': 'lost', 'since': 1},
+          ),
+        ),
         SuperTabTaskGroup.waitingOnOthers,
       );
     });
@@ -111,7 +134,12 @@ void main() {
       expect(of(task(status: 'done')), SuperTabTaskGroup.rest);
       expect(of(task(status: 'stopped')), SuperTabTaskGroup.rest);
       expect(
-        of(task(status: 'working', liveness: {'state': 'unheard-of', 'since': 1})),
+        of(
+          task(
+            status: 'working',
+            liveness: {'state': 'unheard-of', 'since': 1},
+          ),
+        ),
         SuperTabTaskGroup.rest,
       );
     });
