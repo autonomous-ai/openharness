@@ -4764,6 +4764,8 @@ describe('lead.switch', () => {
     s.f.state.machines!.push(destination)
     s.f.run({ ...s.request, machineId: 'destination', model: 'gpt-5.1' })
     const start = s.f.state.starts!.find(candidate => candidate.request.leadFor?.switchId === s.sid())!
+    s.f.run({ type: 'agent.switchClaim', agentId: s.pm, switchId: s.sid() }, s.as)
+    s.f.run({ type: 'agent.switchHandoff', agentId: s.pm, switchId: s.sid(), handoffChangeId: 'e'.repeat(32), note: 'Handoff' }, s.as)
     s.f.state.machines!.find(machine => machine.machineId === 'destination')!.observation!.profiles = []
 
     expect(code(() => s.f.run({ type: 'agent.startDispatch', startId: start.id }, owner,
@@ -4787,7 +4789,32 @@ describe('lead.switch', () => {
 
     s.f.run({ type: 'agent.switchHandoff', agentId: s.pm, switchId, handoffChangeId: 'f'.repeat(32), note: 'Prior work summary.' }, s.as)
 
-    expect(start.request).toMatchObject({ handoffChangeId: 'f'.repeat(32), handoffSourceAgentId: s.pm, handoffNote: 'Prior work summary.' })
+    expect(s.f.state.starts!.find(candidate => candidate.request.leadFor?.switchId === switchId)!.request)
+      .toMatchObject({ handoffChangeId: 'f'.repeat(32), handoffSourceAgentId: s.pm, handoffNote: 'Prior work summary.' })
+  })
+
+  it('requires the source claim before dispatch and keeps the handoff out of ordinary reads', () => {
+    const s = setup()
+    const destination = structuredClone(s.f.state.machines![0]!)
+    destination.machineId = 'destination'
+    destination.generation = 'g2'
+    destination.observation!.generation = 'g2'
+    destination.observation!.capabilities = ['leadSwitch', 'leadStart']
+    s.f.state.machines!.push(destination)
+    s.f.run({ ...s.request, machineId: 'destination', model: 'gpt-5.1' })
+    const switchId = s.sid()
+    const start = s.f.state.starts!.find(candidate => candidate.request.leadFor?.switchId === switchId)!
+    const contribution = { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }
+
+    expect(code(() => s.f.run({ type: 'agent.startDispatch', startId: start.id }, owner, { contribution }))).toBe('HANDOFF_PENDING')
+    expect(visibleState(s.f.state, owner).starts![0]!.request).not.toHaveProperty('handoffNote')
+    expect(code(() => s.f.run({ type: 'agent.switchHandoff', agentId: s.pm, switchId, handoffChangeId: 'f'.repeat(32), note: 'private' }, s.as)))
+      .toBe('STALE_SWITCH')
+
+    s.f.run({ type: 'agent.switchClaim', agentId: s.pm, switchId }, s.as)
+    s.f.run({ type: 'agent.switchHandoff', agentId: s.pm, switchId, handoffChangeId: 'f'.repeat(32), note: 'private' }, s.as)
+    expect(visibleState(s.f.state, owner).starts![0]!.request).not.toHaveProperty('handoffNote')
+    expect(s.f.state.starts!.find(candidate => candidate.request.leadFor?.switchId === switchId)!.request.handoffNote).toBe('private')
   })
 
   it('promotes a running destination candidate to the same lead conversation exactly when it starts', () => {
@@ -4803,6 +4830,8 @@ describe('lead.switch', () => {
     const switchId = s.sid()
     const start = s.f.state.starts!.find(candidate => candidate.request.leadFor?.switchId === switchId)!
     const contribution = { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }
+    s.f.run({ type: 'agent.switchClaim', agentId: s.pm, switchId }, s.as)
+    s.f.run({ type: 'agent.switchHandoff', agentId: s.pm, switchId, handoffChangeId: 'f'.repeat(32), note: 'Prior work' }, s.as)
 
     const started = s.f.run({ type: 'agent.started', startId: start.id, harnessId: 'destination-pm',
       configuration: { ...config, engine: 'codex', model: 'gpt-5.1' } }, owner, { contribution })

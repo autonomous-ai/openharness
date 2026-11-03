@@ -163,6 +163,10 @@ export interface AgentStartRequest {
   buddyProjects?: Array<{ id: string; name: string; cwd: string }>
   /** The offered account selected for a destination PM switch. */
   profileId?: string
+  /** A bounded handoff note transferred from the source host, visible only in the destination host's start row. */
+  handoffNote?: string
+  handoffSourceAgentId?: string
+  handoffChangeId?: string
   /** A Buddy thread session's start (buddySessions.ts): written by message.send with newSession alone. Ids only, never text:
    *  starts are listed to the Lead. */
   buddySession?: BuddySession
@@ -814,6 +818,13 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   const { sharing: _sharing, harnessReservations: _reservations, releasedHarnesses: _released, overlapAlerts: _alerts, closingSessions: _closing,
     removedSessions: _removed, ...kept } = state
   const visible = cloneData({ ...kept, conversations: state.conversations.filter(c => !c.dormant) })
+  // Prepared PM handoffs are private host-to-host launch data. Machine hosts receive their own start through read/hostRows.ts;
+  // ordinary people and agent syncs must never receive the note or its correlation fields.
+  for (const start of visible.starts ?? []) {
+    delete start.request.handoffNote
+    delete start.request.handoffSourceAgentId
+    delete start.request.handoffChangeId
+  }
   // A Buddy-only machine is no machine of the Swarm to anyone, its own person included (machines.ts buddyOnly): their Buddy
   // shows as a Buddy, and their machine stays theirs. Machines, status and the leaderboard's lent hours all read this.
   if (visible.machines) visible.machines = visible.machines.filter(m => !m.buddyOnly)

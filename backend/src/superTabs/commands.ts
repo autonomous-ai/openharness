@@ -251,6 +251,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('agent.startFailed'), startId: id, error: text }).strict(),
   z.object({ type: z.literal('agent.stopLease'), agentId: id, releaseId: id }).strict(),
   z.object({ type: z.literal('agent.switchClaim'), agentId: id, switchId: id }).strict(),
+  // The source PM's host sends the prepared handoff to the candidate start; it is not a general chat message or visible to readers.
+  z.object({ type: z.literal('agent.switchHandoff'), agentId: id, switchId: id, handoffChangeId: id,
+    note: z.string().max(32_000) }).strict(),
   // The host's own words for why it failed: free text, so capped and redacted.
   z.object({ type: z.literal('agent.switchResult'), agentId: id, switchId: id, ok: z.boolean(), error: z.string().trim().min(1).max(300).optional(), down: z.boolean().optional() }).strict(),
   z.object({ type: z.literal('agent.stopRefused'), agentId: id, releaseId: id }).strict(),
@@ -331,6 +334,7 @@ const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'agent.start': ['request.name', 'overrideReason'],
   'agent.startFailed': ['error'],
   'agent.switchResult': ['error'],
+  'agent.switchHandoff': ['note'],
   'agent.startSettled': ['warning'],
   'conversation.create': ['title', 'brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'task.review.focus', 'checks[].description'],
   'conversation.rename': ['title'],
@@ -2345,6 +2349,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
             fail('PROFILE_UNKNOWN', `That account isn’t on ${destination.name} any more.`, 409)
           }
           if (start.request.profileId !== profileId) fail('STALE_SWITCH', 'This PM switch no longer names this account.')
+          if (start.request.machineId !== switchSource.machineId && (start.request.handoffSourceAgentId !== switchSource.id
+            || start.request.handoffNote === undefined || !start.request.handoffChangeId)) {
+            fail('HANDOFF_PENDING', 'The source host has not prepared this PM’s handoff yet.', 409)
+          }
         }
         admitMachineStart(state, start.request, context.now, start, context.teamMachines, context.otherWorkspaceMachines)
         if (start.dispatched || start.error || start.harnessId) fail('START_CLAIMED', 'This native start was already requested. Read its creation status; do not start another.')
@@ -2431,6 +2439,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (!switchSource || switchSource.switchRequest?.targetMachineId !== start.request.machineId
           || conversation(state, project.leadConversationId).leadId !== switchSource.id) {
           fail('STALE_SWITCH', 'This PM switch is no longer current.')
+        }
+        if (start.request.machineId !== switchSource.machineId && (start.request.handoffSourceAgentId !== switchSource.id
+          || start.request.handoffNote === undefined || !start.request.handoffChangeId)) {
+          fail('HANDOFF_PENDING', 'The source host has not prepared this PM’s handoff yet.', 409)
         }
       }
       // Answered, not refused: a refusal would take the row with it. Its host closes the session (cli superTabs/start.ts).
@@ -2618,6 +2630,30 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       target.switchRequest.claimedUntil ??= new Date(context.now + SWITCH_LEASE_MS).toISOString()
       result.leaseId = operationId
       result.expiresAt = Date.parse(target.switchRequest.claimedUntil)
+      break
+    }
+    case 'agent.switchHandoff': {
+      const target = agent(state, command.agentId)
+      const request = target.switchRequest
+      if (actor.kind !== 'agent' || actor.agentId !== target.id || request?.id !== command.switchId
+        || switchExpired(request, context.now) || !request.claimedUntil || Date.parse(request.claimedUntil) <= context.now) {
+        fail('STALE_SWITCH', 'Only the source host can hand off the current PM switch.', 403)
+      }
+      if (!/^[0-9a-f]{32}$/.test(command.handoffChangeId) || Buffer.byteLength(command.note, 'utf8') > 32_000) {
+        fail('HANDOFF_INVALID', 'This PM handoff is too large or invalid.', 400)
+      }
+      const start = state.starts?.find(candidate => candidate.request.leadFor?.switchId === command.switchId
+        && candidate.request.machineId === request.targetMachineId)
+      if (!start || start.error || start.harnessId) fail('STALE_SWITCH', 'This PM switch no longer has a pending destination.', 409)
+      if (start.request.handoffNote !== undefined) {
+        if (start.request.handoffNote !== command.note || start.request.handoffChangeId !== command.handoffChangeId) {
+          fail('HANDOFF_EXISTS', 'This PM switch already has a different handoff.', 409)
+        }
+        break
+      }
+      start.request.handoffNote = command.note
+      start.request.handoffSourceAgentId = target.id
+      start.request.handoffChangeId = command.handoffChangeId
       break
     }
     case 'agent.switchResult': {
