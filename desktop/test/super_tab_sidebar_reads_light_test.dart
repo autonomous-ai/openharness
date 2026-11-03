@@ -340,12 +340,14 @@ void main() {
     },
   );
 
-  // Review of #2790 (Sedge): a wait made a row bold for every viewer, though
-  // only the person it waits on has something to do. A wait on someone else
-  // keeps its ? mark and stays regular; a wait on the reader is bold.
+  // Review of #2790 (Sedge, Plover): a wait made a row bold, for every
+  // viewer, and opening the task did not clear it, while a screen reader
+  // heard "Unread messages". A wait is no unread message: its ? mark and
+  // Activity say it, and the row is bold only for what there is to read.
   testWidgets(
-    'a task waiting on the reader is bold; one waiting on someone else is not',
+    'a waiting task is not bold, whoever it waits on, and its ? mark says it',
     (tester) async {
+      final semantics = tester.ensureSemantics();
       final server = humansSwarm();
       addNumberedWorkgroups(server, 2);
       final groups = (server.state['conversations'] as List)
@@ -363,15 +365,21 @@ void main() {
       }
       final controller = await show(tester, server);
       final g2 = find.byKey(const ValueKey('super-group-g2'));
-      // The reader is peer: g1 waits on the owner, g2 on them.
-      expect(
-        titleStyle(tester, g1, 'Workgroup 1').fontWeight,
-        isNot(grid.AppFont.semibold),
-      );
-      expect(
-        titleStyle(tester, g2, 'Workgroup 2').fontWeight,
-        grid.AppFont.semibold,
-      );
+      for (final (row, title) in [(g1, 'Workgroup 1'), (g2, 'Workgroup 2')]) {
+        expect(
+          titleStyle(tester, row, title).fontWeight,
+          isNot(grid.AppFont.semibold),
+        );
+        expect(
+          find.descendant(of: row, matching: find.text('?')),
+          findsOneWidget,
+        );
+        expect(
+          tester.getSemantics(row).getSemanticsData().label,
+          isNot(contains('Unread messages')),
+        );
+      }
+      semantics.dispose();
       await close(tester, controller);
     },
   );
