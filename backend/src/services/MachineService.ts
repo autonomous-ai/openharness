@@ -16,6 +16,7 @@ import { machineBillingService } from './MachineBillingService.js'
 import { storedAutonomousEnvironment, type AutonomousEnvironment } from '../lib/autonomousEnvironment.js'
 import { TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
+import { machineRenamed } from '../superTabs/machineRenames.js'
 
 /** The agent's tier / how it runs Claude, resolved through its plan.
  *  'self' | 'managed' = a docker agent-node on a manager host; 'remote' = the user's own computer
@@ -651,6 +652,16 @@ export const machineService = {
     assertRequesterEnvironment(binding, requester)
     assertMachineBillingActive(binding)
     await prisma.machine.update({ where: { machineId }, data: { name } })
+    // Its Mac's Harness Team accounts go by "<Mac> · Team" (cli/src/team/command.ts), and keep that after the new name; the
+    // suffix runs past the 40 characters a rename takes, as it does after a longer hostname. A cleared name leaves them.
+    if (name) {
+      await prisma.machine.updateMany({ where: { userId: binding.userId, autonomousEnv: binding.autonomousEnv, hostMachineId: machineId,
+        sessionKind: 'team', ...machineAlive }, data: { name: `${name} · Team` } })
+    }
+    // Every Swarm it is in shows the new name now, not on its next reading, which an offline machine never sends (#2308).
+    await machineRenamed({ machineId, ownerId: binding.userId, autonomousEnv: binding.autonomousEnv }).catch(error => {
+      logger.warn('machine rename did not reach its Swarms; their next reading of it will', { machineId, error: error instanceof Error ? error.message : String(error) })
+    })
     await publishDeviceMachineListChanged(binding.userId, { reason: 'renamed' }).catch(() => { /* best effort */ })
     if (binding.managerId === '') {
       // Remote machine: a live adapter mirrors the name locally (`machine status`) — push it the new one.
