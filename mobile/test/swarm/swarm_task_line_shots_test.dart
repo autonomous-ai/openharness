@@ -95,7 +95,33 @@ void main() {
       final boundary = GlobalKey();
       await pumpTaskChat(
         tester,
-        taskLineBackend([root]),
+        taskLineBackend(
+          [root],
+          // Dee's approved thread: the Buddy's proposal, then the PM.
+          replies: [
+            {
+              'text':
+                  'Goal: Save edits while offline.\n'
+                  'Scope: Desktop and phone drafts.\nPriority: normal',
+              'author': {
+                'kind': 'agent',
+                'id': 'buddy-1',
+                'name': 'Buddy',
+                'displayName': "Dee's Buddy",
+              },
+              'source': {'kind': 'message'},
+            },
+            for (final text in [
+              'On it: Dune is building it.',
+              'Ready for review: PR #2710',
+              'Merged: PR #2710. Ships in the next release.',
+            ])
+              {
+                'text': text,
+                'source': {'kind': 'system'},
+              },
+          ],
+        ),
         boundary: boundary,
         theme: buildAppTheme(brightness: palette.brightness),
       );
@@ -103,7 +129,10 @@ void main() {
       await capture(boundary, 'task-chat-${palette.brightness.name}');
       await tester.tap(find.byKey(const ValueKey('swarm-thread-line-line-1')));
       await tester.pumpAndSettle();
-      expect(find.text('Goal: Save edits while offline.'), findsOneWidget);
+      expect(
+        find.text('Merged: PR #2710. Ships in the next release.'),
+        findsOneWidget,
+      );
       await capture(boundary, 'task-thread-${palette.brightness.name}');
       await tester.pumpWidget(const SizedBox());
     }

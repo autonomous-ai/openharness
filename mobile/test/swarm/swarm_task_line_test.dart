@@ -44,6 +44,7 @@ Map<String, dynamic> legacyShip(String target, int sequence) => {
 FakeSwarm taskLineBackend(
   List<Map<String, dynamic>> page, {
   bool target = true,
+  List<Map<String, dynamic>>? replies,
 }) {
   final fake = FakeSwarm();
   final root = page.firstWhere(
@@ -51,9 +52,26 @@ FakeSwarm taskLineBackend(
     orElse: () => page.first,
   );
   final rootId = root['id'] as String;
+  final thread = [
+    for (final (i, reply)
+        in (replies ??
+                [
+                  {
+                    'text': 'Goal: Save edits while offline.',
+                    'source': {'kind': 'message'},
+                  },
+                ])
+            .indexed)
+      {
+        ...taskLine(id: i == 0 ? 'details' : 'reply-$i', sequence: 3 + i),
+        'thread': rootId,
+        'replyTo': rootId,
+        ...reply,
+      },
+  ];
   final summary = {
     'id': rootId,
-    'replies': 1,
+    'replies': thread.length,
     'lastSequence': 3,
     'authors': <Object>[],
     'people': <Object>[],
@@ -90,16 +108,7 @@ FakeSwarm taskLineBackend(
       };
   fake.routes['/api/super-tabs/$tab/conversations/$leadChat/messages?thread=$rootId'] =
       (_) => {
-        'messages': [
-          root,
-          {
-            ...taskLine(id: 'details', sequence: 3),
-            'text': 'Goal: Save edits while offline.',
-            'thread': rootId,
-            'replyTo': rootId,
-            'source': {'kind': 'message'},
-          },
-        ],
+        'messages': [root, ...thread],
         'threads': [summary],
         'next': null,
       };
