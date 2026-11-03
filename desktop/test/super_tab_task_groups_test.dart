@@ -371,8 +371,12 @@ void main() {
         for (final g
             in (server.state['conversations'] as List)
                 .cast<Map<String, dynamic>>()) {
-          if (g['id'] == 'busy-old' || g['id'] == 'quiet-chat')
+          // A person wrote there: what the filter counts, as the bold does
+          // (#2427).
+          if (g['id'] == 'busy-old' || g['id'] == 'quiet-chat') {
             g['lastMessageSequence'] = 5;
+            g['lastPersonSequence'] = 5;
+          }
         }
         final c = await pumpGrouped(tester, server);
         c.toggleUnreadOnly();

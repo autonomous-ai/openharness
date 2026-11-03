@@ -863,6 +863,16 @@ describe('contributed machine executor', () => {
       }
     })
 
+    // Review of #2793: a 403 with an empty message left an empty reason, which the backend's schema refuses, so the whole reading
+    // was refused and the field dropped for 10 minutes as if the backend were old.
+    it('names a refusal with no message by its code, never an empty reason', async () => {
+      const f = fixture()
+      f.start.mockRejectedValue(new SuperTabHostError('FORBIDDEN', '', 403))
+      await f.machine.tick()
+      f.step(5_000); await f.machine.tick()
+      expect(machinePosts(f).at(-1)!.refusedStarts).toEqual([{ startId: 'start', reason: 'The server refused this machine\'s report for it (FORBIDDEN).' }])
+    })
+
     it('keeps the refusal to 300 characters', async () => {
       const f = fixture()
       f.start.mockRejectedValue(new SuperTabHostError('FORBIDDEN', 'x'.repeat(400), 403))

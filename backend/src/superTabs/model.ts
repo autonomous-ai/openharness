@@ -71,8 +71,8 @@ export interface Agent {
    *  `id` is the operation that asked; `claimedUntil` is set once the host took it (agent.switchClaim). */
   /** The switch request the last rebind settled, until its result arrives: that result is the one line the chat gets, and
    *  it still tells the machine owner who asked. */
-  switchLanded?: { id: string; requestedBy: string }
-  switchRequest?: { id: string; engine: string; profileId: string; model?: string; effort?: string; requestedBy: string; at: string; claimedUntil?: string }
+  switchLanded?: { id: string; requestedBy: string; candidateAgentId?: string }
+  switchRequest?: { id: string; engine: string; profileId: string; targetMachineId?: string; model?: string; effort?: string; requestedBy: string; at: string; claimedUntil?: string }
   /** A Buddy's owner asked its machine to move it onto a model on the Swarm's grid, or back to their subscription (null)
    *  (buddyModel.ts). What they were shown is kept for the line the result writes: the model's name, who serves it and its
    *  window, the smallest any serving machine reported. One at a time; the result or the liveness sweep's lease drops it. */
@@ -175,12 +175,18 @@ export interface AgentStartRequest {
   /** The projects a Swarm-wide Buddy's folder holds, one read-only worktree each, made from that project's own checkout on its
    *  machine (spec: Folder). Ids, names and folders only. */
   buddyProjects?: Array<{ id: string; name: string; cwd: string }>
+  /** The offered account selected for a destination PM switch. */
+  profileId?: string
+  /** A bounded handoff note transferred from the source host, visible only in the destination host's start row. */
+  handoffNote?: string
+  handoffSourceAgentId?: string
+  handoffChangeId?: string
   /** A Buddy thread session's start (buddySessions.ts): written by message.send with newSession alone. Ids only, never text:
    *  starts are listed to the Lead. */
   buddySession?: BuddySession
   /** A project's Product Manager's start (leadStart.ts): written by lead.start alone, never taken from an agent.start. Its
    *  agent becomes the Lead of the project's Lead conversation once it runs. */
-  leadFor?: { projectId: string; personId: string; generation: string }
+  leadFor?: { projectId: string; personId: string; generation: string; switchId?: string }
 }
 export interface AgentStart {
   poolGeneration?: string
@@ -338,6 +344,9 @@ export interface Conversation {
   /** The sequence of its newest message in the main stream: a reply only in its thread leaves it (threads.ts). Absent until
    *  this conversation's first message after threads; readers fall back to lastMessageSequence. */
   lastMainSequence?: number
+  /** The sequence of its newest main-stream message from a person, not a system row (parts/commit.ts): what makes a task's
+   *  sidebar row bold (Huy, 11-03, #2427). Absent until a person's first message after this was added; readers read 0. */
+  lastPersonSequence?: number
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
   /** Its messages drawn as live cards: its task and each linked pull request (cards.ts). Absent until its first card. */
@@ -853,6 +862,13 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   const { sharing: _sharing, autoJoinDeclined: _declined, harnessReservations: _reservations, releasedHarnesses: _released, overlapAlerts: _alerts, closingSessions: _closing,
     removedSessions: _removed, ...kept } = state
   const visible = cloneData({ ...kept, conversations: state.conversations.filter(c => !c.dormant) })
+  // Prepared PM handoffs are private host-to-host launch data. Machine hosts receive their own start through read/hostRows.ts;
+  // ordinary people and agent syncs must never receive the note or its correlation fields.
+  for (const start of visible.starts ?? []) {
+    delete start.request.handoffNote
+    delete start.request.handoffSourceAgentId
+    delete start.request.handoffChangeId
+  }
   if (autoJoinOn(state)) visible.autoJoin = true
   // A Buddy-only machine is no machine of the Swarm to anyone, its own person included (machines.ts buddyOnly): their Buddy
   // shows as a Buddy, and their machine stays theirs. Machines, status and the leaderboard's lent hours all read this.

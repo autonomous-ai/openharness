@@ -134,7 +134,7 @@ void main() {
     expect(lineOf(field.style), closeTo(22, 0.01));
   });
 
-  testWidgets('sidebar items read at 15 px on rows 28 px apart', (
+  testWidgets('sidebar items read at 15 px on rows 28 px apart, a project 32', (
     tester,
   ) async {
     await showView(tester, ConversationServer());
@@ -145,8 +145,9 @@ void main() {
     );
     expect(name.style!.fontSize, 15);
     expect(lineOf(name.style!), closeTo(22, 0.01));
-    // A 26 px row and its 2 px gap: Slack's 28 px pitch.
-    expect(tester.getSize(project).height, 26);
+    // A 26 px row and its 2 px gap: Slack's 28 px pitch; a project's row 4 px
+    // taller, as Huy asked (11-03, #2427).
+    expect(tester.getSize(project).height, 30);
     final activity = tester.widget<Text>(
       find.descendant(of: side, matching: find.text('Activity')),
     );

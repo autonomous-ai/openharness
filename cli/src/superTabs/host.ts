@@ -167,7 +167,7 @@ interface Entry {
 interface Journal { version: 1; machineId: string; entries: Record<string, Entry>; scrubs?: Record<string, PurgeTarget> }
 /** `skillMode` is the agent's project's skills; a row without it (an older backend, a project from before modes) is orchestration.
  *  `roleName` and `instructions` name its project's instructions (backend read/hostRows.ts); an older backend sends neither. */
-interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string; releaseId?: string }; skillMode?: unknown; lead?: unknown; role?: unknown
+interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string; releaseId?: string; switchLanded?: { id?: unknown; candidateAgentId?: unknown } }; skillMode?: unknown; lead?: unknown; role?: unknown
   leadsConversationId?: unknown; roleName?: unknown; instructions?: unknown }
 export interface SuperTabHostOptions {
   now?: () => number
@@ -1115,8 +1115,8 @@ export class SuperTabHost {
         void this.releaseWorker(target)
         continue
       }
-      if (row.lead === true) {
-        leads.add(target.agent.harnessId)
+      if (row.lead === true || target.agent.switchLanded) {
+        if (row.lead === true) leads.add(target.agent.harnessId)
         this.keepAlive(target.agent.harnessId)
         void this.leadSwitches.serve(target as unknown as SwitchRow).catch(error => this.log(`PM switch: ${error instanceof Error ? error.name : typeof error}`))
       }
@@ -1916,7 +1916,7 @@ export class SuperTabHost {
     }
     let context = this.contexts.get(deliveryId)
     if (context === undefined) {
-      context = await this.contextLines(entry, message, command, quotedOther)
+      context = await this.contextLines(entry, message, command, quotedOther, result.buddyNews === true)
       this.contexts.set(deliveryId, context)
     }
     if (this.stopped || this.journal.entries[deliveryId] !== entry) return false
@@ -2158,14 +2158,16 @@ export class SuperTabHost {
   /** The lines that say where a delivery is (agent context design, section 2): the conversation, the agent's own work, and
    *  the thread it is in. Read fresh for each delivery, as the agent: a 60 s cache could build the delivery announcing a
    *  work.assign from a read taken before it. Anything that cannot be read leaves its line out; the delivery always goes. */
-  private async contextLines(entry: Entry, message: Json, prefix: string, quotedOther: ReadonlySet<string>): Promise<string> {
+  private async contextLines(entry: Entry, message: Json, prefix: string, quotedOther: ReadonlySet<string>, buddyNews = false): Promise<string> {
     // A Buddy reads its own person's chat and holds no task, and each read it makes is judged for its grants (security
-    // reviews of #2310): it gets no context lines, so a delivery costs it no read beyond those (design call).
-    if (object(message.source).kind === 'agent-only' || this.isBuddy(entry)) return ''
+    // reviews of #2310): it gets no place or work line, so a delivery costs it no read of the Swarm (design call). Its news
+    // comes from a chat outside its own and gets no line at all, so nothing is read there for it.
+    const buddy = this.isBuddy(entry)
+    if (object(message.source).kind === 'agent-only' || (buddy && buddyNews)) return ''
     const group = String(message.conversationId)
     const lines: string[] = []
     const wait = this.contextWaitMs
-    try {
+    if (!buddy) try {
       // Bounded: a delivery never waits on its context (final review, finding 3). A read that does not answer in time
       // leaves its lines out, and the read goes on for the next delivery.
       const read = await within(this.sources.reads.read(entry.tabId, entry.agentId), wait)
@@ -2177,12 +2179,15 @@ export class SuperTabHost {
     } catch (error) {
       this.log(`context for delivery ${entry.deliveryId} unreadable: ${error instanceof Error ? error.message : String(error)}`)
     }
+    // A reply inside a thread gets the thread line, a Buddy's in its own chat too: Ken 11-03 (#2492) answered "ok để thử" in a
+    // thread of his Buddy chat, the delivery quoted only the thread's root, and the Buddy guessed. Its root is in the page
+    // repliedTo() read, or one read of that root in this same chat; the command is in the Buddy's prefix, with no --agent.
     const root = message.thread
     if (identifier(root) && root !== message.id) {
       const thread = await within(this.threadOf(entry, group, root), wait)
       if (thread && (thread.replies === null || thread.replies > 1)) {
         lines.push(threadLine(thread.root, thread.replies, thread.authors,
-          `${agentCommandOf(entry, prefix)} messages ${shellQuote(group)} --thread ${shellQuote(root)}`, quotedOther.has(root)))
+          `${agentCommandOf(entry, prefix, buddy)} messages ${shellQuote(group)} --thread ${shellQuote(root)}`, quotedOther.has(root)))
       }
     }
     return lines.length ? `${lines.join('\n')}\n\n` : ''

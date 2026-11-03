@@ -764,7 +764,10 @@ export class ContributedMachines {
             catch (error) {
               this.refusedSince.delete(start.id)
               // The backend refused this host's own report for it: the next reading says so, and the backend fails it with this.
-              if (error instanceof SuperTabHostError && error.status === 403) this.refused.set(String(start.id), error.message.slice(0, 300))
+              // One with no message is named by its code: an empty reason would never be reported (review of #2793).
+              if (error instanceof SuperTabHostError && error.status === 403) {
+                this.refused.set(String(start.id), (error.message || `The server refused this machine's report for it (${error.code}).`).slice(0, 300))
+              }
               this.noteWaiting(start.id, error instanceof Error ? error.message : String(error))
             }
           } finally { launched() }

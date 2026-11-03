@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -10,12 +13,15 @@ import 'package:harness/app_shell.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/auth/cli_login.dart';
 import 'package:harness/core/config.dart';
+import 'package:harness/core/machine_resources.dart';
 
 import 'package:harness/core/models.dart';
 import 'package:harness/settings/settings_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
+import 'package:harness/super_tabs/controller.dart' show SuperTabController;
 import 'package:harness/super_tabs/machines.dart';
+import 'package:harness/super_tabs/swarm_switcher.dart' show PersonalSwarm;
 import 'package:harness/super_tabs/team_account_setup.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
@@ -879,5 +885,298 @@ void main() {
         await tester.pump();
       },
     );
+  }
+
+  // Diego, 11-03: saving a machine's settings locked the whole app behind the
+  // Team account setup, in the Personal Swarm too and after an earlier Not
+  // now, and a refused Remove left no way out.
+  group('settings and Personal never lock the app', () {
+    /// The daemon's setup checks asked with [reason].
+    List<Map<String, dynamic>> checks(SuperTabLaunchFixture f, String reason) =>
+        [
+          for (final (type, payload) in f.connection.calls)
+            if (type == 'super_tabs' &&
+                payload['action'] == 'teamSetupCheck' &&
+                payload['reason'] == reason)
+              payload,
+        ];
+
+    List<Map<String, dynamic>> contributions(SuperTabLaunchFixture f) => [
+      for (final post in f.connection.server.posts)
+        if ((post['command'] as Map?)?['type'] == 'machine.contribute')
+          Map<String, dynamic>.from(post['command'] as Map),
+    ];
+
+    /// This Mac, already in the fixture's Swarm, as its owner contributed it.
+    SuperTabLaunchFixture contributed({required String check}) {
+      final f = SuperTabLaunchFixture();
+      f.app.teamAccountHereForTest = true;
+      for (final state in f.app.machineStates.values) {
+        state.localOnly = true;
+      }
+      f.connection.maxAvailableAgents = 16;
+      f.connection.teamCheck = {'state': check};
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 16},
+      ];
+      return f;
+    }
+
+    /// The fixture's Swarm made the person's Personal one, as
+    /// super_tab_personal_projects_test.dart makes it.
+    Future<SuperTabController> personal(SuperTabLaunchFixture f) async {
+      f.connection.server.state
+        ..['name'] = 'Personal'
+        ..['ownerId'] = 'owner'
+        ..['people'] = [
+          {'id': 'owner', 'email': 'owner@example.com', 'role': 'owner'},
+        ];
+      await f.app.superTabs.storage.write('super_tab.personal.owner', tabId);
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Personal');
+      PersonalSwarm.of(f.app).id;
+      for (var i = 0; i < 20; i++) {
+        await Future<void>.microtask(() {});
+      }
+      expect(PersonalSwarm.of(f.app).id, tabId);
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      return c;
+    }
+
+    /// Manage > Machines > this Mac > Configure, one fewer agent, Save.
+    Future<void> saveSettings(
+      WidgetTester tester,
+      SuperTabLaunchFixture f,
+      SuperTabController c,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: (context, child) => TeamAccountSetupLock(
+            app: f.app,
+            operatingSystem: 'macos',
+            child: child!,
+          ),
+          home: Scaffold(
+            body: SizedBox(
+              width: 300,
+              height: 400,
+              child: SuperTabMachines(
+                controller: c,
+                app: f.app,
+                onAddAgent: (_) {},
+                readLocal: (_) async => const MachineResources(
+                  memoryTotalBytes: 32 * 1024 * 1024 * 1024,
+                  memoryUsedBytes: 31 * 1024 * 1024 * 1024,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('super-machine-m')),
+        buttons: kSecondaryMouseButton,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Details').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Configure'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('agent-limit-fewer')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      // Preparation is ready from its second read, a second apart.
+      for (var i = 0; i < 3; i++) {
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pumpAndSettle();
+      }
+    }
+
+    Future<void> close(
+      WidgetTester tester,
+      SuperTabLaunchFixture f,
+      SuperTabController c,
+    ) async {
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      f.dispose();
+      await tester.pump();
+    }
+
+    testWidgets(
+      'saving settings after an earlier Not now sends the change and locks nothing',
+      (tester) async {
+        final f = contributed(check: 'declined');
+        f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+        final c = await f.app.superTabs.open(tabId);
+        await c.refresh();
+        await saveSettings(tester, f, c);
+
+        expect(contributions(f).single['maxAgents'], 7);
+        expect(checks(f, 'contribute'), isEmpty);
+        expect(f.app.teamSetupLocked, isFalse);
+        expect(find.byKey(const Key('team-account-lock')), findsNothing);
+        await close(tester, f, c);
+      },
+    );
+
+    testWidgets(
+      'saving settings in the Personal Swarm with the account wanted locks nothing',
+      (tester) async {
+        final f = contributed(check: 'wanted');
+        final c = await personal(f);
+        await saveSettings(tester, f, c);
+
+        expect(contributions(f).single['maxAgents'], 7);
+        expect(checks(f, 'contribute'), isEmpty);
+        expect(f.app.teamSetupLocked, isFalse);
+        expect(find.byKey(const Key('team-account-lock')), findsNothing);
+        await close(tester, f, c);
+      },
+    );
+
+    testWidgets(
+      'adding this Mac to the Personal Swarm with the account wanted asks nothing',
+      (tester) async {
+        final f = contributed(check: 'wanted');
+        f.connection.server.state['machines'] = <Map<String, dynamic>>[];
+        final c = await personal(f);
+        await tester.pumpWidget(const SizedBox());
+        // The Add machine form's own call, which offers the account by
+        // default.
+        String? added;
+        unawaited(
+          contributeComputer(
+            c,
+            f.app,
+            'm',
+            setupId: 'setup-1',
+            alive: () => true,
+            readResources: (_) async => null,
+          ).then((id) => added = id),
+        );
+        for (var i = 0; i < 4; i++) {
+          await tester.pump(const Duration(seconds: 1));
+        }
+        expect(added, 'm');
+        expect(contributions(f), hasLength(1));
+        expect(checks(f, 'contribute'), isEmpty);
+        expect(f.app.teamSetupLocked, isFalse);
+        await close(tester, f, c);
+      },
+    );
+
+    testWidgets(
+      'a refused removal offers Not now, which records it and opens the app',
+      (tester) async {
+        final f = SuperTabLaunchFixture();
+        f.app.teamAccountHereForTest = true;
+        f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+        f.connection.server.state['machines'] = [
+          {'machineId': 'm', 'name': 'Test host', 'contributorId': 'owner'},
+        ];
+        f.connection.teamCheck = {'state': 'wanted'};
+        f.connection.teamRun = {'state': 'unsupported'};
+        await f.app.offerTeamAccount('join', tabId: tabId);
+        // The Mac runs a project's PM: the Swarm keeps it.
+        f.connection.server.refuse = {
+          'code': 'LEAD_PROTECTED',
+          'message': 'This machine runs the PM of a project.',
+        };
+        await window(tester, f.app);
+        // No way out before Remove was tried.
+        expect(
+          find.byKey(const Key('team-account-lock-not-now')),
+          findsNothing,
+        );
+        await tester.tap(find.byKey(const Key('team-account-lock-continue')));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const Key('team-account-lock-not-now')),
+          findsNothing,
+        );
+        await tester.tap(find.byKey(const Key('team-account-lock-remove')));
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byKey(const Key('team-account-lock-remove-confirm')),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.text('This machine runs the PM of a project.'),
+          findsOneWidget,
+        );
+        // It no longer asks for the Remove that was just refused.
+        expect(
+          find.textContaining('remove this Mac from the Swarm'),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const Key('team-account-lock-not-now-why')),
+          findsOneWidget,
+        );
+        if (shots != null) {
+          debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+          await tester.binding.setSurfaceSize(const Size(1000, 700));
+          await tester.pumpAndSettle();
+          await captureWindow(tester, shots, '7-remove-refused-not-now');
+          await tester.binding.setSurfaceSize(null);
+          debugDefaultTargetPlatformOverride = null;
+          await tester.pumpAndSettle();
+        }
+
+        await tester.tap(find.byKey(const Key('team-account-lock-not-now')));
+        await tester.pumpAndSettle();
+        expect(
+          [
+            for (final (type, payload) in f.connection.calls)
+              if (type == 'super_tabs' &&
+                  payload['action'] == 'teamSetupDecline')
+                payload['action'],
+          ],
+          ['teamSetupDecline'],
+        );
+        expect(find.byKey(const Key('team-account-lock')), findsNothing);
+        expect(f.app.teamSetupLocked, isFalse);
+        await tester.pumpWidget(const SizedBox());
+        f.app.superTabs.dispose();
+        f.dispose();
+        await tester.pump();
+      },
+    );
+  });
+
+  // A contribution locks only while the account is to be made now; a join
+  // after an earlier cancel or failure still does (it is a new Swarm).
+  for (final (state, locks) in [
+    ('wanted', true),
+    ('running', true),
+    ('declined', false),
+    ('waiting', false),
+    ('no-prompt', false),
+  ]) {
+    test(
+      'a contribution answered $state ${locks ? 'locks' : 'does not lock'}',
+      () async {
+        daemon.check = {'ok': true, 'state': state};
+        await app.offerTeamAccount('contribute', tabId: 'tab-1');
+        expect(app.teamSetupLocked, locks);
+      },
+    );
+  }
+
+  for (final state in [
+    'wanted',
+    'declined',
+    'waiting',
+    'running',
+    'no-prompt',
+  ]) {
+    test('a join answered $state locks', () async {
+      daemon.check = {'ok': true, 'state': state};
+      await app.offerTeamAccount('join', tabId: 'tab-1');
+      expect(app.teamSetupLocked, isTrue);
+    });
   }
 }
