@@ -110,11 +110,16 @@ void main() {
       threadId: 'message-1',
       messageSequence: server.revision,
     );
-    await show(tester, server);
-    expect(
-      find.descendant(of: line('message-1'), matching: find.text('@ you')),
-      findsOneWidget,
+    final c = await show(tester, server);
+    final tag = find.descendant(
+      of: line('message-1'),
+      matching: find.text('@ you'),
     );
+    expect(tag, findsOneWidget);
+    c.markThreadRead('lead', 'message-1', server.revision);
+    await tester.pumpAndSettle();
+    expect(tag, findsNothing);
+    await c.flush();
   });
 
   testWidgets('a reply also sent to the chat shows in both, marked as a '
