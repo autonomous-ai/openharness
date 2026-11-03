@@ -159,23 +159,26 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     _measureAfterFrame();
   }
 
-  /// Where "Also send" also puts the reply, full wording first (Scholes,
-  /// 10-31): the project chat as its sidebar row names it, else the main
-  /// chat. A narrower send row takes the short one, never shorter: it still
-  /// says what the option does and where.
-  List<String> get _alsoSendLabels {
+  /// Where "Also send" also puts the reply, always in full (Scholes, 11-03:
+  /// "Also to chat" did not say where): the project chat as its sidebar row
+  /// names it, else the main chat.
+  String get _alsoSendLabel {
     final group = c.selected, snapshot = c.snapshot;
     String? channel;
     if (group != null && snapshot != null && snapshot.isProjectLead(group.id)) {
       channel = snapshot.projectFor(group.id)?.name;
     }
     return channel == null
-        ? const ['Also post to the main chat', 'Also to chat']
-        : ['Also post to #$channel', 'Also to #$channel'];
+        ? 'Also post to the main chat'
+        : 'Also post to #$channel';
   }
 
-  /// One line, always the full wording.
-  String get _alsoSendHint => '${_alsoSendLabels.first} as well as this thread';
+  String get _alsoSendHint => '$_alsoSendLabel as well as this thread';
+
+  /// Whether Also send sits on its own line under the box: its full label
+  /// has no room beside New session on the send row. Set from the send row's
+  /// width once it is laid out ([_choices]).
+  bool _alsoBelow = false;
 
   // An older Buddy chat is kept to read: no thread reply there either (security review 1 of #2437).
   bool get _writable =>
@@ -202,8 +205,11 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
 
   /// A session's thread stays in the thread: Also send is not offered there,
   /// nor for a reply that starts one.
-  bool get _offersAlsoSend =>
-      !_startsSession && c.threadSession(widget.root) == null;
+  bool get _offersAlsoSend => !_startsSession && _alsoSendPossible;
+
+  /// Whether this thread offers Also send whenever New session is off: its
+  /// place is laid out for it, so turning New session on never moves the box.
+  bool get _alsoSendPossible => c.threadSession(widget.root) == null;
 
   /// The files waiting to go with this thread's next reply.
   HarnessAttachments get _files =>
@@ -469,56 +475,46 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                 grid.AppDesktop.groupGap,
                 grid.AppDesktop.groupGap,
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  ListenableBuilder(
-                    listenable: Listenable.merge([
-                      _composer,
-                      _tagIndex,
-                      _tagDismissed,
-                    ]),
-                    builder: (context, _) {
-                      final choices = _tagChoices;
-                      if (choices.isEmpty) return const SizedBox.shrink();
-                      return Padding(
-                        padding: const EdgeInsets.only(
-                          bottom: grid.AppDesktop.controlGap,
+              child: // The Tab order holds wherever Also send sits (reply_box.dart
+                  // fieldOrder).
+                  FocusTraversalGroup(
+                    policy: OrderedTraversalPolicy(),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        ListenableBuilder(
+                          listenable: Listenable.merge([
+                            _composer,
+                            _tagIndex,
+                            _tagDismissed,
+                          ]),
+                          builder: (context, _) {
+                            final choices = _tagChoices;
+                            if (choices.isEmpty) return const SizedBox.shrink();
+                            return Padding(
+                              padding: const EdgeInsets.only(
+                                bottom: grid.AppDesktop.controlGap,
+                              ),
+                              child: SuperTabCompletionList(
+                                listKey: const ValueKey(
+                                  'super-thread-completions',
+                                ),
+                                choices: choices,
+                                index: _tagIndex.value,
+                                rowKeys: _tagRows,
+                              ),
+                            );
+                          },
                         ),
-                        child: SuperTabCompletionList(
-                          listKey: const ValueKey('super-thread-completions'),
-                          choices: choices,
-                          index: _tagIndex.value,
-                          rowKeys: _tagRows,
+                        FocusTraversalOrder(
+                          order: SuperTabReplyBox.fieldOrder,
+                          child: _composerBox(),
                         ),
-                      );
-                    },
-                  ),
-                  _composerBox(),
-                  // Its place is kept while New session is offered, so the
-                  // box never moves as the choice is toggled.
-                  if (_offersSession)
-                    Padding(
-                      padding: const EdgeInsets.only(
-                        top: grid.AppDesktop.controlGap,
-                      ),
-                      child: Visibility(
-                        visible: _startsSession,
-                        maintainSize: true,
-                        maintainAnimation: true,
-                        maintainState: true,
-                        child: Text(
-                          'Your reply starts a new Buddy session',
-                          key: const ValueKey('super-thread-session-note'),
-                          style: DesktopChrome.metadata(
-                            color: DesktopChrome.muted,
-                          ),
-                        ),
-                      ),
+                        ?_underBox(),
+                      ],
                     ),
-                ],
-              ),
+                  ),
             ),
           ],
         ),
@@ -563,52 +559,104 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     inputFormatters: [_tagBackspace],
   );
 
-  /// The send row's options, left of attach and send, on one line at any
-  /// width (Scholes, 10-31): Also send names where it posts in full where
-  /// that fits beside New session, else its short wording; where even that
-  /// has no room (a window too narrow for the thread's default width), the
-  /// labels end in "…", their circles still showing.
+  /// What sits under the box: Also send on its own line where it has no room
+  /// on the send row, and the muted note while the reply starts a session.
+  /// They never show together, so they share one place; each keeps its place
+  /// while hidden, so the box never moves as New session is toggled.
+  Widget? _underBox() {
+    final note = _offersSession
+        ? Padding(
+            padding: const EdgeInsets.only(top: grid.AppDesktop.controlGap),
+            child: Visibility(
+              visible: _startsSession,
+              maintainSize: true,
+              maintainAnimation: true,
+              maintainState: true,
+              child: Text(
+                'Your reply starts a new Buddy session',
+                key: const ValueKey('super-thread-session-note'),
+                style: DesktopChrome.metadata(color: DesktopChrome.muted),
+              ),
+            ),
+          )
+        : null;
+    if (!(_alsoSendPossible && _alsoBelow)) return note;
+    // Its square under the send row's first one: the box's inset.
+    final line = Visibility(
+      visible: _offersAlsoSend,
+      maintainSize: true,
+      maintainAnimation: true,
+      maintainState: true,
+      child: Padding(
+        key: const ValueKey('super-thread-also-line'),
+        padding: const EdgeInsets.only(
+          top: grid.AppDesktop.controlGap,
+          left: grid.AppDesktop.groupGap,
+        ),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: _alsoSendChoice(_writable),
+        ),
+      ),
+    );
+    return note == null ? line : Stack(children: [line, note]);
+  }
+
+  /// The send row's options, left of attach and send (Scholes, 11-03): New
+  /// session, then Also send in full where both fit; where they do not, Also
+  /// send moves to its own line under the box ([_alsoBelow]), never to a
+  /// shorter label. The choice rests on the row's width alone, so it settles
+  /// after one frame, in which Also send is drawn in neither place.
   Widget _choices(bool writable) => LayoutBuilder(
     builder: (context, constraints) {
       double width(String label) =>
           SuperTabComposerToggle.widthOf(context, label);
       final session = _offersSession ? _sessionLabel : null;
-      final alsos = _offersAlsoSend ? _alsoSendLabels : null;
-      final room =
-          constraints.maxWidth -
-          (session == null
-              ? 0
-              : width(session) + (alsos == null ? 0 : _choiceGap));
-      final also = alsos?.firstWhere(
-        (label) => width(label) <= room,
-        orElse: () => alsos.last,
+      // Measured whether or not New session is on, so the place stays put.
+      final also = _alsoSendPossible ? _alsoSendLabel : null;
+      final needed =
+          (session == null ? 0 : width(session)) +
+          (session != null && also != null ? _choiceGap : 0) +
+          (also == null ? 0 : width(also));
+      final below = also != null && needed > constraints.maxWidth;
+      final inline = _offersAlsoSend && !below && !_alsoBelow;
+      if (below != _alsoBelow) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && below != _alsoBelow) {
+            setState(() => _alsoBelow = below);
+          }
+        });
+      }
+      final sessionChoice = FocusTraversalOrder(
+        order: const NumericFocusOrder(SuperTabReplyBox.optionsOrder),
+        child: _sessionChoice(writable),
       );
-      // Fixed while both fit, Also send taking what is left; sharing the row
-      // otherwise.
-      final fits = room >= (also == null ? 0 : width(also));
       return Row(
         children: [
+          // Its own width beside Also send, which then fits; alone it may end
+          // in "…" in a pane narrower than the app allows.
           if (session != null)
-            fits && also != null
-                ? _sessionChoice(writable)
-                : Flexible(child: _sessionChoice(writable)),
-          if (session != null && also != null)
-            const SizedBox(width: _choiceGap),
-          if (also != null)
-            Flexible(
-              child: SuperTabComposerToggle(
-                key: const ValueKey('super-thread-also-send'),
-                on: _alsoSend,
-                label: also,
-                hint: _alsoSendHint,
-                onChanged: writable
-                    ? (on) => setState(() => _alsoSend = on)
-                    : null,
-              ),
-            ),
+            inline ? sessionChoice : Flexible(child: sessionChoice),
+          if (inline) ...[
+            if (session != null) const SizedBox(width: _choiceGap),
+            Flexible(child: _alsoSendChoice(writable)),
+          ],
         ],
       );
     },
+  );
+
+  /// Also send, on the send row or on its own line under the box; after New
+  /// session in the Tab order either way.
+  Widget _alsoSendChoice(bool writable) => FocusTraversalOrder(
+    order: const NumericFocusOrder(SuperTabReplyBox.optionsOrder + .1),
+    child: SuperTabComposerToggle(
+      key: const ValueKey('super-thread-also-send'),
+      on: _alsoSend,
+      label: _alsoSendLabel,
+      hint: _alsoSendHint,
+      onChanged: writable ? (on) => setState(() => _alsoSend = on) : null,
+    ),
   );
 
   static const _choiceGap = 4.0;
