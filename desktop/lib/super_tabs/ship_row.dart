@@ -105,7 +105,14 @@ class _SuperTabShipRowState extends State<SuperTabShipRow> {
               agents('Reviewed by', _ids('reviewerIds')),
             ],
           ),
-          SuperTabPullRequestLinks(_ids('pullRequests').join(' ')),
+          SuperTabPullRequestLinks(
+            _ids('pullRequests').join(' '),
+            repositoryUrl:
+                snapshot
+                        ?.projectFor(message.conversationId)
+                        ?.repository?['repositoryUrl']
+                    as String?,
+          ),
         ],
       ),
     );

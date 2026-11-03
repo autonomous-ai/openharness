@@ -400,6 +400,57 @@ jobs:
       - name: The Redis-backed tests ran
         run: node scripts/redis-tests-ran.mjs vitest-results.json
 
+  # The Super Tab integration suite (npm run test:super-tabs, backend/integration), which every backend PR once ran locally
+  # for 60-90 minutes behind a per-Mac lock (task #2459). Four shards balanced by integration/ci-durations.json; each
+  # integration file starts its own MongoDB replica set (mongodb-memory-server-core), so shards share no database, and the
+  # suite opens no Redis (src/lib/noRedis.test-support.ts).
+  backend-integration:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-backend-integration-${{ strategy.job-index }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.backend == 'true'
+    name: backend-integration (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.23.2
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      # The tests download mongod 7.0.24 into $TMPDIR/harness-super-tab-mongodb-binaries (integration/plans.test-support.ts).
+      - uses: actions/cache@v4
+        with:
+          path: /tmp/harness-super-tab-mongodb-binaries
+          key: super-tab-mongod-7.0.24-${{ runner.os }}-${{ runner.arch }}
+      - name: Super Tab integration shard
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: >-
+          npx vitest run --config vitest.super-tabs.ci.config.ts --shard="$SHARD/4"
+          --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/integration-$SHARD.json"
+      - name: Preserve per-file results (durations refresh integration/ci-durations.json)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-integration-${{ matrix.shard }}
+          path: ${{ runner.temp }}/integration-${{ matrix.shard }}.json
+          if-no-files-found: warn
+          overwrite: true
+          retention-days: 7
+
   website-checks:
     concurrency:
       group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-website-checks
@@ -661,7 +712,7 @@ jobs:
   required:
     name: ci/required
     needs: [plan, process-checks, desktop-tests, companion-subsystems, cli-typecheck, cli-tests, tui-test,
-            backend-desk, website-checks, os-checks, provider-checks, firmware-checks, pro-firmware-build, pro-golden,
+            backend-desk, backend-integration, website-checks, os-checks, provider-checks, firmware-checks, pro-firmware-build, pro-golden,
             mobile-checks, daemons-checks, pty-checks]
     if: always()
     runs-on: ubuntu-latest
