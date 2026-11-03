@@ -237,12 +237,21 @@ function fitText(full: string, make: (text: string) => Message): Message {
 let nextCardSession = 0
 const SWARM_IDS_MAX = 24
 const SWARM_TOKENS_MAX = 480
+/** The models a dial's picker holds (ui_habitat.c): more are never sent. */
+const MODELS_MAX = 48
 
 /** Tokens as `cable_json_guard.c` counts them: every object, array, string (keys too) and bare value. */
 function jsonTokens(value: unknown): number {
   if (Array.isArray(value)) return 1 + value.reduce((n: number, v) => n + jsonTokens(v), 0)
   if (value && typeof value === 'object') return 1 + Object.entries(value).reduce((n, [, v]) => n + 1 + jsonTokens(v), 0)
   return 1
+}
+
+/** Whether a message fits one frame as the device reads it: the cable's payload cap, with a margin for anything the
+ *  frame carries beyond this JSON (its seq), and the firmware's JSON guard, which refuses a frame of more than 512
+ *  tokens whole. */
+function fitsFrame(m: unknown): boolean {
+  return Buffer.byteLength(JSON.stringify(m), 'utf8') <= CABLE_MAX_PAYLOAD - 256 && jsonTokens(m) <= SWARM_TOKENS_MAX
 }
 
 function clipUtf8(text: string, max: number): string {
@@ -1487,10 +1496,21 @@ export class CableSession {
         const serial = msg.request
         const request = typeof serial === 'number' && Number.isInteger(serial)
           && serial > 0 && serial <= 0x7fffffff ? serial : undefined
-        await this.send({
-          t: 'models', agentId, ...(request === undefined ? {} : { request }),
-          items: items.map((id) => ({ id })),
-        })
+        // One frame, as the dial keeps it: the model it has selected first, then the catalog in order, up to the 48 its
+        // picker holds and only while the frame stays within the cap (bytes, and tokens as cable_json_guard.c counts
+        // them). A Kilo agent lists about 325 ids, about 32 KB against the 8 KB cap (Diego, 2026-11-03).
+        const selected = str('selected')
+        const ordered = selected && items.includes(selected) ? [selected, ...items.filter((id) => id !== selected)] : items
+        const reply: Message = { t: 'models', agentId, ...(request === undefined ? {} : { request }), items: [] as Array<{ id: string }> }
+        const kept = reply.items as Array<{ id: string }>
+        for (const id of ordered) {
+          if (kept.length >= MODELS_MAX) break
+          kept.push({ id })
+          // An id that does not fit is left out; a shorter one after it may still.
+          if (!fitsFrame(reply)) kept.pop()
+        }
+        if (kept.length < ordered.length) this.log(`cable: models for ${agentId}: ${kept.length} of ${ordered.length} fit one frame`)
+        await this.send(reply)
         return
       }
       case 'focus':
@@ -2517,9 +2537,19 @@ export class CableSession {
 
   private async send(msg: Message): Promise<boolean> {
     if (!this.link?.isOpen) return false
+    // A message over the frame cap is this side's bug, never a dead port: it is dropped and said, and the link stays up.
+    // Closing over it took the whole dial down on every tap of a long model list (Diego, 2026-11-03).
+    let frame: Uint8Array
     try {
-      const framed = this.seqOn ? { ...msg, seq: this.seq++ } : msg
-      await this.put(this.link, encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(framed), 'utf8')))
+      const framed = this.seqOn ? { ...msg, seq: this.seq } : msg
+      frame = encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(framed), 'utf8'))
+    } catch (err) {
+      this.log(`cable: dropped a ${String(msg.t)} frame (${(err as Error).message})`)
+      return false
+    }
+    if (this.seqOn) this.seq++
+    try {
+      await this.put(this.link, frame)
       return true
     } catch (err) {
       this.log(`cable: write failed (${(err as Error).message})`)
@@ -3232,10 +3262,7 @@ export class CableSession {
       tiles: withTiles ? flatTiles : [],
     })
     if (!this.swarmMembers) return build(swarms, () => false)
-    // Two limits, both the device's: the cable's payload cap (with a margin for anything the frame carries
-    // beyond this JSON) and the firmware's JSON guard, which refuses a frame of more than 512 tokens WHOLE,
-    // leaving the Tabs screen empty. Count with room to spare.
-    const fits = (m: Message) => Buffer.byteLength(JSON.stringify(m), 'utf8') <= CABLE_MAX_PAYLOAD - 256 && jsonTokens(m) <= SWARM_TOKENS_MAX
+    // Both of the device's limits (fitsFrame): a frame over the JSON guard is refused WHOLE, leaving the Tabs screen empty.
     const selectedRow = swarms.find((s) => s.id === selected)
     const capped = swarms.length <= SWARMS_MAX ? swarms
       : swarms.slice(0, SWARMS_MAX).some((s) => s === selectedRow) || !selectedRow ? swarms.slice(0, SWARMS_MAX)
@@ -3246,7 +3273,7 @@ export class CableSession {
       const others = capped.filter((s) => s !== selectedRow).slice(0, selectedRow ? n - 1 : n)
       const list = capped.filter((s) => s === selectedRow || others.includes(s))
       const attempts = [build(list, () => true, true), build(list, () => true), build(list, (s) => s.id === selected), build(list, () => false)]
-      const at = attempts.findIndex(fits)
+      const at = attempts.findIndex(fitsFrame)
       if (at < 0) continue
       if (at > 0 || n < capped.length) this.noteTrimmed(key, `${at === 1 ? 'member names' : at === 2 ? 'ids of the other tabs' : at === 3 ? 'member ids' : ''} dropped${n < capped.length ? `, ${capped.length - n} tab(s) left out` : ''}`)
       return attempts[at]
