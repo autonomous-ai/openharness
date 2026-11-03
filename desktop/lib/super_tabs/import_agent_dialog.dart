@@ -14,6 +14,7 @@ import '../state/app_state.dart';
 import '../state/swarm_navigation.dart' show externalEngineName;
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
+import '../widgets/laid_out_list.dart';
 import '../widgets/update_notice.dart' show formatDownloadSize;
 import 'controller.dart';
 import 'detail_dialog.dart';
@@ -455,7 +456,7 @@ class _FileText extends StatelessWidget {
       child: SizedBox(
         height: 220,
         child: SelectionArea(
-          child: ListView.builder(
+          child: LaidOutListView.builder(
             itemCount: lines.length,
             itemBuilder: (context, i) => Text(lines[i], style: style),
           ),
