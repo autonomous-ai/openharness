@@ -295,7 +295,7 @@ static void pro_cable_test_voice_error_buddy(void)
 {
     welcome();
     reset();
-    CHECK(pro_cable_voice_begin("l2", NULL, 16000, "upb") && strstr(sent[nsent - 1], "\"agentId\":\"l2\""));
+    CHECK(pro_cable_voice_begin("l2", true, NULL, 16000, "upb") && strstr(sent[nsent - 1], "\"agentId\":\"l2\"") && strstr(sent[nsent - 1], "\"face\":true"));
     feed("{\"t\":\"voice.error\",\"uploadId\":\"upb\",\"message\":\"Could not reach your Buddy. Try again.\"}");
     CHECK(nev == 1 && evs[0].kind == EV_VOICE && evs[0].n1 == PRO_VOICE_ERROR && !strcmp(evs[0].a, "Could not reach your Buddy. Try again."));
 }
@@ -672,7 +672,7 @@ static void test_session_machines_library_voice(void)
 
     // voice: replies for another upload are dropped; a route that needs confirming is confirmed
     reset();
-    CHECK(pro_cable_voice_begin("a", NULL, 16000, "up1") && nsent == 1 && strstr(sent[0], "\"lang\":\"en\"") && strstr(sent[0], "\"uploadId\":\"up1\""));
+    CHECK(pro_cable_voice_begin("a", false, NULL, 16000, "up1") && nsent == 1 && strstr(sent[0], "\"lang\":\"en\"") && strstr(sent[0], "\"uploadId\":\"up1\"") && !strstr(sent[0], "\"face\""));
     feed("{\"t\":\"voice.transcript\",\"uploadId\":\"up0\",\"agentId\":\"a\"}");
     feed("{\"t\":\"voice.error\",\"uploadId\":\"up0\",\"message\":\"no\"}");
     CHECK(nev == 0);

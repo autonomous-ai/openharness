@@ -333,8 +333,9 @@ static bool upload_matches(const char *upload_id)
     return same;
 }
 
-bool pro_cable_voice_begin(const char *agent_id, const char *lang, int sample_rate, const char *upload_id)
+bool pro_cable_voice_begin(const char *agent_id, bool face, const char *lang, int sample_rate, const char *upload_id)
 {
+    (void)face;
     if (!upload_id || !upload_id[0]) return false;
     remember_upload(upload_id);
     cJSON *root = msg("voice.begin");

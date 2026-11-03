@@ -736,7 +736,7 @@ static void voice_begin_effect(const char *agent)
     const char *why = pro_app_voice_block_reason(agent);
     const bool was_open = pro_voice_open();
     if (!why) {
-        pro_voice_begin(agent);
+        pro_voice_begin(agent, false);
         // The offer's gate raises s_updating BEFORE it reads whether voice is open, and a start opens voice BEFORE this reads
         // s_updating: one of the two always sees the other, so a recording never starts over an accepted update.
         if (atomic_load(&s_updating)) { pro_voice_end(false); why = "Updating"; }
