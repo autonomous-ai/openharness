@@ -65,6 +65,11 @@ USER = 'me'
 HOME = Path('/home') / USER
 SESSION = HOME / '.harness/auth/session.json'
 COMPUTER_ID = HOME / '.harness/computer-id'
+# A sign-in the backend did not answer is tried this many times in all, this many seconds apart.
+SIGN_IN_ATTEMPTS = 4
+SIGN_IN_PAUSE = 5
+# `harness login --ticket` answers that trying again cannot change (cli.ts ticketSignIn).
+FINAL_SIGN_IN = ('TICKET_INVALID', 'ALREADY_SIGNED_IN')
 HOTSPOT = 'harness-setup'
 ADDRESS = '10.42.0.1'
 PORT = 80
@@ -160,7 +165,13 @@ def hotspot_name(device=None):
 
 
 def signed_in():
-    return SESSION.is_file()
+    """A session the CLI has not marked signed out (cli authSession.ts readAuthSession). A sign-in the
+    backend refused stays on disk with its mark, and a computer signed in by that alone took no
+    ticket: the Dell, 2026-11-03, said signed in to the phone with an account it could not use."""
+    try:
+        return not json.loads(SESSION.read_text()).get('signedOut')
+    except (OSError, ValueError, AttributeError):
+        return False
 
 
 def rows(*args, wait=3):
@@ -369,7 +380,18 @@ def sign_in(ticket):
         FROM_PHONE.touch()
     except OSError:
         pass
-    ok, message = run_sign_in(ticket)
+    # A computer that joined the Wi-Fi a moment ago may not reach the backend on its first try: the MSI's
+    # sign-in failed with "fetch failed" two seconds after it joined (2026-11-03), and the phone was left
+    # with a computer on the Wi-Fi and signed out. A refused ticket is final, and so is a computer signed in.
+    for attempt in range(SIGN_IN_ATTEMPTS):
+        if attempt:
+            log(f'sign-in failed ({message}); trying again')
+            time.sleep(SIGN_IN_PAUSE)
+        ok, message, again = run_sign_in(ticket)
+        if ok or not again:
+            break
+    # A try whose answer was lost may have signed in all the same: the next then hears ALREADY_SIGNED_IN.
+    ok = ok or signed_in()
     if not ok:
         FROM_PHONE.unlink(missing_ok=True)
         return ok, message
@@ -380,6 +402,8 @@ def sign_in(ticket):
 
 
 def run_sign_in(ticket):
+    """(signed in, why not, whether trying again may help): only the backend's answer about the ticket
+    or this computer is final; one that never arrived is not."""
     try:
         result = subprocess.run(['/usr/bin/runuser', '-u', USER, '--', '/usr/bin/harness', 'login', '--json',
                                  '--ticket=' + ticket],
@@ -388,16 +412,17 @@ def run_sign_in(ticket):
                                          PATH='/usr/local/bin:/usr/bin:/bin',
                                          XDG_RUNTIME_DIR=f'/run/user/{pwd.getpwnam(USER).pw_uid}'))
     except (OSError, KeyError, subprocess.TimeoutExpired) as error:
-        return False, str(error)
+        return False, str(error), True
     if result.returncode == 0:
-        return True, ''
-    message = ''
+        return True, '', False
+    message, code = '', ''
     for line in result.stdout.splitlines():
         try:
-            message = json.loads(line).get('message') or message
+            answer = json.loads(line)
+            message, code = answer.get('message') or message, answer.get('code') or code
         except (ValueError, AttributeError):
             pass
-    return False, message or result.stderr.strip()[-200:] or 'The sign-in failed.'
+    return False, message or result.stderr.strip()[-200:] or 'The sign-in failed.', code not in FINAL_SIGN_IN
 
 
 def join(request, networks, device):

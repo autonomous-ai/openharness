@@ -1,4 +1,5 @@
 import type { AgentEngine } from '../engines/types.js'
+import { existsSync } from 'node:fs'
 
 export const DEFAULT_HARNESS_ENGINE = 'opencode' as const
 export const DEFAULT_HARNESS_MODEL = 'opencode/muse-spark-1.3-contributor-free'
@@ -31,16 +32,24 @@ function withoutPackageModel(env: Record<string, string>): Record<string, string
   return { ...env, OPENCODE_CONFIG_CONTENT: JSON.stringify(config) }
 }
 
+/** Whether this is a Harness OS computer: its updater is there (services/osDevice.ts reads it the same way). */
+export function onHarnessOs(): boolean {
+  return process.env.HARNESS_OS === '1' || existsSync('/usr/lib/harness-os/live_update.py')
+}
+
 /** Fresh own-provider launches only. Restores, explicit model routes and a package's own model keep their choices. */
 export function freshHarnessEnvironment(engine: AgentEngine, env: Record<string, string> = {},
-  explicitRoute = false, permissionMode = DEFAULT_HARNESS_PERMISSION): Record<string, string> {
+  explicitRoute = false, permissionMode = DEFAULT_HARNESS_PERMISSION, harnessOs = onHarnessOs()): Record<string, string> {
   if (engine !== DEFAULT_HARNESS_ENGINE) return env
   if (explicitRoute) return withoutPackageModel(env)
   const config = JSON.parse(env.OPENCODE_CONFIG_CONTENT || '{}')
   // A package that names its own model keeps it. Memories reads a person's whole message history, so it
   // pins a free model whose provider keeps nothing and trains on nothing (store/agents/memories/harness.json)
   // rather than the default above, whose terms let its maker train on what it is sent.
-  if (typeof config.model === 'string' && config.model) {
+  // Harness OS pins none (owner, 2026-11-03): OpenCode starts on upstream's own free model there, as its
+  // skel config does since the pinned Muse Spark Free answered "Model is unavailable". Every other computer
+  // keeps the default above.
+  if ((typeof config.model === 'string' && config.model) || harnessOs) {
     return { ...env, OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...config, permission: opencodePermission(config, permissionMode) }) }
   }
   const modelId = DEFAULT_HARNESS_MODEL.split('/')[1]!

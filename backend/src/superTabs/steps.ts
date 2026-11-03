@@ -78,9 +78,11 @@ export function taskOwner(state: SuperTabState, step: Conversation): string | nu
 export const holdsStepOf = (state: SuperTabState, taskId: string, agentId: string): boolean =>
   stepsOf(state, taskId).some(s => s.assignment?.agentId === agentId)
 
-/** Whether [agentId] has held steps only, never a task, in the groups loaded: a Reviewer or Tester the instructions keep,
- *  whatever its role is called, so its idle time is no news for the coordinator. */
-export const onlyStepsHeld = (groups: readonly Conversation[], agentId: string): boolean => {
+/** Whether [agentId] has held steps only, never a task, in the groups loaded, and a task one of them checks has not ended: a
+ *  Reviewer or Tester the instructions keep while the work it checked is open, whatever its role is called, so its idle time
+ *  is no news for the coordinator. Once each of those tasks is done or cancelled it is idle as any agent is, whether or not
+ *  the task is archived yet (Diego, 2026-11-02: one sat unseen under a finished, unarchived task, holding a slot and quota). */
+export const checksOpenWork = (state: SuperTabState, groups: readonly Conversation[], agentId: string): boolean => {
   const held = groups.filter(g => g.assignment?.agentId === agentId)
-  return held.length > 0 && held.every(isStep)
+  return held.length > 0 && held.every(isStep) && held.some(step => !taskEnded(state, step))
 }

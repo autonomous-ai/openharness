@@ -1,4 +1,4 @@
-import { isStep, onlyStepsHeld, taskEnded } from './steps.js'
+import { checksOpenWork, isStep, taskEnded } from './steps.js'
 import { isBuddy } from './buddies.js'
 import { agentDisplayName } from './agentNames.js'
 import { activeWork, stableId, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
@@ -63,8 +63,8 @@ export function idleNotices(state: SuperTabState, projectId: string, now: number
     const groups = groupsOf(state, target)
     if (groups.some(activeWork)) continue
     // A Reviewer or Tester, by what it worked on: the instructions keep it while the work it checked is open (Ken,
-    // 2026-11-02: "Tester has had no open task" twice in 8 minutes, nothing for the PM to do).
-    if (onlyStepsHeld(groups, target.id)) continue
+    // 2026-11-02: "Tester has had no open task" twice in 8 minutes, nothing for the PM to do), and no longer.
+    if (checksOpenWork(state, groups, target.id)) continue
     const since = idleSince(target, groups)
     if (since === undefined || now - since < IDLE_NOTICE_MS || target.idleNoticedAt === since) continue
     target.idleNoticedAt = since

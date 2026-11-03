@@ -259,16 +259,78 @@ class FromPhone(unittest.TestCase):
             marker = Path(folder) / 'set-up-from-phone'
             with patch.object(setup, 'FROM_PHONE', marker), patch.object(setup, 'signed_in', return_value=False), \
                  patch.object(setup, 'as_user') as as_user:
-                with patch.object(setup, 'run_sign_in', side_effect=lambda t: (marker.exists(), '')):
+                with patch.object(setup, 'run_sign_in', side_effect=lambda t: (marker.exists(), '', False)):
                     self.assertEqual(setup.sign_in('t'), (True, ''))
                 self.assertTrue(marker.exists())
                 # Online in the account only with its daemon, which no screen session may start.
                 as_user.assert_called_once_with('systemctl', '--user', 'start', 'harness-daemon', timeout=150)
                 marker.unlink()
-                with patch.object(setup, 'run_sign_in', return_value=(False, 'used')):
+                with patch.object(setup, 'run_sign_in', return_value=(False, 'used', False)) as run:
                     self.assertEqual(setup.sign_in('t'), (False, 'used'))
+                run.assert_called_once()
                 self.assertFalse(marker.exists())
                 as_user.assert_called_once()
+
+
+class SignedIn(unittest.TestCase):
+    def test_a_session_marked_signed_out_is_no_sign_in(self):
+        with tempfile.TemporaryDirectory() as folder:
+            session = Path(folder) / 'session.json'
+            with patch.object(setup, 'SESSION', session):
+                self.assertFalse(setup.signed_in())
+                session.write_text(json.dumps(dict(accessToken='a')))
+                self.assertTrue(setup.signed_in())
+                # The Dell, 2026-11-03: refused at its refresh, kept on disk, and the phone's ticket skipped for it.
+                session.write_text(json.dumps(dict(accessToken='a', signedOut=dict(reason='refresh-refused'))))
+                self.assertFalse(setup.signed_in())
+                session.write_text('{')
+                self.assertFalse(setup.signed_in())
+
+
+class SignInAgain(unittest.TestCase):
+    """The MSI, 2026-11-03: its sign-in two seconds after it joined the Wi-Fi never reached the backend."""
+
+    def sign_in(self, answers, signed_in=False):
+        with tempfile.TemporaryDirectory() as folder, \
+             patch.object(setup, 'FROM_PHONE', Path(folder) / 'set-up-from-phone'), \
+             patch.object(setup, 'signed_in', side_effect=[False, signed_in]), \
+             patch.object(setup, 'as_user'), patch.object(setup, 'log'), \
+             patch.object(setup.time, 'sleep') as sleep, \
+             patch.object(setup, 'run_sign_in', side_effect=answers) as run:
+            return setup.sign_in('t'), run.call_count, sleep.call_count
+
+    def test_a_backend_not_reached_is_tried_again(self):
+        unreached = (False, 'Could not reach the backend: fetch failed', True)
+        self.assertEqual(self.sign_in([unreached, unreached, (True, '', False)]), ((True, ''), 3, 2))
+
+    def test_it_gives_up_after_its_tries(self):
+        unreached = (False, 'fetch failed', True)
+        self.assertEqual(self.sign_in([unreached] * setup.SIGN_IN_ATTEMPTS),
+                         ((False, 'fetch failed'), setup.SIGN_IN_ATTEMPTS, setup.SIGN_IN_ATTEMPTS - 1))
+
+    def test_a_refused_ticket_is_not_tried_again(self):
+        self.assertEqual(self.sign_in([(False, 'This ticket was already used or has expired.', False)]),
+                         ((False, 'This ticket was already used or has expired.'), 1, 0))
+
+    def test_a_lost_answer_that_signed_in_counts(self):
+        answers = [(False, 'timed out', True), (False, 'This computer is already signed in.', False)]
+        self.assertEqual(self.sign_in(answers, signed_in=True), ((True, 'This computer is already signed in.'), 2, 1))
+
+
+class RunSignIn(unittest.TestCase):
+    def run_it(self, completed):
+        with patch.object(setup.subprocess, 'run', return_value=completed), \
+             patch.object(setup.pwd, 'getpwnam', return_value=Account()):
+            return setup.run_sign_in('t')
+
+    def test_only_the_backends_answer_about_the_ticket_is_final(self):
+        def answered(code, message):
+            return result(1, json.dumps(dict(type='result', status='error', code=code, message=message)) + '\n')
+        self.assertEqual(self.run_it(answered('TICKET_INVALID', 'used')), (False, 'used', False))
+        self.assertEqual(self.run_it(answered('ALREADY_SIGNED_IN', 'in')), (False, 'in', False))
+        self.assertEqual(self.run_it(answered('BACKEND_ERROR', 'fetch failed')), (False, 'fetch failed', True))
+        self.assertEqual(self.run_it(result(1, '', 'crashed')), (False, 'crashed', True))
+        self.assertEqual(self.run_it(result(0)), (True, '', False))
 
 
 class Account:
