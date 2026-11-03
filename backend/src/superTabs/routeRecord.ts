@@ -73,6 +73,32 @@ export const routeRecordSchema = z.object({
 }).strict().refine(d => d.candidates.some(c => c.id === d.pick), 'The pick must be one of the candidates.')
   .refine(d => new Set(d.candidates.map(c => c.id)).size === d.candidates.length, 'Candidate ids must be unique.')
 
+/** A record as stored (routeDecisions.ts): the pick keeps its label, and the exclusions are kept once per reason. On production
+ *  (2026-11-03) labels were 5.4 KB of a 20.9 KB row and exclusions 8.9 KB, 47 of them sharing ~5 reasons (task #2488). Rows
+ *  written before keep `excluded` and no `unavailable`. */
+export interface StoredRouteRecord extends Omit<RouteRecord, 'excluded'> {
+  excluded?: RouteRecord['excluded']
+  unavailable?: Array<{ reason: string; titles: string[] }>
+}
+
+/** What a decision keeps of [record]: a label only on the pick (the route showed the others when it ran; Desktop's Details shows
+ *  a candidate's label only when it has one), and each exclusion reason once, with its titles in order. */
+export function storedRecord(record: RouteRecord): StoredRouteRecord {
+  const { excluded, ...rest } = record
+  const candidates = record.candidates.map(({ label, ...c }) => c.id === record.pick ? { ...c, label } : c) as RouteCandidate[]
+  const byReason = new Map<string, string[]>()
+  for (const { title, reason } of excluded) byReason.set(reason, [...byReason.get(reason) ?? [], title])
+  return { ...rest, candidates, ...byReason.size ? { unavailable: [...byReason].map(([reason, titles]) => ({ reason, titles })) } : { excluded: [] } }
+}
+
+/** Either stored form back as readers get a record: `unavailable` expanded into `excluded`, reason by reason in the order each
+ *  first appeared. A record written before this is returned as it is. */
+export function readRecord(stored: StoredRouteRecord | RouteRecord): RouteRecord {
+  if (!('unavailable' in stored) || !stored.unavailable) return stored as RouteRecord
+  const { unavailable, ...rest } = stored
+  return { ...rest, excluded: unavailable.flatMap(({ reason, titles }) => titles.map(title => ({ title, reason }))) } as RouteRecord
+}
+
 /**
  * Whether a started agent is the candidate's: the same machine, engine, and the model and effort that were
  * requested. After a failed switch `final` holds what ran, so the request is the one that names the candidate.
