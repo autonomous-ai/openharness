@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/home_dir.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/measurement/product_measurement.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/import_agent.dart';
@@ -162,10 +163,11 @@ class _Server extends ConversationServer {
 }
 
 class ImportFixture {
-  ImportFixture() {
+  ImportFixture({ProductMeasurement? measurement}) {
     app = createApp(
       connected: true,
       connectionForTest: (id) => daemon..asked = id,
+      productMeasurement: measurement,
     );
     app.currentUser = const CurrentUserProfile(
       id: 'owner',
@@ -824,10 +826,11 @@ void main() {
       WidgetTester tester, {
       void Function(SuperTabConversation group)? onAddAgent,
       Brightness brightness = Brightness.light,
+      ProductMeasurement? measurement,
     }) async {
       await tester.binding.setSurfaceSize(const Size(1200, 900));
       addTearDown(() => tester.binding.setSurfaceSize(null));
-      final f = ImportFixture();
+      final f = ImportFixture(measurement: measurement);
       addTearDown(f.dispose);
       await tester.runAsync(f.start);
       f.agents = [
@@ -1030,6 +1033,90 @@ void main() {
         [for (final (_, c) in f.server.commands) c['type']],
         ['conversation.create', 'agent.start', 'agent.start', 'message.send'],
       );
+    }, variant: mac);
+
+    // ENGINEERING.md 8: each import is counted by its outcome alone, with no
+    // name, path or id.
+    ({ProductMeasurement usage, Map<String, int> Function() totals}) counted() {
+      final reports = <Map<String, dynamic>>[];
+      final usage = ProductMeasurement(
+        surface: 'desktop',
+        automatic: false,
+        context: ProductUsageContext(
+          release: '1.3.0',
+          platform: 'macos',
+          production: true,
+        ),
+        sendSetup: (_) async => {'accepted': true},
+      )..proxyVocabulary = 7;
+      usage.account(
+        'owner',
+        choice: () async => {'enabled': true, 'revision': 0},
+        send: (report) async {
+          reports.add(report);
+          return {'accepted': true};
+        },
+      );
+      addTearDown(usage.dispose);
+      return (
+        usage: usage,
+        totals: () {
+          final all = <String, int>{};
+          for (final report in reports) {
+            for (final e in (report['counters'] as Map).entries) {
+              all[e.key as String] = (all[e.key] ?? 0) + (e.value as int);
+            }
+          }
+          return all;
+        },
+      );
+    }
+
+    testWidgets('a preview is counted as started, and Cancel as cancelled', (
+      tester,
+    ) async {
+      final m = counted();
+      final f = await roster(tester, measurement: m.usage);
+      await preview(tester, f);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      await tester.runAsync(m.usage.flush);
+      expect(m.totals()['ui_desktop_agent_import_started'], 1);
+      expect(m.totals()['ui_desktop_agent_import_cancelled'], 1);
+      expect(m.totals()['ui_desktop_agent_import_ok'], isNull);
+    }, variant: mac);
+
+    testWidgets('an Import is counted as ok', (tester) async {
+      final m = counted();
+      final f = await roster(tester, measurement: m.usage);
+      await preview(tester, f);
+      await tester.tap(find.widgetWithText(FilledButton, 'Import'));
+      await settle(
+        tester,
+        () => find.text('Import an agent into openharness').evaluate().isEmpty,
+      );
+      await tester.runAsync(m.usage.flush);
+      expect(m.totals()['ui_desktop_agent_import_started'], 1);
+      expect(m.totals()['ui_desktop_agent_import_ok'], 1);
+    }, variant: mac);
+
+    testWidgets('an import left after a failed step is counted as failed', (
+      tester,
+    ) async {
+      final m = counted();
+      final f = await roster(tester, measurement: m.usage);
+      await preview(tester, f);
+      f.server.unknownCommand = (command) => command['type'] == 'agent.start';
+      await tester.tap(find.widgetWithText(FilledButton, 'Import'));
+      await settle(
+        tester,
+        () => find.text('Start again').evaluate().isNotEmpty,
+      );
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      await tester.runAsync(m.usage.flush);
+      expect(m.totals()['ui_desktop_agent_import_failed'], 1);
+      expect(m.totals()['ui_desktop_agent_import_cancelled'], isNull);
     }, variant: mac);
 
     testWidgets('a held handoff says why in the picker', (tester) async {
