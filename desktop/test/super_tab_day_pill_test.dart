@@ -257,14 +257,15 @@ void main() {
       c.openThread('message-1');
       await tester.pumpAndSettle();
       final monday = _day(tester, _monday);
-      // The chat back until Monday's last message is near its top, the
+      // The chat back until Monday's last message is in its upper part, the
       // thread at Tuesday's replies: the same place on main, with no pill.
       final scroll = _chatScroll(tester);
       const lastMonday =
           'Two devices editing at once settle on the newest edit. (30)';
       final row = find.text(lastMonday, findRichText: true);
+      // Rows above the view are built too: scroll until it is well inside.
       while ((row.evaluate().isEmpty ||
-              tester.getTopLeft(row.first).dy > 300) &&
+              tester.getTopLeft(row.first).dy < 250) &&
           scroll.position.pixels - 40 > scroll.position.minScrollExtent) {
         await _scrollTo(tester, scroll, scroll.position.pixels - 40);
       }
