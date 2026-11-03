@@ -204,14 +204,21 @@ function faceChat(face: Face, leadId: string, agents: Json[], me: string | undef
   return { kind, id: conversation.id as string, name, working, ...(secs.length ? { since: Math.max(...secs) } : {}) }
 }
 
+/** Where a message is looked for: anywhere in the page, in the chat's main stream (a top-level message, one from before
+ *  threads, or a thread reply also sent to the chat: backend catchUp.ts `inMainStream`), or in one thread, its root among it. */
+export type MessagePlace = 'any' | 'chat' | { thread: string }
+const isIn = (m: Json, place: MessagePlace): boolean => place === 'any' ? true
+  : place === 'chat' ? typeof m.thread !== 'string' || m.thread === m.id || m.alsoInChat === true
+  : m.thread === place.thread
+
 /** The newest row one of the chat's agents wrote: a person-visible message, not a system row (`source`), the person's or
- *  another agent's. `at` in seconds; `id` the message's, or '' when it has none. */
-export function lastAgentMessage(messages: Json[], agentIds: ReadonlySet<string>): { text: string; at: number; id: string; sequence: number } | null {
+ *  another agent's, in `place`. `at` in seconds; `id` the message's, or '' when it has none. */
+export function lastAgentMessage(messages: Json[], agentIds: ReadonlySet<string>, place: MessagePlace = 'any'): { text: string; at: number; id: string; sequence: number } | null {
   let best: { text: string; at: number; id: string; sequence: number } | null = null
   for (const item of messages) {
     const m = object(item)
     const author = object(m.author).id
-    if (m.source != null || typeof author !== 'string' || !agentIds.has(author) || typeof m.text !== 'string') continue
+    if (m.source != null || typeof author !== 'string' || !agentIds.has(author) || typeof m.text !== 'string' || !isIn(m, place)) continue
     const sequence = typeof m.sequence === 'number' ? m.sequence : -1
     if (best && sequence <= best.sequence) continue
     const stamp = typeof m.createdAt === 'number' ? m.createdAt : Date.parse(String(m.createdAt))
@@ -284,6 +291,8 @@ export class SwarmCards {
   private notices = new Map<string, LeadNotice>()
   /** Each Lead's newest quiet notice from the reader's Buddy (`${tab}:${lead}`): apart, so it never hides the Lead's. */
   private buddyNotices = new Map<string, LeadNotice>()
+  /** The notices that are messages of their chat's main stream, not thread replies: only these answer a chat's recap. */
+  private inChat = new WeakSet<LeadNotice>()
   /** The side a swarmBuddy dial swiped to, per Swarm; cleared by the window's next focus change (the newest wins). */
   private sides = new Map<string, CardSide>()
   /** Watched conversations whose last read failed, so a run of failures is logged once. */
@@ -532,8 +541,8 @@ export class SwarmCards {
           try {
             const page = object(await backend(this.core, 'GET', `/api/super-tabs/${tabId}/conversations/${swarmChat.id}/messages`))
             const after = list(page.messages).filter(m => typeof m.sequence === 'number' && m.sequence > baseline)
-            const said = lastAgentMessage(after, new Set(buddiesIn(agents, swarmChat, this.me).map(a => a.id as string)))
-            for (const { leadId } of projects) raise(this.buddyNotices, recapKey(tabId, leadId), 'buddy', swarmChat.id as string, said)
+            const voices = new Set(buddiesIn(agents, swarmChat, this.me).map(a => a.id as string))
+            for (const { leadId } of projects) this.raise(this.buddyNotices, recapKey(tabId, leadId), 'buddy', swarmChat.id as string, after, voices)
             this.seen.set(key, sequence)
             this.failed.delete(key)
           } catch (error) {
@@ -559,10 +568,10 @@ export class SwarmCards {
           try {
             const page = object(await backend(this.core, 'GET', `/api/super-tabs/${tabId}/conversations/${conversation.id}/messages`))
             const after = list(page.messages).filter(m => typeof m.sequence === 'number' && m.sequence > baseline)
-            raise(this.notices, recapKey(tabId, leadId), chat, conversation.id, lastAgentMessage(after, new Set([leadId])))
+            this.raise(this.notices, recapKey(tabId, leadId), chat, conversation.id, after, new Set([leadId]))
             if (chat === 'pm' && buddies) {
               const voices = new Set(buddiesIn(agents, conversation, this.me).map(a => a.id as string))
-              raise(this.buddyNotices, recapKey(tabId, leadId), 'buddy', conversation.id, lastAgentMessage(after, voices))
+              this.raise(this.buddyNotices, recapKey(tabId, leadId), 'buddy', conversation.id, after, voices)
             }
             this.seen.set(key, sequence)
             this.failed.delete(key)
@@ -581,6 +590,18 @@ export class SwarmCards {
     for (const held of [this.notices, this.buddyNotices]) {
       for (const [key, notice] of held) if (!watched.has(`${key.slice(0, key.indexOf(':'))}:${notice.chatId}`)) held.delete(key)
     }
+  }
+
+  /** The newest message `voices` said in `messages` becomes the held notice at `key`, unless one held is newer; marked as the
+   *  chat's own when it is no thread reply. */
+  private raise(held: Map<string, LeadNotice>, key: string, chat: LeadNotice['chat'], chatId: string, messages: Json[], voices: ReadonlySet<string>): void {
+    const said = lastAgentMessage(messages, voices)
+    if (!said || !cardId(said.id)) return
+    const notice: LeadNotice = { chat, chatId, id: said.id, text: cut(said.text, RECAP_BYTES), at: said.at }
+    const before = held.get(key)
+    if (before && before.at > notice.at) return
+    held.set(key, notice)
+    if (lastAgentMessage(messages, voices, 'chat')?.id === said.id) this.inChat.add(notice)
   }
 
   private forgetNotices(): void { this.notices.clear(); this.buddyNotices.clear(); this.failed.clear() }
@@ -655,7 +676,7 @@ export class SwarmCards {
     if (!found) return null
     const kept = this.recaps.get(cachedKey(tabId, leadId, found.chatId, chat))
     const notice = (found.buddy ? this.buddyNotices : this.notices).get(recapKey(tabId, leadId))
-    const heard = notice && notice.chatId === found.id ? notice : undefined
+    const heard = notice && notice.chatId === found.id && this.inChat.has(notice) ? notice : undefined
     if (kept && (!heard || heard.at <= kept.recap.at)) return { recap: kept.recap, sequence: kept.sequence, stale: kept.sequence !== found.sequence }
     if (!heard) return null
     return { recap: { tabId, leadId, text: heard.text, at: heard.at, none: false, ...namedFor(found, chat) }, sequence: -1, stale: true }
@@ -696,11 +717,11 @@ export class SwarmCards {
     return slot(async () => {
       const path = `/api/super-tabs/${tabId}/conversations/${target.id}/messages`
       const newest = object(await backend(this.core, 'GET', path))
-      let said = lastAgentMessage(list(newest.messages), target.voices)
+      let said = lastAgentMessage(list(newest.messages), target.voices, 'chat')
       // The page before, from the page's own (sequence, id) cursor: a page edge inside equal sequences skips nothing (design 4.6).
       const before = object(newest.next)
       if (!said && typeof before.sequence === 'number' && identifier(before.id)) {
-        said = lastAgentMessage(list(object(await backend(this.core, 'GET', `${path}?before=${before.sequence}&beforeId=${before.id}`)).messages), target.voices)
+        said = lastAgentMessage(list(object(await backend(this.core, 'GET', `${path}?before=${before.sequence}&beforeId=${before.id}`)).messages), target.voices, 'chat')
       }
       // Access to the Swarm ended, another person signed in, or the face moved on while the read was out: the answer is not
       // this reader's to have now (a Buddy chat is its owner's alone), so it is neither given nor kept.
@@ -792,13 +813,6 @@ function namedFor(target: Target, chat: CardChat): { chatId?: string; buddy?: tr
   return target.chatId === undefined ? {} : { chatId: target.chatId, ...(chat === 'buddy' ? { buddy: true as const } : {}) }
 }
 
-/** The newest message said becomes the held notice at `key`, unless one held is newer. */
-function raise(held: Map<string, LeadNotice>, key: string, chat: LeadNotice['chat'], chatId: string, said: ReturnType<typeof lastAgentMessage>): void {
-  if (!said || !cardId(said.id)) return
-  const notice: LeadNotice = { chat, chatId, id: said.id, text: cut(said.text, RECAP_BYTES), at: said.at }
-  const before = held.get(key)
-  if (!before || before.at <= notice.at) held.set(key, notice)
-}
 
 /** Each project of a tab whose Lead conversation names its Lead: the project, that conversation and the Lead agent's id. */
 function leadProjects(state: Json): Array<{ project: Json; lead: Json; leadId: string }> {
