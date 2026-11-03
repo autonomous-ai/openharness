@@ -23,11 +23,17 @@ agents from every lab on them, with work verified before it ships.**
 - **People bring the capacity; the Product Manager decides what it builds.** Everyone in a Swarm can bring a machine
   or a subscription, and it joins one pool used before anyone waits.
 
+**The bet.** AI coding is no longer limited by models. It is limited by people's attention and by paid capacity sitting
+idle: teams pay for Claude and Codex plans they use a fraction of, and every extra agent adds work a person must check.
+Harness turns a team's existing subscriptions and machines into a crew that ships verified work around the clock with
+almost no one's attention.
+
 ## Who it is for
 
 In this order:
 
-1. **The Swarm owner.** One person running 5–50 agents on two or more machines: a founder, a staff engineer.
+1. **The Swarm owner.** One person running 5–50 agents on two or more machines: a founder, a staff engineer. The first
+   market is AI-native software teams of 2–20 engineers already paying for three or more Claude or Codex plans.
    Customer zero is Harness itself: the openharness project and Autonomous's other Swarms ship through Harness every
    day. A wall they hit is the most trustworthy backlog item we have.
 2. **Contributors.** People who bring a machine or a subscription into a Swarm: a teammate's idle Mac, a GPU box, a
@@ -60,6 +66,8 @@ Every lab now gives away a lead-plus-workers swarm inside its own subscription, 
 Linear own human team chat and the system of record. Harness owns what they structurally will not:
 
 - **Every vendor at once**, in one crew (a Claude Engineer reviewed by a Codex Reviewer).
+- **The plans people already pay for.** Agents run on the team's own subscriptions, where hosted agents bill per task
+  or per compute minute: the same work at a fraction of the price.
 - **The customer's own machines and devices**, and their subscriptions, as one pool of capacity.
 - **Verification before work reaches GitHub**: independent review, and tests on real machines and real devices.
 - **Work across accounts**: people and machines from different accounts in one Swarm, safely.
@@ -93,7 +101,7 @@ If a lab or GitHub ships real cross-vendor capacity and verification, this posit
 | Bet | The state we want by December 31 | How we know |
 | --- | --- | --- |
 | Customer zero runs on Swarm | openharness and Autonomous's Swarms do all their work through Harness, and their walls are gone | Verified tasks shipped rise while people's attention per task falls |
-| An outside company | A company outside Autonomous owns a Swarm and ships work every week, set up without our hands on their machines | At least one such Swarm |
+| An outside company | Three named design partners onboarded by December 1; one ships work every week, set up without our hands on their machines | Three onboarded by December 1; at least one shipping weekly |
 | Contribution | Bringing a machine or a subscription into a Swarm is easy, safe, seen and used, and people keep doing it | The contribution targets below |
 | Verification is the moat | Problems are caught before merge, not after | Fixes after merge stay under target |
 | One pool of capacity | No work waits for capacity while any machine or subscription in the Swarm has some left | Work waiting for capacity, cost per shipped task |
@@ -122,6 +130,10 @@ test, where the task had one), and no revert or fix of it lands within 7 days. I
 | Measure | Target by December 31, 2026 | Why |
 | --- | --- | --- |
 | Shipped tasks reverted or fixed within 7 days | ≤ 5% | Speed must not cost quality |
+| Request to merged, in working hours | Median ≤ 2 h | Waiting, not building, is what makes work slow |
+| Verified tasks shipped per person-hour of attention | Rising every week, published weekly from our own Swarm | The bet in one number |
+| Changes people see that an agent ran for real before merge | ≥ 95% | Verification is the moat only if it runs |
+| Work on capacity that dropped (a machine offline, an account that stopped answering) moved and running again | ≤ 5 min, nothing lost | Contributed capacity comes and goes |
 | People's decisions per shipped task | ≤ 0.5 | Most tasks should need no one |
 | Time a question waits for a person, in working hours | Median ≤ 15 min | Why the phone and the device exist |
 | Cost per shipped task | Lower each month | Work must cost less than it is worth |
