@@ -1181,7 +1181,7 @@ export class SuperTabStore {
     this.personOnly(user)
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)
-      const sharing = authorizeSwarmJoin(state, user.email, token)
+      const sharing = authorizeSwarmJoin(state, user.email, token, user.sub)
       const member = state.people.find(p => p.id === user.sub)
       return { id: tabId, name: state.name, role: member?.role ?? sharing.access.role, alreadyMember: !!member }
     })
@@ -1194,7 +1194,7 @@ export class SuperTabStore {
       const loaded = await this.load(tx, user, tabId), state = cloneData(loaded.state)
       // Recheck the current grant before an old receipt. Disabling, replacing, or
       // changing access can never revive a removed membership through a retry.
-      const sharing = authorizeSwarmJoin(state, user.email, request.token)
+      const sharing = authorizeSwarmJoin(state, user.email, request.token, user.sub)
       const receiptId = stableId('swarm-join', tabId, user.sub, request.operationId), requestHash = hash(request)
       const prior = await tx.superTabOperation.findUnique({ where: { id: receiptId } })
       let member = state.people.find(p => p.id === user.sub)

@@ -114,13 +114,16 @@ export function authenticatedEmail(email: string): string | null {
   return normalized
 }
 
-export function authorizeSwarmJoin(state: SuperTabState, email: string, token?: string): SwarmSharing {
+/** `userId`: the joining person. Someone who left or was removed (autoJoinDeclined) comes back only on purpose, by an
+ *  invitation or a shared link's token, never by the domain's own join link, which needs none (spec 2026-11-03, Trust 4). */
+export function authorizeSwarmJoin(state: SuperTabState, email: string, token?: string, userId?: string): SwarmSharing {
   const sharing = state.sharing
   const verifiedEmail = authenticatedEmail(email)
   if (!sharing || !verifiedEmail) return fail('JOIN_UNAVAILABLE', 'This Swarm link is unavailable for this account.', 404)
   const access = sharing.access
   // A domain anyone can have an address at lets nobody in, even one saved before this was refused (spec, Trust 2).
-  if (access.mode === 'domain' && token === undefined && !isPublicEmailDomain(access.domain) && verifiedEmail.split('@')[1] === access.domain) return sharing
+  if (access.mode === 'domain' && token === undefined && !isPublicEmailDomain(access.domain) && verifiedEmail.split('@')[1] === access.domain &&
+    !(userId !== undefined && state.autoJoinDeclined?.includes(userId))) return sharing
   if (access.mode === 'link' && token && sharing.link && /^[A-Za-z0-9_-]{43}$/.test(token)) {
     const expected = Buffer.from(sharing.link.hash, 'hex')
     const actual = Buffer.from(tokenHash(token), 'hex')

@@ -164,7 +164,8 @@ describe('Swarm sharing on the authenticated control API', () => {
     const latest = { operationId: randomUUID() }
     await store.join(peer, tab, latest)
     await store.execute(peer, tab, { operationId: randomUUID(), command: { type: 'member.remove', userId: peer.sub } })
-    await expect(store.join(peer, tab, latest)).rejects.toMatchObject({ code: 'JOIN_CHANGED' })
+    // Who left or was removed is refused before any old receipt: the domain link alone never brings them back.
+    await expect(store.join(peer, tab, latest)).rejects.toMatchObject({ code: 'JOIN_UNAVAILABLE' })
     expect((await store.read(owner, tab)).state.people.some(p => p.id === peer.sub)).toBe(false)
     // Someone who left comes back only on purpose, by an invitation or a shared link, never by the domain link alone
     // (spec 2026-11-03, Trust 4). Back by invitation, they get a new membership generation, not any old private grants.
@@ -189,7 +190,8 @@ describe('Swarm sharing on the authenticated control API', () => {
     expect(result).toMatchObject({ role: 'viewer', alreadyMember: true })
     expect(await store.join(peer, tab, join)).toEqual(result)
     await store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'member.remove', userId: peer.sub } })
-    await expect(store.join(peer, tab, join)).rejects.toMatchObject({ code: 'JOIN_CHANGED' })
+    // Who left or was removed is refused before any old receipt: the domain link alone never brings them back.
+    await expect(store.join(peer, tab, join)).rejects.toMatchObject({ code: 'JOIN_UNAVAILABLE' })
   })
 
   it('serializes concurrent joins/settings, prevents operation reuse, and isolates account environments', async () => {
