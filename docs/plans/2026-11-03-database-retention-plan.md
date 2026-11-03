@@ -83,7 +83,8 @@ error each hourly check with when its old receipts expire on their own, and stop
   `label`, which Desktop already treats as optional (`route_row.dart`: `if (c['label'] case final String label)`), and the
   CLI never reads a stored label. Rows written before this keep their full form and read unchanged.
 - **Migration + rollback:** no data migration; the TTL index is made by the release. Rolled back, an older backend reads a
-  trimmed decision with no `excluded` (Desktop's Details then lists no unavailable machines; nothing else reads it) and
+  trimmed decision with no `excluded` (the Details of Desktop, `route_row.dart`, and the phone, `swarm_special_rows.dart`, then
+  list no unavailable machines; nothing else reads it) and
   db push of the older schema drops `operation_expiry` (receipts then grow again, nothing breaks).
 - **Audience — the server enforces it:** unchanged: decisions are read by the same readable-conversation filter.
 - **Identity:** N/A because no identity is read or written.
@@ -98,7 +99,7 @@ error each hourly check with when its old receipts expire on their own, and stop
 | --- | --- | --- |
 | Command replay (`store.ts` execute, agent and person) | its own receipt, by operation id | a request repeated 30 days later runs as new (an operation id is reused only to repeat an interrupted request) |
 | Swarm create, sharing, join (`store.ts`) | same | same; a Swarm create repeated after 30 days fails on its existing id instead of answering it |
-| Native terminal events (`native.ts append`) | the event's own receipt; an answer's prompt receipt | a prompt answered more than 30 days later is refused as missing (NATIVE_PROMPT_MISSING) |
+| Native terminal events (`native.ts append`) | the event's own receipt; an answer's prompt receipt | a prompt answered more than 30 days later is refused as missing (NATIVE_PROMPT_MISSING): the CLI then stops recording that terminal until someone reopens it from the conversation (`cli/src/superTabs/native.ts`) |
 | Native recovery (`native.ts recovery`) | one per incident | an incident reported again after 30 days alarms again |
 | Abandoned starts (`store.ts abandonedStarts`) | a start's receipt, for its time | an unknown time counts as old: a start 30 days old is abandoned, as it should be |
 | Migration fingerprint (`migration/fingerprint.ts`) | a count, before and after, in one transaction | the snapshot is one transaction's, so a TTL delete between them does not show |
