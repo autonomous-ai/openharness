@@ -23,6 +23,7 @@ import 'read_marks.dart';
 import 'reading.dart';
 import 'linked_tasks.dart';
 import 'task_steps.dart';
+import 'task_groups.dart';
 
 /// A messages read started beside a state read, and what it asked for.
 typedef _EarlyRead = ({String query, Future<Map<String, dynamic>> page});
@@ -211,6 +212,7 @@ class SuperTabController extends ChangeNotifier {
       buddiesGroupOpen = initial['buddiesGroupOpen'] as bool? ?? true;
       modelsGroupOpen = initial['modelsGroupOpen'] as bool? ?? true;
       offlineMachinesOpen = initial['offlineMachinesOpen'] as bool? ?? false;
+      sessionProjectId = initial['sessionProjectId'] as String? ?? '';
       selectedId = initial['selectedId'] as String? ?? 'lead';
       final drafts = initial['drafts'];
       if (drafts is Map) {
@@ -864,9 +866,10 @@ class SuperTabController extends ChangeNotifier {
   /// A thread restored open, whose replies its first read of the Swarm brings.
   bool _reopenThread = false;
 
-  /// A thread restored open whose pane has not been on screen: the read mark
-  /// is the account's on every device, and this controller may be open with
-  /// nothing shown, so nothing counts as read until [threadPaneShown].
+  /// The open thread's pane is not on screen: restored open and not yet seen,
+  /// or hidden since ([threadPaneHidden]). The read mark is the account's on
+  /// every device, and this controller keeps reading with nothing shown, so
+  /// nothing counts as read until [threadPaneShown].
   bool _threadUnshown = false;
 
   /// The pane of the open thread is on screen.
@@ -874,7 +877,27 @@ class SuperTabController extends ChangeNotifier {
     if (!_threadUnshown) return;
     _threadUnshown = false;
     if (openedThread case final open?) _seeThread(open.root);
+    _changed();
   }
+
+  /// The pane of the open thread left the screen: the app went to the
+  /// background, another Swarm came to the front, or something covers it.
+  /// Called from a build or a dispose, so listeners are told after it.
+  void threadPaneHidden() {
+    if (_threadUnshown) return;
+    _threadUnshown = true;
+    if (openedThread != null) scheduleMicrotask(_changed);
+  }
+
+  /// The root of the thread open beside the selected conversation, which the
+  /// round dial's face follows; null when none is. Open, not on screen: a
+  /// hidden pane (app in the background, another Swarm in front) is still the
+  /// person's open thread, and the daemon drops the dial out of a thread that
+  /// is not named. Read marks stay gated by [_threadUnshown], not this.
+  String? get threadOnScreen => switch (openedThread) {
+    final open? when open.conversationId == selectedId => open.root,
+    _ => null,
+  };
 
   final _attachments = <String, HarnessAttachments>{};
 
@@ -1003,6 +1026,18 @@ class SuperTabController extends ChangeNotifier {
   /// Whether the Machines group's "Offline · N" disclosure is open; it starts closed.
   bool offlineMachinesOpen = false;
 
+  /// The project last chosen for a New session in the reader's Buddy chat on
+  /// this device, `''` for All projects (task #2347). The next New session
+  /// starts on it, while the reader can still read it.
+  String sessionProjectId = '';
+
+  void chooseSessionProject(String projectId) {
+    if (sessionProjectId == projectId) return;
+    sessionProjectId = projectId;
+    _saveSoon();
+    _changed();
+  }
+
   void toggleProject(String id) {
     if (!expandedProjects.remove(id)) {
       expandedProjects.add(id);
@@ -1020,6 +1055,22 @@ class SuperTabController extends ChangeNotifier {
     if (!closedOpenProjects.remove(projectId)) {
       closedOpenProjects.add(projectId);
     }
+    _changed();
+  }
+
+  /// Each project's task groups folded or unfolded against their default
+  /// (`<project>/<group>`), remembered as Closed is: not saved.
+  final _taskGroupsToggled = <String>{};
+
+  /// Whether [group] of [projectId]'s tasks is folded in the sidebar; only
+  /// The rest starts folded.
+  bool taskGroupFolded(String projectId, SuperTabTaskGroup group) =>
+      group.foldedByDefault !=
+      _taskGroupsToggled.contains('$projectId/${group.name}');
+
+  void toggleTaskGroup(String projectId, SuperTabTaskGroup group) {
+    final key = '$projectId/${group.name}';
+    if (!_taskGroupsToggled.remove(key)) _taskGroupsToggled.add(key);
     _changed();
   }
 
@@ -1247,31 +1298,55 @@ class SuperTabController extends ChangeNotifier {
   /// rebuild either.
   final Map<String, DateTime> _githubAsked = {};
 
+  /// The project's GitHub revision each read was asked at ([SuperTabProject.githubRevision]): another one in the
+  /// Swarm read means the access may have changed, so it is read again at once (task #2316).
+  final Map<String, int> _githubRevisionAsked = {};
+
   /// Whether teammates' agents can push to [projectId]'s repository, as last read; null before a read, or from a
   /// server too old to say.
   SuperTabProjectGitHub? githubAccessOf(String projectId) =>
       _github[projectId]?.value;
 
-  /// Reads [projectId]'s GitHub access, at most every 5 minutes; [refresh]: a person checks again (the server asks
-  /// GitHub at once, at most every 15 seconds per repository). An older server has no such read: nothing is shown.
+  /// Reads [projectId]'s GitHub access, at most every 5 minutes unless the project's GitHub revision moved since the
+  /// last read (someone allowed its repository or installed the app: read again at once); [refresh]: a person checks
+  /// again (the server asks GitHub at once, at most every 15 seconds per repository, and records the answer). A moved
+  /// revision asks GitHub again too, since another server may still keep "not installed", but records nothing. An
+  /// older server has no such read: nothing is shown.
   Future<void> readGitHubAccess(
     String projectId, {
     bool refresh = false,
   }) async {
+    final revision =
+        snapshot?.projects
+            .where((p) => p.id == projectId)
+            .firstOrNull
+            ?.githubRevision ??
+        0;
+    final readAt = _githubRevisionAsked[projectId];
+    // Read again because the revision moved: asks GitHub again, but records nothing (`record=0`), so servers whose caches
+    // differ cannot move it back and forth (review of #2713). A person's own check records.
+    final moved = !refresh && readAt != null && readAt != revision;
     final asked = _githubAsked[projectId];
     if (_disposed ||
         accessRevoked ||
         (!refresh &&
+            !moved &&
             asked != null &&
             clock.now().difference(asked) < const Duration(minutes: 5))) {
       return;
     }
+    // A read already out finishes first; the revision it was asked at still differs, so the next call reads again.
     if (!_githubReading.add(projectId)) return;
     _githubAsked[projectId] = clock.now();
+    _githubRevisionAsked[projectId] = revision;
     try {
       final answer = await request(
         'GET',
-        '$_path/projects/${Uri.encodeComponent(projectId)}/github${refresh ? '?refresh=1' : ''}',
+        '$_path/projects/${Uri.encodeComponent(projectId)}/github${refresh
+            ? '?refresh=1'
+            : moved
+            ? '?refresh=1&record=0'
+            : ''}',
       );
       _github[projectId] = (
         value: SuperTabProjectGitHub.fromJson(answer),
@@ -1559,10 +1634,12 @@ class SuperTabController extends ChangeNotifier {
   }
 
   /// Opens [root]'s thread of the selected conversation beside the chat.
-  void openThread(String root) {
+  /// [shown] false opens it with its pane not on screen (the dial opened it
+  /// in a background tab): nothing reads until [threadPaneShown].
+  void openThread(String root, {bool shown = true}) {
     if (accessRevoked) return;
     openedThread = (conversationId: selectedId, root: root);
-    _threadUnshown = false;
+    _threadUnshown = !shown;
     _pruneThreadFiles();
     _seeThread(root);
     _saveSoon();
@@ -2613,6 +2690,7 @@ class SuperTabController extends ChangeNotifier {
     'buddiesGroupOpen': buddiesGroupOpen,
     'modelsGroupOpen': modelsGroupOpen,
     'offlineMachinesOpen': offlineMachinesOpen,
+    'sessionProjectId': sessionProjectId,
     'drafts': Map<String, String>.of(_drafts),
     'terminals': Map<String, String>.of(_terminals),
 
@@ -2882,6 +2960,14 @@ class SuperTabController extends ChangeNotifier {
     return !_disposed && snapshot?.conversation(id) != null;
   }
 
+  /// When group [groupId] last changed, a message included (parts.dart
+  /// `groupChangedAt`); null for one this reader does not hold.
+  DateTime? groupChangedAt(String groupId) =>
+      switch (_parts?.groupChangedAt(groupId)) {
+        final int at => DateTime.fromMillisecondsSinceEpoch(at),
+        null => null,
+      };
+
   /// [projectId]'s conversations, open and closed, in the snapshot's order.
   List<SuperTabConversation> projectConversations(String projectId) =>
       _indexed()?.byProject[projectId] ?? const [];
@@ -3055,10 +3141,13 @@ class SuperTabController extends ChangeNotifier {
     return _heldSinceRead(group) ? count : max(count, 1);
   }
 
-  /// Whether [m] is the reader's own: written by them, not by an agent or a
-  /// terminal.
+  /// Whether [m] is the reader's own: written by them, not by an agent, a
+  /// terminal or the server in their name.
   bool isOwn(SuperTabMessage m) =>
-      !m.fromAgent && !m.fromTerminal && m.authorId == accountId;
+      !m.fromAgent &&
+      !m.fromTerminal &&
+      !m.postedForAuthor &&
+      m.authorId == accountId;
 
   /// Whether what [id]'s main stream gained since sequence [after] is all the reader's own, sent from
   /// any device. Unsure is no: a message that can't be read is told about, never lost.
@@ -4749,6 +4838,9 @@ class SuperTabController extends ChangeNotifier {
       unawaited(_drainSends());
       return result.future;
     }
+    // Read before the upload's wait: another chat may be open by its end, and
+    // this session belongs to the chat it was sent from.
+    final inSwarmBuddyChat = selected?.isSwarmBuddyChat == true;
     final ids = await _uploadAll(
       conversationId,
       attachments(conversationId),
@@ -4775,9 +4867,7 @@ class SuperTabController extends ChangeNotifier {
       if (oneBuddy) 'oneBuddy': true,
       // A New session in one project of the reader's one Buddy chat (spec
       // 2026-10-31-one-buddy-per-swarm).
-      if (newSession &&
-          sessionProjectId != null &&
-          selected?.isSwarmBuddyChat == true)
+      if (newSession && sessionProjectId != null && inSwarmBuddyChat)
         'sessionProjectId': sessionProjectId,
     });
     // On its way: the message shows in the chat, and the draft is free for

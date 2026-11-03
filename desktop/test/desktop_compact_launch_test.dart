@@ -53,6 +53,7 @@ class _CompactApp extends AppNotifier {
 
   final launches = <Map<String, Object?>>[];
   bool missingMain = false;
+  bool noCommits = false;
   Completer<String?>? pendingLaunch;
   String? launchError = 'Fixture launch declined. Try again.';
 
@@ -69,15 +70,18 @@ class _CompactApp extends AppNotifier {
     String machineId,
     String path, {
     bool refresh = false,
-  }) async => {
-    'isGit': true,
-    // Detached: a current branch would itself be where new work starts.
-    'branch': missingMain ? null : 'main',
-    'branches': [
-      if (!missingMain) {'ref': 'refs/heads/main', 'name': 'main'},
-      {'ref': 'refs/heads/feature', 'name': 'feature'},
-    ],
-  };
+  }) async => noCommits
+      // A folder inside a repository `git init` made and nothing committed.
+      ? {'isGit': true, 'root': '/work', 'branch': 'main', 'branches': []}
+      : {
+          'isGit': true,
+          // Detached: a current branch would itself be where new work starts.
+          'branch': missingMain ? null : 'main',
+          'branches': [
+            if (!missingMain) {'ref': 'refs/heads/main', 'name': 'main'},
+            {'ref': 'refs/heads/feature', 'name': 'feature'},
+          ],
+        };
   @override
   Future<Map<String, dynamic>> listCodexProfiles(
     String machineId, {
@@ -185,10 +189,12 @@ Future<_CompactFixture> _mount(
   String machineName = 'Studio Mac',
   bool pending = false,
   bool missingMain = false,
+  bool noCommits = false,
   String? harnessId,
 }) async {
   final app = _CompactApp(machineName: machineName);
   app.missingMain = missingMain;
+  app.noCommits = noCommits;
   if (harnessId != null) {
     app.machineStates['m']!.dsh.replace([
       DshEntry(
@@ -425,6 +431,29 @@ void main({bool nativeSmoke = false}) {
       await tester.pumpAndSettle();
       expect(fixture.closed, 1);
       expect(fixture.app.launches, isEmpty);
+    },
+  );
+
+  journey(
+    'a repository with no commits starts in its folder with no Worktree or Branch',
+    (tester) async {
+      final fixture = await _mount(tester, noCommits: true);
+      expect(fixture.box.requiredChoice, isNull);
+      expect(
+        find.byKey(const ValueKey('new-harness-field-worktree')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('new-harness-field-branch')),
+        findsNothing,
+      );
+      expect(find.textContaining('no commits'), findsNothing);
+      expect(tester.widget<FilledButton>(_start).onPressed, isNotNull);
+      await key(tester, LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(fixture.app.launches, hasLength(1));
+      expect(fixture.app.launches.single['folder'], '/work/repo');
+      expect(fixture.app.launches.single['projectFolder'], isNull);
     },
   );
 

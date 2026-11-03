@@ -3,7 +3,7 @@ import type { openDaemon } from '../agentClient/daemon.js'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ELSEWHERE, heldLocalModels, leftOut, localProbes, NO_SWARM_AGENTS_ON, offlineModels, routeTask, servedModels, STALL_RETRY_MS, stalled } from './routeCommand.js'
+import { ELSEWHERE, heldByStarts, heldLocalModels, leftOut, localProbes, NO_SWARM_AGENTS_ON, offlineModels, routeTask, servedModels, STALL_RETRY_MS, stalled } from './routeCommand.js'
 import type { describeScmProject } from '../scm/scmProjects.js'
 import { admission, quotaOf, RELAYED_QUOTA, USED_UP_WINDOW } from './capacity.js'
 import { OTHER_REPOSITORY, type Catalog, type Probe, type RoutePlugin } from './route.js'
@@ -1064,6 +1064,53 @@ describe('routing contributed capacity', () => {
     expect(member.answer.ok).toBe(true)
   })
   // Scholes's goals, piece 5 (machineFit.ts): heavy work is judged by the machine's reading, for its members as for new agents.
+  // 2026-11-03: 9 of 25 failed starts in 10 hours were refused by their host for memory or disk set aside for agents still
+  // starting (cli superTabs/reservations.ts), which the route did not count, so it kept offering those machines.
+  const GiB = 2 ** 30
+  const starting = (now: number) => {
+    const req = (memoryBytes: number, diskBytes: number) => ({ machineId: 'm1', requirements: { memoryBytes, diskBytes } })
+    return [
+      // Being created: it holds what it asked for.
+      { id: 's1', request: req(2 * GiB, 1 * GiB), requestedAt: now - 60_000, error: null },
+      // Launched a minute ago: still in its start window.
+      { id: 's2', request: req(2 * GiB, 1 * GiB), requestedAt: now - 120_000, harnessId: 'h9', dispatchedAt: now - 60_000, error: null },
+      // Past the deadline of a start, failed, launched long ago, or on another machine: nothing held.
+      { id: 's3', request: req(8 * GiB, 8 * GiB), requestedAt: now - 30 * 60_000, error: null },
+      { id: 's4', request: req(8 * GiB, 8 * GiB), requestedAt: now - 60_000, error: 'Cloning took too long.' },
+      { id: 's5', request: req(8 * GiB, 8 * GiB), requestedAt: now - 20 * 60_000, harnessId: 'h8', dispatchedAt: now - 10 * 60_000, error: null },
+      { id: 's6', request: { ...req(8 * GiB, 8 * GiB), machineId: 'm2' }, requestedAt: now - 60_000, error: null },
+      // Waited 20 minutes in the Swarm, handed to its host a minute ago: the host reserved it then (review).
+      { id: 's7', request: req(1 * GiB, 1 * GiB), requestedAt: now - 20 * 60_000, dispatchedAt: now - 60_000, error: null },
+    ]
+  }
+  it('counts what starts still starting on a machine hold of its memory and disk, as its host does', () => {
+    const now = Date.now()
+    expect(heldByStarts(starting(now), 'm1', now)).toEqual({ memoryBytes: 5 * GiB, diskBytes: 3 * GiB, heavyMemoryBytes: 0, heavyDiskBytes: 0 })
+    expect(heldByStarts([], 'm1', now)).toEqual({ memoryBytes: 0, diskBytes: 0, heavyMemoryBytes: 0, heavyDiskBytes: 0 })
+    // A heavy start's hold is told apart: the machine fit counts heavy work placed there itself (machineFit.ts placedHeavyWork).
+    const heavy = { id: 'h', request: { machineId: 'm1', heavy: ['build'], requirements: { memoryBytes: 4 * GiB, diskBytes: 15 * GiB } }, requestedAt: now - 60_000, error: null }
+    expect(heldByStarts([heavy], 'm1', now)).toEqual({ memoryBytes: 4 * GiB, diskBytes: 15 * GiB, heavyMemoryBytes: 4 * GiB, heavyDiskBytes: 15 * GiB })
+  })
+  it('leaves out new agents on a machine whose free memory is set aside for agents still starting', async () => {
+    const pool = healthy(); Object.assign(pool.observation.resources, { memoryUsedBytes: 26e9 })
+    expect((await runPool(pool)).answer.ok).toBe(true)
+    const { answer } = await runPool(pool, false, {}, undefined, { state: { starts: starting(Date.now()) } })
+    expect(answer.ok).not.toBe(true)
+    expect(JSON.stringify(answer)).toContain('Insufficient measured free memory, with 5.4 GB set aside for agents still starting.')
+  })
+  it('counts a heavy start once for heavy work: the machine fit holds it, the route\'s reading does not hold it again', async () => {
+    const now = Date.now(), pool = healthy(); Object.assign(pool.observation.resources, { projectDiskFreeBytes: 70e9 })
+    const heavy = { id: 'h', request: { machineId: 'm1', heavy: ['build'], requirements: { memoryBytes: 4 * GiB, diskBytes: 15 * GiB } }, requestedAt: now - 60_000, error: null }
+    const { answer } = await runPool(pool, false, { heavy: ['build'] }, undefined, { state: { starts: [heavy] } })
+    expect((answer.pick as { notes?: string[] }).notes ?? []).not.toEqual(expect.arrayContaining([expect.stringContaining('Machine fit')]))
+  })
+  it('says on each row what its machine has: free slots, free memory less what starts hold, and free disk', async () => {
+    const pool = { ...healthy(), availableSlots: 3 }
+    const { answer } = await runPool(pool, false, {}, undefined, { state: { starts: starting(Date.now()) } })
+    expect((answer.pick as { machine: string }).machine).toBe('3 slots free · 24.6 GB memory free (5.4 GB held by starts) · 196.8 GB disk free')
+    const plain = await runPool({ ...healthy(), availableSlots: 1 })
+    expect((plain.answer.pick as { machine: string }).machine).toBe('1 slot free · 30.0 GB memory free · 200.0 GB disk free')
+  })
   it('judges heavy work by the contributed machine\'s free memory, disk and CPU, for members too, and its start says it is heavy', async () => {
     const pool = healthy(); Object.assign(pool.observation.resources, { memoryUsedBytes: 26e9, cpuPercent: 92 })
     const { answer } = await runPool(pool, true, { heavy: ['build'] })
@@ -1406,6 +1453,42 @@ describe('routing contributed capacity', () => {
     const answer = await routeTask(input, s, where, opener())
     expect(answer).toMatchObject({ ok: true, pick: { machineId: 'm1', engine: 'codex' } })
     expect((answer.alternatives as Array<{ machineId: string; engine: string }>).map(x => [x.machineId, x.engine])).toEqual([['m1', 'claude'], ['m2', 'claude'], ['m3', 'claude']])
+    // Each row says its account's weekly quota, which the project's order picks by (Ken, 2026-11-03).
+    expect((answer.pick as { quota: string }).quota).toBe('fits: weekly 80% left, resets in 5d')
+    expect((answer.alternatives as Array<{ quota: string }>).map(x => x.quota)).toEqual(['fits: weekly 80% left, resets in 5d', 'metered', 'metered'])
+  })
+  // The coordinator picks by the project's order among accounts, so every account is an alternative, once: a Claude account with
+  // 99% left on a machine whose Codex was used up never reached it (Ken, 2026-11-03).
+  it('offers the best row of every engine on every machine as an alternative, and no second row of an account', async () => {
+    const week = (usedPercent: number) => [{ name: 'weekly', usedPercent, resetsAt: Date.now() + 30 * 3_600_000 }]
+    const box = (machineId: string) => Object.assign({ ...healthy(), machineId, name: `Box ${machineId}`, engines: ['claude', 'codex'] }, {
+      observation: { ...healthy().observation, runningHarnessIds: [], quotas: [{ engine: 'claude', known: true, windows: week(1) }, { engine: 'codex', known: true, windows: week(100) }] } })
+    const enabled = { ...floorPolicy, models: floorPolicy.models.map(m => ({ ...m, enabled: true })) }
+    const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: [], conversations: conversations(), machines: ['m1', 'm2', 'm3'].map(box) } },
+      policy: { policy: enabled, warnings: [] }, machines: [] } } })
+    const answer = await routeTask(input, s, where, opener())
+    const rows = [answer.pick, ...answer.alternatives as unknown[]] as Array<{ machineId: string; engine: string; quota: string }>
+    expect(rows.map(x => `${x.machineId} ${x.engine}`).sort()).toEqual(['m1 claude', 'm1 codex', 'm2 claude', 'm2 codex', 'm3 claude', 'm3 codex'])
+    expect(rows.find(x => x.engine === 'claude')!.quota).toBe('fits: weekly 99% left, resets in 30h')
+    expect(rows.find(x => x.engine === 'codex')!.quota).toBe('short: weekly 0% left, resets in 30h')
+  })
+  // A backend from before 2026-11-03 keeps 12 candidates of a decision: the route records the first 12 and offers only those, as the
+  // agent choosing assigns by a recorded candidate.
+  it('records and offers the first 12 rows when the backend keeps no more', async () => {
+    const week = [{ name: 'weekly', usedPercent: 10, resetsAt: Date.now() + 30 * 3_600_000 }]
+    const box = (machineId: string) => Object.assign({ ...healthy(), machineId, name: `Box ${machineId}`, engines: ['claude', 'codex'] }, {
+      observation: { ...healthy().observation, runningHarnessIds: [], quotas: [{ engine: 'claude', known: true, windows: week }, { engine: 'codex', known: true, windows: week }] } })
+    const enabled = { ...floorPolicy, models: floorPolicy.models.map(m => ({ ...m, enabled: true })) }
+    const base = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: [], conversations: conversations(),
+      machines: Array.from({ length: 8 }, (_, i) => box(`m${i}`)) } }, policy: { policy: enabled, warnings: [] }, machines: [] } } })
+    const s = vi.fn(async (payload: Record<string, any>) => payload.action === 'command' && payload.command.decision.candidates.length > 12
+      ? { error: 'VALIDATION_ERROR', detail: 'command.decision.candidates: Too big' } : base(payload))
+    const answer = await routeTask(input, s as never, where, opener())
+    expect(answer).toMatchObject({ ok: true, routeDecisionId: 'd1' })
+    const sent = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0].command.decision.candidates.length)
+    expect(sent).toEqual([16, 12])
+    const recordedIds = new Set(s.mock.calls.filter(c => c[0].action === 'command').at(-1)![0].command.decision.candidates.map((c: { id: string }) => c.id))
+    for (const row of [answer.pick, ...answer.alternatives as unknown[]] as Array<{ id: string }>) expect(recordedIds.has(row.id)).toBe(true)
   })
   it('leaves out a machine that cannot take a teammate\'s project, with the backend\'s reason, and keeps its owner\'s own work there', async () => {
     const reason = 'Contributed laptop has no Harness Team account yet, so it runs only its owner\'s projects.'
@@ -1427,6 +1510,26 @@ describe('routing contributed capacity', () => {
     offline.observation.receivedAt = 0
     const silent = await runPool(offline, false, {}, owners)
     expect(silent.answer.excluded).not.toEqual(expect.arrayContaining([expect.objectContaining({ reason: expect.stringContaining('Contributed laptop is offline.') })]))
+  })
+  // Task #2390 (Tony, 11-03): a machine its owner keeps for some projects (backend machines.ts machine.projects) is left out of
+  // every other project's route, new agents and members alike, with why. The backend refuses it too.
+  it('leaves out a machine its owner keeps for other projects, new agents and members alike, and offers it to those projects', async () => {
+    const projects = [{ id: 'lead', ownerId: 'owner', name: 'Pilot', visibility: 'public' }, { id: 'oh', ownerId: 'owner', name: 'openharness', visibility: 'public' },
+      { id: 'hidden', ownerId: 'owner', name: 'secret', visibility: 'private' }]
+    const kept = (ids: string[]) => ({ ...healthy(), projects: ids })
+    const other = await runPool(kept(['oh']), true, {}, undefined, { state: { projects } })
+    expect(other.answer).toMatchObject({ error: 'NO_CANDIDATE' })
+    expect(other.answer.excluded).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: expect.stringContaining('Multiply'), reason: 'Contributed laptop runs only openharness.' }),
+      expect.objectContaining({ title: expect.not.stringContaining('Multiply'), reason: 'Contributed laptop runs only openharness.' })]))
+    // A private project's name is never written into another project's route.
+    const secret = await runPool(kept(['hidden']), false, {}, undefined, { state: { projects } })
+    expect(secret.answer.excluded).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reason: 'Contributed laptop is kept by its owner for other projects.' })]))
+    expect(JSON.stringify(secret.answer)).not.toContain('secret')
+    // Kept for this project, or for none in particular: offered as before.
+    expect((await runPool(kept(['oh', 'lead']), true, {}, undefined, { state: { projects } })).answer.ok).toBe(true)
+    expect((await runPool(healthy(), true, {}, undefined, { state: { projects } })).answer.ok).toBe(true)
   })
   // One machine (docs/plans/2026-10-24-swarm-team-account.md): a Mac's Harness Team account is that Mac. The Lead is offered
   // the Mac once: a teammate's project starts in the team account, the Mac's owner's own projects stay with the owner.

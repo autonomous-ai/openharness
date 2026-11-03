@@ -8,10 +8,12 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_home_list.dart';
 import 'package:harness_mobile/swarm/swarm_home_prefs.dart';
 import 'package:harness_mobile/swarm/swarm_home_rows.dart';
+import 'package:harness_mobile/swarm/swarm_home_view_sheet.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_style.dart';
@@ -567,6 +569,8 @@ void main() {
       expect(project_(project), findsOneWidget);
       expect(project_(web), findsNothing);
 
+      // Mark all read, in the same sheet (2026-11-03).
+      await open(tester);
       await tester.tap(key('swarm-mark-all-read'));
       await tester.pumpAndSettle();
       expect(project_(project), findsNothing);
@@ -579,6 +583,130 @@ void main() {
       expect(host.session!.home.filter, SwarmHomeFilter.all);
       expect(dot(), findsNothing);
       await tester.pump(const Duration(seconds: 7));
+    });
+
+    /// The caption Sort and filter is at the right of.
+    Finder captionOf(Finder button) =>
+        find.ancestor(of: button, matching: find.byType(SwarmCaption));
+
+    testWidgets('Sort and filter is at the right of the Projects caption, '
+        'not on the top bar (Tony, 2026-11-03); no Mark all read: that is in '
+        'the sheet, under its options, with Refresh', (tester) async {
+      await pump(tester, backend());
+      final view = key('swarm-home-view');
+      expect(
+        key('swarm-mark-all-read'),
+        findsNothing,
+        reason: 'not on the screen',
+      );
+      expect(tester.widget<SwarmCaption>(captionOf(view)).text, 'Projects');
+      expect(
+        tester.getTopLeft(view).dy,
+        greaterThanOrEqualTo(tester.getBottomLeft(key('swarm-you-button')).dy),
+        reason: 'under the top bar',
+      );
+      final card = find
+          .ancestor(of: project_(project), matching: find.byType(SwarmGroup))
+          .first;
+      expect(
+        tester.getTopRight(view).dx,
+        closeTo(tester.getTopRight(card).dx, .01),
+        reason: "its target's end on the card's",
+      );
+      expect(
+        tester.getBottomLeft(view).dy,
+        lessThanOrEqualTo(tester.getTopLeft(card).dy),
+        reason: 'over the card',
+      );
+      expect(
+        tester.getCenter(find.text('Projects')).dy,
+        closeTo(tester.getCenter(view).dy, 1),
+        reason: 'on the words',
+      );
+
+      await open(tester);
+
+      expect(key('swarm-mark-all-read'), findsOneWidget);
+      expect(key('swarm-home-refresh'), findsOneWidget);
+      expect(
+        tester.getTopLeft(key('swarm-view-filter')).dy,
+        lessThan(tester.getTopLeft(key('swarm-mark-all-read')).dy),
+      );
+      expect(
+        tester.getTopLeft(key('swarm-mark-all-read')).dy,
+        lessThan(tester.getTopLeft(key('swarm-home-refresh')).dy),
+      );
+    });
+
+    testWidgets('with a project pinned, Sort and filter is on the Pinned '
+        'caption, the first: once, over every project it sorts', (
+      tester,
+    ) async {
+      final host = await pump(tester, backend());
+      host.session!.home.pin(tab, project, true);
+      await tester.pumpAndSettle();
+
+      final view = key('swarm-home-view');
+      expect(view, findsOneWidget);
+      expect(tester.widget<SwarmCaption>(captionOf(view)).text, 'Pinned');
+      expect(find.text('Projects'), findsOneWidget, reason: 'web is unpinned');
+    });
+
+    testWidgets('Mark all read in the sheet closes it and marks, with its '
+        'Undo; with nothing unread it is greyed and heard as off', (
+      tester,
+    ) async {
+      final handle = tester.ensureSemantics();
+      await pump(tester, backend());
+      SwarmHomeViewAction mark() =>
+          tester.widget<SwarmHomeViewAction>(key('swarm-mark-all-read'));
+      await open(tester);
+      expect(mark().onTap, isNotNull);
+
+      await tester.tap(key('swarm-mark-all-read'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(key('swarm-view-sort'), findsNothing, reason: 'the sheet closed');
+      expect(
+        find.textContaining(RegExp(r'^Marked \d+ chats? read$')),
+        findsOne,
+      );
+      expect(find.text('Undo'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 7));
+      await tester.pumpAndSettle();
+
+      await open(tester);
+      expect(mark().onTap, isNull);
+      expect(
+        tester.getSemantics(key('swarm-mark-all-read')),
+        matchesSemantics(
+          label: 'Mark all read',
+          isButton: true,
+          hasEnabledState: true,
+          isEnabled: false,
+        ),
+      );
+      handle.dispose();
+    });
+
+    testWidgets('Refresh in the sheet closes it, says so, and reads the '
+        'Swarms again', (tester) async {
+      final fake = backend();
+      await pump(tester, fake);
+      int lists() =>
+          fake.paths.where((p) => p == '/api/super-tabs/list').length;
+      final before = lists();
+      await open(tester);
+
+      await tester.tap(key('swarm-home-refresh'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(key('swarm-view-sort'), findsNothing, reason: 'the sheet closed');
+      expect(find.text('Refreshing…'), findsOneWidget);
+      expect(lists(), greaterThan(before));
+      await tester.pumpAndSettle();
     });
 
     Map<String, dynamic> tagInWeb() => {
@@ -642,16 +770,25 @@ void main() {
       );
       final store = MemoryKeyValueStore()
         ..values['swarm_home.$me'] = jsonEncode({'filter': 'mentions'});
-      final host = await pump(tester, fake, store: store);
+      // While you were away keeps what needs the person a skeleton while the
+      // read is retried, so the screen never settles until it answers.
+      final host = await pump(tester, fake, store: store, settle: false);
+      await tester.pump(const Duration(milliseconds: 100));
       expect(find.text('Mentions could not be read.'), findsOneWidget);
       expect(find.text('No mentions.'), findsNothing);
       expect(key('swarm-filter-show-all'), findsOneWidget);
+      Finder needs(Finder matching) =>
+          find.descendant(of: key('swarm-away-needs'), matching: matching);
+      expect(needs(find.byType(SkeletonText)), findsOneWidget);
+      expect(needs(find.text('0')), findsNothing);
 
       fail = false;
       await host.session!.inbox.asks(tab)!.load();
       await tester.pumpAndSettle();
       expect(project_(web), findsOneWidget);
       expect(find.text('Mentions could not be read.'), findsNothing);
+      expect(needs(find.byType(SkeletonText)), findsNothing);
+      expect(needs(find.text('1')), findsOneWidget);
     });
 
     /// [fake] with a second Swarm, whose mentions [read] answers.

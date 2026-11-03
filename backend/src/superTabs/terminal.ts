@@ -145,6 +145,15 @@ export function terminalResult(state: SuperTabState, actor: Actor, request: Term
     error: command.ok ? null : command.error! }
 }
 
+/** An agent that reports its work is not stopped at a usage limit: its mark goes, as when its notice does (task #2321). Its
+ *  host may still be ending the episode; that end then changes nothing. */
+export function workedAgain(state: SuperTabState, agentId: string): void {
+  const target = state.agents.find(a => a.id === agentId)
+  if (!target?.limitedUntil && !target?.alerting?.includes('limit')) return
+  target.limitedUntil = null
+  target.alerting = target.alerting?.filter(a => a !== 'limit')
+}
+
 /** One row per episode: a repeated observation adds nothing, and `active: false` ends the episode. No screen text goes in the row.
  * It is delivered to the agent's project Lead, in the agent's group when the Lead is there, else by a second row in the Lead's chat. */
 export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author, id: string, now: number,
@@ -154,6 +163,8 @@ export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author
   const alerting = target.alerting ?? []
   if (!command.active) {
     target.alerting = alerting.filter(a => a !== command.alert)
+    // The notice is gone: so is the mark, whatever time it named (task #2321: River stayed "limited" after its notice went).
+    if (command.alert === 'limit') target.limitedUntil = null
     return []
   }
   if (alerting.includes(command.alert)) return []

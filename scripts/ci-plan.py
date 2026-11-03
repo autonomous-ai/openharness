@@ -483,7 +483,11 @@ def read_gate(client, run):
     if not isinstance(suites, list) or not set(suites) <= SUITES:
         raise ValueError("required-gate receipt has invalid suites")
     reused = check_reused_records(receipt.get("reused", {}), suites, receipt["source_sha"], receipt["event"])
-    if receipt["required_jobs"] != sorted({"process-checks"} | set().union(*(JOBS[name] for name in set(suites) - set(reused)))):
+    # Every job this planner requires must have run and passed (checked above for each listed job). A receipt may list more:
+    # the merge helper runs from main, so a PR that adds a CI job brings jobs main does not know yet (#2804, batch #2815).
+    required = receipt["required_jobs"]
+    if (required != sorted(set(required))
+            or not {"process-checks"} | set().union(*(JOBS[name] for name in set(suites) - set(reused))) <= set(required)):
         raise ValueError("required-gate receipt does not run every suite it did not reuse")
     after = client.api(f"actions/runs/{run['id']}")
     ci.check_run(after, client.repository, run["id"])

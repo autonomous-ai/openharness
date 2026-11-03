@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { cloneData } from './cloneData.js'
+import { autoJoinOn } from './autoJoinDomain.js'
 import { lostReasonWithoutMachine } from './lostReason.js'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
@@ -22,6 +23,8 @@ export interface Person {
   avatar?: import('./profile.js').Avatar
   /** The name they chose (usernames.ts), or one kept for them; absent, readers work out their default. Only members read it. */
   username?: string
+  /** `domain`: joined by themselves as someone at the owner's email domain (autoJoin.ts), so the people list says so. */
+  joinedVia?: 'domain'
 }
 export interface AgentConfiguration {
   engine: string
@@ -214,7 +217,12 @@ export interface Check {
   independent: boolean
   evidence: string | null
   passedBy: string | null
+  /** Each checker's latest verdict during this attempt (checkVerdicts.ts); `evidence` and `passedBy` are derived from them.
+   *  Absent until the first verdict recorded since verdicts were kept. */
+  verdicts?: CheckVerdict[]
 }
+/** One checker's verdict on a check: its actor key (`agent:ID` or `person:ID`), what it found and when. */
+export interface CheckVerdict { by: string; passed: boolean; evidence: string; at: number }
 export interface Assignment {
   id: string
   agentId: string
@@ -434,6 +442,11 @@ export interface SuperTabState {
   rules?: import('./rules.js').SwarmRule[]
   /** Owner-only sharing configuration; visibleState always removes it. */
   sharing?: import('./sharing.js').SwarmSharing
+  /** People who left or were removed, whom auto-join never adds again (autoJoin.ts); visibleState always removes it. */
+  autoJoinDeclined?: string[]
+  /** Only in what a reader gets (visibleState), never stored: people at the owner's domain join by themselves, so the leave
+   *  dialog says someone who leaves is not added back. */
+  autoJoin?: true
   paused: boolean
   /** Its owner deleted it (deletion.ts): nobody reads or writes it, its row lists no member, and its owner may restore it until
    *  `purgeAt` (ISO times). Absent on a live Swarm. */
@@ -648,8 +661,6 @@ export interface CommandEffects {
   instructions?: import('./instructions.js').InstructionsWrite
   /** A coordinator's note kept or a note removed, written outside the tab state by the store (instructions.ts). */
   notes?: import('./instructions.js').NotesWrite
-  /** Stored messages given new words: a task's line as the task moves (taskLine.ts). */
-  edits?: import('./taskLine.js').MessageEdit[]
 }
 /** `details` go to the caller with the code: what it needs to act on the refusal (a stale save's current text). */
 export class SuperTabError extends Error {
@@ -815,7 +826,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // and closing sessions (only that machine's host roster lists them: read/hostRows.ts; a removed private agent's session is
   // not every member's), and overlap alerts. Nor a dormant conversation: it is read on demand, never in a whole-Swarm read
   // (spec, Archive); a command may still load one.
-  const { sharing: _sharing, harnessReservations: _reservations, releasedHarnesses: _released, overlapAlerts: _alerts, closingSessions: _closing,
+  const { sharing: _sharing, autoJoinDeclined: _declined, harnessReservations: _reservations, releasedHarnesses: _released, overlapAlerts: _alerts, closingSessions: _closing,
     removedSessions: _removed, ...kept } = state
   const visible = cloneData({ ...kept, conversations: state.conversations.filter(c => !c.dormant) })
   // Prepared PM handoffs are private host-to-host launch data. Machine hosts receive their own start through read/hostRows.ts;
@@ -825,6 +836,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     delete start.request.handoffSourceAgentId
     delete start.request.handoffChangeId
   }
+  if (autoJoinOn(state)) visible.autoJoin = true
   // A Buddy-only machine is no machine of the Swarm to anyone, its own person included (machines.ts buddyOnly): their Buddy
   // shows as a Buddy, and their machine stays theirs. Machines, status and the leaderboard's lent hours all read this.
   if (visible.machines) visible.machines = visible.machines.filter(m => !m.buddyOnly)
@@ -834,6 +846,11 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   else delete visible.removedMachines
   // Rows by day and project that only the leaderboard read uses, and it takes them from the Swarm itself.
   for (const pool of visible.machines ?? []) delete pool.lentDays
+  // A machine kept for some projects names to each reader only those they may read (machines.ts projects): a private
+  // project's id is not another member's to see.
+  for (const pool of visible.machines ?? []) {
+    if (pool.projects) pool.projects = pool.projects.filter(id => projectsOf(state).some(p => p.id === id && canReadProject(state, actor, p)))
+  }
   // Nor its id, which a Buddy's row carries (machineHiddenFrom).
   visible.agents = visible.agents.map(a => machineHiddenFrom(state, actor, a) ? agentWithoutMachine(a) : a)
   // The removed Leads conversation reaches nobody (leadsRemoved), its id included.

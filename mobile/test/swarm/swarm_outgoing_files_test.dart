@@ -128,11 +128,10 @@ void main() {
     files.addNumbered([file('photo.jpg', 2)]);
     files.addNumbered([file('photo.jpg', 3)]);
 
-    expect([for (final f in files.files) f.name], [
-      'photo.jpg',
-      'photo-2.jpg',
-      'photo-3.jpg',
-    ]);
+    expect(
+      [for (final f in files.files) f.name],
+      ['photo.jpg', 'photo-2.jpg', 'photo-3.jpg'],
+    );
   });
 
   test('remove and clear tell their listeners', () {

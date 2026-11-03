@@ -176,17 +176,17 @@ static void lookups_and_recap(void)
     // Recap: only the open Lead's text lands.
     ht_supertabs_recap_open(&model, "s1", "L0", 100);
     assert(model.recap.state == HT_RECAP_LOADING && model.recap.asked_ms == 100 && !model.recap.text[0]);
-    assert(!ht_supertabs_recap_put(&model, "s1", "L1", "", "other", 1, false));
+    assert(!ht_supertabs_recap_put(&model, "s1", "L1", "", "", "other", 1, false));
     assert(model.recap.state == HT_RECAP_LOADING && !model.recap.text[0]);
     char *big = malloc(1601); memset(big, 'r', 1599); strcpy(big + 1499, "\xe2\x80\xa6"); memset(big + 1502, 'r', 98); big[1600] = 0;
-    assert(ht_supertabs_recap_put(&model, "s1", "L0", "", big, 1792560000u, false));
+    assert(ht_supertabs_recap_put(&model, "s1", "L0", "", "", big, 1792560000u, false));
     assert(model.recap.state == HT_RECAP_LOADED && strlen(model.recap.text) == 1499 && model.recap.at == 1792560000u);
     free(big);
     ht_supertabs_recap_open(&model, "s1", "L1", 200);
     assert(model.recap.state == HT_RECAP_LOADING && !model.recap.text[0]);
-    assert(ht_supertabs_recap_put(&model, "s1", "L1", "", "", 0, true) && model.recap.state == HT_RECAP_EMPTY);
+    assert(ht_supertabs_recap_put(&model, "s1", "L1", "", "", "", 0, true) && model.recap.state == HT_RECAP_EMPTY);
     ht_supertabs_recap_open(&model, "", "", 300);
-    assert(model.recap.state == HT_RECAP_NONE && !ht_supertabs_recap_put(&model, "", "", "", "x", 0, false));
+    assert(model.recap.state == HT_RECAP_NONE && !ht_supertabs_recap_put(&model, "", "", "", "", "x", 0, false));
     ht_supertabs_recap_open(&model, "s1", "L0", 400);
     ht_supertabs_reset(&model);
     assert(model.n == 0 && model.id_n == 0 && model.recap.state == HT_RECAP_NONE && !model.recap.lead[0]);
@@ -227,25 +227,25 @@ static void chats(void)
 
     // drops a recap for another chat: the face is the group's, so the Lead chat's recap (or none named) is not its.
     ht_supertabs_recap_open(&model, "s1", "L0", 100);
-    assert(!ht_supertabs_recap_put(&model, "s1", "L0", "lead-web", "the Lead", 1, false));
-    assert(!ht_supertabs_recap_put(&model, "s1", "L0", "", "no chat named", 1, false));
+    assert(!ht_supertabs_recap_put(&model, "s1", "L0", "lead-web", "", "the Lead", 1, false));
+    assert(!ht_supertabs_recap_put(&model, "s1", "L0", "", "", "no chat named", 1, false));
     assert(model.recap.state == HT_RECAP_LOADING && !model.recap.text[0]);
-    assert(ht_supertabs_recap_put(&model, "s1", "L0", "g1", "Tests green.", 2, false));
+    assert(ht_supertabs_recap_put(&model, "s1", "L0", "g1", "", "Tests green.", 2, false));
     assert(model.recap.state == HT_RECAP_LOADED && !strcmp(model.recap.chat_id, "g1") && !strcmp(model.recap.text, "Tests green."));
     // An old daemon's Lead (no chat) takes the recap that names none, as before.
     ht_supertabs_recap_open(&model, "s1", "L2", 200);
-    assert(ht_supertabs_recap_put(&model, "s1", "L2", "", "Shipped.", 3, false) && !model.recap.chat_id[0]);
+    assert(ht_supertabs_recap_put(&model, "s1", "L2", "", "", "Shipped.", 3, false) && !model.recap.chat_id[0]);
     // Opening the Lead already on the face keeps its recap until a new one arrives; one still on its way is asked anew.
     ht_supertabs_recap_open(&model, "s1", "L0", 250);
-    assert(ht_supertabs_recap_put(&model, "s1", "L0", "g1", "Tests green.", 2, false));
+    assert(ht_supertabs_recap_put(&model, "s1", "L0", "g1", "", "Tests green.", 2, false));
     ht_supertabs_recap_open(&model, "s1", "L0", 260);
     assert(model.recap.state == HT_RECAP_LOADED && !strcmp(model.recap.text, "Tests green.") && model.recap.asked_ms == 260);
-    assert(ht_supertabs_recap_put(&model, "s1", "L0", "g1", "Deployed.", 4, false) && !strcmp(model.recap.text, "Deployed."));
+    assert(ht_supertabs_recap_put(&model, "s1", "L0", "g1", "", "Deployed.", 4, false) && !strcmp(model.recap.text, "Deployed."));
     ht_supertabs_recap_open(&model, "s1", "L2", 270); ht_supertabs_recap_open(&model, "s1", "L2", 280);
     assert(model.recap.state == HT_RECAP_LOADING && model.recap.asked_ms == 280);
     // The face's chat moved on: what it holds is another chat's, and is not kept.
     ht_supertabs_recap_open(&model, "s1", "L0", 290);
-    assert(ht_supertabs_recap_put(&model, "s1", "L0", "g1", "Tests green.", 2, false));
+    assert(ht_supertabs_recap_put(&model, "s1", "L0", "g1", "", "Tests green.", 2, false));
     t.leads[0].chat_id[0] = 'h'; ht_supertabs_put(&model, &t, 0, NULL, 0);
     ht_supertabs_recap_open(&model, "s1", "L0", 295);
     assert(model.recap.state == HT_RECAP_LOADING && !model.recap.text[0] && !model.recap.chat_id[0]);
@@ -253,6 +253,53 @@ static void chats(void)
     ht_supertabs_recap_open(&model, "s1", "L1", 300);
     assert(!model.recap.chat_id[0]);
     puts("supertab: chat kind/id/name, old Leads as the Lead chat, recap only for the face's chat, the face's own reopen keeps it PASS");
+}
+
+// A Lead in a thread (spec 2026-11-03-dial-thread-face): its root, title and replies, and a recap that must be the thread's.
+static void threads(void)
+{
+    static ht_supertab_t t;
+    ht_supertabs_reset(&model);
+    const char ids[1][ID_MAX] = {"s1"};
+    ht_supertabs_ids(&model, ids, 1, NULL, 0);
+    assert(ht_supertab_init(&t, "s1", "", "openharness", 2));
+    char title[200]; memset(title, 't', 97); strcpy(title + 97, "\xc3\xa9x");   // the buffer holds 97 bytes: a letter straddling it is dropped
+    ht_lead_in_t a = lead("L0", "work", 0); a.chat = "pm"; a.chat_id = "pm1"; a.thread = "m9"; a.thread_title = "Fix the login bug"; a.thread_replies = 3;
+    ht_lead_in_t b = lead("L1", "work", 1); b.chat = "pm"; b.chat_id = "pm1"; b.thread = "m8"; b.thread_title = title; b.thread_replies = -1;
+    ht_lead_in_t old = lead("L2", "work", 2); old.thread_replies = -1;   // no thread fields: the main chat
+    assert(ht_supertab_lead_add(&t, &a) && ht_supertab_lead_add(&t, &b) && ht_supertab_lead_add(&t, &old));
+    // "a lead keeps its thread root, title and replies"
+    assert(!strcmp(t.leads[0].thread_root, "m9") && !strcmp(t.leads[0].thread_title, "Fix the login bug") && t.leads[0].thread_replies == 3);
+    assert(!strcmp(t.leads[1].thread_root, "m8") && strlen(t.leads[1].thread_title) == 97 && t.leads[1].thread_replies == -1);
+    assert(!t.leads[2].thread_root[0] && !t.leads[2].thread_title[0] && t.leads[2].thread_replies == -1);
+    ht_supertabs_put(&model, &t, 0, NULL, 0);
+
+    // "a recap for another thread than the face's is refused"
+    ht_supertabs_recap_open(&model, "s1", "L0", 100);
+    assert(!ht_supertabs_recap_put(&model, "s1", "L0", "pm1", "", "main chat", 1, false));
+    assert(!ht_supertabs_recap_put(&model, "s1", "L0", "pm1", "m7", "another thread", 1, false));
+    assert(model.recap.state == HT_RECAP_LOADING && !model.recap.text[0]);
+    assert(ht_supertabs_recap_put(&model, "s1", "L0", "pm1", "m9", "Taken.", 2, false));
+    assert(model.recap.state == HT_RECAP_LOADED && !strcmp(model.recap.thread, "m9"));
+    // and the main chat's face refuses a thread's recap
+    ht_supertabs_recap_open(&model, "s1", "L2", 110);
+    assert(!ht_supertabs_recap_put(&model, "s1", "L2", "", "m9", "thread", 1, false));
+    assert(ht_supertabs_recap_put(&model, "s1", "L2", "", NULL, "main", 1, false));
+
+    // "leaving the thread re-opens the main chat's recap": the held thread recap is kept for the thread, not the main chat.
+    ht_supertabs_recap_open(&model, "s1", "L0", 200);
+    assert(ht_supertabs_recap_put(&model, "s1", "L0", "pm1", "m9", "Taken.", 2, false));
+    ht_supertabs_recap_open(&model, "s1", "L0", 210);
+    assert(model.recap.state == HT_RECAP_LOADED && !strcmp(model.recap.text, "Taken.") && model.recap.asked_ms == 210);   // same thread: kept
+    assert(!ht_supertabs_thread_leave(&model, "s1", "L2") && !ht_supertabs_thread_leave(&model, "s1", "nope"));
+    assert(ht_supertabs_thread_leave(&model, "s1", "L0"));
+    const ht_lead_t *l0 = &ht_supertabs_find(&model, "s1")->leads[0];
+    assert(!l0->thread_root[0] && !l0->thread_title[0] && l0->thread_replies == -1);
+    ht_supertabs_recap_open(&model, "s1", "L0", 300);
+    assert(model.recap.state == HT_RECAP_LOADING && !model.recap.text[0] && !model.recap.thread[0] && model.recap.asked_ms == 300);
+    assert(!ht_supertabs_recap_put(&model, "s1", "L0", "pm1", "m9", "late thread recap", 3, false));
+    assert(ht_supertabs_recap_put(&model, "s1", "L0", "pm1", "", "Merged #2704.", 4, false) && !strcmp(model.recap.text, "Merged #2704."));
+    puts("supertab: thread root/title/replies, a recap only for the face's thread, leaving it asks the main chat again PASS");
 }
 
 // The reader's own Buddy in each project (spec 2026-10-29-round-dial-pm-buddy): `buddies` while the Swarm has them on,
@@ -317,6 +364,7 @@ int main(void)
     transitions();
     lookups_and_recap();
     chats();
+    threads();
     buddies();
     return 0;
 }

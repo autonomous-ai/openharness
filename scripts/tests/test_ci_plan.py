@@ -933,6 +933,29 @@ class GitHubEvidenceTests(unittest.TestCase):
         self.assertEqual(gate["receipt"]["suites"], ["backend", "mobile"])
         self.assertIn("actions/jobs/120", self.github.reads)
 
+    def test_a_receipt_from_a_planner_that_adds_a_job_passes_the_older_helper(self):
+        # The merge helper runs from main; a PR that adds a CI job (#2804: backend-integration) brings a receipt listing a
+        # job main's JOBS does not know yet. Every job main requires ran and passed, so it may merge (batch #2815 refused).
+        self.github.add_run(12, self.head, self.tree, ["mobile", "backend"])
+        receipt = self.github.receipts[12]
+        receipt["required_jobs"] = sorted(receipt["required_jobs"] + ["backend-new-shards"])
+        receipt["results"]["backend-new-shards"] = "success"
+        gate = self.evidence.passed_gate(self.head)
+        self.assertIn("backend-new-shards", gate["receipt"]["required_jobs"])
+
+    def test_a_receipt_missing_a_job_main_requires_or_with_a_failed_extra_job_is_refused(self):
+        self.github.add_run(12, self.head, self.tree, ["mobile", "backend"])
+        receipt = self.github.receipts[12]
+        receipt["required_jobs"] = [job for job in receipt["required_jobs"] if job != "backend-desk"]
+        with self.assertRaisesRegex(ValueError, "does not run every suite"):
+            self.evidence.passed_gate(self.head)
+        self.github.add_run(13, self.head, self.tree, ["mobile", "backend"])
+        receipt = self.github.receipts[13]
+        receipt["required_jobs"] = sorted(receipt["required_jobs"] + ["backend-new-shards"])
+        receipt["results"]["backend-new-shards"] = "failure"
+        with self.assertRaisesRegex(ValueError, "inconsistent"):
+            self.evidence.passed_gate(self.head)
+
     def test_a_failed_latest_check_is_not_rescued_by_an_older_pass(self):
         self.github.add_run(12, self.head, self.tree, ["mobile"], conclusion="failure")
         with self.assertRaisesRegex(ValueError, "not a pass"):

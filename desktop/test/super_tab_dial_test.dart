@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/logging/app_log.dart';
 import 'package:harness/super_tabs/controller.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -461,6 +462,231 @@ void main() {
     expect(row(after.last)['conversationId'], 'design-fix');
   });
 
+  // Diego's dial, 2026-11-03: a thread open on Desktop was neither shown nor
+  // answered on the dial.
+  test('the Swarm row names the open thread while its pane shows, and not after it closes', () async {
+    final (f, c) = await openChats();
+    c.select('design-fix');
+    await settle();
+    expect(row(announces(f).last).containsKey('threadRoot'), isFalse);
+    c.openThread('m-root');
+    await settle();
+    expect(row(announces(f).last)['conversationId'], 'design-fix');
+    expect(row(announces(f).last)['threadRoot'], 'm-root');
+    c.closeThread();
+    await settle();
+    expect(row(announces(f).last)['conversationId'], 'design-fix');
+    expect(row(announces(f).last).containsKey('threadRoot'), isFalse);
+    // A thread of another conversation is not on screen beside this one.
+    c.openThread('m-root');
+    c.select('design-lead');
+    await settle();
+    expect(row(announces(f).last)['conversationId'], 'design-lead');
+    expect(row(announces(f).last).containsKey('threadRoot'), isFalse);
+  });
+
+  test('a hidden thread pane still names its root to the dial', () async {
+    final (f, c) = await openChats();
+    c.select('design-fix');
+    c.openThread('m-root');
+    await settle();
+    final before = announces(f).length;
+    c.threadPaneHidden();
+    await settle();
+    // Hiding the pane re-announces nothing and keeps the root in the row.
+    expect(announces(f).length, before);
+    expect(row(announces(f).last)['threadRoot'], 'm-root');
+    f.app.announceWindowForeground();
+    await settle();
+    expect(row(announces(f).last)['threadRoot'], 'm-root');
+  });
+
+  test('closing the pane drops the root from the announce', () async {
+    final (f, c) = await openChats();
+    c.select('design-fix');
+    c.openThread('m-root');
+    c.threadPaneHidden();
+    await settle();
+    c.closeThread();
+    await settle();
+    expect(row(announces(f).last).containsKey('threadRoot'), isFalse);
+  });
+
+  Future<void> threadOnly(
+    SuperTabLaunchFixture f,
+    String conversation,
+    Object? root,
+  ) => f.app.handleEventForTest('m', {
+    'type': 'dial_super_tab',
+    'payload': {
+      'superTabId': tabId,
+      'conversationId': conversation,
+      'threadRoot': root,
+      'threadOnly': true,
+    },
+  });
+
+  test('a threadOnly open does not raise the window or change the active Swarm', () async {
+    final (f, c) = await openChats();
+    final tab = f.app.activeSwarmId;
+    f.app.newSwarm(newTabPage: true);
+    final other = f.app.activeSwarmId;
+    var raised = 0;
+    final sub = f.app.deviceWindowRequests.listen((_) => raised++);
+    f.connection.server.append('Fix it', conversationId: 'design-lead');
+    final root = 'message-${f.connection.server.revision}';
+    await threadOnly(f, 'design-lead', root);
+    await settle();
+    await sub.cancel();
+    expect(raised, 0);
+    expect(f.app.activeSwarmId, other);
+    expect(f.app.activeSwarmId, isNot(tab));
+    expect(c.openedThread?.conversationId, 'design-lead');
+    expect(c.openedThread?.root, root);
+  });
+
+  test('a threadOnly open in a group chat opens the group\'s thread', () async {
+    final (f, c) = await openChats();
+    f.connection.server.append('Fix it', conversationId: 'design-fix');
+    final root = 'message-${f.connection.server.revision}';
+    await threadOnly(f, 'design-fix', root);
+    await settle();
+    expect(c.selectedId, 'design-fix');
+    expect(c.openedThread?.conversationId, 'design-fix');
+    expect(c.openedThread?.root, root);
+  });
+
+  test('a threadOnly close closes only that conversation\'s thread', () async {
+    final (f, c) = await openChats();
+    c.select('design-fix');
+    c.openThread('m-root');
+    await threadOnly(f, 'design-fix', null);
+    await settle();
+    expect(c.openedThread, isNull);
+    expect(c.selectedId, 'design-fix');
+  });
+
+  test('a threadOnly close for another conversation changes nothing', () async {
+    final (f, c) = await openChats();
+    c.select('design-fix');
+    c.openThread('m-root');
+    await threadOnly(f, 'design-lead', null);
+    await settle();
+    expect(c.openedThread?.root, 'm-root');
+    expect(c.selectedId, 'design-fix');
+  });
+
+  // A dial open that waits for its root (the post is still on its way).
+  String nextRoot(SuperTabLaunchFixture f) =>
+      'message-${f.connection.server.revision + 1}';
+
+  Future<void> arrive(SuperTabLaunchFixture f, SuperTabController c) async {
+    f.connection.server.append('Fix it', conversationId: 'design-lead');
+    await c.refresh();
+    await settle();
+  }
+
+  test('a thread the person opens while a dial open waits is kept', () async {
+    final (f, c) = await openChats();
+    final root = nextRoot(f);
+    await threadOnly(f, 'design-lead', root);
+    await settle();
+    expect(c.openedThread, isNull);
+    c.openThread('m-root');
+    await arrive(f, c);
+    expect(c.openedThread?.root, 'm-root');
+  });
+
+  test('a leave while the dial\'s thread still waits opens nothing later', () async {
+    final (f, c) = await openChats();
+    final root = nextRoot(f);
+    await threadOnly(f, 'design-lead', root);
+    await settle();
+    await threadOnly(f, 'design-lead', null);
+    await settle();
+    await arrive(f, c);
+    expect(c.openedThread, isNull);
+  });
+
+  test('a newer dial thread replaces a pending one', () async {
+    final (f, c) = await openChats();
+    final first = 'message-2';
+    await threadOnly(f, 'design-lead', first);
+    await settle();
+    f.connection.server.append('Other', conversationId: 'design-lead');
+    final second = 'message-${f.connection.server.revision}';
+    await threadOnly(f, 'design-lead', second);
+    await settle();
+    await arrive(f, c);
+    expect(c.openedThread?.root, second);
+  });
+
+  test('a thread the dial opens in a background tab marks nothing read until shown', () async {
+    final (f, c) = await openChats();
+    final server = f.connection.server..threads = true;
+    server.append('Fix it', conversationId: 'design-lead');
+    final root = 'message-${server.revision}';
+    server.append('Reply', conversationId: 'design-lead');
+    server.messages.last
+      ..['thread'] = root
+      ..['replyTo'] = root;
+    await threadOnly(f, 'design-lead', root);
+    await settle();
+    await c.loadThread();
+    await settle();
+    expect(c.openedThread?.root, root);
+    expect(server.threadMarkPosts, isEmpty);
+    c.threadPaneShown();
+    await settle();
+    expect(server.threadMarkPosts, hasLength(1));
+  });
+
+  // Review of #2756 (ENGINEERING.md §1, §2): only the thread-only message
+  // opens or closes the dial's thread. An ordinary pick, which nothing sends
+  // with a root, keeps whatever thread the person has open.
+  test('an ordinary dial pick leaves the open thread as it is, whatever root it names', () async {
+    final (f, c) = await openChats();
+    f.connection.server.append('Fix it', conversationId: 'design-lead');
+    final posted = 'message-${f.connection.server.revision}';
+    c.select('design-lead');
+    await settle();
+    c.openThread('m-root');
+    for (final root in [posted, null]) {
+      await f.app.handleEventForTest('m', {
+        'type': 'dial_super_tab',
+        'payload': {
+          'superTabId': tabId,
+          'projectId': 'design',
+          'threadRoot': root,
+        },
+      });
+      await settle();
+      expect(c.selectedId, 'design-lead');
+      expect(c.openedThread?.root, 'm-root', reason: '$root');
+    }
+  });
+
+  // Review of #2756 (ENGINEERING.md §6): a dial thread whose root never
+  // reaches the chat is given up, and the log says so, without its root.
+  test('a dial thread whose root never arrives is given up, and logged', () async {
+    final lines = <String>[];
+    final previous = appLog;
+    appLog = _RecordingLog(lines);
+    addTearDown(() => appLog = previous);
+    final (f, c) = await openChats();
+    f.app.dialThreadWaitForTest = const Duration(milliseconds: 20);
+    await threadOnly(f, 'design-lead', 'message-never');
+    // Waits for the give-up's log line itself, never a fixed time (ENGINEERING.md §3).
+    final given = DateTime.now().add(const Duration(seconds: 5));
+    while (!lines.any((l) => l.contains('thread')) &&
+        DateTime.now().isBefore(given)) {
+      await settle();
+    }
+    expect(c.openedThread, isNull);
+    expect(lines.where((l) => l.contains('thread')), hasLength(1));
+    expect(lines.join('\n'), isNot(contains('message-never')));
+  });
+
   test('a decisions view or an unloaded Swarm leaves conversationId out', () async {
     final (f, c) = await openChats();
     c.select('design-pm');
@@ -485,4 +711,17 @@ void main() {
     hold.complete();
     await settle();
   });
+}
+
+class _RecordingLog implements AppLog {
+  _RecordingLog(this.lines);
+  final List<String> lines;
+  @override
+  void record(
+    AppLogLevel level,
+    String category,
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) => lines.add('$category $message');
 }

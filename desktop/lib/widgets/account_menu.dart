@@ -41,6 +41,7 @@ Future<AccountMenuChoice?> showAccountMenu(
   double topInset = 0,
   bool focusFirst = false,
   bool forPhone = false,
+  String? version,
   bool devices = true,
   void Function(void Function() close)? onOpen,
   bool Function(Offset position)? ownsPointer,
@@ -56,6 +57,7 @@ Future<AccountMenuChoice?> showAccountMenu(
     name: name,
     email: email,
     forPhone: forPhone,
+    version: version,
     devices: devices,
     onChoose: close,
   ),
@@ -68,6 +70,7 @@ class AccountMenu extends StatelessWidget {
     required this.email,
     required this.onChoose,
     this.forPhone = false,
+    this.version,
     this.devices = true,
   });
 
@@ -79,6 +82,11 @@ class AccountMenu extends StatelessWidget {
   /// The web on a phone: rows a finger can hit, and no Add Phone (a phone is
   /// already here). Its compact bar keeps Devices and the Store itself.
   final bool forPhone;
+
+  /// The version this build runs, when it says one: the web build's, so a page
+  /// held open since a release can be told from the new one (task #2185).
+  /// Desktop gives none, and its menu is as it was.
+  final String? version;
 
   /// Whether this build has Devices (`AppNotifier.devicesEnabled`).
   final bool devices;
@@ -178,6 +186,19 @@ class AccountMenu extends StatelessWidget {
                     ),
                   ),
                 ],
+              if (version case final version?) ...[
+                const AppMenuDivider(),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(15, 6, 15, 4),
+                  child: Text(
+                    'Harness $version',
+                    key: const ValueKey('account-menu-version'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: DesktopChrome.metadata(),
+                  ),
+                ),
+              ],
             ],
           ),
         ),

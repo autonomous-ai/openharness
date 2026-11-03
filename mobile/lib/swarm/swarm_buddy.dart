@@ -1,6 +1,5 @@
 import 'package:flutter/foundation.dart';
 
-import 'identity.dart';
 import 'model.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
@@ -499,17 +498,14 @@ String _machineName(Object? name, {String fallback = 'Your machine'}) {
       : name;
 }
 
-/// A person of [reader]'s Swarm by the name it shows them by: their address
-/// before the @; "its owner" while the Swarm does not list them (the
+/// A person of [reader]'s Swarm by the name it shows them by: their username;
+/// "its owner" while the Swarm does not list them (the
 /// desktop's `buddyPersonName`).
 String swarmBuddyPersonName(SwarmReader reader, String personId) {
-  final email = reader.snapshot?.people
+  final person = reader.snapshot?.people
       .where((p) => p.id == personId)
-      .firstOrNull
-      ?.email;
-  return email == null || email.isEmpty
-      ? 'its owner'
-      : superTabPersonName(email);
+      .firstOrNull;
+  return person == null || person.email.isEmpty ? 'its owner' : person.username;
 }
 
 /// Opens the person's Buddy chat in [projectId], on the server first when

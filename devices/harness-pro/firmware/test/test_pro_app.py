@@ -111,12 +111,13 @@ static struct {   // what the last contact (or call) made the app send
     bool abort_was_pending;
     char open_id[ID_MAX];
 } R;
-static struct { bool open, pending, waiting, hold_pending, refuse; int lost; char agent[ID_MAX]; } V;
+static struct { bool open, pending, waiting, hold_pending, refuse, face; int lost; char agent[ID_MAX]; } V;
 static struct { int n, offset[64]; uint32_t request[64]; bool ok, supported; } LIB = {.ok = true, .supported = true};
 static struct { int n; ht_scroll_phase_t phase[64]; int dy[64], v[64]; } SC;
 
 bool pro_cable_send_open(const char *id) { CHECK(LOCK_DEPTH == 0); R.opens++; snprintf(R.open_id, sizeof R.open_id, "%s", id); return true; }
 static struct { int n; bool fail; char t[16][24], tab[16][ID_MAX], lead[16][ID_MAX]; } SUP;   // the Swarm cards' select / open / recap.get frames
+bool pro_cable_supertab_side(const char *tab, const char *side) { CHECK(LOCK_DEPTH == 0); (void)tab; (void)side; return true; }
 bool pro_cable_supertab_send(const char *t, const char *tab, const char *lead) {
     CHECK(LOCK_DEPTH == 0);
     if (SUP.fail) return false;
@@ -137,7 +138,8 @@ bool pro_cable_library_supported(void) { return LIB.supported; }
 cable_link_stats_t cable_link_stats(void) { return (cable_link_stats_t){0}; }
 void pro_cable_counters(uint32_t *bad, uint32_t *unknown) { *bad = 0; *unknown = 0; }
 static bool GATE_IN_BEGIN;   // the race: an offer's gate lands while a voice start is between its gate check and its begin
-void pro_voice_begin(const char *agent) {
+void pro_voice_begin(const char *agent, bool face) {
+    V.face = face;
     CHECK(LOCK_DEPTH == 0);
     if (GATE_IN_BEGIN) (void)pro_app_begin_update_gate();
     R.begins++;
@@ -350,7 +352,7 @@ static void lead_view_via_app(void) {
     CHECK(top() == POD_V_LEAD && U.nav.depth == 2);
     CHECK(SUP.n == 3 && !strcmp(SUP.t[0], "supertab.select") && !strcmp(SUP.t[1], "supertab.open") && !strcmp(SUP.t[2], "supertab.recap.get"));
     CHECK(!strcmp(SUP.tab[2], "sw1") && !strcmp(SUP.lead[2], "l1") && !strcmp(SUP.lead[0], "l1"));
-    pro_app_supertab_recap("sw1", "l1", "Merged and shipped.", 1792560000u, false);   // the answer lands: drawn, nothing more sent
+    pro_app_supertab_recap("sw1", "l1", "", "Merged and shipped.", 1792560000u, false);   // the answer lands: drawn, nothing more sent
     render();
     CHECK(U.model.swarms[0].leads[1].recap == POD_RECAP_LOADED && SUP.n == 3);
     memset(&SUP, 0, sizeof SUP);
@@ -377,6 +379,23 @@ static int first_text_y(const char *word) {   // the y of the drawn run that sta
     for (int i = 0; i < S.count; i++) if (S.runs[i].text[0] && !strncmp(S.runs[i].text, word, strlen(word))) return S.runs[i].y;
     return -1;
 }
+// A tap on a Lead view talks to its face chat, and says so (Swarm parity part 3 on part 1's rule): without `face` the daemon posts
+// the words in the Lead conversation, so on the Buddy side the person's Buddy words would land in the shared chat.
+static void lead_view_talk_says_face(void) {
+    setup();
+    swarm_feed(3);
+    pod_swarm_t *sw = (pod_swarm_t *)pod_model_swarm(&U.model, "sw1");
+    snprintf(sw->leads[1].local, ID_MAX, "a1");
+    swarm_home_page();
+    tap(POD_A_LEAD, 1);
+    CHECK(top() == POD_V_LEAD);
+    render();
+    bool c;
+    contact(true, 360, 600, &c);
+    contact(false, 360, 600, &c);
+    CHECK(R.begins == 1 && !strcmp(V.agent, "a1") && pod_ui_talking(&U));
+    CHECK(V.face);
+}
 static void lead_view_scrolls_via_app(void) {
     setup();
     swarm_feed(3);
@@ -385,7 +404,7 @@ static void lead_view_scrolls_via_app(void) {
     swarm_home_page();
     tap(POD_A_LEAD, 1);
     CHECK(top() == POD_V_LEAD && !strcmp(U.nav.stack[1].agent, "a1"));
-    pro_app_supertab_recap("sw1", "l1", LONG_LEAD, 1792560000u, false);
+    pro_app_supertab_recap("sw1", "l1", "", LONG_LEAD, 1792560000u, false);
     render();
     CHECK(pod_scroll_max(&U.nav, &U.model) >= 2 && first_text_y("one") >= 0);
     now += 2000;
@@ -1722,6 +1741,14 @@ static void pro_app_test_voice_gate(void) {
     CHECK(!strcmp(pro_app_voice_block_reason("a1"), "Answer its question first."));
     pro_app_question_close("a1");
     CHECK(pro_app_voice_block_reason("a1") == NULL);
+    // buddy_talk_not_blocked_by_question: a talk opened from a Lead view (a Swarm face) goes to its chat, so the terminal's question, pane type and offline machine block nothing
+    pro_app_question("a1", "r1", "Which?", NULL, POD_ATTN_NONE);
+    memset(&U.nav, 0, sizeof U.nav);
+    U.nav.depth = 1; U.nav.stack[0].view = POD_V_TALK; snprintf(U.nav.stack[0].swarm, ID_MAX, "sw1");
+    CHECK(pro_app_voice_block_reason("a1") == NULL && pro_app_voice_block_reason("a2") == NULL && pro_app_voice_block_reason("a4") == NULL);
+    pod_nav_init(&U.nav);
+    CHECK(!strcmp(pro_app_voice_block_reason("a1"), "Answer its question first."));
+    pro_app_question_close("a1");
     // A Super Tab wait is not answered here: talking to the agent is how it is unblocked.
     pro_app_question("a1", "supertab:as1:needs_human", "Which?", "Launch v2", POD_ATTN_DECISION);
     CHECK(pro_app_voice_block_reason("a1") == NULL);
@@ -2009,6 +2036,24 @@ static void notify_banner_beep_and_expiry(void) {
     CHECK(pro_app_asleep());
     pro_app_summary("a3", "t", "In the dark.", NULL, false, POD_TIER_ALERT);
     CHECK(BEEPS == 1 && U.model.unread_count == 1 && !pro_app_asleep());
+}
+
+// A Swarm chat's notice through the app: an entry, the toast, one beep and a wake (a muted Pro is silent); a read removes it. Phase 1 ignores the Buddy's chat.
+static void swarm_notice_and_buddy_chat(void) {
+    notif_room();
+    swarm_feed(3);
+    pro_app_supertab_notice("sw1", "l1", "buddy", "b1", "The Buddy answered.");   // buddy_chat_notice_ignored_in_phase_1
+    CHECK(BEEPS == 0 && U.model.unread_count == 0 && !U.ban_on);
+    pro_app_supertab_notice("sw1", "l1", "lead", "c1", "The Lead answered. More.");
+    CHECK(BEEPS == 1 && U.model.unread_count == 1 && U.ban_on && !strcmp(U.model.unread[0].tab, "sw1") && !strcmp(U.model.unread[0].agent, "l1"));
+    render();
+    CHECK(banner() && !strcmp(banner()->id, "l1"));
+    pro_app_supertab_notice_read("sw1", "l1", "c1");
+    render();
+    CHECK(U.model.unread_count == 0 && !U.ban_on && banner() == NULL);
+    MUTED = true; now += 40000;
+    pro_app_supertab_notice("sw1", "l2", "group", "g1", "Muted.");
+    CHECK(BEEPS == 1 && U.model.unread_count == 1);
 }
 
 // The tiers: alert = entry + toast + beep + wake; list = entry only; silent = nothing. One beep per 30 s; one entry per agent.
@@ -2546,6 +2591,7 @@ static void console_tap_talks_on_the_touch_path(void) {
     CHECK(R.begins == 0 && !V.open && top() == POD_V_AGENT);
     contact(false, 360, 400, &c);                                // the lift talks, with no pro_app_tick and no render between
     CHECK(R.begins == 1 && V.open && !strcmp(V.agent, "a1") && pod_ui_talking(&U) && LOCK_DEPTH == 0);
+    CHECK(!V.face);   // an agent room shows no chat: its words go to the harness, never a Swarm chat (review of #2298)
     render();                                                    // the Talk frame, whose full-screen hit is topmost
     contact(true, 20, 20, &c);                                  // a new tap anywhere (here over the bar) sends
     contact(false, 20, 20, &c);
@@ -2615,7 +2661,7 @@ int main(int argc, char **argv) {
         {"library_fills_other_tabs", library_fills_other_tabs}, {"sweep_schedule", sweep_schedule},
         {"notice_shows_three_seconds", notice_shows_three_seconds}, {"link_drop_keeps_the_stack", link_drop_keeps_the_stack}, {"orphan_recording_is_discarded", orphan_recording_is_discarded}, {"side_button_discards_hands_free", side_button_discards_hands_free},
         {"send_before_recorder_started", send_before_recorder_started}, {"cap_leaves_talking", cap_leaves_talking},
-        {"lead_view_via_app", lead_view_via_app}, {"lead_view_scrolls_via_app", lead_view_scrolls_via_app}, {"lead_close_owed_on_busy_link", lead_close_owed_on_busy_link}, {"lead_view_relink_and_focus", lead_view_relink_and_focus}, {"tap_resolves_by_id", tap_resolves_by_id}, {"utf8_cuts", utf8_cuts}, {"clock_wrap", clock_wrap}, {"small_cable_stack", small_cable_stack},
+        {"lead_view_via_app", lead_view_via_app}, {"lead_view_scrolls_via_app", lead_view_scrolls_via_app}, {"lead_view_talk_says_face", lead_view_talk_says_face}, {"lead_close_owed_on_busy_link", lead_close_owed_on_busy_link}, {"lead_view_relink_and_focus", lead_view_relink_and_focus}, {"tap_resolves_by_id", tap_resolves_by_id}, {"utf8_cuts", utf8_cuts}, {"clock_wrap", clock_wrap}, {"small_cable_stack", small_cable_stack},
         {"activity_text_is_stable_through_the_real_cadence", activity_text_is_stable_through_the_real_cadence},
         {"follow_from_tabs", follow_from_tabs}, {"follow_from_another_agent", follow_from_another_agent}, {"follow_same_agent_is_a_no_op", follow_same_agent_is_a_no_op},
         {"follow_ignored_while_talking", follow_ignored_while_talking}, {"follow_waits_out_the_users_touch", follow_waits_out_the_users_touch},
@@ -2632,7 +2678,7 @@ int main(int argc, char **argv) {
         {"pro_app_test_sweep_retries", pro_app_test_sweep_retries}, {"pro_app_test_voice_gate", pro_app_test_voice_gate},
         {"pro_app_test_voice_paths", pro_app_test_voice_paths}, {"pro_app_test_touch_rules", pro_app_test_touch_rules},
         {"pro_app_test_roster_and_swarms", pro_app_test_roster_and_swarms}, {"side_button", side_button}, {"side_button_console", side_button_console}, {"question_needs_the_link", question_needs_the_link},
-        {"notify_banner_beep_and_expiry", notify_banner_beep_and_expiry}, {"notify_tap_opens_and_swipe_dismisses", notify_tap_opens_and_swipe_dismisses},
+        {"notify_banner_beep_and_expiry", notify_banner_beep_and_expiry}, {"swarm_notice_and_buddy_chat", swarm_notice_and_buddy_chat}, {"notify_tap_opens_and_swipe_dismisses", notify_tap_opens_and_swipe_dismisses},
         {"notify_never_over_talk", notify_never_over_talk}, {"notify_tiers", notify_tiers}, {"notify_question_and_error", notify_question_and_error}, {"notify_supertab_question_stays", notify_supertab_question_stays}, {"supertab_question_survives_turns", supertab_question_survives_turns}, {"supertab_question_link_drop", supertab_question_link_drop}, {"supertab_question_close_and_failure", supertab_question_close_and_failure}, {"notify_entries_expire", notify_entries_expire}, {"notify_question_entry_ends_with_question", notify_question_entry_ends_with_question}, {"notify_question_resent_after_relink_is_quiet", notify_question_resent_after_relink_is_quiet}, {"notify_question_same_prompt_new_request_beeps", notify_question_same_prompt_new_request_beeps}, {"notify_replace_seen_and_read", notify_replace_seen_and_read},
         {"ota_screen_and_touch", ota_screen_and_touch}, {"voice_refused_while_updating", voice_refused_while_updating},
         {"update_gate", update_gate}, {"ota_failed_returns", ota_failed_returns}, {"ota_keeps_awake", ota_keeps_awake},

@@ -343,7 +343,7 @@ class ApiClient {
     final data = unwrapApiResponse(res) as Map<String, dynamic>;
     return (data['transcript'] as String? ?? '').trim();
   }
-  // -- Swarm reads (the viewer's own session signs them) --
+  // -- Swarm requests (the viewer's own session signs them) --
 
   /// One read of the Swarm ([path], `/api/super-tabs…`), straight from the
   /// backend with this viewer's own sign-in, as the web build reads it
@@ -354,6 +354,37 @@ class ApiClient {
   /// transport threw.
   Future<Object?> swarmRead(String path) async {
     final response = await _dio.get<dynamic>(path);
+    return _swarmValue(response);
+  }
+
+  /// A Swarm write signed by this phone. Keep [body], including its operation
+  /// ID, unchanged through bearer refresh and caller retries. The caller cancels
+  /// it on account change, preventing a refresh from replaying for a new account.
+  /// Never forward a command or its bearer to a redirect or another origin.
+  Future<Object?> swarmWrite(
+    String path, {
+    Map<String, dynamic>? body,
+    CancelToken? cancel,
+  }) async {
+    final uri = Uri.parse(path);
+    if (uri.hasScheme ||
+        uri.hasAuthority ||
+        !uri.path.startsWith('/api/super-tabs/') ||
+        uri.pathSegments.any((segment) => segment == '.' || segment == '..') ||
+        uri.hasQuery ||
+        uri.hasFragment) {
+      throw ArgumentError.value(path, 'path', 'Expected a Swarm backend path');
+    }
+    final response = await _dio.post<dynamic>(
+      path,
+      data: body,
+      cancelToken: cancel,
+      options: Options(followRedirects: false),
+    );
+    return _swarmValue(response);
+  }
+
+  static Object? _swarmValue(Response<dynamic> response) {
     final status = response.statusCode ?? 0;
     var body = response.data;
     if (body is String) {

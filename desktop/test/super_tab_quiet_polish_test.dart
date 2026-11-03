@@ -18,6 +18,7 @@ Map<String, dynamic> _taskLine(int sequence, String state, String title) => {
   'conversationId': 'lead',
   'sequence': sequence,
   'text': '$title · $state',
+  'thread': 'line-$sequence',
   'createdAt': '2026-11-02T09:00:00Z',
   'author': {'kind': 'agent', 'id': 'kai', 'name': 'Kai'},
   'source': {
@@ -151,8 +152,11 @@ void main() {
         });
       await showView(tester, server);
       final text = tester.getTopLeft(find.text('A plain message.')).dx;
-      expect(tester.getTopLeft(find.text('Windows credential fix')).dx, text);
-      expect(tester.getTopLeft(find.textContaining('Proposal from')).dx, text);
+      expect(
+        tester.getTopLeft(find.text('Windows credential fix · working')).dx,
+        text,
+      );
+      expect(tester.getTopLeft(find.text('Goal: Activity read fix')).dx, text);
     });
   });
 
@@ -207,18 +211,18 @@ void main() {
     });
   });
 
-  group("a task's pane", () {
+  group("a task message's thread pane", () {
     Future<void> open(WidgetTester tester) async {
       final server = swarm();
       server.messages.add(_taskLine(1, 'working', 'Windows credential fix'));
-      await showView(tester, server);
-      await tester.tap(find.text('Windows credential fix').first);
+      final c = await showView(tester, server);
+      c.openThread('line-1');
       await tester.pumpAndSettle();
     }
 
     testWidgets("its header's rule meets the chat's", (tester) async {
       await open(tester);
-      final panel = find.byKey(const ValueKey('super-task-panel-close'));
+      final panel = find.byKey(const ValueKey('super-thread-close'));
       final rule = find.descendant(
         of: find.ancestor(of: panel, matching: find.byType(Column)).first,
         matching: find.byType(Divider),
@@ -230,8 +234,8 @@ void main() {
       tester,
     ) async {
       await open(tester);
-      final box = _key('super-task-reply-surface');
-      final close = tester.getTopRight(_key('super-task-panel-close')).dx;
+      final box = _key('super-thread-composer-surface');
+      final close = tester.getTopRight(_key('super-thread-close')).dx;
       expect(tester.getTopRight(box).dx, lessThan(close));
       expect(900 - tester.getBottomLeft(box).dy, greaterThanOrEqualTo(16));
     });
