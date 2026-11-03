@@ -5347,7 +5347,7 @@ describe('swarm cards', () => {
         const { session, port } = await connect(host)
         try {
           port.say(BUDDY); await settle()
-          port.say({ t: 'voice.begin', uploadId: 'u-h1', agentId: 'h1' })
+          port.say({ t: 'voice.begin', uploadId: 'u-h1', agentId: 'h1', face: true })
           port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
           await vi.waitFor(() => expect(swarmSay).toHaveBeenCalled())
           expect(swarmSay.mock.calls).toEqual([['h1', 'ship it', 'buddy', 'pm1']])
