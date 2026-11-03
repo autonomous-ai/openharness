@@ -75,7 +75,9 @@ export function askBuddyModel(state: SuperTabState, actor: Actor, gridModel: str
   if (buddy.modelRequest) fail('BUDDY_SWITCHING', 'Your Buddy is already switching.', 409)
   const shown = gridModel === null ? {} : served(state, gridModel, now)
   if (!shown) fail('BUDDY_MODEL_UNAVAILABLE', 'Nobody in the Swarm serves that model now.', 409)
-  buddy.modelRequest = { id: requestId, gridModel, ...shown, requestedBy: buddy.buddyOf!.personId, at: new Date(now).toISOString() }
+  // The grid its machine moves it onto (agent_retarget's gridName): the Swarm's own, the one the models were checked on.
+  buddy.modelRequest = { id: requestId, gridModel, ...(gridModel === null ? {} : { gridName: state.localModels!.grid }), ...shown,
+    requestedBy: buddy.buddyOf!.personId, at: new Date(now).toISOString() }
 }
 
 /** Sends [buddy]'s main Buddy home to its owner's subscription by itself, unless it is on it, already switching, or its machine
