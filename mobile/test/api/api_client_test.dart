@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -303,6 +304,27 @@ void main() {
       await expectLater(client(_Tokens(['token'])).swarmWrite(path, body: body),
         throwsA(isA<SuperTabFailure>().having((f) => f.statusCode, 'status', 307)));
       expect(backend.requests.single.followRedirects, isFalse);
+    });
+
+    test('cancelling an in-flight write prevents a later 401 replay', () async {
+      final tokens = _Tokens(['old-account', 'new-account']);
+      final reached = Completer<void>();
+      final release = Completer<void>();
+      backend.hold = (_, _) async {
+        reached.complete();
+        await release.future;
+      };
+      backend.answer = (_, _) => (status: 401, body: {'success': false});
+      final cancel = CancelToken();
+      final writing = client(tokens).swarmWrite(path, body: body, cancel: cancel);
+      final stopped = expectLater(writing, throwsA(isA<DioException>()));
+      await reached.future;
+      cancel.cancel('account changed');
+      release.complete();
+      await stopped;
+      await Future<void>.delayed(Duration.zero);
+      expect(backend.requests, hasLength(1));
+      expect(tokens.asks.where((a) => a.force), isEmpty);
     });
 
     test('a foreign absolute URL is rejected before credentials are used', () async {
