@@ -23,18 +23,11 @@ agents from every lab on them, with work verified before it ships.**
 - **People bring the capacity; the Product Manager decides what it builds.** Everyone in a Swarm can bring a machine
   or a subscription, and it joins one pool used before anyone waits.
 
-**The bet.** AI coding is no longer limited by models. It is limited by people's attention and by paid capacity sitting
-idle: teams pay for Claude and Codex plans they use a fraction of, and every extra agent adds work a person must check.
-Harness turns a team's existing subscriptions and machines into a crew that ships verified work around the clock with
-almost no one's attention.
-
 ## Who it is for
 
 In this order:
 
 1. **The Swarm owner.** One person running 5–50 agents on two or more machines: a founder, a staff engineer.
-   The first market is the team around them: AI-native software teams of 2–20 engineers already paying for three or more
-   Claude or Codex plans.
    Customer zero is Harness itself: the openharness project and Autonomous's other Swarms ship through Harness every
    day. A wall they hit is the most trustworthy backlog item we have.
 2. **Contributors.** People who bring a machine or a subscription into a Swarm: a teammate's idle Mac, a GPU box, a
@@ -67,8 +60,6 @@ Every lab now gives away a lead-plus-workers swarm inside its own subscription, 
 Linear own human team chat and the system of record. Harness owns what they structurally will not:
 
 - **Every vendor at once**, in one crew (a Claude Engineer reviewed by a Codex Reviewer).
-- **Every teammate's plans, from every vendor, in one pool.** A lab's own crew runs on one person's plan from that lab;
-  cloud agents bill per task or per compute minute. A Swarm runs on all the plans its people already pay for.
 - **The customer's own machines and devices**, and their subscriptions, as one pool of capacity.
 - **Verification before work reaches GitHub**: independent review, and tests on real machines and real devices.
 - **Work across accounts**: people and machines from different accounts in one Swarm, safely.
