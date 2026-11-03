@@ -4772,6 +4772,24 @@ describe('lead.switch', () => {
     expect(s.f.state.conversations.find(c => c.id === 'lead')!.leadId).toBe(s.pm)
   })
 
+  it('publishes the prepared handoff only to the destination host start after the source claims the switch', () => {
+    const s = setup()
+    const destination = structuredClone(s.f.state.machines![0]!)
+    destination.machineId = 'destination'
+    destination.generation = 'g2'
+    destination.observation!.generation = 'g2'
+    destination.observation!.capabilities = ['leadSwitch', 'leadStart']
+    s.f.state.machines!.push(destination)
+    s.f.run({ ...s.request, machineId: 'destination', model: 'gpt-5.1' })
+    const switchId = s.sid()
+    const start = s.f.state.starts!.find(candidate => candidate.request.leadFor?.switchId === switchId)!
+    s.f.run({ type: 'agent.switchClaim', agentId: s.pm, switchId }, s.as)
+
+    s.f.run({ type: 'agent.switchHandoff', agentId: s.pm, switchId, handoffChangeId: 'f'.repeat(32), note: 'Prior work summary.' }, s.as)
+
+    expect(start.request).toMatchObject({ handoffChangeId: 'f'.repeat(32), handoffSourceAgentId: s.pm, handoffNote: 'Prior work summary.' })
+  })
+
   it('promotes a running destination candidate to the same lead conversation exactly when it starts', () => {
     const s = setup()
     const destination = structuredClone(s.f.state.machines![0]!)
