@@ -80,6 +80,25 @@ describe('ordinary task messages and progress replies', () => {
     expect(posted.messages.filter(m => m.recipients.includes(f.pm))).toHaveLength(1)
   })
 
+  it('reports each newly merged pull request once, including a second pull request for the same task', () => {
+    const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId
+    const second = 'https://github.com/example/app/pull/8'
+    for (const url of [PR, second]) {
+      const merged = f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: url })
+      expect(merged.messages.filter(m => m.thread === root)).toEqual([expect.objectContaining({ text: `Merged ${url}.`, source: { kind: 'system' } })])
+      expect(f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: url }).messages.filter(m => m.thread === root)).toEqual([])
+    }
+  })
+
+  it('says when work is blocked instead of reporting that it started', () => {
+    const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId
+    const builder = f.add('Kai', id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: builder })
+    f.status(id, builder, 'working', 'Started.')
+    const blocked = f.status(id, builder, 'blocked', 'The build is unavailable.')
+    expect(blocked.messages.find(m => m.thread === root)!.text).toBe('Work is blocked.\n\nThe build is unavailable.')
+  })
+
   it('posts a newly linked pull request only once in the task thread', () => {
     const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId
     const builder = f.add('Kai', id)
