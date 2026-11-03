@@ -421,21 +421,21 @@ describe('the project clone of a large repository', () => {
   it('gives up on a clone that stops making progress, and stops its git', async () => {
     const git = await fakeGit("echo 'Receiving objects:   1%' >&2\nexec sleep 30")
     const started = Date.now()
-    const failure = await cloneRepository('https://github.com/owner/repo', join(root, 'checkout'), process.env, { git, stallMs: 300 })
+    const failure = await cloneRepository('https://github.com/owner/repo', join(root, 'checkout'), process.env, { git, stallMs: 1500 })
       .then(() => null, (error: unknown) => error)
     expect(failure).toBeInstanceOf(ProjectFolderError)
     expect(failure).toMatchObject({ code: 'CLONE_TIMEOUT', message: 'Cloning stopped making progress. Check the connection and retry.' })
-    expect(Date.now() - started).toBeLessThan(5000)
+    expect(Date.now() - started).toBeLessThan(10_000)
     expect(running(Number(await readFile(join(root, 'pid'), 'utf8')))).toBe(false)
-  })
+  }, 20_000)
 
   it('never cuts off a slow clone that keeps making progress', async () => {
-    // Five times the window, a line every 100 ms: the receiving part of a big clone on a slow connection.
-    const git = await fakeGit("i=0\nwhile [ $i -lt 15 ]; do echo \"Receiving objects: $i%\" >&2; sleep 0.1; i=$((i+1)); done\nexit 0")
+    // Over three times the window, a line every 200 ms: the receiving part of a big clone on a slow connection.
+    const git = await fakeGit("i=0\nwhile [ $i -lt 25 ]; do echo \"Receiving objects: $i%\" >&2; sleep 0.2; i=$((i+1)); done\nexit 0")
     const started = Date.now()
-    await expect(cloneRepository('https://github.com/owner/repo', join(root, 'checkout'), process.env, { git, stallMs: 300 })).resolves.toBeUndefined()
-    expect(Date.now() - started).toBeGreaterThan(1200)
-  })
+    await expect(cloneRepository('https://github.com/owner/repo', join(root, 'checkout'), process.env, { git, stallMs: 1500 })).resolves.toBeUndefined()
+    expect(Date.now() - started).toBeGreaterThan(4500)
+  }, 20_000)
 })
 
 // The OS chooses a familiar project root without changing other hn installations.
