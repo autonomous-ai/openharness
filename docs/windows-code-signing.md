@@ -64,10 +64,15 @@ The remaining steps wait for the organisation's permission grant:
 4. **Federated credential.** On that app → Certificates & secrets → Federated credentials → Add:
    - scenario: GitHub Actions deploying Azure resources
    - organization and repository: this repository
-   - entity type: **Environment**, name **`release`**
+   - scenario: **Other issuer**, issuer `https://token.actions.githubusercontent.com`, audience
+     `api://AzureADTokenExchange`
+   - subject: **`repo:autonomous-ai@98006261/openharness@1322671404:environment:release`**
 
-   This produces the subject `repo:autonomous-ai/openharness:environment:release`. Only jobs in that environment can
-   sign, and the environment's own rules decide which branches and tags those are.
+   This repository uses GitHub's immutable OIDC subject (`gh api repos/autonomous-ai/openharness/actions/oidc/customization/sub`
+   shows `use_immutable_subject: true`), which names the org and repository by ID too. The subject the "GitHub
+   Actions" scenario writes, `repo:autonomous-ai/openharness:environment:release`, never matches, and `azure/login`
+   fails with `AADSTS700213: No matching federated identity record`. Only jobs in that environment can sign, and the
+   environment's own rules decide which branches and tags those are.
 5. **Role.** On the certificate profile (not the account or the subscription) → Access control (IAM), assign
    **Artifact Signing Certificate Profile Signer** to the app registration.
 
