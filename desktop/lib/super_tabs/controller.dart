@@ -4749,6 +4749,9 @@ class SuperTabController extends ChangeNotifier {
       unawaited(_drainSends());
       return result.future;
     }
+    // Read before the upload's wait: another chat may be open by its end, and
+    // this session belongs to the chat it was sent from.
+    final inSwarmBuddyChat = selected?.isSwarmBuddyChat == true;
     final ids = await _uploadAll(
       conversationId,
       attachments(conversationId),
@@ -4775,9 +4778,7 @@ class SuperTabController extends ChangeNotifier {
       if (oneBuddy) 'oneBuddy': true,
       // A New session in one project of the reader's one Buddy chat (spec
       // 2026-10-31-one-buddy-per-swarm).
-      if (newSession &&
-          sessionProjectId != null &&
-          selected?.isSwarmBuddyChat == true)
+      if (newSession && sessionProjectId != null && inSwarmBuddyChat)
         'sessionProjectId': sessionProjectId,
     });
     // On its way: the message shows in the chat, and the draft is free for
