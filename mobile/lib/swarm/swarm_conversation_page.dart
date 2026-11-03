@@ -179,13 +179,8 @@ class SwarmConversationPage extends StatefulWidget {
   /// it is their Buddy chat.
   final SwarmBuddyActions? buddy;
 
-  /// Swarm Home C's project chat (Tony, 2026-10-30): an add-reaction chip
-  /// after a message's reactions. Every chat, this one, a Buddy chat and a
-  /// task's alike, has a New messages line above the first message the person
-  /// had not read as it opened ([swarmFirstUnread]), placed once, the chat
-  /// opening at it when it is above the screen; Jump to first unread while the
-  /// line is above the view and has not been seen; and Jump to latest while
-  /// they read more than a screen back (Desktop's `_checkUnreadLine`).
+  /// Swarm Home C's project chat (Tony, 2026-10-30): it gates only the
+  /// add-reaction chip after a message's reactions.
   final bool homeC;
 
   /// At the root of a tab, as the Buddy tab holds the person's Buddy chat: no
