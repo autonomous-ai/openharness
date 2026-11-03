@@ -27,6 +27,7 @@ const EXPIRY: Array<[string, string, Record<string, number>, number]> = [
   ...['SwarmWorkspace', 'SwarmWorkspaceMember', 'SwarmWorkspaceRemoval'].map(c => [c, 'workspace_purge', { purgeAt: 1 }, 0] as [string, string, Record<string, number>, number]),
   ['SwarmWorkspaceInvitation', 'workspace_invitation_expiry', { expiresAt: 1 }, 0],
   ['SuperTabMention', 'mention_expiry', { createdAt: 1 }, 30 * DAY],
+  ['SuperTabOperation', 'operation_expiry', { createdAt: 1 }, 30 * DAY],
   ['SuperTabTerminalRequest', 'terminal_request_expiry', { createdAt: 1 }, 120],
   ['product_usage_receipts', 'product_usage_expiry', { expiresAt: 1 }, 0],
   ['product_usage_totals', 'product_usage_expiry', { dayUtc: 1 }, 396 * DAY],
@@ -138,6 +139,26 @@ describe('a release\'s schema step', () => {
     const since = new Date()
     await releaseSchema(db, target)
     expect(await indexChanges(db, since)).toEqual(['collMod SuperTabMention mention_expiry'])
+    expect(await expiryIndexes(db)).toEqual(EXPIRY)
+    await db.$disconnect()
+  }, 240_000)
+
+  it('gives an existing collection its new expiry index when the database user may not run collMod (prod 10-29)', async () => {
+    const { db, target } = await database()
+    // Production before this release: the operations collection, with receipts, and no expiry index.
+    const before = await schemaWith(schema => schema.replace(/\n *\/\/\/[^\n]*\n *@@index\(\[createdAt\], map: "operation_expiry"\)/, ''))
+    await releaseSchema(db, { ...target, schema: before })
+    await db.$runCommandRaw({ dropIndexes: 'SuperTabOperation', index: 'operation_expiry' }).catch(() => {})
+    await db.superTabOperation.create({ data: { id: 'receipt', tabId: 't', actorKey: 'agent:a', requestHash: 'h', revision: 0, result: {} } })
+    // As Prisma reports Mongo's refusal (code 13) of collMod to production's app user; db push runs as its own process.
+    const refusing = new Proxy(db, { get: (held, key) => key === '$runCommandRaw'
+      ? (command: Record<string, unknown>) => 'collMod' in command
+        ? Promise.reject(new Error('Raw query failed. Code: `13`. Message: `not authorized on harness to execute command { collMod: "SuperTabOperation" }`'))
+        : held.$runCommandRaw(command as never)
+      : Reflect.get(held, key) })
+    const since = new Date()
+    await releaseSchema(refusing, target)
+    expect((await indexChanges(db, since)).filter(change => change.includes('SuperTabOperation'))).toEqual(['createIndexes SuperTabOperation operation_expiry'])
     expect(await expiryIndexes(db)).toEqual(EXPIRY)
     await db.$disconnect()
   }, 240_000)

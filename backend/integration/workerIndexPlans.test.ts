@@ -151,3 +151,20 @@ describe('the pending-upload sweep', () => {
     }
   })
 })
+
+describe('the operation receipts\' expiry (superTabs/operations.ts)', () => {
+  // Mongo's TTL monitor deletes by the expiry index's key, about once a minute: receipts past their 30 days, never a scan.
+  it('finds the receipts past their 30 days by the operation_expiry index, reading only those', async () => {
+    const { OPERATION_EXPIRY_MS } = await import('../src/superTabs/operations.js')
+    const row = (ageMs: number) => ({ id: randomUUID(), tabId: 'tab', actorKey: 'agent:a', requestHash: 'h', revision: 0, result: {}, createdAt: new Date(Date.now() - ageMs) })
+    await db.superTabOperation.createMany({ data: [...Array.from({ length: 40 }, () => row(DAY)), ...Array.from({ length: 3 }, () => row(40 * DAY))] })
+    const cutoff = new Date(Date.now() - OPERATION_EXPIRY_MS).toISOString()
+    const answer = await db.$runCommandRaw({ explain: { find: 'SuperTabOperation', filter: { createdAt: { $lt: { $date: cutoff } } } }, verbosity: 'executionStats' }) as
+      { queryPlanner: { winningPlan: unknown }; executionStats: { nReturned: number; totalDocsExamined: number } }
+    const winning = JSON.stringify(answer.queryPlanner.winningPlan)
+    expect(winning).toMatch(/"stage":"IXSCAN"/)
+    expect(winning).toMatch(/"indexName":"operation_expiry"/)
+    expect(answer.executionStats.nReturned).toBe(3)
+    expect(answer.executionStats.totalDocsExamined).toBe(3)
+  })
+})
