@@ -373,6 +373,14 @@ function span(ms: number): string {
   return `${Math.round(ms / 86_400_000)} days`
 }
 const resetsIn = (resetsAt: number, now: number) => span(Math.max(0, resetsAt - now))
+/** When a weekly window resets, to the hour past two days ("6d13h"): the PM paces its own account by the day since its reset
+ *  (project instructions, 2026-11-03), and "7 days", a whole day either way, left it half a day off. */
+function weeklyResetsIn(resetsAt: number, now: number): string {
+  const ms = Math.max(0, resetsAt - now)
+  if (ms < 48 * 3_600_000) return span(ms)
+  const hours = Math.round(ms / 3_600_000), days = Math.floor(hours / 24)
+  return hours % 24 ? `${days}d${hours % 24}h` : `${days}d`
+}
 function quotaText(q: Quota, now: number): string {
   if (q.metered) return 'quota metered'
   if (!q.known || q.leftPercent === null) return q.why ? `quota unknown (${q.why})` : 'quota unknown'
@@ -513,7 +521,7 @@ export function quotaBrief(p: Pick<Probe, 'quota' | 'gridModel'> & { fit: Pick<F
   const resetsAt = week ? week.resetsAt : p.quota.resetsAt
   // Why it is unknown says what would make it known (River, 2026-11-03): a Team account's reading its owner's machine relays.
   if (!p.quota.known || left === null) return `${p.fit.status}: ${p.quota.why ? cut(p.quota.why, 200) : 'weekly unknown'}`
-  return `${p.fit.status}: weekly ${Math.round(left)}% left${resetsAt === null ? '' : `, resets in ${resetsIn(resetsAt, now)}`}`
+  return `${p.fit.status}: weekly ${Math.round(left)}% left${resetsAt === null ? '' : `, resets in ${weeklyResetsIn(resetsAt, now)}`}`
 }
 
 /** One unrated new agent per machine of the named model's engine, on that machine's first row of the engine, which carries

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/identity.dart';
+import 'package:harness/super_tabs/pull_requests.dart';
 import 'package:harness/super_tabs/ship_row.dart';
 
 import 'super_tab_mentions_test.dart' show showView;
@@ -143,6 +144,102 @@ void main() {
     expect(find.text('Requested by'), findsNothing);
     expect(find.byType(SuperTabAvatar), findsNWidgets(2));
     await tester.pumpAndSettle();
+  });
+
+  group('pull request chips', () {
+    const own = 'https://github.com/autonomous-ai/openharness/pull/2527';
+    const wrongOwner = 'https://github.com/openharness/openharness/pull/2527';
+
+    test('two links for one pull request are one link, whatever their case', () {
+      final links = superTabPullRequestLinks(
+        '$own https://github.com/Autonomous-AI/OpenHarness/pull/2527 $own '
+        'https://github.com/autonomous-ai/openharness/pull/2528',
+      );
+      expect([for (final l in links) l.pathSegments[3]], ['2527', '2528']);
+    });
+
+    test('a pull request elsewhere than the project\'s repository names it', () {
+      final links = superTabPullRequestLinks('$own $wrongOwner');
+      expect(
+        superTabPullRequestLabels(
+          links,
+          repositoryUrl: 'git@github.com:autonomous-ai/openharness.git',
+        ),
+        ['openharness · PR #2527', 'openharness/openharness · PR #2527'],
+      );
+    });
+
+    test('the project\'s repository is read in every form git writes it', () {
+      final links = superTabPullRequestLinks('$own $wrongOwner');
+      for (final address in [
+        'ssh://git@github.com:22/autonomous-ai/openharness.git',
+        'ssh://git@ssh.github.com:443/Autonomous-AI/OpenHarness.git',
+        'git://github.com/autonomous-ai/openharness',
+        'https://github.com/autonomous-ai/openharness.git/',
+      ]) {
+        expect(
+          superTabPullRequestLabels(links, repositoryUrl: address),
+          ['openharness · PR #2527', 'openharness/openharness · PR #2527'],
+          reason: address,
+        );
+      }
+    });
+
+    test('without the project\'s repository, owners sharing a name show', () {
+      final both = superTabPullRequestLinks('$own $wrongOwner');
+      expect(superTabPullRequestLabels(both), [
+        'autonomous-ai/openharness · PR #2527',
+        'openharness/openharness · PR #2527',
+      ]);
+      expect(superTabPullRequestLabels(both.take(1).toList()), [
+        'openharness · PR #2527',
+      ]);
+    });
+
+    testWidgets('a ship line with two links for one pull request has one chip', (
+      tester,
+    ) async {
+      await show(
+        tester,
+        shipServer(
+          source: {
+            'pullRequests': [
+              own,
+              'https://github.com/Autonomous-AI/openharness/pull/2527',
+              'https://github.com/autonomous-ai/openharness/pull/2528',
+            ],
+          },
+        )..state['project'] = {
+          'machineId': 'm',
+          'cwd': '/work',
+          'repositoryUrl': 'https://github.com/autonomous-ai/openharness',
+        },
+      );
+      expect(find.text('openharness · PR #2527'), findsOneWidget);
+      expect(find.text('openharness · PR #2528'), findsOneWidget);
+      expect(find.byType(OutlinedButton), findsNWidgets(2));
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('a link in another repository shows owner and repository', (
+      tester,
+    ) async {
+      await show(
+        tester,
+        shipServer(
+          source: {
+            'pullRequests': [own, wrongOwner],
+          },
+        )..state['project'] = {
+          'machineId': 'm',
+          'cwd': '/work',
+          'repositoryUrl': 'https://github.com/autonomous-ai/openharness',
+        },
+      );
+      expect(find.text('openharness · PR #2527'), findsOneWidget);
+      expect(find.text('openharness/openharness · PR #2527'), findsOneWidget);
+      await tester.pumpAndSettle();
+    });
   });
 
   testWidgets('the conversation draws a ship message as the celebration', (

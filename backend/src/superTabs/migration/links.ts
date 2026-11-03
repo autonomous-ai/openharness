@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client'
 import { appendPullRequestUrls, type SuperTabState } from '../model.js'
+import { groupRepositoryUrl } from '../projects.js'
 
 /** Groups from before link lists have none. The migration rebuilds theirs once from complete stored history (moved from
  *  store.ts, where every read did it: reads never write once Swarms are in parts, design R8). */
@@ -20,6 +21,6 @@ export async function restorePullRequestUrls(tx: Prisma.TransactionClient, tabId
       ...messages.filter(message => message.conversationId === group.id).map(message => message.text),
       ...prior.flatMap(attempt => [...(attempt.checks ?? []).map(check => check.evidence), attempt.assignment?.result]),
       ...group.checks.map(check => check.evidence), group.assignment?.result,
-    ])
+    ], groupRepositoryUrl(state, group))
   }
 }

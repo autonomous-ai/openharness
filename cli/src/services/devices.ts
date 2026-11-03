@@ -174,7 +174,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** What became of words for a Lead, as the service answered: a refusal keeps its code and its message, cut to what a dial
    *  shows in a voice error. */
   const saidOf = (answer: Record<string, unknown>): SaidOnCard => {
-    if (answer.said === true) return { said: true }
+    if (answer.said === true) {
+      const t = answer.thread && typeof answer.thread === 'object' ? answer.thread as Record<string, unknown> : {}
+      const ids = [t.tabId, t.conversationId, t.root]
+      return ids.every((v): v is string => typeof v === 'string' && CHAT_ID.test(v)) ? { said: true, thread: { tabId: ids[0], conversationId: ids[1], root: ids[2] } } : { said: true }
+    }
     const refused = answer.refused && typeof answer.refused === 'object' ? answer.refused as Record<string, unknown> : {}
     if (typeof refused.code !== 'string' || typeof refused.message !== 'string') return { said: false }
     return { said: false, refused: { code: refused.code, message: truncateUtf8(refused.message, VOICE_ERROR_BYTES) } }
@@ -190,7 +194,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   let cardInclude: string[] = []
   // The conversation the window has open in its active Swarm tab, which the round dial's face follows (design
   // 2026-10-28-round-dial-swarm-chat): said with the wish, and left out when there is none, as before.
-  let cardFocus: { tabId: string; conversationId: string; fromDevice?: true } | null = null
+  let cardFocus: { tabId: string; conversationId: string; threadRoot?: string; fromDevice?: true } | null = null
   const tellCards = (): void => {
     const on = cardDevices > 0
     void askCards({ action: 'cardsWanted', on, include: on ? cardInclude : [], ...(on && cardFocus ? { focus: cardFocus } : {}) })
@@ -254,20 +258,32 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // name that chat by an id: a dial never shows it for another one.
     swarmCardRecap: async (tabId, leadId, chat) => {
       const r = await askCards({ action: 'cardRecap', tabId, leadId, ...chatFlag(chat) })
+      // A refusal fails with its code, which the dial's log names; null was silent (Diego, 2026-11-03).
+      if (r.ok !== true && typeof r.error === 'string') throw new Error(r.error)
       if (r.ok !== true || typeof r.text !== 'string' || typeof r.at !== 'number' || !Number.isInteger(r.at) || r.at < 0 || typeof r.none !== 'boolean') return null
       if (chat && !(typeof r.chatId === 'string' && CHAT_ID.test(r.chatId))) return null
       return { tabId, leadId, text: truncateUtf8(r.text, 1500), at: r.at, none: r.none, ...(chat ? { chatId: r.chatId as string } : {}),
-        ...(chat === 'buddy' ? { buddy: true as const } : {}) }
+        ...(chat === 'buddy' ? { buddy: true as const } : {}), ...(chat && typeof r.thread === 'string' && CHAT_ID.test(r.thread) ? { thread: r.thread } : {}) }
     },
     swarmCardOpen: (session, tabId, leadId, chat) => { void askCards({ action: 'cardOpen', session, tabId, leadId, ...chatFlag(chat) }) },
     swarmCardSide: (tabId, side) => { void askCards({ action: 'cardSide', tabId, side }) },
+    // The conversation whose thread the window should close, or null when the Lead's face was in none (or the service is away).
+    swarmThreadLeave: async (tabId, leadId, chat) => {
+      const r = await askCards({ action: 'cardThreadLeave', tabId, leadId, ...chatFlag(chat) })
+      return r.ok === true && typeof r.conversationId === 'string' && CHAT_ID.test(r.conversationId) ? { tabId, conversationId: r.conversationId } : null
+    },
     // An error (no service, a refused post) is not `said`: the words go to the harness instead, never lost.
-    swarmSay: async (harnessId, text, chat, chatId, reviewed) => saidOf(await askCards({ action: 'cardSay', harnessId, text, ...chatFlag(chat),
-      ...(chatId ? { chatId, ...(reviewed ? { reviewed: true } : {}) } : {}) })),
+    swarmSay: async (harnessId, text, chat, chatId, reviewed, options) => saidOf(await askCards({ action: 'cardSay', harnessId, text, ...chatFlag(chat),
+      ...(chatId ? { chatId, ...(reviewed ? { reviewed: true } : {}) } : {}), ...(options?.threaded ? { threaded: true } : {}),
+      ...(options?.thread !== undefined ? { thread: options.thread } : {}) })),
     // The Pro picked a Lead: the window opens that Swarm tab and project. Harmless with no window. `chat`, from a round dial
     // that keeps sides: the Buddy chat or the Lead chat there; a window from before it opens the project's Lead chat.
     superTabSelected: (superTabId, projectId, chat) =>
       core.clients.sendLocal({ type: 'dial_super_tab', payload: { superTabId, projectId, ...(chat ? { chat } : {}) } }),
+    // The dial's thread opened (a root) or closed (null) beside a conversation, with no project pick: no `projectId`, so an older
+    // window ignores it, and the new one neither raises nor refocuses (spec 2026-11-03-dial-thread-face).
+    superTabThread: (superTabId, conversationId, threadRoot) =>
+      core.clients.sendLocal({ type: 'dial_super_tab', payload: { superTabId, conversationId, threadRoot, threadOnly: true } }),
     scrolled: (phase, dy, velocity, superTabId) => core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity, ...(superTabId ? { superTabId } : {}) } }),
     // Gestures stay at this desk. The device inventory and its settings also reach the owner's other
     // machines, through the encrypted device-management event.
@@ -582,9 +598,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       const include = [...new Set((swarms?.swarms ?? []).map((s) => s.superTabId).filter((id): id is string => !!id))].slice(0, 16)
       const open = cableHost.activeSwarmProject()
       // `fromDevice`: the window followed a device's own pick, which the cards keep a dial's side through.
+      // `threadRoot`: the thread open beside it, whose opening or closing moves the dial's face too.
       const focus = open?.conversationId
-        ? { tabId: open.superTabId, conversationId: open.conversationId, ...(open.fromDevice ? { fromDevice: true as const } : {}) } : null
-      const refocused = `${focus?.tabId}/${focus?.conversationId}` !== `${cardFocus?.tabId}/${cardFocus?.conversationId}`
+        ? { tabId: open.superTabId, conversationId: open.conversationId, ...(open.threadRoot ? { threadRoot: open.threadRoot } : {}),
+          ...(open.fromDevice ? { fromDevice: true as const } : {}) } : null
+      const refocused = `${focus?.tabId}/${focus?.conversationId}/${focus?.threadRoot}` !== `${cardFocus?.tabId}/${cardFocus?.conversationId}/${cardFocus?.threadRoot}`
       if (include.join(',') !== cardInclude.join(',') || refocused) { cardInclude = include; cardFocus = focus; if (cardDevices > 0) tellCards() }
       void cable.syncSwarms()
       void cable.syncAgents()

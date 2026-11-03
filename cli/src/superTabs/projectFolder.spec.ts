@@ -146,6 +146,13 @@ describe('preparing another person\'s start with the Harness GitHub App', () => 
     expect(f.fetch).toHaveBeenCalledWith(f.start.request.cwd, options.gitEnv)
   })
 
+  it('fetches the branch a start names, not only the default branch: a single-branch clone has no other', async () => {
+    const f = hosted()
+    ;(f.start.request as Record<string, unknown>).branchRef = 'refs/remotes/origin/feature'
+    await f.ready()
+    expect(f.fetch).toHaveBeenCalledWith(f.start.request.cwd, expect.objectContaining({ HARNESS_SWARM_GIT_TOKEN: TOKEN }), 'refs/remotes/origin/feature')
+  })
+
   it('leaves the machine owner\'s own project, and a server without the app, to the owner\'s login as before', async () => {
     const own = hosted({ github: false })
     expect(await own.ready()).toBeNull()

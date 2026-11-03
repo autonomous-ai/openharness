@@ -28,7 +28,7 @@ import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
 
 import { PLAYER_STATES, type PlayerSession } from './playerLibrary.js'
-import type { CardChat, CardSide, LeadRecap, SaidOnCard, SwarmCard } from '../superTabs/cards.js'
+import type { CardChat, CardSide, LeadRecap, SaidOnCard, SayOptions, SwarmCard } from '../superTabs/cards.js'
 import type { ActivitySnapshot, AppSwarms, SuperTabAsk, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, OpenReason, RouteDecision } from './cableSession.js'
 import type { WindowRoute } from './windowRoute.js'
 import type { SelectionCommand, SelectionResult } from './windowSelection.js'
@@ -113,11 +113,15 @@ export interface CableHostWiring {
   swarmCardOpen?: (session: string, tabId: string, leadId: string | null, chat?: CardChat) => void
   /** A round dial that speaks swarmBuddy swiped to a side of a Swarm (spec 2026-10-29-round-dial-pm-buddy). */
   swarmCardSide?: (tabId: string, side: CardSide) => void
+  /** A swarmThread dial left the thread on its face: the conversation whose thread the window should close, or null when it had none. */
+  swarmThreadLeave?: (tabId: string, leadId: string, chat?: CardChat) => Promise<{ tabId: string; conversationId: string } | null>
   /** Words for a Lead that runs here, posted as the person in its Swarm chat; not `said` when the harness leads no project,
    *  `refused` with the backend's reason when it refused the post. */
-  swarmSay?: (harnessId: string, text: string, chat?: CardChat, chatId?: string, reviewed?: boolean) => Promise<SaidOnCard>
+  swarmSay?: (harnessId: string, text: string, chat?: CardChat, chatId?: string, reviewed?: boolean, options?: SayOptions) => Promise<SaidOnCard>
   /** A device picked a Lead: the window opens that Swarm tab and project. */
   superTabSelected?: (superTabId: string, projectId: string, chat?: CardSide) => void
+  /** The dial's thread opened (a root) or closed (null) beside a conversation of a Swarm tab, with no project pick. */
+  superTabThread?: (superTabId: string, conversationId: string, threadRoot: string | null) => void
   /** A finger on the dial's glass, in pieces, while it is down; `superTabId` when it scrolls that Swarm's chat (a Pro's Lead view). */
   scrolled?: (phase: 'down' | 'move' | 'up', dy: number, velocity: number, superTabId?: string) => void
   /** The dial came, went, or started taking an update — see CableSession's onDialStatus. */
@@ -561,9 +565,14 @@ export class DaemonCableHost implements CableHost {
     this.wiring.swarmCardSide?.(tabId, side)
   }
 
-  swarmSay(harnessId: string, text: string, chat: CardChat = false, chatId?: string, reviewed = false): Promise<SaidOnCard> {
+  swarmSay(harnessId: string, text: string, chat: CardChat = false, chatId?: string, reviewed = false, options?: SayOptions): Promise<SaidOnCard> {
+    if (options) return this.wiring.swarmSay?.(harnessId, text, chat, chatId, reviewed, options) ?? Promise.resolve({ said: false })
     const pinned: [chatId?: string, reviewed?: boolean] = chatId ? (reviewed ? [chatId, true] : [chatId]) : []
     return this.wiring.swarmSay?.(harnessId, text, chat, ...pinned) ?? Promise.resolve({ said: false })
+  }
+
+  swarmThreadLeave(tabId: string, leadId: string, chat: CardChat = true): Promise<{ tabId: string; conversationId: string } | null> {
+    return this.wiring.swarmThreadLeave?.(tabId, leadId, chat) ?? Promise.resolve(null)
   }
 
   superTabSelected(superTabId: string, projectId: string, chat?: CardSide): void {
@@ -571,17 +580,23 @@ export class DaemonCableHost implements CableHost {
     else this.wiring.superTabSelected?.(superTabId, projectId)
   }
 
+  superTabThread(superTabId: string, conversationId: string, threadRoot: string | null): void {
+    this.wiring.superTabThread?.(superTabId, conversationId, threadRoot)
+  }
+
   /**
    * The active tab when it is a Swarm, with its open project or '' when none is (its Chat with PM, a DM, or a Swarm
    * not loaded yet); `fromDevice` when the announce was a device's own pick. A Swarm tab with no project used to read
    * as no Swarm at all, and the dial stayed on "Nothing on this tab" while the window showed the Swarm. `conversationId`: the
-   * conversation it has open there, when the window names one, which the round dial's face follows.
+   * conversation it has open there, when the window names one, which the round dial's face follows, and `threadRoot` the
+   * thread whose pane is on screen beside it.
    */
-  activeSwarmProject(): { superTabId: string; projectId: string; conversationId?: string; fromDevice: boolean } | null {
+  activeSwarmProject(): { superTabId: string; projectId: string; conversationId?: string; threadRoot?: string; fromDevice: boolean } | null {
     const app = this.swarms
     const tab = app?.swarms.find((s) => s.id === app.active)
     return app && tab?.superTabId ? { superTabId: tab.superTabId, projectId: tab.projectId ?? '',
-      ...(tab.conversationId ? { conversationId: tab.conversationId } : {}), fromDevice: app.fromDevice === true } : null
+      ...(tab.conversationId ? { conversationId: tab.conversationId, ...(tab.threadRoot ? { threadRoot: tab.threadRoot } : {}) } : {}),
+      fromDevice: app.fromDevice === true } : null
   }
 
   selectSwarm(swarmId: string): void {

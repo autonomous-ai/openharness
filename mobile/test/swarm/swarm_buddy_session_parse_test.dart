@@ -46,58 +46,61 @@ void main() {
       's',
     );
   });
-  test('session fields read as Desktop reads them (project, lookup, ended)', () {
-    expect(
-      SuperTabBuddySessionOf.fromJson({
-        'thread': 'r',
-        'from': 1,
-        'projectId': 'p',
-      })!.projectId,
-      'p',
-    );
-    expect(
-      SuperTabBuddySessionOf.fromJson({'thread': 'r', 'projectId': ''})!
-          .projectId,
-      isNull,
-    );
-    expect(
-      SuperTabBuddySessionOf.fromJson({'thread': 'r', 'projectId': 3})!
-          .projectId,
-      isNull,
-    );
-    final chat = SuperTabConversation.fromJson({
-      'id': 'c',
-      'kind': 'buddy',
-      'buddyOwnerId': 'p',
-      'title': 'Wren',
-      'agentIds': <String>[],
-      'archived': false,
-      'brief': '',
-      'checks': <dynamic>[],
-      'assignment': null,
-      'lastMessageSequence': 0,
-      'buddySessions': [
-        {'thread': 'r', 'startId': 's'},
-      ],
-    });
-    expect(chat.sessionFor('r')!.startId, 's');
-    expect(chat.sessionFor('x'), isNull);
-    SuperTabMessage message(Map<String, dynamic> extra) =>
-        SuperTabMessage.fromJson({
-          'id': 'm',
-          'conversationId': 'c',
-          'text': 't',
-          'sequence': 1,
-          'author': {'kind': 'agent', 'id': 'a'},
-          'thread': 'm',
-          ...extra,
-        });
-    final ended = message({
-      'buddySession': true,
-      'source': {'kind': 'buddy-session-ended', 'reason': 'idle'},
-    });
-    expect([ended.sessionEnded, ended.sessionEndReason], [true, 'idle']);
-    final plain = message({'buddySession': true});
-    expect([plain.sessionEnded, plain.sessionEndReason], [false, null]);
-  });
+  test(
+    'session fields read as Desktop reads them (project, lookup, ended)',
+    () {
+      expect(
+        SuperTabBuddySessionOf.fromJson({
+          'thread': 'r',
+          'from': 1,
+          'projectId': 'p',
+        })!.projectId,
+        'p',
+      );
+      expect(
+        SuperTabBuddySessionOf.fromJson({'thread': 'r', 'projectId': ''})!
+            .projectId,
+        isNull,
+      );
+      expect(
+        SuperTabBuddySessionOf.fromJson({'thread': 'r', 'projectId': 3})!
+            .projectId,
+        isNull,
+      );
+      final chat = SuperTabConversation.fromJson({
+        'id': 'c',
+        'kind': 'buddy',
+        'buddyOwnerId': 'p',
+        'title': 'Wren',
+        'agentIds': <String>[],
+        'archived': false,
+        'brief': '',
+        'checks': <dynamic>[],
+        'assignment': null,
+        'lastMessageSequence': 0,
+        'buddySessions': [
+          {'thread': 'r', 'startId': 's'},
+        ],
+      });
+      expect(chat.sessionFor('r')!.startId, 's');
+      expect(chat.sessionFor('x'), isNull);
+      SuperTabMessage message(Map<String, dynamic> extra) =>
+          SuperTabMessage.fromJson({
+            'id': 'm',
+            'conversationId': 'c',
+            'text': 't',
+            'sequence': 1,
+            'author': {'kind': 'agent', 'id': 'a'},
+            'thread': 'm',
+            ...extra,
+          });
+      final ended = message({
+        'buddySession': true,
+        'source': {'kind': 'buddy-session-ended', 'reason': 'idle'},
+      });
+      expect([ended.sessionEnded, ended.sessionEndReason], [true, 'idle']);
+      final plain = message({'buddySession': true});
+      expect([plain.sessionEnded, plain.sessionEndReason], [false, null]);
+    },
+  );
 }

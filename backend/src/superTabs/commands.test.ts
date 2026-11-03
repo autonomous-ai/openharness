@@ -2173,8 +2173,11 @@ describe('cancelling work', () => {
     const assignment = f.state.conversations.find(c => c.id === group)!.assignment!
     expect(assignment).toMatchObject({ status: 'cancelled', result: 'Duplicate of another task' })
     expect(activeWork(f.state.conversations.find(c => c.id === group)!)).toBe(false)
-    expect(effects.messages).toHaveLength(1)
-    expect(effects.messages[0]).toMatchObject({ recipients: [worker], text: 'lead cancelled this task: Duplicate of another task. Stop working on it.' })
+    // Beside it, only the task's ordinary thread reply in the project chat (taskLine.ts).
+    const inTask = effects.messages.filter(m => m.conversationId === group)
+    expect(inTask).toHaveLength(1)
+    expect(inTask[0]).toMatchObject({ recipients: [worker], text: 'lead cancelled this task: Duplicate of another task. Stop working on it.' })
+    expect(effects.messages.filter(m => m.conversationId !== group)).toEqual([expect.objectContaining({ text: 'Not building this: Duplicate of another task.', recipients: [] })])
     expect(f.run(cancel, leadActor).messages).toHaveLength(0)
     expect(f.state.agents.find(a => a.id === worker)!.workDecision).toBe('awaiting')
     f.run({ type: 'agent.release', agentId: worker, decision: 'keep' }, leadActor)
@@ -2205,8 +2208,9 @@ describe('cancelling work', () => {
     expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('reconciling')
     const effects = f.run(cancel, leadActor)
     expect(f.state.conversations.find(c => c.id === group)!.assignment).toMatchObject({ status: 'cancelled', result: 'Duplicate of another task' })
-    expect(effects.messages).toHaveLength(1)
-    expect(effects.messages[0]).toMatchObject({ recipients: [], text: 'lead cancelled this task: Duplicate of another task.' })
+    const inTask = effects.messages.filter(m => m.conversationId === group)
+    expect(inTask).toHaveLength(1)
+    expect(inTask[0]).toMatchObject({ recipients: [], text: 'lead cancelled this task: Duplicate of another task.' })
     expect(f.run(cancel, leadActor).messages).toHaveLength(0)
   })
   it('still refuses the removed worker or a collaborator cancelling its task', () => {
@@ -2216,8 +2220,9 @@ describe('cancelling work', () => {
     expect(() => f.run(cancel, peer)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
   })
   it('refuses work that already finished', () => {
-    const { f, group, leadActor, assignmentId, cancel } = active()
-    f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'stopped', result: null }, owner, { confirmedStopped: true })
+    const { f, group, leadActor, cancel } = active()
+    // A stopped task did not finish, so it still cancels ('archiving unfinished work'); a done one has ended.
+    f.state.conversations.find(c => c.id === group)!.assignment!.status = 'done'
     expect(() => f.run(cancel, leadActor)).toThrow('already ended')
   })
 
@@ -4190,6 +4195,48 @@ describe('agent.stopRefused', () => {
     t.f.run({ type: 'agent.release', agentId: t.worker, decision: 'stop' }, { kind: 'agent', agentId: t.lead, machineOwnerId: 'host-owner' })
     expect(() => t.f.run({ type: 'agent.stopRefused', agentId: t.worker, releaseId: 'idle-release' }, t.asWorker)).toThrow('Only the execution host')
     expect(t.member().workDecision).toBe('stop')
+  })
+})
+
+describe('archiving unfinished work', () => {
+  /** A task Peer asked for, its worker's attempt left at [status]. */
+  function task(status: 'lost' | 'stopped' | 'cancelled' | 'done') {
+    const f = fixture()
+    f.invite()
+    const group = f.run({ type: 'conversation.create', title: 'Round tabs', brief: 'Drop closed tabs.', requesterId: 'peer',
+      checks: [{ description: 'Closed tabs leave the dial.', independent: false }] }).result.conversationId as string
+    const worker = f.add('worker', 'owner', group)
+    const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).result.assignmentId as string
+    if (status === 'cancelled') f.run({ type: 'work.cancel', conversationId: group, assignmentId, reason: 'Superseded by the dial rewrite.' })
+    else f.state.conversations.find(c => c.id === group)!.assignment!.status = status
+    return { f, group, assignmentId }
+  }
+  const archive = (t: ReturnType<typeof task>) => t.f.run({ type: 'conversation.archive', conversationId: t.group, archived: true })
+
+  it.each(['lost', 'stopped'] as const)('refuses to archive a %s task by hand, so nothing unfinished closes silently', status => {
+    const t = task(status)
+    expect(() => archive(t)).toThrow('cancel it with a reason')
+    expect(t.f.state.conversations.find(c => c.id === t.group)!.archived).toBe(false)
+  })
+
+  it('cancels a stopped task, which then archives', () => {
+    const t = task('stopped')
+    t.f.run({ type: 'work.cancel', conversationId: t.group, assignmentId: t.assignmentId, reason: 'Nobody can finish it here.' })
+    expect(t.f.state.conversations.find(c => c.id === t.group)!.assignment!.status).toBe('cancelled')
+    archive(t)
+    expect(t.f.state.conversations.find(c => c.id === t.group)!.archived).toBe(true)
+  })
+
+  it('tags the requester with the reason when a cancelled task is archived', () => {
+    const t = task('cancelled')
+    expect(archive(t).messages).toEqual([expect.objectContaining({ conversationId: t.group, mentions: ['peer'],
+      text: 'Archived without shipping: the task was cancelled (Superseded by the dial rewrite).' })])
+  })
+
+  it('archives a done task without tagging anyone', () => {
+    const t = task('done')
+    expect(archive(t).messages).toEqual([])
+    expect(t.f.state.conversations.find(c => c.id === t.group)!.archived).toBe(true)
   })
 })
 
