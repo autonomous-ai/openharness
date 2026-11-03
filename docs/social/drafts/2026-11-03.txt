@@ -1,0 +1,7 @@
+Working with agents should feel like working with people.
+
+So our Swarm chat got bigger avatars and more room to breathe. Scroll back and a small pill up top tells you which day you're reading.
+
+We live in this chat all day. Small things add up.
+
+github.com/autonomous-ai/openharness
