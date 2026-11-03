@@ -159,19 +159,38 @@ The request in flight is `Agent.modelRequest { id, gridModel | null, contextWind
 A thread session started while the Buddy is on a shared model starts on that model (`gridModel`/`gridName` on its start
 request, as a routed Builder's start does today).
 
+### The contributor: seen and safe (PRODUCT.md, Contribution; PM, 2026-11-03)
+
+Whoever serves the model a Buddy runs on is told, and their limits hold:
+
+- **Seen.** When a Buddy lands on a model, each member who serves it (a machine's owner for a local model, the member
+  who shares an API) gets one line in their own Buddy chat: `Scholes's Buddy now runs on DeepSeek 4.1 Flash, served
+  by your Mac Studio.` (or `…on your saved API`). Not for a person serving their own Buddy. Their Swarm models list
+  shows `Used by Scholes's Buddy` under the model while one is on it (from the Buddy agents' `gridModel`, which every
+  member's roster read already carries).
+- **Safe.** The Buddy goes back to its owner's subscription by itself when:
+  - its machine reports the model hit a limit or keeps failing (the host's existing `agent.alert` `limit` or `model`
+    on the Buddy while it is on a grid model): `DeepSeek 4.1 Flash hit a limit, so your Buddy is back on your
+    subscription.`;
+  - nobody in the Swarm has served the model for 2 minutes (the machine left or went quiet, the model stopped, the API
+    was unshared): `Nobody serves DeepSeek 4.1 Flash now, so your Buddy is back on your subscription.`
+  The server writes the same `modelRequest` home that the person's own pick does (marked with its reason), so the
+  Buddy's machine carries it out the same way; a Buddy mid-turn is moved once its turn ends (the host retries within the
+  lease). The grid itself still enforces each serving machine's own limits per request.
+
 ## Design (docs/feature-design-rules.md)
 
 Reviewed revision: ______  Reviewer: ______
 
 1. **Growth.** Two fields on the Buddy's agent record: `modelRequest` (one at a time; deleted by `buddy.modelResult`, or
-   by the hourly tidy after 10 minutes with a "didn't answer" line) and `gridModel` (the current shared model; deleted
+   by the liveness sweep after 10 minutes with a "didn't answer" line) and `gridModel` (the current shared model; deleted
    when the Buddy goes back to the subscription, and with the agent when the Buddy is removed, its owner leaves or a
    down Buddy is replaced). On the machine: `subscriptionSessionId` on the daemon's registry row (deleted on the way
    home and with the row), and the host's done-requests file (one id per Buddy, the newest kept). One system line per
    switch in the owner's Buddy chat, under that chat's existing retention.
    | Record | create | update | finish | lost / cancel | delete |
    | --- | --- | --- | --- | --- | --- |
-   | modelRequest | buddy.model | — | buddy.modelResult | tidy at 10 min | with the agent |
+   | modelRequest | buddy.model, or the server on a limit or a model gone 2 min | — | buddy.modelResult | liveness sweep at 10 min | with the agent |
    | gridModel | modelResult ok on a grid | next ok result | modelResult ok home | stays; the bar shows "not served now" | with the agent |
    | subscriptionSessionId | fresh move out | — | move home ok | stays with the row | with the row |
 2. **Concurrency.** Each command writes the Swarm state under its existing per-Swarm write; `buddy.model` refuses while a

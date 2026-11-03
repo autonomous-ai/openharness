@@ -30,7 +30,10 @@ not fit; the host reports `buddy.modelResult`, which sets `Agent.gridModel` and 
   `Your Buddy started a fresh session on <model>: this conversation is too long for it (<window>K). Switch back to your subscription to continue the earlier one.`,
   `Your Buddy is back on your subscription.`,
   `Couldn't switch your Buddy: <reason>. It is still on <current>.`,
-  `Your Buddy's computer didn't answer.`
+  `Couldn't switch your Buddy: its computer didn't answer. It is still on <current>.`,
+  `<person>'s Buddy now runs on <model>, served by your <machine>.` / `…on your saved API.`,
+  `<model> hit a limit, so your Buddy is back on your subscription.`,
+  `Nobody serves <model> now, so your Buddy is back on your subscription.`
 - Fresh-session threshold: context tokens ≥ 80% of the target's context window. Unknown size or window: resume.
 - Request lease: 10 minutes (`BUDDY_MODEL_LEASE_MS = 10 * 60_000`).
 - Host capability name: `buddyModel`.
@@ -96,6 +99,34 @@ not fit; the host reports `buddy.modelResult`, which sets `Agent.gridModel` and 
   name; an `api` reading by `<person>'s saved API`.
 - [ ] **Step 4: Run to see them pass** — same command, Expected: PASS.
 - [ ] **Step 5: Commit** — `git commit -m "Swarm: a person asks to switch their Buddy's model; the server checks it and records the outcome (#2354)"`
+
+### Task 1b: Backend — the contributor is told, and a Buddy comes home on a limit or a model gone
+
+**Files:**
+- Modify: `backend/src/superTabs/buddyModel.ts` (`modelRequest.reason`, contributor lines, `buddyModelHome`)
+- Modify: `backend/src/superTabs/commands.ts` (`agent.alert` on a Buddy on a grid model), `backend/src/superTabs/tidy.ts`
+  (the sweep moves a Buddy whose model nobody served for 2 minutes)
+- Test: `backend/src/superTabs/buddyModel.test.ts`
+
+**Interfaces:**
+- Produces: `Agent.modelRequest.reason?: 'limit' | 'gone'`; `Agent.gridModelUnservedSince?: number` (ms; set by the sweep
+  when the model first goes unserved, cleared when it is served again or the Buddy leaves it).
+- Produces: `BUDDY_MODEL_GONE_MS = 2 * 60_000`.
+
+- [ ] **Step 1: Failing tests**:
+  - an ok result onto `deepseek-4.1-flash` (served by owner's Mac Studio) also writes, in owner's Buddy chat,
+    `peer's Buddy now runs on DeepSeek 4.1 Flash, served by your Mac Studio.`; onto owner's API, `…on your saved API.`;
+    nothing for a model peer's own machine serves.
+  - `agent.alert { alert: 'limit', active: true }` from a Buddy on a grid model records `modelRequest { gridModel: null,
+    reason: 'limit' }`; its ok result writes `DeepSeek 4.1 Flash hit a limit, so your Buddy is back on your subscription.`;
+    the same alert from a Buddy on its subscription records nothing; a request already pending is left as it is.
+  - the sweep with the model unserved for under 2 minutes changes nothing; at 2 minutes records `reason: 'gone'`, whose
+    result line is `Nobody serves DeepSeek 4.1 Flash now, so your Buddy is back on your subscription.`; served again
+    before then clears the mark.
+- [ ] **Step 2: Run** `cd backend && npm test -- src/superTabs/buddyModel.test.ts` — FAIL.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** — PASS.
+- [ ] **Step 5: Commit** — `Swarm: the member serving a Buddy's model is told, and the Buddy comes home on a limit or when nobody serves it (#2354)`
 
 ### Task 2: CLI — a Buddy's grid launch carries no MCP server
 
