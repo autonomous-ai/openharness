@@ -21,7 +21,8 @@
  *   2. the process-wide voice memory budget (lib/voiceBudget.ts), taken for the whole request before the
  *      upload is buffered and given back once it is answered;
  *   3. the account's plan's daily voice seconds (lib/voiceQuota.ts), charged by the clip's length before
- *      Deepgram is called and given back when Deepgram fails.
+ *      Deepgram is called and given back when Deepgram fails. Only PCM WAV is taken, so that length is
+ *      known from the bytes (wavDurationMs).
  */
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
@@ -43,28 +44,29 @@ const MAX_AUDIO_BYTES = 25 * 1024 * 1024
 const PER_MINUTE = 10
 const MINUTE_MS = 60_000
 
-/** What the phone and the dial record (16 kHz, mono, 16-bit): the rate a WAV is charged at when its
- *  header does not state a believable one. */
-const FALLBACK_BYTES_PER_SECOND = 16_000 * 2
 const WAV_HEADER_BYTES = 44
+const WAVE_FORMAT_PCM = 1
 
 /**
- * The clip's length in milliseconds, as Deepgram will hear it: the bytes after the header at the rate the
- * header states. The header is the caller's to write, so a rate outside what a microphone records (which
- * would make a long clip read as no time at all) is not believed and the recorders' own rate is used.
+ * The clip's length in milliseconds, as Deepgram will hear it, or null when it cannot be told from the bytes.
+ *
+ * Only uncompressed PCM WAV is accepted, which is all the phone (mobile/lib/phone/voice_wav.dart) and the dial
+ * (cli/src/cable/cableHost.ts wav()) ever send: its length is the bytes after the header at the rate the header
+ * states. Compressed audio (MP3, Opus, or a compressed codec inside a WAV) is many times longer than its bytes
+ * suggest, so charging it by size would let one account transcribe hours a day on a 10-minute plan. The header
+ * is the caller's to write, so a rate, channel count or sample size outside what a microphone records (which
+ * would make a long clip read as no time at all) is refused too.
  */
-export function wavDurationMs(audio: Buffer): number {
-  const pcmBytes = Math.max(0, audio.length - WAV_HEADER_BYTES)
-  let bytesPerSecond = FALLBACK_BYTES_PER_SECOND
-  if (audio.length >= WAV_HEADER_BYTES && audio.toString('ascii', 0, 4) === 'RIFF' && audio.toString('ascii', 8, 12) === 'WAVE') {
-    const channels = audio.readUInt16LE(22)
-    const sampleRate = audio.readUInt32LE(24)
-    const bits = audio.readUInt16LE(34)
-    if (channels >= 1 && channels <= 2 && sampleRate >= 8_000 && sampleRate <= 48_000 && [8, 16, 24, 32].includes(bits)) {
-      bytesPerSecond = sampleRate * channels * (bits / 8)
-    }
-  }
-  return Math.ceil((pcmBytes / bytesPerSecond) * 1000)
+export function wavDurationMs(audio: Buffer): number | null {
+  if (audio.length < WAV_HEADER_BYTES) return null
+  if (audio.toString('ascii', 0, 4) !== 'RIFF' || audio.toString('ascii', 8, 12) !== 'WAVE' || audio.toString('ascii', 12, 16) !== 'fmt ') return null
+  if (audio.readUInt16LE(20) !== WAVE_FORMAT_PCM) return null
+  const channels = audio.readUInt16LE(22)
+  const sampleRate = audio.readUInt32LE(24)
+  const bits = audio.readUInt16LE(34)
+  if (channels < 1 || channels > 2 || sampleRate < 8_000 || sampleRate > 48_000 || ![8, 16, 24, 32].includes(bits)) return null
+  const bytesPerSecond = sampleRate * channels * (bits / 8)
+  return Math.ceil(((audio.length - WAV_HEADER_BYTES) / bytesPerSecond) * 1000)
 }
 
 function dailyLimitMessage(err: VoiceQuotaExceededError): string {
@@ -135,9 +137,15 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
       return
     }
 
+    const durationMs = wavDurationMs(audio)
+    if (durationMs === null) {
+      sendError(reply, 'Voice recordings must be uncompressed WAV audio', 'UNSUPPORTED_AUDIO', 415)
+      return
+    }
+
     const uploadId = `stt-${randomUUID()}`
     try {
-      await voiceQuotaService.reserveForUser(userId, req.user?.autonomousEnv ?? 'prod', uploadId, wavDurationMs(audio))
+      await voiceQuotaService.reserveForUser(userId, req.user?.autonomousEnv ?? 'prod', uploadId, durationMs)
     } catch (err) {
       if (err instanceof VoiceQuotaExceededError) {
         sendError(reply, dailyLimitMessage(err), err.code, 429, {
@@ -153,7 +161,8 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
 
     const lang = pickLang((req.query as { lang?: unknown } | undefined)?.lang)
     try {
-      const transcript = await transcribeWavWithDeepgram(audio, file.mimetype || 'audio/wav', lang)
+      // Always WAV: the bytes were checked as PCM WAV above, so the caller's own type never chooses a decoder.
+      const transcript = await transcribeWavWithDeepgram(audio, 'audio/wav', lang)
       await voiceQuotaService.commit(uploadId).catch((err) => {
         // Left pending, the cleanup worker would hand these seconds back: logged, never silent.
         logger.error('voice-stt: quota commit failed', { user: userId, error: err instanceof Error ? err.message : String(err) })
