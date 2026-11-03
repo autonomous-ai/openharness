@@ -468,7 +468,7 @@ function worktreeAdd(source: string, args: string[], timeout: number): Promise<W
 /** Kills [pid] and everything it started: its process group, or on Windows its tree. Null when that was done, else why
  *  not. On Windows `taskkill /T` finds only what still descends from a live git, so a failure here is reported and
  *  `worktreeAdd` still waits for git's stderr to close before anything is read or removed. */
-function stopTree(pid: number | undefined): Promise<string | null> {
+export function stopTree(pid: number | undefined): Promise<string | null> {
   if (pid === undefined) return Promise.resolve(null)
   if (process.platform !== 'win32') {
     try { process.kill(-pid, 'SIGKILL'); return Promise.resolve(null) } catch (error) {

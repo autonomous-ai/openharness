@@ -4,7 +4,7 @@ import { access, lstat, mkdir, mkdtemp, rename, rm, stat } from 'node:fs/promise
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { plausibleBranchName, projectFolderName, projectFolderSlug } from './agentNames.js'
-import { GitProjectError, prepareGitProject, validGitPath } from './gitProject.js'
+import { GitProjectError, prepareGitProject, stopTree, validGitPath } from './gitProject.js'
 import { cloneAttempts, isGitHubHost, parseGitHubRepository, resolvedRepositoryIdentity } from './githubRepository.js'
 import { githubAliases, resolveHost } from './sshHosts.js'
 import { scmByKind } from '../scm/scmProjects.js'
@@ -285,42 +285,50 @@ function logAttempt(owner: string, name: string, url: string, outcome: string): 
 /** Every branch a fetch sees, as a full clone's `origin` has: a single-branch clone writes only its own. */
 const ALL_BRANCHES = '+refs/heads/*:refs/remotes/origin/*'
 
+/** How long a clone may go without git reporting any progress before it is given up. Git reports at least once a second
+ *  while objects arrive (`--progress`); the longest silence measured cloning lampOS was 4.4 s. A clone that keeps
+ *  progressing is never cut off, however long it takes on a slow connection. */
+export const CLONE_STALL_MS = 120_000
+
 /** No shell interpolation or interactive password prompt. Diagnostics stay
  * bounded and private; only actionable, credential-free messages reach the UI.
  *
  * Blob-less and single-branch: the default branch with its whole history, file contents fetched as they are needed (the
  * checkout's own, then whatever `blame` or another branch's checkout reads). lampOS (576 MB pack, about 4,400 branches)
- * took 48 s in full on MACs-Mac-Studio and longer than the 5 minutes allowed on a slower Mac; blob-less, 6 s. The fetch
- * rule is then widened to every branch, so `git fetch origin X && git checkout X` works as it does in a full clone. */
-export function cloneRepository(url: string, destination: string, gitEnv?: NodeJS.ProcessEnv): Promise<void> {
+ * took 48 s in full on MACs-Mac-Studio and longer than the 5 minutes once allowed on a slower Mac; blob-less, 6 s. The
+ * fetch rule is then widened to every branch, so `git fetch origin X && git checkout X` works as in a full clone.
+ * [options] are for tests: `git` the command, `stallMs` the no-progress window. */
+export function cloneRepository(url: string, destination: string, gitEnv?: NodeJS.ProcessEnv,
+  options: { git?: string; stallMs?: number } = {}): Promise<void> {
   return new Promise((resolve, reject) => {
     const base = gitEnv ?? process.env
+    const git = options.git ?? 'git'
     const env = { ...base, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never',
       GIT_SSH_COMMAND: base.GIT_SSH_COMMAND ?? 'ssh -oBatchMode=yes -oConnectTimeout=20' }
-    const child = spawn('git', ['clone', '--progress', '--filter=blob:none', '--single-branch', '--', url, destination], {
-      stdio: ['ignore', 'ignore', 'pipe'], env,
+    // Its own process group, so a stalled clone's remote helper and index-pack stop with it.
+    const child = spawn(git, ['clone', '--progress', '--filter=blob:none', '--single-branch', '--', url, destination], {
+      stdio: ['ignore', 'ignore', 'pipe'], env, detached: process.platform !== 'win32', windowsHide: true,
     })
-    let diagnostic = '', timedOut = false
-    let forceKill: ReturnType<typeof setTimeout> | undefined
-    const deadline = setTimeout(() => {
-      timedOut = true
-      child.kill()
-      forceKill = setTimeout(() => child.kill('SIGKILL'), 2000)
-      forceKill.unref()
-    }, 300_000)
-    deadline.unref()
-    child.stderr?.on('data', (chunk: Buffer) => { diagnostic = (diagnostic + chunk.toString()).slice(0, 8192) })
+    let diagnostic = '', stalled = false
+    const stall = setTimeout(() => {
+      stalled = true
+      void stopTree(child.pid).then(problem => { if (problem) console.error(`[project] could not stop a stalled clone: ${problem}`) })
+    }, options.stallMs ?? CLONE_STALL_MS)
+    stall.unref()
+    child.stderr?.on('data', (chunk: Buffer) => {
+      if (!stalled) stall.refresh()
+      diagnostic = (diagnostic + chunk.toString()).slice(-8192)
+    })
     child.on('error', () => {
-      clearTimeout(deadline)
+      clearTimeout(stall)
       reject(new ProjectFolderError('GIT_UNAVAILABLE', 'Git could not start. Install Git on the selected machine, then retry.'))
     })
     child.on('close', (code) => {
-      clearTimeout(deadline)
-      clearTimeout(forceKill)
-      if (timedOut) reject(new ProjectFolderError('CLONE_TIMEOUT', 'Cloning took too long. Check the connection and retry.'))
+      clearTimeout(stall)
+      if (stalled) reject(new ProjectFolderError('CLONE_TIMEOUT', 'Cloning stopped making progress. Check the connection and retry.'))
       else if (code !== 0) reject(cloneFailure(diagnostic))
       else {
-        execFile('git', ['-C', destination, 'config', 'remote.origin.fetch', ALL_BRANCHES], { env, timeout: 10_000, killSignal: 'SIGKILL' },
+        execFile(git, ['-C', destination, 'config', 'remote.origin.fetch', ALL_BRANCHES], { env, timeout: 10_000, killSignal: 'SIGKILL' },
           error => error ? reject(new ProjectFolderError('CLONE_FAILED', 'Could not clone the repository. Check the URL and connection, then retry.')) : resolve())
       }
     })
