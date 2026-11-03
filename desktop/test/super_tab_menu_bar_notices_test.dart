@@ -173,6 +173,22 @@ void main() {
     expect(rows.last['id'], 'mention-1');
   });
 
+  test('a tag read past leaves the menu bar\'s Swarm rows', () async {
+    final f = SuperTabLaunchFixture(local: true);
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+    final c = await f.app.superTabs.open(tabId);
+    f.connection.server.tag('message-1', messageSequence: 5);
+    Future<List<Object?>> kinds(int mark) async {
+      f.connection.server.markReadElsewhere('lead', mark);
+      await c.refresh();
+      await SuperTabMentions.of(c).load();
+      return [for (final r in statusMenuSwarmEntries(f.app)) r['kind']];
+    }
+
+    expect(await kinds(4), ['mention']);
+    expect(await kinds(5), isEmpty);
+  });
+
   group('a conversation the person can no longer read', () {
     /// A tag and a decision in "Offline editing", then that conversation
     /// leaves what this account reads.
@@ -436,8 +452,9 @@ void main() {
     }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 
     /// Mounts [f]'s app with its windows answering, and clicks a tag's system
-    /// notice as the macOS runner sends it back.
-    Future<Future<void> Function(String agentId)> clicker(
+    /// notice (or another Swarm notice, by its [machine] slot) as the macOS
+    /// runner sends it back.
+    Future<Future<void> Function(String agentId, {String machine})> clicker(
       WidgetTester tester,
       SuperTabLaunchFixture f,
     ) async {
@@ -457,14 +474,14 @@ void main() {
       }
       await mount(tester, f.app, nativeTabs: true);
       await tester.pump();
-      return (agentId) async {
+      return (
+        agentId, {
+        String machine = SystemNotifications.mentionNoticeMachine,
+      }) async {
         messenger.handlePlatformMessage(
           'harness/notifications',
           const StandardMethodCodec().encodeMethodCall(
-            MethodCall('tapped', {
-              'machineId': SystemNotifications.mentionNoticeMachine,
-              'agentId': agentId,
-            }),
+            MethodCall('tapped', {'machineId': machine, 'agentId': agentId}),
           ),
           (_) {},
         );
@@ -508,6 +525,34 @@ void main() {
         expect(c.noticeRequest, isNull);
         expect(c.selectedId, 'offline');
         // The read marker's save settles.
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pumpWidget(const SizedBox());
+        f.dispose();
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+    );
+
+    // Diego (11-03): a chat's New messages notice opened nothing; it carried
+    // no Swarm or chat, so the click never reached the app.
+    testWidgets(
+      'a click on a chat\'s New messages notification brings its Swarm tab '
+      'forward and opens that chat',
+      (tester) async {
+        final f = SuperTabLaunchFixture(
+          connectionFactory: TwoSwarms.new,
+          systemNotifications: clicks(),
+        );
+        await tester.runAsync(() => openWithNotices(f));
+        final swarmTab = f.app.activeSwarmId;
+        f.app.newSwarm(name: 'Desktop');
+        final click = await clicker(tester, f);
+        final c = f.app.superTabs.peek(tabId)!;
+        // A chat the person can no longer read opens nothing.
+        await click('$tabId/gone', machine: '@chat');
+        expect(f.app.activeSwarmId, isNot(swarmTab));
+        await click('$tabId/offline', machine: '@chat');
+        expect(f.app.activeSwarmId, swarmTab);
+        expect(c.selectedId, 'offline');
         await tester.pump(const Duration(seconds: 1));
         await tester.pumpWidget(const SizedBox());
         f.dispose();

@@ -18,15 +18,32 @@ const OTHER_ACCOUNT_LINE = 'From another account:'
 const TITLE_MAX = 40
 const STEP_MAX = 20
 
-/** Notices nobody waits on within minutes. Not `pair-loop`, `terminal-alert`, `buddy-proposal`, `update-request`, `digest-request`
- *  (throttled already, with instructions of their own) nor `agent-only`: each delivers at once, as any kind not listed does. */
+/** Notices nobody waits on within minutes. Not `pair-loop`, `buddy-proposal`, `update-request`, `digest-request` (throttled
+ *  already, with instructions of their own): each delivers at once, as any kind not listed does. A `terminal-alert` and an
+ *  `agent-only` row are gathered only in the forms `gatheredNotice` names. */
 export const DIGEST_KINDS: ReadonlySet<unknown> = new Set(['work-stalled', 'work-lost', 'work-resumed', 'idle', 'review-failed', 'review-capacity', 'overlap', 'note-removed'])
+/** The alerts nobody acts on within minutes: routing already skips a limited agent, and a failing model retries on its own
+ *  (docs/plans/2026-11-02-pm-digest-more-kinds-design.md). An agent waiting at a prompt (`prompt`) needs someone now. */
+const GATHERED_ALERTS: ReadonlySet<unknown> = new Set(['limit', 'model'])
 
-/** Whether a message to a coordinator waits for the digest: a routine notice, or a `work.status` row saying Done. Needs a human
- *  and Blocked go at once; so does a status row written before rows said their status. */
+/** Whether a message to a coordinator waits for the digest: a routine notice, a `work.status` row saying Done, the coordinator's own
+ *  skills notice (`message.send` `notice: "skills"`), or a usage-limit or failing-model alert. Needs a human and Stuck, a task's or
+ *  a step's (a person must act on each: blocked and needs_human are only for that, review of #2797), any other agent-only row (a
+ *  decision answered) and a prompt alert go at once; so does a status row written before rows said their status. */
 export function gatheredNotice(source: unknown): boolean {
-  const row = source as { kind?: unknown } | null | undefined
+  const row = source as { kind?: unknown; notice?: unknown; alert?: unknown } | null | undefined
   return DIGEST_KINDS.has(row?.kind) || doneRow(source)
+    || (row?.kind === 'agent-only' && row.notice === 'skills')
+    || (row?.kind === 'terminal-alert' && GATHERED_ALERTS.has(row.alert))
+}
+
+/** A gathered alert whose agent no longer has that alert: it ended before the digest went, so the digest leaves it out. An agent
+ *  that is gone is left to the release's own checks. */
+export function endedAlert(state: Pick<SuperTabState, 'agents'>, source: unknown): boolean {
+  const row = source as { kind?: unknown; agentId?: unknown; alert?: unknown } | null | undefined
+  if (row?.kind !== 'terminal-alert' || !GATHERED_ALERTS.has(row.alert)) return false
+  const target = state.agents.find(a => a.id === row.agentId)
+  return !!target && !(target.alerting ?? []).includes(row.alert as 'limit' | 'model')
 }
 
 /** A `work.status` row saying Done: the one notice that outlives its sender (store.ts releasableNotices). */

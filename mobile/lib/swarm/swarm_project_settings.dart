@@ -339,10 +339,11 @@ String? _text(Map<String, dynamic>? map, String key) => switch (map?[key]) {
 /// Project details from Project settings…, read only, as the desktop's
 /// details dialog has them: under the project's name, its description (its
 /// chat's brief), its repository, and its coordinator by the name the project
-/// gives it. The page under it closes it when the read, the access or the
-/// project is gone.
-class SwarmProjectDetailsSheet extends StatelessWidget {
-  const SwarmProjectDetailsSheet({
+/// gives it. Not the sheet a tap on the project's name opens
+/// (`SwarmProjectDetailsSheet`), which is its actions. The page under it
+/// closes it when the read, the access or the project is gone.
+class SwarmProjectInfoSheet extends StatelessWidget {
+  const SwarmProjectInfoSheet({
     super.key,
     required this.reader,
     required this.projectId,
@@ -368,9 +369,9 @@ class SwarmProjectDetailsSheet extends StatelessWidget {
       final lead = chat?.leadId;
       return SwarmProjectSheetFrame(
         title: project.name,
-        closeKey: 'swarm-project-details-close',
+        closeKey: 'swarm-project-info-close',
         child: ListView(
-          key: ValueKey('swarm-project-details-$projectId'),
+          key: ValueKey('swarm-project-info-$projectId'),
           padding: const EdgeInsets.fromLTRB(
             AppSpace.screenInset,
             AppSpace.xs,
@@ -381,20 +382,20 @@ class SwarmProjectDetailsSheet extends StatelessWidget {
             if (brief.isEmpty)
               Text(
                 'No description yet',
-                key: const ValueKey('swarm-project-details-description'),
+                key: const ValueKey('swarm-project-info-description'),
                 style: AppType.body(color: AppPalette.textSecondary),
               )
             else
               SelectableText(
                 brief,
-                key: const ValueKey('swarm-project-details-description'),
+                key: const ValueKey('swarm-project-info-description'),
                 style: AppType.body(color: AppPalette.textPrimary, height: 1.4),
               ),
             const SizedBox(height: AppSpace.l),
             SwarmGroup(
               children: [
                 SwarmRow(
-                  key: const ValueKey('swarm-project-details-repository'),
+                  key: const ValueKey('swarm-project-info-repository'),
                   title: 'Repository',
                   detail: SelectableText(
                     repository,
@@ -406,7 +407,7 @@ class SwarmProjectDetailsSheet extends StatelessWidget {
                   onTap: null,
                 ),
                 SwarmRow(
-                  key: const ValueKey('swarm-project-details-coordinator'),
+                  key: const ValueKey('swarm-project-info-coordinator'),
                   title: snapshot.coordinatorNameOf(project.id),
                   detail: SwarmRow.line(
                     lead == null ? 'Starting…' : snapshot.agentName(lead),
@@ -528,8 +529,12 @@ class _SwarmProjectSharingSheetState extends State<SwarmProjectSharingSheet> {
     final enabled = !owner && !_saving;
     return SwarmRow(
       key: ValueKey('swarm-sharing-person-${person.id}'),
-      title: person.email,
-      detail: owner ? SwarmRow.line('Project owner') : null,
+      // By the name the Swarm shows them by, over the email the desktop
+      // lists: two of one name are still told apart.
+      title: person.shownName,
+      detail: SwarmRow.line(
+        [person.email, if (owner) 'Project owner'].join(' · '),
+      ),
       trailing: Checkbox(
         key: ValueKey('swarm-sharing-person-${person.id}-check'),
         value: ticked,

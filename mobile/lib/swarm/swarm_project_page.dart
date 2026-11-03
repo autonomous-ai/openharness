@@ -22,9 +22,11 @@ import 'swarm_conversation_page.dart';
 import 'swarm_home_keeper.dart';
 import 'swarm_home_rows.dart';
 import 'swarm_inbox.dart';
+import 'swarm_invites_sheet.dart' show SwarmInvitesSheet;
 import 'swarm_leaderboard.dart';
 import 'swarm_message_row.dart';
 import 'swarm_pm_chat.dart';
+import 'swarm_project_details.dart';
 import 'swarm_project_settings.dart';
 import 'swarm_project_status.dart';
 import 'swarm_project_tabs.dart';
@@ -506,6 +508,55 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
     ),
   );
 
+  /// The project's details, from a tap on its name ([SwarmProjectDetailsSheet]),
+  /// as the menu's sheets open: what it hands back opens once it is gone.
+  void _openDetails(
+    SwarmSession session,
+    SwarmReader reader,
+    SuperTabSnapshot snapshot,
+    SuperTabProject project,
+  ) {
+    if (_sheet != null || !mounted) return;
+    bool allowed() =>
+        !reader.accessRevoked &&
+        reader.snapshot?.projectById(project.id) != null &&
+        swarmCanWrite(reader);
+    final chatId = project.leadConversationId;
+    final route = swarmSheetRoute<VoidCallback>(
+      context,
+      builder: (_) => SwarmProjectDetailsSheet(
+        reader: reader,
+        projectId: project.id,
+        terminal: (shell, computers) => allowed()
+            ? swarmTerminalAction(
+                agent: () => swarmProjectPm(reader.snapshot, project.id),
+                allowed: allowed,
+                shell: shell,
+                computers: computers,
+              )
+            : null,
+        onStatus: _openStatusSheet,
+        onWork: _openWork,
+        onTeam: _openTeamSheet,
+        onLeaderboard: _openLeaderboardSheet,
+        onNotifications: snapshot.conversation(chatId) == null
+            ? null
+            : () => unawaited(showSwarmNotifySheet(context, reader, chatId)),
+        onInvite: () => _openSheet(
+          (_) => SwarmInvitesSheet(session: session, reader: reader),
+        ),
+      ),
+    );
+    setState(() => _sheet = route);
+    unawaited(
+      Navigator.of(context).push(route).then((action) {
+        if (!mounted) return;
+        if (_sheet == route) setState(() => _sheet = null);
+        action?.call();
+      }),
+    );
+  }
+
   void _openSharingSheet(SwarmReader reader) => _openSheet(
     (_) => SwarmProjectSharingSheet(
       reader: reader,
@@ -513,11 +564,10 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
     ),
   );
 
-  void _openDetailsSheet(SwarmReader reader) => _openSheet(
-    (_) => SwarmProjectDetailsSheet(
-      reader: reader,
-      projectId: widget.projectId,
-    ),
+  /// Project settings…'s Project details ([SwarmProjectInfoSheet]): not the
+  /// sheet a tap on its name opens ([_openDetails]).
+  void _openInfoSheet(SwarmReader reader) => _openSheet(
+    (_) => SwarmProjectInfoSheet(reader: reader, projectId: widget.projectId),
   );
 
   Future<void> _openSettings(SwarmReader reader) async {
@@ -527,7 +577,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       reader,
       widget.projectId,
       onShown: (route) => _settings = shown = route,
-      onDetails: () => _openDetailsSheet(reader),
+      onDetails: () => _openInfoSheet(reader),
     );
     if (_settings == shown) _settings = null;
   }
@@ -578,6 +628,11 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
     return SwarmTopBar(
       leading: back,
       title: _homeC ? '#${project.name}' : project.name,
+      // Swarm Home C: the name opens the project's details, as Slack's does.
+      onTitle: _homeC
+          ? () => _openDetails(session, reader, snapshot, project)
+          : null,
+      titleLabel: _homeC ? '#${project.name}, project details' : null,
       line: KeyedSubtree(
         key: const ValueKey('swarm-project-team-line'),
         child: _homeC

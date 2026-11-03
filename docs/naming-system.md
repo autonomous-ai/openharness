@@ -113,7 +113,10 @@ after the label and an add action at the right. Project rows read as channels, f
 **# product-managers** row was removed on 2026-10-31: it was not a project.) A click on a project row
 opens its product manager chat and reveals its workgroups; a second click on the open project
 hides them. Workgroups are shown by their number in grey with no **#**
-and then their title (`12  Offline editing`), aligned with the project name. An expanded project
+and then their title (`12  Offline editing`), aligned with the project name, under four headings
+with their counts, in this order: **Needs you** (waiting on the person or tagging them),
+**Working**, **Waiting on others** and **The rest**, which starts folded (`▾ Needs you  1`); a
+click on a heading folds or unfolds it, each project keeping its own. An expanded project
 without workgroups says **No workgroups yet**. An open channel's heading reads as its row
 (`# openharness`). **Buddies** holds the person's **Buddy chat** for each project, from the
 start, listed by their Buddy's name and avatar, or while none runs by the name they chose for it,

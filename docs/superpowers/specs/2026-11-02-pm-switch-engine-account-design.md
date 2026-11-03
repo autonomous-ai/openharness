@@ -211,6 +211,80 @@ action, from the project's menu or from the limit line, whoever owns that machin
   Tasks and chat stay." When the reader does not own that machine: "Only accounts its owner offered are listed." Confirm
   sends `lead.switch`. While it runs, the PM row shows "Switching…".
 
+### 9. Move a PM between machines and choose its model (Dee, 11-03)
+
+- `lead.switch` adds optional `machineId` and `model` fields. An omitted `machineId` keeps the existing same-machine
+  behavior. When supplied, the backend admits the destination only if its contribution is active, its latest observation is
+  online, it advertises `leadSwitch`, it offers the requested engine and profile, and the actor may place this project's PM
+  there. Only the project's owner moves its PM to another machine (`manageProject`, as `lead.start`); the real owner of the
+  source PM's machine still switches engine or account on that machine only. The destination is placed and recorded as the
+  person who asked (`placeLead` with the actor, the whole command context, Team accounts idle included; both security
+  reviews of #2705). A destination must pass the same
+  `requireTeamWork` rules as a project Lead start; Team-account placement, contribution scope, project folder and
+  generation are rechecked when the destination host launches. The server never accepts a machine merely because its id
+  appears in the request.
+- The backend stores the destination machine, requested model, and destination account in the one pending request on the
+  PM row. The target host claims it, rechecks its current contribution and profile/sign-in, and starts a fresh PM session
+  there with the existing handoff note and selected engine, account, and model. It carries the original PM's project folder,
+  role, saved Swarm skill, permission mode, and GitHub setting; machine-specific folder and Team account rules are
+  recomputed for the target. A request id/change id makes claim, create, adoption after restart and reporting idempotent.
+- The candidate session is a separate agent until it proves it started. In one backend transaction, its successful start
+  promotes it to the lead of the same lead conversation, clears the source's switch request, preserves project/task/chat
+  state, and writes the single success line. Only after that committed promotion does the source host see the old session
+  is no longer PM and close the old process named by this switch. The source stays authoritative and running before
+  promotion. If destination validation or start fails, the candidate is closed if this switch created it, the source PM
+  remains authoritative and running, and one failure line gives a fixed, safe reason. A timed-out or abandoned request is
+  cleared by the existing liveness sweep; a late target cannot promote after the request expires or its claim is
+  superseded.
+- The source host prepares the existing handoff in its local project folder and sends only the bounded handoff note to
+  the destination start through the switch's private host data. The backend exposes that note only to the claimed
+  destination host, never in person or ordinary agent reads, and deletes it when the request settles or expires. The
+  destination start treats it as quoted context, not instructions. A source that cannot prepare or transfer the note
+  leaves the old PM running and ends the request with one fixed failure line.
+- The Desktop dialog follows the agreed layout: a machine picker, then engine/account choices for that machine, then a
+  model picker with Default first. It lists machines the person may use, including unavailable machines disabled with a
+  short reason. Switching machines refreshes the account rows and compatible model choices; no stale selection can be
+  submitted. When no destination, engine/account, or model can change, it shows the reason in one line. Phone remains out
+  of scope. The chosen model is passed to the new session; an engine refusal follows existing launch behavior and drops
+  the unsupported model/effort together, while the PM moves only if the fallback session rebinds.
+
+```text
+Switch PM
+Machine   [ Mac 1 ▾ ]
+○ Claude · Default     Current · 64% left
+○ Codex · Default      80% left · resets Fri
+Model     [ Default ▾ ]
+The new session starts fresh and reads a handoff note. Tasks and chat stay.
+                              [Cancel]  [Switch]
+```
+
+#### Design checklist addendum
+
+- **Growth:** one optional target id and model on each PM's existing single switch request; cleared on rebind, failure, or
+  stale-request expiry. No destination history or additional polling table.
+- **Concurrency:** one request per PM. Claim lease and request id serialize competing hosts; destination contribution
+  generation, Team placement and engine/profile support are revalidated immediately before launch. Only one accepted
+  candidate promotion changes the lead conversation. Source closure is fenced by the settled switch id and old harness id.
+- **Read cost:** no new poll; destination data uses the existing machine observation and host-row feed. Desktop reads the
+  already loaded project snapshot and machine observations.
+- **Scale:** bounded by existing machine, agent, profile and contribution caps. First warning is stale target claims or
+  repeated start failures, visible through the existing switch failure line and machine liveness telemetry.
+- **Compatibility:** `machineId` and `model` are optional; old clients retain same-machine switching. Old hosts cannot
+  claim a destination switch without `leadSwitch`; clients refresh machine data before submission. A destination host
+  accepts only request fields it knows and reports a safe failure if a newer backend asks for unsupported behavior.
+- **Migration + rollback:** no migration. Old serialized requests omit destination and model and retain current semantics.
+  Rolling back the backend leaves unknown optional fields unused; a target that cannot complete leaves the source PM
+  running. Rollback never deletes task/chat state.
+- **Audience:** backend checks both the actor's right to switch and the destination's right to run this project's work;
+  the host repeats its contribution, generation, Team and profile checks. Machine ids and model names do not grant access.
+- **Identity:** the target host starts the PM with its own authorized daemon and account. The project's owner login is never
+  copied to the target. Team-account restrictions remain enforced by `requireTeamWork` and `teamAccountPool`.
+- **Failure:** any pre-promotion refusal leaves the source authoritative and running and produces one fixed-reason line. The
+  target process is stopped only if this switch created it and launch fails after creation. Once rebind lands, source
+  cleanup cannot report the move as failed.
+- **Platforms:** backend protocol and CLI host behavior are platform-neutral. Destination availability reflects each host's
+  reported capabilities and account offerings; Desktop tests use a memory store and fake sign-in. Phone UI is out of scope.
+
 ## Design checklist (docs/feature-design-rules.md)
 
 - **Growth:** `claude-profiles.json` is capped at 256 paths, the report at 16 profiles, `switchRequest` is one field per PM

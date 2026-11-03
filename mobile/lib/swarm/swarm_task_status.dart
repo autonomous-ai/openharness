@@ -19,7 +19,7 @@ String? Function(String personId) swarmTaskPersonName(
 ) =>
     (personId) =>
         switch (snapshot.people.where((p) => p.id == personId).firstOrNull) {
-          final person? when person.email.isNotEmpty => person.username,
+          final person? when person.email.isNotEmpty => person.shownName,
           _ => null,
         };
 

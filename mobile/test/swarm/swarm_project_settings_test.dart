@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/parts.dart';
@@ -16,7 +17,8 @@ import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
-import 'package:harness_mobile/swarm/team_glance.dart';
+import 'package:harness_mobile/swarm/swarm_style.dart';
+import 'package:harness_mobile/swarm/swarm_unread.dart';
 
 import '../support/real_fonts.dart';
 import '../voice_fakes.dart';
@@ -66,7 +68,11 @@ void main() {
   List<Map<String, dynamic>> people(int at) => [
     part(me, at, person(me, role: role)),
     part('diego', at, person('diego', role: 'collaborator')),
-    part('ken', at, person('ken', role: 'collaborator')),
+    // Shown by the name they set for the Swarm.
+    part('ken', at, {
+      ...person('ken', role: 'collaborator'),
+      'name': 'Ken Tran',
+    }),
   ];
 
   /// Moves the Swarm on: the next change read carries the project and its
@@ -443,14 +449,14 @@ void main() {
       await pump(tester);
       await openDetails(tester);
       expect(find.text('Project settings'), findsNothing);
-      expect(key('swarm-project-details-close'), findsOneWidget);
-      await tester.tap(key('swarm-project-details-close'));
+      expect(key('swarm-project-info-close'), findsOneWidget);
+      await tester.tap(key('swarm-project-info-close'));
       await tester.pumpAndSettle();
       expect(find.byType(BottomSheet), findsNothing);
 
       // And again: nothing of the first stays in the way.
       await openDetails(tester);
-      expect(key('swarm-project-details-close'), findsOneWidget);
+      expect(key('swarm-project-info-close'), findsOneWidget);
     });
   });
 
@@ -613,7 +619,7 @@ void main() {
       );
       await openDetails(tester);
 
-      expect(key('swarm-project-details-close'), findsOneWidget);
+      expect(key('swarm-project-info-close'), findsOneWidget);
       expect(
         find.descendant(
           of: find.byType(BottomSheet),
@@ -622,7 +628,7 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('The phone app for Harness.'), findsOneWidget);
-      final repository = key('swarm-project-details-repository');
+      final repository = key('swarm-project-info-repository');
       expect(
         find.descendant(of: repository, matching: find.text('Repository')),
         findsOneWidget,
@@ -634,7 +640,7 @@ void main() {
         ),
         findsOneWidget,
       );
-      final pm = key('swarm-project-details-coordinator');
+      final pm = key('swarm-project-info-coordinator');
       expect(
         find.descendant(of: pm, matching: find.text('Product Manager')),
         findsOneWidget,
@@ -652,14 +658,14 @@ void main() {
       expect(find.text('No description yet'), findsOneWidget);
       expect(
         find.descendant(
-          of: key('swarm-project-details-repository'),
+          of: key('swarm-project-info-repository'),
           matching: find.text('Not set'),
         ),
         findsOneWidget,
       );
       expect(
         find.descendant(
-          of: key('swarm-project-details-coordinator'),
+          of: key('swarm-project-info-coordinator'),
           matching: find.text('Starting…'),
         ),
         findsOneWidget,
@@ -683,7 +689,7 @@ void main() {
         'once', (tester) async {
       await pump(tester, myRole: 'viewer');
       await openDetails(tester);
-      expect(key('swarm-project-details-close'), findsOneWidget);
+      expect(key('swarm-project-info-close'), findsOneWidget);
       name = 'Phone app';
       await moveOn(tester);
       expect(
@@ -704,7 +710,7 @@ void main() {
         'head': part('head', 9, headData(projects: const [])),
       };
       await moveOn(tester);
-      expect(key('swarm-project-details-close'), findsNothing);
+      expect(key('swarm-project-info-close'), findsNothing);
       expect(find.byType(BottomSheet), findsNothing);
     });
   });
@@ -744,7 +750,7 @@ void main() {
       expect(
         find.descendant(
           of: key('swarm-sharing-person-$me'),
-          matching: find.text('Project owner'),
+          matching: find.text('$me@example.com · Project owner'),
         ),
         findsOneWidget,
       );
@@ -752,7 +758,26 @@ void main() {
       expect(tickable(tester, me), isFalse, reason: 'its owner stays in');
       expect(ticked(tester, 'diego'), isFalse);
       expect(ticked(tester, 'ken'), isFalse);
-      expect(find.text('diego@example.com'), findsOneWidget);
+      // Each by the name the Swarm shows them by, over their email: their
+      // username until they set a name.
+      for (final (id, shown) in [('diego', 'diego'), ('ken', 'Ken Tran')]) {
+        final row = key('swarm-sharing-person-$id');
+        expect(
+          find.descendant(of: row, matching: find.text(shown)),
+          findsOneWidget,
+          reason: id,
+        );
+        expect(
+          find.descendant(of: row, matching: find.text('$id@example.com')),
+          findsOneWidget,
+          reason: id,
+        );
+        expect(
+          tester.getTopLeft(find.text(shown)).dy,
+          lessThan(tester.getTopLeft(find.text('$id@example.com')).dy),
+          reason: '$id: the name over the email',
+        );
+      }
 
       await tester.tap(key('swarm-sharing-person-diego'));
       await tester.pumpAndSettle();
@@ -802,8 +827,10 @@ void main() {
       expect(ticked(tester, 'ken'), isFalse);
       expect(key('swarm-sharing-person-gone'), findsNothing);
 
-      // The checkbox itself ticks too.
+      // The checkbox itself ticks too; the list scrolls to the last one.
       await tester.tap(key('swarm-sharing-person-diego-check'));
+      await tester.ensureVisible(key('swarm-sharing-person-ken-check'));
+      await tester.pumpAndSettle();
       await tester.tap(key('swarm-sharing-person-ken-check'));
       await tester.pumpAndSettle();
       await tester.tap(key('swarm-sharing-save'));
@@ -960,12 +987,12 @@ void main() {
   });
 
   group('the lock of a private project on Home', () {
-    final now = DateTime(2026, 11, 3, 9);
-
     Future<void> row(
       WidgetTester tester, {
       required String visibility,
       String name = 'Mobile',
+      String? swarmName,
+      SwarmProjectNews news = swarmNoProjectNews,
       double width = 390,
     }) {
       final snapshot = SuperTabSnapshot.fromJson(
@@ -998,10 +1025,9 @@ void main() {
                   project: SwarmHomeProject(
                     swarmId: tab,
                     project: snapshot.projects.single,
+                    news: news,
                   ),
-                  glance: swarmTeamGlance(snapshot, now: now),
-                  humans: 1,
-                  now: now,
+                  swarmName: swarmName,
                   onTap: () {},
                 ),
               ),
@@ -1011,15 +1037,27 @@ void main() {
       );
     }
 
-    testWidgets('a private project has a lock after its name, heard as '
-        'Private project', (tester) async {
+    final lock = key('swarm-project-private');
+    final name = key('swarm-project-name');
+
+    testWidgets('a private project has a lock at the end of its one line, '
+        'heard as Private project', (tester) async {
       final semantics = tester.ensureSemantics();
       await row(tester, visibility: 'private');
-      final lock = key('swarm-project-private');
       expect(lock, findsOneWidget);
       expect(
         tester.getTopLeft(lock).dx,
-        greaterThan(tester.getTopRight(find.text('#Mobile')).dx),
+        greaterThan(tester.getTopRight(name).dx),
+      );
+      expect(tester.getTopRight(lock).dx, 390 - AppSpace.l);
+      expect(
+        tester.getCenter(lock).dy,
+        moreOrLessEquals(tester.getCenter(name).dy, epsilon: 1),
+        reason: 'level with the name, on the one line',
+      );
+      expect(
+        tester.getSize(find.byType(SwarmHomeProjectRow)).height,
+        minTouchTarget,
       );
       // Heard with the row's name, as one button.
       expect(
@@ -1031,21 +1069,38 @@ void main() {
 
     testWidgets('a public one has none', (tester) async {
       await row(tester, visibility: 'public');
-      expect(key('swarm-project-private'), findsNothing);
+      expect(lock, findsNothing);
     });
 
-    testWidgets('a long name ellipsizes and keeps the lock in sight', (
+    testWidgets('after the tags waiting in it, as the desktop marks it', (
       tester,
     ) async {
       await row(
         tester,
         visibility: 'private',
+        news: (bold: true, tags: 2, hasWaitingTag: true),
+      );
+      final tags = find.byType(SwarmTags);
+      expect(tags, findsOneWidget);
+      expect(
+        tester.getTopLeft(lock).dx,
+        greaterThan(tester.getTopRight(tags).dx),
+      );
+    });
+
+    testWidgets('a long name and its Swarm ellipsize and keep the lock in '
+        'sight', (tester) async {
+      await row(
+        tester,
+        visibility: 'private',
         name: 'A project with a name far too long for one row of a phone',
+        swarmName: 'Phone Swarm',
         width: 240,
       );
       expect(tester.takeException(), isNull);
-      final lock = tester.getRect(key('swarm-project-private'));
-      expect(lock.right, lessThanOrEqualTo(240));
+      final rect = tester.getRect(lock);
+      expect(rect.right, lessThanOrEqualTo(240));
+      expect(rect.left, greaterThanOrEqualTo(tester.getTopRight(name).dx));
     });
   });
 
