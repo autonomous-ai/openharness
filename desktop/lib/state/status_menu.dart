@@ -197,8 +197,8 @@ void clearStatusMenuNotifications(AppNotifier app, List receipts) {
 }
 
 /// The menu bar's Swarm section: in each open Swarm tab, the decisions asked
-/// of this account, then the tags waiting for it and not read past, newest first in each, as its
-/// Notifications page lists them. Only from conversations it can read now,
+/// of this account, then the tags waiting for it and not read past, newest
+/// first in each, as Activity lists them. Only from conversations it can read now,
 /// none from a Swarm it lost, none signed out: the lists are what was read
 /// last, and access can leave before they are read again. Choosing one opens
 /// it there (`SuperTabController.openNotice`).
