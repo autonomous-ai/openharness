@@ -575,13 +575,15 @@ export class DaemonCableHost implements CableHost {
    * The active tab when it is a Swarm, with its open project or '' when none is (its Chat with PM, a DM, or a Swarm
    * not loaded yet); `fromDevice` when the announce was a device's own pick. A Swarm tab with no project used to read
    * as no Swarm at all, and the dial stayed on "Nothing on this tab" while the window showed the Swarm. `conversationId`: the
-   * conversation it has open there, when the window names one, which the round dial's face follows.
+   * conversation it has open there, when the window names one, which the round dial's face follows, and `threadRoot` the
+   * thread whose pane is on screen beside it.
    */
-  activeSwarmProject(): { superTabId: string; projectId: string; conversationId?: string; fromDevice: boolean } | null {
+  activeSwarmProject(): { superTabId: string; projectId: string; conversationId?: string; threadRoot?: string; fromDevice: boolean } | null {
     const app = this.swarms
     const tab = app?.swarms.find((s) => s.id === app.active)
     return app && tab?.superTabId ? { superTabId: tab.superTabId, projectId: tab.projectId ?? '',
-      ...(tab.conversationId ? { conversationId: tab.conversationId } : {}), fromDevice: app.fromDevice === true } : null
+      ...(tab.conversationId ? { conversationId: tab.conversationId, ...(tab.threadRoot ? { threadRoot: tab.threadRoot } : {}) } : {}),
+      fromDevice: app.fromDevice === true } : null
   }
 
   selectSwarm(swarmId: string): void {
