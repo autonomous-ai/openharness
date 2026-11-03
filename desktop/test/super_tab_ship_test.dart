@@ -169,6 +169,22 @@ void main() {
       );
     });
 
+    test('the project\'s repository is read in every form git writes it', () {
+      final links = superTabPullRequestLinks('$own $wrongOwner');
+      for (final address in [
+        'ssh://git@github.com:22/autonomous-ai/openharness.git',
+        'ssh://git@ssh.github.com:443/Autonomous-AI/OpenHarness.git',
+        'git://github.com/autonomous-ai/openharness',
+        'https://github.com/autonomous-ai/openharness.git/',
+      ]) {
+        expect(
+          superTabPullRequestLabels(links, repositoryUrl: address),
+          ['openharness · PR #2527', 'openharness/openharness · PR #2527'],
+          reason: address,
+        );
+      }
+    });
+
     test('without the project\'s repository, owners sharing a name show', () {
       final both = superTabPullRequestLinks('$own $wrongOwner');
       expect(superTabPullRequestLabels(both), [
