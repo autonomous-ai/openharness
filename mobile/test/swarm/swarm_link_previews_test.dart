@@ -52,11 +52,12 @@ void main() {
 
   /// Swarm [tab] with chat g1 reading [page] as its latest messages, and
   /// chat g2, "Release notes"; with [other], the account also has Swarm
-  /// tab-2, whose chat h1 is "Billing".
+  /// tab-2, whose chat h1 is "Billing". [members] join the reader in [tab].
   FakeSwarm backend(
     List<Map<String, dynamic>> page, {
     Object? next,
     bool other = false,
+    List<Map<String, dynamic>> members = const [],
   }) {
     final fake = FakeSwarm();
     fake.routes['/api/super-tabs/list'] = (_) => {
@@ -66,18 +67,26 @@ void main() {
       ],
       'next': null,
     };
-    fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
-      groups: [
-        groupData(
-          'g1',
-          title: 'Fix login',
-          agentIds: ['agent-lead', 'agent-builder'],
-          status: 'working',
-          lastMessageSequence: page.isEmpty ? 0 : page.last['sequence'] as int,
-        ),
-        groupData('g2', title: 'Release notes', agentIds: ['agent-builder']),
-      ],
-    );
+    fake.routes['/api/super-tabs/$tab/parts'] = (_) {
+      final load = firstLoad(
+        groups: [
+          groupData(
+            'g1',
+            title: 'Fix login',
+            agentIds: ['agent-lead', 'agent-builder'],
+            status: 'working',
+            lastMessageSequence: page.isEmpty
+                ? 0
+                : page.last['sequence'] as int,
+          ),
+          groupData('g2', title: 'Release notes', agentIds: ['agent-builder']),
+        ],
+      );
+      for (final member in members) {
+        (load['members'] as List).add(part(member['id'] as String, 1, member));
+      }
+      return load;
+    };
     fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
     fake.routes['/api/super-tabs/tab-2/parts'] = (_) => firstLoad(
       tabId: 'tab-2',
@@ -339,6 +348,36 @@ void main() {
     await leave(tester);
   });
 
+  testWidgets('a person who set a name is shown by it, as the chat shows '
+      'them', (tester) async {
+    final fake = backend(
+      [message('m1', 1, author: me, text: 'See harness://swarm/$tab/g2/k1')],
+      members: [
+        {
+          ...person('ken', role: 'collaborator'),
+          'username': 'kenji',
+          'name': 'Minh Nguyen',
+        },
+      ],
+    );
+    fake.routes[one('g2', 'k1')] = (_) => {
+      'messages': [
+        {
+          ...message('k1', 7, conversation: 'g2', text: 'Shipped'),
+          'author': {'kind': 'person', 'id': 'ken', 'name': 'kenji'},
+        },
+      ],
+    };
+    await pump(tester, fake);
+
+    expect(
+      inPreview('$tab/g2/k1', 'Minh Nguyen · Release notes'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('kenji'), findsNothing);
+    await leave(tester);
+  });
+
   group('a reply whose original is not loaded', () {
     List<Map<String, dynamic>> page() => [
       for (var i = 10; i < 40; i++)
@@ -376,6 +415,38 @@ void main() {
         fake.paths,
         isNot(contains('$messages?before=10&beforeId=m10')),
         reason: 'no earlier page is read for a quote',
+      );
+      await leave(tester);
+    });
+
+    testWidgets('names a person who set a name by it', (tester) async {
+      final fake = backend(
+        page(),
+        next: older,
+        members: [
+          {
+            ...person('ken', role: 'collaborator'),
+            'username': 'kenji',
+            'name': 'Minh Nguyen',
+          },
+        ],
+      );
+      fake.routes[one('g1', 'm1')] = (_) => {
+        'messages': [
+          {
+            ...message('m1', 1, text: 'The very first plan'),
+            'author': {'kind': 'person', 'id': 'ken', 'name': 'kenji'},
+          },
+        ],
+      };
+      await pump(tester, fake);
+
+      expect(
+        find.descendant(
+          of: key('swarm-quote-m40'),
+          matching: find.text('Minh Nguyen'),
+        ),
+        findsOneWidget,
       );
       await leave(tester);
     });
