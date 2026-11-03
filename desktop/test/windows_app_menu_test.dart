@@ -113,12 +113,12 @@ void main() {
   testWidgets('Escape closes the panel', (tester) async {
     await pumpCompact(tester);
     await tap(tester, 'app-menu-button');
-    expect(find.text('HARNESS'), findsOneWidget);
+    expect(find.byKey(const Key('app-menu-section-harness')), findsOneWidget);
 
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
 
-    expect(find.text('HARNESS'), findsNothing);
+    expect(find.byKey(const Key('app-menu-section-harness')), findsNothing);
   });
 
   testWidgets('draws one button and no menu strip', (tester) async {
@@ -128,7 +128,7 @@ void main() {
     // None of the strip's menu buttons or section names is on screen until the
     // panel opens.
     expect(find.byKey(const Key('menu-bar-harness')), findsNothing);
-    expect(find.text('HARNESS'), findsNothing);
+    expect(find.byKey(const Key('app-menu-section-harness')), findsNothing);
   });
 
   testWidgets('one panel carries every section the strip had', (tester) async {
@@ -136,13 +136,13 @@ void main() {
     await tap(tester, 'app-menu-button');
 
     for (final section in [
-      'HARNESS',
-      'FILE',
-      'EDIT',
-      'VIEW',
-      'HISTORY',
-      'WINDOW',
-      'HELP',
+      'Harness',
+      'File',
+      'Edit',
+      'View',
+      'History',
+      'Window',
+      'Help',
     ]) {
       expect(find.text(section), findsOneWidget, reason: 'section $section');
     }
@@ -177,10 +177,10 @@ void main() {
   testWidgets('a second press closes the panel', (tester) async {
     await pumpCompact(tester);
     await tap(tester, 'app-menu-button');
-    expect(find.text('HARNESS'), findsOneWidget);
+    expect(find.byKey(const Key('app-menu-section-harness')), findsOneWidget);
 
     await tap(tester, 'app-menu-button');
-    expect(find.text('HARNESS'), findsNothing);
+    expect(find.byKey(const Key('app-menu-section-harness')), findsNothing);
   });
 
   testWidgets('every switcher on the strip still uses the same strings', (

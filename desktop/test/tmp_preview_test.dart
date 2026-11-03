@@ -23,7 +23,8 @@ void main() {
     await tester.runAsync(() async {
       final image = await boundary.toImage(pixelRatio: 2);
       final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-      File(path).writeAsBytesSync(bytes!.buffer.asUint8List());
+      File(path).parent.createSync(recursive: true);
+    File(path).writeAsBytesSync(bytes!.buffer.asUint8List());
     });
   }
 
@@ -136,11 +137,17 @@ void main() {
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
-    await shoot(tester, 'evidence/windows-app-menu/preview-closed.png');
+    await shoot(
+      tester,
+      '/Users/macbookpro/Workspace/autonomous-harness/evidence/windows-app-menu/preview-closed.png',
+    );
 
     await tester.tap(find.byKey(const Key('app-menu-button')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
-    await shoot(tester, 'evidence/windows-app-menu/preview-open.png');
+    await shoot(
+      tester,
+      '/Users/macbookpro/Workspace/autonomous-harness/evidence/windows-app-menu/preview-open.png',
+    );
   });
 }

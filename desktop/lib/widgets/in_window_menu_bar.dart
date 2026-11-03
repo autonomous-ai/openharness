@@ -1162,8 +1162,10 @@ class _MenuFocusRegion extends InheritedWidget {
   bool updateShouldNotify(_MenuFocusRegion oldWidget) => false;
 }
 
-/// The name over one group of a compact panel's rows: quiet, upper-case, and
-/// not a row — it never takes focus or a press.
+/// The name over one group of a compact panel's rows: quiet, sentence case and
+/// not a row — it never takes focus or a press. Sentence case rather than caps:
+/// that is how Windows 11's own menus, Slack and Figma label a group, and this
+/// panel is the app's menu bar, not a settings list.
 class _SectionHeading extends StatelessWidget {
   const _SectionHeading(this.label);
 
@@ -1173,10 +1175,14 @@ class _SectionHeading extends StatelessWidget {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     return Padding(
+      key: Key('app-menu-section-${label.toLowerCase()}'),
       padding: const EdgeInsets.fromLTRB(14, 8, 14, 2),
       child: Text(
-        label.toUpperCase(),
-        style: grid.AppType.monoLabel(color: grid.AppPalette.textFaint),
+        label,
+        style: grid.AppType.caption(
+          color: grid.AppPalette.textFaint,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
