@@ -24,7 +24,7 @@ void main() {
       grid.AppTheme.brightness.value = brightness;
       addTearDown(() => grid.AppTheme.brightness.value = previous);
       tester.view.devicePixelRatio = 2;
-      tester.view.physicalSize = const Size(1240, 820);
+      tester.view.physicalSize = const Size(1240, 1000);
       addTearDown(tester.view.reset);
       final now = DateTime.now().millisecondsSinceEpoch;
       final server = ConversationServer();
