@@ -1805,7 +1805,7 @@ static bool select_taken(void) {
 static void swarm_notice_goes_with_its_swarm(void) {
     // the Swarm leaves the list while its toast shows
     swarm_lead_open(1);
-    CHECK(pod_ui_swarm_notice(&U, "sw1", "l2", "c1", "Private words.", true, 3400));
+    CHECK(pod_ui_swarm_notice(&U, "sw1", "l2", "pm", "c1", "Private words.", true, 3400));
     render(3400);
     CHECK(U.frame.banner);
     pod_ui_supertab_ids(&U, NULL, 0);
@@ -1814,7 +1814,7 @@ static void swarm_notice_goes_with_its_swarm(void) {
 
     // a Lead leaves its Swarm while its toast shows; a finger on the toast opens no Lead and sends no select
     swarm_lead_open(1);
-    CHECK(pod_ui_swarm_notice(&U, "sw1", "l2", "c1", "Private words.", true, 3400));
+    CHECK(pod_ui_swarm_notice(&U, "sw1", "l2", "pm", "c1", "Private words.", true, 3400));
     render(3400);
     const pod_hit_t *h = find(POD_A_BANNER);
     CHECK(h);
@@ -1833,7 +1833,7 @@ static void swarm_notice_goes_with_its_swarm(void) {
 
     // a finger on a Notices row when the Swarm goes: nothing opens, and the row is off the next frame
     swarm_home(4);
-    CHECK(pod_ui_swarm_notice(&U, "sw1", "l2", "c1", "Private words.", true, 3400));
+    CHECK(pod_ui_swarm_notice(&U, "sw1", "l2", "pm", "c1", "Private words.", true, 3400));
     act(POD_A_INBOX, 0);
     render(3420);
     CHECK(top()->view == POD_V_INBOX);
