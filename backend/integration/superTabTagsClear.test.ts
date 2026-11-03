@@ -21,6 +21,8 @@ import { buddyChatId } from '../src/superTabs/buddies.js'
 import { stableId, type Author, type Conversation, type SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
+import { resolveByAnswer } from '../src/superTabs/mentions.js'
+import { profiled } from './plans.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -189,6 +191,28 @@ describe('answering clears tags', () => {
     await sendTo(s, s.buddyId, peer)
     expect(await listed(s.tabId, peer)).toEqual([])
     expect((await tagFor(tag, peer)).resolvedBy).toBe('answer')
+  })
+
+  // ENGINEERING §4: a person's post runs this in its message.send. The tags are found by the person's own index; the agent that
+  // made each is in no index, so they are read once, never once per agent answered.
+  it('answering five agents reads the person\'s tags once, and resolves only those five agents\' waiting tags', async () => {
+    const tabId = `tab-${randomUUID()}`, now = Date.now()
+    const agents = Array.from({ length: 10 }, (_, i) => `agent-${i}`)
+    // 200 tags of one person, 20 by each agent; one in four already resolved.
+    const tags = Array.from({ length: 200 }, (_, i) => ({ id: `${tabId}-tag-${i}`, tabId, personId: peer.sub, projectId: 'lead', conversationId: 'lead',
+      messageId: `m-${i}`, authorAgentId: agents[i % 10]!, createdAt: new Date(now - 60_000 - i * 1000),
+      resolvedAt: i % 4 === 0 ? new Date(now - 30_000) : null, resolvedBy: i % 4 === 0 ? 'read' : null }))
+    await db.superTabMention.createMany({ data: tags })
+    const answered = agents.slice(0, 5)
+    const entries = await profiled(db, () => resolveByAnswer(db as never, tabId, peer.sub, answered, now))
+    const examined = entries.filter(e => e.ns.endsWith('.SuperTabMention')).reduce((sum, e) => sum + (e.docsExamined ?? 0), 0)
+    const expected = tags.filter(tag => answered.includes(tag.authorAgentId) && !tag.resolvedAt).map(tag => tag.id).sort()
+    const after = await db.superTabMention.findMany({ where: { tabId }, select: { id: true, resolvedBy: true } })
+    expect(after.filter(row => row.resolvedBy === 'answer').map(row => row.id).sort()).toEqual(expected)
+    expect(after.filter(row => row.resolvedBy === 'read')).toHaveLength(50)
+    expect(after.filter(row => !row.resolvedBy)).toHaveLength(150 - expected.length)
+    // Each of the person's tags once, then each resolved tag by its id.
+    expect(examined, `examined ${examined} for ${tags.length} tags, ${expected.length} resolved`).toBeLessThanOrEqual(tags.length + expected.length)
   })
 
   it('a tag by another agent stays', async () => {
