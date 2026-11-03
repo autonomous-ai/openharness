@@ -166,9 +166,14 @@ describe('Swarm sharing on the authenticated control API', () => {
     await store.execute(peer, tab, { operationId: randomUUID(), command: { type: 'member.remove', userId: peer.sub } })
     await expect(store.join(peer, tab, latest)).rejects.toMatchObject({ code: 'JOIN_CHANGED' })
     expect((await store.read(owner, tab)).state.people.some(p => p.id === peer.sub)).toBe(false)
-    // A newly confirmed join receives a new membership generation, not any old private grants.
-    const rejoin = await store.join(peer, tab, { operationId: randomUUID() })
-    expect(rejoin.alreadyMember).toBe(false)
+    // Someone who left comes back only on purpose, by an invitation or a shared link, never by the domain link alone
+    // (spec 2026-11-03, Trust 4). Back by invitation, they get a new membership generation, not any old private grants.
+    await expect(store.join(peer, tab, { operationId: randomUUID() })).rejects.toMatchObject({ code: 'JOIN_UNAVAILABLE' })
+    const invitation = await store.execute(owner, tab, { operationId: randomUUID(),
+      command: { type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' } })
+    const rejoin = await store.execute(peer, tab, { operationId: randomUUID(), command: { type: 'invite.accept', inviteId: String(invitation.result.inviteId) } })
+    expect(rejoin.result.alreadyMember).toBe(false)
+    expect((await store.join(peer, tab, { operationId: randomUUID() })).alreadyMember).toBe(true)
     await expect(store.join(peer, tab, latest)).rejects.toMatchObject({ code: 'JOIN_CHANGED' })
   })
 

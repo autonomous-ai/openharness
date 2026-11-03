@@ -342,15 +342,38 @@ describe('Leaving is final for auto-join', () => {
     expect((await personIn(tab, invitee))!.joinedVia).toBeUndefined()
   })
 
-  it('lets someone come back on purpose by a link, which clears the decline', async () => {
+  it('lets someone come back on purpose by a shared link, which clears the decline', async () => {
     const { linked } = await org('twelve', ['linked'])
     const tab = await create()
     await turnOn(tab)
     await listed(linked)
     await leave(linked, tab)
-    expect((await request(`${tab}/join`, { operationId: randomUUID() }, linked)).statusCode).toBe(200)
+    const link = (await save(tab, { mode: 'link', role: 'collaborator' })).json().data
+    const token = new URL(link.joinUrl).searchParams.get('token')!
+    expect((await request(`${tab}/join`, { operationId: randomUUID(), token }, linked)).statusCode).toBe(200)
     expect(await declinedOf(tab)).not.toContain(linked.sub)
     expect((await personIn(tab, linked))!.joinedVia).toBeUndefined()
+  })
+
+  // Security review 1 of #2714: the domain's own join link needs no token, so it must not undo a leave or a removal.
+  it('keeps someone who left or was removed out of the domain link too', async () => {
+    const { gone, ousted } = await org('seventeen', ['gone', 'ousted'])
+    const tab = await create()
+    await turnOn(tab)
+    await listed(gone)
+    await listed(ousted)
+    await leave(gone, tab)
+    await leave(ousted, tab, current)
+    for (const user of [gone, ousted]) {
+      expect((await request(`${tab}/join/preview`, {}, user)).statusCode).toBe(404)
+      expect((await request(`${tab}/join`, { operationId: randomUUID() }, user)).statusCode).toBe(404)
+      await expect(store.join(user, tab, { operationId: randomUUID() })).rejects.toMatchObject({ code: 'JOIN_UNAVAILABLE' })
+      expect(await personIn(tab, user)).toBeUndefined()
+      expect(await declinedOf(tab)).toContain(user.sub)
+    }
+    // The same holds once the owner turns auto-join off: the domain link alone never undoes a leave or a removal.
+    await save(tab, { mode: 'domain', domain: current.email.split('@')[1]!, role: 'collaborator', autoJoin: false })
+    await expect(store.join(ousted, tab, { operationId: randomUUID() })).rejects.toMatchObject({ code: 'JOIN_UNAVAILABLE' })
   })
 
   it('declines someone the Workspace removed instead of joining them, and does not try that Swarm again', async () => {
