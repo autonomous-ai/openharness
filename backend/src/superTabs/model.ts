@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { githubRepository } from '../github/repository.js'
 import { cloneData } from './cloneData.js'
 import { autoJoinOn } from './autoJoinDomain.js'
 import { lostReasonWithoutMachine } from './lostReason.js'
@@ -386,13 +387,27 @@ export interface TaskLiveness {
   personId?: string
 }
 
-/** The GitHub pull request links in [text], each once, in order. */
-export const pullRequestLinks = (text: string): string[] => [...new Set([...text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)]
-  .filter(match => Number(match[1]) <= Number.MAX_SAFE_INTEGER).map(match => match[0]))]
+/** [url] as the project's own pull request, in the project's spelling of owner and repository (GitHub names are not case
+ *  sensitive); null when it belongs to any other repository, whatever its name, since an owner is never guessed. Without a
+ *  known GitHub repository nothing can be judged. */
+export function projectPullRequestUrl(url: string, repositoryUrl: string | null | undefined): string | null {
+  const own = githubRepository(repositoryUrl)
+  if (!own) return url
+  const match = url.match(/^https:\/\/github\.com\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_.-]+)\/pull\/([1-9][0-9]*)$/)
+  if (!match) return null
+  return match[1]!.toLowerCase() === own.owner.toLowerCase() && match[2]!.toLowerCase() === own.name.toLowerCase()
+    ? `https://github.com/${own.fullName}/pull/${match[3]}` : null
+}
 
-export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>): void {
-  const urls = new Set(group.pullRequestUrls ?? [])
-  for (const text of texts) if (text) for (const url of pullRequestLinks(text)) urls.add(url)
+/** The GitHub pull request links in [text], each once, in order. With the project's [repositoryUrl], each is that repository's
+ *  (in the project's spelling) and a link into any other repository is left out, so one pull request is one link. */
+export const pullRequestLinks = (text: string, repositoryUrl?: string | null): string[] => [...new Set([...text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)]
+  .filter(match => Number(match[1]) <= Number.MAX_SAFE_INTEGER).flatMap(match => projectPullRequestUrl(match[0], repositoryUrl) ?? []))]
+
+/** Adds the pull request links of [texts] to [group] and corrects the ones it holds, by the project's [repositoryUrl]. */
+export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>, repositoryUrl?: string | null): void {
+  const urls = new Set((group.pullRequestUrls ?? []).flatMap(url => projectPullRequestUrl(url, repositoryUrl) ?? []))
+  for (const text of texts) if (text) for (const url of pullRequestLinks(text, repositoryUrl)) urls.add(url)
   group.pullRequestUrls = [...urls]
 }
 export interface Invitation {
