@@ -1002,6 +1002,8 @@ void main() {
     test(
       'a waiting notify-send stops at its limit, or when it is stopped',
       () async {
+        // `sleep 30; true` keeps the shell's child, as Linux's dash keeps a lone one: stopping
+        // the shell leaves the child holding its output (CI, desktop shard 3, 11-03).
         final answered = await waitOffUiIsolate('/bin/sh', [
           '-c',
           'printf default',
@@ -1009,15 +1011,14 @@ void main() {
         expect((answered.exitCode, answered.stdout), (0, 'default'));
         final timedOut = await waitOffUiIsolate(
           '/bin/sh',
-          ['-c', 'sleep 30'],
+          ['-c', 'sleep 30; true'],
           limit: const Duration(milliseconds: 200),
         ).result.timeout(const Duration(seconds: 10));
         expect(timedOut.exitCode, isNot(0));
         final stopped = waitOffUiIsolate('/bin/sh', [
           '-c',
-          'sleep 30',
+          'sleep 30; true',
         ], limit: const Duration(minutes: 1));
-        await Future<void>.delayed(const Duration(milliseconds: 200));
         stopped.kill();
         expect(
           (await stopped.result.timeout(const Duration(seconds: 10))).exitCode,
