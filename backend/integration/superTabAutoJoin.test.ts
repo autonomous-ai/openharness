@@ -6,7 +6,7 @@ import { promisify } from 'node:util'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { PrismaClient } from '@prisma/client'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
@@ -25,13 +25,8 @@ let clock = Date.now()
 
 const account = (n: number, email: string): AuthUser => ({ sub: `3000000000000000000000${n.toString(16).padStart(2, '0')}`, email, autonomousEnv: 'prod', role: 'user' })
 const ken = account(1, 'ken@acme.com'), x = account(2, 'x@acme.com'), gmailOwner = account(3, 'owner@gmail.com'), xGmail = account(4, 'x@gmail.com')
-const relay = account(5, 'y@privaterelay.appleid.com'), partner = account(6, 'p@partner.com'), y = account(7, 'y@acme.com'), z = account(8, 'z@acme.com')
-const w = account(9, 'w@acme.com'), v = account(10, 'v@acme.com'), u = account(11, 'u@acme.com'), t = account(12, 't@acme.com')
-const boss = account(13, 'boss@beta.io'), b1 = account(14, 'b1@beta.io'), s1 = account(15, 's1@acme.com'), r1 = account(16, 'r1@acme.com')
-const q1 = account(17, 'q1@acme.com'), d1 = account(18, 'd1@acme.com')
-const leaver = account(19, 'leaver@acme.com'), removed = account(20, 'removed@acme.com'), invitee = account(21, 'invitee@acme.com')
-const linked = account(22, 'linked@acme.com'), banned = account(23, 'banned@acme.com'), wsGone = account(24, 'gone@acme.com'), toggler = account(25, 'toggler@acme.com')
-const accounts = [ken, x, gmailOwner, xGmail, relay, partner, y, z, w, v, u, t, boss, b1, s1, r1, q1, d1, leaver, removed, invitee, linked, banned, wsGone, toggler]
+const relay = account(5, 'y@privaterelay.appleid.com'), partner = account(6, 'p@partner.com')
+const accounts = [ken, x, gmailOwner, xGmail, relay, partner]
 
 /** A Swarm's whole state as its parts hold it. */
 async function storedState(tab: string): Promise<SuperTabState> {
@@ -49,17 +44,34 @@ async function saveState(tab: string, state: SuperTabState) {
       sequenceBase: current.sequenceBase })
   })
 }
-const request = (path: string, body?: object, user: AuthUser = ken, method?: 'GET' | 'POST') =>
+/** The owner the helpers act as by default: ken, or the owner of the test's own company (org). */
+let current = ken
+let nextAccount = 0x40
+/** A company of its own for one test, so Swarms of other tests at the same domain never fill its try of ten: its owner becomes
+ *  the helpers' default, and each name is a person at its domain. */
+const org = async (label: string, names: string[]): Promise<Record<string, AuthUser>> => {
+  const make = async (name: string) => {
+    const user = account(nextAccount++, `${name}@${label}.com`)
+    accounts.push(user)
+    await db.user.create({ data: { id: user.sub, externalId: `auto-join-fixture-${user.sub}`, email: user.email, autonomousEnv: user.autonomousEnv } })
+    return user
+  }
+  current = await make('owner')
+  const people: Record<string, AuthUser> = {}
+  for (const name of names) people[name] = await make(name)
+  return people
+}
+const request = (path: string, body?: object, user: AuthUser = current, method?: 'GET' | 'POST') =>
   app.inject({ method: method ?? (body ? 'POST' : 'GET'), url: `/api/super-tabs/${path}`,
     headers: { authorization: `Bearer ${user.sub}` }, ...(body ? { payload: body } : {}) })
 /** Saves sharing as `owner` through the API, at the current revision. */
-const save = async (tab: string, access: GeneralAccess | Record<string, unknown>, owner: AuthUser = ken) => {
+const save = async (tab: string, access: GeneralAccess | Record<string, unknown>, owner: AuthUser = current) => {
   const current = await store.sharing(owner, tab)
   return request(`${tab}/sharing`, { operationId: randomUUID(), revision: current.revision, access }, owner)
 }
-const create = async (owner: AuthUser = ken, name = 'Acme Swarm') => (await store.create(owner, randomUUID(), name)).id
+const create = async (owner: AuthUser = current, name = 'Acme Swarm') => (await store.create(owner, randomUUID(), name)).id
 const later = () => { clock += 121_000 }
-const turnOn = (tab: string, role: 'collaborator' | 'viewer' = 'collaborator', owner: AuthUser = ken) =>
+const turnOn = (tab: string, role: 'collaborator' | 'viewer' = 'collaborator', owner: AuthUser = current) =>
   save(tab, { mode: 'domain', domain: owner.email.split('@')[1]!, role, autoJoin: true }, owner)
 const personIn = async (tab: string, user: AuthUser) => (await storedState(tab)).people.find(p => p.id === user.sub)
 const workspaceRole = async (tab: string, user: AuthUser) => {
@@ -95,6 +107,7 @@ beforeAll(async () => {
 afterAll(async () => { await app?.close(); await db?.$disconnect(); await replica?.stop() })
 
 describe('Domain checks on save and join', () => {
+  beforeEach(() => { current = ken })
   it('refuses a public domain on save', async () => {
     const own = await create(gmailOwner)
     const refused = await save(own, { mode: 'domain', domain: 'gmail.com', role: 'collaborator' }, gmailOwner)
@@ -172,14 +185,15 @@ describe('Domain checks on save and join', () => {
 
 describe('Joining by domain on the person\'s own list read', () => {
   it('joins x@acme.com to the acme Swarm with auto-join on, as a Workspace guest, with the role the owner picked', async () => {
+    const { x } = await org('one', ['x'])
     const on = await create(), linkOnly = await create(), invited = await create()
     await turnOn(on, 'viewer')
-    await save(linkOnly, { mode: 'domain', domain: 'acme.com', role: 'collaborator' })
+    await save(linkOnly, { mode: 'domain', domain: current.email.split('@')[1]!, role: 'collaborator' })
     const tabs = await listed(x)
     expect(tabs).toContain(on)
     expect(tabs).not.toContain(linkOnly)
     expect(tabs).not.toContain(invited)
-    expect(await personIn(on, x)).toMatchObject({ role: 'viewer', joinedVia: 'domain', email: 'x@acme.com' })
+    expect(await personIn(on, x)).toMatchObject({ role: 'viewer', joinedVia: 'domain', email: x.email })
     expect(await workspaceRole(on, x)).toBe('guest')
     expect(await personIn(linkOnly, x)).toBeUndefined()
   })
@@ -197,6 +211,7 @@ describe('Joining by domain on the person\'s own list read', () => {
   })
 
   it('joins through the Workspaces list too', async () => {
+    const { y } = await org('two', ['y'])
     const tab = await create()
     await turnOn(tab)
     expect((await request('workspaces', undefined, y)).statusCode).toBe(200)
@@ -204,17 +219,19 @@ describe('Joining by domain on the person\'s own list read', () => {
   })
 
   it('keeps the role of someone already a member of the Workspace', async () => {
+    const { z } = await org('three', ['z'])
     const tab = await create()
     await turnOn(tab)
     const { workspaceId } = await storedState(tab)
-    await db.$transaction(tx => addMember(tx, workspaceId!, { id: z.sub, email: z.email }, 'member', ken.sub, randomUUID()))
+    await db.$transaction(tx => addMember(tx, workspaceId!, { id: z.sub, email: z.email }, 'member', current.sub, randomUUID()))
     expect(await listed(z)).toContain(tab)
     expect(await workspaceRole(tab, z)).toBe('member')
   })
 
   it('joins ten Swarms per try, and the rest after two minutes', async () => {
+    const { b1 } = await org('beta', ['b1'])
     const tabs: string[] = []
-    for (let i = 0; i < 11; i++) { const tab = await create(boss, `Beta ${i}`); await turnOn(tab, 'collaborator', boss); tabs.push(tab) }
+    for (let i = 0; i < 11; i++) { const tab = await create(current, `Beta ${i}`); await turnOn(tab); tabs.push(tab) }
     expect((await listed(b1)).filter(id => tabs.includes(id))).toHaveLength(10)
     expect((await listed(b1)).filter(id => tabs.includes(id))).toHaveLength(10)
     later()
@@ -222,6 +239,7 @@ describe('Joining by domain on the person\'s own list read', () => {
   })
 
   it('never joins from a team session', async () => {
+    const { t } = await org('four', ['t'])
     const tab = await create()
     await turnOn(tab)
     const team = await app.inject({ method: 'GET', url: '/api/super-tabs/list', headers: { authorization: `Bearer team:${t.sub}` } })
@@ -232,11 +250,12 @@ describe('Joining by domain on the person\'s own list read', () => {
 
   it('writes no membership after turning auto-join off commits', async () => {
     for (let i = 0; i < 4; i++) {
+      const { w, v } = await org(`five${i}`, ['w', 'v'])
       const tab = await create()
       await turnOn(tab)
-      const revision = (await store.sharing(ken, tab)).revision
-      const off = { operationId: randomUUID(), revision, access: { mode: 'domain' as const, domain: 'acme.com', role: 'collaborator' as const, autoJoin: false } }
-      await Promise.all([store.saveSharing(ken, tab, off), store.autoJoinSwarm(w, tab).catch(() => 'conflict')])
+      const revision = (await store.sharing(current, tab)).revision
+      const off = { operationId: randomUUID(), revision, access: { mode: 'domain' as const, domain: current.email.split('@')[1]!, role: 'collaborator' as const, autoJoin: false } }
+      await Promise.all([store.saveSharing(current, tab, off), store.autoJoinSwarm(w, tab).catch(() => 'conflict')])
       const parts = await db.$transaction(tx => import('../src/superTabs/parts/index.js').then(p => p.loadAll(tx, tab)))
       const joined = parts.members.find(m => m.key === w.sub && !m.deleted)
       // Joined only before the turn-off: the turn-off's head write is then the later one.
@@ -247,6 +266,7 @@ describe('Joining by domain on the person\'s own list read', () => {
   })
 
   it('stops at 200 people, and tells the owner', async () => {
+    const { u } = await org('six', ['u'])
     const tab = await create()
     await turnOn(tab)
     const state = await storedState(tab)
@@ -258,9 +278,10 @@ describe('Joining by domain on the person\'s own list read', () => {
   })
 
   it('joins nobody to a deleted Swarm', async () => {
-    const tab = await create(ken, 'Doomed')
+    const { d1 } = await org('seven', ['d1'])
+    const tab = await create(current, 'Doomed')
     await turnOn(tab)
-    await store.execute(ken, tab, { operationId: randomUUID(), command: { type: 'swarm.delete', name: 'Doomed' } })
+    await store.execute(current, tab, { operationId: randomUUID(), command: { type: 'swarm.delete', name: 'Doomed' } })
     expect((await db.superTab.findUniqueOrThrow({ where: { id: tab } })).autoJoinDomain).toBeNull()
     expect(await store.autoJoinSwarm(d1, tab)).toBe('skipped')
     await listed(d1)
@@ -268,6 +289,7 @@ describe('Joining by domain on the person\'s own list read', () => {
   })
 
   it('makes one membership when two reads of the same person race', async () => {
+    const { s1 } = await org('eight', ['s1'])
     const tab = await create()
     await turnOn(tab)
     const outcomes = await Promise.all([store.autoJoinSwarm(s1, tab), store.autoJoinSwarm(s1, tab)])
@@ -282,6 +304,7 @@ describe('Leaving is final for auto-join', () => {
     store.execute(by, tab, { operationId: randomUUID(), command: { type: 'member.remove', userId: user.sub } })
 
   it('does not pull back someone who left', async () => {
+    const { leaver } = await org('nine', ['leaver'])
     const tab = await create()
     await turnOn(tab)
     expect(await listed(leaver)).toContain(tab)
@@ -293,10 +316,11 @@ describe('Leaving is final for auto-join', () => {
   })
 
   it('does not pull back someone the owner removed, and keeps that across turning auto-join off and on', async () => {
+    const { removed } = await org('ten', ['removed'])
     const tab = await create()
     await turnOn(tab)
     await listed(removed)
-    await leave(removed, tab, ken)
+    await leave(removed, tab, current)
     await save(tab, { mode: 'invited', role: 'collaborator' })
     await turnOn(tab)
     expect(await declinedOf(tab)).toContain(removed.sub)
@@ -305,11 +329,12 @@ describe('Leaving is final for auto-join', () => {
   })
 
   it('lets someone come back on purpose by an accepted invitation, which clears the decline', async () => {
+    const { invitee } = await org('eleven', ['invitee'])
     const tab = await create()
     await turnOn(tab)
     await listed(invitee)
     await leave(invitee, tab)
-    const invite = await store.execute(ken, tab, { operationId: randomUUID(),
+    const invite = await store.execute(current, tab, { operationId: randomUUID(),
       command: { type: 'invite.create', email: invitee.email, role: 'viewer', conversationId: 'lead' } })
     await store.execute(invitee, tab, { operationId: randomUUID(), command: { type: 'invite.accept', inviteId: String(invite.result.inviteId) } })
     expect(await declinedOf(tab)).not.toContain(invitee.sub)
@@ -318,6 +343,7 @@ describe('Leaving is final for auto-join', () => {
   })
 
   it('lets someone come back on purpose by a link, which clears the decline', async () => {
+    const { linked } = await org('twelve', ['linked'])
     const tab = await create()
     await turnOn(tab)
     await listed(linked)
@@ -328,11 +354,12 @@ describe('Leaving is final for auto-join', () => {
   })
 
   it('declines someone the Workspace removed instead of joining them, and does not try that Swarm again', async () => {
+    const { banned } = await org('thirteen', ['banned'])
     const tab = await create()
     await turnOn(tab)
     const { workspaceId } = await storedState(tab)
     await db.swarmWorkspaceMember.create({ data: { id: memberId(workspaceId!, banned.sub), workspaceId: workspaceId!, userId: banned.sub, email: banned.email,
-      role: 'guest', generation: 'old', addedBy: ken.sub, addedAt: new Date(), removedAt: new Date(), removedBy: ken.sub, purgeAt: null } })
+      role: 'guest', generation: 'old', addedBy: current.sub, addedAt: new Date(), removedAt: new Date(), removedBy: current.sub, purgeAt: null } })
     expect(await listed(banned)).not.toContain(tab)
     expect(await personIn(tab, banned)).toBeUndefined()
     expect(await declinedOf(tab)).toContain(banned.sub)
@@ -344,11 +371,12 @@ describe('Leaving is final for auto-join', () => {
   })
 
   it('declines someone who joined by domain and was then removed from the Workspace', async () => {
+    const { wsGone } = await org('fourteen', ['wsGone'])
     const tab = await create()
     await turnOn(tab)
     await listed(wsGone)
     const { workspaceId } = await storedState(tab)
-    await store.workspaces.remove(ken, workspaceId!, wsGone.sub)
+    await store.workspaces.remove(current, workspaceId!, wsGone.sub)
     expect(await personIn(tab, wsGone)).toBeUndefined()
     expect(await declinedOf(tab)).toContain(wsGone.sub)
   })
