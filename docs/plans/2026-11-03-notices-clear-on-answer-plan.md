@@ -1,6 +1,6 @@
 # Notices Clear On Read And Answer Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **How this plan runs:** by this project's instructions: one Engineer implements it task by task, test first (each failing test committed before its code), and the review step on the pull request is the one independent review. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A Swarm tag or an agent's open question stops being a notification once its person reads it or answers the agent, wherever they do it.
 
