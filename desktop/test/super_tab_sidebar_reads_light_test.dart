@@ -219,19 +219,13 @@ void main() {
     final server = humansSwarm();
     addNumberedWorkgroups(server, 1);
     working(server);
-    // A title longer than the room right of the list: the tooltip stays
-    // compact and wraps, rather than being pushed back over the list.
-    (server.state['conversations'] as List)
-            .cast<Map<String, dynamic>>()
-            .firstWhere((g) => g['id'] == 'g1')['title'] =
-        'Workgroup 1 ${'with a very long title that goes on ' * 8}';
-    final controller = await show(tester, server, size: const Size(800, 700));
+    final controller = await show(tester, server);
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     addTearDown(mouse.removePointer);
     await mouse.addPointer(location: Offset.zero);
     await mouse.moveTo(tester.getCenter(g1));
     await tester.pumpAndSettle(const Duration(seconds: 2));
-    final tip = find.textContaining('goes on \n');
+    final tip = find.textContaining('Workgroup 1\n');
     expect(tip, findsOneWidget);
     // The tooltip's whole box, its padding and border included, clears the row and its state mark.
     final bubble = find

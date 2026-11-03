@@ -394,6 +394,10 @@ class ProjectSidebar extends StatelessWidget {
                               // Beside the row, level with it, never over
                               // the rows below (Huy, 11-03, #2427).
                               positionDelegate: _besideTheRow,
+                              // Compact: a long name wraps rather than
+                              // needing more room than the window has right
+                              // of the list.
+                              constraints: const BoxConstraints(maxWidth: 260),
                               message:
                                   label ??
                                   project?.name ??
