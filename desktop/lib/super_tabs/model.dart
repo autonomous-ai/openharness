@@ -1412,6 +1412,13 @@ class SuperTabMessage {
   /// A note the backend writes about a terminal: a Lead's typing, or an alert.
   bool get terminalEvent =>
       source['kind'] == 'terminal-input' || source['kind'] == 'terminal-alert';
+
+  /// The project chat's line when linked work is Done (ship_row.dart).
+  bool get shipLine => source['kind'] == 'ship';
+
+  /// A line the chat draws as its own row, with no sender's header (view.dart):
+  /// a message after it has no header to join (Diego, #2547).
+  bool get drawsOwnRow => shipLine || terminalEvent || route != null;
   String? get terminalNote {
     if (!fromTerminal) return null;
     final phase = source['phase'];

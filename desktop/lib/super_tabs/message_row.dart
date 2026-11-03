@@ -172,13 +172,16 @@ class SuperTabMessageRow extends StatefulWidget {
 
   /// Whether [current] joins [previous]'s header: the same sender, within five
   /// minutes on the same day. In the chat, a thread reply shown there stands
-  /// on its own with its Replied in thread line; [inThread], replies group.
+  /// on its own with its Replied in thread line; [inThread], replies group. A
+  /// line that draws its own row has no header to share, on either side.
   static bool groupsWith(
     SuperTabMessage current,
     SuperTabMessage? previous, {
     bool inThread = false,
   }) {
     if (previous == null ||
+        current.drawsOwnRow ||
+        previous.drawsOwnRow ||
         // A message that started a session stands on its own, with its line.
         current.sessionRoot ||
         previous.sessionRoot ||
