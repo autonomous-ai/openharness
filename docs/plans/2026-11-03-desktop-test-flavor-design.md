@@ -60,8 +60,9 @@ The test flavor signs in as a test account, never as the person whose Mac it is.
   is reused by every run. The CLI's own `session.lock` keeps two runs from refreshing it at once.
 - **How.** The first `start` runs `harness login --code` in the test home. The code is approved in a browser where the
   test account is signed in: a private window, never the person's own window.
-- **Guard.** After sign-in, `start` reads the account in the test session and the account in the person's
-  `~/.harness/auth/session.json`. It only reads the file: it does not run the person's CLI, which could refresh the
+- **Guard.** After sign-in, `start` reads the account id in the test session and in the person's
+  `~/.harness/auth/session.json` (`signInAcct`, or for an older session the access token's subject, compared in memory
+  and never printed). It only reads the file: it does not run the person's CLI, which could refresh the
   token. If they are the same account, `start` signs the test home out, deletes it, and stops with: "The test copy
   signed in as this Mac's own account. Sign it in with the test account instead."
 - **Signing out.** The test copy's own Sign out runs the test home's CLI, so it can sign out only the test session.

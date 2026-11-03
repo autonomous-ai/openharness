@@ -95,5 +95,59 @@ class PatchInfoTest(unittest.TestCase):
         self.assertNotEqual(self.info.get('CFBundleIdentifier'), 'ai.autonomous.harness.test')
 
 
+def _jwt(payload):
+    import base64
+    import json
+    part = lambda value: base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip('=')
+    return f"{part({'alg': 'none'})}.{part(payload)}.signature"
+
+
+class SameAccountGuardTest(unittest.TestCase):
+    def setUp(self):
+        import json
+        import tempfile
+        self.json = json
+        self.root = Path(tempfile.mkdtemp(prefix='harness-test-flavor-guard.'))
+        self.addCleanup(__import__('shutil').rmtree, self.root, ignore_errors=True)
+
+    def session(self, name, **fields):
+        path = self.root / name
+        path.write_text(self.json.dumps({'version': 1, 'accessToken': _jwt({'sub': 'acct-from-token'}), **fields}))
+        return path
+
+    def test_reads_the_sign_in_account(self):
+        path = self.session('a.json', signInAcct='acct-1', refreshToken='secret-refresh')
+        self.assertEqual(test_flavor.session_account(path), 'acct-1')
+
+    def test_an_older_session_falls_back_to_the_token_subject_and_never_returns_token_text(self):
+        path = self.session('b.json', refreshToken='secret-refresh')
+        account = test_flavor.session_account(path)
+        self.assertEqual(account, 'acct-from-token')
+        self.assertNotIn('secret', account)
+        self.assertNotIn('.', account)
+
+    def test_missing_or_unreadable_is_none(self):
+        self.assertIsNone(test_flavor.session_account(self.root / 'missing.json'))
+        broken = self.root / 'broken.json'
+        broken.write_text('{not json')
+        self.assertIsNone(test_flavor.session_account(broken))
+
+    def test_the_same_account_is_refused_in_plain_words(self):
+        with self.assertRaises(test_flavor.SameAccount) as refused:
+            test_flavor.check_not_owner('acct-1', 'acct-1')
+        self.assertEqual(str(refused.exception),
+                         "The test copy signed in as this Mac's own account. Sign it in with the test account instead.")
+
+    def test_another_account_passes(self):
+        test_flavor.check_not_owner('acct-owner', 'acct-test')
+
+    def test_an_unknown_test_account_is_refused(self):
+        with self.assertRaises(test_flavor.SameAccount):
+            test_flavor.check_not_owner('acct-owner', None)
+
+    def test_a_person_who_is_not_signed_in_passes(self):
+        test_flavor.check_not_owner(None, 'acct-test')
+
+
 if __name__ == '__main__':
     unittest.main()

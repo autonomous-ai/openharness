@@ -131,19 +131,20 @@ PR's own CLI bundle (`cli/build-bundle.mjs`, `BUNDLE_OUT_DIR`), PlistBuddy and c
 - Test: `desktop/tool/test_test_flavor.py`
 
 **Interfaces:**
-- Produces: `session_account(path: Path) -> str | None`, which reads the account email or id from a CLI
-  `session.json`, or None when the file is missing or unreadable. Also
+- Produces: `session_account(path: Path) -> str | None`, which reads the account id from a CLI `session.json`
+  (`signInAcct`; for an older session without it, the access token's `sub`, decoded in memory and never printed or
+  returned), or None when the file is missing or unreadable. Also
   `check_not_owner(real: str | None, test: str | None) -> None`, which raises `SameAccount` with the Global Constraints
   copy when they are equal or when `test` is None.
 
 - [ ] **Step 1: Write the failing tests:**
-  - the same email → `SameAccount` with the exact copy;
-  - different emails pass;
+  - the same account id → `SameAccount` with the exact copy;
+  - different ids pass;
   - an unreadable test session raises;
   - a missing real session (the person is not signed in) passes;
-  - `session_account` never returns the token fields (a fixture with `accessToken` returns only the email).
+  - `session_account` returns `signInAcct`, else the token's `sub`, and never any token text.
 - [ ] **Step 2: Run** → FAIL.
-- [ ] **Step 3: Implement** both, reading the field names the CLI writes (`cli/src/lib/authSession.ts`).
+- [ ] **Step 3: Implement** both, reading the field names the CLI writes (`cli/src/lib/authSession.ts` `AuthSession`).
 - [ ] **Step 4: Run** → PASS.
 - [ ] **Step 5: Commit.**
 
