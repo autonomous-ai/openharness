@@ -396,6 +396,56 @@ void main() {
     await finish(tester);
   });
 
+  // Security reviews of #2705: the PM machine's owner switches its engine or
+  // account there, and only the project's owner moves it to another machine.
+  testWidgets(
+    'the PM machine\'s owner sees other machines disabled with the reason',
+    (tester) async {
+      final server = swarm();
+      server.state['machines'] = [
+        ...(server.state['machines'] as List),
+        {
+          'machineId': 'target',
+          'name': 'Mac Two',
+          'contributorId': 'mac',
+          'engines': ['codex'],
+          'observation': {
+            'receivedAt': DateTime.now().millisecondsSinceEpoch,
+            'capabilities': ['leadStart', 'leadSwitch'],
+            'profiles': [],
+          },
+        },
+      ];
+      await mount(tester, server, 'mac');
+      await openMenu(tester);
+      await tester.tap(item);
+      await tester.pumpAndSettle();
+      // Its own machine's accounts stay open to it.
+      expect(
+        tester
+            .widget<ListTile>(
+              find.byKey(const ValueKey('switch-pm-codex-bbbbbbbbbbbbbbbb')),
+            )
+            .enabled,
+        isTrue,
+      );
+      await tester.tap(find.byKey(const ValueKey('switch-pm-machine')));
+      await tester.pumpAndSettle();
+      final reason = find.textContaining(
+        'Only the project’s owner moves its PM to another machine.',
+      );
+      expect(reason, findsOneWidget);
+      final other = tester.widget<DropdownMenuItem<String>>(
+        find.ancestor(
+          of: reason,
+          matching: find.byType(DropdownMenuItem<String>),
+        ),
+      );
+      expect(other.enabled, isFalse);
+      await finish(tester);
+    },
+  );
+
   testWidgets('a destination that goes stale cannot be submitted', (
     tester,
   ) async {
