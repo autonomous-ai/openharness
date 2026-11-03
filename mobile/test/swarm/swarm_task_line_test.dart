@@ -85,7 +85,14 @@ FakeSwarm taskLineBackend(
   fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
     ...firstLoad(
       groups: [
-        groupData(leadChat, title: 'Project chat', lastMessageSequence: 10),
+        groupData(
+          leadChat,
+          title: 'Project chat',
+          lastMessageSequence: 10,
+          // Its PM, as a project chat has one.
+          leadId: 'agent-lead',
+          agentIds: ['agent-lead'],
+        ),
         if (target) groupData('task-1', title: 'Fix login'),
       ],
     ),
