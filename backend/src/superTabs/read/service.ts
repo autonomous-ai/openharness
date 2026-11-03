@@ -367,6 +367,8 @@ export class SwarmReads {
 
   async list(user: AuthUser, after?: string, withMentions = false): Promise<SwarmList> {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+    // People at the owner's domain join Swarms with auto-join on by themselves, before the first page is read (autoJoin.ts).
+    if (!after) await this.store.autoJoin(user)
     const rows = await memberSwarms(this.db, user.autonomousEnv, user.sub, { after, limit: 101 })
     // A Swarm of a Workspace the person is no longer in is not theirs to list, even before their removal from it has run.
     const workspaceIds = [...new Set(rows.flatMap(r => r.workspaceId ? [r.workspaceId] : []))]
