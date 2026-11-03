@@ -381,3 +381,25 @@ describe('Leaving is final for auto-join', () => {
     expect(await declinedOf(tab)).toContain(wsGone.sub)
   })
 })
+
+describe('What readers see', () => {
+  it('tells every member auto-join is on, marks who came by domain, and never shows the declines or the sharing', async () => {
+    const { joiner, leaver } = await org('fifteen', ['joiner', 'leaver'])
+    const tab = await create()
+    await turnOn(tab)
+    await listed(joiner)
+    await listed(leaver)
+    await store.execute(leaver, tab, { operationId: randomUUID(), command: { type: 'member.remove', userId: leaver.sub } })
+    const first = (await request(`${tab}/parts`, undefined, joiner)).json().data
+    expect(first.head.data.autoJoin).toBe(true)
+    expect(first.members.find((m: { key: string }) => m.key === joiner.sub).data.joinedVia).toBe('domain')
+    expect(first.members.find((m: { key: string }) => m.key === current.sub).data.joinedVia).toBeUndefined()
+    expect(first.head.data.autoJoinDeclined).toBeUndefined()
+    expect(first.head.data.sharing).toBeUndefined()
+    expect(JSON.stringify(first)).not.toContain(leaver.sub)
+    expect((await store.read(joiner, tab)).state).toMatchObject({ autoJoin: true })
+    expect((await store.read(joiner, tab)).state.autoJoinDeclined).toBeUndefined()
+    await save(tab, { mode: 'domain', domain: current.email.split('@')[1]!, role: 'collaborator', autoJoin: false })
+    expect((await request(`${tab}/parts`, undefined, joiner)).json().data.head.data.autoJoin).toBeUndefined()
+  })
+})
