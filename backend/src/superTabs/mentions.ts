@@ -165,13 +165,18 @@ export async function resolveRead(db: Tx | PrismaClient, input: { tabId: string;
   const rows = await tx.superTabMention.findMany({ where: { tabId, personId, conversationId, createdAt: { gt: new Date(now - MENTION_EXPIRY_MS) }, ...waiting },
     select: { id: true, messageId: true }, orderBy: { createdAt: 'desc' }, take: 500 })
   if (!rows.length) return 0
-  const messages = await tx.superTabMessage.findMany({ where: { tabId, id: { in: rows.map(r => r.messageId) }, sequence: { lte: sequence } },
-    select: { id: true, conversationId: true, thread: true, alsoInChat: true, sequence: true } })
+  // By id through its index (parts/indexed.ts), never a Prisma `in` on a hot collection (hotFilters.test.ts).
+  const messages = (await readBy(tx, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: [...new Set(rows.map(r => r.messageId))] }, tabId,
+    sequence: { $lte: sequence } } }, { $project: { conversationId: 1, thread: 1, alsoInChat: 1 } }]))
+    .map(m => ({ id: m._id as string, conversationId: m.conversationId as string, thread: (m.thread as string | undefined) ?? null,
+      alsoInChat: (m.alsoInChat as boolean | undefined) ?? null }))
   const threads = await threadsOf(tx, tabId, messages)
   const passed = new Set(messages.filter(m => (threads.get(m.id) ?? null) === threadId).map(m => m.id))
   const ids = rows.filter(r => passed.has(r.messageId)).map(r => r.id)
   if (!ids.length) return 0
-  return (await tx.superTabMention.updateMany({ where: { tabId, personId, id: { in: ids }, ...waiting }, data: { resolvedAt: new Date(now), resolvedBy: 'read' } })).count
+  let count = 0
+  for (const id of ids) count += (await tx.superTabMention.updateMany({ where: { id, tabId, personId, ...waiting }, data: { resolvedAt: new Date(now), resolvedBy: 'read' } })).count
+  return count
 }
 
 /** The agents a person's post answers: its recipients, and in their own Buddy chat also the coordinator of each project the Buddy
@@ -187,8 +192,10 @@ export function answeredAgents(state: SuperTabState, actor: Extract<Actor, { kin
  *  before its time is never listed, as in resolveByReply (intended). */
 export async function resolveByAnswer(tx: Tx, tabId: string, personId: string, agentIds: readonly string[], now: number): Promise<void> {
   if (!agentIds.length) return
-  await tx.superTabMention.updateMany({ where: { tabId, personId, authorAgentId: { in: [...agentIds] }, createdAt: { lte: new Date(now) }, ...waiting },
-    data: { resolvedAt: new Date(now), resolvedBy: 'answer' } })
+  for (const authorAgentId of new Set(agentIds)) {
+    await tx.superTabMention.updateMany({ where: { tabId, personId, authorAgentId, createdAt: { lte: new Date(now) }, ...waiting },
+      data: { resolvedAt: new Date(now), resolvedBy: 'answer' } })
+  }
 }
 
 /** A worker took the group: its held tags are over. A listed one moves to Earlier; one not yet listed is dropped, as if never

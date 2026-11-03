@@ -5094,7 +5094,8 @@ describe('a delivery held by a busy pane', () => {
     expect(t.saved().entries).toEqual({})
     await seconds(t, host, 5)
     expect(writes(t)).toBe(122)
-  })
+    // 120 simulated ticks: about 2 s here, past the 5 s default on a loaded CI runner.
+  }, 20_000)
 
   it('a cancel pushed while held stops the retry', async () => {
     const t = setup(), host = t.open()
