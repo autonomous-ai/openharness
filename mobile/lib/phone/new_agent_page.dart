@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -412,7 +413,9 @@ class _NewAgentPageState extends State<NewAgentPage> {
     // leaves the list to the engines its own agents are already running, and a
     // machine with neither still gets the browse-and-create path.
     unawaited(
-      widget.notifier.probeEngines(_machineId).then((_) => _adoptDefaultEngine()),
+      widget.notifier
+          .probeEngines(_machineId)
+          .then((_) => _adoptDefaultEngine()),
     );
     unawaited(_loadCodexProfiles());
   }
@@ -1042,6 +1045,8 @@ class _NewAgentPageState extends State<NewAgentPage> {
         _creating = false;
         _error = null;
         _failure = null;
+        // The bar's start, kept across the checks below: it fills from the first answer.
+        if (_held == null) _heldSince = DateTime.now();
         _held = error;
       });
       _holdCheck?.cancel();
@@ -1066,6 +1071,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
 
   /// What the machine holds the request on, while it does (an engine installing): shown as a wait.
   String? _held;
+  DateTime _heldSince = DateTime.now();
   Timer? _holdCheck;
 
   /// The files [creation] is to be handed once it exists, and the task that follows them — kept
@@ -1122,6 +1128,10 @@ class _NewAgentPageState extends State<NewAgentPage> {
 
   /// The rows take no taps: a request is on its way, or one is waiting to be checked on.
   bool get _locked => _creating || _checking;
+
+  /// A press is under way — not the check a held request makes by itself every few seconds, which
+  /// changes nothing on screen: the attach and mic buttons blinked with each one.
+  bool get _pressed => _creating && _held == null;
 
   /// The press under way is a check on [_creation], not a new request — the desktop's
   /// `_checkingLaunch`, so the button says Checking rather than Starting.
@@ -1435,7 +1445,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
                                   if (nothingRunning &&
                                       !_terminal &&
                                       _task.text.trim().isEmpty &&
-                                      !_creating)
+                                      !_pressed)
                                     Padding(
                                       padding: const EdgeInsets.only(bottom: 8),
                                       child: Wrap(
@@ -1500,7 +1510,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
                                           Align(
                                             alignment: Alignment.bottomRight,
                                             child: AttachmentButton(
-                                              onTap: _creating
+                                              onTap: _pressed
                                                   ? null
                                                   : () => unawaited(_attach()),
                                             ),
@@ -1521,7 +1531,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
                                                     status ==
                                                         VoiceInputStatus
                                                             .starting,
-                                                onTap: _creating ? null : _talk,
+                                                onTap: _pressed ? null : _talk,
                                               );
                                             },
                                           ),
@@ -1536,34 +1546,23 @@ class _NewAgentPageState extends State<NewAgentPage> {
                                         padding: const EdgeInsets.only(top: 4),
                                         child: AttachmentList(
                                           attachments: _attachments,
-                                          enabled: !_creating,
+                                          enabled: !_pressed,
                                         ),
                                       ),
                                   ],
+                                  // Held (an engine installing): its line over a bar, in place of the
+                                  // button. The checks every few seconds go on underneath, so the
+                                  // screen no longer flips between Check status and Checking….
                                   if (_held != null && _error == null)
                                     Padding(
                                       key: const ValueKey('new-agent-held'),
                                       padding: const EdgeInsets.only(top: 8),
-                                      child: Row(
-                                        children: [
-                                          SizedBox.square(
-                                            dimension: 12,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 1.6,
-                                              color: tty.dim,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 10),
-                                          Expanded(
-                                            child: Text(
-                                              _held!,
-                                              style: tty.style(
-                                                color: tty.dim,
-                                                size: TtySize.meta,
-                                              ),
-                                            ),
-                                          ),
-                                        ],
+                                      child: Text(
+                                        _held!,
+                                        style: tty.style(
+                                          color: tty.dim,
+                                          size: TtySize.meta,
+                                        ),
                                       ),
                                     ),
                                   if (_error != null)
@@ -1578,29 +1577,35 @@ class _NewAgentPageState extends State<NewAgentPage> {
                                       ),
                                     ),
                                   const SizedBox(height: 10),
-                                  TtyPrimaryButton(
-                                    // Says what it will do: check on a request still unanswered, start,
-                                    // or choose what is still missing first.
-                                    label: _checking
-                                        ? 'Check status'
-                                        : _failed
-                                        ? 'Try Again'
-                                        : ready
-                                        ? 'Start'
-                                        : _engine == null
-                                        ? 'Choose an agent'
-                                        : 'Choose a project',
-                                    busy: _creating,
-                                    busyLabel: _checkingLaunch
-                                        ? 'Checking…'
-                                        : 'Starting…',
-                                    // Never a dead button: with a choice missing, Start opens its chooser.
-                                    onPressed: () => unawaited(_start()),
-                                  ),
+                                  if (_held != null && _error == null)
+                                    _HeldProgress(
+                                      key: const ValueKey('new-agent-held-bar'),
+                                      since: _heldSince,
+                                    )
+                                  else
+                                    TtyPrimaryButton(
+                                      // Says what it will do: check on a request still unanswered, start,
+                                      // or choose what is still missing first.
+                                      label: _checking
+                                          ? 'Check status'
+                                          : _failed
+                                          ? 'Try Again'
+                                          : ready
+                                          ? 'Start'
+                                          : _engine == null
+                                          ? 'Choose an agent'
+                                          : 'Choose a project',
+                                      busy: _creating,
+                                      busyLabel: _checkingLaunch
+                                          ? 'Checking…'
+                                          : 'Starting…',
+                                      // Never a dead button: with a choice missing, Start opens its chooser.
+                                      onPressed: () => unawaited(_start()),
+                                    ),
                                   // A request the machine holds before starting anything (an engine it is
                                   // installing) can still be called off — the desktop's Cancel request.
                                   if (_creation?.canCancelPending == true &&
-                                      !_creating)
+                                      (!_creating || _held != null))
                                     Center(
                                       child: TtyTextButton(
                                         key: const ValueKey(
@@ -2231,4 +2236,58 @@ class _Silent implements Listenable {
 
   @override
   void removeListener(VoidCallback listener) {}
+}
+
+/// The bar under a held request (an engine installing). The machine says that it installs, not how
+/// far it has got, so the bar is paced rather than measured: quick at first, slower as it goes, and
+/// never full — done is the harness opening.
+class _HeldProgress extends StatefulWidget {
+  const _HeldProgress({super.key, required this.since});
+
+  final DateTime since;
+
+  /// Half the bar in about this long; most installs are done well before it is near the end.
+  static const _halfway = Duration(seconds: 40);
+
+  @override
+  State<_HeldProgress> createState() => _HeldProgressState();
+}
+
+class _HeldProgressState extends State<_HeldProgress> {
+  late final Timer _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = Timer.periodic(const Duration(milliseconds: 250), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    final seconds =
+        DateTime.now().difference(widget.since).inMilliseconds / 1000;
+    final half = _HeldProgress._halfway.inSeconds;
+    final value = 0.95 * (1 - math.pow(0.5, seconds / half));
+    return Semantics(
+      label: 'Installing',
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(3),
+        child: LinearProgressIndicator(
+          value: value.toDouble(),
+          minHeight: 6,
+          color: tty.green,
+          backgroundColor: tty.green.withValues(alpha: 0.18),
+        ),
+      ),
+    );
+  }
 }

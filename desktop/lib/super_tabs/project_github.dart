@@ -372,7 +372,7 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
             access.state == 'not-installed'
                 ? 'GitHub is open in your browser. Install Harness on ${_owner(repository)} there. '
                       'This updates by itself when you come back.'
-                : 'GitHub is open in your browser. Click Authorize on the “Harness for Autonomous” page. '
+                : "GitHub is open in your browser. Click Authorize on GitHub's page. "
                       'This updates by itself when you come back.',
           ),
           if (access.state == 'not-approved')

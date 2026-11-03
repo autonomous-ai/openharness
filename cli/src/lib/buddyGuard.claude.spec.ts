@@ -97,6 +97,9 @@ describe.skipIf(!hasClaude).each([
     curlPost: bash(''),
     joined: bash('git log && git push origin HEAD:main'),
     harnessNew: bash('harness new codex'),
+    // Since #2355 a post's TEXT - reads stdin, which the guard cannot check for secrets; a proposal's JSON - likewise.
+    postStdin: bash('harness super-tab --tab t post chat - op-2'),
+    proposeStdin: bash("harness super-tab --tab t propose op-3 '-'"),
     // The waits Scholes's Buddy started for its chat, which stopped it at "Do you want to proceed?" (10-29): a Monitor
     // polling it, the same loop in the shell, and a read left running in the background.
     monitorLoop: { name: 'Monitor', input: { command: 'while true; do harness super-tab --tab t messages chat; sleep 30; done',
@@ -289,6 +292,12 @@ describe.skipIf(!hasClaude).each([
   it.skipIf(skip).each(Object.keys(refused))('refuses %s, and it never ran', (name) => {
     const result = api.results.get(api.id(refused[name as keyof typeof refused]))
     expect(result?.is_error).toBe(true)
+  })
+
+  it.skipIf(skip)('tells it to pass a post or a proposal as its argument, not on stdin', () => {
+    for (const call of [refused.postStdin, refused.proposeStdin]) {
+      expect(JSON.stringify(api.results.get(api.id(call))?.content)).toContain('Harness cannot check it for secrets')
+    }
   })
 
   it.skipIf(skip)('pushed nothing', () => {

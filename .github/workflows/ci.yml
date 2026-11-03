@@ -370,6 +370,16 @@ jobs:
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.backend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # A real Redis for the Redis-backed unit tests, which skip without one: a cache stamp that could repeat passed CI unseen
+    # for that reason (review of #2456).
+    services:
+      redis:
+        image: redis:7.2.5
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 2s --health-retries 15
+    env:
+      REDIS_TEST_URL: redis://127.0.0.1:6379/15
     defaults:
       run:
         working-directory: backend
@@ -386,7 +396,9 @@ jobs:
       # The whole backend unit suite (src/**/*.test.ts, including the shared desk layout test): it once ran only the desk
       # test, and main broke 48 team-session tests unseen (#1926).
       - name: Backend unit suite
-        run: npm test
+        run: npm test -- --reporter=default --reporter=json --outputFile.json=vitest-results.json
+      - name: The Redis-backed tests ran
+        run: node scripts/redis-tests-ran.mjs vitest-results.json
 
   website-checks:
     concurrency:

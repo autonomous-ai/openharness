@@ -117,6 +117,12 @@ it('retains a fork handoff level through a daemon restart', async () => {
   expect(launch).not.toHaveBeenCalled()
 })
 
+it('retains the alias a clone got in through across a daemon restart', async () => {
+  const { directory, receipts } = fixture()
+  await receipts.run(id, fingerprint, async () => ({ state: 'created', agentId: 'cloned', clonedVia: { alias: 'gh-work' } }))
+  expect(new AgentCreationReceipts(directory).status(id)).toEqual({ state: 'created', agentId: 'cloned', clonedVia: { alias: 'gh-work' } })
+})
+
 it('retains a fresh restart outcome through a daemon restart', async () => {
   const { directory, receipts } = fixture()
   const restart = vi.fn(async () => ({ state: 'created' as const, agentId: 'agent-1', resumed: false }))

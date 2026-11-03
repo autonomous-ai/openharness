@@ -214,6 +214,80 @@ void main() {
     });
   });
 
+  group('CliLogin.loginWithCode', () {
+    test('asks the CLI for a code, shows each one it says, and answers the account question', () async {
+      final process = _Process();
+      final runner = _Runner(process);
+      final codes = <(String, int)>[];
+      final done = CliLogin(runner: runner).loginWithCode(
+        onCode: (code, expiresIn) => codes.add((code, expiresIn)),
+        onConfirm: (email) async => email == 'dee@example.com',
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(runner.arguments, [
+        'login',
+        '--force',
+        '--json',
+        '--code',
+        '--entry-point=desktop',
+      ]);
+      process.emit({'type': 'code', 'code': '12345678', 'expiresIn': 120});
+      // Kept alive: the same code again, with its new time left.
+      process.emit({'type': 'code', 'code': '12345678', 'expiresIn': 95});
+      process.emit({'type': 'confirm', 'email': 'dee@example.com'});
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(process.written.join(), 'yes\n');
+      process.emit({'type': 'result', 'status': 'success'});
+      process.finish();
+      await done;
+      expect(codes, [('12345678', 120), ('12345678', 95)]);
+    });
+
+    test('a code that runs out says so with its own reason', () async {
+      final process = _Process();
+      final done = CliLogin(runner: _Runner(process))
+          .loginWithCode(onCode: (_, _) {}, onConfirm: (_) async => false);
+      await Future<void>.delayed(Duration.zero);
+      process.emit({
+        'type': 'result',
+        'status': 'error',
+        'code': 'EXPIRED',
+        'message': 'The code expired.',
+      });
+      process.finish(1);
+      await expectLater(
+        done,
+        throwsA(
+          isA<PhoneSignInException>().having((e) => e.code, 'code', 'EXPIRED'),
+        ),
+      );
+    });
+
+    test('a CLI from before --code starts SSO instead: stops it and says the CLI is too old', () async {
+      final process = _Process();
+      final done = CliLogin(runner: _Runner(process)).loginWithCode(
+        onCode: (_, _) => fail('no code from an old CLI'),
+        onConfirm: (_) async => fail('nothing to confirm'),
+      );
+      await Future<void>.delayed(Duration.zero);
+      process.emit({
+        'type': 'authorize_url',
+        'url': 'https://sso.example/authorize',
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(process.killed, isTrue);
+      process.finish(143);
+      await expectLater(
+        done,
+        throwsA(
+          isA<PhoneSignInException>()
+              .having((e) => e.code, 'code', 'CLI_TOO_OLD')
+              .having((e) => e.message, 'message', contains('code')),
+        ),
+      );
+    });
+  });
+
   group('viewerQrSignIn', () {
     test('claims only after the person confirms the account', () async {
       final api = _Api(['pending', 'approved']);

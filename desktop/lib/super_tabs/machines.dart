@@ -1,7 +1,10 @@
 import 'dart:async';
 
 import 'package:clock/clock.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
 
 import '../core/machine_resources.dart';
 import '../core/models.dart';
@@ -17,6 +20,8 @@ import '../state/harness_activity.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../usage/models_menu_controller.dart';
+import '../widgets/browser_menu_guard.dart';
+import '../widgets/finger_target.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/harness_activity_mark.dart';
@@ -35,8 +40,10 @@ import 'machine_icon.dart';
 import 'machine_status.dart';
 import 'model.dart';
 import 'join_machine.dart' show superTabSuggestedAgentSlots;
+import 'personal_machine_rows.dart';
 import 'team_account_setup.dart';
 import 'section_heading.dart';
+import '../widgets/laid_out_list.dart';
 
 export 'machine_status.dart';
 
@@ -72,6 +79,9 @@ int? _maxAgentSlots(MachineResources? resources) {
 int? _suggestedAgentSlots(MachineResources? resources) =>
     superTabSuggestedAgentSlots(resources);
 
+/// Where a machine's row starts in Manage, so its mark sits under the heading.
+const _manageRowStart = 12.0;
+
 class SuperTabMachines extends StatefulWidget {
   const SuperTabMachines({
     super.key,
@@ -84,10 +94,20 @@ class SuperTabMachines extends StatefulWidget {
     this.collapsed = false,
     this.onToggleCollapsed,
     this.onOpenAgent,
+    this.ticks,
+    this.manage = false,
   });
   final SuperTabController controller;
   final AppNotifier? app;
   final bool embedded;
+
+  /// Manage › Machines: one line per machine with its owner and status, and
+  /// Add machine at the foot, with no heading of its own (Quiet Swarm, screen 10).
+  final bool manage;
+
+  /// Runs the one-second clock; by default everywhere but under `flutter test`.
+  @visibleForTesting
+  final bool? ticks;
 
   /// Whether the body below the heading is hidden. The heading itself, and
   /// its Add machine action, remain visible so the group stays reachable.
@@ -352,6 +372,8 @@ Future<bool> _sendContribution(
   required bool Function() alive,
   bool teamAccountOnly = false,
   bool offerTeamAccount = true,
+  bool ifMissing = false,
+  bool unlessRemoved = false,
 }) async {
   // An earlier lost reply leaves an uncertain attempt holding its own
   // receipt, and only one action may be in flight: check that one first, then
@@ -378,6 +400,8 @@ Future<bool> _sendContribution(
     'engines': engines,
     'maxAgents': maxAgents,
     if (teamAccountOnly) 'teamAccountOnly': true,
+    if (ifMissing) 'ifMissing': true,
+    if (unlessRemoved) 'unlessRemoved': true,
   });
   if (result == null) {
     throw SuperTabFailure(
@@ -413,6 +437,8 @@ Future<String?> contributeComputer(
   required bool Function() alive,
   bool teamAccountOnly = false,
   bool offerTeamAccount = true,
+  bool ifMissing = false,
+  bool unlessRemoved = false,
   Future<MachineResources?> Function(String machineId)? readResources,
 }) async {
   final prepared = await _prepareContribution(
@@ -445,6 +471,8 @@ Future<String?> contributeComputer(
     alive: alive,
     teamAccountOnly: teamAccountOnly,
     offerTeamAccount: offerTeamAccount,
+    ifMissing: ifMissing,
+    unlessRemoved: unlessRemoved,
   );
   return added ? machineId : null;
 }
@@ -780,9 +808,19 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   /// reporting through it are refreshing until one more is. Null: the app has not been away.
   int? _swarmReadsAtReturn;
 
-  /// Once a second, so that ages, states and the heading's count follow the clock between the Swarm's reads.
+  /// Once a second while the list shows ([_syncTick]), so that ages and states
+  /// follow the clock between the Swarm's reads.
   Timer? _tick;
+
+  /// What each row last drew, and their order: a tick or a machine's report
+  /// redraws only a row whose words moved, and the list only when rows move.
+  final _rowsDrawn = <String, Object>{};
+  List<String> _orderDrawn = const [];
+  final _rowBeats = <String, ValueNotifier<int>>{};
   final _tips = <String, GlobalKey<TooltipState>>{};
+
+  /// One per Swarm menu open now, each keeping the browser's menu off.
+  final _menuHolds = <Object>{};
   ModelsMenuController? _usage;
   Timer? _timer;
   bool _reading = false;
@@ -810,9 +848,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   @override
   void initState() {
     super.initState();
-    if (!kUnderTest) {
-      _tick = Timer.periodic(const Duration(seconds: 1), (_) => _changed());
-    }
+    c.machinesChanged.addListener(_machinesMoved);
     unawaited(_readTeamSetup());
     if ((!kUnderTest || widget.readLocal != null) && widget.app != null) {
       _updateUsage();
@@ -824,6 +860,95 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   void _changed() {
     if (mounted) setState(() {});
   }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncTick();
+  }
+
+  @override
+  void didUpdateWidget(SuperTabMachines old) {
+    super.didUpdateWidget(old);
+    if (!identical(old.controller, c)) {
+      old.controller.machinesChanged.removeListener(_machinesMoved);
+      c.machinesChanged.addListener(_machinesMoved);
+    }
+    _syncTick();
+  }
+
+  /// The clock runs only while something it moves shows: not for a Swarm not
+  /// on screen, a window at the back, or a collapsed group, whose heading shows
+  /// an age only while the Swarm can't be read.
+  void _syncTick() {
+    final wanted =
+        (widget.ticks ?? !kUnderTest) &&
+        !c.away &&
+        TickerMode.valuesOf(context).enabled &&
+        widget.app?.foreground.value != false &&
+        (!widget.collapsed || c.backendUnreachable);
+    if (!wanted) {
+      _tick?.cancel();
+      _tick = null;
+    } else {
+      _tick ??= Timer.periodic(
+        const Duration(seconds: 1),
+        (_) => _redrawMoved(),
+      );
+    }
+  }
+
+  /// A machine reported, or the Swarm came on screen or left it. Told outside
+  /// a build but for that last, which may come from one.
+  void _machinesMoved() {
+    if (!mounted) return;
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      SchedulerBinding.instance.addPostFrameCallback((_) => _machinesMoved());
+      return;
+    }
+    _syncTick();
+    _redrawMoved();
+    if (!c.away &&
+        _timer?.isActive != true &&
+        !_reading &&
+        widget.app?.foreground.value == true &&
+        (!kUnderTest || widget.readLocal != null)) {
+      unawaited(_refresh());
+    }
+  }
+
+  /// Redraws what no longer says what it drew, and nothing else.
+  void _redrawMoved() {
+    if (!mounted || c.snapshot == null || c.accessRevoked) return;
+    final views = _sortedViews();
+    if (c.backendUnreachable ||
+        !listEquals(_orderDrawn, [for (final v in views) v.id])) {
+      _changed();
+      return;
+    }
+    for (final view in views) {
+      if (_rowsDrawn[view.id] != _rowWords(view)) {
+        _rowBeats[view.id]?.value++;
+      }
+    }
+  }
+
+  /// Everything a row's look goes by, but for what a rebuild of the list says.
+  Object _rowWords(_MachineView view) => Object.hashAll([
+    view.name,
+    view.status,
+    view.readingAt,
+    view.arrived,
+    view.paused,
+    view.cleaning,
+    view.dim,
+    view.details,
+    view.tip,
+    view.problem,
+    view.subscriptionsAside,
+    view.agents.length,
+  ]);
 
   /// Reads why this Mac has no Harness Team account, only while its person's
   /// own row offers Set up: asked of this Mac's daemon, never of another's.
@@ -865,6 +990,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   }
 
   void _foreground() {
+    _syncTick();
     _updateUsage();
     _revision++;
     _timer?.cancel();
@@ -909,7 +1035,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       await _readTeamSetup();
     } finally {
       _reading = false;
-      if (mounted && widget.app?.foreground.value == true) {
+      // A Swarm that isn't showing reads nothing; coming back reads at once ([_machinesMoved]).
+      if (mounted && !c.away && widget.app?.foreground.value == true) {
         _timer = Timer(const Duration(seconds: 15), _refresh);
       }
     }
@@ -917,9 +1044,15 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 
   @override
   void dispose() {
+    _menuHolds.forEach(BrowserMenuGuard.release);
+    _menuHolds.clear();
     _revision++;
     _timer?.cancel();
     _tick?.cancel();
+    c.machinesChanged.removeListener(_machinesMoved);
+    for (final beat in _rowBeats.values) {
+      beat.dispose();
+    }
     widget.app?.foreground.removeListener(_foreground);
     _usage?.removeListener(_changed);
     _usage?.dispose();
@@ -1040,9 +1173,24 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           superTabMap(raw)['engine'] as String: superTabMap(raw),
     };
     final configured = (pool?['engines'] as List?)?.whereType<String>();
+    // What the machine has installed (its readiness, probed by the CLI), per engine.
+    final readiness = observation['readiness'];
+    final installed = {
+      for (final raw
+          in (readiness is Map ? readiness['engines'] : null) as List? ?? [])
+        if (raw is Map && raw['installed'] == true) raw['engine'],
+    };
+    // A list that still names a retired engine (OpenCode) cannot say which of the two it offers: Claude and Codex
+    // come from what it reported or has installed.
     final allowed =
         configured?.any((engine) => !_chipEngines.contains(engine)) == true
-        ? quotas.keys.toList()
+        ? [
+            for (final engine in _chipEngines)
+              if (configured!.contains(engine) ||
+                  quotas.containsKey(engine) ||
+                  installed.contains(engine))
+                engine,
+          ]
         : configured?.where(_chipEngines.contains).toList();
     var accounts =
         _usage?.rows
@@ -1088,19 +1236,26 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               engine,
               row,
               stale: stale,
-              struck:
-                  suspended[engine] ??
-                  (!stale && (row['remainingPercent'] as num) <= 0
-                      ? _noQuotaLeft
-                      : null),
+              struck: suspended[engine],
+              // Information only: quota never makes a machine unusable.
+              notice:
+                  suspended[engine] == null &&
+                      !stale &&
+                      (row['remainingPercent'] as num) <= 0
+                  ? _noQuotaLeft
+                  : null,
             ),
             null => _unfigured(
               engine,
               poolId,
-              superMachineAllowanceReason(
-                quotas[engine],
-                reasons is Map ? reasons[engine] : null,
-              ),
+              quotas[engine] == null &&
+                      !(reasons is Map && reasons[engine] != null) &&
+                      (stale || installed.contains(engine))
+                  ? (stale ? kAllowanceNotReadOffline : kAllowanceNotRead)
+                  : superMachineAllowanceReason(
+                      quotas[engine],
+                      reasons is Map ? reasons[engine] : null,
+                    ),
               struck: suspended[engine],
             ),
           },
@@ -1123,6 +1278,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     Map<String, Object?> row, {
     required bool stale,
     String? struck,
+    String? notice,
   }) {
     final account = WorkspaceSubscriptionUsage.fromRows([row]).accounts.first;
     return _Allowance(
@@ -1132,6 +1288,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       left: (row['remainingPercent'] as num).toDouble().clamp(0, 100),
       stale: stale,
       struck: struck,
+      notice: notice,
       note: superMachineAllowanceNote(switch (row['details']) {
         final List lines => lines.whereType<String>(),
         _ => const <String>[],
@@ -1482,7 +1639,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   final preview = previewState.data;
                   final blockedReason = preview?.blockedProjectName == null
                       ? null
-                      : 'This machine runs the Product Manager of project ${preview!.blockedProjectName}. Delete the project first.';
+                      : 'This machine runs the ${c.snapshot?.coordinatorNameOf(preview!.blockedProjectId ?? '') ?? kDefaultCoordinatorName} of project ${preview!.blockedProjectName}. Delete the project first.';
                   final refusal = reason ?? blockedReason;
                   final enabled =
                       permitted &&
@@ -1530,11 +1687,13 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                                   for (final agent in preview.agents) ...[
                                     const SizedBox(height: 4),
                                     Text(
-                                      '${agent.name} · ${agent.projectName}',
+                                      agent.projectName.isEmpty
+                                          ? agent.name
+                                          : '${agent.name} · ${agent.projectName}',
                                     ),
                                     if (agent.task != null)
                                       Text(
-                                        'The open task “${agent.task}” goes back to the Product Manager.',
+                                        'The open task “${agent.task}” loses its agent.',
                                       ),
                                   ],
                                 ],
@@ -1613,26 +1772,37 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 
   /// A machine row's right-click: its details, and Remove from Swarm for whoever may.
   Future<void> _menu(_MachineView view, Offset at) async {
-    final choice = await showMenu<String>(
-      context: context,
-      position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx, at.dy),
-      items: [
-        const PopupMenuItem(value: 'details', child: Text('Details')),
-        if (_canRemove(view.id))
-          PopupMenuItem(
-            key: ValueKey('super-machine-menu-remove'),
-            value: 'remove',
-            enabled: _removeReason(view.id) == null,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Remove from Swarm'),
-                if (_removeReason(view.id) case final reason?) Text(reason),
-              ],
+    // The menu's barrier takes the pointer from the row, so a second right-click would bring up the browser's menu
+    // over this one. Off until it closes; dispose lets go too, for a screen that goes with the menu still up.
+    final hold = Object();
+    _menuHolds.add(hold);
+    BrowserMenuGuard.hold(hold);
+    final String? choice;
+    try {
+      choice = await showMenu<String>(
+        context: context,
+        position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx, at.dy),
+        items: [
+          const PopupMenuItem(value: 'details', child: Text('Details')),
+          if (_canRemove(view.id))
+            PopupMenuItem(
+              key: ValueKey('super-machine-menu-remove'),
+              value: 'remove',
+              enabled: _removeReason(view.id) == null,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Remove from Swarm'),
+                  if (_removeReason(view.id) case final reason?) Text(reason),
+                ],
+              ),
             ),
-          ),
-      ],
-    );
+        ],
+      );
+    } finally {
+      _menuHolds.remove(hold);
+      BrowserMenuGuard.release(hold);
+    }
     if (!mounted) return;
     if (choice == 'details') await _openDetails(view);
     if (choice == 'remove' &&
@@ -1756,47 +1926,77 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     }
   }
 
+  /// Where a long press opens the menu: under the middle of the row, which the touch gives no point for.
+  Offset _longPressAt(BuildContext rowContext) {
+    final box = rowContext.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return Offset.zero;
+    return box.localToGlobal(Offset(box.size.width / 2, box.size.height));
+  }
+
   Widget _machine(_MachineView view) {
     final tipKey = _tips.putIfAbsent(view.id, GlobalKey<TooltipState>.new);
     final expanded = c.isMachineExpanded(view.id);
     final selected = _selectedMachineId == view.id;
-    final row = Material(
-      color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
-      borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-      clipBehavior: Clip.antiAlias,
-      // No chevron (Dee, 2026-10-27): a click expands the machine, and its
-      // details are in the right-click menu, or a long press on a touch screen.
-      child: InkWell(
-        key: ValueKey('super-machine-${view.id}'),
-        onTap: () {
-          c.toggleMachineExpanded(view.id);
-          _changed();
-        },
-        onLongPress: () => unawaited(_openDetails(view)),
-        onSecondaryTapUp: (event) =>
-            unawaited(_menu(view, event.globalPosition)),
-        hoverColor: grid.AppSurface.hoverFill,
-        focusColor: grid.AppSurface.hoverFill,
-        borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-        onFocusChange: (focused) {
-          if (focused &&
-              FocusManager.instance.highlightMode ==
-                  FocusHighlightMode.traditional) {
-            tipKey.currentState?.ensureTooltipVisible();
-          } else if (!focused) {
-            Tooltip.dismissAllToolTips();
-          }
-        },
-        child: Semantics(
-          expanded: expanded,
-          child: _MachineLine(
-            view: view,
-            onSetUpTeam: view.setUpTeam
-                ? () async {
-                    await showTeamAccountSetup(context, widget.app!);
-                    await _readTeamSetup();
+    final row = BrowserMenuOff(
+      active: true,
+      child: _RowHoverRegion(
+        child: Material(
+          color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
+          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+          clipBehavior: Clip.antiAlias,
+          // No chevron (Dee, 2026-10-27): a click expands the machine, and its
+          // details are in the right-click menu, or a long press on a touch screen.
+          child: Builder(
+            builder: (rowContext) => CallbackShortcuts(
+              bindings: {
+                const SingleActivator(LogicalKeyboardKey.contextMenu): () =>
+                    unawaited(_menu(view, _longPressAt(rowContext))),
+                const SingleActivator(
+                  LogicalKeyboardKey.f10,
+                  shift: true,
+                ): () =>
+                    unawaited(_menu(view, _longPressAt(rowContext))),
+              },
+              child: InkWell(
+                key: ValueKey('super-machine-${view.id}'),
+                onTap: () {
+                  c.toggleMachineExpanded(view.id);
+                  _changed();
+                },
+                onLongPress: () =>
+                    unawaited(_menu(view, _longPressAt(rowContext))),
+                onSecondaryTapUp: (event) =>
+                    unawaited(_menu(view, event.globalPosition)),
+                hoverColor: grid.AppSurface.hoverFill,
+                focusColor: grid.AppSurface.hoverFill,
+                borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+                onFocusChange: (focused) {
+                  if (focused &&
+                      FocusManager.instance.highlightMode ==
+                          FocusHighlightMode.traditional) {
+                    tipKey.currentState?.ensureTooltipVisible();
+                  } else if (!focused) {
+                    Tooltip.dismissAllToolTips();
                   }
-                : null,
+                },
+                child: Semantics(
+                  expanded: expanded,
+                  child: _MachineLine(
+                    view: view,
+                    words: widget.manage,
+                    onMore: BrowserMenuGuard.inBrowser
+                        ? (at) => _menu(view, at)
+                        : null,
+                    onSetUpTeam: view.setUpTeam
+                        ? () async {
+                            await showTeamAccountSetup(context, widget.app!);
+                            await _readTeamSetup();
+                          }
+                        : null,
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
       ),
@@ -1829,24 +2029,38 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             ),
           ),
         ),
-        if (expanded) ...[
-          if (view.agents.isNotEmpty) _agentCount(view),
-          _MachineReadings(view: view),
-          if (view.agents.isEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(36, 4, 32, 8),
-              child: Text(
-                view.status == SuperTabMachineStatus.offline
-                    ? 'Offline'
-                    : view.status == SuperTabMachineStatus.unknown
-                    ? "Can't reach Harness"
-                    : view.status == SuperTabMachineStatus.refreshing
-                    ? 'Refreshing…'
-                    : 'No agents yet',
-                style: DesktopChrome.metadata(),
+        // The rest of the machine belongs to its menu too: a right-click on its readings is not the browser's.
+        if (expanded)
+          BrowserMenuOff(
+            active: true,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onSecondaryTapUp: (event) =>
+                  unawaited(_menu(view, event.globalPosition)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (view.agents.isNotEmpty) _agentCount(view),
+                  _MachineReadings(view: view),
+                  if (view.agents.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(36, 4, 32, 8),
+                      child: Text(
+                        view.status == SuperTabMachineStatus.offline
+                            ? 'Offline'
+                            : view.status == SuperTabMachineStatus.unknown
+                            ? "Can't reach Harness"
+                            : view.status == SuperTabMachineStatus.refreshing
+                            ? 'Refreshing…'
+                            : 'No agents yet',
+                        style: DesktopChrome.metadata(),
+                      ),
+                    ),
+                ],
               ),
             ),
-        ],
+          ),
       ],
     );
   }
@@ -1890,7 +2104,27 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   /// screen of rows. The list opens over the sidebar, grouped by what each is doing.
   Widget _agentCount(_MachineView view) {
     final count = view.agents.length;
-    final label = count == 1 ? '1 agent' : '$count agents';
+    final total = count == 1 ? '1 agent' : '$count agents';
+    // What is happening now, not only how many exist. A machine that reads offline runs nothing, whatever its agents
+    // last did, unless a session this Desktop holds says one is working (the list below says the same); one the
+    // Desktop cannot read says only the total, since nothing is known of what they do.
+    final working = view.agents
+        .where(
+          (agent) => switch (_activity(view, agent)) {
+            HarnessActivity.working || HarnessActivity.starting => true,
+            _ => false,
+          },
+        )
+        .length;
+    final offline =
+        view.status == SuperTabMachineStatus.offline && working == 0;
+    final label = offline
+        ? '$total · none running, machine offline'
+        : view.status == SuperTabMachineStatus.live ||
+              view.status == SuperTabMachineStatus.late ||
+              view.status == SuperTabMachineStatus.offline
+        ? '$total · $working working'
+        : total;
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth.clamp(240.0, 320.0);
@@ -1938,7 +2172,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                             label,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: DesktopChrome.control(),
+                            style: DesktopChrome.control(
+                              color: offline ? DesktopChrome.muted : null,
+                            ),
                           ),
                         ),
                         Icon(
@@ -1958,18 +2194,23 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     );
   }
 
-  /// [view]'s agents under Working, Waiting and Idle, each by name; a group with none is left out.
+  /// [view]'s agents under Working, Waiting, Idle and Kept (closed), each by name; a group with none is left out.
   List<Widget> _agentGroups(_MachineView view) {
     final groups = <String, List<(SuperTabAgent, HarnessActivity)>>{
       'Working': [],
       'Waiting': [],
       'Idle': [],
+      'Kept (closed)': [],
     };
     for (final agent in view.agents) {
       final activity = _activity(view, agent);
       groups[switch (activity) {
             HarnessActivity.working || HarnessActivity.starting => 'Working',
             HarnessActivity.needsInput || HarnessActivity.failed => 'Waiting',
+            // A kept agent whose session is closed on a machine that is
+            // there: the Swarm removes the others, so this one says so.
+            _ when agent.keptClosed && activity != HarnessActivity.offline =>
+              'Kept (closed)',
             _ => 'Idle',
           }]!
           .add((agent, activity));
@@ -2008,22 +2249,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     HarnessActivity activity,
   ) {
     final name = c.snapshot!.agentName(agent.id);
-    final lead = c.snapshot!.isLead(agent.id);
-    final customRole = c.snapshot!.activeRoleForAgent(agent);
-    final role =
-        customRole?.name ??
-        (lead
-            ? 'Product Manager'
-            : agent.isReviewer
-            ? 'Reviewer'
-            : 'Engineer');
-    final badge =
-        customRole?.name ??
-        (lead
-            ? 'PM'
-            : agent.isReviewer
-            ? 'Rev'
-            : 'Dev');
+    final (name: role, :badge) =
+        c.snapshot!.roleOf(agent.id) ?? (name: 'Engineer', badge: 'Dev');
     final info = SuperTabAgentInfo(c, widget.app, agent, activity: activity);
     final theme = terminalThemeFor(
       grid.AppTheme.surfacePalette,
@@ -2113,7 +2340,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   }
 
   /// Keep offline machines in the same list and on the same columns.
-  List<Widget> _machines() {
+  List<_MachineView> _sortedViews() {
     final views = [for (final id in _rowIds) _view(id)];
     String key(_MachineView view) =>
         superTabMachineName(view.name).toLowerCase();
@@ -2129,29 +2356,101 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           ? key(a).compareTo(key(b))
           : a.id.compareTo(b.id),
     );
-    return [for (final view in views) _machine(view)];
+    return views;
+  }
+
+  /// One row each, redrawn on its own ([_redrawMoved]).
+  List<Widget> _machines() {
+    final views = _sortedViews();
+    _orderDrawn = [for (final v in views) v.id];
+    _rowBeats.removeWhere((id, beat) {
+      if (_orderDrawn.contains(id)) return false;
+      beat.dispose();
+      return true;
+    });
+    return [
+      for (final id in _orderDrawn)
+        ValueListenableBuilder<int>(
+          key: ValueKey('super-machine-row-$id'),
+          valueListenable: _rowBeats.putIfAbsent(id, () => ValueNotifier(0)),
+          builder: (context, _, _) {
+            final view = _view(id);
+            _rowsDrawn[id] = _rowWords(view);
+            return _machine(view);
+          },
+        ),
+    ];
   }
 
   @override
   Widget build(BuildContext context) {
     final failingSince = c.backendUnreachable ? c.unreachableSince : null;
+    final add = c.canWrite && widget.app != null
+        ? () => unawaited(
+            showAddComputers(
+              context,
+              c,
+              widget.app!,
+              readResources: widget.readLocal,
+            ),
+          )
+        : null;
+    if (widget.manage) {
+      return LaidOutListView(
+        // A row's mark starts under Manage's heading, its words end at the
+        // page's edge (Swarm's and Models' 24).
+        padding: const EdgeInsets.fromLTRB(
+          _manageRowStart,
+          grid.AppDesktop.controlGap,
+          grid.AppDesktop.groupGap,
+          grid.AppDesktop.controlGap,
+        ),
+        children: [
+          // Only a Swarm that can't be read is news, as under the old heading.
+          if (c.backendUnreachable)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: SuperTabMachinesPill(
+                connecting: c.stillConnecting,
+                reconnectingFor: failingSince == null
+                    ? Duration.zero
+                    : widget.now().difference(failingSince),
+              ),
+            ),
+          if (_ids.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(grid.AppDesktop.controlGap),
+              child: Text(
+                "Add a machine for this Swarm's agents to use.",
+                style: DesktopChrome.metadata(),
+              ),
+            )
+          else
+            ..._machines(),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Padding(
+              padding: const EdgeInsets.only(right: grid.AppDesktop.controlGap),
+              child: TextButton(
+                key: const ValueKey('super-manage-add-machine'),
+                onPressed: add,
+                child: const Text('Add machine'),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
     final children = [
       SuperTabSectionHeading(
         'Machines',
-        onAdd: c.canWrite && widget.app != null
-            ? () => unawaited(
-                showAddComputers(
-                  context,
-                  c,
-                  widget.app!,
-                  readResources: widget.readLocal,
-                ),
-              )
-            : null,
+        onAdd: add,
         addTooltip: 'Add machine',
         // Only a Swarm that can't be read is news; a live one says nothing.
         trailing: c.backendUnreachable
             ? SuperTabMachinesPill(
+                connecting: c.stillConnecting,
                 reconnectingFor: failingSince == null
                     ? Duration.zero
                     : widget.now().difference(failingSince),
@@ -2166,7 +2465,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           Padding(
             padding: const EdgeInsets.fromLTRB(36, 8, 16, 16),
             child: Text(
-              'Add a machine for the product manager to use.',
+              "Add a machine for this Swarm's agents to use.",
               style: DesktopChrome.metadata(),
             ),
           )
@@ -2176,6 +2475,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             mainAxisSize: MainAxisSize.min,
             children: _machines(),
           ),
+        if (widget.app case final app?)
+          PersonalMachineRows(controller: c, app: app),
       ],
     ];
     return widget.embedded
@@ -2184,7 +2485,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             mainAxisSize: MainAxisSize.min,
             children: children,
           )
-        : ListView(children: children);
+        : LaidOutListView(children: children);
   }
 }
 
@@ -2192,6 +2493,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 class _RemovalPreview {
   const _RemovalPreview({
     required this.blockedProjectName,
+    this.blockedProjectId,
     required this.agents,
     required this.soleSourceProjects,
   });
@@ -2215,10 +2517,10 @@ class _RemovalPreview {
       final agent = superTabMap(item);
       final name = agent['name'], projectName = agent['projectName'];
       final task = agent['task'];
+      // A Swarm-wide Buddy has no project: the server sends an empty name.
       if (name is! String ||
           name.isEmpty ||
           projectName is! String ||
-          projectName.isEmpty ||
           (task != null && task is! String)) {
         throw const FormatException('Invalid machine removal preview');
       }
@@ -2234,12 +2536,19 @@ class _RemovalPreview {
     }
     return _RemovalPreview(
       blockedProjectName: blockedName as String?,
+      blockedProjectId: switch (blocked) {
+        {'projectId': final String id} => id,
+        _ => null,
+      },
       agents: agents,
       soleSourceProjects: projects,
     );
   }
 
   final String? blockedProjectName;
+
+  /// The project whose coordinator runs there, to call it what that project calls it.
+  final String? blockedProjectId;
   final List<_RemovalAgent> agents;
   final List<String> soleSourceProjects;
 }
@@ -2383,6 +2692,7 @@ class _Allowance {
     this.note,
     this.stale = false,
     this.struck,
+    this.notice,
   });
 
   final String engine, name, figure, detail;
@@ -2394,9 +2704,12 @@ class _Allowance {
   /// The share left, 0–100; null when there is no figure.
   final double? left;
 
-  /// Why new work does not go to this engine here (out of quota, or suspended after failed starts), shown on hover
+  /// Why new work does not go to this engine here (the server suspended it after failed starts), shown on hover
   /// with its name struck through; null when it takes work.
   final String? struck;
+
+  /// A fact said on hover, never struck: no quota left until it resets. Quota makes no machine unusable.
+  final String? notice;
 
   /// The last figure an offline machine read: shown muted, never as now.
   final bool stale;
@@ -2420,15 +2733,25 @@ class _Allowance {
   );
 }
 
-/// What hovering an engine with no quota left on a machine says (the route leaves it out the same way).
-const _noQuotaLeft =
-    'Not used for new work here: no quota left until it resets.';
+/// What hovering an engine with no quota left on a machine says: a fact, never a refusal.
+const _noQuotaLeft = 'No quota left until it resets.';
 
 /// The same leading icon/name and trailing status column as projects.
 class _MachineLine extends StatelessWidget {
-  const _MachineLine({required this.view, this.onSetUpTeam});
+  const _MachineLine({
+    required this.view,
+    this.onSetUpTeam,
+    this.onMore,
+    this.words = false,
+  });
 
   final _MachineView view;
+
+  /// Its owner and status in words (Manage), not their marks.
+  final bool words;
+
+  /// In a browser, opens the machine's menu at a point until it closes: the ⋯ that needs no right-click.
+  final Future<void> Function(Offset at)? onMore;
 
   /// This Mac's row, without its Harness Team account: Set up under the paused line.
   final VoidCallback? onSetUpTeam;
@@ -2523,7 +2846,29 @@ class _MachineLine extends StatelessWidget {
               ),
             ),
           ),
-          if (owner != null)
+          if (words) ...[
+            if (owner != null)
+              Padding(
+                padding: const EdgeInsets.only(
+                  left: grid.AppDesktop.controlGap,
+                ),
+                child: Text(
+                  owner.username,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: DesktopChrome.metadata(),
+                ),
+              ),
+            Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: grid.AppDesktop.controlGap,
+              ),
+              child: Text(switch (view.status) {
+                SuperTabMachineStatus.live => 'online',
+                final status => superTabMachineStateLabel(status).toLowerCase(),
+              }, style: DesktopChrome.metadata()),
+            ),
+          ] else if (owner != null)
             Padding(
               padding: const EdgeInsets.only(left: 6),
               child: Tooltip(
@@ -2536,25 +2881,139 @@ class _MachineLine extends StatelessWidget {
               padding: const EdgeInsets.only(left: 6),
               child: Text('Cleaning up', style: DesktopChrome.metadata()),
             ),
-          SizedBox(
-            width: 32,
-            child: Center(
-              child: KeyedSubtree(
-                key: ValueKey(
-                  'super-machine-state-${view.id}-${view.status.name}',
-                ),
-                child: SuperTabMachineDot(
-                  status: view.status,
-                  readingAt: view.readingAt,
-                  arrived: view.arrived,
+          if (onMore case final open?)
+            _MachineMore(
+              key: ValueKey('super-machine-more-${view.id}'),
+              onOpen: open,
+            ),
+          if (!words)
+            SizedBox(
+              width: 32,
+              child: Center(
+                child: KeyedSubtree(
+                  key: ValueKey(
+                    'super-machine-state-${view.id}-${view.status.name}',
+                  ),
+                  child: SuperTabMachineDot(
+                    status: view.status,
+                    readingAt: view.readingAt,
+                    arrived: view.arrived,
+                  ),
                 ),
               ),
             ),
-          ),
         ],
       ),
     );
   }
+}
+
+/// The ⋯ on a machine row. It takes no room until the row is pointed at or the button has focus, and stays in the
+/// focus order the whole time, so a key can reach it.
+class _MachineMore extends StatefulWidget {
+  const _MachineMore({super.key, required this.onOpen});
+
+  final Future<void> Function(Offset at) onOpen;
+
+  /// The button's width and height when shown: [AppIconButton]'s target.
+  static const width = 32.0;
+
+  @override
+  State<_MachineMore> createState() => _MachineMoreState();
+}
+
+class _MachineMoreState extends State<_MachineMore> {
+  bool _focused = false;
+
+  /// With its menu up the row loses the pointer to the menu's barrier; the ⋯ stays, so the row does not jump.
+  bool _open = false;
+
+  Future<void> _press() async {
+    final box = context.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return;
+    setState(() => _open = true);
+    try {
+      await widget.onOpen(box.localToGlobal(Offset(0, box.size.height)));
+    } finally {
+      if (mounted) setState(() => _open = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // A touch screen has nothing to hover (Huy, 2026-11-02): the ⋯ stays, a finger's size.
+    final touch = BrowserMenuGuard.onTouchScreen;
+    final shown = touch || _focused || _open || _RowHover.of(context);
+    final extent = touch ? kFingerTarget : _MachineMore.width;
+    final button = AppIconButton(
+      icon: AppIcons.ellipsis,
+      tooltip: 'More',
+      size: 16,
+      onPressed: () => unawaited(_press()),
+    );
+    return Focus(
+      canRequestFocus: false,
+      skipTraversal: true,
+      onFocusChange: (focused) => setState(() => _focused = focused),
+      child: SizedBox(
+        width: shown ? extent : 0,
+        height: extent,
+        child: OverflowBox(
+          alignment: Alignment.centerRight,
+          minWidth: extent,
+          maxWidth: extent,
+          child: Opacity(
+            opacity: shown ? 1 : 0,
+            child: IgnorePointer(
+              ignoring: !shown,
+              child: touch
+                  ? GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => unawaited(_press()),
+                      child: Center(child: button),
+                    )
+                  : button,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Whether the pointer is over the row below it.
+class _RowHover extends InheritedWidget {
+  const _RowHover({required this.hovered, required super.child});
+
+  final bool hovered;
+
+  static bool of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<_RowHover>()?.hovered ?? false;
+
+  @override
+  bool updateShouldNotify(_RowHover oldWidget) => hovered != oldWidget.hovered;
+}
+
+/// Tells [_RowHover] readers below it when the pointer enters and leaves.
+class _RowHoverRegion extends StatefulWidget {
+  const _RowHoverRegion({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_RowHoverRegion> createState() => _RowHoverRegionState();
+}
+
+class _RowHoverRegionState extends State<_RowHoverRegion> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+    opaque: false,
+    onEnter: (_) => setState(() => _hovered = true),
+    onExit: (_) => setState(() => _hovered = false),
+    child: _RowHover(hovered: _hovered, child: widget.child),
+  );
 }
 
 /// The expanded reading block wraps complete values, without filling missing slots.
@@ -2635,10 +3094,19 @@ class _MachineReadings extends StatelessWidget {
         ),
       (
         'Subscriptions',
-        view.allowances.isEmpty ? null : view.subscriptionsAside,
+        view.allowances.isEmpty
+            ? (view.status == SuperTabMachineStatus.offline ? 'offline' : null)
+            : view.subscriptionsAside,
         (width) => view.allowances.isEmpty
             ? Text(
-                'No Claude or Codex allowance reported for this machine',
+                // Only a machine read just now is known to have none; one offline, out of reach or being read again
+                // may have an allowance it cannot report at this moment.
+                switch (view.status) {
+                  SuperTabMachineStatus.live || SuperTabMachineStatus.late =>
+                    'No Claude or Codex allowance reported for this machine',
+                  SuperTabMachineStatus.offline => kAllowanceNotReadOffline,
+                  _ => kAllowanceNotRead,
+                },
                 style: DesktopChrome.text(
                   size: 11,
                   height: 1.3,
@@ -2813,9 +3281,10 @@ class _MachineReadings extends StatelessWidget {
   Widget _allowance(_Allowance allowance) {
     final left = allowance.left;
     final struck = allowance.struck;
+    final said = struck ?? allowance.notice;
     return Tooltip(
       message: [
-        ?struck,
+        ?said,
         if (allowance.detail.isNotEmpty) allowance.detail,
       ].join('\n\n'),
       child: Semantics(
@@ -2823,7 +3292,7 @@ class _MachineReadings extends StatelessWidget {
             (left == null
                 ? '${allowance.name}: ${allowance.note}'
                 : '${allowance.name} ${allowance.figure} remaining') +
-            (struck == null ? '' : '. $struck'),
+            (said == null ? '' : '. $said'),
         excludeSemantics: true,
         child: Container(
           key: ValueKey(

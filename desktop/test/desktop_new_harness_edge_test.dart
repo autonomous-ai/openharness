@@ -134,6 +134,7 @@ class _App extends AppNotifier {
     bool bypassPermission = false,
     String? permissionMode,
     String? codexHome,
+    String? claudeHome,
     String? dsh,
     String? swarmRole,
     String? swarmSkillMode,

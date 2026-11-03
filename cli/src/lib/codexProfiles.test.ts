@@ -79,7 +79,8 @@ describe('codexProfiles', () => {
     const folder = join(home, '.codex-linked')
     mkdirSync(folder)
     linkCodexProfile(folder)
-    expect(listCodexProfiles([], emptyDiscovery)).toEqual([{ path: folder, label: '.codex-linked' }])
+    // A link is a folder this machine knows (New Harness makes them): it is not an offer to the Swarm.
+    expect(listCodexProfiles([], emptyDiscovery)).toEqual([{ path: folder, label: '.codex-linked', offered: false }])
   })
 
   it('listCodexProfiles drops a linked folder that has since vanished', async () => {
@@ -95,7 +96,7 @@ describe('codexProfiles', () => {
     const { listCodexProfiles } = await loadModule()
     const folder = join(home, '.codex-observed')
     mkdirSync(folder)
-    expect(listCodexProfiles([folder], emptyDiscovery)).toEqual([{ path: folder, label: '.codex-observed' }])
+    expect(listCodexProfiles([folder], emptyDiscovery)).toEqual([{ path: folder, label: '.codex-observed', offered: false }])
   })
 
   it('listCodexProfiles includes freshly discovered folders', async () => {
@@ -103,7 +104,7 @@ describe('codexProfiles', () => {
     mkdirSync(join(home, '.codex'))
     writeFileSync(join(home, '.codex', 'auth.json'), '{}')
     expect(listCodexProfiles([], { home, environment: {} })).toEqual([
-      { path: join(home, '.codex'), label: '.codex' },
+      { path: join(home, '.codex'), label: '.codex', offered: true },
     ])
   })
 
@@ -113,7 +114,8 @@ describe('codexProfiles', () => {
     mkdirSync(folder)
     writeFileSync(join(folder, 'auth.json'), '{}')
     linkCodexProfile(folder)
-    expect(listCodexProfiles([folder], { home, environment: {} })).toEqual([{ path: folder, label: '.codex' }])
+    // The default account: offered with no offer of its own.
+    expect(listCodexProfiles([folder], { home, environment: {} })).toEqual([{ path: folder, label: '.codex', offered: true }])
   })
 
   it('listCodexProfiles sorts by label (case-insensitive), then by path', async () => {
@@ -123,8 +125,8 @@ describe('codexProfiles', () => {
     mkdirSync(a)
     mkdirSync(b)
     expect(listCodexProfiles([a, b], emptyDiscovery)).toEqual([
-      { path: a, label: '.codex-alpha' },
-      { path: b, label: '.codex-Beta' },
+      { path: a, label: '.codex-alpha', offered: false },
+      { path: b, label: '.codex-Beta', offered: false },
     ])
   })
 

@@ -175,6 +175,10 @@ class SampleNotifier extends AppNotifier {
   @override
   Future<void> retryMachines() async => notifyListeners();
 
+  /// The sample has no account to read.
+  @override
+  bool get accountReading => false;
+
   /// The sample's computers are always reached, and their agents are already here: there is
   /// nothing to dial or re-ask when Find opens.
   @override

@@ -415,6 +415,83 @@ void main() {
       expect(post['recipientIds'], ['agent-lead']);
     });
 
+    // Tony's phone list, task 26, as Desktop's decisions_view.dart.
+    group('a question here also offers', () {
+      Future<FakeSwarm> open(
+        WidgetTester tester, {
+        List<Map<String, dynamic>>? decisions,
+      }) async {
+        final fake = backend(
+          buddy: wren(),
+          page: [message('m1', 1, author: 'agent-wren')],
+          decisions: decisions ?? [decision('d1', minute: 2)],
+        );
+        await pump(tester, fake);
+        return fake;
+      }
+
+      testWidgets('its coordinator deciding, held for Undo, then sent as a '
+          'delegation', (tester) async {
+        final fake = await open(tester);
+        await tester.tap(find.text('Let Product Manager decide'));
+        await tester.pump();
+        expect(find.text('Leaving it to Product Manager'), findsOneWidget);
+        await tester.pump(const Duration(seconds: 10));
+        await tester.pumpAndSettle();
+        expect(fake.commands.single, {
+          'type': 'decision.answer',
+          'decisionId': 'd1',
+          'delegate': true,
+        });
+      });
+
+      testWidgets('and Undo takes it back, sending nothing', (tester) async {
+        final fake = await open(tester);
+        await tester.tap(find.text('Let Product Manager decide'));
+        await tester.pump();
+        await tester.tap(key('swarm-undo-d1'));
+        await tester.pump(const Duration(seconds: 10));
+        await tester.pumpAndSettle();
+        expect(fake.commands, isEmpty);
+        expect(find.text('Let Product Manager decide'), findsOneWidget);
+      });
+
+      testWidgets('not with no recommended option to take', (tester) async {
+        await open(
+          tester,
+          decisions: [
+            {...decision('d1', minute: 2), 'recommended': null},
+          ],
+        );
+        expect(find.text('Let Product Manager decide'), findsNothing);
+        expect(find.text('Not now'), findsOneWidget);
+      });
+
+      testWidgets('Not now, folding it to one line here with Show, sending '
+          'nothing, and a question asked later still shows', (tester) async {
+        final fake = await open(
+          tester,
+          decisions: [decision('d1', minute: 2), decision('d2', minute: 3)],
+        );
+        await tester.tap(key('swarm-decision-later-d1'));
+        await tester.pumpAndSettle();
+        expect(key('swarm-ask-d1'), findsNothing);
+        expect(key('swarm-ask-d2'), findsOneWidget);
+        expect(find.text('1 decision set aside'), findsOneWidget);
+        expect(fake.commands, isEmpty);
+
+        await tester.tap(key('swarm-decision-later-d2'));
+        await tester.pumpAndSettle();
+        expect(find.text('2 decisions set aside'), findsOneWidget);
+
+        await tester.tap(key('swarm-decisions-show'));
+        await tester.pumpAndSettle();
+        expect(key('swarm-ask-d1'), findsOneWidget);
+        expect(key('swarm-ask-d2'), findsOneWidget);
+        expect(key('swarm-decisions-aside'), findsNothing);
+      });
+    });
+
     testWidgets('every open question the PM asked the person in the project '
         'shows here and is answered in place', (tester) async {
       final fake = backend(
@@ -499,6 +576,45 @@ void main() {
       ]);
     });
 
+    testWidgets('⋮ holds the chat\'s Notifications too: Muted is kept, and '
+        'access lost while the sheet is open closes it', (tester) async {
+      final fake = backend(buddy: wren());
+      const notify = '/api/super-tabs/$tab/conversations/$chat/notifications';
+      fake.routes[notify] = (body) => {'notify': body!['notify']};
+      final host = await pump(tester, fake);
+
+      await tester.tap(key('swarm-buddy-menu'));
+      await tester.pumpAndSettle();
+      expect(find.text('Rename Buddy'), findsOneWidget);
+      expect(find.text('notifications'), findsOneWidget);
+      await tester.tap(find.text('Muted'));
+      await tester.pumpAndSettle();
+      expect(
+        [
+          for (final call in fake.calls)
+            if (call.path == notify) call.body,
+        ],
+        [
+          {'notify': 'muted'},
+        ],
+      );
+
+      await tester.tap(key('swarm-buddy-menu'));
+      await tester.pumpAndSettle();
+      expect(find.text('Muted'), findsOneWidget);
+      const refused = SuperTabFailure(
+        'FORBIDDEN',
+        'You cannot read this Swarm.',
+        statusCode: 403,
+      );
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => throw refused;
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) => throw refused;
+      await readAgain(tester, host);
+
+      expect(find.text('Muted'), findsNothing);
+      expect(find.text('Rename Buddy'), findsNothing);
+    });
+
     testWidgets('⋮ Remove Buddy asks first; Cancel removes nothing, Remove '
         'stops it', (tester) async {
       final fake = backend(buddy: wren());
@@ -577,7 +693,13 @@ void main() {
         ),
         findsOneWidget,
       );
-      expect(key('swarm-buddy-menu'), findsNothing, reason: 'none to remove');
+      // Renamed before it runs, as on Desktop; nothing to remove yet.
+      await tester.tap(key('swarm-buddy-menu'));
+      await tester.pumpAndSettle();
+      expect(find.text('Rename Buddy'), findsOneWidget);
+      expect(find.text('Remove Buddy'), findsNothing, reason: 'none to remove');
+      await tester.tapAt(const Offset(10, 10));
+      await tester.pumpAndSettle();
 
       startsNext(fake, [
         buddyStartData('s1', chatId: chat, machineId: 'mac-1'),
@@ -689,6 +811,100 @@ void main() {
           },
         },
       ]);
+    });
+
+    // Tony's phone list, task 18, as Desktop's #2497: the server refuses new
+    // work on a paused machine, and only said so after the pick.
+    testWidgets('a paused machine says so and cannot be picked, and an online '
+        'one comes first', (tester) async {
+      final fake = backend(
+        machines: [
+          {...machine('mac-1', 'Aaa Paused'), 'paused': true},
+          machine('mac-2', 'Zed Open'),
+        ],
+      );
+      final computers = FakeComputers(const [])
+        ..own = [
+          (id: 'mac-1', name: 'Aaa Paused', away: false),
+          (id: 'mac-2', name: 'Zed Open', away: false),
+        ];
+      await pump(tester, fake, computers: computers);
+
+      expect(
+        find.descendant(
+          of: key('swarm-buddy-machine'),
+          matching: find.text('Zed Open'),
+        ),
+        findsOneWidget,
+        reason: 'the paused one is never the one offered',
+      );
+      await tester.tap(key('swarm-buddy-machine'));
+      await tester.pumpAndSettle();
+      expect(find.text('paused'), findsOneWidget);
+      await tester.tap(find.text('Aaa Paused'), warnIfMissed: false);
+      await tester.pumpAndSettle();
+      expect(
+        find.text(swarmBuddyOwnMachines.toLowerCase()),
+        findsOneWidget,
+        reason: 'not picked: the sheet stays',
+      );
+    });
+
+    testWidgets(
+      'with every machine paused, it says how to resume and offers no Start',
+      (tester) async {
+        final fake = backend(
+          machines: [
+            {...machine('mac-1', 'Only Paused'), 'paused': true},
+          ],
+        );
+        await pump(
+          tester,
+          fake,
+          computers: FakeComputers(const [])
+            ..own = [(id: 'mac-1', name: 'Only Paused', away: false)],
+        );
+        expect(
+          find.text(
+            'New work is paused on your machines. Choose Resume new work in '
+            'Machines to start your Buddy.',
+          ),
+          findsOneWidget,
+        );
+        expect(key('swarm-buddy-start-button'), findsNothing);
+        await tester.tap(key('swarm-buddy-machine'));
+        await tester.pumpAndSettle();
+        expect(find.text('paused'), findsOneWidget);
+        await tester.tap(find.text('Only Paused'), warnIfMissed: false);
+        await tester.pumpAndSettle();
+        expect(fake.commands, isEmpty);
+      },
+    );
+
+    testWidgets('a machine both paused and offline says offline, and the words '
+        'for all offline stay', (tester) async {
+      final fake = backend(
+        machines: [
+          {...machine('mac-1', 'Gone'), 'paused': true},
+        ],
+      );
+      await pump(
+        tester,
+        fake,
+        computers: FakeComputers(const [])
+          ..own = [(id: 'mac-1', name: 'Gone', away: true)],
+      );
+      expect(
+        find.text(
+          'Your machines are offline. Open Harness on one of them to start '
+          'your Buddy there.',
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(key('swarm-buddy-machine'));
+      await tester.pumpAndSettle();
+      expect(find.text(swarmBuddyMachineOffline), findsOneWidget);
+      expect(find.text('paused'), findsNothing);
     });
 
     testWidgets('with no machine of the person\'s own, it says to add one and '

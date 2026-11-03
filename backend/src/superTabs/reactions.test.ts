@@ -73,6 +73,8 @@ describe('reactions', () => {
   it('lets an agent react in a conversation it is in, as a person does, with ✅ for done', () => {
     const f = fixture()
     const builder = f.agent('lead', 'Builder')
+    // A member stored there before the project chat held only its coordinator (#2207).
+    f.lead().agentIds.push(builder)
     for (const emoji of ['eyes', 'check', 'rocket']) {
       expect(f.run(react(true, emoji), asAgent(builder), target(false)).result, emoji).toMatchObject({ changed: true })
     }

@@ -1,4 +1,5 @@
 import '../core/home_dir.dart';
+import '../usage/usage_account_key.dart';
 import '../measurement/product_measurement.dart';
 import '../measurement/product_runtime_health.dart';
 import '../measurement/product_connections.dart';
@@ -17,6 +18,7 @@ import 'dart:io'
     show Directory, FileSystemEntity, FileSystemEntityType, Platform, exit, pid;
 import 'dart:math' show Random, min;
 
+import 'package:clock/clock.dart';
 import 'package:dio/dio.dart';
 
 import 'dart:ui'
@@ -95,14 +97,17 @@ import '../settings/config_store.dart';
 import '../settings/experimental_features.dart';
 import '../core/local_key_value_store.dart';
 import '../core/harness_file_store.dart';
+import '../super_tabs/swarm_accounts.dart';
 import '../super_tabs/attachment_upload.dart';
 import '../super_tabs/avatar_upload.dart';
 import '../super_tabs/backend_transport.dart';
 import '../super_tabs/client.dart';
 import '../super_tabs/controller.dart';
 import '../super_tabs/join_machine.dart';
+import '../super_tabs/identity.dart' show superTabMachineName;
 import '../super_tabs/view_store.dart';
-import '../super_tabs/notifications.dart' show superTabMentionNotice;
+import '../super_tabs/notifications.dart'
+    show superTabChatNotice, superTabMentionNotice;
 import '../measurement/setup_preference_store.dart';
 import '../devices/device_hosts.dart';
 import '../stats/harness_stats.dart';
@@ -125,6 +130,7 @@ import 'harness_share_status.dart';
 import 'desk_sync.dart';
 import 'machine_profile.dart';
 import 'pane_layout_store.dart';
+import 'profile_cache.dart';
 import 'terminal_pane.dart';
 import 'device_visit.dart';
 import 'started_children.dart';
@@ -264,18 +270,60 @@ class AgentForkAttempt {
   Future<ForkAgentResult>? get pending => _inFlight;
 }
 
+/// One account an engine can run under on a machine, as Change agent offers it.
+class AgentProfile {
+  const AgentProfile({
+    required this.id,
+    required this.key,
+    required this.label,
+    this.path,
+    this.percentLeft,
+    this.offered = true,
+    this.canOffer = false,
+  });
+
+  /// False when the machine's owner has not offered this account to the Swarm. Using it does not:
+  /// only Swarm accounts… does ([AppNotifier.setAccountOffered]).
+  final bool offered;
+
+  /// Not the default account, on a CLI that says what is offered: Swarm accounts… can list it.
+  final bool canOffer;
+
+  /// The account's Swarm profile id ([swarmProfileId]): what `usage_read` and the current-account check use.
+  final String id;
+
+  /// What [AppNotifier.changeAgent] is given: the folder, or `'default'` for the default account.
+  final String key;
+  final String label;
+  final String? path;
+
+  /// Null when the machine could not read this account's usage.
+  final int? percentLeft;
+}
+
+/// Null and `'default'` both mean the machine's default account.
+bool sameAgentProfile(String? a, String? b) =>
+    (a ?? 'default') == (b ?? 'default');
+
 /// One deliberate creation, retained by the form if its reply is lost. Reusing
 /// it checks the original request; opening New agent starts a fresh intent.
 class _AgentChange {
-  _AgentChange(this.source, this.engine, this.revision);
+  _AgentChange(this.source, this.engine, this.revision, [this.profile]);
   final Agent source;
   final String engine;
+
+  /// The account folder to start in ([AgentProfile.key]); null keeps the default.
+  final String? profile;
   final int revision;
   final creation = AgentCreationAttempt(background: true);
   Future<String?>? pending;
   bool preservingViews = false;
   bool handoffHeld = false;
   bool contextLoaded = false;
+
+  /// Its machine prepared the handoff under this switch's id: its stop names
+  /// the switch (a Swarm Product Manager's machine checks the two match).
+  bool handoffPrepared = false;
   String? handoff;
 
   /// The handoff ran and left the new agent without a first prompt: say so once the switch is done.
@@ -337,6 +385,10 @@ class AgentCreationAttempt {
   String? get agentId => _agentId;
   String? _outcome;
   String? _preparedFolder;
+
+  /// The SSH alias this attempt's own clone went through, until its harness
+  /// starts and the person is told.
+  String? _clonedVia;
   ProjectFolderRequest? _projectFolder;
 
   /// The worktree this computer made for this attempt, set only where it is
@@ -712,6 +764,8 @@ enum AttachIntent { person, automatic }
 /// Machines asked for from outside the workspace ([AppNotifier.requestMachines]): the device to
 /// select there, or the first phone or app.
 typedef MachinesRequest = ({String? devicePub, bool phones});
+
+const buddyKeepsItsEngine = 'A Buddy keeps its engine for now';
 
 /// Change agent on a Swarm Buddy, which keeps running and so keeps its agent
 /// (hn's `BUDDY_KEEPS_ITS_AGENT`, word for word).
@@ -1225,6 +1279,7 @@ class AppNotifier extends ChangeNotifier {
   // Account and inventory replies belong to the session that requested them.
   // Signing out invalidates them before asynchronous connection cleanup.
   int _authRevision = 0;
+
   /// Cancels work across account changes, independently of measurement preferences.
   int get accountGeneration => _authRevision;
   Future<void>? _profileInFlight;
@@ -1368,6 +1423,24 @@ class AppNotifier extends ChangeNotifier {
   /// setup — [signedIn] is presumed true until the CLI has been asked.
   bool get signInStepNext => _signInStep && viewer == null && !signedIn;
 
+  /// Whether Harness was on this computer before this launch, so the sign-in
+  /// page can say it is set up rather than look like a first run (Scholes's
+  /// end-to-end test of 1.3.44, finding 5). False on the launch that first
+  /// installed it, the tour's.
+  bool get harnessSetUpBefore => !_firstHarnessLaunch;
+  bool _firstHarnessLaunch = false;
+
+  /// This computer as the sign-in page names it: its own row (the daemon's
+  /// while signed out), else its host name, without Bonjour's `.local`.
+  /// Null when neither is known. Only ever this computer's own name: no
+  /// account, and no other machine.
+  String? get thisComputerName {
+    final row = localMachineState?.machine.name?.trim();
+    final name = row != null && row.isNotEmpty ? row : localHostnameOrNull();
+    if (name == null || name.isEmpty) return null;
+    return superTabMachineName(name);
+  }
+
   /// Whether RootShell shows the sign-in step in place of the workspace: from
   /// the moment setup (and its tour) hands over, until an account arrives.
   bool get signInStepShowing {
@@ -1387,7 +1460,7 @@ class AppNotifier extends ChangeNotifier {
   /// The sign-in step's buttons. Unlike the sign-in sheet, the page does not
   /// change while the browser is open, so every way in stays live: pressing
   /// one again opens the browser again, and another one switches to it.
-  /// No [provider] is the sign-in page's own chooser — Continue with email.
+  /// No [provider] is the sign-in page's own chooser — Email, GitHub or passkey.
   Future<void> signInFromStep([SignInProvider? provider]) async {
     if (signingIn) {
       // The same way in, pressed again: its page again, not a second sign-in
@@ -1823,7 +1896,7 @@ class AppNotifier extends ChangeNotifier {
           required conversationId,
           required name,
           required mime,
-          required bytes,
+          required file,
           required cancel,
           required onProgress,
         }) => _teamComputer
@@ -1838,7 +1911,7 @@ class AppNotifier extends ChangeNotifier {
             conversationId: conversationId,
             name: name,
             mime: mime,
-            bytes: bytes,
+            file: file,
             cancel: cancel,
             onProgress: onProgress,
           ),
@@ -1851,6 +1924,7 @@ class AppNotifier extends ChangeNotifier {
           )
         : uploadAvatarWith(() => api)(tabId: tabId, png: png),
     onMention: superTabMentionNotice(systemNotifications),
+    onChatMessage: superTabChatNotice(systemNotifications),
     onTagCounts: notifyListeners,
     onNotices: notifyListeners,
     discoveryInterval: kUnderTest ? Duration.zero : const Duration(seconds: 15),
@@ -1942,6 +2016,7 @@ class AppNotifier extends ChangeNotifier {
           throw const SuperTabFailure(
             'MACHINE_UNAVAILABLE',
             teamComputerSwarmMessage,
+            settled: true,
           );
         }
         throw const SuperTabFailure(
@@ -2204,13 +2279,17 @@ class AppNotifier extends ChangeNotifier {
         'reason': reason,
         'tabId': ?tabId,
       });
-      appLog.info('super-tabs', 'team account offer ($reason): ${answer['state']}');
+      appLog.info(
+        'super-tabs',
+        'team account offer ($reason): ${answer['state']}',
+      );
       if (answer['state'] == 'wanted') {
         // The start check runs once for each daemon process, so a restart
         // with the explanation still open must not show it again: once a
         // launch at start. A join, a contribution or the machine row's Set up
         // is the person asking, and always explains.
-        if (reason != 'startup' || !_teamStartExplained) _teamSetupAsks.add(reason);
+        if (reason != 'startup' || !_teamStartExplained)
+          _teamSetupAsks.add(reason);
         if (reason == 'startup') _teamStartExplained = true;
       }
       return true;
@@ -2240,7 +2319,10 @@ class AppNotifier extends ChangeNotifier {
       // a restart, and counting it as one asked without end (re-check of
       // #1790); the first identity read after an unknown one is taken as the
       // same process.
-      final restarted = daemon != null && _teamOfferDaemon != null && daemon != _teamOfferDaemon;
+      final restarted =
+          daemon != null &&
+          _teamOfferDaemon != null &&
+          daemon != _teamOfferDaemon;
       if (!_teamOfferStarted || restarted) {
         _teamOfferRetry?.cancel();
         _teamOfferRetry = null;
@@ -4028,8 +4110,7 @@ class AppNotifier extends ChangeNotifier {
     final captured = tab.panes
         .where(
           (p) =>
-              identical(p, pane) ||
-              p.viewsAgent(pane.machineId, pane.agentId),
+              identical(p, pane) || p.viewsAgent(pane.machineId, pane.agentId),
         )
         .toList();
     return _afterCloseGuards(
@@ -4169,10 +4250,15 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// Capture once before showing a prompt. Old/replaced targets cannot inherit its answer.
+  /// [changeId]: the Change agent switch this close is part of, whose
+  /// handoff was prepared under that id. A Swarm Product Manager's machine
+  /// lets its stop through only for that switch (cli superTabs/leadSwitch.ts);
+  /// any other close of one is refused as before.
   Future<Map<String, dynamic>> Function(String) prepareSessionClose(
     String machineId,
-    Agent agent,
-  ) {
+    Agent agent, {
+    String? changeId,
+  }) {
     final machine = stateOf(machineId);
     final revision = _authRevision;
     final removal = machine?._agentRemovals[agent.id];
@@ -4211,6 +4297,7 @@ class AppNotifier extends ChangeNotifier {
             'sessionId': agent.sessionId ?? '',
             'createdAt': agent.createdAt!.toUtc().toIso8601String(),
             'mode': mode,
+            'changeId': ?changeId,
           },
         );
       } on WsRequestFailure catch (failure) {
@@ -4642,9 +4729,17 @@ class AppNotifier extends ChangeNotifier {
           .firstOrNull;
       if (project == null) return;
       // Only an existing chat of the reader's own: a device never makes one.
-      if (buddy && controller.buddyChat(projectId) != null) {
+      // Where the Swarm gives one Buddy per person, that is their Swarm chat
+      // (# buddy, which names no project), whichever project the dial is on;
+      // an earlier project chat there is history (Diego, 11-02).
+      final buddyKey =
+          controller.oneBuddy &&
+              controller.buddyChat(SuperTabController.kSwarmBuddyKey) != null
+          ? SuperTabController.kSwarmBuddyKey
+          : projectId;
+      if (buddy && controller.buddyChat(buddyKey) != null) {
         await (controller.buddyChatOpener ?? controller.openBuddyChat)(
-          projectId,
+          buddyKey,
         );
         if (_disposed || _devicePick != pick) return;
       } else {
@@ -4823,6 +4918,9 @@ class AppNotifier extends ChangeNotifier {
   /// Whether this build can sign in by a phone at all (the CLI's, and a viewer's, can).
   bool get canSignInWithPhone => cliLogin is PhoneSignInClient;
 
+  /// Whether this build can sign in by a code another device types in (the CLI's can).
+  bool get canSignInWithCode => cliLogin is CodeSignInClient;
+
   /// What a sign-in in progress is waiting on before it can start — another sign-in on this
   /// computer, say — for the login screen to show; null when it is not waiting.
   String? get loginWaitingNote => switch (cliLogin) {
@@ -4895,7 +4993,10 @@ class AppNotifier extends ChangeNotifier {
                : AgentPrefetch(log: (line) => appLog.info('setup', line))),
        windowsSelfInstall =
            windowsSelfInstall ??
-           (RuntimePlatform.isWindows && kReleaseMode && !kUnderTest && !kViewerMode
+           (RuntimePlatform.isWindows &&
+                   kReleaseMode &&
+                   !kUnderTest &&
+                   !kViewerMode
                ? WindowsSelfInstall()
                : null),
        _exitApp = exitApp ?? exit,
@@ -6550,7 +6651,24 @@ class AppNotifier extends ChangeNotifier {
     await _store?.saveEnvironment(value);
   }
 
+  /// How long into startup each step finished, in ms, for the log line and for tests. Task #2169.
+  @visibleForTesting
+  Map<String, int> get startupTimings => Map.unmodifiable(_startupTimings);
+  final _startupTimings = <String, int>{};
+  final _startupClock = Stopwatch();
+  void _markStartup(String step) {
+    if (_startupClock.isRunning) _startupTimings[step] = _startupClock.elapsedMilliseconds;
+  }
+
+  /// Set by any install during this boot: what the CLI said before it is out of date.
+  bool _installedThisBoot = false;
+
   Future<void> bootstrap() async {
+    _startupTimings.clear();
+    _startupClock
+      ..reset()
+      ..start();
+    _installedThisBoot = false;
     final localFixture = localManualFixture;
     if (localFixture != null) {
       _bootstrapLocalManual(localFixture);
@@ -6585,8 +6703,20 @@ class AppNotifier extends ChangeNotifier {
         if (!_selfInstallUnavailable) {
           _startUpdateChecking();
         }
+        // Beside the tool probe, as neither waits on the other (task #2169). A fresh computer has no CLI yet: a check that
+        // fails is asked again after. One from before a sign-out or an install says nothing about now.
+        final askedAt = _authRevision;
+        final early = cliLogin.checkStatus().then<CliAuthStatus?>((status) {
+          _markStartup('signed-in check');
+          return status;
+        }).catchError((Object _) => null);
         final environmentReady = await _prepareEnvironment();
+        _markStartup('tools');
         if (!environmentReady) return;
+        await _continueAfterEnvironmentReady(
+          early: _installedThisBoot || askedAt != _authRevision ? null : early,
+        );
+        return;
       }
       await _continueAfterEnvironmentReady();
     } catch (error, stack) {
@@ -6655,6 +6785,7 @@ class AppNotifier extends ChangeNotifier {
       // box and installed OpenCode in its first pane, about 90 s to a first result against 55 s on a Mac.
       // They wait for what setup brings until it is ready ([_continueAfterEnvironmentReady]).
       if (firstHarness) {
+        _firstHarnessLaunch = true;
         agentPrefetch?.setupRunning = true;
         agentPrefetch?.start();
         // The tour's final line announces sign-in: see [signInStepShowing].
@@ -6761,6 +6892,7 @@ class AppNotifier extends ChangeNotifier {
     bool quiet = false,
   }) async {
     final provisioner = environmentProvisioner ?? EnvironmentProvisioner();
+    if (install) _installedThisBoot = true;
     final result = await provisioner.ensureReady(
       onProgress: (value) {
         _measureSetup(value);
@@ -6799,7 +6931,7 @@ class AppNotifier extends ChangeNotifier {
   /// What `bootstrap()` does right after the environment is confirmed ready — pulled out so
   /// [recheckEnvironmentStep] can reach the same destination without repeating `bootstrap()`'s config
   /// load and update-check startup, which already ran on the launch that got stuck here.
-  Future<void> _continueAfterEnvironmentReady() async {
+  Future<void> _continueAfterEnvironmentReady({Future<CliAuthStatus?>? early}) async {
     agentPrefetch?.setupRunning = false;
     final revision = _authRevision;
     if (!_authWorkCurrent(revision)) return;
@@ -6815,9 +6947,12 @@ class AppNotifier extends ChangeNotifier {
     // refreshes it itself. This app never reads, stores, or refreshes a token of its own; it just
     // asks the CLI whether this computer is currently signed in.
     try {
-      final authStatus = await cliLogin.checkStatus();
+      final authStatus = await early ?? await cliLogin.checkStatus();
+      _markStartup('signed-in check');
       if (!_authWorkCurrent(revision)) return;
       signedIn = authStatus.loggedIn;
+      await _useKeptProfile(authStatus, revision);
+      if (!_authWorkCurrent(revision)) return;
       if (!authStatus.loggedIn) {
         currentUser = null;
         // Viewers keep their own login screen. Desktop can prepare the saved
@@ -7083,6 +7218,15 @@ class AppNotifier extends ChangeNotifier {
     // `_authWorkCurrent` returns) used to leave "Starting local service…" on a screen nothing would
     // ever repaint.
     await _identifyBeforeLayout(revision);
+    _ensurePool();
+    // The daemon check starts beside the restores, as neither waits on the other (task #2169). The window opens once both
+    // have answered, so the tiles are there for it, as before.
+    Object? daemonFailure;
+    var daemonFailed = false;
+    final daemon = ensureCliDaemonReady().then<void>((_) => _markStartup('daemon')).catchError((Object error) {
+      daemonFailed = true;
+      daemonFailure = error;
+    });
     await _restorePaneLayout(claimOnAttach: true);
     _armLaunchClaimExpiry();
     if (!_authWorkCurrent(revision)) {
@@ -7091,14 +7235,14 @@ class AppNotifier extends ChangeNotifier {
     }
     await dial.restore();
     await firstArrival.restore();
+    _markStartup('saved tabs');
     if (!_authWorkCurrent(revision)) {
       _bootStatusMessage = null;
       return;
     }
-    _ensurePool();
-    try {
-      await ensureCliDaemonReady();
-    } catch (error) {
+    await daemon;
+    if (daemonFailed) {
+      final error = daemonFailure;
       _bootStatusMessage = null;
       if (!_authWorkCurrent(revision)) return;
       status = AppStatus.authenticated;
@@ -7113,6 +7257,9 @@ class AppNotifier extends ChangeNotifier {
     // the saved session gone) — that already routed to the login screen, so don't clobber it.
     if (status == AppStatus.unauthenticated) return;
     status = AppStatus.authenticated;
+    _markStartup('window');
+    appLog.info('startup', startupLogLine(_startupTimings));
+    _startupClock.stop();
     notifyListeners();
     // The CLI has confirmed daemon readiness. Display-name/avatar metadata is
     // independent of machine discovery and must not delay work — and a guest
@@ -7258,6 +7405,10 @@ class AppNotifier extends ChangeNotifier {
     signedIn = false;
     _signInStep = true;
     currentUser = null;
+    _provenMachineId = null;
+    _keptProfileId = null;
+    _profileConfirmed = false;
+    unawaited(_profileCache.clear());
     if (banner != null) {
       _lastError = banner;
       _lastErrorRetryable = true;
@@ -7434,10 +7585,67 @@ class AppNotifier extends ChangeNotifier {
       final me = await api.me();
       if (me != null && _authWorkCurrent(revision)) {
         currentUser = CurrentUserProfile.fromMe(me);
+        _profileConfirmed = true;
       }
     } catch (_) {
       /* Unknown: the profile load after boot tries again. */
     }
+  }
+
+  /// The machine id `harness auth status` named at this boot: what a kept profile is checked against ([ProfileCache]).
+  String? _provenMachineId;
+  late final _profileCache = ProfileCache(_paneLayout?.storage);
+
+  /// The account the kept profile showing now names, if one is: a server answer for another account clears it.
+  String? _keptProfileId;
+
+  /// Whether the server has answered who is signed in during this run. A kept profile shows until it has, and it is asked again
+  /// when the backend returns, as a person with no profile at all is. Security review of #2617.
+  bool _profileConfirmed = false;
+
+  /// The last profile, when the CLI's session is the one it was read under; otherwise it goes (task #2169). A viewer has no CLI
+  /// session to prove it, and reads its profile before the layout instead ([_identifyBeforeLayout]).
+  Future<void> _useKeptProfile(CliAuthStatus authStatus, int revision) async {
+    if (viewer != null) return;
+    final machineId = authStatus.loggedIn ? authStatus.machineId : null;
+    _provenMachineId = machineId;
+    _keptProfileId = null;
+    _profileConfirmed = false;
+    final kept = machineId == null ? null : await _profileCache.read(machineId);
+    if (!_authWorkCurrent(revision)) return;
+    if (kept == null) {
+      await _profileCache.clear();
+      return;
+    }
+    _keptProfileId = kept.id;
+    currentUser = kept;
+    notifyListeners();
+  }
+
+  /// Keeps what the server just answered, only where it can't name another account later: a machine id proves the account only
+  /// while everything under it is that account's. Someone can sign in as another in a terminal while the answer is on its way,
+  /// so an answer naming another account than the record goes, and a first record waits for the CLI to name the machine still.
+  Future<void> _keepProfile(CurrentUserProfile profile, int revision) async {
+    final machineId = _provenMachineId;
+    if (machineId == null) return;
+    final kept = _keptProfileId;
+    if (kept != null && kept != profile.id) {
+      _provenMachineId = null;
+      _keptProfileId = null;
+      await _profileCache.clear();
+      return;
+    }
+    if (kept == null) {
+      final CliAuthStatus still;
+      try {
+        still = await cliLogin.checkStatus();
+      } catch (_) {
+        return;
+      }
+      if (!_authWorkCurrent(revision) || !still.loggedIn || still.machineId != machineId) return;
+      _keptProfileId = profile.id;
+    }
+    await _profileCache.write(machineId, profile);
   }
 
   Future<void> _readProfile(int revision) async {
@@ -7448,6 +7656,8 @@ class AppNotifier extends ChangeNotifier {
       }
       if (me != null) {
         currentUser = CurrentUserProfile.fromMe(me);
+        _profileConfirmed = true;
+        if (currentUser case final profile?) unawaited(_keepProfile(profile, revision));
         // A sign-in by hand: the device log keeps which account it was made to.
         if (currentUser!.id case final id?)
           unawaited(_deviceLog?.signedInAs(id));
@@ -7554,13 +7764,19 @@ class AppNotifier extends ChangeNotifier {
     appLog.info('daemon', 'backend ${online ? 'online' : 'offline'}');
     if (online && wasOffline && status == AppStatus.authenticated) {
       if (refetch && !machinesRefreshing) unawaited(retryMachines());
-      if (currentUser == null) unawaited(_loadProfile());
+      if (!_profileConfirmed) unawaited(_loadProfile());
       _deskEnsure(_authRevision);
       // A daemon whose backend was away answered the last read with an error.
       if (_desk.enabled) unawaited(agentMessages.refresh());
+      // The same for the Swarm's: a daemon just started has its backend a few seconds later
+      // (6 s on 10-30), and the Swarm on screen would otherwise wait for its next poll.
+      if (viewer == null) superTabs.serverAvailable();
     }
     notifyListeners();
   }
+
+  @visibleForTesting
+  void noteBackendOnlineForTest(bool online) => _noteBackendOnline(online);
 
   /// Supervision starts once the daemon is at least ANSWERING — ready or still connecting. It used to
   /// wait for ready, out of fear of a concurrent `harness start` from both places; the supervisor
@@ -7781,6 +7997,10 @@ class AppNotifier extends ChangeNotifier {
     cliLogin.cancel();
     _sessionExpired = true;
     currentUser = null;
+    _provenMachineId = null;
+    _keptProfileId = null;
+    _profileConfirmed = false;
+    unawaited(_profileCache.clear());
     signingIn = false;
     pendingAuthorizeUrl = null;
     final previousMachineId = localMachineState?.machine.machineId;
@@ -8271,7 +8491,9 @@ class AppNotifier extends ChangeNotifier {
     Object error,
     int revision,
   ) {
-    final reason = !_authWorkCurrent(revision)
+    final reason = revision == _refreshedAuthRevision
+        ? SignInEndReason.expired
+        : !_authWorkCurrent(revision)
         ? SignInEndReason.cancelled
         : switch (error) {
             SignInException(:final code) || PhoneSignInException(:final code) =>
@@ -8796,17 +9018,71 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// Sign in by a QR a signed-in phone approves, then a yes here to the account it names.
-  Future<void> loginWithPhone() async {
+  Future<void> loginWithPhone() => _loginByApproval(ApprovalSignIn.phone);
+
+  /// Sign in by a short code another signed-in device types in — a phone's Settings ▸ Sign in a
+  /// computer ▸ Type a code instead, or a computer's Machines ▸ Approve a device — then a yes here.
+  Future<void> loginWithCode() => _loginByApproval(ApprovalSignIn.code);
+
+  /// The sign-in step's Scan with your phone and Sign in on another device. As [signInFromStep]:
+  /// another way in under way ends and this one begins; the same one again changes nothing.
+  Future<void> approveFromStep(ApprovalSignIn method) async {
+    if (signingIn) {
+      if (approvalSignIn == method) return;
+      if (!canCancelLogin) return;
+      cancelLogin();
+    }
+    await _loginByApproval(method);
+  }
+
+  /// A code's whole life at the backend, however often it is kept alive (`QR_SIGN_IN_MAX_LIFE_SEC`
+  /// in backend `lib/harnessSession.ts`). Scholes's code ran out twice before he could type it
+  /// (2026-10-31): the page swaps in a new one before then instead of showing a dead one.
+  static const approvalCodeLife = Duration(minutes: 10);
+
+  /// How long before a code's end the page swaps in the next: time for the swap itself, so the
+  /// code on screen is always one that still works.
+  static const approvalRefreshLead = Duration(seconds: 15);
+
+  /// How many new codes a page left open gets before it stops asking (about an hour of them).
+  /// Each is a sign-in record at the backend; a window nobody is looking at should not make them
+  /// all night.
+  static const maxApprovalRefreshes = 6;
+
+  /// The approval sign-in under way, if any: what the step shows in place of its ways in.
+  ApprovalSignIn? approvalSignIn;
+
+  /// The code to type on another device ([loginWithCode]) while it waits for one to approve it.
+  String? pendingSignInCode;
+
+  /// When the page swaps in a new QR or code, for its "New code in" line. Null before the first.
+  DateTime? approvalRefreshAt;
+
+  Timer? _approvalRefresh;
+  int _approvalRefreshes = 0;
+
+  /// The attempt a refresh replaced: counted as expired, not as the person cancelling.
+  int? _refreshedAuthRevision;
+
+  Future<void> _loginByApproval(
+    ApprovalSignIn method, {
+    bool refreshing = false,
+  }) async {
     final client = cliLogin;
+    final supported = switch (method) {
+      ApprovalSignIn.phone => client is PhoneSignInClient,
+      ApprovalSignIn.code => client is CodeSignInClient,
+    };
     if (_disposed ||
-        signingIn ||
+        (signingIn && !refreshing) ||
         signingOut ||
         signOutError != null ||
-        client is! PhoneSignInClient) {
+        !supported) {
       return;
     }
     final finish = productMeasurement.begin(ProductFlow.signIn);
     var signedInHere = false;
+    var refreshAfter = false;
     final wasGuest = isGuest;
     final revision = _invalidateAuthWork();
     previousAccountEmail = currentUser?.email;
@@ -8818,26 +9094,70 @@ class AppNotifier extends ChangeNotifier {
     signInProvider = null;
     pendingAuthorizeUrl = null;
     _clearPhoneSignIn();
+    approvalSignIn = method;
+    if (!refreshing) _approvalRefreshes = 0;
     notifyListeners();
+    // When this attempt's code first showed, and how long a fresh one lives: the start of its
+    // backend life, and the measure of a "less than usual" time left near its end.
+    DateTime? shownAt;
+    int? fullLife;
+    void shown(int expiresIn) {
+      final now = clock.now();
+      shownAt ??= now;
+      fullLife ??= expiresIn;
+      var end = shownAt!.add(approvalCodeLife);
+      // Less than a fresh code's time left: the backend is near the end of its life, whatever this
+      // page assumes that life to be.
+      final reported = now.add(Duration(seconds: expiresIn));
+      if (expiresIn < fullLife! && reported.isBefore(end)) end = reported;
+      final refreshAt = end.subtract(approvalRefreshLead);
+      if (refreshAt == approvalRefreshAt) return;
+      approvalRefreshAt = refreshAt;
+      _approvalRefresh?.cancel();
+      final wait = refreshAt.difference(now);
+      _approvalRefresh = Timer(
+        wait.isNegative ? Duration.zero : wait,
+        () => _refreshApproval(revision),
+      );
+    }
+
     try {
       if (_workspaceCleanup case final cleanup?) {
         await cleanup;
         if (!_authWorkCurrent(revision)) return;
       }
-      await (client as PhoneSignInClient).loginWithPhone(
-        onQr: (link, _) {
-          if (!_authWorkCurrent(revision) || pendingQrLink == link) return;
-          pendingQrLink = link;
-          notifyListeners();
-        },
-        onConfirm: (email) {
-          if (!_authWorkCurrent(revision)) return Future.value(false);
-          final answer = _phoneConfirm = Completer<bool>();
-          pendingConfirmEmail = email;
-          notifyListeners();
-          return answer.future;
-        },
-      );
+      Future<bool> confirm(String email) {
+        if (!_authWorkCurrent(revision)) return Future.value(false);
+        final answer = _phoneConfirm = Completer<bool>();
+        pendingConfirmEmail = email;
+        notifyListeners();
+        return answer.future;
+      }
+
+      switch (method) {
+        case ApprovalSignIn.phone:
+          await (client as PhoneSignInClient).loginWithPhone(
+            onQr: (link, expiresIn) {
+              if (!_authWorkCurrent(revision)) return;
+              shown(expiresIn);
+              if (pendingQrLink == link) return;
+              pendingQrLink = link;
+              notifyListeners();
+            },
+            onConfirm: confirm,
+          );
+        case ApprovalSignIn.code:
+          await (client as CodeSignInClient).loginWithCode(
+            onCode: (code, expiresIn) {
+              if (!_authWorkCurrent(revision)) return;
+              shown(expiresIn);
+              if (pendingSignInCode == code) return;
+              pendingSignInCode = code;
+              notifyListeners();
+            },
+            onConfirm: confirm,
+          );
+      }
       if (!_authWorkCurrent(revision)) return;
       finish(ProductOutcome.ok);
       signedInHere = true;
@@ -8853,11 +9173,22 @@ class AppNotifier extends ChangeNotifier {
     } catch (error) {
       if (!signedInHere) _measureSignInEnd(finish, error, revision);
       if (!_authWorkCurrent(revision)) return;
-      status = wasGuest ? AppStatus.authenticated : AppStatus.unauthenticated;
-      _lastError = error.toString();
-      _lastErrorRetryable = true;
-      if (wasGuest && _guestDeskRestorePending && !signedIn) {
-        unawaited(_becomeGuest(revision: revision));
+      // The code ran out before anyone used it (or while the person answered): a new one, on the
+      // same page, until the bound.
+      if (!signedInHere &&
+          error is PhoneSignInException &&
+          error.code == 'EXPIRED' &&
+          _approvalRefreshes < maxApprovalRefreshes) {
+        refreshAfter = true;
+      } else {
+        status = wasGuest ? AppStatus.authenticated : AppStatus.unauthenticated;
+        _lastError = error is PhoneSignInException && error.code == 'EXPIRED'
+            ? _approvalRanOut
+            : error.toString();
+        _lastErrorRetryable = true;
+        if (wasGuest && _guestDeskRestorePending && !signedIn) {
+          unawaited(_becomeGuest(revision: revision));
+        }
       }
     } finally {
       finish(
@@ -8871,21 +9202,78 @@ class AppNotifier extends ChangeNotifier {
         signingIn = false;
       }
     }
+    if (refreshAfter && _authWorkCurrent(revision)) {
+      _approvalRefreshes++;
+      // Synchronously up to its first wait, so no frame shows the ways in between the two codes.
+      unawaited(_loginByApproval(method, refreshing: true));
+      return;
+    }
     if (_authWorkCurrent(revision)) notifyListeners();
   }
+
+  static const _approvalRanOut =
+      'The code ran out. Choose a way to sign in when you are ready.';
+
+  /// The QR or code on screen is about to end: replace it with a new one, unless the person is
+  /// answering whose account approved it — that answer belongs to this code.
+  void _refreshApproval(int revision) {
+    final method = approvalSignIn;
+    if (!_authWorkCurrent(revision) ||
+        !signingIn ||
+        method == null ||
+        pendingConfirmEmail != null ||
+        approvalAnswered) {
+      return;
+    }
+    _refreshedAuthRevision = revision;
+    if (_approvalRefreshes >= maxApprovalRefreshes) {
+      // Out of new codes: back to the ways in, saying why, with no dead code left on screen.
+      final next = _invalidateAuthWork();
+      signingIn = false;
+      _clearPhoneSignIn();
+      status = isGuest ? AppStatus.authenticated : AppStatus.unauthenticated;
+      _lastError = _approvalRanOut;
+      _lastErrorRetryable = true;
+      cliLogin.cancel();
+      notifyListeners();
+      if (isGuest && _guestDeskRestorePending) {
+        unawaited(_becomeGuest(revision: next));
+      }
+      return;
+    }
+    _approvalRefreshes++;
+    cliLogin.cancel();
+    unawaited(_loginByApproval(method, refreshing: true));
+  }
+
+  /// The person said yes to the account that approved: the QR or code has done its work, and no new
+  /// one replaces it while the session is claimed.
+  bool approvalAnswered = false;
 
   /// The person's answer to "Sign in as [pendingConfirmEmail]?".
   void confirmPhoneSignIn(bool yes) {
     final answer = _phoneConfirm;
     _phoneConfirm = null;
     pendingConfirmEmail = null;
+    if (yes && answer != null && !answer.isCompleted) {
+      approvalAnswered = true;
+      approvalRefreshAt = null;
+      _approvalRefresh?.cancel();
+      _approvalRefresh = null;
+    }
     if (answer != null && !answer.isCompleted) answer.complete(yes);
     notifyListeners();
   }
 
   void _clearPhoneSignIn() {
     pendingQrLink = null;
+    pendingSignInCode = null;
     pendingConfirmEmail = null;
+    approvalSignIn = null;
+    approvalAnswered = false;
+    approvalRefreshAt = null;
+    _approvalRefresh?.cancel();
+    _approvalRefresh = null;
     final answer = _phoneConfirm;
     _phoneConfirm = null;
     if (answer != null && !answer.isCompleted) answer.complete(false);
@@ -8993,6 +9381,7 @@ class AppNotifier extends ChangeNotifier {
     final previousMachineId = localMachineState?.machine.machineId;
     cliLogin.cancel();
     signingIn = false;
+    _clearPhoneSignIn();
     signingOut = true;
     signOutError = null;
     _lastError = null;
@@ -9009,6 +9398,10 @@ class AppNotifier extends ChangeNotifier {
     final becomesGuest = viewer == null && localManualFixture == null;
     if (!becomesGuest) status = AppStatus.unauthenticated;
     currentUser = null;
+    _provenMachineId = null;
+    _keptProfileId = null;
+    _profileConfirmed = false;
+    unawaited(_profileCache.clear());
     notifyListeners();
     // Clear saved credentials alongside connection cleanup. A new login must
     // wait for both, otherwise the old logout can delete its fresh session.
@@ -9468,7 +9861,8 @@ class AppNotifier extends ChangeNotifier {
     // (`SuperTabReading.readsOnConnect`). The web reads the backend itself,
     // so a machine connecting there is no reason to read.
     if (viewer == null) {
-      final served = sharedTabsTarget != null;
+      final served =
+          sharedTabsTarget?.connectionStatus == ConnectionStatus.connected;
       if (served && !_superTabsServed) superTabs.serverAvailable();
       _superTabsServed = served;
     }
@@ -10038,10 +10432,36 @@ class AppNotifier extends ChangeNotifier {
     }
     if (localEndpoint != null) _updateLocalProjectSnapshot(localEndpoint);
     _autoConnectAndLoadMachines();
+    _startBackgroundRereads();
+    notifyListeners();
+    // A grant that has just arrived places what waited for it (R2).
+    _placeSharedPanesSoon();
+  }
+
+  /// The background re-reads a signed-in window keeps: each connected
+  /// machine's agent sync and the machine list's safety net. A guest keeps
+  /// none (an unattended computer on the sign-in page goes idle); the local
+  /// service itself stays supervised. Sign-out cancels them in
+  /// [_clearAccountWorkspace], and sign-in starts them here again.
+  void _startBackgroundRereads() {
+    if (_disposed || isGuest) return;
+    for (final machine in machineStates.values) {
+      if (machine.connectionStatus == ConnectionStatus.connected) {
+        _startAgentSyncTimer(machine.machine.machineId);
+      }
+    }
     // The list is pushed (`machines_changed`); this only catches a missed push.
     _sharingDiscoveryTimer ??= Timer.periodic(machineListSafetyNetInterval, (
-      _,
+      timer,
     ) {
+      // Belt and braces: sign-out cancels it, and a guest never arms it.
+      if (isGuest) {
+        timer.cancel();
+        if (identical(_sharingDiscoveryTimer, timer)) {
+          _sharingDiscoveryTimer = null;
+        }
+        return;
+      }
       // The desk is pushed too, and a missed desk push is caught here as well:
       // one small GET, and an unchanged revision applies nothing.
       if (!_disposed &&
@@ -10060,9 +10480,6 @@ class AppNotifier extends ChangeNotifier {
       }
       unawaited(_rereadMachinesInBackground(pushed: false));
     });
-    notifyListeners();
-    // A grant that has just arrived places what waited for it (R2).
-    _placeSharedPanesSoon();
   }
 
   /// The inventory has answered, and answered for now: loaded, not loading,
@@ -10231,10 +10648,11 @@ class AppNotifier extends ChangeNotifier {
   /// The [attempt]th ask of [remoteOfflineRetryDelays], then the next once it answered, until
   /// [_stopOfflineRetry] takes its timer away.
   void _scheduleRemoteOfflinePoll(String machineId, int attempt) {
-    final delay = remoteOfflineRetryDelays[min(
-      attempt,
-      remoteOfflineRetryDelays.length - 1,
-    )];
+    final delay =
+        remoteOfflineRetryDelays[min(
+          attempt,
+          remoteOfflineRetryDelays.length - 1,
+        )];
     late final Timer timer;
     timer = Timer(delay, () async {
       await _pollOfflineMachine(machineId);
@@ -10414,6 +10832,9 @@ class AppNotifier extends ChangeNotifier {
   }
 
   void _startAgentSyncTimer(String machineId) {
+    // A guest asks nothing on a timer: an unattended computer on the sign-in
+    // page must go idle. Sign-in starts it ([_startBackgroundRereads]).
+    if (isGuest) return;
     if (_agentSyncTimers.containsKey(machineId)) return;
     _agentSyncTimers[machineId] = Timer.periodic(agentSyncInterval, (_) {
       final machine = machineStates[machineId];
@@ -10563,6 +10984,7 @@ class AppNotifier extends ChangeNotifier {
           prev.engineDisplayName != agent.engineDisplayName ||
           prev.engineIconHint != agent.engineIconHint ||
           prev.codexHome != agent.codexHome ||
+          prev.claudeHome != agent.claudeHome ||
           prev.modelName != agent.modelName ||
           prev.modelEffort != agent.modelEffort ||
           prev.gridModel != agent.gridModel ||
@@ -11772,7 +12194,7 @@ class AppNotifier extends ChangeNotifier {
     if (!_authWorkCurrent(revision) || status == AppStatus.unauthenticated) {
       return;
     }
-    if (signedIn && currentUser == null) unawaited(_loadProfile());
+    if (signedIn && !_profileConfirmed) unawaited(_loadProfile());
     // A boot that found the daemon still connecting finishes THROUGH here (see
     // `_loadProfile`), so the local id is followed and the desk joined here as
     // well — once, after the list, as the boot does.
@@ -14697,6 +15119,10 @@ class AppNotifier extends ChangeNotifier {
         },
         timeout: const Duration(seconds: 10),
       );
+    } on WsRequestFailure catch (failure) {
+      // The machine answered. NOT_FOUND says a folder is not there, which a
+      // machine that could not be reached does not know.
+      return {'error': failure.code};
     } catch (error) {
       return {'error': 'UNREACHABLE'};
     }
@@ -14899,13 +15325,298 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  Future<Map<String, dynamic>> listClaudeProfiles(
+    String machineId, {
+    Set<String> observedPaths = const {},
+  }) async {
+    try {
+      return await _conn(machineId).request(
+        'claude_profiles_list',
+        payload: {'observedPaths': observedPaths.toList()},
+        timeout: const Duration(seconds: 10),
+      );
+    } catch (error) {
+      return {'error': 'UNREACHABLE'};
+    }
+  }
+
+  final _addingClaude = <String>{};
+
+  /// This computer's accounts its owner can offer to the Swarm or take back. Throws when it cannot
+  /// tell, so the screen says so and never reads a failure as "no accounts".
+  Future<List<SwarmAccount>> swarmAccounts(String machineId) async {
+    if (stateOf(machineId)?.isLocalMachine != true) {
+      throw StateError('not this computer');
+    }
+    final agents = stateOf(machineId)?.agents ?? const <Agent>[];
+    return [
+      for (final engine in const ['claude', 'codex'])
+        ...await () async {
+          final reply = engine == 'claude'
+              ? await listClaudeProfiles(
+                  machineId,
+                  observedPaths: {for (final a in agents) ?a.claudeHome},
+                )
+              : await listCodexProfiles(
+                  machineId,
+                  observedPaths: {for (final a in agents) ?a.codexHome},
+                );
+          final rows = reply['profiles'];
+          if (rows is! List) throw StateError('no list');
+          return [
+            for (final row in rows)
+              if (row is Map &&
+                  row['path'] is String &&
+                  row['offered'] is bool &&
+                  row['default'] != true)
+                SwarmAccount(
+                  engine: engine,
+                  path: row['path'] as String,
+                  label: row['label'] as String? ?? row['path'] as String,
+                  offered: row['offered'] as bool,
+                ),
+          ];
+        }(),
+    ];
+  }
+
+  /// Offers an account of this computer to the Swarm, or takes it back. Null when done, or what to
+  /// tell the owner.
+  Future<String?> setAccountOffered(
+    String machineId,
+    String engine,
+    String path,
+    bool offered,
+  ) async {
+    if (stateOf(machineId)?.isLocalMachine != true) {
+      return 'Accounts can be offered on their own computer only.';
+    }
+    String? code;
+    try {
+      final reply = await _conn(machineId).request(
+        'swarm_account_offer',
+        payload: {'engine': engine, 'path': path, 'offered': offered},
+        timeout: const Duration(seconds: 10),
+      );
+      code = reply['error'] as String?;
+    } on WsRequestFailure catch (failure) {
+      code = failure.code;
+    } catch (_) {
+      code = 'UNREACHABLE';
+    }
+    return switch (code) {
+      null => null,
+      'NOT_FOUND' => 'That account’s folder is gone.',
+      'UNSUPPORTED' ||
+      'UNKNOWN_TYPE' => 'Update Harness on this computer to offer accounts.',
+      'TOO_MANY' => 'Too many accounts are offered. Withdraw one first.',
+      _ => 'Couldn’t reach this computer. Try again.',
+    };
+  }
+
+  /// What `usage_read` last said per account, kept so opening the picker again does not call the vendors again.
+  final _usageCache = <(String, String, String), ({DateTime at, int? left})>{};
+  static const _usageFresh = Duration(minutes: 5);
+  static const _usageReadsPerEngine = 8;
+
+  /// Where Codex keeps the default account, which the picker names `'default'`.
+  static String _codexDefaultHome() =>
+      Platform.environment['CODEX_HOME'] ?? '${homeDir()}/.codex';
+
+  /// The accounts [engine] runs under on [machineId], each with the share of its limit left when
+  /// the machine can read it. Empty for any other engine or when the machine does not answer.
+  Future<List<AgentProfile>> agentProfiles(
+    String machineId,
+    String engine,
+  ) async {
+    if (engine != 'claude' && engine != 'codex') return const [];
+    // Profile requests are not sealed for the relay, so only this computer's own daemon is asked.
+    if (stateOf(machineId)?.isLocalMachine != true) return const [];
+    final observed = {
+      for (final a in stateOf(machineId)?.agents ?? const <Agent>[])
+        ?(engine == 'claude' ? a.claudeHome : a.codexHome),
+    };
+    final Map<String, dynamic> reply;
+    try {
+      reply = engine == 'claude'
+          ? await listClaudeProfiles(machineId, observedPaths: observed)
+          : await listCodexProfiles(machineId, observedPaths: observed);
+    } catch (_) {
+      return const [];
+    }
+    final rows = reply['profiles'];
+    if (rows is! List) return const [];
+    final defaultId = swarmProfileId(machineId, engine, 'default');
+    final profiles = [
+      for (final row in rows)
+        if (row is Map && row['path'] is String)
+          () {
+            final path = row['path'] as String;
+            final rowId = row['id'] as String?;
+            // An old Claude CLI names its default account with the literal 'default'.
+            final legacy = engine == 'claude' && rowId == 'default';
+            // The CLI marks the default row; an old Codex CLI sends no flag, so its env folder is it.
+            final isDefault =
+                row['default'] == true ||
+                legacy ||
+                rowId == defaultId ||
+                (engine == 'codex' &&
+                    row['default'] == null &&
+                    path == _codexDefaultHome());
+            return (
+              path: path,
+              offered: row['offered'] != false,
+              canOffer: row['offered'] is bool && !isDefault,
+              label: row['label'] as String? ?? path,
+              id: isDefault
+                  ? defaultId
+                  : (rowId ?? swarmProfileId(machineId, engine, path)),
+              isDefault: isDefault,
+              legacy: legacy,
+            );
+          }(),
+    ];
+    // One account has no choice to show, so its usage is not worth a vendor call.
+    var budget = profiles.length > 1 ? _usageReadsPerEngine : 0;
+    return Future.wait([
+      for (final p in profiles)
+        () async {
+          final key = (machineId, engine, p.id);
+          var cached = _usageCache[key];
+          if ((cached == null ||
+                  clock.now().difference(cached.at) >= _usageFresh) &&
+              budget > 0) {
+            budget--;
+            int? left;
+            try {
+              // An old CLI does not know profile reads: its plain read answers both
+              // engines' default accounts, so take the one for this engine.
+              final usage = parseUsageReadResult(
+                await _conn(machineId).request(
+                  'usage_read',
+                  payload: p.legacy
+                      ? const {}
+                      : {
+                          'profile': {'engine': engine, 'id': p.id},
+                        },
+                  timeout: const Duration(seconds: 10),
+                ),
+              );
+              final tightest =
+                  (p.legacy
+                          ? usage
+                                .where((u) => u.provider.name == engine)
+                                .firstOrNull
+                          : usage.firstOrNull)
+                      ?.tightest;
+              if (tightest != null) {
+                left = (100 - tightest.usedPercent).round().clamp(0, 100);
+              }
+            } catch (_) {}
+            cached = _usageCache[key] = (at: clock.now(), left: left);
+          }
+          return AgentProfile(
+            id: p.id,
+            key: p.isDefault ? 'default' : p.path,
+            label: p.label,
+            path: p.path,
+            percentLeft: cached?.left,
+            offered: p.offered,
+            canOffer: p.canOffer,
+          );
+        }(),
+    ]);
+  }
+
+  /// Opens a Claude that is signed out in a new account folder beside the others on [machineId]:
+  /// the picker lists it once the person has run /login there. A pane cannot be given an
+  /// environment, so Claude is started with `claudeHome` instead of `CLAUDE_CONFIG_DIR`.
+  Future<String?> addClaudeAccount(String machineId, String agentId) async {
+    if (stateOf(machineId)?.isLocalMachine != true) {
+      return 'A Claude account can be added on this computer only.';
+    }
+    final source = stateOf(machineId)?.agents
+        .where((a) => a.id == agentId)
+        .firstOrNull;
+    final folder =
+        source?.project?.cwd ??
+        (source == null ? null : stateOf(machineId)?.projectOf(source)?.cwd);
+    if (folder == null) {
+      return 'This harness has no project folder to open Claude in.';
+    }
+    // One add at a time per machine: a second click would pick the same folder.
+    if (!_addingClaude.add(machineId)) {
+      return 'A Claude account is already being added.';
+    }
+    try {
+      final listed = await listClaudeProfiles(machineId);
+      final rows =
+          (listed['profiles'] as List?)?.whereType<Map>().toList() ?? [];
+      final home = rows.isEmpty ? null : rows.first['path'] as String?;
+      if (home == null) return 'Could not reach this machine.';
+      // A folder is free when the machine does not list it and no agent here runs in it.
+      final taken = {
+        for (final r in rows) r['path'],
+        for (final a in stateOf(machineId)?.agents ?? const <Agent>[])
+          a.claudeHome,
+      };
+      var n = 1;
+      while (taken.contains('$home/.harness/claude-profiles/$n')) {
+        n++;
+      }
+      final path = '$home/.harness/claude-profiles/$n';
+      // The folder only exists once Claude has signed in there; the machine finds it by itself then.
+      final error = await createAgent(
+        machineId,
+        engine: 'claude',
+        folder: folder,
+        claudeHome: path,
+      );
+      if (error == null) {
+        agentChangeNotice?.call('Run /login, then pick it again');
+      }
+      return error;
+    } finally {
+      _addingClaude.remove(machineId);
+    }
+  }
+
   /// Starts an agent, or recovers this form's earlier request after a lost reply.
   /// Returns null on success, or an inline message; [attempt] tells the form
   /// whether to offer Check status instead of inviting another creation.
   Future<String> prepareLocalProjectFolder(
     ProjectFolderRequest request, {
     String label = 'harness',
-  }) => request.prepareLocal(label: label);
+  }) async {
+    String? via;
+    final folder = await request.prepareLocal(
+      label: label,
+      onClonedVia: (alias) => via = alias,
+    );
+    if (via case final alias?) rememberClonedVia(folder, alias);
+    return folder;
+  }
+
+  @visibleForTesting
+  void rememberClonedVia(String folder, String alias) =>
+      _clonedViaFolders[folder] = alias;
+
+  /// A folder this computer's own clone reached through an SSH alias, until
+  /// its creation takes it. Kept by folder, it outlived a creation that failed,
+  /// and a later start in that folder announced a clone it never made.
+  final _clonedViaFolders = <String, String>{};
+
+  /// The alias a machine's own clone went through (cli launches.ts
+  /// `clonedVia`), when it names a safe one.
+  static String? _clonedViaOf(Map<String, dynamic> result) {
+    final via = result['clonedVia'];
+    final alias = via is Map ? via['alias'] : null;
+    return alias is String && isSafeSshAlias(alias) ? alias : null;
+  }
+
+  void _announceClonedVia(String? alias) {
+    if (alias != null) agentChangeNotice?.call('Cloned via $alias');
+  }
 
   Future<String?> createAgent(
     String machineId, {
@@ -14919,6 +15630,7 @@ class AppNotifier extends ChangeNotifier {
     bool bypassPermission = true,
     String? permissionMode,
     String? codexHome,
+    String? claudeHome,
     String? dsh,
     String? swarmRole,
     String? swarmSkillMode,
@@ -14943,6 +15655,7 @@ class AppNotifier extends ChangeNotifier {
       // dialog derives from the same choice.
       'permissionMode': ?permissionMode,
       'codexHome': ?codexHome,
+      'claudeHome': ?claudeHome,
       // The harness this agent is created from. `engine` above is its BASE —
       // the machine refuses the pair when they disagree (`INVALID_DSH`).
       'dsh': ?dsh,
@@ -15250,8 +15963,8 @@ class AppNotifier extends ChangeNotifier {
     // person (an engine Windows cannot start as asked).
     'ENGINE_LAUNCH_REFUSED' =>
       detail != null && detail.isNotEmpty
-      ? detail
-      : 'This engine cannot start on $machine. Nothing was started.',
+          ? detail
+          : 'This engine cannot start on $machine. Nothing was started.',
     'CODEX_CLI_TOO_OLD' =>
       detail ??
           'The installed Codex CLI on $machine is too old for Auto approvals. '
@@ -15369,13 +16082,21 @@ class AppNotifier extends ChangeNotifier {
     final made = creation._worktreeMadeHere;
     if (made == null) return;
     creation._worktreeMadeHere = null;
-    if (creation._preparedFolder == made.folder) creation._preparedFolder = null;
+    if (creation._preparedFolder == made.folder)
+      creation._preparedFolder = null;
     try {
-      if (!await discardLocalWorktree(made.folder, keepBranch: made.keepBranch)) {
+      if (!await discardLocalWorktree(
+        made.folder,
+        keepBranch: made.keepBranch,
+      )) {
         appLog.info('worktree', 'kept after cancel: ${made.folder}');
       }
     } catch (error) {
-      appLog.warn('worktree', 'not removed after cancel: ${made.folder}', error: error);
+      appLog.warn(
+        'worktree',
+        'not removed after cancel: ${made.folder}',
+        error: error,
+      );
     }
   }
 
@@ -15404,6 +16125,9 @@ class AppNotifier extends ChangeNotifier {
           ? null
           : _creationPlacementError(targetId, split, placement: placement);
       if (placementError != null) return placementError;
+      if (choices['claudeHome'] != null && choices['engine'] != 'claude') {
+        return 'Choose a Claude account only for Claude';
+      }
       if (choices['codexHome'] != null) {
         if (choices['engine'] != 'codex') {
           return 'Choose a Codex profile only for Codex';
@@ -15473,6 +16197,11 @@ class AppNotifier extends ChangeNotifier {
                     engineIdentity(dshId).label)
               : engineIdentity(choices['engine'] as String?).label,
         );
+        if (preparedBefore == null) {
+          creation._clonedVia = _clonedViaFolders.remove(
+            creation._preparedFolder,
+          );
+        }
         if (preparedBefore == null && project.createsWorktree) {
           creation._worktreeMadeHere = (
             folder: creation._preparedFolder!,
@@ -15742,6 +16471,16 @@ class AppNotifier extends ChangeNotifier {
           creation._existingFolder = folder;
           return creation._complete(_projectExistsMessage(folder, machineName));
         }
+        // Every way that machine has to GitHub was refused (cli launches.ts
+        // `access`): one short line, in the app's words, names the repository.
+        final denied = failure['access'] == 'denied'
+            ? GitHubRepository.parse('${choices['repositoryUrl'] ?? ''}')
+            : null;
+        if (denied != null) {
+          return creation._complete(
+            'No access to ${denied.slug} on $machineName.',
+          );
+        }
         return creation._complete(
           _creationFailureMessage(
             failure['code'] as String,
@@ -15768,6 +16507,8 @@ class AppNotifier extends ChangeNotifier {
     creation._complete(null);
     if (_disposed || machineStates[machineId] != machine) return null;
     creation._agentId = agent.id;
+    _announceClonedVia(creation._clonedVia ?? _clonedViaOf(result));
+    creation._clonedVia = null;
     if (choices['prompt'] case final String prompt
         when prompt.trim().isNotEmpty) {
       _firstMessages[(machineId, agent.id)] = prompt;
@@ -16583,7 +17324,10 @@ class AppNotifier extends ChangeNotifier {
     final resuming = attempt.agent?.isStopped == true;
     if (resuming && machine.connectionStatus != ConnectionStatus.connected) {
       final connected = await connectTrusted(machineId);
-      if (!_restartCurrent(attempt, beforeSend: !attempt.awaitingConfirmation)) {
+      if (!_restartCurrent(
+        attempt,
+        beforeSend: !attempt.awaitingConfirmation,
+      )) {
         return const RestartAgentResult(
           error: 'The harness changed while connecting. Select it again.',
           retryable: false,
@@ -16634,8 +17378,11 @@ class AppNotifier extends ChangeNotifier {
         }
       }
       _measurementResumes.remove(measurementKey)?.call(ProductOutcome.failed);
-      return RestartAgentResult(error: _restartFailure(code, detail, resuming: resuming));
+      return RestartAgentResult(
+        error: _restartFailure(code, detail, resuming: resuming),
+      );
     }
+
     final unknown = RestartAgentResult(
       error: resuming
           ? 'Still waiting for the Open response. Select the harness again to check status.'
@@ -16794,15 +17541,16 @@ class AppNotifier extends ChangeNotifier {
   }) => code == 'PTY_HOST_UNAVAILABLE'
       // Its detail is written for the log.
       ? 'Harness could not open a terminal on this machine. Run harness start on it, then try again.'
-      : detail is String && detail.isNotEmpty &&
-          !const {
-            'IDENTITY_UNAVAILABLE',
-            'CWD_NOT_FOUND',
-            'SESSION_FOLDER_GONE',
-            'GRID_CREDENTIAL_REQUIRED',
-            'ENGINE_NOT_INSTALLED',
-            'ENGINE_UNAVAILABLE',
-          }.contains(code)
+      : detail is String &&
+            detail.isNotEmpty &&
+            !const {
+              'IDENTITY_UNAVAILABLE',
+              'CWD_NOT_FOUND',
+              'SESSION_FOLDER_GONE',
+              'GRID_CREDENTIAL_REQUIRED',
+              'ENGINE_NOT_INSTALLED',
+              'ENGINE_UNAVAILABLE',
+            }.contains(code)
       ? detail
       : switch (code) {
           'ENGINE_LAUNCH_REFUSED' =>
@@ -16817,12 +17565,9 @@ class AppNotifier extends ChangeNotifier {
           'RESUME_UNAVAILABLE' => 'The saved conversation is unavailable. The harness can still be started fresh.',
           'RESUME_SESSION_MISMATCH' => 'The harness came back on a different conversation. The saved one is still kept.',
           'RESUME_FAILED' => 'The harness did not come back. Its output and conversation are kept.',
-          'IDENTITY_UNAVAILABLE' =>
-            'The saved conversation could not be verified. Check that its agent account and project are still available, then retry. You can also start a new harness; the saved one is kept.',
-          'CWD_NOT_FOUND' || 'SESSION_FOLDER_GONE' =>
-            'The project folder is unavailable. Restore it, then retry, or start a new harness in another folder.',
-          'GRID_CREDENTIAL_REQUIRED' =>
-            'Reconnect the model provider in Models, then retry. Your saved conversation is kept.',
+          'IDENTITY_UNAVAILABLE' => 'The saved conversation could not be verified. Check that its agent account and project are still available, then retry. You can also start a new harness; the saved one is kept.',
+          'CWD_NOT_FOUND' || 'SESSION_FOLDER_GONE' => 'The project folder is unavailable. Restore it, then retry, or start a new harness in another folder.',
+          'GRID_CREDENTIAL_REQUIRED' => 'Reconnect the model provider in Models, then retry. Your saved conversation is kept.',
           'ENGINE_NOT_INSTALLED' || 'ENGINE_UNAVAILABLE' =>
             'Install this agent on the computer, then retry.',
           _ =>
@@ -16978,6 +17723,24 @@ class AppNotifier extends ChangeNotifier {
   /// top, which shows it as a snack bar; null when no screen is listening.
   void Function(String message)? agentChangeNotice;
 
+  /// Whether [agentId] is a Swarm Buddy, as any open Swarm's roster says. Its machine refuses to
+  /// stop it, so Change agent cannot switch it.
+  @visibleForTesting
+  final buddyAgentsForTest = <(String, String)>{};
+
+  bool isSwarmBuddy(String machineId, String agentId) =>
+      buddyAgentsForTest.contains((machineId, agentId)) ||
+      superTabs.loadedControllers.any(
+        (c) =>
+            c.snapshot?.agents.any(
+              (a) =>
+                  a.isBuddy &&
+                  a.machineId == machineId &&
+                  a.harnessId == agentId,
+            ) ==
+            true,
+      );
+
   List<String> agentSwitchEngines(String machineId, Agent source) {
     if (source.dsh == 'autonomous/pair') {
       return const ['opencode', 'codex', 'claude'];
@@ -16999,14 +17762,25 @@ class AppNotifier extends ChangeNotifier {
 
   /// One switch intent owns its creation receipt. Save the old conversation,
   /// then move all views as soon as the replacement terminal can be attached.
-  Future<String?> changeAgent(String machineId, String agentId, String engine) {
+  Future<String?> changeAgent(
+    String machineId,
+    String agentId,
+    String engine, {
+    String? profile,
+  }) {
     final source = stateOf(machineId)?.agents
         .where((a) => a.id == agentId)
         .firstOrNull;
     if (source == null) {
       return Future.value('This harness is no longer available.');
     }
-    if (source.engine == engine) return Future.value();
+    final currentProfile = source.engine == 'claude'
+        ? source.claudeHome
+        : source.codexHome;
+    if (source.engine == engine &&
+        (profile == null || sameAgentProfile(profile, currentProfile))) {
+      return Future.value();
+    }
     if (stateOf(machineId)?.machine.isShared != false) {
       return Future.value('Shared harnesses are view-only.');
     }
@@ -17020,6 +17794,9 @@ class AppNotifier extends ChangeNotifier {
         'This agent is not supported by the installed harness.',
       );
     }
+    if (isSwarmBuddy(machineId, agentId)) {
+      return Future.value(buddyKeepsItsEngine);
+    }
     final key = (machineId, agentId);
     if (source.dsh == 'autonomous/pair' &&
         _agentChanges[key] == null &&
@@ -17031,25 +17808,35 @@ class AppNotifier extends ChangeNotifier {
     }
     var operation = _agentChanges[key];
     if (operation?.pending case final pending?) {
-      return operation!.engine == engine
+      return operation!.engine == engine &&
+              sameAgentProfile(operation.profile, profile)
           ? pending
           : Future.value('The agent is already switching.');
     }
     if (operation != null &&
         ((!operation.preservingViews &&
-                (!operation.handoffHeld || operation.engine != engine)) ||
+                (!operation.handoffHeld ||
+                    operation.engine != engine ||
+                    !sameAgentProfile(operation.profile, profile))) ||
             operation.launchFailed ||
             (operation.creation._finished &&
                 operation.creation.agentId == null))) {
       _agentChanges.remove(key);
       operation = null;
     }
-    if (operation != null && operation.engine != engine) {
+    if (operation != null &&
+        (operation.engine != engine ||
+            !sameAgentProfile(operation.profile, profile))) {
       return Future.value(
         'Check the pending switch to ${operation.engine} before choosing another agent.',
       );
     }
-    final change = operation ??= _AgentChange(source, engine, _authRevision);
+    final change = operation ??= _AgentChange(
+      source,
+      engine,
+      _authRevision,
+      profile,
+    );
     _agentChanges[key] = change;
     return change.pending = _changeAgent(
       machineId,
@@ -17066,11 +17853,8 @@ class AppNotifier extends ChangeNotifier {
     required Duration timeout,
   }) async {
     try {
-      return await _conn(machineId).request(
-        type,
-        payload: payload,
-        timeout: timeout,
-      );
+      return await _conn(machineId)
+          .request(type, payload: payload, timeout: timeout);
     } on WsRequestFailure catch (failure) {
       return {...failure.payload, 'error': failure.code};
     }
@@ -17110,6 +17894,7 @@ class AppNotifier extends ChangeNotifier {
         sourceLabel: engineIdentity(source.engine).label,
       );
       if (accepted.accepted) {
+        change.handoffPrepared = true;
         change.handoff = accepted.prompt;
         change.handoffEmpty = accepted.prompt == null;
         change.handoffFailed = false;
@@ -17207,7 +17992,13 @@ class AppNotifier extends ChangeNotifier {
         (latest.project?.cwd ?? machine.projectOf(latest)?.cwd) != folder) {
       return 'The conversation changed. Reopen Change agent.';
     }
-    final close = prepareSessionClose(machineId, latest);
+    // Named only after its handoff was prepared under this id: a Swarm
+    // Product Manager's machine checks the two belong to one switch.
+    final close = prepareSessionClose(
+      machineId,
+      latest,
+      changeId: change.handoffPrepared ? change.creation._id : null,
+    );
     change.preservingViews = true;
     if (!latest.isStopped) {
       final saved = await close('now');
@@ -17251,6 +18042,12 @@ class AppNotifier extends ChangeNotifier {
         engine: change.engine,
         folder: folder,
         dsh: source.dsh,
+        codexHome: change.engine == 'codex' && change.profile != 'default'
+            ? change.profile
+            : null,
+        claudeHome: change.engine == 'claude' && change.profile != 'default'
+            ? change.profile
+            : null,
         name: source.displayName,
         permissionMode: mode,
         bypassPermission: mode == 'auto' || mode == 'full',
@@ -18600,6 +19397,52 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// Keep a group member visible while its terminal is unavailable.
+  /// Takes pane [paneId] out of Swarm tab [swarmId] only: one of the person's
+  /// own panes a Personal project showed behind its [term]
+  /// (super_tabs/personal_projects.dart). The tab it lives in keeps it and its
+  /// session, and nothing is remembered as closed.
+  Future<void> releaseSuperTabView(String swarmId, int paneId) async {
+    final tab = swarms
+        .where((s) => s.id == swarmId && s.isSuperTab)
+        .firstOrNull;
+    final pane = tab?.panes.where((p) => p.id == paneId).firstOrNull;
+    if (tab == null || pane == null || _disposed) return;
+    final wasFocused = identical(activeSwarm, tab) && focusedPaneId == paneId;
+    tab.remove(pane);
+    _settlePins(tab);
+    _persistLayout();
+    selectedMachineId = focusedPane?.machineId;
+    if (wasFocused) _announceAppFocus();
+    notifyListeners();
+    if (!allPanes.contains(pane)) await _detachSession(pane, sendClose: true);
+  }
+
+  /// Swarm tab [swarmId] lays out its panes as [source] does: a Personal
+  /// project's panes that are exactly one tab's keep that tab's split sizes.
+  void copySuperTabLayout(String swarmId, Swarm source) {
+    final tab = swarms
+        .where((s) => s.id == swarmId && s.isSuperTab)
+        .firstOrNull;
+    if (tab == null || _disposed || tab.panes.length != source.panes.length) {
+      return;
+    }
+    final count = '${tab.panes.length}:';
+    tab.presets.remove(tab.panes.length);
+    if (source.presets[source.panes.length] case final preset?) {
+      tab.presets[tab.panes.length] = preset;
+    }
+    tab.paneSizes.removeWhere((key, _) => key.startsWith(count));
+    for (final MapEntry(:key, :value) in source.paneSizes.entries) {
+      if (key.startsWith(count)) tab.paneSizes[key] = value;
+    }
+    final arranged = source.arrangedKey?.startsWith(count) == true;
+    tab.arranged = arranged ? source.arranged : null;
+    tab.arrangedKey = arranged ? source.arrangedKey : null;
+    tab.gridColumns = source.gridColumns;
+    _persistLayout();
+    notifyListeners();
+  }
+
   void reserveSuperTabPane(String swarmId, String machineId, String harnessId) {
     final tab = swarms
         .where((s) => s.id == swarmId && s.superTabId != null)
@@ -19678,8 +20521,7 @@ class AppNotifier extends ChangeNotifier {
       }
     }
     bool closesWithPane(TerminalPane candidate) =>
-        candidate == pane ||
-        candidate.viewsAgent(pane.machineId, pane.agentId);
+        candidate == pane || candidate.viewsAgent(pane.machineId, pane.agentId);
     if (tab.kind == 'harness' &&
         tab.panes.every(closesWithPane) &&
         !_activeAgentCreations.any((attempt) => attempt._targetId == tab.id)) {
@@ -22230,6 +23072,7 @@ class AppNotifier extends ChangeNotifier {
   @override
   void dispose() {
     _teamOfferRetry?.cancel();
+    _approvalRefresh?.cancel();
     if (identical(CrashLog.healthError, _measurementError)) {
       CrashLog.healthError = null;
     }
@@ -22339,3 +23182,8 @@ String machineSelectErrorText(String code, String machine) => switch (code) {
     'The subscription for $machine has ended. Renew it to use it again.',
   _ => 'Could not connect to $machine. Try again in a moment.',
 };
+
+/// The startup stopwatch as its log line: each step, in the order it finished.
+String startupLogLine(Map<String, int> timings) => timings.entries
+    .map((step) => '${step.key} after ${step.value} ms')
+    .join(', ');

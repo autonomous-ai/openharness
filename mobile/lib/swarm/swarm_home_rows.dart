@@ -3,9 +3,12 @@ import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/fzf.dart' show fzfAge;
+import 'package:harness_mobile/phone/tty.dart';
+import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
+import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
@@ -16,10 +19,10 @@ import 'swarm_style.dart';
 import 'swarm_unread.dart';
 import 'team_glance.dart';
 
-/// The rows of Swarm Home: a project with its team in coloured dots and
-/// when it last moved, as Tony's prototype B1 drew them (2026-10-29), its
-/// tile now a dot and its name a channel's, as C1 draws them (2026-10-30);
-/// the projects quiet for a day folded in one row.
+/// The rows of Swarm Home: a project with how many people read it, how many
+/// agents are running and when it last moved, its tile a dot and its name a
+/// channel's, as C1 draws them (2026-10-30); the projects quiet for a day
+/// folded in one row.
 
 /// A team in a line of coloured dots, as B1 draws it: "● 4 working ● 1
 /// waiting", each dot in its state's colour ([swarmStateColor]), who is down
@@ -74,6 +77,21 @@ class SwarmTeamDots extends StatelessWidget {
   }
 }
 
+/// A project's line on Home: "5 humans • 8 agents running", leaving out what
+/// is none, then its Swarm, the first to go when the row is short, where Home
+/// shows several. Empty with nothing to say.
+String swarmProjectLine({
+  required int humans,
+  required SwarmTeamGlance glance,
+  String? swarmName,
+}) => [
+  if (humans > 0) swarmHumans(humans),
+  ?glance.running,
+  ?swarmName,
+].join(_lineGap);
+
+const _lineGap = ' • ';
+
 /// What a need asks, as its Home row's title: a decision's question, a tag's
 /// words, the question work waits on (or the work itself).
 String swarmNeedAsk(SwarmNeed need) => switch (need) {
@@ -83,30 +101,82 @@ String swarmNeedAsk(SwarmNeed need) => switch (need) {
   SwarmWorkNeed(:final work) => work.question ?? work.conversation.label,
 };
 
+/// An invitation to a Swarm on Home (Tony's mobile list, task 24), one line: the
+/// Swarm's name, Not now and Join. The account's, so it shows whichever Swarm
+/// or filter Home is on.
+class SwarmInvitationRow extends StatelessWidget {
+  const SwarmInvitationRow({
+    super.key,
+    required this.invitation,
+    required this.joining,
+    required this.onJoin,
+    required this.onLater,
+  });
+
+  final SwarmInvitation invitation;
+  final bool joining;
+  final VoidCallback onJoin, onLater;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return SwarmRow(
+      title: invitation.name.trim(),
+      chevron: null,
+      onTap: null,
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TtyTextButton(
+            key: ValueKey('swarm-invitation-later-${invitation.inviteId}'),
+            label: 'Not now',
+            color: tty.dim,
+            onPressed: joining ? null : onLater,
+          ),
+          const SizedBox(width: AppSpace.s),
+          TtyTextButton(
+            key: ValueKey('swarm-invitation-join-${invitation.inviteId}'),
+            label: joining ? 'Joining…' : 'Join',
+            onPressed: joining ? null : onJoin,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// One project on Home, as C1 draws it: a dot in the colour of how its team
 /// is ([swarmProjectColor]), its name as a channel's ("#openharness") — bold
-/// and bright with something new in it, quiet otherwise — and, as B1 draws
-/// them, its team in coloured dots ([SwarmTeamDots]), and at its right how
-/// long ago it last moved, over the tags waiting in it ("@2", filled) or,
-/// unread, a dot. A tap opens it; a long press offers its pin
-/// ([onLongPress]).
+/// and bright with something new in it, quiet otherwise — how many people read
+/// it and how many agents are running ([swarmProjectLine]), and at its right
+/// how long ago it last moved, over the tags waiting in it ("@2", filled) or,
+/// unread, a dot; a skeleton in their place while what waits is on its way
+/// ([tagsLoading]). A tap opens it; a long press offers its pin ([onLongPress]).
 class SwarmHomeProjectRow extends StatelessWidget {
   const SwarmHomeProjectRow({
     super.key,
     required this.project,
     required this.glance,
+    required this.humans,
     required this.now,
     this.swarmName,
+    this.tagsLoading = false,
     required this.onTap,
     this.onLongPress,
   });
 
   final SwarmHomeProject project;
   final SwarmTeamGlance glance;
+
+  /// How many people read it ([swarmProjectPeople]).
+  final int humans;
   final DateTime now;
 
   /// Its Swarm, where Home shows several.
   final String? swarmName;
+
+  /// What waits in its Swarm is not read yet: its tags may still come.
+  final bool tagsLoading;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
 
@@ -119,6 +189,11 @@ class SwarmHomeProjectRow extends StatelessWidget {
       final at? => fzfAge(at.toLocal(), now.toLocal()),
       null => '',
     };
+    final line = swarmProjectLine(
+      humans: humans,
+      glance: glance,
+      swarmName: swarmName,
+    );
     return _Tap(
       onTap: onTap,
       onLongPress: onLongPress,
@@ -166,12 +241,24 @@ class SwarmHomeProjectRow extends StatelessWidget {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 3),
-                    SwarmTeamDots(glance, lead: swarmName),
+                    if (line.isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        line,
+                        key: const ValueKey('swarm-project-line'),
+                        semanticsLabel: line.replaceAll(_lineGap, ', '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppType.caption(
+                          color: AppPalette.textSecondary,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
-              if (age.isNotEmpty || bright) ...[
+              if (age.isNotEmpty || bright || tagsLoading) ...[
                 const SizedBox(width: 12),
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
@@ -188,6 +275,15 @@ class SwarmHomeProjectRow extends StatelessWidget {
                     if (news.tags > 0) ...[
                       const SizedBox(height: 4),
                       SwarmTags(news.tags, filled: true),
+                    ] else if (tagsLoading) ...[
+                      const SizedBox(height: 4),
+                      // As big as the filled tags it stands for.
+                      const Skeleton(
+                        key: ValueKey('swarm-project-tags-loading'),
+                        width: 36,
+                        height: 20,
+                        radius: 10,
+                      ),
                     ] else if (news.bold) ...[
                       const SizedBox(height: 8),
                       ExcludeSemantics(
@@ -267,10 +363,10 @@ class SwarmOtherProjectsRow extends StatelessWidget {
 /// How a project's team is, as its dot on Home: red with someone down,
 /// yellow with someone waiting or a tag waiting on the person, green with
 /// someone working, faint otherwise.
-Color swarmProjectColor(SwarmTeamGlance glance, SwarmRowNews news) =>
+Color swarmProjectColor(SwarmTeamGlance glance, SwarmProjectNews news) =>
     glance.down > 0
     ? swarmStateColor(SwarmAgentState.down)
-    : glance.waiting > 0 || news.tags > 0
+    : glance.waiting > 0 || news.tags > 0 || news.hasWaitingTag
     ? swarmStateColor(SwarmAgentState.waiting)
     : glance.working > 0
     ? swarmStateColor(SwarmAgentState.working)

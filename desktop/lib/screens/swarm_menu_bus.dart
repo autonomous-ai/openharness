@@ -118,6 +118,10 @@ class SwarmMenuState extends ChangeNotifier {
   /// (HarnessKeymap.applyMenuKeys), so a rebinding shows up in both.
   Map<String, String> hints = const {};
 
+  /// The only keys AppKit hands to Flutter, when the keymap names them
+  /// (`input`, before a workspace: Close Tab's); null is every binding's.
+  Set<String>? input;
+
   void apply(String method, Map<Object?, Object?> args) {
     switch (method) {
       case 'update':
@@ -149,6 +153,10 @@ class SwarmMenuState extends ChangeNotifier {
         };
       case 'keymapState':
         hints = _parseHints(args['contexts']);
+        input = switch (args['input']) {
+          final List keys => {...keys.whereType<String>()},
+          _ => null,
+        };
       default:
         return;
     }

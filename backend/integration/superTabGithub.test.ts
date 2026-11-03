@@ -93,10 +93,19 @@ async function fresh(options: { github?: boolean; approveAll?: boolean; signIn?:
 }
 
 type Env = Awaited<ReturnType<typeof fresh>>
-/** The team account switched on for this test, in the Swarms of [owners] or everyone's. */
-function teamAccounts(owners = '') {
+/** [person] joins the owner's Swarm [tab] as a collaborator. */
+async function invited(env: Env, tab: string, person: AuthUser) {
+  const invitation = await env.run(tab, { type: 'invite.create', email: person.email, role: 'collaborator', conversationId: 'lead' } as Command)
+  await env.run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string } as Command, person)
+}
+/** The owner's account without an email for this test, as an account can be: the owner's email is the token's gate. */
+async function ownerWithoutEmail() {
+  await db.user.update({ where: { id: owner.sub }, data: { email: '' } })
+  onTestFinished(async () => { await db.user.update({ where: { id: owner.sub }, data: { email: owner.email } }) })
+}
+/** The team account switched on for this test, in every Swarm. */
+function teamAccounts() {
   vi.stubEnv('SWARM_TEAM_ACCOUNT_REQUIRED', '1')
-  vi.stubEnv('SWARM_TEAM_ACCOUNT_OWNERS', owners)
   onTestFinished(() => { vi.unstubAllEnvs() })
 }
 /** A tab whose project is on [repositoryUrl], with a Builder on the host's machine working on a task. */
@@ -124,7 +133,7 @@ describe('the GitHub token endpoint', () => {
     expect(data).toMatchObject({ token: 'ghs_fixture_1', repository: 'example/app', defaultBranch: 'main', defaultBranchProtected: false,
       defaultBranchProtection: 'none', requestedBy: { name: 'Olive Owner', email: owner.email }, agent: expect.any(String), machine: 'Fixture Mac',
       pullRequestLine: `Requested by Olive Owner (${owner.email}) through Harness.` })
-    expect(data.trailers).toEqual([`Co-authored-by: Olive Owner <${owner.email}>`, `Harness-Agent: ${data.agent}`, 'Harness-Machine: Fixture Mac'])
+    expect(data.trailers).toEqual([`Co-authored-by: Olive Owner <${owner.email}>`, 'Co-authored-by: Harness by Autonomous <noreply@autonomous.ai>', `Harness-Agent: ${data.agent}`, 'Harness-Machine: Fixture Mac'])
     expect(Date.parse(data.expiresAt)).toBeGreaterThan(Date.now() + 50 * 60_000)
     const minted = env.github.calls.find(c => c.path === '/app/installations/91/access_tokens')!
     expect(minted.body).toEqual({ repositories: ['app'],
@@ -138,8 +147,35 @@ describe('the GitHub token endpoint', () => {
     expect(read.json().data.githubApp).toBe(true)
   })
 
+  // Security reviews 1 and 2 of #2492: who asked for a group changes no token. The owner's email is the gate and the commits
+  // name the owner, as on main; only each task's message names its requester (projects.ts requestedByLine).
+  it('gives the token and owner trailers whoever asked, and refuses it when the owner has no email, though the requester has one', async () => {
+    const env = await fresh()
+    const tab = (await env.store.create(owner, randomUUID(), 'Pilot')).id
+    await env.run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: randomUUID(), name: 'Lead',
+      configuration: config, lead: true, project: { cwd: '/work/app', repositoryUrl: 'https://github.com/example/app.git' } } as Command)
+    await invited(env, tab, host)
+    const group = String((await env.run(tab, { type: 'conversation.create', title: 'Add search', brief: 'Add a search field', checks: [],
+      requesterId: host.sub } as Command)).result.conversationId)
+    const worker = String((await env.run(tab, { type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId: randomUUID(),
+      name: 'Builder', configuration: config, lead: false } as Command)).result.agentId)
+    await env.run(tab, { type: 'work.assign', conversationId: group, agentId: worker } as Command)
+    const given = await ask(env, tab, worker, 'owner-mac', owner)
+    expect(given.statusCode, given.body).toBe(200)
+    expect(given.json().data).toMatchObject({ requestedBy: { name: 'Olive Owner', email: owner.email },
+      pullRequestLine: `Requested by Olive Owner (${owner.email}) through Harness.` })
+    expect(given.json().data.trailers[0]).toBe(`Co-authored-by: Olive Owner <${owner.email}>`)
+    expect(given.body).not.toContain(host.email)
+    await ownerWithoutEmail()
+    const refused = await ask(env, tab, worker, 'owner-mac', owner)
+    expect(refused.statusCode, refused.body).toBe(404)
+    // Refused as on main (here before the owner's own check, as this owner's account no longer matches): no token, whoever asked.
+    expect(refused.json().error.code).toBe('NOT_FOUND')
+    expect(env.github.calls.filter(c => c.path.endsWith('/access_tokens'))).toHaveLength(1)
+  })
+
   // A Harness Team account has no git identity of its own (PR #1934, 2026-10-28): its commits are the app's bot account's.
-  it('names the app\'s bot account as who a Harness Team account\'s commits are by', async () => {
+  it('names Harness by Autonomous as who a Harness Team account\'s commits are by, asking GitHub nothing', async () => {
     const env = await fresh()
     const { tab, worker } = await working(env)
     const computerId = createHash('sha256').update('gh-host').digest('hex').slice(0, 32)
@@ -151,15 +187,13 @@ describe('the GitHub token endpoint', () => {
     const response = await env.app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/github-token?asAgentId=${worker}`,
       headers: { authorization: `Bearer ${host.sub}`, 'x-test-team': '1' }, payload: { machineId: 'gh-host' } })
     expect(response.statusCode, response.body).toBe(200)
-    expect(response.json().data.commitAs).toEqual({ name: 'harness-fixture[bot]', email: '4242+harness-fixture[bot]@users.noreply.github.com' })
-    // GitHub not saying who the bot is leaves it out, and the token is still given.
-    const other = await fresh()
-    other.github.control.botId = null
-    const second = await working(other)
-    const again = await other.app.inject({ method: 'POST', url: `/api/super-tabs/${second.tab}/github-token?asAgentId=${second.worker}`,
+    expect(response.json().data.commitAs).toEqual({ name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' })
+    // GitHub is not asked: not saying who the bot is changes nothing.
+    env.github.control.botId = null
+    const again = await env.app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/github-token?asAgentId=${worker}`,
       headers: { authorization: `Bearer ${host.sub}`, 'x-test-team': '1' }, payload: { machineId: 'gh-host' } })
-    expect(again.json().data).toMatchObject({ token: expect.any(String) })
-    expect(again.json().data).not.toHaveProperty('commitAs')
+    expect(again.statusCode, again.body).toBe(200)
+    expect(again.json().data.commitAs).toEqual({ name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' })
   })
 
   it('warns, but still gives the token, when the default branch does not require a pull request; and says when it does', async () => {
@@ -243,7 +277,8 @@ describe('a queued start\'s preparation token', () => {
     projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null }, quotas: [], tools: { git: true },
     runningHarnessIds: [], stoppedHarnessIds: [] }
   /** The owner's project on github.com, with a start queued on [machineId], a machine its owner [contributor] added to the Swarm. */
-  async function queued(env: Env, machineId = 'gh-pool', contributor = host, repositoryUrl: string | null = 'https://github.com/example/app.git') {
+  async function queued(env: Env, machineId = 'gh-pool', contributor = host, repositoryUrl: string | null = 'https://github.com/example/app.git',
+    requester?: AuthUser) {
     const tab = (await env.store.create(owner, randomUUID(), 'Pool')).id
     await env.run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: randomUUID(), name: 'Lead',
       configuration: config, lead: true, project: { cwd: '/work/app', repositoryUrl } } as Command)
@@ -269,7 +304,11 @@ describe('a queued start\'s preparation token', () => {
       const pool = (await poolRows(env.store, team, machineId)).find(p => p.tabId === tab)!
       await env.store.observeMachine(team, tab, machineId, { generation: pool.machine.generation, ...observed, privacy: { mode: 'dedicated' } })
     }
-    const startId = String((await env.run(tab, { type: 'agent.start', request: { conversationId: 'lead', machineId, engine: 'codex', name: 'Builder',
+    // A group of the project, its start's conversation: no agent but the coordinator starts into the project chat (#2207).
+    // [requester] asked for it, where given. The contributor joined above.
+    const conversationId = String((await env.run(tab, { type: 'conversation.create', title: 'Add search', brief: 'Add a search field',
+      checks: [], ...(requester ? { requesterId: requester.sub } : {}) } as Command)).result.conversationId)
+    const startId = String((await env.run(tab, { type: 'agent.start', request: { conversationId, machineId, engine: 'codex', name: 'Builder',
       cwd: '/swarm-root/lead', permissionMode: 'full', worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } as Command)).result.startId)
     return { tab, startId }
   }
@@ -303,13 +342,16 @@ describe('a queued start\'s preparation token', () => {
   })
 
   // Rolled out with the team account (machines.ts teamAccountRequired), so a bug in it cannot stop anyone else's Swarm.
-  it('asks no approval in a Swarm the team account is not tried in, or with the switch off', async () => {
-    teamAccounts('someone@example.com')
+  // Every Swarm alike (2026-11-02): an owner list left in a deployment (SWARM_TEAM_ACCOUNT_OWNERS, read 10-27 to 11-02) no
+  // longer exempts a Swarm from approving its repositories.
+  it('asks approval in any Swarm with the switch on, whatever SWARM_TEAM_ACCOUNT_OWNERS says, and none with it off', async () => {
+    teamAccounts()
+    vi.stubEnv('SWARM_TEAM_ACCOUNT_OWNERS', 'someone@example.com')
     const env = await fresh({ approveAll: false })
     const { tab, startId } = await queued(env)
     const status = await env.app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/projects/lead/github`, headers: { authorization: `Bearer ${owner.sub}` } })
-    expect(status.json().data).toMatchObject({ state: 'covered', repository: 'example/app' })
-    expect((await prepare(env, tab, startId)).json().data).toMatchObject({ github: true, token: 'ghs_fixture_1' })
+    expect(status.json().data).toMatchObject({ state: 'not-approved', repository: 'example/app' })
+    expect((await prepare(env, tab, startId)).statusCode).toBe(403)
     vi.unstubAllEnvs()
     const off = await queued(env)
     expect((await prepare(env, off.tab, off.startId)).json().data).toMatchObject({ github: true })
@@ -355,6 +397,22 @@ describe('a queued start\'s preparation token', () => {
     const installed = await env.app.inject({ method: 'GET', url: `/api/github/callback?installation_id=9&setup_action=install&state=${encodeURIComponent(state)}` })
     expect(installed.body).toContain('Harness is installed')
     expect(env.approved).toHaveLength(1)
+  })
+
+  it('approves nothing for a Swarm deleted since the link was made, and says so as for an expired link', async () => {
+    const signIn = { authorizeUrl: (state: string) => `https://github.test/login/oauth/authorize?state=${state}`,
+      permission: async () => ({ login: 'olive', push: true }) } as unknown as GitHubSignIn
+    teamAccounts()
+    const env = await fresh({ approveAll: false, signIn })
+    const { tab } = await queued(env)
+    const asked = await env.app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/projects/lead/github/approve`,
+      headers: { authorization: `Bearer ${owner.sub}` }, payload: { scope: 'project' } })
+    const state = new URL((asked.json().data as { authorizeUrl: string }).authorizeUrl).searchParams.get('state')!
+    await env.run(tab, { type: 'swarm.delete', name: 'Pool' } as Command)
+    const late = await env.app.inject({ method: 'GET', url: `/api/github/callback?code=c&state=${encodeURIComponent(state)}` })
+    expect(late.statusCode).toBe(400)
+    expect(late.body).toContain('This link has expired')
+    expect(env.approved).toEqual([])
   })
 
   it('says nothing was approved when the person cancels GitHub\'s sign-in', async () => {
@@ -436,6 +494,20 @@ describe('a queued start\'s preparation token', () => {
     const none = await env.app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/projects/lead/github/approve`,
       headers: { authorization: `Bearer ${owner.sub}` }, payload: { scope: 'swarm' } })
     expect(none.json().error).toMatchObject({ code: 'GITHUB_APPROVAL_NOT_CONFIGURED' })
+  })
+
+  // Security reviews 1 and 2 of #2492: a start's preparation names the owner whoever asked, as on main, and an owner without an
+  // email answers it empty, which fails the start on its host (cli/src/superTabs/projectFolder.ts).
+  it('names the owner for a start whoever asked for its group, and nobody when the owner has no email', async () => {
+    const env = await fresh()
+    const { tab, startId } = await queued(env, 'gh-pool', host, undefined, host)
+    const response = await prepare(env, tab, startId)
+    expect(response.statusCode, response.body).toBe(200)
+    expect(response.json().data).toMatchObject({ github: true, repository: 'example/app', requestedBy: { name: 'Olive Owner', email: owner.email } })
+    await ownerWithoutEmail()
+    const empty = await prepare(env, tab, startId)
+    expect(empty.statusCode, empty.body).toBe(200)
+    expect(empty.json().data.requestedBy).toEqual({ name: 'Olive Owner', email: '' })
   })
 
   it('answers no token for the machine owner\'s own project, unless its host asks for one anyway', async () => {
@@ -538,5 +610,77 @@ describe('revoking the token when the task ends', () => {
     expect(env.github.revoked).toEqual([])
     expect(env.log.warn).toHaveBeenCalledWith('[github] token revoke failed', expect.objectContaining({ tabId: tab, repository: 'example/app', why: 'task ended' }))
     expect(JSON.stringify(env.log.warn.mock.calls)).not.toContain(token)
+  })
+})
+
+// Scholes's goals, piece 5: the route holds work that starts heavy CI while the account is at its limit of running jobs.
+describe('the CI load', () => {
+  const load = (env: Env, tab: string, projectId: string, user = owner, asAgentId?: string) => env.app.inject({ method: 'GET',
+    url: `/api/super-tabs/${tab}/projects/${projectId}/ci-load${asAgentId ? `?asAgentId=${asAgentId}` : ''}`, headers: { authorization: `Bearer ${user.sub}` } })
+  /** An agent of the project on the owner's own Mac, which the owner's sign-in speaks for. */
+  const own = async (env: Env, tab: string, group: string) => String((await env.run(tab, { type: 'agent.add', conversationId: group, machineId: 'owner-mac',
+    harnessId: randomUUID(), name: 'Router', configuration: config, lead: false } as Command)).result.agentId)
+  const busy = (env: Env) => env.github.actions.set('example/app', [
+    { id: 11, status: 'in_progress', jobs: [{ status: 'in_progress', labels: ['ubuntu-latest'] }, { status: 'in_progress', labels: ['macos-15'] }] },
+    { id: 12, status: 'queued', jobs: [{ status: 'queued', labels: ['macos-15'] }] }])
+
+  it('gives an agent of the project, and a person, the counts alone, read with a token that only reads runs and is revoked', async () => {
+    const env = await fresh()
+    busy(env)
+    const { tab, group } = await working(env)
+    const agent = await load(env, tab, 'lead', owner, await own(env, tab, group))
+    expect(agent.statusCode).toBe(200)
+    expect(agent.json().data).toEqual({ state: 'read', load: { running: 2, queued: 1, macosRunning: 1, macosQueued: 1 } })
+    // No run's name, branch or the token reaches the answer.
+    for (const text of ['secret-branch', 'run 11', 'ghs_', 'example/app']) expect(agent.body).not.toContain(text)
+    expect(env.github.calls.find(c => c.path.endsWith('/access_tokens'))!.body).toEqual({ repositories: ['app'], permissions: { actions: 'read', metadata: 'read' } })
+    expect(env.github.issued.size).toBe(0)
+    expect((await load(env, tab, 'lead')).json().data).toMatchObject({ state: 'read' })
+  })
+  it('refuses another project, one the reader cannot see, and an unknown one alike, naming none and reading nothing', async () => {
+    const env = await fresh()
+    busy(env)
+    const { tab, group, worker } = await working(env)
+    const router = await own(env, tab, group)
+    const secret = String((await env.run(tab, { type: 'project.create', name: 'Secret Plans', visibility: 'private', brief: '' } as Command)).result.projectId)
+    // The Lead's project's agent may not read the private project, which it cannot see: refused as a project that is not there.
+    const refusals = [await load(env, tab, secret, owner, router), await load(env, tab, 'nope', owner, router)]
+    for (const r of refusals) {
+      expect(r.statusCode).toBe(404)
+      expect(r.body).not.toContain('Secret Plans')
+    }
+    expect(refusals[0]!.json().error).toEqual(refusals[1]!.json().error)
+    // A person outside the Swarm reads nothing of it, answered as any Swarm it cannot reach (security review 1 of #2428); as
+    // the host of an agent of the project, it reads what that agent may.
+    const outsider = await load(env, tab, 'lead', host)
+    expect(outsider.statusCode).toBe(404)
+    expect(outsider.json().error).toEqual({ code: 'NOT_FOUND', message: 'This is not available to you. It may have been removed, or your access changed.' })
+    expect(outsider.body).not.toContain('running')
+    expect((await load(env, tab, secret, host, worker)).statusCode).toBe(404)
+    expect((await load(env, tab, 'lead', host, worker)).json().data).toMatchObject({ state: 'read' })
+  })
+  it('reads the counts once someone who can push approved the repository for the project, in a Swarm without the team account', async () => {
+    const env = await fresh({ approveAll: false })
+    busy(env)
+    const { tab } = await working(env)
+    expect((await load(env, tab, 'lead')).json().data).toEqual({ state: 'not-approved' })
+    // As the app's sign-in records it for someone who can push (github/approvals.ts).
+    env.approved.push({ tabId: tab, projectId: 'lead', repository: 'example/app', scope: 'project', login: 'olive' })
+    expect((await load(env, tab, 'lead')).json().data).toEqual({ state: 'read', load: { running: 2, queued: 1, macosRunning: 1, macosQueued: 1 } })
+  })
+  it('reads nothing for a repository not approved for the project, in a Swarm with the team account or without, and says when the server has no app', async () => {
+    // Security review 1 of #2428: tokens ask approval only where the team account is tried; this read asks it everywhere.
+    for (const team of [true, false]) {
+      if (team) teamAccounts()
+      const env = await fresh({ approveAll: false })
+      busy(env)
+      const { tab } = await working(env)
+      expect((await load(env, tab, 'lead')).json().data).toEqual({ state: 'not-approved' })
+      expect(env.github.calls.some(c => c.path.endsWith('/access_tokens'))).toBe(false)
+      vi.unstubAllEnvs()
+    }
+    const off = await fresh({ github: false })
+    const other = await working(off)
+    expect((await load(off, other.tab, 'lead')).json().data).toEqual({ state: 'unavailable' })
   })
 })

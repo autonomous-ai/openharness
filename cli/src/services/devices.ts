@@ -37,7 +37,6 @@ import { harnessDevicesRequest } from '../lib/harnessDevices.js'
 import { machineKindsOf } from '../lib/e2ee/machineKinds.js'
 import { truncateUtf8 } from '../lib/deviceRecentTrim.js'
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
-import { createJevDecide } from '../lib/jev/jevClient.js'
 import { createTally, createTierDecider, type Tier, type TierDecision, type TierInput } from '../lib/notifyTier.js'
 import { createPartGuard } from './devicesGuard.js'
 import { FLEET_FALLBACKS, startFleet, type Fleet } from './fleet.js'
@@ -59,7 +58,7 @@ export interface DevicesDeps {
   /** `HARNESSD_TEST_FAULTS`: parts to fail, for the end-to-end suite. */
   faults?: ReadonlySet<string>
   log?: (line: string) => void
-  /** How loudly a finished turn tells the devices. Defaults to rules plus Jev (off with `HARNESS_NOTIFY_SMART=0`). */
+  /** How loudly a finished turn tells the devices. Defaults to the fixed rules (lib/notifyTier.ts). */
   decideTier?: (input: TierInput) => Promise<TierDecision>
   /** A monotonic clock in ms (default `performance.now`), for the reply throttle: a wall-clock step must not stall or burst it. */
   now?: () => number
@@ -97,7 +96,6 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const tally = createTally((line) => log(`[cable] ${line}`))
   const tierOf = deps.decideTier ?? createTierDecider({
     tally,
-    jev: process.env.HARNESS_NOTIFY_SMART === '0' ? null : createJevDecide({ backend: (method, path, body) => core.account.backend(method, path, body) }),
     log,
   })
   const part = createPartGuard({ log, faults: deps.faults })
@@ -368,7 +366,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (!start || !cable.wantsStats()) return finish({})
       return turnTokens(event.agentId, start).then(finish)
     }
-    // On screen or a sub-agent's: silent, Jev is not asked. Otherwise the tier decides how loudly the dial tells. The
+    // On screen or a sub-agent's: silent, nobody is asked. Otherwise the tier decides how loudly the dial tells. The
     // tile still updates either way — the recap is what it draws.
     else if (event.kind === 'summary') {
       const { agentId } = event
@@ -382,15 +380,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       ended.delete(agentId)
       const who = cableHost.describe(agentId)
       // Decided once already, by the recaps (services/recaps.ts), for the phone as well: the dial follows it and
-      // nobody is asked again. A card without one (a cloud agent's, a recaps from before) is decided here.
-      if (event.tier) {
+      // nobody is asked again. A card without one (a cloud agent's, a recaps from before) is decided here, and so is
+      // a Team machine's, whatever its card says: it runs Swarm work only (#2540's review: its own tier alerted).
+      if (event.tier && !onTeamMachine(event)) {
         tally(who?.name ?? '', event.tier, 'recaps', 'decided upstream', 0)
         void cable.summary(agentId, recap, event.text, event.tier, event.fullText, false)
         return
       }
       // Returned, so the agent's next card waits behind this one (inOrder): a late recap must not follow turn.started.
       return tierOf({ agent: who?.name ?? '', engine: who?.engine ?? '', recap, durationS: turn?.durationS ?? null,
-        stats: turn?.stats ?? {}, subagent: false, onScreen: false, failed: event.failed === true })
+        stats: turn?.stats ?? {}, subagent: false, onScreen: false, failed: event.failed === true, swarm: swarmAgent(event) })
         .then((d) => d.tier, () => 'list' as const)
         .then((tier) => { void cable.summary(agentId, recap, event.text, tier, event.fullText, false) })
     }
@@ -417,14 +416,20 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       return remoteWorker(event.machineId, event.agentId).then((worker) => worker ? quiet() : shown())
     }
   }
-  /** A Builder or Reviewer the Swarm started here (its record's Swarm role, and an agent started it, as every Swarm start
-   *  is), or any agent on a Harness Team account. A Lead is the person's own agent leading the Swarm, and one the person
-   *  started by hand is theirs whatever its role: their failures reach the dial as before. */
+  /** An agent the Swarm started here, a Builder or Reviewer as it was (its record's Swarm role, and an agent started it, as
+   *  every Swarm start is), or any agent on a Harness Team account. The coordinator is the person's own agent leading the
+   *  Swarm, and one the person started by hand is theirs whatever its role: their failures reach the dial as before. */
   const swarmWorker = (event: DialEvent): boolean => {
     const session = event.machineId ? undefined : core.agents.byAgent(event.agentId)
     const role = session?.startedBy === 'agent' ? session.swarmSkill?.role : undefined
-    return role === 'dev' || role === 'review' || (!!event.machineId && teamMachines.has(event.machineId))
+    return role === 'agent' || onTeamMachine(event)
   }
+  /** An agent on one of the account's Harness Team machines, which run Swarm work only. */
+  const onTeamMachine = (event: DialEvent): boolean => !!event.machineId && teamMachines.has(event.machineId)
+  /** Any Swarm agent, whatever its role (PM, Buddy, Builder, Reviewer, Tester): its registry row carries `swarmSkill`, or it runs
+   *  on a Harness Team account. Its news reaches the dial through the Swarm's cards, so its finished turn is silent. */
+  const swarmAgent = (event: DialEvent): boolean =>
+    (!event.machineId && !!core.agents.byAgent(event.agentId)?.swarmSkill) || onTeamMachine(event)
   /** Whether an agent on another machine is a Swarm's Builder or Reviewer, as the Swarm service read it last
    *  (superTabs/cards.ts `worker`). Asked once a minute at most per agent: a failing worker fails every 1-2 s. */
   const WORKER_ANSWER_MS = 60_000

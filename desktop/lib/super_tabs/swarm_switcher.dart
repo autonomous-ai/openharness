@@ -11,6 +11,7 @@ import '../widgets/desktop_chrome.dart';
 import 'buddy_rows.dart' show SuperTabCountBadge;
 import 'controller.dart';
 import 'machines.dart' show contributeComputer;
+import 'personal_machines.dart';
 import 'section_heading.dart' show SuperTabSectionHeading;
 
 /// The Swarm dropdown at the top of a Swarm tab's left bar (Dee, 10-30): the
@@ -98,6 +99,12 @@ class PersonalSwarm extends ChangeNotifier {
 
   /// Whether Swarm [id] was taken away from the signed-in person while shown.
   bool lost(String id) => _lost[_account]?.contains(id) ?? false;
+
+  /// [id] is the account's again (a deleted Swarm restored): listed once
+  /// more, and lost again only by a new loss.
+  void regained(String id) {
+    if (_lost[_account]?.remove(id) ?? false) notifyListeners();
+  }
 
   /// A Swarm the person owns named Personal, of those they belong to, with
   /// no one else in it when it has been read.
@@ -222,6 +229,10 @@ class PersonalSwarm extends ChangeNotifier {
     if (_account != account || _tabShowing(swarmId) != shown) return;
     app.showSuperTabIn(swarmId, personal, kPersonalSwarmName);
     await _addThisComputer(account, swarmId, personal);
+    // Then the person's other machines, whatever became of this one.
+    if (app.superTabs.peek(personal) case final opened?) {
+      unawaited(PersonalMachines.of(app).sync(opened));
+    }
   }
 
   String? _tabShowing(String swarmId) =>
@@ -266,6 +277,11 @@ class PersonalSwarm extends ChangeNotifier {
       )) {
         return;
       }
+      // Its person took it out, on any computer: it stays out (backend
+      // commands.ts machine.remove). Add machine brings it back.
+      if (snapshot.removedMachines.any((id) => sameMachineId(id, machineId))) {
+        return;
+      }
       await contributeComputer(
         c,
         app,
@@ -276,6 +292,9 @@ class PersonalSwarm extends ChangeNotifier {
         // accounts, this Mac is never lent under its owner's own login.
         teamAccountOnly: snapshot.teamAccounts,
         offerTeamAccount: false,
+        // The server decides, whatever this computer read.
+        ifMissing: true,
+        unlessRemoved: true,
       );
     } catch (failure) {
       // Only while the tab still shows Personal: once it moved on, Personal
@@ -438,7 +457,11 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
                 controller: _menu,
                 consumeOutsideTap: true,
                 alignmentOffset: const Offset(0, grid.AppControl.menuGap),
-                style: grid.AppMenu.style(minWidth: width, maxWidth: width),
+                style: grid.AppMenu.style(
+                  minWidth: width,
+                  maxWidth: width,
+                  maxHeight: 480,
+                ),
                 onOpen: () {
                   if (_tab case final tab?) personal.clearError(tab);
                 },
@@ -473,6 +496,7 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
                             : badge(choice.waiting),
                         onPressed: () => _pick(choice.id),
                       ),
+                    const AppMenuDivider(),
                     AppMenuItem(
                       key: const ValueKey('swarm-switch-new'),
                       label: 'New Swarm',

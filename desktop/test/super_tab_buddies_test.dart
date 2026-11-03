@@ -15,6 +15,7 @@ import 'package:harness/super_tabs/view.dart';
 import 'support/buddy_fixture.dart';
 import 'support/pm_chat_fixture.dart';
 import 'support/super_tab_fixture.dart';
+import 'support/super_tab_members.dart';
 import 'swarm_state_test.dart' show createApp;
 
 /// Buddies (Ken's spec, 10-28): a person's private agent per project. Since
@@ -612,6 +613,12 @@ void main() {
             find.descendant(of: machine, matching: find.text('Kens-MacBook')),
             findsOneWidget,
           );
+          expect(
+            find.textContaining(
+              'posts to the Product Manager only when you ask.',
+            ),
+            findsOneWidget,
+          );
 
           await tester.tap(submit);
           await tester.pumpAndSettle();
@@ -889,6 +896,29 @@ void main() {
         },
       );
 
+      testWidgets(
+        "the coordinator's lines carry the badge of the role it goes by",
+        (tester) async {
+          final server = buddySwarm();
+          giveBuddy(server);
+          (server.state['agents'] as List).first['roleName'] = 'Coordinator';
+          server.state['projects'] = [
+            {
+              ...projectFixture('lead', 'openharness', 'lead'),
+              'coordinatorName': 'Coordinator',
+            },
+          ];
+          pmReply(server, 'buddy-peer-lead', 'Your fix is merged.');
+          final c = await show(tester, server);
+          await tester.tap(buddyEntry);
+          await tester.pumpAndSettle();
+
+          expect(find.text('Lead (Coordinator) → you'), findsOneWidget);
+          expect(find.textContaining('(PM)'), findsNothing);
+          await close(tester, c);
+        },
+      );
+
       testWidgets('its header names the Buddy and where it runs', (
         tester,
       ) async {
@@ -1059,17 +1089,35 @@ void main() {
       });
 
       testWidgets(
-        'an empty Buddy chat says who reads it and how to reach the PM',
+        'an empty Buddy chat says who reads it and how to reach the coordinator',
         (tester) async {
           final server = buddySwarm();
           giveBuddy(server);
-          final c = await show(tester, server);
+          var c = await show(tester, server);
           await tester.tap(buddyEntry);
           await tester.pumpAndSettle();
 
           expect(
             find.text(
-              "Only you and Wren read this chat. Say what you want to build; say 'send to the PM' when it's ready.",
+              "Only you and Wren read this chat. Say what you want to build; say 'send to the Product Manager' when it's ready.",
+            ),
+            findsOneWidget,
+          );
+          await close(tester, c);
+
+          // Called what its project calls it.
+          server.state['projects'] = [
+            {
+              ...projectFixture('lead', 'openharness', 'lead'),
+              'coordinatorName': 'Coordinator',
+            },
+          ];
+          c = await show(tester, server);
+          await tester.tap(buddyEntry);
+          await tester.pumpAndSettle();
+          expect(
+            find.text(
+              "Only you and Wren read this chat. Say what you want to build; say 'send to the Coordinator' when it's ready.",
             ),
             findsOneWidget,
           );
@@ -1304,11 +1352,12 @@ void main() {
     });
 
     testWidgets(
-      'the Buddy chat lists only its person and its Buddy, and offers no Add agent',
+      'the Buddy chat lists the whole Swarm, never its Buddy, and offers no Add agent',
       (tester) async {
         final server = buddySwarm();
         giveBuddy(server);
         final c = await show(tester, server);
+        await openSuperTabMembers(tester);
         expect(
           find.byKey(const ValueKey('super-person-owner')),
           findsOneWidget,
@@ -1316,12 +1365,17 @@ void main() {
         await tester.tap(buddyEntry);
         await tester.pumpAndSettle();
 
+        // The same people and agents as every chat (Dee, 2026-10-31).
         expect(find.byKey(const ValueKey('super-person-peer')), findsOneWidget);
-        expect(find.byKey(const ValueKey('super-person-owner')), findsNothing);
+        expect(
+          find.byKey(const ValueKey('super-person-owner')),
+          findsOneWidget,
+        );
         expect(
           find.byKey(const ValueKey('super-member-lead-agent')),
-          findsNothing,
+          findsOneWidget,
         );
+        expect(find.byKey(const ValueKey('super-member-wren')), findsNothing);
         expect(find.byTooltip('Add agent'), findsNothing);
         await close(tester, c);
       },
@@ -1437,15 +1491,15 @@ void main() {
       });
 
       testWidgets(
-        'Notifications keep Decisions, for anyone with or without a Buddy',
+        'Activity keeps Needs you, for anyone with or without a Buddy',
         (tester) async {
           final server = buddySwarm();
           server.ask(['Ship it?']);
           final c = await show(tester, server);
-          await tester.tap(find.byKey(const ValueKey('super-notifications')));
+          await tester.tap(find.byKey(const ValueKey('super-activity')));
           await tester.pumpAndSettle();
 
-          expect(find.text('Decisions'), findsOneWidget);
+          expect(find.text('Needs you'), findsOneWidget);
           expect(find.text('Ship it?'), findsOneWidget);
           await close(tester, c);
         },
@@ -1468,12 +1522,12 @@ void main() {
         'a tag from the old Chat with PM is placed in the project chat and opens it',
         (tester) async {
           final (_, c) = await withHistory(tester);
-          await tester.tap(find.byKey(const ValueKey('super-notifications')));
+          await tester.tap(find.byKey(const ValueKey('super-activity')));
           await tester.pumpAndSettle();
 
           expect(find.textContaining('Chat with PM'), findsNothing);
           await tester.tap(
-            find.byKey(const ValueKey('super-mention-mention-1')),
+            find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
           );
           await tester.pumpAndSettle();
 
@@ -1486,7 +1540,7 @@ void main() {
 
     group('a proposal in the project chat', () {
       testWidgets(
-        "is labelled from the server's tag, with whose behalf it is on",
+        "opens labelled from the server's tag, with whose behalf it is on",
         (tester) async {
           final server = buddySwarm();
           giveBuddy(server);
@@ -1500,16 +1554,22 @@ void main() {
               'ownerMessageId': 'message-1',
             },
           );
+          // The server gives a top-level message itself as its thread.
+          final proposal = server.messages.last;
+          proposal['thread'] = proposal['id'];
           // A Buddy's ordinary message carries no label, whatever it says.
           buddyReply(server, 'lead', 'Proposal · on ken.tran\'s behalf');
           final c = await show(tester, server);
           await c.select('lead');
           await tester.pumpAndSettle();
 
+          // In the chat it is one line; opened, it reads whole, labelled.
           expect(
             find.byKey(const ValueKey('super-proposal-label')),
-            findsOneWidget,
+            findsNothing,
           );
+          await tester.tap(find.textContaining('Proposal from'));
+          await tester.pumpAndSettle();
           expect(
             find.descendant(
               of: find.byKey(const ValueKey('super-proposal-label')),

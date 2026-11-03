@@ -7,7 +7,11 @@
 # -d returns only once the compositor has acknowledged the lock, so swayidle's before-sleep waits
 # for it, as it did for swaylock -f. The marker says the same to the session checks
 # (tests/session_vm.py): gtklock, unlike swaylock, leaves no session leader to look for.
+#
+# Already locked (Super+L or the idle timeout, then the lid closed), it stays as it is: a second
+# gtklock is refused by the compositor and would only have removed the marker of the first.
 marker=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/harness-os-locked
+pgrep -x -u "$(id -u)" gtklock >/dev/null && exit 0
 rm -f "$marker"
 exec gtklock -d \
   -s /usr/share/harness-os/lock/style.css \

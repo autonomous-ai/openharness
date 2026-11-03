@@ -10,7 +10,8 @@
  * earlier contributions repaired after an update. It never authorizes the person's other repositories.
  * The other is a Swarm agent in the Swarm's full mode in the checkout of its remote project's own repository, or in a
  * worktree of the repository the person picked for it in this machine's own window (core/agents/launches.ts
- * `swarmCheckout`). Any other existing folder stays the person's question.
+ * `swarmCheckout`). A person's one Buddy's folder is Harness's own, and its launch reads no project's settings
+ * (superTabs/buddyHome.ts `trustBuddyHome`). Any other existing folder stays the person's question.
  * The callers decide (core/agents/create.ts, launches.ts). A worktree only inherits the answer its source
  * repo already has.
  *

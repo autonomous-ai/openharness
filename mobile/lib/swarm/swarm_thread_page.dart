@@ -8,6 +8,7 @@ import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/shared/theme/app_ink.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/swarm_tokens_set_b.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 
 import 'model.dart';
@@ -16,8 +17,12 @@ import 'swarm_choices.dart';
 import 'swarm_conversation.dart';
 import 'swarm_conversation_page.dart';
 import 'swarm_message_row.dart';
+import 'swarm_outbox.dart';
+import 'swarm_paste.dart';
 import 'swarm_session.dart';
+import 'swarm_session_widgets.dart';
 import 'swarm_thread.dart';
+import 'swarm_voice.dart';
 
 /// Draws one of a thread's messages as its chat draws them; a tap on it
 /// opens or closes its actions ([acting]).
@@ -26,11 +31,16 @@ typedef SwarmThreadRow = Widget Function(
   SuperTabMessage message, {
   required bool grouped,
   required bool acting,
+  required bool lit,
+  required bool followed,
   required VoidCallback onTap,
 });
 
 /// Draws the person's reply on its way: "Sending…", then "Not sent · Retry"
-typedef SwarmThreadPending = Widget Function(SwarmThread thread, String text);
+typedef SwarmThreadPending = Widget Function(
+  SwarmThread thread,
+  SwarmPost post,
+);
 
 /// One thread of a chat, full screen as Slack Mobile opens one: its root at
 /// the top, "N replies", its replies, and a reply box at the foot with Also
@@ -49,6 +59,7 @@ class SwarmThreadPage extends StatefulWidget {
     required this.title,
     required this.row,
     required this.pending,
+    this.focus,
   });
 
   final String swarmId;
@@ -61,6 +72,9 @@ class SwarmThreadPage extends StatefulWidget {
   final String? title;
   final SwarmThreadRow row;
   final SwarmThreadPending pending;
+
+  /// Where the thread lands once it is read; none shows it from its top.
+  final SwarmThreadFocus? focus;
 
   @override
   State<SwarmThreadPage> createState() => _SwarmThreadPageState();
@@ -79,6 +93,123 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
   /// The message whose actions are open (Copy), by a tap on it.
   String? _acting;
 
+  /// The row of [_acting], to bring its actions into view.
+  final _actingKey = GlobalKey();
+
+  /// Opens [id]'s actions, or closes them on a second tap. Opened under the
+  /// last reply of a thread read to its foot they would be drawn under the
+  /// box, so the row is scrolled just enough to show them (the chat, newest
+  /// at its foot, grows upward and never hides them).
+  void _toggleActions(String id) {
+    setState(() => _acting = _acting == id ? null : id);
+    if (_acting == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final row = _actingKey.currentContext;
+      if (!mounted || _acting != id || row == null) return;
+      unawaited(
+        Scrollable.ensureVisible(
+          row,
+          alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+          duration: const Duration(milliseconds: 150),
+        ),
+      );
+    });
+  }
+
+  /// The thread's read mark as it was when the page opened, before showing
+  /// the thread moves it: the first unread reply is the first after it.
+  late final int _readThrough = widget.focus?.after ?? _markAtOpen();
+
+  int _markAtOpen() {
+    final chat = widget.chat, reader = chat.reader;
+    return reader.readMarks?.threadThrough(chat.id, widget.root) ??
+        reader.snapshot?.threadMarks[chat.id]?[widget.root] ??
+        0;
+  }
+
+  /// The message the thread landed on, lit for a moment and keyed to be
+  /// brought into view.
+  String? _target, _lit;
+  Timer? _litTimer;
+  final _targetKey = GlobalKey();
+  bool _landing = false;
+
+  /// Once the thread is read: finds the focus (reading earlier replies back
+  /// to it, a bounded number of pages), scrolls to it and lights it for
+  /// 2 seconds, as the chat does for a quoted message.
+  void _land() {
+    final focus = widget.focus;
+    if (focus == null || _landing || _thread.state != SwarmChatState.loaded) {
+      return;
+    }
+    _landing = true;
+    unawaited(_findFocus(focus));
+  }
+
+  Future<void> _findFocus(SwarmThreadFocus focus) async {
+    // The read that brought the thread is still finishing: its listeners run
+    // before it lets another one start.
+    await Future<void>.delayed(Duration.zero);
+    final id = focus.messageId;
+    String? target;
+    if (id != null) {
+      var pages = 0;
+      bool found() => _thread.messages.any((m) => m.id == id);
+      while (mounted &&
+          !found() &&
+          _thread.hasEarlier &&
+          _thread.error == null &&
+          pages++ < SwarmThreadFocus.maxEarlierPages) {
+        await _thread.loadEarlier();
+      }
+      if (found()) target = id;
+    } else {
+      final replies = _thread.replies;
+      target = replies.where((m) => m.sequence > _readThrough).firstOrNull?.id;
+      target ??= replies.lastOrNull?.id;
+    }
+    if (!mounted || target == null) return;
+    setState(() {
+      _target = target;
+      _lit = target;
+    });
+    _litTimer?.cancel();
+    _litTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _lit = null);
+    });
+    _reveal(target, 0);
+  }
+
+  /// The list builds only the rows near what is shown: it jumps near the
+  /// target by its place in the list until its row is built, then brings it
+  /// to the middle (as the chat's `_reveal` does).
+  void _reveal(String id, int attempt) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _target != id) return;
+      if (_targetKey.currentContext case final row?) {
+        unawaited(
+          Scrollable.ensureVisible(
+            row,
+            alignment: 0.5,
+            duration: const Duration(milliseconds: 250),
+          ),
+        );
+        return;
+      }
+      final index = _thread.messages.indexWhere((m) => m.id == id);
+      if (!_scroll.hasClients || index < 0 || attempt > 20) return;
+      final count = _thread.messages.length;
+      _scroll.position.jumpTo(
+        (_scroll.position.maxScrollExtent * index / count).clamp(
+          0,
+          _scroll.position.maxScrollExtent,
+        ),
+      );
+      _reveal(id, attempt + 1);
+    });
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
   /// What the last pick left out, or why it could not pick, under the box.
   final _attachNote = ValueNotifier<String?>(null);
   bool _picking = false;
@@ -86,12 +217,38 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
   SwarmSession? _session;
   bool _watching = false;
 
+  /// Not covered by a screen pushed over this one.
+  bool _visible = true;
+
+  /// The reply box's mic, while the shell can hear one ([SwarmScope.voiceOf]):
+  /// the main chat's, a take sent as a reply.
+  SwarmVoice? _voice;
+
   @override
   void initState() {
     super.initState();
     _text.addListener(_typed);
     _thread.composer.addListener(_drafted);
+    _thread.addListener(_seen);
+    _thread.addListener(_guardVoice);
+    _thread.addListener(_land);
+    // Before the thread shows, so showing it does not move the mark first.
+    _readThrough;
     unawaited(_thread.load());
+  }
+
+  /// A thread the person can no longer reply in hears nothing: a take under
+  /// way goes, nothing of it written or sent.
+  void _guardVoice() {
+    if (!_mayReply) _voice?.hide();
+  }
+
+  /// The person may still reply here.
+  bool get _mayReply => _thread.state != SwarmChatState.lost && _thread.canPost;
+
+  /// While on screen, what the thread shows is read ([SwarmThread.markRead]).
+  void _seen() {
+    if (_watching) _thread.markRead();
   }
 
   @override
@@ -99,19 +256,45 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     super.didChangeDependencies();
     final session = SwarmScope.of(context);
     // Off while a screen pushed over this one covers it.
-    final watch = session != null && TickerMode.valuesOf(context).enabled;
+    _visible = TickerMode.valuesOf(context).enabled;
+    final watch = session != null && _visible;
+    if (_voice == null) {
+      if (SwarmScope.voiceOf(context) case final create?) {
+        _voice = SwarmVoice(
+          create: create,
+          dictation: SwarmScope.dictationOf(context),
+          draft: () => _thread.draft,
+          write: (text) {
+            if (_mayReply) _thread.draft = text;
+          },
+          post: () {
+            if (mounted && _mayReply && _thread.canSend) unawaited(_send());
+          },
+        );
+      }
+    }
+    // A covered thread hears nothing, nor one signed out of: its take goes
+    // with it. Another account loses the thread's read ([_guardVoice]).
+    if (!watch) _voice?.hide();
+    _guardVoice();
     if (session != _session || watch != _watching) {
       if (_watching) _session?.unwatch(widget.swarmId);
       _session = session;
       _watching = watch;
       if (watch) session.watch(widget.swarmId);
     }
+    _seen();
   }
 
   @override
   void dispose() {
     if (_watching) _session?.unwatch(widget.swarmId);
     _thread.composer.removeListener(_drafted);
+    _thread.removeListener(_seen);
+    _thread.removeListener(_guardVoice);
+    _thread.removeListener(_land);
+    _litTimer?.cancel();
+    _voice?.dispose();
     _thread.dispose();
     _attachNote.dispose();
     _farBack.dispose();
@@ -154,6 +337,17 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
       _picking = false;
     }
   }
+
+  /// A picture pasted into the box ([pasteSwarmImage]), into the thread's
+  /// files, as the + puts a photo there.
+  Future<void> _pasteImage(SwarmPastedImage image) => pasteSwarmImage(
+    _thread.files,
+    image,
+    // Nothing goes into a thread the person can no longer reply in.
+    stillWanted: () =>
+        mounted && _thread.state != SwarmChatState.lost && _thread.canPost,
+    note: (note) => _attachNote.value = note,
+  );
 
   /// Whether the foot is more than a screen below ([_farBack]), on every
   /// scroll and whenever the thread's length changes.
@@ -209,6 +403,10 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _header(context, tty),
+            ListenableBuilder(
+              listenable: _thread,
+              builder: (context, _) => SwarmThreadSessionLine(thread: _thread),
+            ),
             Expanded(
               child: Stack(
                 children: [
@@ -216,7 +414,13 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                     child: NotificationListener<Notification>(
                       onNotification: _measured,
                       child: ListenableBuilder(
-                        listenable: _thread,
+                        // Message links resolve against the inbox's current
+                        // reader, which can change independently of this
+                        // thread's older conversation reader.
+                        listenable: Listenable.merge([
+                          _thread,
+                          if (_session case final session?) session.inbox,
+                        ]),
                         builder: (context, _) => _body(tty),
                       ),
                     ),
@@ -240,7 +444,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
               ),
             ),
             ListenableBuilder(
-              listenable: Listenable.merge([_thread, _thread.composer]),
+              listenable: Listenable.merge([_thread, _thread.composer, _voice]),
               builder: (context, _) => _foot(tty),
             ),
           ],
@@ -323,14 +527,23 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     }
     final replies = t.replies;
     final count = t.count;
-    final pending = t.pending;
-    Widget row(SuperTabMessage m, {required bool grouped}) => widget.row(
-      t,
-      m,
-      grouped: grouped,
-      acting: _acting == m.id,
-      onTap: () => setState(() => _acting = _acting == m.id ? null : m.id),
-    );
+    final pending = t.outgoing;
+    Widget row(SuperTabMessage m, {required bool grouped}) {
+      final built = widget.row(
+        t,
+        m,
+        grouped: grouped,
+        acting: _acting == m.id,
+        lit: _lit == m.id,
+        followed: _target == m.id,
+        onTap: () => _toggleActions(m.id),
+      );
+      if (_acting == m.id) return KeyedSubtree(key: _actingKey, child: built);
+      return _target == m.id
+          ? KeyedSubtree(key: _targetKey, child: built)
+          : built;
+    }
+
     return ListView(
       key: const ValueKey('swarm-thread-messages'),
       controller: _scroll,
@@ -398,7 +611,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                 replies[index - 1].authorId == reply.authorId &&
                 replies[index - 1].fromAgent == reply.fromAgent,
           ),
-        if (pending != null) widget.pending(t, pending),
+        for (final post in pending) widget.pending(t, post),
       ],
     );
   }
@@ -415,7 +628,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
         // The first read's failure is said in the body, with Try again.
         if (error != null &&
             error != t.readError &&
-            (t.rootMessage != null || t.pending != null))
+            (t.rootMessage != null || t.outgoing.isNotEmpty))
           Padding(
             padding: const EdgeInsets.fromLTRB(
               AppSpace.screenInset,
@@ -446,26 +659,22 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     );
   }
 
-  /// The reply box: the files going with the reply, a field that grows with
-  /// what is typed, then Also send, the + and a round Send (the desktop's
-  /// thread composer).
+  /// The reply box: notes, then the card ([SwarmComposerCard]) — the files
+  /// going with the reply, a field that grows with what is typed and its X,
+  /// then +, Also send, the mic and a round Send (the desktop's thread
+  /// composer, with the main chat's mic). While a take is under way the
+  /// toolbar is the voice row ([SwarmVoiceRow]): Also send is hidden, and
+  /// keeps its tick for the row's Send or the one after the take. No Tag: a
+  /// thread has no @ picker.
   Widget _box(SwarmThread t, Tty tty) {
+    // A reply on its way never holds the box: the next is typed meanwhile.
     final canSend = t.canSend;
-    // A reply not confirmed is sent again from where it shows.
-    final writable = !t.sending && t.pending == null;
     final canAttach = !t.uploading && t.files.room > 0;
-    return Container(
+    final voice = _voice;
+    final talking = voice?.face != null;
+    return Padding(
       key: const ValueKey('swarm-thread-box'),
-      decoration: BoxDecoration(
-        color: Color.alphaBlend(tty.text.withValues(alpha: 0.02), tty.ground),
-        border: Border(top: BorderSide(color: swarmChatHair(tty))),
-      ),
-      padding: const EdgeInsets.fromLTRB(
-        AppSpace.m,
-        AppSpace.s,
-        AppSpace.m,
-        AppSpace.xs,
-      ),
+      padding: SwarmComposer.padding,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -487,39 +696,90 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                     ),
                   ),
           ),
-          SwarmOutgoingChips(box: t),
-          SwarmMessageField(
-            controller: _text,
+          if (_voice?.notice case final notice?)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpace.xs,
+                0,
+                AppSpace.xs,
+                AppSpace.s,
+              ),
+              child: Text(
+                notice,
+                key: const ValueKey('swarm-thread-voice-note'),
+                style: AppType.caption(color: tty.yellow),
+              ),
+            ),
+          // Quiet: nothing went wrong, the words stay in the box.
+          if (_voice?.stopped case final stopped?)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpace.xs,
+                0,
+                AppSpace.xs,
+                AppSpace.s,
+              ),
+              child: Text(
+                stopped,
+                key: const ValueKey('swarm-thread-voice-stopped'),
+                style: AppType.caption(color: AppPalette.textSecondary),
+              ),
+            ),
+          if (t.offersSessions && !talking) SwarmNewSessionCheck(thread: t),
+          SwarmComposerCard(
             focus: _focus,
-            hint: 'Reply',
-            fieldKey: const ValueKey('swarm-thread-field'),
-          ),
-          Row(
-            children: [
-              Expanded(
-                child: _AlsoSend(
-                  label: t.alsoSendLabel,
-                  value: t.alsoSend,
-                  onChanged: writable ? (on) => t.alsoSend = on : null,
-                ),
-              ),
-              if (swarmSendsFiles)
-                SwarmAttachButton(
-                  key: const ValueKey('swarm-thread-attach'),
-                  onTap: canAttach ? () => unawaited(_pickFiles()) : null,
-                ),
-              SwarmRoundButton(
-                key: const ValueKey('swarm-thread-send'),
-                label: 'Send reply',
-                fill: canSend ? AppPalette.accent : ttyRaised(tty),
-                onTap: canSend ? () => unawaited(_send()) : null,
-                child: Icon(
-                  LucideIcons.arrowUp,
-                  size: 20,
-                  color: canSend ? AppInk.onFill : AppPalette.textFaint,
-                ),
-              ),
-            ],
+            chips: t.files.files.isEmpty ? null : SwarmOutgoingChips(box: t),
+            field: SwarmMessageField(
+              controller: _text,
+              focus: _focus,
+              hint: 'Reply',
+              fieldKey: const ValueKey('swarm-thread-field'),
+              clearKey: const ValueKey('swarm-thread-clear'),
+              clearable: !talking,
+              imagePaste: swarmSendsFiles
+                  ? SwarmImagePaste(
+                      enabled: canAttach,
+                      onImage: (image) => unawaited(_pasteImage(image)),
+                    )
+                  : null,
+            ),
+            toolbar: talking
+                ? SwarmVoiceRow(voice: voice!)
+                : Row(
+                    children: [
+                      if (swarmSendsFiles)
+                        SwarmAttachButton(
+                          key: const ValueKey('swarm-thread-attach'),
+                          onTap: canAttach
+                              ? () => unawaited(_pickFiles())
+                              : null,
+                        ),
+                      if (t.offersAlsoSend)
+                        Expanded(
+                          child: _AlsoSend(
+                            label: t.alsoSendLabel,
+                            value: t.alsoSend,
+                            onChanged: (on) => t.alsoSend = on,
+                          ),
+                        )
+                      else
+                        const Spacer(),
+                      // The main chat's mic, beside Send as there.
+                      if (voice != null) SwarmVoiceMic(voice: voice),
+                      SwarmRoundButton(
+                        key: const ValueKey('swarm-thread-send'),
+                        label: 'Send reply',
+                        face: 36,
+                        fill: canSend ? AppPalette.accent : ttyRaised(tty),
+                        onTap: canSend ? () => unawaited(_send()) : null,
+                        child: Icon(
+                          LucideIcons.arrowUp,
+                          size: 20,
+                          color: canSend ? AppInk.onFill : AppPalette.textFaint,
+                        ),
+                      ),
+                    ],
+                  ),
           ),
         ],
       ),

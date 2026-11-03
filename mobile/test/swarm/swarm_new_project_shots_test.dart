@@ -294,4 +294,101 @@ void main() {
     AppTheme.palette.value = HarnessPalette.graphite;
     AppTheme.brightness.value = Brightness.dark;
   }, skip: shots == null);
+
+  testWidgets('a paused Swarm first: the sheet opens on one that takes work, '
+      'the paused one last and marked; a Swarm with no repository hints at '
+      'a link (Dee, 11-01), on a 390 point phone in both themes', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    tester.view.physicalSize = const Size(1170, 2532);
+    tester.view.devicePixelRatio = 3;
+    tester.view.padding = const FakeViewPadding(top: 141, bottom: 102);
+    for (final palette in [HarnessPalette.graphite, HarnessPalette.paper]) {
+      final brightness = palette.brightness;
+      AppTheme.palette.value = palette;
+      AppTheme.brightness.value = brightness;
+      final swarms = [
+        NewProjectSwarm(name: 'Swarm review verification')..paused = true,
+        NewProjectSwarm(
+          id: 'tab-2',
+          name: 'autonomous.ai',
+          machines: [leadPool('mac-studio', name: 'Studio.local', slots: 3)],
+        ),
+        NewProjectSwarm(
+          id: 'tab-3',
+          name: 'Lamp Swarm',
+          projects: [swarmProject('project-3', 'Ideas')],
+        ),
+      ];
+      final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
+        ..value = {PhoneExperiment.swarm};
+      final account = ValueNotifier<String?>(me);
+      final host = SwarmHost(
+        accountId: () => me,
+        account: account,
+        request: newProjectBackend(swarms).request,
+        notices: SilentSystemNotices(),
+        features: features,
+        readMarks: MemoryKeyValueStore(),
+      )..foreground = false;
+      final boundary = GlobalKey();
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: boundary,
+          child: MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: buildAppTheme(brightness: brightness),
+            builder: (_, child) => SwarmScope(notifier: host, child: child!),
+            onGenerateRoute: (_) => CupertinoPageRoute<void>(
+              builder: (_) => SwarmPage(now: () => newProjectNow),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      Future<void> capture(String name) => tester.runAsync(() async {
+        final image =
+            await (boundary.currentContext!.findRenderObject()!
+                    as RenderRepaintBoundary)
+                .toImage(pixelRatio: 3);
+        final png = await image.toByteData(format: ui.ImageByteFormat.png);
+        await File('$shots/new-project-390-$name-${brightness.name}.png')
+            .writeAsBytes(png!.buffer.asUint8List());
+        image.dispose();
+      });
+      Finder key(String value) => find.byKey(ValueKey(value));
+      Future<void> tap(String k) async {
+        await tester.ensureVisible(key(k));
+        await tester.pumpAndSettle();
+        await tester.tap(key(k));
+        await tester.pumpAndSettle();
+      }
+
+      // Home shows the paused Swarm alone, as Dee's did.
+      host.session!.home.show(tab);
+      await tester.pumpAndSettle();
+      await tap('swarm-new-project');
+      await tap('swarm-new-project-machine');
+      await tap('swarm-new-project-pick-machine-mac-studio');
+      await capture('paused-default');
+      await tap('swarm-new-project-swarm');
+      await capture('paused-list');
+      await tap('swarm-new-project-pick-swarm-$tab');
+      await capture('paused-chosen');
+      await tap('swarm-new-project-swarm');
+      await tap('swarm-new-project-pick-swarm-tab-3');
+      await capture('link-hint');
+      await tap('swarm-new-project-close');
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 30));
+      host.dispose();
+      account.dispose();
+    }
+    await tester.binding.setSurfaceSize(null);
+    tester.view.reset();
+    AppTheme.palette.value = HarnessPalette.graphite;
+    AppTheme.brightness.value = Brightness.dark;
+  }, skip: shots == null);
 }

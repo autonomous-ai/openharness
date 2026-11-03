@@ -9,9 +9,10 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
+import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 
-import 'identity.dart';
+import 'swarm_invites_sheet.dart';
 import 'model.dart';
 import 'swarm_leaderboard_reader.dart';
 import 'swarm_reader.dart';
@@ -59,8 +60,7 @@ List<SwarmProjectHuman> swarmProjectHumans(
     for (final person in swarmProjectPeople(snapshot, project))
       (
         person: person,
-        name:
-            scores[person.id]?.displayName ?? superTabPersonName(person.email),
+        name: scores[person.id]?.displayName ?? person.username,
         score: scores[person.id],
         own: person.id == viewer,
       ),
@@ -168,8 +168,9 @@ class SwarmProjectSheetFrame extends StatelessWidget {
 /// sheet. No cups, medals or emoji.
 ///
 /// In a sheet from the project's menu ([sheet]) the people are the project's
-/// own ([swarmProjectHumans]), without ranks: each shows at once, with their
-/// points when the board answers.
+/// own ([swarmProjectHumans]), without ranks or the change against last week:
+/// skeleton rows until the board answers, then each with their points; each by
+/// name alone if it cannot.
 ///
 /// People are named from the members its Swarm already read; the board
 /// itself is read on open, on a pull, on another week, and every few minutes
@@ -387,6 +388,7 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
               ),
               title: 'Leaderboard',
               subtitle: project?.name,
+              trailing: _inviteButton(),
             ),
             Expanded(child: board),
           ],
@@ -407,11 +409,18 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
     return SwarmProjectSheetFrame(
       title: 'Leaderboard',
       closeKey: 'swarm-leaderboard-close',
-      trailing: _WeekButton(
-        label: swarmWeekName(reader?.week, current),
-        onTap: reader == null
-            ? null
-            : () => unawaited(_pickWeek(context, reader, current)),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ?_inviteButton(),
+          _WeekButton(
+            label: _shownLabel(reader, current),
+            period: reader?.period != null,
+            onTap: reader == null
+                ? null
+                : () => unawaited(_pick(context, reader, current)),
+          ),
+        ],
       ),
       child: RefreshIndicator(
         // The Swarm names its people, and the board scores them.
@@ -440,9 +449,12 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
     int current,
   ) {
     final reader = _board;
-    if (_session == null || _lost || snapshot == null || project == null) {
-      return const [];
+    if (_session == null || _lost) return const [];
+    // The Swarm names the people: how many rows is not known before it.
+    if (snapshot == null) {
+      return [if (_swarm?.error == null) const _PersonRowsLoading(rows: 4)];
     }
+    if (project == null) return const [];
     final board = reader?.board;
     final humans = swarmProjectHumans(
       snapshot,
@@ -463,7 +475,8 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
         ),
       if (board != null)
         _TeamLine(
-          week: swarmWeekName(reader?.week, current),
+          week: _shownLabel(reader, current),
+          period: reader?.period,
           shipped: board.shipped,
           before: board.shippedBefore,
           onWeek: null,
@@ -494,20 +507,24 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
             ],
           ),
         ),
-      for (final h in humans)
-        _PersonRow(
-          id: h.person.id,
-          score: h.score,
-          person: h.person,
-          name: h.name,
-          own: h.own,
-          columns: columns,
-          ranks: false,
-          onTap: switch (h.score) {
-            final score? => () => _openWeek(context, score, h.person, h.name),
-            null => null,
-          },
-        ),
+      if (reader == null || reader.loading)
+        _PersonRowsLoading(rows: humans.length.clamp(1, 8))
+      else
+        for (final h in humans)
+          _PersonRow(
+            id: h.person.id,
+            score: h.score,
+            person: h.person,
+            name: h.name,
+            own: h.own,
+            columns: columns,
+            ranks: false,
+            trends: false,
+            onTap: switch (h.score) {
+              final score? => () => _openWeek(context, score, h.person, h.name),
+              null => null,
+            },
+          ),
     ];
   }
 
@@ -534,13 +551,13 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
     SuperTabPerson? personOf(String id) =>
         people.where((p) => p.id == id).firstOrNull;
     String nameOf(SwarmScore score) => switch (personOf(score.personId)) {
-      final person? => score.displayName ?? superTabPersonName(person.email),
+      final person? => score.displayName ?? person.username,
       null => 'Former member',
     };
-    final week = swarmWeekName(reader?.week, current);
+    final week = _shownLabel(reader, current);
     final pickWeek = reader == null
         ? null
-        : () => unawaited(_pickWeek(context, reader, current));
+        : () => unawaited(_pick(context, reader, current));
     final columns = board == null || board.people.isEmpty
         ? null
         : _Columns.of(context, board.people);
@@ -548,6 +565,7 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
     return [
       _TeamLine(
         week: week,
+        period: reader?.period,
         shipped: board?.shipped,
         before: board?.shippedBefore,
         onWeek: pickWeek,
@@ -625,6 +643,58 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
         if (_week == shown) _week = null;
       }),
     );
+  }
+
+  /// Invite people beside the people, as on the desktop's Humans board: it
+  /// shows only to the Swarm's owner ([SwarmInviteButton]).
+  Widget? _inviteButton() {
+    final session = _session, swarm = _swarm;
+    if (session == null || swarm == null || _lost) return null;
+    return SwarmInviteButton(session: session, reader: swarm);
+  }
+
+  /// "Last 7d", or from a server before periods the week shown.
+  String _shownLabel(SwarmLeaderboardReader? reader, int current) =>
+      switch (reader == null ? swarmDefaultPeriod : reader.period) {
+        final period? => swarmPeriodLabel(period),
+        null => swarmWeekName(reader?.week, current),
+      };
+
+  /// The rolling periods in a sheet, or the weeks from a server before them.
+  Future<void> _pick(
+    BuildContext context,
+    SwarmLeaderboardReader reader,
+    int current,
+  ) => reader.period == null
+      ? _pickWeek(context, reader, current)
+      : _pickPeriod(context, reader);
+
+  Future<void> _pickPeriod(
+    BuildContext context,
+    SwarmLeaderboardReader reader,
+  ) async {
+    final route = swarmSheetRoute<String>(
+      context,
+      isScrollControlled: false,
+      builder: (context) => _Sheet(
+        title: 'Period',
+        closeKey: 'swarm-leaderboard-week-close',
+        children: [
+          for (final period in swarmPeriods)
+            _WeekOption(
+              key: ValueKey('swarm-leaderboard-period-$period'),
+              label: swarmPeriodLabel(period),
+              selected: reader.period == period,
+              onTap: () => Navigator.of(context).pop(period),
+            ),
+        ],
+      ),
+    );
+    _picker = route;
+    final period = await Navigator.of(context).push(route);
+    if (identical(_picker, route)) _picker = null;
+    if (period == null || !mounted || !identical(reader, _board)) return;
+    await reader.showPeriod(period);
   }
 
   /// The four weeks the board keeps, this one first, in a sheet.
@@ -722,11 +792,15 @@ class _TeamLine extends StatelessWidget {
     required this.shipped,
     required this.before,
     required this.onWeek,
+    this.period,
     this.picker = true,
   });
 
-  /// "This week", "Last week", …: the week shown.
+  /// "This week", "Last week", …: the week shown; "Last 7d": the period.
   final String week;
+
+  /// The rolling period shown; null for a week.
+  final String? period;
 
   /// Null until the board is read.
   final int? shipped, before;
@@ -739,7 +813,13 @@ class _TeamLine extends StatelessWidget {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final shipped = this.shipped, before = this.before;
-    final earlier = week == 'This week' ? 'last week' : 'the week before';
+    final period = this.period;
+    final span = period == null ? week.toLowerCase() : swarmPeriodSpan(period);
+    final earlier = period != null
+        ? swarmPeriodEarlier(period)
+        : week == 'This week'
+        ? 'last week'
+        : 'the week before';
     return Padding(
       key: const ValueKey('swarm-leaderboard-team'),
       padding: const EdgeInsets.only(left: AppSpace.s, bottom: AppSpace.xs),
@@ -749,16 +829,64 @@ class _TeamLine extends StatelessWidget {
             child: shipped == null
                 ? const SizedBox.shrink()
                 : Text(
-                    '$shipped shipped ${week.toLowerCase()} · '
-                    '$before $earlier',
+                    '$shipped shipped $span'
+                    '${earlier == null ? '' : ' · $before $earlier'}',
                     style: AppType.caption(color: AppPalette.textSecondary),
                   ),
           ),
-          if (picker) _WeekButton(label: week, onTap: onWeek),
+          if (picker)
+            _WeekButton(label: week, period: period != null, onTap: onWeek),
         ],
       ),
     );
   }
+}
+
+/// The sheet's team line and [rows] people on their way, in the metrics of a
+/// person named alone ([_PersonRow]), fading towards the last.
+class _PersonRowsLoading extends StatelessWidget {
+  const _PersonRowsLoading({required this.rows});
+
+  final int rows;
+
+  @override
+  Widget build(BuildContext context) => SkeletonBlock(
+    key: const ValueKey('swarm-leaderboard-loading'),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: AppSpace.s, bottom: AppSpace.xs),
+          child: SkeletonText(style: AppType.caption(), width: 180),
+        ),
+        for (var i = 0; i < rows; i++)
+          Opacity(
+            opacity: skeletonFade(i, rows, depth: .4),
+            child: ConstrainedBox(
+              key: ValueKey('swarm-leaderboard-loading-$i'),
+              constraints: const BoxConstraints(minHeight: minTouchTarget),
+              child: Padding(
+                padding: const EdgeInsets.all(AppSpace.s),
+                child: Row(
+                  children: [
+                    const Skeleton(
+                      width: 32,
+                      height: 32,
+                      shape: BoxShape.circle,
+                    ),
+                    const SizedBox(width: AppSpace.m),
+                    SkeletonText(
+                      style: AppType.body(),
+                      width: i.isEven ? 96 : 128,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
 }
 
 /// The board's fixed numeric columns, each as wide as its widest value at the
@@ -821,11 +949,15 @@ class _PersonRow extends StatelessWidget {
     required this.columns,
     required this.onTap,
     this.ranks = true,
+    this.trends = true,
   });
 
   final String id;
   final SwarmScore? score;
   final bool ranks;
+
+  /// The change against last week; a project's sheet has the points alone.
+  final bool trends;
 
   /// Null for someone who has left.
   final SuperTabPerson? person;
@@ -839,7 +971,7 @@ class _PersonRow extends StatelessWidget {
     AppTheme.watch(context);
     final score = this.score;
     final numbers = score == null ? const <String>[] : swarmNumbers(score);
-    final trend = score == null ? null : swarmTrend(score);
+    final trend = score == null || !trends ? null : swarmTrend(score);
     Widget column(String kind, double width, Widget? child) => Padding(
       padding: const EdgeInsets.only(left: AppSpace.s),
       child: SizedBox(
@@ -919,7 +1051,7 @@ class _PersonRow extends StatelessWidget {
                       ],
                     ),
                   ),
-                  if (columns.trend case final width?)
+                  if (columns.trend case final width? when trends)
                     column(
                       'trend-column',
                       width,
@@ -1019,15 +1151,22 @@ class _Trend extends StatelessWidget {
 
 /// The week shown and its arrow: opens the week picker.
 class _WeekButton extends StatelessWidget {
-  const _WeekButton({required this.label, required this.onTap});
+  const _WeekButton({
+    required this.label,
+    required this.onTap,
+    this.period = false,
+  });
 
   final String label;
+
+  /// A rolling period, not a week: says so to a screen reader.
+  final bool period;
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) => Semantics(
     button: true,
-    label: 'Week: $label',
+    label: '${period ? 'Period' : 'Week'}: $label',
     excludeSemantics: true,
     child: InkWell(
       key: const ValueKey('swarm-leaderboard-week'),

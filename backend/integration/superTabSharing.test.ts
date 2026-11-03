@@ -78,9 +78,10 @@ describe('Swarm sharing on the authenticated control API', () => {
     expect((await request(tab, 'sharing')).json().data).toEqual({ revision: 0,
       access: { mode: 'invited', role: 'collaborator' }, joinUrl: null })
     expect((await request(tab, 'sharing', undefined, null)).statusCode).toBe(401)
-    expect((await request(tab, 'sharing', undefined, peer)).statusCode).toBe(403)
+    // Someone outside the Swarm is answered as for one that does not exist (routes/superTabs.ts NOT_AVAILABLE).
+    expect((await request(tab, 'sharing', undefined, peer)).statusCode).toBe(404)
     const body = { operationId: randomUUID(), revision: 0, access: { mode: 'link', role: 'collaborator' } }
-    expect((await request(tab, 'sharing', body, peer)).statusCode).toBe(403)
+    expect((await request(tab, 'sharing', body, peer)).statusCode).toBe(404)
     expect((await request(tab, 'sharing', { ...body, access: { mode: 'link', role: 'owner' } })).statusCode).toBe(400)
     expect((await request(tab, 'join/preview', {}, peer)).statusCode).toBe(404)
     expect((await request(tab, 'join', { operationId: randomUUID() }, peer)).statusCode).toBe(404)

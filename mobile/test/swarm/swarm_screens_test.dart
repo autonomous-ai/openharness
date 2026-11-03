@@ -171,6 +171,8 @@ void main() {
       request: fake.request,
       notices: SilentSystemNotices(),
       features: features,
+      // The phone's read marks: a tag counts only once they are back.
+      readMarks: MemoryKeyValueStore(),
     )..foreground = false;
     addTearDown(host.dispose);
     await tester.pumpWidget(
@@ -212,7 +214,7 @@ void main() {
       .length;
 
   group('the Swarm page', () {
-    testWidgets('Jump to comes first, then its projects; what needs the '
+    testWidgets('its projects come first, under the title; what needs the '
         'person is in Needs you', (tester) async {
       // An iPhone's screen: all of Home at once.
       tester.view.physicalSize = const Size(1170, 2532);
@@ -226,7 +228,7 @@ void main() {
         reason: "the Activity tab's",
       );
       expect(
-        tester.getTopLeft(key('swarm-jump')).dy,
+        tester.getTopLeft(key('swarm-title-button')).dy,
         lessThan(tester.getTopLeft(key('swarm-project-$tab-$project')).dy),
       );
       expect(
@@ -250,13 +252,13 @@ void main() {
       final row = key('swarm-project-$tab-$project');
       expect(
         find.descendant(of: row, matching: find.text('@1')),
-        findsOneWidget,
-        reason: "River's tag, waiting in it",
+        findsNothing,
+        reason: "River's task-chat tag stays on its own row",
       );
       expect(
-        find.descendant(of: row, matching: find.byType(SwarmTeamDots)),
+        find.descendant(of: row, matching: find.text('1 human')),
         findsOneWidget,
-        reason: 'its team in coloured dots (prototype B1)',
+        reason: 'how many people read it, with no agent running',
       );
     });
 
@@ -959,7 +961,8 @@ void main() {
       expect(find.text('This conversation is read only.'), findsOneWidget);
     });
 
-    testWidgets('the decision asked in it is answered in it', (tester) async {
+    testWidgets('the decision asked in it is not shown in it: it is answered '
+        'in Activity (Dee, 11-01)', (tester) async {
       await pump(
         tester,
         backend(),
@@ -967,8 +970,9 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('Ship it behind a flag?'), findsOneWidget);
-      expect(key('swarm-option-d1-0'), findsOneWidget);
+      expect(find.text('Which name should the flag have?'), findsOneWidget);
+      expect(find.text('Ship it behind a flag?'), findsNothing);
+      expect(key('swarm-option-d1-0'), findsNothing);
     });
 
     testWidgets('a viewer reads it and cannot post', (tester) async {
@@ -988,8 +992,9 @@ void main() {
       );
     });
 
-    testWidgets('one the person can no longer read shows nothing of it, '
-        'its decision included', (tester) async {
+    testWidgets('one the person can no longer read shows nothing of it', (
+      tester,
+    ) async {
       final fake = backend();
       final host = await pump(
         tester,
@@ -999,7 +1004,6 @@ void main() {
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField), 'my reply');
       expect(find.text('Which name should the flag have?'), findsOneWidget);
-      expect(find.text('Ship it behind a flag?'), findsOneWidget);
 
       // Taken out of g1: the Swarm is read again in full without it, and
       // the decision list has not caught up yet.

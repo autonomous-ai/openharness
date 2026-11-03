@@ -1,6 +1,8 @@
 import 'dart:io';
 import 'dart:ui' show PointerDeviceKind;
 
+import 'package:flutter/foundation.dart'
+    show debugDefaultTargetPlatformOverride;
 import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -20,6 +22,7 @@ import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/widgets/app_icon_button.dart';
+import 'package:harness/widgets/browser_menu_guard.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/widgets/engine_identity.dart';
 
@@ -502,6 +505,7 @@ void main() {
       WidgetTester tester,
       int agents, {
       int buddies = 0,
+      Duration age = Duration.zero,
     }) async {
       final server = ConversationServer();
       server.state['agents'] = [
@@ -527,7 +531,8 @@ void main() {
           'name': 'Studio Mac',
           'contributorId': 'owner',
           'observation': {
-            'receivedAt': DateTime.now().millisecondsSinceEpoch,
+            'receivedAt':
+                DateTime.now().millisecondsSinceEpoch - age.inMilliseconds,
             'resources': {'cpuPercent': 12},
           },
         },
@@ -572,12 +577,45 @@ void main() {
       await unmount(tester, c);
     });
 
+    testWidgets(
+      'an offline machine keeps its total and says nothing is running, in the muted ink',
+      (tester) async {
+        final c = await mount(tester, 34, age: const Duration(minutes: 10));
+        final text = find.descendant(
+          of: line,
+          matching: find.text('34 agents · none running, machine offline'),
+        );
+        expect(text, findsOneWidget);
+        expect(
+          tester.widget<Text>(text).style?.color,
+          DesktopChrome.control(color: DesktopChrome.muted).color,
+        );
+        expect(find.textContaining('working'), findsNothing);
+        await unmount(tester, c);
+      },
+    );
+
+    testWidgets(
+      'one agent on an offline machine reads "1 agent · none running"',
+      (tester) async {
+        final c = await mount(tester, 1, age: const Duration(minutes: 10));
+        expect(
+          find.descendant(
+            of: line,
+            matching: find.text('1 agent · none running, machine offline'),
+          ),
+          findsOneWidget,
+        );
+        await unmount(tester, c);
+      },
+    );
+
     testWidgets('one: "1 agent" with a chevron, no avatar and no agent row', (
       tester,
     ) async {
       final c = await mount(tester, 1);
       expect(
-        find.descendant(of: line, matching: find.text('1 agent')),
+        find.descendant(of: line, matching: find.text('1 agent · 0 working')),
         findsOneWidget,
       );
       expect(
@@ -599,7 +637,10 @@ void main() {
       (tester) async {
         final c = await mount(tester, 2, buddies: 3);
         expect(
-          find.descendant(of: line, matching: find.text('2 agents')),
+          find.descendant(
+            of: line,
+            matching: find.text('2 agents · 0 working'),
+          ),
           findsOneWidget,
         );
         await tester.tap(line);
@@ -626,7 +667,7 @@ void main() {
       final c = await mount(tester, 20);
       expect(line, findsOneWidget);
       expect(
-        find.descendant(of: line, matching: find.text('20 agents')),
+        find.descendant(of: line, matching: find.text('20 agents · 0 working')),
         findsOneWidget,
       );
       for (var i = 0; i < 20; i++) {
@@ -648,7 +689,7 @@ void main() {
     });
 
     testWidgets(
-      'tapping the line lists every agent, Working, Waiting, then Idle, with name, role and status',
+      'tapping the line lists every agent, Working, Waiting, Idle, then Kept (closed), with name, role and status',
       (tester) async {
         final f = SuperTabLaunchFixture();
         f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
@@ -667,15 +708,24 @@ void main() {
           agent('dev', 'Nova'),
           agent('rev', 'Sage'),
           agent('idle', 'Iris'),
+          // Closed on its machine and kept by someone: not Idle (Huy, 2026-11-02).
+          agent('kept', 'Kai')
+            ..['workDecision'] = 'keep'
+            ..['downSince'] = DateTime.now().toUtc().toIso8601String()
+            ..['configuration'] = {
+              'engine': 'claude',
+              'model': 'opus',
+              'effort': 'high',
+            },
         ];
         (server.state['agents'] as List)[2]['role'] = 'reviewer';
         (server.state['conversations'] as List)[0]
           ..['leadId'] = 'pm'
-          ..['agentIds'] = ['pm', 'dev', 'rev', 'idle']
+          ..['agentIds'] = ['pm', 'dev', 'rev', 'idle', 'kept']
           ..['assignment'] = {'agentId': 'rev', 'status': 'needs_human'};
         f.app.machineStates['m']!
           ..agents = [
-            for (final id in ['pm', 'dev', 'rev', 'idle'])
+            for (final id in ['pm', 'dev', 'rev', 'idle', 'kept'])
               Agent.fromJson({
                 'id': 'native-$id',
                 'name': id,
@@ -701,7 +751,10 @@ void main() {
         );
         await tester.pump();
         expect(
-          find.descendant(of: line, matching: find.text('4 agents')),
+          find.descendant(
+            of: line,
+            matching: find.text('5 agents · 2 working'),
+          ),
           findsOneWidget,
         );
         expect(find.text('Nova'), findsNothing);
@@ -713,7 +766,7 @@ void main() {
         expect(list, findsOneWidget);
         double top(Finder finder) => tester.getTopLeft(finder).dy;
         final headings = [
-          for (final group in ['Working', 'Waiting', 'Idle'])
+          for (final group in ['Working', 'Waiting', 'Idle', 'Kept (closed)'])
             find.descendant(of: list, matching: find.text(group)),
         ];
         for (final heading in headings) {
@@ -730,6 +783,8 @@ void main() {
           row('rev'),
           headings[2],
           row('idle'),
+          headings[3],
+          row('kept'),
         ];
         for (var i = 1; i < order.length; i++) {
           expect(top(order[i]), greaterThan(top(order[i - 1])));
@@ -761,6 +816,18 @@ void main() {
           );
         }
         expect(find.descendant(of: list, matching: agentAvatar), findsNothing);
+        // Hovering the kept, closed agent reads as its line does, the mockup Huy approved: status, machine, model, effort.
+        Finder tip(String id) => find.ancestor(
+          of: row(id),
+          matching: find.byWidgetPredicate(
+            (w) =>
+                w is Tooltip &&
+                (w.message ?? '').startsWith('Kept (closed) · ') &&
+                (w.message ?? '').endsWith(' · Opus · high'),
+          ),
+        );
+        expect(tip('kept'), findsOneWidget);
+        expect(tip('idle'), findsNothing);
 
         await tester.tap(row('rev'));
         await tester.pump();
@@ -836,32 +903,22 @@ void main() {
         find.descendant(of: dev, matching: find.text('Dev')),
         findsOneWidget,
       );
-      server.state['projects'] = [
-        {
-          ...projectFixture('lead', 'Pilot', 'lead'),
-          'skillSet': 'custom',
-          'roles': [
-            {
-              'id': 'lead',
-              'name': 'Product Manager',
-              'kind': 'lead',
-              'version': 'v1',
-            },
-            {
-              'id': 'research',
-              'name': 'Research Engineer',
-              'kind': 'builder',
-              'version': 'v1',
-            },
-          ],
-        },
-      ];
-      (server.state['agents'] as List)[1]['roleId'] = 'research';
+      // The role the project's document gives it; its badge cut to 12 characters.
+      (server.state['agents'] as List)[1]['roleName'] = 'Research Engineer';
       await c.refresh();
       await show();
       await tester.pumpAndSettle();
       expect(
-        find.descendant(of: dev, matching: find.text('Research Engineer')),
+        find.descendant(of: dev, matching: find.text('Research En…')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: dev,
+          matching: find.byWidgetPredicate(
+            (w) => w is Semantics && w.properties.label == 'Research Engineer',
+          ),
+        ),
         findsOneWidget,
       );
       expect(
@@ -1498,10 +1555,12 @@ void main() {
         expect(find.textContaining('Pilot'), findsWidgets);
         expect(find.textContaining('Beacon'), findsWidgets);
         expect(
-          find.textContaining('Review the onboarding flow'),
+          find.text(
+            'The open task “Review the onboarding flow” loses its agent.',
+          ),
           findsOneWidget,
         );
-        expect(find.textContaining('Product Manager'), findsWidgets);
+        expect(find.textContaining('Product Manager'), findsNothing);
         expect(find.textContaining('only on this machine'), findsOneWidget);
         expect(find.textContaining('Swarm folders'), findsOneWidget);
         if (capture != null) {
@@ -1546,6 +1605,42 @@ void main() {
       },
     );
 
+    testWidgets(
+      'a Swarm-wide Buddy has no project: its name is listed alone and Remove still asks',
+      (tester) async {
+        final server = _RemovalServer();
+        server.state['machines'] = [machine('owner')];
+        server.preview = {
+          'blockedBy': null,
+          'agents': [
+            {'id': 'a1', 'name': 'Wren', 'projectName': ''},
+          ],
+          'soleSourceProjects': <Object>[],
+        };
+        final c = server.controller();
+        await c.refresh();
+        await mount(tester, c);
+        await tester.tap(
+          find.byKey(const ValueKey('super-machine-studio')),
+          buttons: kSecondaryMouseButton,
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byKey(const ValueKey('super-machine-menu-remove')),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Remove Studio from this Swarm?'), findsOneWidget);
+        expect(find.text('Wren'), findsOneWidget);
+        expect(find.textContaining('Wren ·'), findsNothing);
+        expect(find.text('Could not check this machine.'), findsNothing);
+        await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+        await tester.pumpAndSettle();
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
+      },
+    );
+
     testWidgets('a right-click offers it to whoever may remove the machine', (
       tester,
     ) async {
@@ -1570,6 +1665,326 @@ void main() {
       await c.flush();
       c.dispose();
     });
+
+    testWidgets(
+      'a long press opens the same menu, Details and Remove, not the details',
+      (tester) async {
+        final server = _RemovalServer();
+        server.state['machines'] = [machine('owner')];
+        final c = server.controller();
+        await c.refresh();
+        await mount(tester, c);
+        await tester.longPress(
+          find.byKey(const ValueKey('super-machine-studio')),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Details'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('super-machine-menu-remove')),
+          findsOneWidget,
+        );
+        expect(find.byType(SuperTabMachineDetails), findsNothing);
+        await tester.tap(find.text('Details'));
+        await tester.pumpAndSettle();
+        expect(find.byType(SuperTabMachineDetails), findsOneWidget);
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
+      },
+    );
+
+    testWidgets(
+      'in a browser, pointing at a machine row switches the browser menu off',
+      (tester) async {
+        final told = <bool>[];
+        BrowserMenuGuard.debugWeb = true;
+        BrowserMenuGuard.debugSink = (off) async => told.add(off);
+        addTearDown(BrowserMenuGuard.debugReset);
+        final server = _RemovalServer();
+        server.state['machines'] = [machine('owner')];
+        final c = server.controller();
+        await c.refresh();
+        await mount(tester, c);
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(location: const Offset(900, 700));
+        await tester.pump();
+        expect(told, isEmpty);
+        await mouse.moveTo(
+          tester.getCenter(find.byKey(const ValueKey('super-machine-studio'))),
+        );
+        await tester.pump();
+        expect(told, [true]);
+        await mouse.moveTo(const Offset(900, 700));
+        await tester.pump();
+        expect(told, [true, false]);
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
+      },
+    );
+
+    group('in a browser, the ⋯ on a machine row', () {
+      final more = find.byKey(const ValueKey('super-machine-more-studio'));
+      final rowKey = find.byKey(const ValueKey('super-machine-studio'));
+      double width(WidgetTester tester) => tester.getSize(more).width;
+
+      Future<dynamic> browser(
+        WidgetTester tester, {
+        String owner = 'owner',
+        // A test runs as Android unless it says: these are a mouse's browser.
+        TargetPlatform platform = TargetPlatform.macOS,
+      }) async {
+        debugDefaultTargetPlatformOverride = platform;
+        addTearDown(() => debugDefaultTargetPlatformOverride = null);
+        BrowserMenuGuard.debugWeb = true;
+        BrowserMenuGuard.debugSink = (_) async {};
+        addTearDown(BrowserMenuGuard.debugReset);
+        final server = _RemovalServer();
+        server.state['machines'] = [machine(owner)];
+        final c = server.controller();
+        await c.refresh();
+        await mount(tester, c);
+        return c;
+      }
+
+      Future<void> hover(WidgetTester tester) async {
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        addTearDown(mouse.removePointer);
+        await mouse.addPointer(location: const Offset(900, 700));
+        await mouse.moveTo(tester.getCenter(rowKey));
+        await tester.pump();
+      }
+
+      Future<void> done(WidgetTester tester, dynamic c) async {
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
+        debugDefaultTargetPlatformOverride = null;
+      }
+
+      // Huy, 2026-11-02: a touch screen has nothing to hover, so the ⋯ stays.
+      for (final platform in [TargetPlatform.iOS, TargetPlatform.android]) {
+        testWidgets(
+          'on a ${platform.name} browser it is always there, a finger wide, and a tap opens the menu',
+          (tester) async {
+            final c = await browser(tester, platform: platform);
+            final size = tester.getSize(more);
+            expect(size.width, greaterThanOrEqualTo(44));
+            expect(size.height, greaterThanOrEqualTo(44));
+            // Its corner too: the whole finger's target opens it.
+            await tester.tapAt(tester.getTopLeft(more) + const Offset(2, 2));
+            await tester.pumpAndSettle();
+            expect(find.text('Details'), findsOneWidget);
+            expect(c.isMachineExpanded('studio'), isFalse);
+            await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+            await tester.pumpAndSettle();
+            expect(tester.getSize(more).width, greaterThanOrEqualTo(44));
+            await done(tester, c);
+          },
+        );
+      }
+
+      testWidgets(
+        'a browser with a mouse keeps it for hover, focus or an open menu',
+        (tester) async {
+          final c = await browser(tester);
+          expect(width(tester), 0);
+          await hover(tester);
+          expect(width(tester), 32);
+          await done(tester, c);
+        },
+      );
+
+      testWidgets('shows on pointing and opens the same menu on a left click', (
+        tester,
+      ) async {
+        final c = await browser(tester);
+        expect(width(tester), 0, reason: 'nothing until pointed at');
+        await hover(tester);
+        expect(width(tester), greaterThan(0));
+        await tester.tap(more);
+        await tester.pumpAndSettle();
+        expect(find.text('Details'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('super-machine-menu-remove')),
+          findsOneWidget,
+        );
+        // The click stayed on the button: the row did not expand as well.
+        expect(c.isMachineExpanded('studio'), isFalse);
+        await tester.tap(find.text('Details'));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('super-machine-remove')),
+          findsOneWidget,
+        );
+        await tester.tap(find.byTooltip('Close').last);
+        await tester.pumpAndSettle();
+        await done(tester, c);
+      });
+
+      testWidgets(
+        'keeps Desktop\'s permissions: another person\'s machine has Details alone',
+        (tester) async {
+          final c = await browser(tester, owner: 'someone-else');
+          await hover(tester);
+          await tester.tap(more);
+          await tester.pumpAndSettle();
+          expect(find.text('Details'), findsOneWidget);
+          expect(find.text('Remove from Swarm'), findsNothing);
+          await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+          await tester.pumpAndSettle();
+          await done(tester, c);
+        },
+      );
+
+      testWidgets('a key reaches it: focus shows it and Enter opens the menu', (
+        tester,
+      ) async {
+        final c = await browser(tester);
+        // Tab, as a person does: the row first, the ⋯ after the sidebar's other rows.
+        for (var i = 0; i < 20 && width(tester) == 0; i++) {
+          await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+          await tester.pump();
+        }
+        expect(width(tester), greaterThan(0));
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(find.text('Details'), findsOneWidget);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        await done(tester, c);
+      });
+
+      testWidgets('the menu key on the row itself opens the menu', (
+        tester,
+      ) async {
+        final c = await browser(tester);
+        Focus.of(
+          tester.element(
+            find.byKey(const ValueKey('super-machine-name-studio')),
+          ),
+        ).requestFocus();
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.contextMenu);
+        await tester.pumpAndSettle();
+        expect(find.text('Details'), findsOneWidget);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        await done(tester, c);
+      });
+
+      testWidgets('a computer has no ⋯: its right-click stays the way in', (
+        tester,
+      ) async {
+        final server = _RemovalServer();
+        server.state['machines'] = [machine('owner')];
+        final c = server.controller();
+        await c.refresh();
+        await mount(tester, c);
+        expect(more, findsNothing);
+        await done(tester, c);
+      });
+    });
+
+    testWidgets(
+      'the browser menu stays off while the Swarm menu is open, and comes back when it closes',
+      (tester) async {
+        final told = <bool>[];
+        BrowserMenuGuard.debugWeb = true;
+        BrowserMenuGuard.debugSink = (off) async => told.add(off);
+        addTearDown(BrowserMenuGuard.debugReset);
+        final server = _RemovalServer();
+        server.state['machines'] = [machine('owner')];
+        final c = server.controller();
+        await c.refresh();
+        await mount(tester, c);
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        addTearDown(mouse.removePointer);
+        await mouse.addPointer(location: const Offset(900, 700));
+        final row = find.byKey(const ValueKey('super-machine-studio'));
+        await mouse.moveTo(tester.getCenter(row));
+        await tester.pump();
+        await tester.tap(row, buttons: kSecondaryMouseButton);
+        await tester.pumpAndSettle();
+        expect(find.text('Details'), findsOneWidget);
+        // The menu's barrier took the pointer from the row: a second right-click
+        // lands on the barrier and must not bring up the browser's menu.
+        await mouse.moveTo(const Offset(900, 700));
+        await tester.pump();
+        expect(told, [true], reason: 'still off with the menu open');
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(told, [
+          true,
+          false,
+        ], reason: 'a terminal has its Copy and Paste again');
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
+      },
+    );
+
+    testWidgets(
+      'an expanded machine: a right-click on its readings opens the same menu, with the browser menu off',
+      (tester) async {
+        final told = <bool>[];
+        BrowserMenuGuard.debugWeb = true;
+        BrowserMenuGuard.debugSink = (off) async => told.add(off);
+        addTearDown(BrowserMenuGuard.debugReset);
+        final server = _RemovalServer();
+        server.state['machines'] = [machine('owner')];
+        final c = server.controller();
+        await c.refresh();
+        await mount(tester, c);
+        await tester.tap(find.byKey(const ValueKey('super-machine-studio')));
+        await tester.pumpAndSettle();
+        final below = find.textContaining(
+          RegExp('No agents yet|Offline|Refreshing|reach Harness'),
+        );
+        expect(below, findsOneWidget);
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        addTearDown(mouse.removePointer);
+        await mouse.addPointer(location: const Offset(900, 700));
+        await mouse.moveTo(tester.getCenter(below));
+        await tester.pump();
+        expect(told.last, isTrue);
+        await tester.tap(below, buttons: kSecondaryMouseButton);
+        await tester.pumpAndSettle();
+        expect(find.text('Details'), findsOneWidget);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
+      },
+    );
+
+    testWidgets(
+      'losing the screen with the Swarm menu open gives the browser menu back',
+      (tester) async {
+        final told = <bool>[];
+        BrowserMenuGuard.debugWeb = true;
+        BrowserMenuGuard.debugSink = (off) async => told.add(off);
+        addTearDown(BrowserMenuGuard.debugReset);
+        final server = _RemovalServer();
+        server.state['machines'] = [machine('owner')];
+        final c = server.controller();
+        await c.refresh();
+        await mount(tester, c);
+        await tester.tap(
+          find.byKey(const ValueKey('super-machine-studio')),
+          buttons: kSecondaryMouseButton,
+        );
+        await tester.pumpAndSettle();
+        expect(BrowserMenuGuard.isOff, isTrue);
+        // Sign-out or access lost: the workspace goes, Navigator and all.
+        await tester.pumpWidget(const SizedBox());
+        expect(BrowserMenuGuard.isOff, isFalse);
+        expect(told.last, isFalse);
+        await c.flush();
+        c.dispose();
+      },
+    );
 
     testWidgets('machine with a Product Manager cannot be removed', (
       tester,
@@ -2188,6 +2603,51 @@ void main() {
       await tester.pump();
     },
   );
+
+  // Task #2195: a Swarm that isn't showing reads no machine's usage.
+  testWidgets('reads nothing while its Swarm is away, and reads at once on its return', (tester) async {
+    final f = SuperTabLaunchFixture();
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+    f.connection.server.state['machines'] = [
+      {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 8},
+    ];
+    final c = await f.app.superTabs.open(tabId);
+    await c.refresh();
+    var reads = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 300,
+            height: 400,
+            child: SuperTabMachines(
+              controller: c,
+              app: f.app,
+              onAddAgent: (_) {},
+              readLocal: (_) async {
+                reads++;
+                return null;
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(seconds: 1));
+    expect(reads, greaterThan(0));
+    c.away = true;
+    await tester.pump(const Duration(seconds: 16));
+    final atAway = reads;
+    await tester.pump(const Duration(seconds: 40));
+    expect(reads, atAway);
+    c.away = false;
+    await tester.pump(const Duration(seconds: 1));
+    expect(reads, greaterThan(atAway));
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+    f.app.superTabs.dispose();
+    await tester.pump();
+  });
 
   testWidgets(
     'machine settings show its name, Agents as memory allows, and Remove from this Swarm',
@@ -2886,7 +3346,7 @@ void main() {
   // Ken, 2026-10-28: work kept landing on engines that could not run on a machine. The only visible change: an engine that
   // is out of quota or suspended there has its name struck through in the machine's Subscriptions, with why on hover.
   testWidgets(
-    'strikes through an engine out of quota or suspended on a machine, with why on hover',
+    'strikes through an engine suspended on a machine, and says on hover when one has no quota left',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(900, 1400));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -2964,8 +3424,8 @@ void main() {
         findsOneWidget,
       );
       expect(tip('claude'), startsWith(suspended));
-      // Out of quota: struck, its figure kept.
-      expect(decoration('codex', 'Codex'), TextDecoration.lineThrough);
+      // Out of quota: information, never struck; its figure kept.
+      expect(decoration('codex', 'Codex'), isNull);
       expect(
         find.descendant(
           of: find.byKey(const ValueKey('super-machine-allowance-m-codex')),
@@ -2973,12 +3433,8 @@ void main() {
         ),
         findsOneWidget,
       );
-      expect(
-        tip('codex'),
-        startsWith(
-          'Not used for new work here: no quota left until it resets.',
-        ),
-      );
+      expect(tip('codex'), startsWith('No quota left until it resets.'));
+      expect(tip('codex'), isNot(contains('Not used for new work')));
       expect(tester.takeException(), isNull);
 
       // Once neither holds, nothing is struck.

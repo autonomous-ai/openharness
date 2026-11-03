@@ -5,6 +5,7 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/phone/phone_shell.dart';
 import 'package:harness_mobile/phone/agent_home.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/swarm/swarm_activity_page.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 
@@ -82,13 +83,20 @@ void main() {
           }
           await tester.pump();
           await tester.pump(const Duration(milliseconds: 400));
-          if (on) {
+          if (on && kind == 'decision') {
+            // A decision opens in Activity, at it: no chat shows decisions.
+            final page = tester.widget<SwarmActivityPage>(
+              find.byType(SwarmActivityPage),
+            );
+            expect((page.focus, page.swarmId), ('decision:d1', 'tab-b'));
+            expect(find.byType(SwarmConversationPage), findsNothing);
+            expect(find.byType(SwarmPage, skipOffstage: false), findsOneWidget);
+          } else if (on) {
             final page = tester.widget<SwarmConversationPage>(
               find.byType(SwarmConversationPage),
             );
             expect(page.conversationId, target.conversationId);
             expect(page.messageId, target.messageId);
-            expect(page.decisionId, target.decisionId);
           } else {
             expect(find.byType(SwarmConversationPage), findsNothing);
             expect(find.byType(AgentHome), findsOneWidget);
@@ -122,9 +130,7 @@ void main() {
   });
 
   testWidgets("a tap on a project chat's notice opens the project on Home "
-      "C's screen, its chat at the message, its decision asked", (
-    tester,
-  ) async {
+      "C's screen, its chat at the message", (tester) async {
     final fake = FakeSwarm();
     fake.routes['/api/super-tabs/list'] = (_) => {
       'tabs': [
@@ -151,7 +157,7 @@ void main() {
       swarmId: tab,
       conversationId: leadChat,
       messageId: 'm7',
-      decisionId: 'd1',
+      decisionId: null,
     );
     for (var i = 0; i < 20; i++) {
       await tester.pump(const Duration(milliseconds: 100));
@@ -161,10 +167,7 @@ void main() {
     final chat = tester.widget<SwarmConversationPage>(
       find.byType(SwarmConversationPage),
     );
-    expect(
-      (chat.conversationId, chat.messageId, chat.decisionId),
-      (leadChat, 'm7', 'd1'),
-    );
+    expect((chat.conversationId, chat.messageId), (leadChat, 'm7'));
   });
 
   testWidgets('a tap that launched the app opens it too', (tester) async {

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/logging/app_log.dart';
 import 'package:harness_mobile/swarm/swarm_asks.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
@@ -236,6 +237,28 @@ void main() {
       expect(r.asks.error, isNotNull);
     });
 
+    test('goes in the log once, however many reads of the asks fail', () async {
+      final before = appLog;
+      final log = _Log();
+      appLog = log;
+      addTearDown(() => appLog = before);
+      final r = rig(decisions: 1);
+      final failure = const SuperTabFailure('INTERNAL', 'Broken');
+      r.swarm.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) =>
+          throw failure;
+      r.swarm.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
+        'mentions': <Object>[],
+      };
+
+      await r.reader.refresh();
+      await settle();
+      await r.reader.refresh();
+      await settle();
+
+      expect(r.asks.error, isNotNull);
+      expect(log.errors, [failure]);
+    });
+
     test('ends when the Swarm itself could not be read', () async {
       final r = rig();
       r.swarm.routes['/api/super-tabs/$tab/parts'] = (_) =>
@@ -315,6 +338,148 @@ void main() {
       expect(r.asks.mentions.single.text, 'Can you check the copy?');
     },
   );
+
+  // Tony's phone list, task 26, as Desktop's decisions.dart.
+  group('Let the coordinator decide', () {
+    Future<
+      (
+        ({FakeSwarm swarm, SwarmReader reader, SwarmAsks asks}),
+        SuperTabDecision,
+      )
+    >
+    open({Map<String, dynamic> Function(String id)? row}) async {
+      final r = rig(decisions: 1);
+      r.swarm.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
+        'decisions': [(row ?? decisionRow)('d1')],
+      };
+      await r.reader.refresh();
+      await settle();
+      return (r, r.asks.decisions.single);
+    }
+
+    test('sends a delegation, with no choice of the person\'s', () async {
+      final (r, decision) = await open();
+      Map<String, dynamic>? command;
+      r.swarm.routes['/api/super-tabs/$tab/commands'] = (body) {
+        command = (body as Map)['command'] as Map<String, dynamic>;
+        return {'ok': true};
+      };
+      expect(await r.asks.delegate(decision), isTrue);
+      expect(command, {
+        'type': 'decision.answer',
+        'decisionId': 'd1',
+        'delegate': true,
+      });
+    });
+
+    test(
+      'with its reply lost, goes again as the same delegation under the same '
+      'receipt, never as a choice',
+      () async {
+        final (r, decision) = await open();
+        final bodies = <Map<String, dynamic>>[];
+        var lose = true;
+        r.swarm.routes['/api/super-tabs/$tab/commands'] = (body) {
+          bodies.add(body as Map<String, dynamic>);
+          if (lose) throw StateError('Offline');
+          return {'ok': true};
+        };
+        expect(await r.asks.delegate(decision), isFalse);
+        expect(r.asks.unconfirmedDelegate(decision), isTrue);
+        expect(
+          r.asks.unconfirmed(decision),
+          isNull,
+          reason: 'no option of theirs is waiting',
+        );
+        lose = false;
+        expect(await r.asks.delegate(decision), isTrue);
+        expect(bodies[1]['operationId'], bodies[0]['operationId']);
+        expect(bodies[1]['command'], bodies[0]['command']);
+      },
+    );
+
+    test('is offered only with a recommended option it can take', () async {
+      Map<String, dynamic> row(String id, Object? recommended) => {
+        ...decisionRow(id),
+        'options': ['A', 'B'],
+        'recommended': recommended,
+      };
+      expect((await open(row: (id) => row(id, 1))).$2.canDelegate, isTrue);
+      expect((await open(row: (id) => row(id, null))).$2.canDelegate, isFalse);
+      expect((await open(row: (id) => row(id, 2))).$2.canDelegate, isFalse);
+    });
+  });
+
+  group('the answered list', () {
+    Map<String, dynamic> answeredRow(String id, {bool delegated = false}) => {
+      ...decisionRow(id),
+      'choice': 0,
+      if (delegated) 'delegated': true,
+    };
+
+    test('reads what the coordinator answered too', () async {
+      final r = rig();
+      r.swarm.routes['/api/super-tabs/$tab/decisions?state=settled'] = (_) => {
+        'decisions': [answeredRow('d1', delegated: true), answeredRow('d2')],
+      };
+      await r.reader.refresh();
+      await r.asks.readAnswered();
+      expect(
+        [for (final d in r.asks.answered) (d.id, d.delegated)],
+        [('d1', true), ('d2', false)],
+      );
+    });
+
+    test('falls back on a backend from before Let PM decide, and shows none '
+        'from one before decisions', () async {
+      final r = rig();
+      r.swarm.routes['/api/super-tabs/$tab/decisions?state=settled'] = (_) =>
+          throw const SuperTabFailure('BAD', 'Bad.', statusCode: 400);
+      r.swarm.routes['/api/super-tabs/$tab/decisions?state=answered'] = (_) => {
+        'decisions': [answeredRow('d2')],
+      };
+      await r.reader.refresh();
+      await r.asks.readAnswered();
+      expect(r.asks.answered.single.id, 'd2');
+
+      final none = rig();
+      none.swarm.routes['/api/super-tabs/$tab/decisions?state=settled'] = (_) =>
+          throw const SuperTabFailure(
+            'NOT_FOUND',
+            'Not found.',
+            statusCode: 404,
+          );
+      await none.reader.refresh();
+      await none.asks.readAnswered();
+      expect(none.asks.answered, isEmpty);
+      expect(none.asks.answeredError, isNull);
+    });
+
+    test('says when it could not be read', () async {
+      final r = rig();
+      r.swarm.routes['/api/super-tabs/$tab/decisions?state=settled'] = (_) =>
+          throw StateError('Offline');
+      await r.reader.refresh();
+      await r.asks.readAnswered();
+      expect(r.asks.answeredError, isNotNull);
+    });
+
+    test(
+      'shows nothing read before the Swarm was read again from nothing',
+      () async {
+        final r = rig();
+        r.swarm.routes['/api/super-tabs/$tab/decisions?state=settled'] = (_) =>
+            {
+              'decisions': [answeredRow('d1')],
+            };
+        await r.reader.refresh();
+        await r.asks.readAnswered();
+        expect(r.asks.answered, hasLength(1));
+        r.reader.revoke();
+        expect(r.asks.answered, isEmpty);
+      },
+    );
+  });
 
   test('a backend from before decisions has none to show', () async {
     final r = rig(decisions: 1);
@@ -725,4 +890,17 @@ void main() {
       expect(news, ['d2']);
     },
   );
+}
+
+class _Log implements AppLog {
+  final errors = <Object?>[];
+
+  @override
+  void record(
+    AppLogLevel level,
+    String category,
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) => errors.add(error);
 }

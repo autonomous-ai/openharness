@@ -1,4 +1,4 @@
-import { subscribeConnectorsChanged, subscribeDeskChanged, subscribeDeviceKeysChanged, subscribeDeviceMachineListChanged, subscribeZooChanged } from './bus.js'
+import { subscribeConnectorsChanged, subscribeDeskChanged, subscribeDeviceKeysChanged, subscribeDeviceMachineListChanged, subscribeTuiOpen, subscribeZooChanged, TUI_OPEN_FOR_MS, tuiOpenNow } from './bus.js'
 import { relaySwarmChanges } from './swarmClientPushes.js'
 
 /**
@@ -21,6 +21,9 @@ import { relaySwarmChanges } from './swarmClientPushes.js'
  *    for the daemon: it re-reads the envelope and merges it into this computer's connections.
  *  - `swarm_changed`    — a Swarm the account is in changed (lib/swarmClientPushes.ts): the
  *    windows read it again instead of every 3 s.
+ *  - `__tui_open`       — a terminal app of the account is open, good for `forMs` (bus.ts noteTuiPresence); said at
+ *    attach too, with 0 when none is. For the daemon itself: it holds back from the relay the events only a terminal
+ *    app reads while none is open (cli gateway.ts). `__` so a daemon from before it drops it without a word.
  *
  * `zoo` is the server's daemons switch (lib/daemonsSwitch.ts): off, the zoo channel is not even listened
  * on, since nothing publishes it.
@@ -57,6 +60,11 @@ export async function relayAccountPushes(userId: string, send: (frame: unknown) 
       send({ t: 'down', connId: '', frame: { type: 'connectors_changed', payload: { revision: msg.revision } } })
     }))
     unsubs.push(await relaySwarmChanges(userId, (frame) => send({ t: 'down', connId: '', frame })))
+    const tuiOpen = (forMs: number) => send({ t: 'down', connId: '', frame: { type: '__tui_open', payload: { forMs } } })
+    unsubs.push(await subscribeTuiOpen(userId, () => tuiOpen(TUI_OPEN_FOR_MS)))
+    // Unreadable (null): no word at all, so the daemon relays every event rather than hold a terminal app's back.
+    const open = await tuiOpenNow(userId)
+    if (open !== null) tuiOpen(open ? TUI_OPEN_FOR_MS : 0)
   } catch (err) {
     stop()
     throw err

@@ -250,7 +250,7 @@ void main() {
       await openTasks(tester);
 
       for (final (id, text) in [
-        ('g-review', 'Nova · Waiting for review · 3m · PM posted 1m ago'),
+        ('g-review', 'Nova · Waiting on others · 3m · Posted 1m ago'),
         ('g-work', 'Atlas · Working · 4m ago'),
       ]) {
         final row = key('swarm-task-$id');
@@ -306,13 +306,13 @@ void main() {
       await openTasks(tester);
       expect(
         line(tester, 'g-review'),
-        'Nova · Waiting for review · 3m · PM posted 1m ago',
+        'Nova · Waiting on others · 3m · Posted 1m ago',
       );
 
       await tester.pump(const Duration(minutes: 1));
       expect(
         line(tester, 'g-review'),
-        'Nova · Waiting for review · 4m · PM posted 2m ago',
+        'Nova · Waiting on others · 4m · Posted 2m ago',
       );
       expect(line(tester, 'g-work'), 'Atlas · Working · 5m ago');
     });
@@ -357,7 +357,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         line(tester, 'g-review'),
-        'Nova · Waiting for review · 3m · PM posted 1m ago',
+        'Nova · Waiting on others · 3m · Posted 1m ago',
       );
       expect(find.byType(Skeleton), findsNothing);
       expect(key('swarm-project-loading'), findsNothing);
@@ -433,7 +433,7 @@ void main() {
           'g-ask',
           'Nova · Waiting on person-tony · Ship it behind a flag? · 12m',
         ),
-        ('g-review', 'Nova · Waiting for review · 3m · PM posted 1m ago'),
+        ('g-review', 'Nova · Waiting on others · 3m · Posted 1m ago'),
         ('g-work', 'Atlas · Working · 4m ago'),
       ]) {
         expect(

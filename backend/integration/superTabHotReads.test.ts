@@ -10,7 +10,6 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import { listGroupIndexes } from '../src/superTabs/parts/indexed.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
-import { waitingIn } from '../src/superTabs/decisions.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import { machineSwarms, swarmsIn } from '../src/superTabs/swarmRows.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
@@ -177,6 +176,49 @@ it('reuses the host timestamp at the same stamp, including a repeated wake with 
   expect((await direct.changes(owner, s.machineId, { full: true })).tabs).toEqual(changed.tabs)
 })
 
+/** What lastChangedAt answered before it read one key per Swarm: the newest changedAt over every part, by full scan. */
+async function newestByScan(tabIds: string[]): Promise<Map<string, number>> {
+  const newest = new Map<string, number>()
+  for (const name of ['SwarmHead', 'SwarmMember', 'SwarmAgent', 'SwarmGroup', 'SwarmMachine', 'SwarmStart', 'SwarmProgress']) {
+    const reply = await db.$runCommandRaw({ aggregate: name, cursor: {}, pipeline: [{ $match: { tabId: { $in: tabIds } } },
+      { $group: { _id: '$tabId', at: { $max: '$changedAt' } } }] }) as unknown as { cursor: { firstBatch: Array<{ _id: string; at: { $date: string } | null }> } }
+    for (const row of reply.cursor.firstBatch) {
+      const at = row.at ? Date.parse(row.at.$date) : 0
+      if (at > (newest.get(row._id) ?? 0)) newest.set(row._id, at)
+    }
+  }
+  return newest
+}
+
+it('reads each Swarm\'s newest change from one index key per part collection, with the answer a full scan gives', async () => {
+  const a = await scene(), b = await scene()
+  clock = Date.now()
+  await store.execute(owner, b.tabId, { operationId: randomUUID(), command: {
+    type: 'message.send', conversationId: b.web, text: 'A newer change', replyTo: null, recipientIds: [] } })
+  const expected = await newestByScan([a.tabId, b.tabId])
+  const entries = await profiled(async () => expect(await lastChangedAt(db, [a.tabId, b.tabId])).toEqual(expected))
+  const scans = entries.filter(e => timestampScans([e]).length)
+  expect(scans).toHaveLength(7)
+  // A busy Swarm's scan read every key of its parts (prod's largest: 1,300 groups, 873 starts, 721 agents, 2026-10-30).
+  for (const scan of scans) expect(scan.keysExamined ?? 0, `${scan.command?.aggregate} ${scan.planSummary}`).toBeLessThanOrEqual(4)
+  // A head is one document per Swarm, so its plan may stay an IXSCAN; collections with many parts per Swarm skip them.
+  expect(scans.find(s => s.command?.aggregate === 'SwarmGroup')?.planSummary).toMatch(/DISTINCT_SCAN/)
+})
+
+it('lists Swarms with their newest change read once per stamp, not on every list', async () => {
+  const s = await scene()
+  const reads = new SwarmReads(store, { now: () => Date.now() })
+  swarmReadCache()!.drop(s.tabId)
+  const first = await reads.list(owner)
+  expect(first.tabs.find(t => t.id === s.tabId)?.lastChangedAt).toBe((await newestByScan([s.tabId])).get(s.tabId))
+  expect(timestampScans(await profiled(() => reads.list(owner)))).toEqual([])
+  clock = Date.now()
+  await store.execute(owner, s.tabId, { operationId: randomUUID(), command: {
+    type: 'message.send', conversationId: s.web, text: 'Listed again', replyTo: null, recipientIds: [] } })
+  const again = await reads.list(owner)
+  expect(again.tabs.find(t => t.id === s.tabId)?.lastChangedAt).toBe((await newestByScan([s.tabId])).get(s.tabId))
+})
+
 describe('delivery authority reads', () => {
   it.each(['person', 'agent'] as const)('claim, hold and ack from a %s leave unrelated conversations and machine parts unread', async sender => {
     const s = await scene()
@@ -192,8 +234,8 @@ describe('delivery authority reads', () => {
       const groups = entries.filter(e => e.ns.endsWith('.SwarmGroup') && e.op !== 'update')
       const returned = groups.reduce((sum, e) => sum + (e.nreturned ?? 0), 0)
       console.log(`delivery ${action.type}: groups=${returned}, docs=${entries.reduce((sum, e) => sum + (e.docsExamined ?? 0), 0)}`)
-      // The project and Swarm Lead conversations plus the receiver's group; no quiet groups or finished work.
-      expect(returned, `${action.type}: ${JSON.stringify(plan(groups))}`).toBe(3)
+      // The project's Lead conversation plus the receiver's group; no quiet groups, finished work or removed Leads conversation.
+      expect(returned, `${action.type}: ${JSON.stringify(plan(groups))}`).toBe(2)
       expect(groups.every(e => !!e.command?.hint), 'delivery reads use the installed group indexes').toBe(true)
       expect(entries.filter(e => e.ns.endsWith('.SwarmMachine'))).toEqual([])
     }
@@ -207,6 +249,9 @@ describe('hot reads read only what they return (roadmap 2.7)', () => {
     // Another Swarm with running work: a read not bounded by its Swarm reads that one's rows too.
     await scene()
     s = await scene()
+    // One decision waiting in the work ended last, which that end closes (decisions.ts withdrawIn).
+    await db.superTabDecision.create({ data: { id: `${s.tabId}-web`, tabId: s.tabId, batchId: 'w', projectId: 'lead', conversationId: s.web,
+      personId: owner.sub, askerAgentId: s.lead, question: 'Ship?', options: ['A', 'B'], recommended: 0, unblocks: 'Work', createdAt: new Date(MIGRATED) } })
     const hosts = new HostReads(store, { now: () => clock })
     clock = Date.now()
     entries = await profiled(async () => {
@@ -214,7 +259,6 @@ describe('hot reads read only what they return (roadmap 2.7)', () => {
       clock = Date.now()
       await hosts.changes(owner, s.machineId, { cursor: first.cursor })
       await store.deliveries(owner, s.tabId, s.lead)
-      await db.$transaction(tx => waitingIn(tx, s.tabId, s.web))
       // Last: ending the running work releases its run record and open deliveries.
       const work = ((await db.swarmGroup.findFirst({ where: { tabId: s.tabId, key: s.web } }))!.data as { assignment: { id: string } }).assignment.id
       await store.execute(owner, s.tabId, { operationId: randomUUID(),
@@ -241,10 +285,17 @@ describe('hot reads read only what they return (roadmap 2.7)', () => {
   })
 
   it('the Lead\'s poll reads only the Swarm\'s open deliveries, not each agent\'s closed ones', () => {
-    const rows = reads(entries, 'SuperTabDelivery', ['tabId', 'status'], ['agentId', 'messageId', 'assignmentId', 'conversationId'])
+    // Prisma sends the open statuses as an $or; the claimed-only read ending deliveries makes is the next test's.
+    const rows = reads(entries, 'SuperTabDelivery', ['tabId', 'status', 'or'], ['agentId', 'messageId', 'assignmentId', 'conversationId'])
     expect(rows).toHaveLength(1)
     // One key past the last of each open status at most: never one per agent.
     expect(rows[0]!.keysExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(rows[0]!.nreturned! + 3)
+  })
+
+  it('ending deliveries finds the machines to tell from the Swarm\'s claimed ones alone', () => {
+    const rows = reads(entries, 'SuperTabDelivery', ['tabId', 'status'], ['or', 'agentId', 'messageId', 'assignmentId', 'conversationId'])
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) expect(row.keysExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(row.nreturned! + 1)
   })
 
   it('ending work reads only its own open deliveries, never the Swarm\'s others', () => {
@@ -253,10 +304,12 @@ describe('hot reads read only what they return (roadmap 2.7)', () => {
     for (const row of rows) expect(row.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(row.nreturned!)
   })
 
-  it('whether a decision waits in a conversation reads only that conversation\'s decisions', () => {
+  it('ending work closes its waiting decisions reading only that conversation\'s, never the Swarm\'s others', async () => {
     const rows = reads(entries, 'SuperTabDecision', ['tabId', 'conversationId'], ['personId'])
-    expect(rows).toHaveLength(1)
-    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(rows[0]!.nreturned!)
+    expect(rows.length, JSON.stringify(entries.filter(e => e.ns.endsWith('.SuperTabDecision')))).toBeGreaterThan(0)
+    // The other quiet conversations hold waiting decisions too: only the one in this work is examined.
+    for (const row of rows) expect(row.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(1)
+    expect(await db.superTabDecision.findUnique({ where: { id: `${s.tabId}-web` } })).toMatchObject({ withdrawn: true })
   })
 
   it('no read of these scans a whole collection', () => {

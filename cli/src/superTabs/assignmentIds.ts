@@ -12,9 +12,13 @@ import { ENDED_WORK } from './wire.js'
 type Json = Record<string, unknown>
 const object = (value: unknown): Json => value && typeof value === 'object' && !Array.isArray(value) ? value as Json : {}
 
-/** The commands that name an assignment, and those an agent sends only for its own task. */
+/** The commands that name an assignment; those that name the agent's own task's group when sent with none; and the one an
+ *  agent sends only for its own task. A check is anyone's in the task to record (backend commands.ts work.check): a
+ *  Reviewer holding a step records its verdict on the task's checks (E2E 2026-11-02: refused here, so the Engineer passed
+ *  its own review check). */
 export const ASSIGNMENT_COMMANDS: ReadonlySet<string> = new Set(['work.status', 'work.check', 'work.cancel', 'work.resume'])
 const OWN_TASK: ReadonlySet<string> = new Set(['work.status', 'work.check'])
+const HOLDER_ONLY: ReadonlySet<string> = new Set(['work.status'])
 const CURRENT = 'current'
 
 /** The group's active assignment in a Swarm's state (its old shape, as the daemon reassembles it), or null. */
@@ -50,7 +54,7 @@ export function withCurrentAssignment(command: Json, state: unknown, agentId: st
   const group = OWN_TASK.has(String(command.type)) && !command.conversationId ? ownGroup(state, agentId) : null
   if (group) command = { ...command, conversationId: group }
   const current = currentAssignment(state, command.conversationId)
-  if (!current || (OWN_TASK.has(String(command.type)) && current.agentId !== agentId)) return command
+  if (!current || (HOLDER_ONLY.has(String(command.type)) && current.agentId !== agentId)) return command
   return { ...command, assignmentId: current.id }
 }
 
@@ -58,6 +62,6 @@ export function withCurrentAssignment(command: Json, state: unknown, agentId: st
 export function staleAssignmentHint(command: Json, state: unknown, agentId: string): string {
   const current = currentAssignment(state, command.conversationId)
   if (!current) return 'This group has no active assignment now.'
-  if (OWN_TASK.has(String(command.type)) && current.agentId !== agentId) return 'This group\'s active assignment is another agent\'s, not yours.'
+  if (HOLDER_ONLY.has(String(command.type)) && current.agentId !== agentId) return 'This group\'s active assignment is another agent\'s, not yours.'
   return `This group's active assignment is ${current.id}: send it again with "assignmentId": "${current.id}" (or "current").`
 }

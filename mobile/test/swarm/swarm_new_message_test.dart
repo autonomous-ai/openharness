@@ -21,9 +21,11 @@ import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/swarm/swarm_voice.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
+import 'swarm_paste_fakes.dart';
 
 /// New message on Swarm Home (Tony, 10-30: as Slack Mobile starts one): the
 /// header's compose is gone, a round + floats at Home's bottom right, and it
@@ -766,6 +768,33 @@ void main() {
       expectHomeCProject('Web');
     });
 
+    testWidgets('Paste attaches the clipboard\'s picture, which goes with '
+        'the message to the chat picked', (tester) async {
+      FakeSwarmClipboard(image: pngBytes()).install(tester);
+      final uploads = FakeUploads();
+      final fake = backend();
+      await pump(tester, fake, upload: uploads.upload);
+      await open(tester);
+      await tester.tap(row(webLead));
+      await tester.pumpAndSettle();
+
+      await openFieldMenu(tester, key('swarm-new-message-field'));
+      await tester.tap(
+        find.widgetWithText(TextSelectionToolbarTextButton, 'Paste'),
+      );
+      await tester.pumpAndSettle();
+      expect(key('swarm-outgoing-pasted-image.png'), findsOneWidget);
+
+      await tester.tap(key('swarm-new-message-send'));
+      await tester.pumpAndSettle();
+
+      expect(uploads.names, ['pasted-image.png']);
+      expect(uploads.asked.single.conversationId, webLead);
+      expect(sends(fake).single['command']['attachmentIds'], [
+        'id-pasted-image.png',
+      ]);
+    });
+
     testWidgets('+ attaches files, which go up to the chat picked and with '
         'its message', (tester) async {
       final uploads = FakeUploads();
@@ -795,41 +824,255 @@ void main() {
       expect(sheetOpen(), isFalse);
     });
 
-    testWidgets('the mic writes into the box, and its second tap sends to '
-        'the chat picked', (tester) async {
-      final dictation = _Dictation();
+    testWidgets('its X clears the text only: hidden while empty, the files '
+        'stay with Send on for them, focus stays, and no Tag', (tester) async {
       final fake = backend();
-      await pump(
+      pickSwarmFiles = () async => [
+        XFile.fromData(
+          Uint8List.fromList([1, 2, 3]),
+          name: 'build.log',
+          path: '/copies/build.log',
+        ),
+      ];
+      await pump(tester, fake, upload: FakeUploads().upload);
+      await open(tester);
+      await tester.tap(row(webLead));
+      await tester.pump();
+      expect(key('swarm-tag'), findsNothing, reason: 'no @ picker here');
+      expect(key('swarm-new-message-clear'), findsNothing);
+      await tester.tap(key('swarm-new-message-attach'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-attach-files'));
+      await tester.pumpAndSettle();
+      await write(tester, 'The log');
+      expect(key('swarm-new-message-clear'), findsOneWidget);
+
+      await tester.tap(key('swarm-new-message-clear'));
+      await tester.pump();
+
+      expect(field(tester), '');
+      expect(key('swarm-new-message-clear'), findsNothing);
+      expect(key('swarm-outgoing-build.log'), findsOneWidget);
+      expect(
+        tester
+            .widget<TextField>(
+              inside(key('swarm-new-message-field'), find.byType(TextField)),
+            )
+            .focusNode!
+            .hasFocus,
+        isTrue,
+      );
+      expect(
+        tester.widget<SwarmRoundButton>(key('swarm-new-message-send')).onTap,
+        isNotNull,
+      );
+      expect(sends(fake), isEmpty);
+    });
+
+    testWidgets('while a message is on its way its X takes no touch, as the '
+        'field does', (tester) async {
+      final fake = backend();
+      final take = fake.routes['/api/super-tabs/$tab/commands']!;
+      final answer = Completer<void>();
+      fake.routes['/api/super-tabs/$tab/commands'] = (body) async {
+        await answer.future;
+        return take(body);
+      };
+      await pump(tester, fake);
+      await open(tester);
+      await tester.tap(row(webLead));
+      await write(tester, 'Ship it tonight');
+      await tester.tap(key('swarm-new-message-send'));
+      await tester.pump();
+      expect(key('swarm-new-message-sending'), findsOneWidget);
+
+      await tester.tap(key('swarm-new-message-clear'), warnIfMissed: false);
+      await tester.pump();
+
+      expect(field(tester), 'Ship it tonight');
+      answer.complete();
+      await tester.pumpAndSettle();
+      expect(sends(fake).single['command']['text'], 'Ship it tonight');
+    });
+
+    /// The sheet open on the Lead's chat — or on none, unless [pick] — its
+    /// mic heard by [dictation], or recorded and transcribed by [stt].
+    Future<FakeSwarm> talking(
+      WidgetTester tester,
+      _Dictation? dictation, {
+      FakeTranscriber? stt,
+      bool pick = true,
+      void Function(SwarmHost host)? host,
+    }) async {
+      final fake = backend();
+      final pumped = await pump(
         tester,
         fake,
         voice: () => VoiceInputController(
-          transcriber: FakeTranscriber().call,
+          transcriber: (stt ?? FakeTranscriber()).call,
           recorder: FakeVoiceRecorder(),
           language: ValueNotifier('vi'),
         ),
         dictation: dictation,
       );
+      host?.call(pumped);
       await open(tester);
-      await tester.tap(row(leadChat));
+      if (pick) await tester.tap(row(leadChat));
       await tester.pump();
+      return fake;
+    }
 
-      await tester.tap(
-        inside(find.byType(SwarmNewMessageSheet), key('swarm-mic')),
-      );
+    Finder inSheet(String value) =>
+        inside(find.byType(SwarmNewMessageSheet), key(value));
+
+    Future<void> tapIn(WidgetTester tester, String value) async {
+      await tester.tap(inSheet(value));
       for (var i = 0; i < 5; i++) {
         await tester.pump();
       }
+    }
+
+    testWidgets('the mic writes into the box; stop keeps the words and sends '
+        'nothing, and Send then sends to the chat picked', (tester) async {
+      final dictation = _Dictation();
+      final fake = await talking(tester, dictation);
+
+      await tapIn(tester, 'swarm-mic');
       dictation.say('Mai họp lúc 9 giờ');
       await tester.pump();
       expect(field(tester), 'Mai họp lúc 9 giờ');
+      expect(inSheet('swarm-new-message-send'), findsNothing);
+      expect(inSheet('swarm-new-message-attach'), findsNothing);
+      expect(inSheet('swarm-new-message-clear'), findsNothing);
+      expect(inSheet('swarm-voice-stop'), findsOneWidget);
 
-      await tester.tap(
-        inside(find.byType(SwarmNewMessageSheet), key('swarm-mic')),
-      );
+      await tapIn(tester, 'swarm-voice-stop');
+      await tester.pumpAndSettle();
+      expect(sends(fake), isEmpty, reason: 'voice never sends by itself');
+      expect(field(tester), 'Mai họp lúc 9 giờ');
+      expect(sheetOpen(), isTrue);
+      expect(inSheet('swarm-new-message-send'), findsOneWidget);
+      expect(inSheet('swarm-new-message-clear'), findsOneWidget);
+
+      await tester.tap(inSheet('swarm-new-message-send'));
       await tester.pumpAndSettle();
       expect(sends(fake).single['command']['text'], 'Mai họp lúc 9 giờ');
       expect(sends(fake).single['command']['conversationId'], leadChat);
       expect(sheetOpen(), isFalse);
+    });
+
+    // Tony, 11-01: Send right of stop ends the take and posts it.
+    testWidgets("the row's Send ends the take and posts its last words to the "
+        'chat picked, once, and the sheet closes', (tester) async {
+      final dictation = _Dictation();
+      final fake = await talking(tester, dictation);
+
+      await tapIn(tester, 'swarm-mic');
+      expect(
+        tester.widget<SwarmRoundButton>(inSheet('swarm-voice-send')).onTap,
+        isNull,
+        reason: 'an empty box',
+      );
+      dictation.say('Mai họp');
+      await tester.pump();
+      dictation.lastWords = 'Mai họp lúc 9 giờ';
+      final at = tester.getCenter(inSheet('swarm-voice-send'));
+      await tester.tapAt(at);
+      await tester.pump();
+      await tester.tapAt(at);
+      await tester.pumpAndSettle();
+
+      expect(sends(fake), hasLength(1));
+      expect(sends(fake).single['command']['text'], 'Mai họp lúc 9 giờ');
+      expect(sends(fake).single['command']['conversationId'], leadChat);
+      expect(sheetOpen(), isFalse);
+    });
+
+    testWidgets("with no chat picked the row's Send is off", (tester) async {
+      final dictation = _Dictation();
+      final fake = await talking(tester, dictation, pick: false);
+
+      await tapIn(tester, 'swarm-mic');
+      dictation.say('cho ai đây');
+      await tester.pump();
+      expect(field(tester), 'cho ai đây');
+      expect(
+        tester.widget<SwarmRoundButton>(inSheet('swarm-voice-send')).onTap,
+        isNull,
+      );
+      await tapIn(tester, 'swarm-voice-send');
+      expect(sends(fake), isEmpty);
+      expect(inSheet('swarm-voice-stop'), findsOneWidget, reason: 'listening');
+    });
+
+    testWidgets("a recording: the row's Send posts what was typed and what "
+        'was said; nothing heard posts nothing and keeps the sheet', (
+      tester,
+    ) async {
+      final stt = FakeTranscriber()..replies.addAll(['', 'lúc 9 giờ']);
+      final fake = await talking(tester, null, stt: stt);
+      await write(tester, 'Mai họp');
+
+      await tapIn(tester, 'swarm-mic');
+      expect(
+        tester.widget<SwarmRoundButton>(inSheet('swarm-voice-send')).onTap,
+        isNotNull,
+        reason: 'live while recording',
+      );
+      await tapIn(tester, 'swarm-voice-send');
+      await tester.pumpAndSettle();
+      expect(sends(fake), isEmpty);
+      expect(field(tester), 'Mai họp');
+      expect(sheetOpen(), isTrue);
+      expect(find.text(SwarmVoice.nothingSent), findsOneWidget);
+
+      await tapIn(tester, 'swarm-mic');
+      await tapIn(tester, 'swarm-voice-send');
+      await tester.pumpAndSettle();
+      expect(sends(fake).single['command']['text'], 'Mai họp lúc 9 giờ');
+      expect(sheetOpen(), isFalse);
+    });
+
+    testWidgets("the Swarm's read taken away while the row's Send transcribes "
+        'closes the sheet and posts nothing', (tester) async {
+      final stt = FakeTranscriber()..pending = Completer<String>();
+      late SwarmHost host;
+      final fake = await talking(tester, null, stt: stt, host: (h) => host = h);
+      await tapIn(tester, 'swarm-mic');
+      await tapIn(tester, 'swarm-voice-send');
+      expect(inSheet('swarm-voice-sending'), findsOneWidget);
+
+      for (final route in ['parts', 'changes']) {
+        fake.routes['/api/super-tabs/$tab/$route'] = (_) =>
+            throw SuperTabFailure('FORBIDDEN', 'No access.', statusCode: 403);
+      }
+      unawaited(host.session!.inbox.reader(tab)!.refresh());
+      await tester.pumpAndSettle();
+      expect(sheetOpen(), isFalse);
+      stt.pending!.complete('bí mật');
+      await tester.pumpAndSettle();
+
+      expect(sends(fake), isEmpty);
+      expect(find.text('bí mật'), findsNothing);
+    });
+
+    testWidgets('cancel takes back what the take added and keeps what was '
+        'typed before it', (tester) async {
+      final dictation = _Dictation();
+      final fake = await talking(tester, dictation);
+      await write(tester, 'Ghi chú:');
+
+      await tapIn(tester, 'swarm-mic');
+      dictation.say('bỏ câu này');
+      await tester.pump();
+      expect(field(tester), 'Ghi chú: bỏ câu này');
+
+      await tapIn(tester, 'swarm-voice-cancel');
+      await tester.pumpAndSettle();
+      expect(field(tester), 'Ghi chú:');
+      expect(sends(fake), isEmpty);
+      expect(inSheet('swarm-mic'), findsOneWidget);
+      expect(inSheet('swarm-new-message-send'), findsOneWidget);
     });
 
     testWidgets('taken while Home is out of sight, it opens nothing, and the '
@@ -1103,9 +1346,18 @@ void main() {
       final load = fake.routes['/api/super-tabs/$tab/parts']!;
       fake.routes['/api/super-tabs/$tab/parts'] = (_) =>
           throw SuperTabFailure('INTERNAL', 'Broken', statusCode: 500);
-      final host = await pump(tester, fake);
+      // Home's skeleton breathes while it shows: nothing settles under it.
+      Future<void> frames() async {
+        for (var i = 0; i < 10; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+        }
+      }
+
+      final host = await pump(tester, fake, settle: false);
+      await frames();
       expect(key('swarm-new-message'), findsOneWidget);
-      await open(tester);
+      await tester.tap(key('swarm-new-message'));
+      await frames();
 
       expect(key('swarm-new-message-loading'), findsNothing);
       expect(key('swarm-new-message-none'), findsNothing);
@@ -1206,6 +1458,9 @@ class _Dictation implements SwarmDictation {
   void Function(String)? _words;
   void Function(SwarmDictationEnd)? _end;
 
+  /// What [stop] hears last, before it ends.
+  String? lastWords;
+
   void say(String words) => _words?.call(words);
 
   @override
@@ -1225,6 +1480,7 @@ class _Dictation implements SwarmDictation {
 
   @override
   Future<void> stop() async {
+    if (lastWords case final words?) say(words);
     final end = _end;
     _words = _end = null;
     end?.call(SwarmDictationEnd.done);

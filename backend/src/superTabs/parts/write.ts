@@ -68,8 +68,9 @@ export function extracted(kind: PartKind, data: unknown, stamp: number): Record<
         agentIds: group.agentIds, executionMachineId: activeWork(group) ? group.assignment!.execution.machineId : null,
         messageSeq: group.messageSeq ?? 0, reportSeq: group.reportSeq ?? 0,
         lastActivityAt: group.lastActivityAt ? new Date(group.lastActivityAt) : new Date(stamp), hostDigest: hostDigest(group),
-        // A review with no active Reviewer is read by the archive pass too: it closes once its pull requests are (tidy.ts reviewClosable).
-        workFinished: ['done', 'cancelled'].includes(group.assignment?.status ?? '') || (!!group.reviewOf && !activeWork(group)) }
+        // A step is never marked by a write: it archives with its task (task steps design; steps.ts endSteps), not on its own clock.
+        // Only the worker's startup marks one, once its task has ended (archive.ts markFinishedGroups).
+        workFinished: !group.reviewOf && (['done', 'cancelled'].includes(group.assignment?.status ?? '') || (!!group.reviewOf && !activeWork(group))) }
     }
     case 'agent': {
       const agent = data as Agent

@@ -15,7 +15,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/state/workspace_chrome.dart';
-import 'package:harness/web/shell/web_app_menu.dart';
+import 'package:harness/web/shell/web_new_menu.dart';
 import 'package:harness/web/shell/web_chrome.dart';
 import 'package:harness/web/tabs/web_tab_menu.dart';
 import 'package:harness/widgets/desktop_workspace_tab.dart';
@@ -132,7 +132,7 @@ Future<void> _openSettings(WidgetTester tester, Size size) async {
 }
 
 Future<void> _openAppMenu(WidgetTester tester) async {
-  await tester.tap(find.byKey(const ValueKey('web-app-menu-button')));
+  await tester.tap(find.byKey(const ValueKey('web-new-menu-button')));
   await tester.pump(const Duration(milliseconds: 100));
 }
 
@@ -306,7 +306,7 @@ void main() {
     await _workspace(tester, _phone);
     await _openAppMenu(tester);
 
-    for (final row in ['super_tab.new', 'machines.list', 'web.sign_out']) {
+    for (final row in ['swarm.new', 'super_tab.new', 'app.store', 'web.more']) {
       expect(
         _target(tester, ValueKey('web-menu:$row')).height,
         greaterThanOrEqualTo(_finger),
@@ -321,7 +321,7 @@ void main() {
     await _openAppMenu(tester);
 
     expect(
-      _target(tester, const ValueKey('web-menu:machines.list')).height,
+      _target(tester, const ValueKey('web-menu:super_tab.new')).height,
       32,
     );
     await tester.pumpWidget(const SizedBox.shrink());
@@ -385,15 +385,9 @@ void main() {
   }) async {
     await _workspace(tester, size, harness: true, desktop: desktop);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-    final menu = find.byKey(const ValueKey('web-app-menu-button'));
-    if (menu.evaluate().isNotEmpty) {
-      await _openAppMenu(tester);
-      await tester.tap(find.byKey(const ValueKey('web-menu:machines.list')));
-    } else {
-      await tester.tap(find.byKey(const ValueKey('swarm-search-button')));
-      await tester.pump(const Duration(milliseconds: 200));
-      await tester.enterText(find.byType(EditableText).first, '@');
-    }
+    await tester.tap(find.byKey(const ValueKey('swarm-search-button')));
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.enterText(find.byType(EditableText).first, '@');
     await tester.pump(const Duration(milliseconds: 400));
     await _openMachines(tester);
   }
@@ -486,7 +480,7 @@ void main() {
           home: Scaffold(
             body: Align(
               alignment: Alignment.topLeft,
-              child: WebAppMenuButton(
+              child: WebNewMenuButton(
                 app: app,
                 commands: WorkspaceCommands(
                   enabled: () => true,

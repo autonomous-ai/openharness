@@ -273,7 +273,8 @@ Map<String, dynamic> recentModel(
 };
 
 /// The last 7 days of [modelsSwarm] (the approved mockup, 10-30): 100 tasks,
-/// 84 on Opus, 11 on Sonnet, 3 on Codex with no model reported, 2 on Sol.
+/// 84 on Opus, 11 on Sonnet, 3 on Codex with no model reported (the sidebar
+/// leaves those out), 2 on Sol.
 List<Map<String, dynamic>> recentModels() => [
   recentModel(
     'claude',

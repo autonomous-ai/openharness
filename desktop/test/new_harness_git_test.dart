@@ -123,13 +123,11 @@ void main() {
   Future<void> settle() => Future<void>.delayed(Duration.zero);
 
   test(
-    'missing main requires choosing a branch without changing Worktree',
+    'no default, no main and no current branch asks without changing Worktree',
     () async {
       final connection = _Connection()
         ..answers['/repo'] = {
           'isGit': true,
-          'branch': 'master',
-          'defaultRef': 'refs/remotes/origin/master',
           'branches': [
             {'ref': 'refs/heads/master', 'name': 'master'},
             {'ref': 'refs/heads/feature', 'name': 'feature'},
@@ -1173,28 +1171,73 @@ void main() {
     },
   );
 
-  test('an empty repository keeps Worktree on and requires a choice', () async {
-    final connection = _Connection()
-      ..answers['/empty'] = {'isGit': true, 'branch': 'main', 'branches': []};
-    final app = createApp(
-      connectionForTest: (_) => connection,
-      connected: true,
+  // Claude Code's desktop app does the same: no error, no worktree, the
+  // session runs in the folder that was picked.
+  for (final (name, folder, root) in [
+    ('an empty repository', '/empty', '/empty'),
+    // `git init` in the home folder makes ~/Downloads one of these.
+    ('a folder inside an empty repository', '/home/u/Downloads', '/home/u'),
+  ]) {
+    test(
+      '$name starts in the folder itself, with no Worktree or Branch',
+      () async {
+        final connection = _Connection()
+          ..answers[folder] = {
+            'isGit': true,
+            'root': root,
+            'branch': 'main',
+            'branches': [],
+          };
+        final app = createApp(
+          connectionForTest: (_) => connection,
+          connected: true,
+        );
+        final box = NewHarnessController(
+          app,
+          machineId: 'm',
+          engine: 'codex',
+          folder: folder,
+        );
+        addTearDown(app.dispose);
+        addTearDown(box.dispose);
+        await settle();
+        expect(box.isGitProject, true);
+        expect(box.noCommitsYet, true);
+        expect(box.worktree, false);
+        expect(box.canUseWorktree, false);
+        expect(box.choosesBranch, false);
+        expect(box.requiredChoice, isNull);
+        expect(box.projectFolderRequest, isNull);
+        // The person's Worktree choice is kept for the next real repository.
+        expect(box.worktreeToRemember, isNull);
+        box.toggleWorktree();
+        expect(box.worktree, false);
+        expect(await box.create(), NewHarnessOutcome.created);
+        expect(connection.starts, hasLength(1));
+        expect(connection.starts.single['projectSource'], isNull);
+        expect(connection.starts.single['cwd'], folder);
+      },
     );
-    final box = NewHarnessController(
-      app,
-      machineId: 'm',
-      engine: 'codex',
-      folder: '/empty',
-    );
-    addTearDown(app.dispose);
-    addTearDown(box.dispose);
-    await settle();
-    expect(box.isGitProject, true);
-    expect(box.worktree, true);
-    expect(box.requiredChoice?.message, contains('no commits'));
-    expect(await box.create(), NewHarnessOutcome.failed);
-    expect(box.worktree, true);
-    expect(connection.starts, isEmpty);
+  }
+
+  test('an empty repository asks for no folder preparation on any path', () {
+    const info = GitProjectInfo(isGit: true, branch: 'main');
+    expect(hasNoCommits(info), true);
+    expect(hasNoCommits(const GitProjectInfo()), false);
+    expect(worktreeByDefault(info), false);
+    for (final worktree in [true, false]) {
+      expect(
+        gitFolderRequest(
+          '/home/u/Downloads',
+          info,
+          worktree: worktree,
+          branchRef: null,
+          branchName: 'typed',
+          placeholder: 'brave-otter',
+        ),
+        isNull,
+      );
+    }
   });
 
   testWidgets(

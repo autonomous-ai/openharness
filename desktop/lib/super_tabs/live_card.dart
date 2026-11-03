@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../shared/theme/pull_request_icon.dart';
 import '../widgets/desktop_chrome.dart';
+import 'visible_tick.dart';
 import 'controller.dart';
 import 'live_card_model.dart';
 import 'live_card_pull_request.dart';
@@ -15,7 +16,7 @@ String superTabCardStatus(Map<String, dynamic>? assignment) =>
       'working' => 'Working',
       'needs_human' => 'Waiting on a person',
       'blocked' => 'Blocked',
-      'review' => 'In review',
+      'review' => 'Waiting on others',
       'done' => 'Done',
       'stopped' || 'lost' => 'Stopped',
       'cancelled' => 'Cancelled',
@@ -44,7 +45,8 @@ class SuperTabLiveCard extends StatefulWidget {
   State<SuperTabLiveCard> createState() => _SuperTabLiveCardState();
 }
 
-class _SuperTabLiveCardState extends State<SuperTabLiveCard> {
+class _SuperTabLiveCardState extends State<SuperTabLiveCard>
+    with WidgetsBindingObserver, VisibleTick<SuperTabLiveCard> {
   late List<SuperTabPullRequestCard> _watched = _pullRequests;
 
   /// A task card lists every pull request its group linked; a PR card its own.
@@ -58,26 +60,44 @@ class _SuperTabLiveCardState extends State<SuperTabLiveCard> {
     ];
   }
 
-  @override
-  void initState() {
-    super.initState();
-    widget.facts.watch(_watched.map((c) => c.url));
+  /// Whether this card holds its pull requests' watch: only while on screen, so a Swarm that isn't showing asks GitHub nothing.
+  bool _watching = false;
+
+  void _hold(bool onScreen) {
+    if (onScreen == _watching) return;
+    _watching = onScreen;
+    if (onScreen) {
+      widget.facts.watch(_watched.map((c) => c.url));
+    } else {
+      widget.facts.unwatch(_watched.map((c) => c.url));
+    }
   }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _hold(onScreen);
+  }
+
+  @override
+  void onScreenChanged(bool onScreen) => _hold(onScreen);
 
   @override
   void didUpdateWidget(SuperTabLiveCard old) {
     super.didUpdateWidget(old);
+    final next = _pullRequests;
     // Watched again before the old ones are let go, so a rebuild never
     // stops the refresh of what it still shows.
-    final next = _pullRequests;
-    widget.facts.watch(next.map((c) => c.url));
-    old.facts.unwatch(_watched.map((c) => c.url));
+    if (_watching) {
+      widget.facts.watch(next.map((c) => c.url));
+      old.facts.unwatch(_watched.map((c) => c.url));
+    }
     _watched = next;
   }
 
   @override
   void dispose() {
-    widget.facts.unwatch(_watched.map((c) => c.url));
+    if (_watching) widget.facts.unwatch(_watched.map((c) => c.url));
     super.dispose();
   }
 
@@ -89,7 +109,7 @@ class _SuperTabLiveCardState extends State<SuperTabLiveCard> {
         for (final card in _watched)
           SuperTabCardPullRequest(card, widget.facts.of(card.url)),
       ];
-      final review = widget.controller.reviewLine(widget.group);
+      final linked = widget.controller.linkedLine(widget.group);
       return _Frame(
         bar: widget.card.task || pulls.isEmpty
             ? DesktopChrome.accent
@@ -101,7 +121,7 @@ class _SuperTabLiveCardState extends State<SuperTabLiveCard> {
         children: [
           if (widget.card.task) ..._task(),
           for (final pull in pulls) SuperTabCardPullRequestRow(pull),
-          if (review != null) Text(review, style: DesktopChrome.metadata()),
+          if (linked != null) Text(linked, style: DesktopChrome.metadata()),
         ],
       );
     },

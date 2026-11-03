@@ -5,8 +5,10 @@ import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 
 import '../core/local_key_value_store.dart';
+import 'account_keys.dart';
 import 'attachment_upload.dart';
 import 'avatar_upload.dart';
+import 'activity.dart';
 import 'controller.dart';
 import 'decisions.dart';
 import 'model.dart';
@@ -28,20 +30,31 @@ typedef SuperTabListing = ({String id, String name});
 class SuperTabClient {
   SuperTabClient({
     required this.transport,
-    required this.storage,
+    required LocalKeyValueStore storage,
     LocalKeyValueStore? viewStorage,
     this.onSnapshot,
     this.onTabs,
     this.onSelection,
     this.onMention,
+    this.onChatMessage,
     this.onTagCounts,
     this.onNotices,
     this.upload = refuseUpload,
     this.avatarUpload = refuseAvatarUpload,
     this.discoveryInterval = const Duration(seconds: 15),
-  }) : viewStorage = viewStorage ?? storage;
+  }) : _storage = storage,
+       viewStorage = viewStorage ?? storage;
   final SuperTabTransport transport;
-  final LocalKeyValueStore storage;
+  final LocalKeyValueStore _storage;
+
+  /// Where Swarm drafts, launches, hidden Swarms and the switcher's pick are
+  /// kept, per account. On the web a write for an account that is not signed
+  /// in on this page is dropped ([SwarmAccountStorage]): one landing after a
+  /// sign-out would put back what it cleared.
+  late final LocalKeyValueStore storage = SwarmAccountStorage(
+    _storage,
+    writes: (account) => !_forgetsWebOnly || account == _account,
+  );
 
   /// Where each Swarm's saved view is kept ([SuperTabSavedViews]): a few
   /// hundred KB each, so Desktop keeps them out of [storage]'s small file.
@@ -55,6 +68,11 @@ class SuperTabClient {
   /// A Lead tagged this account in one of its Swarms while the app was open.
   /// A new tag of the reader in Swarm `tabId`.
   final void Function(String tabId, SuperTabMention mention)? onMention;
+
+  /// A new message in a chat the reader set to All new messages
+  /// ([SuperTabChatNotices]), with the Swarm, the chat and how far it goes.
+  final void Function(String tabId, SuperTabConversation group, int sequence)?
+  onChatMessage;
 
   /// The waiting tags of a Swarm that is not open changed ([waitingTags]).
   final void Function()? onTagCounts;
@@ -109,6 +127,9 @@ class SuperTabClient {
     // The account bound before the host said views are kept, at boot. With
     // none bound yet, the bind that follows claims.
     if (claims && _account != null) _claimViews();
+    // A page that starts signed out still sweeps what another page wrote of
+    // an account after it signed out.
+    if (claims && _account == null) _forgetSignedOut();
     for (final controller in _loaded.values) {
       controller.reading = value;
     }
@@ -150,7 +171,29 @@ class SuperTabClient {
     unawaited(
       _views.claim(_account, leaving: leaving).catchError((Object _) {}),
     );
+    _forgetSignedOut(leaving: leaving);
   }
+
+  /// The web's sign-out: the drafts, launches, hidden Swarms and switcher
+  /// pick of the account leaving go, and those of any account signed out on
+  /// this browser that another page wrote after ([forgetSwarmAccounts]).
+  /// The account signed in now, and any other, keep theirs. Desktop keeps
+  /// each account's, as before.
+  void _forgetSignedOut({String? leaving}) {
+    if (!_forgetsWebOnly) return;
+    final bound = _account;
+    _forgetting = _forgetting
+        .then(
+          (_) => forgetSwarmAccounts(_storage, bound: bound, leaving: leaving),
+        )
+        .catchError((Object _) {});
+  }
+
+  Future<void> _forgetting = Future.value();
+
+  /// The last sign-out's clearing, for tests and Settings.
+  @visibleForTesting
+  Future<void> get forgotten => _forgetting;
 
   /// Moves each time a Swarm's view is kept on this device: Settings' Clear
   /// now stops saying Cleared once one is kept again.
@@ -324,6 +367,11 @@ class SuperTabClient {
   /// still protects its Product Managers, without reading anything more.
   final _closedSnapshots = <String, SuperTabSnapshot>{};
 
+  /// The files waiting to go in Swarms let go, for their next controllers: in
+  /// memory for this account, and for the newest [_keptFilesSwarms] alone.
+  final _keptFiles = <String, SuperTabKeptFiles>{};
+  static const _keptFilesSwarms = 8;
+
   /// How many times each Swarm was closed here: an open a close overtook
   /// stops before it makes a controller.
   final _closes = <String, int>{};
@@ -331,7 +379,17 @@ class SuperTabClient {
   Iterable<SuperTabController> get loadedControllers => _loaded.values;
 
   /// Native close actions name the machine's harness id, not the Swarm agent id.
-  String? leadProtectionReasonForHarness(String machineId, String harnessId) {
+  String? leadProtectionReasonForHarness(String machineId, String harnessId) =>
+      _leadOfHarness(machineId, harnessId)?.reason;
+
+  /// The coordinator's name in the project the machine's harness coordinates.
+  String? leadCoordinatorForHarness(String machineId, String harnessId) =>
+      _leadOfHarness(machineId, harnessId)?.coordinator;
+
+  ({String reason, String coordinator})? _leadOfHarness(
+    String machineId,
+    String harnessId,
+  ) {
     for (final snapshot in [
       for (final controller in loadedControllers) ?controller.snapshot,
       ..._closedSnapshots.values,
@@ -341,7 +399,11 @@ class SuperTabClient {
           continue;
         }
         if (snapshot.leadProtectionReason(agent.id) case final reason?) {
-          return reason;
+          final project = snapshot.leadProjectForAgent(agent.id)!;
+          return (
+            reason: reason,
+            coordinator: snapshot.coordinatorNameOf(project.id),
+          );
         }
       }
     }
@@ -387,7 +449,12 @@ class SuperTabClient {
     _listMentions = true;
     discoveryError = null;
     for (final controller in _loaded.values) {
-      controller.revokeAccess('The account changed. Open this Swarm again.');
+      // Desktop keeps each account's unsent and unconfirmed messages for its
+      // next sign-in; the web forgets them with the rest ([_forgetSignedOut]).
+      controller.revokeAccess(
+        'The account changed. Open this Swarm again.',
+        keepSaved: !_forgetsWebOnly,
+      );
     }
     for (final future in _controllers.values) {
       unawaited(
@@ -402,6 +469,7 @@ class SuperTabClient {
     _controllers.clear();
     _loaded.clear();
     _closedSnapshots.clear();
+    _keptFiles.clear();
     _closes.clear();
     if (account != null &&
         onTabs != null &&
@@ -621,6 +689,16 @@ class SuperTabClient {
     final loaded = _loaded.remove(id);
     // One that has read nothing yet keeps what the last close kept.
     if (loaded?.snapshot case final snapshot?) _closedSnapshots[id] = snapshot;
+    if (loaded != null) {
+      final kept = loaded.keptFiles;
+      _keptFiles.remove(id);
+      if (kept.chats.isNotEmpty || kept.threads.isNotEmpty) {
+        _keptFiles[id] = kept;
+        if (_keptFiles.length > _keptFilesSwarms) {
+          _keptFiles.remove(_keptFiles.keys.first);
+        }
+      }
+    }
     loaded?.dispose();
     if (loaded != null) unawaited(loaded.flush().catchError((Object _) {}));
     // Still reading its saved state: that open stops ([_open]).
@@ -666,6 +744,7 @@ class SuperTabClient {
           )
           ..away = _isAway(id)
           ..pushUntil = _pushUntil;
+    if (_keptFiles.remove(id) case final kept?) controller.adoptFiles(kept);
     var seenChange = (
       lastChangedAt: -1,
       mentionsWaiting: -1,
@@ -711,6 +790,10 @@ class SuperTabClient {
       ..onArrived = onMention == null
           ? null
           : (mention) => onMention!(id, mention);
+    if (onChatMessage case final told?) {
+      SuperTabChatNotices.of(controller).onMessage = (group, sequence) =>
+          told(id, group, sequence);
+    }
     if (onNotices case final changed?) {
       SuperTabMentions.of(controller).addListener(changed);
       SuperTabDecisions.of(controller).addListener(changed);

@@ -117,3 +117,48 @@ void startBuddy(
     },
   ];
 }
+
+/// [buddySwarm] on a server with one Buddy per person for the whole Swarm
+/// (spec 2026-10-31-one-buddy-per-swarm).
+ConversationServer oneBuddySwarm() {
+  final server = buddySwarm();
+  server.state['swarmBuddy'] = true;
+  // Ken's Mac runs the one Buddy and its sessions (backend SWARM_BUDDY_CAPABILITY).
+  ((server.state['machines'] as List).first as Map)['observation'] = {
+    'receivedAt': DateTime.now().millisecondsSinceEpoch,
+    'capabilities': ['buddySessions', 'swarmBuddy'],
+  };
+  server.state['threadSessions'] = true;
+  server.state['sessionsFromChat'] = true;
+  return server;
+}
+
+/// Gives [person] their one running Buddy [name] and its chat, in no project,
+/// as the backend's `buddy.create` with no project leaves them.
+void giveSwarmBuddy(
+  ConversationServer server, {
+  String person = 'peer',
+  String id = 'wren',
+  String name = 'Wren',
+  String machineId = 'ken-mac',
+}) {
+  (server.state['agents'] as List).add({
+    'id': id,
+    'name': name,
+    'buddyScope': 'swarm',
+    'buddyOf': {'personId': person, 'generation': 'fixture'},
+    'machineId': machineId,
+    'harnessId': 'h-$id',
+    'contributorId': person,
+    'machineOwnerId': person,
+    'confidential': true,
+    'configuration': {'engine': 'claude', 'model': 'default'},
+  });
+  (server.state['conversations'] as List).add({
+    ...conversationFixture('swarm-buddy-$person', "$person's Buddy"),
+    'kind': 'swarm-buddy',
+    'projectId': null,
+    'buddyOwnerId': person,
+    'agentIds': [id],
+  });
+}

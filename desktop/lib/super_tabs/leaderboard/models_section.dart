@@ -29,8 +29,7 @@ class LeaderboardModelShare {
     required this.passed,
   });
 
-  /// "Opus 5.5", "GPT-6.1 Sol"; "Codex, model not reported" when the agent
-  /// reported none.
+  /// "Opus 5.5", "GPT-6.1 Sol".
   final String name;
 
   /// The engine that ran most of its tasks: its icon leads the row.
@@ -51,7 +50,9 @@ class LeaderboardModelShare {
 /// The models that ran tasks in the last 7 days, or the board's week from a
 /// server before those, the largest share first, then by name. Shares round
 /// by largest remainder: the floors, then one more point each to the largest
-/// remainders until they add up to 100.
+/// remainders until they add up to 100. A record with no reported model is
+/// left out, and out of the shares (Scholes, 2026-11-02): it cannot be named,
+/// and older servers still send the ones written before the 10-31 fix.
 List<LeaderboardModelShare> leaderboardModelShares(SuperTabLeaderboard board) {
   final merged =
       <
@@ -59,10 +60,9 @@ List<LeaderboardModelShare> leaderboardModelShares(SuperTabLeaderboard board) {
         ({Map<String, int> engines, int attempts, int reviewed, int passed})
       >{};
   for (final score in board.recentModels ?? board.byModel) {
-    final name = switch (score.model) {
-      final String model => modelDisplayName(model),
-      null => '${engineIdentity(score.engine).label}, model not reported',
-    };
+    final model = score.model;
+    if (model == null || model.trim().isEmpty) continue;
+    final name = modelDisplayName(model);
     // One row per model, whichever engine ran it at whichever effort:
     // rows are keyed by name.
     final before = merged[name];
@@ -126,15 +126,19 @@ class LeaderboardModelsSection extends StatelessWidget {
     required this.board,
     required this.projectId,
     required this.collapsed,
-    required this.onToggleCollapsed,
+    this.onToggleCollapsed,
     this.now = DateTime.now,
+    this.heading = true,
   });
   final SuperTabLeaderboardReader board;
 
   /// The open project; a board of any other shows nothing.
   final String? projectId;
   final bool collapsed;
-  final VoidCallback onToggleCollapsed;
+  final VoidCallback? onToggleCollapsed;
+
+  /// False where the page already says Models (Manage).
+  final bool heading;
   final DateTime Function() now;
 
   @override
@@ -155,16 +159,17 @@ class LeaderboardModelsSection extends StatelessWidget {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          SuperTabSectionHeading(
-            'Models',
-            key: const ValueKey('super-models-heading'),
-            endInset: 0,
-            collapsed: collapsed,
-            onToggleCollapsed: onToggleCollapsed,
-            titleTooltip: read.recentModels != null
-                ? 'Share of agent work, last 7 days'
-                : 'Share of agent work, $span',
-          ),
+          if (heading)
+            SuperTabSectionHeading(
+              'Models',
+              key: const ValueKey('super-models-heading'),
+              endInset: 0,
+              collapsed: collapsed,
+              onToggleCollapsed: onToggleCollapsed,
+              titleTooltip: read.recentModels != null
+                  ? 'Share of agent work, last 7 days'
+                  : 'Share of agent work, $span',
+            ),
           if (!collapsed)
             for (final share in shares) _row(share, span, style, column),
         ],

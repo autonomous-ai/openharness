@@ -137,7 +137,7 @@ class _SwarmModelsWindowState extends State<_SwarmModelsWindow> {
     final c = widget.controller, app = widget.app;
     final size = MediaQuery.sizeOf(context);
     return ListenableBuilder(
-      listenable: c,
+      listenable: Listenable.merge([c, c.machinesChanged]),
       builder: (context, _) {
         final local = c.snapshot?.localModels;
         final on = local?.enabled == true;
@@ -202,7 +202,7 @@ class _SwarmModelsWindowState extends State<_SwarmModelsWindow> {
             children: [
               Text(
                 'Run models on your own machines for this Swarm, and share your APIs with it. '
-                'The product manager can then give simple tasks to them, at no subscription cost.',
+                'Agents in this Swarm can then run on them, at no subscription cost.',
                 style: DesktopChrome.text(),
               ),
               const SizedBox(height: 12),

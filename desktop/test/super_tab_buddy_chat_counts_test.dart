@@ -19,6 +19,7 @@ import 'package:harness/state/harness_activity.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/machine_icon.dart';
 import 'package:harness/super_tabs/machines.dart';
+import 'package:harness/super_tabs/model.dart' show SuperTabNotify;
 import 'package:harness/super_tabs/buddy_chat.dart';
 import 'package:harness/super_tabs/buddy_chat_shortcut.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
@@ -29,6 +30,7 @@ import 'package:harness/widgets/desktop_chrome.dart';
 import 'box_render_preview_test.dart' show loadPreviewFonts;
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 import 'swarm_screen_test.dart' show mount;
+import 'support/buddy_fixture.dart';
 import 'support/pm_chat_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
@@ -165,6 +167,154 @@ void main() {
 
       expect(owner.buddyUnread, 0);
       expect(reads.where((p) => p.contains(peerChat)), isEmpty);
+    });
+  });
+
+  group('the unread count with one Buddy for the Swarm', () {
+    const key = SuperTabController.kSwarmBuddyKey;
+
+    /// [account]'s controller in a Swarm with one Buddy each, their # buddy
+    /// opened once and then left for a workgroup, so the Buddy's replies
+    /// arrive unread.
+    Future<(SuperTabController, String)> awayFromBuddy(
+      ConversationServer server, {
+      String account = 'peer',
+    }) async {
+      final c = server.controller(account: account);
+      addTearDown(c.dispose);
+      await c.refresh();
+      await c.openBuddyChat(key);
+      final chat = c.buddyChat(key)!.id;
+      await c.select('offline');
+      await pumpEventQueue();
+      return (c, chat);
+    }
+
+    ConversationServer swarmWithBuddy() {
+      final server = oneBuddySwarm();
+      giveSwarmBuddy(server);
+      return server;
+    }
+
+    test("counts the Buddy's replies after leaving # buddy", () async {
+      final server = swarmWithBuddy();
+      final (c, chat) = await awayFromBuddy(server);
+      expect(c.buddyUnread, 0);
+
+      buddyReply(server, chat, 'Here is the plan.');
+      buddyReply(server, chat, 'Shall I ship it?');
+      await c.refresh();
+      await pumpEventQueue();
+
+      expect(c.unreadCount(c.buddyChat(key)!), 2);
+      expect(c.buddyUnread, 2);
+    });
+
+    test('a muted # buddy never counts, and counts again unmuted', () async {
+      final server = swarmWithBuddy();
+      final (c, chat) = await awayFromBuddy(server);
+      buddyReply(server, chat, 'Here is the plan.');
+      buddyReply(server, chat, 'Shall I ship it?');
+      await c.refresh();
+      await pumpEventQueue();
+      expect(c.buddyUnread, 2);
+
+      expect(await c.setNotify(chat, SuperTabNotify.muted), isTrue);
+      expect(c.buddyUnread, 0);
+
+      expect(await c.setNotify(chat, SuperTabNotify.all), isTrue);
+      expect(c.buddyUnread, 2);
+    });
+
+    test('clears once # buddy is read', () async {
+      final server = swarmWithBuddy();
+      final (c, chat) = await awayFromBuddy(server);
+      buddyReply(server, chat, 'Here is the plan.');
+      await c.refresh();
+      await pumpEventQueue();
+      expect(c.buddyUnread, 1);
+
+      await c.select(chat);
+      await pumpEventQueue();
+      c.markRead(chat);
+
+      expect(c.buddyUnread, 0);
+    });
+
+    test("never counts or reads the older project Buddy chat: its lines are copies", () async {
+      final server = swarmWithBuddy();
+      // The reader's older Buddy chat in the lead project, with news.
+      (server.state['conversations'] as List).add({
+        ...conversationFixture('buddy-peer-lead', "peer's Buddy"),
+        'kind': 'buddy',
+        'projectId': 'lead',
+        'buddyOwnerId': 'peer',
+        'agentIds': <String>[],
+      });
+      final (c, chat) = await awayFromBuddy(server);
+      final reads = <String>[];
+      server.onRead = reads.add;
+
+      buddyReply(server, 'buddy-peer-lead', 'A copy of the plan.');
+      buddyReply(server, chat, 'Here is the plan.');
+      await c.refresh();
+      await pumpEventQueue();
+
+      expect(c.buddyChat('lead'), isNotNull);
+      expect(c.buddyUnread, 1);
+      expect(reads.where((p) => p.contains('/buddy-peer-lead/')), isEmpty);
+    });
+
+    test("never counts or reads another person's Buddy chat", () async {
+      final server = swarmWithBuddy();
+      final (_, peerChat) = await awayFromBuddy(server);
+      final owner = server.controller(account: 'owner');
+      addTearDown(owner.dispose);
+      await owner.refresh();
+      final reads = <String>[];
+      server.onRead = reads.add;
+
+      buddyReply(server, peerChat, 'Only for Ken.');
+      await owner.refresh();
+      await pumpEventQueue();
+
+      expect(owner.buddyChat(key), isNull);
+      expect(owner.buddyUnread, 0);
+      expect(reads.where((p) => p.contains(peerChat)), isEmpty);
+    });
+
+    test(
+      'counts every unread line of a chat not held yet, past a page',
+      () async {
+        final server = swarmWithBuddy();
+        server.messagePage = 10;
+        final (c, chat) = await awayFromBuddy(server);
+        // One line read first, so the read mark sits at it.
+        buddyReply(server, chat, 'Earlier, already read.');
+        await c.refresh();
+        await c.select(chat);
+        await pumpEventQueue(times: 100);
+        c.markRead(chat);
+        await c.select('offline');
+        for (var i = 1; i <= 25; i++) {
+          buddyReply(server, chat, 'Update $i');
+        }
+        await c.refresh();
+        await pumpEventQueue(times: 100);
+
+        expect(c.buddyUnread, 25);
+      },
+    );
+
+    test('a Swarm with no Buddy chat yet counts nothing', () async {
+      final server = oneBuddySwarm();
+      final c = server.controller(account: 'peer');
+      addTearDown(c.dispose);
+      await c.refresh();
+      await pumpEventQueue();
+
+      expect(c.buddyChat(key), isNull);
+      expect(c.buddyUnread, 0);
     });
   });
 
@@ -397,7 +547,7 @@ void main() {
       (tester) async {
         final c = await show(tester, riverSwarm());
         Future<void> shortcutOverNotifications() async {
-          await tester.tap(find.byKey(const ValueKey('super-notifications')));
+          await tester.tap(find.byKey(const ValueKey('super-activity')));
           await tester.pumpAndSettle();
           expect(find.text('Message your Buddy'), findsNothing);
           // What ⇧⌘K runs (openActiveBuddyChat).
@@ -439,7 +589,7 @@ void main() {
       tester,
     ) async {
       final c = await show(tester, pmChatSwarm());
-      await tester.tap(find.byKey(const ValueKey('super-notifications')));
+      await tester.tap(find.byKey(const ValueKey('super-activity')));
       await tester.pumpAndSettle();
       expect(find.text('Message your Buddy'), findsNothing);
 
@@ -608,11 +758,16 @@ void main() {
         );
         expect(tab['attention'], 2);
       } else {
+        // A Swarm's tab is its name, bold when something there waits, with
+        // no count (Quiet Swarm, screen 0).
+        expect(find.byKey(ValueKey('tab-tags:${swarm.id}')), findsNothing);
+        expect(find.byKey(ValueKey('tab-activity:${swarm.id}')), findsNothing);
         expect(
           tester
-              .widget<Text>(find.byKey(ValueKey('tab-tags:${swarm.id}')))
-              .data,
-          '2',
+              .widget<Text>(find.byKey(ValueKey('tab-label:${swarm.id}')))
+              .style
+              ?.fontWeight,
+          grid.AppFont.semibold,
         );
       }
       await tester.pumpWidget(const SizedBox());

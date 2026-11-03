@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:collection/collection.dart' show DeepCollectionEquality;
 import 'package:flutter/foundation.dart';
 
+import 'package:harness_mobile/logging/app_log.dart';
+
 import 'model.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
@@ -36,6 +38,12 @@ class SuperTabDecision implements SwarmAskItem {
       recommended = (row['recommended'] as num?)?.toInt() ?? 0,
       unblocks = row['unblocks'] as String? ?? '',
       choice = (row['choice'] as num?)?.toInt(),
+      delegated = row['delegated'] == true,
+      canDelegate = switch (row['recommended']) {
+        final num r =>
+          r >= 0 && r < (row['options'] as List? ?? const []).length,
+        _ => false,
+      },
       note = row['note'] as String?,
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? '');
   @override
@@ -44,8 +52,15 @@ class SuperTabDecision implements SwarmAskItem {
   final List<String> options;
   final int recommended;
 
-  /// The option the reader chose; null while it is open.
+  /// The option the reader chose, or the coordinator chose for them
+  /// ([delegated]); null while it is open.
   final int? choice;
+
+  /// The reader left it to the coordinator, who took the recommended option.
+  final bool delegated;
+
+  /// Whether the coordinator can answer it: only with a recommended option.
+  final bool canDelegate;
   final String? note;
   @override
   final DateTime? createdAt;
@@ -64,7 +79,9 @@ class SuperTabMention implements SwarmAskItem {
       leadName = row['leadName'] as String? ?? 'Lead',
       text = row['text'] as String? ?? '',
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
-      resolvedBy = row['resolvedBy'] as String?;
+      resolvedBy = row['resolvedBy'] as String?,
+      threadId = row['threadId'] as String?,
+      messageSequence = (row['messageSequence'] as num?)?.toInt();
   @override
   final String id, projectName, conversationId, conversationTitle;
   final String projectId, messageId, leadName, text;
@@ -73,6 +90,14 @@ class SuperTabMention implements SwarmAskItem {
 
   /// `reply` or `done` once it moved to Earlier; null while it waits.
   final String? resolvedBy;
+
+  /// The thread's root when the tag is in a reply only in its thread: it
+  /// counts on Threads (`SwarmThreads.threadMentions`). Null in the main
+  /// stream, and from a backend before it.
+  final String? threadId;
+
+  /// The tagging message's sequence; null from a backend before it.
+  final int? messageSequence;
 }
 
 /// The reader's open decisions and waiting tags in one Swarm, read from the
@@ -103,8 +128,16 @@ class SwarmAsks extends ChangeNotifier {
       !(reader.snapshot == null && reader.error != null) &&
       _settled != reader.generation;
 
+  /// The last read of what waits failed: a list empty now says nothing. Tried
+  /// again each time the Swarm is read.
+  bool get readFailed => _failed;
+
   /// The [SwarmReader.generation] whose asks were read, or need none.
   int _settled = -1;
+
+  /// The read of the lists under way, if any: what waits here is known once
+  /// it ends.
+  Future<void>? get reading => _loading;
 
   /// Decisions being answered: their buttons wait for the backend.
   final Set<String> answering = {};
@@ -112,7 +145,7 @@ class SwarmAsks extends ChangeNotifier {
   /// Answers sent whose reply never came, by decision: sent again under the
   /// same receipt and choice until one is confirmed, so the backend applies
   /// the answer once and no other is offered meanwhile.
-  final _unconfirmed = <String, ({String operationId, int choice})>{};
+  final _unconfirmed = <String, ({String operationId, int? choice})>{};
 
   /// Tags being marked done, tags whose Done failed (with what to say on
   /// them), and tags confirmed done that a list read before then may still
@@ -132,6 +165,13 @@ class SwarmAsks extends ChangeNotifier {
   /// again.
   int? unconfirmed(SuperTabDecision decision) =>
       _unconfirmed[decision.id]?.choice;
+
+  /// A delegation sent for [decision] and not confirmed: [delegate] sends it
+  /// again.
+  bool unconfirmedDelegate(SuperTabDecision decision) {
+    final sent = _unconfirmed[decision.id];
+    return sent != null && sent.choice == null;
+  }
 
   /// An ask that arrived after the first read: what a phone notice tells.
   void Function(SwarmAskItem item)? onArrived;
@@ -321,10 +361,18 @@ class SwarmAsks extends ChangeNotifier {
         }
       }
       if (changed) notifyListeners();
-    } catch (_) {
+    } catch (failure) {
       if (_disposed || reader.generation != generation) return true;
       const failed = 'Could not load what is waiting for you. Try again.';
       final told = error == failed && _failed && _settled == generation;
+      // Once per failure, not once per poll.
+      if (!told) {
+        appLog.warn(
+          'swarm',
+          'What waits in ${reader.tabId} not read',
+          error: failure,
+        );
+      }
       error = failed;
       _failed = true;
       _settled = generation;
@@ -348,7 +396,15 @@ class SwarmAsks extends ChangeNotifier {
   /// as it was, whatever [choice] says; a decision the backend has answered
   /// already (by this answer, its reply lost, or another device) is read
   /// back.
-  Future<bool> answer(SuperTabDecision decision, int choice) async {
+  Future<bool> answer(SuperTabDecision decision, int choice) =>
+      _answer(decision, choice);
+
+  /// Let the coordinator decide: the backend answers with the recommended
+  /// option on the reader's behalf, recorded as the coordinator's choice,
+  /// never as theirs. Sent again as [answer] is.
+  Future<bool> delegate(SuperTabDecision decision) => _answer(decision, null);
+
+  Future<bool> _answer(SuperTabDecision decision, int? choice) async {
     if (_disposed || !answering.add(decision.id)) return false;
     final sent = _unconfirmed[decision.id] ??= (
       operationId: superTabOperationId(),
@@ -359,7 +415,10 @@ class SwarmAsks extends ChangeNotifier {
       await _command({
         'type': 'decision.answer',
         'decisionId': decision.id,
-        'choice': sent.choice,
+        if (sent.choice case final chosen?)
+          'choice': chosen
+        else
+          'delegate': true,
       }, operationId: sent.operationId);
     } on SuperTabFailure catch (failure) {
       if (failure.code != 'DECISION_ANSWERED') {
@@ -384,8 +443,71 @@ class SwarmAsks extends ChangeNotifier {
     _unconfirmed.remove(decision.id);
     error = null;
     await load();
+    if (_answeredAt != null) unawaited(readAnswered());
     unawaited(reader.refresh());
     return true;
+  }
+
+  /// The newest decisions answered, by the reader or the coordinator, as the
+  /// last [readAnswered] found them. Read only on asking: nothing polls them.
+  /// What was read of an earlier read of the Swarm, or before access was lost,
+  /// never shows.
+  List<SuperTabDecision> get answered =>
+      _answeredAt == reader.generation && !reader.accessRevoked
+      ? _answered
+      : const [];
+  List<SuperTabDecision> _answered = const [];
+  int? _answeredAt;
+
+  /// What to say when the answered list could not be read; null otherwise.
+  String? get answeredError => answered.isEmpty ? _answeredError : null;
+  String? _answeredError;
+  Future<void>? _answeredReading;
+  bool _answeredAgain = false;
+
+  /// Reads [answered]; asked during a read, reads once more after it.
+  Future<void> readAnswered() {
+    if (_answeredReading case final running?) {
+      _answeredAgain = true;
+      return running;
+    }
+    return _answeredReading = () async {
+      do {
+        _answeredAgain = false;
+        await _readAnswered();
+      } while (_answeredAgain && !_disposed);
+    }().whenComplete(() => _answeredReading = null);
+  }
+
+  Future<void> _readAnswered() async {
+    final generation = reader.generation;
+    try {
+      final rows = await _settledRows();
+      if (_disposed || reader.generation != generation) return;
+      _answered = List.unmodifiable(rows.map(SuperTabDecision.fromJson));
+      _answeredAt = generation;
+      _answeredError = null;
+    } catch (failure) {
+      if (_disposed || reader.generation != generation) return;
+      appLog.warn(
+        'swarm',
+        'Answered decisions in ${reader.tabId} not read',
+        error: failure,
+      );
+      _answeredError = 'Could not load answered decisions. Try again.';
+    }
+    notifyListeners();
+  }
+
+  /// `settled` holds the answers the coordinator gave too. A backend from
+  /// before Let PM decide has no such list: its `answered` holds every answer.
+  Future<List<Map<String, dynamic>>> _settledRows() async {
+    try {
+      return await _rows('decisions?state=settled', 'decisions');
+    } on SuperTabFailure catch (failure) {
+      if (failure.statusCode != 400) rethrow;
+      return _rows('decisions?state=answered', 'decisions');
+    }
   }
 
   /// The reader is finished with [mention]: [finishing] at once, out of

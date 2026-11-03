@@ -1,12 +1,14 @@
-/** A person, or a project's Lead, tags people in a message; each tag waits in the person's Swarm-wide list until they reply in that
- *  conversation or mark it done. Tags live in SuperTabMention, never in the tab state, so an older backend still
+/** A person, or any agent of the project but a Buddy, tags people in a message; each tag waits in the person's Swarm-wide list
+ *  until they reply in that conversation or mark it done. Tags live in SuperTabMention, never in the tab state, so an older backend still
  *  reads and writes a tab that has them. Called inside SuperTabStore's transactions. */
 import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { ensureIndex } from '../lib/db/indexes.js'
-import { activeWork, fail, isLeads, person, stableId, type Actor, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-import { canReadGroup, groupProject, ledProject, projectOf } from './projects.js'
-import { groupsBy } from './parts/indexed.js'
+import { activeWork, agentOnly, fail, isLeads, person, stableId, type Actor, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import { canReadGroup, groupProject, projectAgent, projectOf } from './projects.js'
+import { isSwarmBuddyChat } from './buddies.js'
+import { groupsBy, readBy } from './parts/indexed.js'
+import { deliveredCopies } from './pageReads.js'
 import { usernameOf } from './usernames.js'
 
 type Tx = Prisma.TransactionClient
@@ -104,13 +106,12 @@ const OPENS_BLOCK = new RegExp('^(?: {4}|\\t| {0,3}(?:[-*+](?:[ \\t\\n]|$)|#{1,6
   + '|\\d{1,9}[.)](?:[ \\t\\n]|$)|```|~~~|\\||\\[[^\\]\\n]+\\]:'
   + '|(?:(?:\\*[ \\t]*){3,}|(?:-[ \\t]*){3,}|(?:_[ \\t]*){3,})(?:\\n|$)))')
 
-/** Whether [actor] may tag people in [group]: a person who can post there; among agents only the project's Lead, in its own
- *  project's conversations; nobody in the Leads conversation. */
+/** Whether [actor] may tag people in [group]: a person who can post there; any agent of the project but a Buddy, in its own
+ *  project's conversations (project instructions, phase 4); nobody in the Leads conversation. */
 function mayTag(state: SuperTabState, actor: Actor, group: Conversation): boolean {
-  if (isLeads(group)) return false
-  if (actor.kind !== 'agent') return true
-  const led = ledProject(state, actor.agentId)
-  return !!led && groupProject(state, group).id === led.id
+  // Nobody else reads a person's one Buddy chat, so nobody is tagged there (Dee, 10-31).
+  if (isLeads(group) || isSwarmBuddyChat(group)) return false
+  return actor.kind !== 'agent' || projectAgent(state, actor, groupProject(state, group).id)
 }
 
 /** The people [named] by a post's text whom it tags: only when [actor] may tag here, only people who can read [group], never
@@ -121,16 +122,15 @@ export function textTags(state: SuperTabState, actor: Actor, group: Conversation
     && canReadGroup(state, { kind: 'person', userId: p.id, email: p.email }, group)))
 }
 
-/** A person who can post here tags people; among agents only the project's Lead, in that project's conversations. Never in
- *  the Leads conversation, and only people who can read the conversation. A person's tag of themselves is dropped. */
+/** A person who can post here tags people; so does any agent of the project but a Buddy, in that project's conversations.
+ *  Never in the Leads conversation, and only people who can read the conversation. A person's tag of themselves is dropped. */
 export function checkMentions(state: SuperTabState, actor: Actor, group: Conversation, personIds: string[]): string[] {
   const ids = [...new Set(personIds)].filter(id => actor.kind !== 'person' || id !== actor.userId)
   if (!ids.length) return ids
-  if (isLeads(group)) fail('MENTION_FORBIDDEN', 'Nobody is tagged in the Leads conversation.', 403)
-  if (actor.kind === 'agent') {
-    const led = ledProject(state, actor.agentId)
-    if (!led) fail('MENTION_FORBIDDEN', 'Only a project’s Lead can tag people.', 403)
-    if (groupProject(state, group).id !== led.id) fail('MENTION_FORBIDDEN', 'A Lead can tag people only in its own project’s conversations.', 403)
+  if (isLeads(group)) fail('INVALID_MENTION', 'Nobody is tagged in the Leads conversation.', 400)
+  if (isSwarmBuddyChat(group)) fail('INVALID_MENTION', 'Nobody else reads your Buddy chat.', 400)
+  if (actor.kind === 'agent' && !projectAgent(state, actor, groupProject(state, group).id)) {
+    fail('FORBIDDEN', 'Only a person or an agent of this project tags people here.', 403)
   }
   for (const id of ids) {
     const member = state.people.find(p => p.id === id) ?? fail('INVALID_MENTION', 'Tag a person in this Swarm.', 400)
@@ -164,7 +164,8 @@ export async function resolveWhenWorked(tx: Tx, tabId: string, conversationId: s
   await tx.superTabMention.deleteMany({ where: held })
 }
 
-/** The group's Lead acted on it (leadAction in the state): the held tags made before that are dropped for good, listed or not.
+/** The task was handled (leadAction in the state: any agent's route, start or assignment there, or its coordinator's post): the
+ *  held tags made before that are dropped for good, listed or not.
  *  Dropped, not resolved, so a later reply or assignment cannot bring one back in Earlier. */
 export async function dropHeldTags(tx: Tx, tabId: string, conversationId: string, now: number): Promise<void> {
   await tx.superTabMention.deleteMany({ where: { tabId, conversationId, holdUntil: { isSet: true }, createdAt: { lt: new Date(now) }, ...waiting } })
@@ -195,14 +196,26 @@ export async function markDone(tx: Tx, tabId: string, id: string, personId: stri
   await tx.superTabMention.updateMany({ where: { id, tabId, personId, ...waiting }, data: { resolvedAt: new Date(now), resolvedBy: 'done' } })
 }
 
+/** A person's unexpired tags in a Swarm, waiting or answered, newest first: the rows [readable] lists and counts. */
+const tagRows = (tabId: string, personId: string, now: number, open: boolean | null) => ({
+  where: { tabId, personId, createdAt: { gt: new Date(now - MENTION_EXPIRY_MS) }, ...(open === null ? {} : open ? waiting : { resolvedAt: { not: null } }) },
+  orderBy: { createdAt: 'desc' as const }, take: 500,
+})
+
+/** The conversations of a person's waiting tags, newest tag first, once each: those [waitingMentions] may read beyond what a
+ *  read holds, so a change poll can hold them per conversation (read/service.ts). */
+export async function waitingTagConversations(tx: Tx, tabId: string, personId: string, now: number): Promise<string[]> {
+  const rows = await tx.superTabMention.findMany({ ...tagRows(tabId, personId, now, true), select: { conversationId: true } })
+  return [...new Set(rows.map(row => row.conversationId))]
+}
+
 /** The person's own unexpired tags in conversations they can still read, newest first, each with its conversation. The badge
  *  counts this same list. Ordinary loads leave quiet (dormant) conversations out of the state, so the ones a tag is in are
  *  read here: the count and the list check the same conversations whichever state they get.
  *  ponytail: capped at 500 per state; page it if a person ever gets more in 30 days. */
-async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>, now: number, open: boolean) {
+async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>, now: number, open: boolean | null) {
   person(state, actor.userId)
-  const rows = await tx.superTabMention.findMany({ where: { tabId, personId: actor.userId, createdAt: { gt: new Date(now - MENTION_EXPIRY_MS) },
-    ...(open ? waiting : { resolvedAt: { not: null } }) }, orderBy: { createdAt: 'desc' }, take: 500 })
+  const rows = await tx.superTabMention.findMany(tagRows(tabId, actor.userId, now, open))
   const groups = new Map(state.conversations.map(c => [c.id, c]))
   const missing = [...new Set(rows.map(r => r.conversationId))].filter(id => !groups.has(id))
   if (missing.length) {
@@ -243,7 +256,8 @@ export function mentionsDigest(ids: string[]): string {
 export async function listMentions(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>, now: number, open: boolean) {
   const tagged = await readable(tx, tabId, state, actor, now, open)
   const messages = tagged.length ? await tx.superTabMessage.findMany({ where: { tabId, id: { in: tagged.map(t => t.row.messageId) } },
-    select: { id: true, text: true, author: true } }) : []
+    select: { id: true, text: true, author: true, conversationId: true, thread: true, alsoInChat: true, sequence: true } }) : []
+  const threads = await threadsOf(tx, tabId, messages)
   return tagged.map(({ row, group }) => {
     const message = messages.find(m => m.id === row.messageId)
     const author = message?.author as { kind?: string; name?: string; displayName?: string } | undefined
@@ -252,6 +266,59 @@ export async function listMentions(tx: Tx, tabId: string, state: SuperTabState, 
     return { id: row.id, projectId: row.projectId, projectName: projectOf(state, group.projectId ?? 'lead').name,
       conversationId: row.conversationId, conversationTitle: group.title, messageId: row.messageId,
       leadId: row.authorAgentId, leadName: authorName, text: (message?.text ?? '').slice(0, 200),
-      createdAt: row.createdAt, resolvedAt: row.resolvedAt, resolvedBy: row.resolvedBy }
+      createdAt: row.createdAt, resolvedAt: row.resolvedAt, resolvedBy: row.resolvedBy, threadId: message ? threads.get(message.id) ?? null : null,
+      // Where the tagged message is in its chat: Desktop clears its red number once the reader has read past it (Slack).
+      messageSequence: message?.sequence ?? null }
   })
+}
+
+/** A thread a person's own tag is in: the tagged message's thread (a reply's root, or a root itself), in the tag's conversation. */
+export interface TaggedThread { conversationId: string; threadId: string; at: number }
+
+/** The threads the person's own unexpired tags are in, waiting or answered, newest tag first, once each, at most `limit` of those
+ *  `keep` accepts (the caller's own filters apply before the count, so threads it drops never use up the limit) (the
+ *  Threads list, read/followedThreads.ts: a tag in a chat they never opened has no thread mark, so no other read finds it). Only
+ *  tags [readable] lists: conversations they can read, never a held Lead notice before its time. A message is taken only in the
+ *  conversation its tag names, and only its thread id leaves here, so a tag never names a thread of another chat. Its root
+ *  and replies are read and checked by the caller. The tags by one indexed read of at most 500 rows (tagRows), their messages by id
+ *  in one more. */
+export async function taggedThreads(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>, now: number,
+  limit: number, keep: (thread: TaggedThread) => boolean = () => true): Promise<TaggedThread[]> {
+  const tagged = await readable(tx, tabId, state, actor, now, null)
+  if (!tagged.length) return []
+  const found = await readBy(tx, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: [...new Set(tagged.map(t => t.row.messageId))] }, tabId } },
+    { $project: { conversationId: 1, thread: 1 } }])
+  const messages = new Map(found.map(r => [r._id as string, r]))
+  const seen = new Set<string>()
+  const threads: TaggedThread[] = []
+  for (const { row } of tagged) {
+    const message = messages.get(row.messageId)
+    const threadId = typeof message?.thread === 'string' ? message.thread : null
+    if (!threadId || message!.conversationId !== row.conversationId) continue
+    const key = `${row.conversationId}\u0000${threadId}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    const thread = { conversationId: row.conversationId, threadId, at: row.createdAt.getTime() }
+    if (!keep(thread)) continue
+    threads.push(thread)
+    if (threads.length >= limit) break
+  }
+  return threads
+}
+
+/** For each tagged message that is a thread reply only (not also sent to the chat), its thread's root: the tag belongs to the
+ *  thread, not the chat's main stream (Desktop counts it on Threads, as Slack does). Only a root the person may read, in the
+ *  tag's own conversation, roots its own thread: an agent-only or delivered-copy root reads as none, so the tag counts as the
+ *  chat's and no root id they cannot open leaves here. The roots by id in one read. */
+async function threadsOf(tx: Tx, tabId: string, messages: Array<{ id: string; conversationId: string; thread: string | null; alsoInChat: boolean | null }>):
+  Promise<Map<string, string>> {
+  const replies = messages.filter(m => m.thread && m.thread !== m.id && m.alsoInChat !== true)
+  if (!replies.length) return new Map()
+  const found = await readBy(tx, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: [...new Set(replies.map(m => m.thread!))] }, tabId } },
+    { $project: { conversationId: 1, thread: 1, source: 1, recipientIds: 1 } }])
+  const roots = found.map(r => ({ id: r._id as string, conversationId: r.conversationId as string, thread: r.thread, source: r.source ?? null,
+    recipientIds: (r.recipientIds as string[] | undefined) ?? [] })).filter(r => r.thread === r.id && !agentOnly(r.source, r.recipientIds))
+  const copies = await deliveredCopies(tx, tabId, roots)
+  const shown = new Map(roots.filter(r => !copies.has(r.id)).map(r => [r.id, r.conversationId]))
+  return new Map(replies.filter(m => shown.get(m.thread!) === m.conversationId).map(m => [m.id, m.thread!]))
 }

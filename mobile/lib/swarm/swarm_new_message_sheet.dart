@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -12,6 +13,7 @@ import 'package:harness_mobile/shared/theme/app_icon_size.dart';
 import 'package:harness_mobile/shared/theme/app_ink.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/swarm_tokens_set_b.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
@@ -23,11 +25,13 @@ import 'swarm_conversation.dart';
 import 'swarm_conversation_page.dart'
     show
         SwarmAttachButton,
+        SwarmComposerCard,
         SwarmMessageField,
         SwarmRoundButton,
         attachSwarmFiles;
 import 'swarm_inbox.dart';
 import 'swarm_outgoing_files.dart';
+import 'swarm_paste.dart';
 import 'swarm_reader.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
@@ -124,6 +128,7 @@ swarmNewMessageChats(SwarmInbox inbox, List<SwarmListing> swarms) {
       if (own != null &&
           own.projectId == project.id &&
           !own.archived &&
+          !swarmIsOldBuddyChat(reader, own.id) &&
           own.buddyOwnerId == reader.accountId) {
         chats.add(
           SwarmNewMessageChat(
@@ -214,13 +219,18 @@ class SwarmNewMessageSheet extends StatefulWidget {
   State<SwarmNewMessageSheet> createState() => _SwarmNewMessageSheetState();
 }
 
+/// What the list keeps under the composer at the least: one 44pt row and its
+/// padding, so ✕ stays a scroll away with the keyboard up.
+const double _listRoom = 44 + AppSpace.m;
+
 class _SwarmNewMessageSheetState extends State<SwarmNewMessageSheet>
     implements SwarmFilesBox {
   final _query = TextEditingController();
   final _text = TextEditingController();
   final _focus = FocusNode(debugLabel: 'New message');
 
-  /// The files going with the message, in memory only, until it goes.
+  /// The files going with the message, until it goes: in memory, or a large
+  /// one on disk in the app's temporary folder.
   @override
   final files = SwarmOutgoingFiles();
 
@@ -288,7 +298,9 @@ class _SwarmNewMessageSheetState extends State<SwarmNewMessageSheet>
               selection: TextSelection.collapsed(offset: text.length),
             );
           },
-          send: _spoken,
+          post: () {
+            if (mounted && _canSend) unawaited(_send());
+          },
         )..addListener(_redraw);
       }
     }
@@ -417,14 +429,6 @@ class _SwarmNewMessageSheetState extends State<SwarmNewMessageSheet>
     _focus.requestFocus();
   }
 
-  /// The second tap on the mic ended a take: what is in the box goes, as
-  /// Send would send it.
-  void _spoken() {
-    if (_visible && _text.text.trim().isNotEmpty && _canSend) {
-      unawaited(_send());
-    }
-  }
-
   /// +'s sheet and picker ([attachSwarmFiles]), their files into [files].
   Future<void> _attach() async {
     if (_picking || _locked) return;
@@ -442,6 +446,17 @@ class _SwarmNewMessageSheetState extends State<SwarmNewMessageSheet>
       _picking = false;
     }
   }
+
+  /// A picture pasted into the box ([pasteSwarmImage]), into [files], as
+  /// the + puts a photo there.
+  Future<void> _pasteImage(SwarmPastedImage image) => pasteSwarmImage(
+    files,
+    image,
+    stillWanted: () => mounted && !_closing && !_locked,
+    note: (note) {
+      if (mounted && !_closing) setState(() => _note = note);
+    },
+  );
 
   /// Posts the text and the files to the chat picked, through that chat's
   /// own send; or, while its post is not confirmed, sends that one again.
@@ -508,33 +523,44 @@ class _SwarmNewMessageSheetState extends State<SwarmNewMessageSheet>
         padding: EdgeInsets.only(
           bottom: MediaQuery.viewInsetsOf(context).bottom,
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // ✕, To: and the chats scroll as one, and only the composer is
-            // pinned: on a small phone with the keyboard up, a long draft,
-            // a reason or files still leave Send above the keys.
-            Expanded(
-              child: ListView(
-                key: const ValueKey('swarm-new-message-list'),
-                keyboardDismissBehavior:
-                    ScrollViewKeyboardDismissBehavior.onDrag,
-                padding: const EdgeInsets.only(bottom: AppSpace.m),
-                children: [
-                  _header(),
-                  _to(),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: AppSpace.m),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: _rows(list, several: shown.length > 1),
+        child: LayoutBuilder(
+          builder: (context, below) => Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // ✕, To: and the chats scroll as one, and only the composer is
+              // pinned: on a small phone with the keyboard up, a long draft,
+              // a reason or files still leave Send above the keys.
+              Expanded(
+                child: ListView(
+                  key: const ValueKey('swarm-new-message-list'),
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  padding: const EdgeInsets.only(bottom: AppSpace.m),
+                  children: [
+                    _header(),
+                    _to(),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpace.m,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: _rows(list, several: shown.length > 1),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            SafeArea(top: false, child: _composer(tty, picked)),
-          ],
+              // At most what leaves the list one row, so ✕ stays a scroll
+              // away: past that the field gives up lines.
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: math.max(0, below.maxHeight - _listRoom),
+                ),
+                child: SafeArea(top: false, child: _composer(tty, picked)),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -679,10 +705,15 @@ class _SwarmNewMessageSheetState extends State<SwarmNewMessageSheet>
   }
 
   /// Why the last Send did not go, what the last pick left out, what the mic
-  /// could not hear, the files going, then +, the field, the mic and Send.
+  /// could not hear, then the card ([SwarmComposerCard]): the files going,
+  /// the field and its X, then +, the mic and Send — or, while a take is
+  /// under way, the voice row ([SwarmVoiceRow]) and its Send, for the chat
+  /// picked. No Tag: New message has no @ picker.
   Widget _composer(Tty tty, SwarmNewMessageChat? picked) {
     final canSend = _canSend;
     final locked = _locked;
+    final voice = _voice;
+    final talking = voice?.face != null;
     Widget note(String text, String key, Color color) => Padding(
       padding: const EdgeInsets.fromLTRB(
         AppSpace.xs,
@@ -696,16 +727,10 @@ class _SwarmNewMessageSheetState extends State<SwarmNewMessageSheet>
         style: AppType.caption(color: color),
       ),
     );
-    return Container(
-      decoration: BoxDecoration(
-        color: Color.alphaBlend(tty.text.withValues(alpha: 0.02), tty.ground),
-        border: Border(top: BorderSide(color: AppGlass.hair)),
-      ),
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpace.m,
-        vertical: AppSpace.s,
-      ),
+    return Padding(
+      padding: SwarmComposer.padding,
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (_error case final error?)
@@ -720,56 +745,77 @@ class _SwarmNewMessageSheetState extends State<SwarmNewMessageSheet>
               'swarm-new-message-voice-stopped',
               AppPalette.textSecondary,
             ),
-          SwarmOutgoingChips(box: this),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              if (swarmSendsFiles)
-                SwarmAttachButton(
-                  key: const ValueKey('swarm-new-message-attach'),
-                  onTap: locked || files.room <= 0
-                      ? null
-                      : () => unawaited(_attach()),
-                ),
-              const SizedBox(width: AppSpace.xs),
-              Expanded(
-                child: IgnorePointer(
-                  ignoring: locked,
-                  child: SwarmMessageField(
-                    controller: _text,
-                    focus: _focus,
-                    hint: picked == null
-                        ? 'Write a message…'
-                        : 'Message ${picked.title}',
-                    fieldKey: const ValueKey('swarm-new-message-field'),
-                  ),
+          Flexible(
+            child: SwarmComposerCard(
+              focus: _focus,
+              fit: true,
+              chips: files.files.isEmpty ? null : SwarmOutgoingChips(box: this),
+              // While locked the field and its X take no touch.
+              field: IgnorePointer(
+                ignoring: locked,
+                child: SwarmMessageField(
+                  controller: _text,
+                  focus: _focus,
+                  hint: picked == null
+                      ? 'Write a message…'
+                      : 'Message ${picked.title}',
+                  fieldKey: const ValueKey('swarm-new-message-field'),
+                  clearKey: const ValueKey('swarm-new-message-clear'),
+                  clearable: !talking,
+                  imagePaste: swarmSendsFiles
+                      ? SwarmImagePaste(
+                          enabled: !locked && files.room > 0,
+                          onImage: (image) => unawaited(_pasteImage(image)),
+                        )
+                      : null,
                 ),
               ),
-              if (_voice case final voice?)
-                SwarmVoiceMic(voice: voice)
-              else
-                const SizedBox(width: AppSpace.xs),
-              SwarmRoundButton(
-                key: const ValueKey('swarm-new-message-send'),
-                label: 'Send',
-                fill: canSend || _sending ? AppPalette.accent : ttyRaised(tty),
-                onTap: canSend ? () => unawaited(_send()) : null,
-                child: _sending
-                    ? SizedBox.square(
-                        dimension: AppIconSize.besideText,
-                        child: CircularProgressIndicator(
-                          key: const ValueKey('swarm-new-message-sending'),
-                          strokeWidth: 2,
-                          color: AppInk.onFill,
+              toolbar: talking
+                  ? SwarmVoiceRow(
+                      voice: voice!,
+                      canPost: _picked != null && !_closing && !locked,
+                    )
+                  : Row(
+                      children: [
+                        if (swarmSendsFiles)
+                          SwarmAttachButton(
+                            key: const ValueKey('swarm-new-message-attach'),
+                            onTap: locked || files.room <= 0
+                                ? null
+                                : () => unawaited(_attach()),
+                          ),
+                        const Spacer(),
+                        if (voice != null) SwarmVoiceMic(voice: voice),
+                        SwarmRoundButton(
+                          key: const ValueKey('swarm-new-message-send'),
+                          label: 'Send',
+                          face: 36,
+                          fill: canSend || _sending
+                              ? AppPalette.accent
+                              : ttyRaised(tty),
+                          onTap: canSend ? () => unawaited(_send()) : null,
+                          child: _sending
+                              ? SizedBox.square(
+                                  dimension: AppIconSize.besideText,
+                                  child: CircularProgressIndicator(
+                                    key: const ValueKey(
+                                      'swarm-new-message-sending',
+                                    ),
+                                    strokeWidth: 2,
+                                    color: AppInk.onFill,
+                                  ),
+                                )
+                              : Icon(
+                                  LucideIcons.arrowUp,
+                                  size: 20,
+                                  color: canSend
+                                      ? AppInk.onFill
+                                      : AppPalette.textFaint,
+                                ),
                         ),
-                      )
-                    : Icon(
-                        LucideIcons.arrowUp,
-                        size: AppIconSize.besideText,
-                        color: canSend ? AppInk.onFill : AppPalette.textFaint,
-                      ),
-              ),
-            ],
+                      ],
+                    ),
+            ),
           ),
         ],
       ),

@@ -3,9 +3,13 @@ import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
 
+import 'package:harness_mobile/logging/app_log.dart';
+
 import 'model.dart';
 import 'parts.dart';
 import 'swarm_buddy.dart';
+import 'swarm_chat_notify.dart';
+import 'swarm_kept.dart';
 import 'swarm_read_marks.dart';
 import 'swarm_request.dart';
 import 'waiting_work.dart';
@@ -104,6 +108,10 @@ class SwarmReader extends ChangeNotifier {
   /// null where nobody keeps them, and nothing reads as unread.
   SwarmReadMarks? readMarks;
 
+  /// The account's drafts and unsent posts, which its inbox keeps; null where
+  /// nobody keeps them, and each chat holds its own while it is open.
+  SwarmKept? kept;
+
   /// What the last read could not do, as a sentence; null once one succeeds.
   String? error;
 
@@ -192,10 +200,15 @@ class SwarmReader extends ChangeNotifier {
   Future<void> _read() async {
     var changed = false;
     final failedBefore = error;
+    final serial = ++_readSerial;
     try {
       final read = await _readParts();
       if (_disposed || accessRevoked) return;
       final parts = _parts!;
+      // Sent before this read began: what it holds is the server's own now.
+      final settled = _notifyKept.length;
+      _notifyKept.removeWhere((_, kept) => kept.$2 < serial);
+      if (_notifyKept.length != settled) changed = true;
       if (read.changed || snapshot == null) {
         final views = _views;
         final view = read.view ?? await _view(parts, accountId, big: _bigParts);
@@ -239,6 +252,10 @@ class SwarmReader extends ChangeNotifier {
       if (_disposed || accessRevoked) return;
       error = 'Could not reach this Swarm. Try again.';
       changed = true;
+    }
+    // Once per failure, not once per poll. Home shows its skeleton meanwhile.
+    if (error case final failed? when failed != failedBefore) {
+      appLog.warn('swarm', 'Swarm $tabId not read: $failed');
     }
     if (changed || error != failedBefore) notifyListeners();
   }
@@ -306,6 +323,8 @@ class SwarmReader extends ChangeNotifier {
 
   void _forget() {
     accessRevoked = true;
+    _notifySending.clear();
+    _notifyKept.clear();
     snapshot = null;
     partners = const {};
     buddies = SwarmBuddies.none;
@@ -315,6 +334,66 @@ class SwarmReader extends ChangeNotifier {
     _dormantPages.clear();
     _dormantReads.clear();
     _poll?.cancel();
+  }
+
+  /// The reader's notification setting for chat [id] (backend
+  /// chatSettings.ts): the one being sent, else the one the server kept and
+  /// no read has carried yet, else the last read's, else Mentions only.
+  SwarmNotify notifyOf(String id) =>
+      _notifySending[id] ??
+      _notifyKept[id]?.$1 ??
+      SwarmNotify.parse(snapshot?.chatSettings[id]);
+
+  /// Settings sent and not yet answered: the newest choice per chat, with
+  /// its number.
+  final _notifySending = <String, SwarmNotify>{};
+  final _notifyAsked = <String, int>{};
+
+  /// Settings the server kept, until a read carries them, with the number of
+  /// the newest read begun when it answered: one begun after it carries the
+  /// setting. Without it a chat would flick back to the last read's setting
+  /// meanwhile.
+  final _notifyKept = <String, (SwarmNotify, int)>{};
+
+  /// Reads begun, in order ([_read]).
+  int _readSerial = 0;
+
+  /// Keeps [level] for chat [id] on every device of the reader, through the
+  /// desktop's own call: shown at once, and the old setting back when the
+  /// server did not keep it. A later choice for the same chat wins over one
+  /// still on its way. False only when the newest choice was not kept; an
+  /// answer after access went changes nothing.
+  Future<bool> setNotify(String id, SwarmNotify level) async {
+    if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
+      return false;
+    }
+    final asked = (_notifyAsked[id] ?? 0) + 1;
+    _notifyAsked[id] = asked;
+    _notifySending[id] = level;
+    notifyListeners();
+    var kept = false;
+    try {
+      final answer = superTabMap(
+        await request(
+          'POST',
+          '$_path/conversations/${Uri.encodeComponent(id)}/notifications',
+          body: {'notify': level.name},
+        ),
+      );
+      kept = answer['notify'] == level.name;
+    } catch (_) {
+      kept = false;
+    }
+    // A newer choice for this chat settles it; access gone takes it away.
+    if (_disposed || accessRevoked || _notifyAsked[id] != asked) return true;
+    _notifyAsked.remove(id);
+    _notifySending.remove(id);
+    // Kept only while the chat is still one the reader reads.
+    if (kept && snapshot?.conversation(id) != null) {
+      _notifyKept[id] = (level, _readSerial);
+    }
+    notifyListeners();
+    return kept;
   }
 
   /// A dormant stub says a held group closed, not how: its data is read again

@@ -8,6 +8,7 @@ import '../shared/theme/app_space.dart';
 import '../shared/theme/app_theme.dart';
 import '../shared/theme/app_type.dart';
 import '../theme/app_theme.dart' show AppColors;
+import 'model.dart' show kDefaultCoordinatorName;
 import 'swarm_asks.dart';
 import 'swarm_inbox.dart';
 import 'swarm_row.dart';
@@ -141,11 +142,15 @@ class SwarmNeedLine extends StatelessWidget {
     required this.session,
     required this.need,
     required this.onTap,
+    this.chevron = LucideIcons.chevronDown300,
   });
 
   final SwarmSession session;
   final SwarmNeed need;
   final VoidCallback onTap;
+
+  /// Down where it opens in place on Home; right where it opens elsewhere.
+  final IconData chevron;
 
   @override
   Widget build(BuildContext context) {
@@ -154,6 +159,7 @@ class SwarmNeedLine extends StatelessWidget {
       final SwarmDecisionNeed decision => switch (session.held(decision)) {
         final choice? =>
           'Sending “${swarmOption(decision.decision.options, choice)}”',
+        null when session.heldDelegate(decision) => 'Leaving it to be decided',
         null => decision.decision.question,
       },
       SwarmMentionNeed(:final mention) =>
@@ -168,7 +174,7 @@ class SwarmNeedLine extends StatelessWidget {
       ),
       title: swarmNeedTitle(need),
       detail: line.isEmpty ? null : SwarmRow.line(line),
-      chevron: LucideIcons.chevronDown300,
+      chevron: chevron,
       onTap: onTap,
     );
   }
@@ -331,11 +337,15 @@ class SwarmDecisionAnswer extends StatelessWidget {
     required this.session,
     required this.need,
     this.fillRecommended = false,
+    this.onNotNow,
   });
 
   final SwarmSession session;
   final SwarmDecisionNeed need;
   final bool fillRecommended;
+
+  /// Sets it aside where it shows: in the Buddy chat alone, as on the desktop.
+  final VoidCallback? onNotNow;
 
   @override
   Widget build(BuildContext context) {
@@ -345,8 +355,26 @@ class SwarmDecisionAnswer extends StatelessWidget {
     final held = session.held(need);
     final sending = asks?.answering.contains(decision.id) ?? false;
     final note = AppType.caption(color: AppColors.warning, height: 1.35);
+    final coordinator =
+        session.inbox
+            .reader(need.swarmId)
+            ?.snapshot
+            ?.coordinatorNameOf(decision.projectId) ??
+        kDefaultCoordinatorName;
     final Widget actions;
-    if (held != null) {
+    if (session.heldDelegate(need)) {
+      actions = _Held(
+        key: ValueKey('swarm-held-box-${decision.id}-delegate'),
+        label: 'Leaving it to $coordinator',
+        window: session.undoWindow,
+        action: SwarmButton(
+          key: ValueKey('swarm-undo-${decision.id}'),
+          label: 'Undo',
+          style: SwarmButtonStyle.link,
+          onPressed: () => session.undo(need),
+        ),
+      );
+    } else if (held != null) {
       actions = _Held(
         key: ValueKey('swarm-held-box-${decision.id}-$held'),
         label: 'Sending “${swarmOption(decision.options, held)}”',
@@ -361,6 +389,17 @@ class SwarmDecisionAnswer extends StatelessWidget {
       );
     } else if (sending) {
       actions = const _Held(label: 'Sending…');
+    } else if (asks?.unconfirmedDelegate(decision) ?? false) {
+      // Sent, and maybe taken: only the same delegation may go again.
+      actions = _Held(
+        label: 'Leaving it to $coordinator is not confirmed.',
+        action: SwarmButton(
+          key: ValueKey('swarm-resend-${decision.id}'),
+          label: 'Send again',
+          style: SwarmButtonStyle.link,
+          onPressed: () => unawaited(asks!.delegate(decision)),
+        ),
+      );
     } else if (asks?.unconfirmed(decision) case final choice?) {
       // Sent, and maybe taken: only the same answer may go again.
       actions = _Held(
@@ -390,6 +429,33 @@ class SwarmDecisionAnswer extends StatelessWidget {
             keyOf: (index) => ValueKey('swarm-option-${decision.id}-$index'),
             onTap: (index) => session.hold(need, index),
           ),
+          if (decision.canDelegate || onNotNow != null) ...[
+            const SizedBox(height: 4),
+            Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                if (decision.canDelegate)
+                  SwarmButton(
+                    key: ValueKey('swarm-decision-delegate-${decision.id}'),
+                    label: 'Let $coordinator decide',
+                    style: SwarmButtonStyle.link,
+                    onPressed: () => session.holdDelegate(need),
+                  ),
+                if (decision.canDelegate && onNotNow != null)
+                  Text(
+                    '·',
+                    style: AppType.caption(color: AppPalette.textSecondary),
+                  ),
+                if (onNotNow case final notNow?)
+                  SwarmButton(
+                    key: ValueKey('swarm-decision-later-${decision.id}'),
+                    label: 'Not now',
+                    style: SwarmButtonStyle.link,
+                    onPressed: notNow,
+                  ),
+              ],
+            ),
+          ],
         ],
       );
     }

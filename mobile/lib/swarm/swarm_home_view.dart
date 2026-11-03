@@ -12,8 +12,8 @@ typedef SwarmHomeSwarm = ({
 
 /// [snapshot] thinned to what Home draws: its projects, its agents by name,
 /// engine and status, each conversation's title, project, people, work
-/// status and when it last changed, and the built-in pictures people and
-/// agents wear. Nothing a chat
+/// status and when it last changed, people's usernames, and the built-in
+/// pictures people and agents wear. Nothing a chat
 /// holds — no message, brief, check, task, question or email, no photo or
 /// status — nor machines, starts or what waits on the person, which come
 /// with the next read. [buddies] marks the Buddy chats and Buddies, so none
@@ -29,15 +29,23 @@ SwarmHomeSwarm swarmHomeSwarm(
     'name': snapshot.name,
     'ownerId': snapshot.ownerId,
     'paused': snapshot.paused,
-    'leadsConversationId': ?snapshot.leadsConversationId,
+    if (snapshot.swarmBuddy) 'swarmBuddy': true,
     'projects': [for (final p in snapshot.projects) _project(p)],
     'people': [
       for (final p in snapshot.people)
-        {'id': p.id, 'email': '', 'role': p.role, 'avatar': ?_preset(p.avatar)},
+        {
+          'id': p.id,
+          'email': '',
+          'username': ?p.chosenUsername,
+          'role': p.role,
+          'avatar': ?_preset(p.avatar),
+        },
     ],
     'agents': [
       for (final a in snapshot.agents)
-        {
+        // A thread's own session is not drawn: kept, it would read as the
+        // Buddy until the next read.
+        if (a.buddySession == null) {
           ..._agent(a),
           if (buddies.buddyOwners[a.id] case final owner?)
             'buddyOf': {'personId': owner},
@@ -48,7 +56,7 @@ SwarmHomeSwarm swarmHomeSwarm(
         {
           ..._conversation(c),
           if (buddies.chatOwners[c.id] case final owner?) ...{
-            'kind': 'buddy',
+            'kind': c.isSwarmBuddyChat ? 'swarm-buddy' : 'buddy',
             'buddyOwnerId': owner,
           },
         },
@@ -78,7 +86,7 @@ Map<String, dynamic> _project(SuperTabProject p) => {
     for (final id in p.memberIds) {'id': id},
   ],
   'skillMode': p.skillMode,
-  'skillSet': p.skillSet,
+  'coordinatorName': ?p.coordinatorName,
   'updateMinutes': p.updateMinutes,
 };
 
@@ -87,12 +95,14 @@ Map<String, dynamic> _agent(SuperTabAgent a) => {
   'projectId': a.hasProjectId ? a.projectId : null,
   'name': a.name,
   'displayName': ?a.displayName,
+  'buddyScope': ?a.buddyScope,
   'machineId': a.machineId,
   'harnessId': a.harnessId,
   'contributorId': a.contributorId,
   'machineOwnerId': a.machineOwnerId,
   'role': ?a.role,
   'roleId': ?a.roleId,
+  'roleName': ?a.roleName,
   'limitedUntil': ?a.limitedUntil?.toIso8601String(),
   'downSince': ?a.downSince?.toIso8601String(),
   'avatar': ?_preset(a.avatar),

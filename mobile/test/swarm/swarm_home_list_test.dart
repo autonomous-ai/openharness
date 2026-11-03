@@ -193,7 +193,7 @@ void main() {
       String id, {
       int? minutes,
       String swarmId = tab,
-      SwarmRowNews news = swarmNoNews,
+      SwarmProjectNews news = swarmNoProjectNews,
     }) => SwarmHomeProject(
       swarmId: swarmId,
       project: SuperTabProject.fromJson({
@@ -280,8 +280,16 @@ void main() {
       final lists = swarmHomeLists(
         [
           project('a', minutes: 5),
-          project('b', minutes: 60 * 30, news: (bold: false, tags: 1)),
-          project('c', minutes: 60 * 31, news: (bold: true, tags: 0)),
+          project(
+            'b',
+            minutes: 60 * 30,
+            news: (bold: false, tags: 1, hasWaitingTag: true),
+          ),
+          project(
+            'c',
+            minutes: 60 * 31,
+            news: (bold: true, tags: 0, hasWaitingTag: false),
+          ),
           project('d', minutes: 60 * 32),
         ],
         pins: const {},
@@ -368,6 +376,8 @@ void main() {
       expect(jsonDecode(store.values[key]!), {
         'pins': [swarmHomeProjectKey(tab, 'p1')],
         'swarm': tab,
+        // Home showing one Swarm counts as using it, for the Buddy tab.
+        'buddySwarm': tab,
       });
     });
 

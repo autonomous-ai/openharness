@@ -6,6 +6,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/widgets/laid_out_list.dart';
 
 import 'box_render_preview_test.dart' show loadPreviewFonts;
 import 'support/super_tab_fixture.dart';
@@ -89,7 +90,7 @@ void main() {
           .widget<ListView>(
             find.descendant(
               of: find.byKey(const ValueKey('super-thread-panel')),
-              matching: find.byType(ListView),
+              matching: find.byType(LaidOutListView),
             ),
           )
           .controller!;

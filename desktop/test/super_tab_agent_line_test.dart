@@ -10,6 +10,7 @@ import 'package:harness/super_tabs/roster.dart';
 import 'package:harness/super_tabs/agent_line.dart';
 
 import 'support/super_tab_fixture.dart';
+import 'support/super_tab_members.dart';
 
 Map<String, dynamic> _machine(
   String id,
@@ -114,6 +115,7 @@ Future<ConversationServer> _swarm(
     ),
   );
   await tester.pumpAndSettle();
+  await unfoldSuperTabIdle(tester);
   return server;
 }
 
@@ -174,7 +176,7 @@ void main() {
     });
 
     testWidgets(
-      'names each state in a word: waiting, lost, down, limited, stuck, in review',
+      'names each state in a word: waiting, lost, down, kept (closed), limited, stuck, in review',
       (tester) async {
         final until = DateTime.now().add(const Duration(hours: 2)).toLocal();
         String two(int n) => n.toString().padLeft(2, '0');
@@ -195,6 +197,15 @@ void main() {
             ),
             _agent('Moss', 'm1'),
             _agent('Teal', 'm1'),
+            // Closed on its machine, and someone chose to keep it: not Idle, not Down.
+            _agent(
+              'Moth',
+              'm2',
+              extra: {
+                'downSince': DateTime.now().toUtc().toIso8601String(),
+                'workDecision': 'keep',
+              },
+            ),
           ],
           tasks: [
             _task('Wren', 'needs_human'),
@@ -208,7 +219,7 @@ void main() {
           findsOneWidget,
         );
         expect(
-          _line('Teal', 'In review · Mac Studio · Opus · high'),
+          _line('Teal', 'Waiting on others · Mac Studio · Opus · high'),
           findsOneWidget,
         );
         expect(
@@ -228,6 +239,10 @@ void main() {
         expect(tip, contains('Lost "Task of Lark"'));
         expect(
           _line('Kite', 'Down · MacBook Pro · Opus · high'),
+          findsOneWidget,
+        );
+        expect(
+          _line('Moth', 'Kept (closed) · MacBook Pro · Opus · high'),
           findsOneWidget,
         );
         expect(

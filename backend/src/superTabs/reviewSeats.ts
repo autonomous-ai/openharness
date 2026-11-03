@@ -1,6 +1,6 @@
-/** Whether a new Reviewer of an engine could start on a contributed machine soon: what the project chat's notice
+/** Whether a new agent of an engine could start on a contributed machine soon: what the project chat's notice
  *  (reviewCapacity.ts) reads. On 2026-10-30 every Codex Reviewer was out of weekly quota for days and reviews waited all
- *  morning (Tony); since Ken's ruling that day any strong engine reviews any build (rules.ts reviewRefusal). */
+ *  morning (Tony). */
 import { suspendedEngines } from './engineHealth.js'
 import { MACHINE_FRESH_MS, type ContributedMachine } from './machines.js'
 import type { SuperTabState } from './model.js'

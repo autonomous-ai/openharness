@@ -24,11 +24,13 @@
  */
 import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { basename, join } from 'node:path'
-import { mangleClaudeProjectDir } from '../../../../cli/src/lib/claudeProject.js'
 import { guardLesson, slug, type DistillWhy } from './distill.js'
 import { untrusted } from '../../shared/guard.js'
 import type { LessonRecord, LessonStore } from './store.js'
 import { contentHash, projectHash, projectName, type Signal } from './types.js'
+
+/** Claude Code's folder for a project: the path with every other character a dash (cli engines/claude/discoveryContract.ts). */
+export const mangleClaudeProjectDir = (cwd: string): string => cwd.replace(/[^A-Za-z0-9]/g, '-')
 
 export type BorrowEngine = 'hermes' | 'claude' | 'codex'
 

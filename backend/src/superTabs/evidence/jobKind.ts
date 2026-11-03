@@ -28,8 +28,10 @@ function entryKind(entry: string): JobKind | 'tests' | null {
  * tests counting as the code and only tests as `tests`; entries naming several components, or none, leave it to the route
  * word when that is a kind, else `general`.
  */
-export function jobKindOf(group: Pick<Conversation, 'reviewOf'> & { task?: { owns: string[] } }, routeWord?: string): JobKind {
-  if (group.reviewOf) return 'review'
+export function jobKindOf(group: Pick<Conversation, 'reviewOf'> & { step?: string; task?: { owns: string[] } }, routeWord?: string): JobKind {
+  // A step is named by its project's instructions (task steps design): ranked as its route says, as any task is, never as a
+  // review because it is linked. A linked group from before steps is a review.
+  if (group.reviewOf && !group.step) return 'review'
   if (routeWord === 'security') return 'security'
   const kinds = new Set((group.task?.owns ?? []).map(entryKind).filter(k => k !== null))
   const components = [...kinds].filter(k => k !== 'tests')

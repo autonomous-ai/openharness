@@ -12,15 +12,19 @@ import 'controller.dart';
 /// call (hosts, starts, GitHub tokens, deliveries, terminals) are refused
 /// before anything is sent, so this transport never signs them.
 const _tab =
-    r'(?!(?:hosts|workspaces|grids|list|invitations|routing-policy|workspace-invitations)/)[A-Za-z0-9_-]+';
+    r'(?!(?:hosts|workspaces|grids|list|invitations|deleted|routing-policy|workspace-invitations)/)[A-Za-z0-9_-]+';
 const _id = r'[A-Za-z0-9_-]+';
 final _swarmRoute = RegExp(
   '^/api/super-tabs(?:'
-  '|/list|/invitations|/routing-policy'
+  '|/list|/invitations|/deleted'
   '|/$_tab/(?:parts|changes|commands|mentions|decisions|leaderboard|sharing'
   '|routing-policy|groups|groups/$_id|join|join/preview|native'
-  '|conversations/$_id/(?:messages|catch-up|read)'
-  '|projects/$_id/(?:github|github/approve|roles/$_id)'
+  '|activity|activity/read|threads|inbox'
+  '|conversations/$_id/(?:messages|catch-up|read|notifications'
+  '|threads/$_id/(?:read|follow)'
+  '|messages/$_id/attachments/$_id)'
+  '|projects/$_id/(?:github|github/approve'
+  '|instructions(?:/revisions(?:/[0-9]+)?)?)'
   '|route-decisions/$_id|machines/$_id/removal)'
   r')(?:\?[A-Za-z0-9_=&%-]+)?$',
 );

@@ -1,10 +1,14 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadOrCreateHookCredential } from '../lib/hookAuth.js'
 import { devicesCommand, deviceRequest, type DevicesClientDeps } from './client.js'
+
+// A folder too long for a socket now has one under the home folder: only a home too long as well is left on the port.
+beforeEach(() => { vi.stubEnv('HOME', `/${'h'.repeat(120)}`) })
+afterEach(() => { vi.unstubAllEnvs() })
 
 const snapshot = (brightness = 80) => ({ status: { devices: [{ id: 'usb', attached: true, settings: { brightness } }] } })
 function fixture() {
@@ -71,8 +75,9 @@ describe('Devices DSH commands', () => {
     expect(await reply).toEqual(snapshot())
     expect(socket.close).toHaveBeenCalledOnce()
   })
-  it('shows the daemon this OS user\'s local credential on its loopback socket and fetches', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'devices-cred-'))
+  it('shows the daemon this OS user\'s local credential on its loopback socket and fetches only where no socket can exist', async () => {
+    const dataDir = join(mkdtempSync(join(tmpdir(), 'devices-cred-')), 'd'.repeat(100))
+    mkdirSync(dataDir, { mode: 0o700 })
     try {
       const credential = loadOrCreateHookCredential(dataDir)
       const socket = Object.assign(new EventEmitter(), { send: vi.fn(), close: vi.fn() })

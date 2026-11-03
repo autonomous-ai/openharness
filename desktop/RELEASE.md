@@ -594,8 +594,12 @@ its own runner and `upload-windows` publishes from ubuntu. Three files go to `ha
   no app: it reads the manifest when it runs, picks this PC's zip as `install.ps1 -App` does, checks it and runs its
   `Harness.exe --install` (`installer/`, docs/superpowers/specs/2026-10-19-windows-installer-design.md).
 
-Nothing is code-signed yet. Windows shows SmartScreen once, on the installer a browser downloaded; Smart App Control
-blocks the build where it is on. A failed Windows build stops the release, as a failed macOS or Linux build does.
+`sign-windows` Authenticode-signs every `.exe` and `.dll` in both zips and `harness-install.exe` through Azure Artifact
+Signing, as **AUTONOMOUS INC.**, once the repository variable `WINDOWS_SIGNING` is `required`
+([docs/windows-code-signing.md](../docs/windows-code-signing.md)). Until then it is skipped and the files ship
+unsigned: Windows shows SmartScreen once, on the installer a browser downloaded, and Smart App Control blocks the build
+where it is on. Once signing is required, a failed signature stops the release and a candidate prepared unsigned is
+not reused. A failed Windows build stops the release, as a failed macOS or Linux build does.
 
 If Microsoft Defender flags `harness-install.exe` or the app, submit the file as a software developer at
 https://www.microsoft.com/wdsi/filesubmission with the release version. Do not change the build to dodge a detection.

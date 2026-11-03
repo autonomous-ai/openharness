@@ -3,14 +3,17 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../core/local_key_value_store.dart';
+import '../logging/app_log.dart';
 import 'model.dart';
 import 'swarm_asks.dart';
 import 'swarm_buddy.dart';
 import 'swarm_home_cache.dart';
+import 'swarm_kept.dart';
 import 'swarm_home_keeper.dart';
 import 'swarm_read_marks.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
+import 'swarm_threads.dart';
 import 'waiting_work.dart';
 
 /// One of the account's Swarms, as the list names it.
@@ -50,7 +53,10 @@ class SwarmDecisionNeed extends SwarmNeed {
   @override
   String get conversationId => decision.conversationId;
   @override
-  String get key => 'decision:${decision.id}';
+  String get key => keyOf(decision.id);
+
+  /// The key of decision [id]'s need: what Activity opens at for its notice.
+  static String keyOf(String id) => 'decision:$id';
 }
 
 /// A Lead's tag of the person.
@@ -89,14 +95,22 @@ class SwarmInbox extends ChangeNotifier {
     required this.request,
     this.upload = refuseSwarmUpload,
     this.pollInterval = const Duration(seconds: 15),
+    DateTime Function()? now,
     SwarmHomeCache? homeCache,
     Duration homeWait = const Duration(seconds: 30),
     this.readMarks,
-  }) : _home = homeCache == null
+    SwarmKeptStore? keptStore,
+  }) : kept = SwarmKept(accountId: accountId, store: keptStore),
+       _now = now ?? DateTime.now,
+       _home = homeCache == null
            ? null
            : SwarmHomeKeeper(homeCache, accountId, wait: homeWait) {
+    kept.addListener(_dropUnlisted);
     if (_home != null) unawaited(_restore());
   }
+
+  /// The account's drafts and unsent posts ([SwarmKept]).
+  final SwarmKept kept;
 
   /// Keeps the last Home ([SwarmHomeCache]), so a cold start draws it at once.
   final SwarmHomeKeeper? _home;
@@ -150,8 +164,16 @@ class SwarmInbox extends ChangeNotifier {
   /// True once the list has been read.
   bool loaded = false;
 
-  /// Invitations waiting for the person, read only while they have no Swarm.
+  /// Invitations waiting for the person: read at every read of the list while
+  /// they have no Swarm, and at most every [_invitationsEvery] while they have
+  /// one, since the list is read every few seconds on every open phone.
   List<SwarmInvitation> invitations = const [];
+
+  static const _invitationsEvery = Duration(minutes: 5);
+  final DateTime Function() _now;
+
+  /// When the invitations were last asked for; null when they are due now.
+  DateTime? _invitationsAt;
 
   /// The last read of the invitations failed, while there is no Swarm: not "no invitation".
   /// Those read before stay meanwhile.
@@ -195,7 +217,12 @@ class SwarmInbox extends ChangeNotifier {
       joining.remove(invitation.inviteId);
       if (!_disposed) notifyListeners();
     }
-    await refresh();
+    // Gone at once, and not brought back by a read already under way.
+    _putOff.add(invitation.inviteId);
+    invitations = List.unmodifiable(
+      invitations.where((other) => other.inviteId != invitation.inviteId),
+    );
+    await refreshAll();
     return true;
   }
 
@@ -251,8 +278,17 @@ class SwarmInbox extends ChangeNotifier {
   /// phone notice tells.
   void Function(SwarmNeed need)? onArrived;
 
+  /// Swarm [swarmId] was read, and [needs] already hold what that read
+  /// found: what takes a notice down once its need stays gone.
+  void Function(String swarmId)? onSwarmRead;
+
+  /// Swarms read during a read of the list, told once [needs] are worked
+  /// out at its end.
+  final _readDuringList = <String>{};
+
   final _readers = <String, SwarmReader>{};
   final _asks = <String, SwarmAsks>{};
+  final _threads = <String, SwarmThreads>{};
 
   /// Each Swarm's waiting work as last seen: null until its first read, whose
   /// waiting work is not news.
@@ -278,6 +314,15 @@ class SwarmInbox extends ChangeNotifier {
 
   /// [id]'s decisions and tags, while it is listed.
   SwarmAsks? asks(String id) => _asks[id];
+
+  /// [id]'s followed threads, while it is listed: made when first asked for,
+  /// and read only while something shows it ([SwarmThreads]).
+  SwarmThreads? threads(String id) {
+    if (_disposed) return null;
+    final reader = _readers[id];
+    if (reader == null) return null;
+    return _threads[id] ??= SwarmThreads(reader, asks: _asks[id]);
+  }
 
   bool get shown => _shown;
 
@@ -323,6 +368,19 @@ class SwarmInbox extends ChangeNotifier {
     return _refreshing ??= _read().whenComplete(() => _refreshing = null);
   }
 
+  /// One read now with the invitations in it: a pull, or a join just made. Runs
+  /// after a read already under way, which may have passed them by.
+  Future<void> refreshAll() async {
+    if (_refreshing case final reading?) await reading;
+    _invitationsAt = null;
+    await refresh();
+  }
+
+  bool get _invitationsDue {
+    final at = _invitationsAt;
+    return at == null || _now().difference(at) >= _invitationsEvery;
+  }
+
   /// What a screen draws of the inbox itself: a read that leaves it as it
   /// was tells nobody.
   Object get _face =>
@@ -333,17 +391,26 @@ class SwarmInbox extends ChangeNotifier {
     _polling = true;
     try {
       final (:listed, :changedAt) = await _list();
-      List<SwarmInvitation>? invited = const [];
+      List<SwarmInvitation>? invited;
       Object? unread;
-      if (listed.isEmpty) {
+      if (listed.isEmpty || _invitationsDue) {
+        _invitationsAt = _now();
         try {
           invited = await _invitations();
         } catch (failure) {
-          (invited, unread) = (null, failure);
+          // With a Swarm, Home has work to show: it stays as it is, and the
+          // read comes round again.
+          if (listed.isEmpty) {
+            unread = failure;
+          } else {
+            appLog.warn('swarm', 'Invitations not read', error: failure);
+          }
         }
       }
       if (_disposed) return;
       if (!listEquals(listed, swarms)) swarms = listed;
+      _listedIds = {for (final swarm in listed) swarm.id};
+      _dropUnlisted();
       // What was read of them stays while they cannot be read again.
       if (invited != null && !listEquals(invited, invitations)) {
         invitations = invited;
@@ -368,16 +435,52 @@ class SwarmInbox extends ChangeNotifier {
       ]);
     } on SuperTabFailure catch (failure) {
       if (_disposed) return;
+      // Once per failure, not once per poll.
+      if (error != failure.message) {
+        appLog.warn(
+          'swarm',
+          'Swarm list not read: ${failure.code} ${failure.statusCode}',
+          error: failure,
+        );
+      }
       error = failure.message;
       _away = failure.code == 'MACHINE_UNAVAILABLE' ? _sooner() : null;
-    } catch (_) {
+    } catch (failure, stack) {
       if (_disposed) return;
-      error = 'Could not load your Swarms. Try again.';
+      const unread = 'Could not load your Swarms. Try again.';
+      if (error != unread) {
+        appLog.failure(
+          'swarm',
+          'Swarm list not read',
+          error: failure,
+          stackTrace: stack,
+        );
+      }
+      error = unread;
       _away = null;
     } finally {
       _polling = false;
     }
     _rebuild(told: _face != before);
+    final read = _readDuringList.toList();
+    _readDuringList.clear();
+    for (final id in read) {
+      if (_disposed) return;
+      if (_readers.containsKey(id)) onSwarmRead?.call(id);
+    }
+  }
+
+  /// [reader] answered a read: told after the reader's own notify, which
+  /// works out [needs] again, or at the end of the list read under way.
+  void _readerRead(String id, SwarmReader reader) {
+    scheduleMicrotask(() {
+      if (_disposed || !identical(_readers[id], reader)) return;
+      if (_polling) {
+        _readDuringList.add(id);
+      } else {
+        onSwarmRead?.call(id);
+      }
+    });
   }
 
   /// The next quick read while no computer can be asked ([_away]).
@@ -438,6 +541,9 @@ class SwarmInbox extends ChangeNotifier {
         if (row['id'] is! String || row['name'] is! String) {
           throw const FormatException('Invalid tab');
         }
+        // A deleted Swarm is never the person's to show, whatever lists it
+        // (backend superTabs/deletion.ts): one marked so is left out.
+        if (row['deletedAt'] != null) continue;
         final id = row['id'] as String;
         listed[id] = (id: id, name: row['name'] as String);
         changedAt[id] = (row['lastChangedAt'] as num?)?.toInt() ?? 0;
@@ -457,8 +563,14 @@ class SwarmInbox extends ChangeNotifier {
       request: request,
       upload: upload,
     )..addListener(_relay);
+    reader.reads.addListener(() => _readerRead(id, reader));
     reader.readMarks = SwarmReadMarks(reader, store: readMarks)
       ..addListener(_relay);
+    reader.kept = kept;
+    void watch() => _checkKept(id, reader);
+    _keptWatches[id] = watch;
+    reader.addListener(watch);
+    kept.addListener(watch);
     _asks[id] = SwarmAsks(reader)
       ..onArrived = ((ask) => onArrived?.call(switch (ask) {
         final SuperTabDecision decision => SwarmDecisionNeed(id, decision),
@@ -472,15 +584,67 @@ class SwarmInbox extends ChangeNotifier {
   /// A Swarm off the list ([lost]), or the inbox closing: what a screen
   /// still holds of it is taken back ([SwarmReader.revoke]) before it is
   /// dropped.
+  /// The Swarms the last list that answered named; null before one has.
+  Set<String>? _listedIds;
+
+  /// A Swarm the account no longer has goes from what is kept, also one lost
+  /// while the app was closed, which has no reader to say so. Once what was
+  /// kept is back, and only from a list that answered.
+  void _dropUnlisted() {
+    final listed = _listedIds;
+    if (_disposed || listed == null || !kept.loaded) return;
+    for (final id in kept.tabs) {
+      if (!listed.contains(id)) kept.dropSwarm(id);
+    }
+  }
+
+  /// How [_checkKept] follows each Swarm, by its id.
+  final _keptWatches = <String, VoidCallback>{};
+
+  /// Chats kept but not in a Swarm's read, already asked for this session.
+  final _keptAsked = <(String, String)>{};
+
+  /// What is kept of Swarm [id] goes when the person has lost it, and of one of
+  /// its chats when that is lost, opened or not: a closed chat is in no full
+  /// read, so one missing from it is asked for by id, once a session.
+  void _checkKept(String id, SwarmReader reader) {
+    if (_disposed || !kept.loaded) return;
+    if (reader.accessRevoked) {
+      kept.dropSwarm(id);
+      return;
+    }
+    final snapshot = reader.snapshot;
+    if (snapshot == null || reader.heldLoad == 0) return;
+    for (final chat in kept.chats(id)) {
+      if (snapshot.conversation(chat) != null) continue;
+      if (!_keptAsked.add((id, chat))) continue;
+      unawaited(() async {
+        try {
+          if (!await reader.loadConversation(chat) && !_disposed) {
+            kept.dropChat(id, chat);
+          }
+        } catch (_) {
+          // Not known either way: it stays, and is asked for again next session.
+        }
+      }());
+    }
+  }
+
   void _drop(String id, {bool lost = true}) {
+    final watch = _keptWatches.remove(id);
+    if (watch != null) kept.removeListener(watch);
+    if (lost) kept.dropSwarm(id);
+    final threads = _threads.remove(id);
     _asks.remove(id)?.dispose();
     final reader = _readers.remove(id)?..removeListener(_relay);
     if (reader != null) {
+      if (watch != null) reader.removeListener(watch);
       final marks = reader.readMarks;
       // Lost, it is revoked first, so its read marks leave the phone too;
       // the inbox closing keeps them, written now, for the next one.
       if (!lost) marks?.dispose();
       reader.revoke();
+      threads?.dispose();
       if (lost) marks?.dispose();
       reader.dispose();
     }
@@ -591,6 +755,9 @@ class SwarmInbox extends ChangeNotifier {
     for (final id in _readers.keys.toList()) {
       _drop(id, lost: false);
     }
+    kept
+      ..removeListener(_dropUnlisted)
+      ..dispose();
     super.dispose();
   }
 }

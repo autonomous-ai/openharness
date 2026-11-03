@@ -122,7 +122,8 @@ class SettingsCompactScreen extends StatelessWidget {
     onPopInvokedWithResult: (didPop, _) {
       if (!didPop) onBack();
     },
-    child: Focus(
+    // A scope, as in [SettingsScreen]: the keys still reach it after a click.
+    child: FocusScope(
       onKeyEvent: onKeyEvent,
       child: Scaffold(
         backgroundColor: grid.AppPalette.windowBg,

@@ -1,14 +1,16 @@
 import { activeWork, forRecipients, stableId, type Agent, type AgentStart, type Assignment, type Author, type Conversation, type MessageDraft,
   type SuperTabState, type TaskLiveness } from './model.js'
+import { failedSessionStart } from './buddySessions.js'
 import { noteStartFailed } from './engineHealth.js'
 import { machineOffline, sessionStopped } from './lostReason.js'
 import { agentDisplayName } from './agentNames.js'
-import { failureNotice, LEAD_PICKUP_SUFFIX, STILL_PREPARING_SUFFIX, STOPPED_REPORTING_SUFFIX, TIMED_OUT_SUFFIX } from './startFailure.js'
-import { GRID_START_FAILED, stepUp } from './stepUp.js'
+import { askedModel, coordinatorCopy, failureNotice, failureRecipients, leadPickupSuffix, STILL_PREPARING_SUFFIX, STOPPED_REPORTING_SUFFIX, TIMED_OUT_SUFFIX } from './startFailure.js'
 import { leadOf, toLead } from './terminal.js'
 import { dropIdleBuddyMachines, MACHINE_FRESH_MS } from './machines.js'
 import { leadStartFailed } from './leadStart.js'
+import { staleSwitches } from './tidy.js'
 import { ledProject, projectsOf } from './projects.js'
+import { coordinatorNameOf } from './instructions.js'
 import { waitedOn } from './leaderboard/record.js'
 
 // Work never sits with a dead owner (design: "A Swarm that never stops", 2026-10-26). A worker's active assignment is held
@@ -40,6 +42,12 @@ export const SWEEP_EVERY_MS = 30_000
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 const machineName = (state: SuperTabState, machineId: string) => state.machines?.find(m => m.machineId === machineId)?.name ?? 'its machine'
+/** What [group]'s project calls its coordinator; never a lookup that throws, since these checks run inside machine reports. */
+const coordinatorOfGroup = (state: SuperTabState, group: Conversation) =>
+  coordinatorNameOf(projectsOf(state).find(p => p.id === (group.projectId ?? 'lead')) ?? {})
+/** [group]'s project chat when it is loaded; never a lookup that throws. */
+const projectChatOf = (state: SuperTabState, group: Conversation) =>
+  state.conversations.find(c => c.id === projectsOf(state).find(p => p.id === (group.projectId ?? 'lead'))?.leadConversationId)
 /** A sweep runs inside a machine's report and the Lead's poll, so it never fails on an agent whose membership changed:
  *  it writes as that agent without checking it, and a delivery to an agent no longer shared is not created. */
 const writtenBy = (state: SuperTabState, writer: Agent): Author => ({ kind: 'agent', id: writer.id, name: writer.name,
@@ -61,16 +69,17 @@ export function renewLease(assignment: Assignment, now: number): void {
   assignment.progressAt = now
 }
 
-/** A hand-off: a result that says it is ready for review and names a revision (a commit hash). Right after '@', 'at ' or
- *  'head ', the forms hand-offs use, any 7-40 hex digits count, since a short hash can be all digits or all letters;
- *  anywhere else it needs a digit and a letter, so dates and other numbers do not count (review of #2176). */
-// Desktop reads hand-offs with a copy of these two (desktop/lib/super_tabs/agent_mark.dart): change both together.
+/** A hand-off as the older built-in skills write it: a result that says it is ready for review and names a revision (a commit
+ *  hash). Right after '@', 'at ' or 'head ', the forms hand-offs use, any 7-40 hex digits count, since a short hash can be all
+ *  digits or all letters; anywhere else it needs a digit and a letter, so dates and other numbers do not count (review of
+ *  #2176). Desktop reads hand-offs with a copy of these two (desktop/lib/super_tabs/agent_mark.dart): change both together. */
 const READY_FOR_REVIEW = /\bready for review\b/i
 const REVISION = /(?:@|\b(?:at|head)\s+)[0-9a-f]{7,40}\b|\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/i
 
-/** Work that waits for its review, whose quiet time therefore does not count (2026-10-29: five Engineers who had handed
- *  over lost their tasks waiting for a Reviewer). In review, or working with a hand-off as its latest result, as Engineers
- *  report while done is refused until the review passes, until a review finds problems in it. */
+/** Work that waits for others, whose quiet time therefore does not count (2026-10-29: five Engineers who had handed over lost
+ *  their tasks waiting for a Reviewer): the review status its agent set, or, while agents on the older built-in skills exist
+ *  (this release), a working task whose result is their hand-off, until someone else's verdict finds problems in it
+ *  (commands.ts work.check sets reviewFoundAt). Those skills had Done refused until a review passed. */
 export function waitingForReview(assignment: Assignment): boolean {
   if (assignment.status === 'review') return true
   return assignment.status === 'working' && assignment.reviewFoundAt === undefined && !!assignment.result
@@ -84,13 +93,83 @@ export function restartQuietTime(assignment: Assignment, now: number): void {
   assignment.leaseUntil = Math.max(assignment.leaseUntil ?? 0, now + QUIET_RUNNING_MS)
 }
 
-/** A review found problems in work waiting for it: the work is its Engineer's to fix again, and its quiet time counts. */
-export function reviewFoundProblems(assignment: Assignment, now: number): boolean {
-  if (!waitingForReview(assignment)) return false
-  assignment.status = 'working'
-  assignment.reviewFoundAt = now
-  restartQuietTime(assignment, now)
-  return true
+/** The build a linked task (reviewOf) reviews, while that build is active work of the same project and not archived. Only
+ *  a loaded build counts: an active one is always loaded, by a machine's report (parts/load.ts loadObserved reads running
+ *  groups) as by the Lead's poll. A cancelled, finished, lost, archived or asleep build reviews nothing. */
+function reviewedBuild(state: SuperTabState, group: Conversation): Conversation | undefined {
+  if (!group.reviewOf) return undefined
+  const build = state.conversations.find(c => c.id === group.reviewOf)
+  return build && !build.archived && activeWork(build) && (build.projectId ?? 'lead') === (group.projectId ?? 'lead') ? build : undefined
+}
+
+/** The active linked tasks (reviewOf [build]) its own [agentId] holds: the Reviewer's or Tester's task for that build. */
+function ownLinkedTasks(state: SuperTabState, build: Conversation, agentId: string): Conversation[] {
+  return state.conversations.filter(c => c.reviewOf === build.id && activeWork(c) && c.assignment!.agentId === agentId
+    && reviewedBuild(state, c) === build)
+}
+
+/** A linked task waits for the new revision from its own Reviewer's verdict asking for changes until the build's next Ready,
+ *  while that build is still active, so its quiet time does not count then (Diego, 2026-11-01: a Reviewer waiting on a normal
+ *  fix round of ~31 minutes lost its task, its Lead was woken and its verdict refused). It follows the Reviewer, never the
+ *  Engineer: an Engineer's own posts or "working" heartbeats keep no idle Reviewer (review of #2487). A verdict is usually a
+ *  post to the Engineer, which holds only while the Engineer isn't itself waiting on a review, so a "starting now" followed by
+ *  silence still moves (#2241: 35 attempts lost in a day). */
+export function waitingForRevision(state: SuperTabState, group: Conversation): boolean {
+  const build = reviewedBuild(state, group)
+  if (!build) return false
+  const assignment = group.assignment
+  return assignment?.changesRequestedAt !== undefined || (assignment?.toldEngineerAt !== undefined && !waitingForReview(build.assignment!))
+}
+
+/** The Reviewer's verdict asking for changes, in the form the project's reviewers write (code-reviewer.md). */
+const ASKS_FOR_CHANGES = /ready to merge:\W*(no|with fixes)\b/i
+
+/** [agentId] wrote to its Engineer, in its own linked task's chat or in the build's: it may now wait for the new revision
+ *  (waitingForRevision), if the Engineer was waiting on this review (a Tester's verdict has no set form), or it asks for changes
+ *  while the Engineer already fixes someone else's. A note to a working Engineer keeps no Reviewer that then hangs. Written in
+ *  that post's own write. */
+export function toldEngineer(state: SuperTabState, group: Conversation, agentId: string, recipients: string[], text: string, now: number): void {
+  const own = activeWork(group) && group.assignment!.agentId === agentId && reviewedBuild(state, group) ? [group] : ownLinkedTasks(state, group, agentId)
+  for (const step of own) {
+    const engineer = reviewedBuild(state, step)!.assignment!
+    if (!recipients.includes(engineer.agentId) || !(waitingForReview(engineer) || ASKS_FOR_CHANGES.test(text))) continue
+    step.assignment!.toldEngineerAt = now
+    recordTaskState(state, step, now)
+  }
+}
+
+/** The Engineer [agentId] wrote to a step's agent waiting for its revision, in the step's chat or the build's: a "fixed at abc,
+ *  please re-check" is a Ready by post, so that wait ends and its 30 minutes run from now (review of #2659). A step not waiting
+ *  gets no time from it: an Engineer's posts keep no idle Reviewer (review of #2487). */
+export function engineerAnswered(state: SuperTabState, group: Conversation, agentId: string, recipients: string[], now: number): void {
+  const steps = group.reviewOf ? [group] : state.conversations.filter(c => c.reviewOf === group.id)
+  for (const step of steps) {
+    if (!activeWork(step) || step.assignment!.toldEngineerAt === undefined || !recipients.includes(step.assignment!.agentId)) continue
+    if (reviewedBuild(state, step)?.assignment!.agentId !== agentId) continue
+    delete step.assignment!.toldEngineerAt
+    restartQuietTime(step.assignment!, now)
+    recordTaskState(state, step, now)
+  }
+}
+
+/** [agentId]'s verdict in [build] asked for changes (a failed check by someone other than its assignee): its own linked task
+ *  waits for the new revision (waitingForRevision). Written in that command's own write, with the linked task's group. */
+export function changesRequested(state: SuperTabState, build: Conversation, agentId: string, now: number): void {
+  for (const linked of ownLinkedTasks(state, build, agentId)) {
+    linked.assignment!.changesRequestedAt = now
+    recordTaskState(state, linked, now)
+  }
+}
+
+/** [build] is ready for review again: each linked task that waited for this revision counts its quiet time from now, so the end
+ *  of the wait does not lose it, as an Engineer whose review found problems does (restartQuietTime). */
+export function revisionReady(state: SuperTabState, build: Conversation, now: number): void {
+  for (const linked of state.conversations.filter(c => c.reviewOf === build.id && activeWork(c) && (c.assignment!.changesRequestedAt !== undefined || c.assignment!.toldEngineerAt !== undefined))) {
+    delete linked.assignment!.changesRequestedAt
+    delete linked.assignment!.toldEngineerAt
+    restartQuietTime(linked.assignment!, now)
+    recordTaskState(state, linked, now)
+  }
 }
 
 /** The active assignments held by workers, not by a Lead, and not already being reconciled after their agent left. */
@@ -103,9 +182,11 @@ function workerTasks(state: SuperTabState): Array<{ group: Conversation; assignm
   })
 }
 
-/** The worker's own status, check or message in its task's group renews its lease. */
-export function renewOwnTask(group: Conversation, agentId: string, now: number): void {
+/** The worker's own status, check or message in its task's group renews its lease. A Reviewer or Tester checks and posts in
+ *  the build's group, so there it renews its own linked task (reviewOf), never another agent's. */
+export function renewOwnTask(state: SuperTabState, group: Conversation, agentId: string, now: number): void {
   if (activeWork(group) && group.assignment!.agentId === agentId) renewLease(group.assignment!, now)
+  for (const linked of ownLinkedTasks(state, group, agentId)) renewLease(linked.assignment!, now)
 }
 
 /** The last time its machine's reports renewed a worker's lease: a report listing it running with recent progress renews at
@@ -142,6 +223,16 @@ function limitReason(worker: Agent, now: number): string | null {
     ? `it hit a usage limit until ${worker.limitedUntil.slice(11, 16)} UTC` : null
 }
 
+/** The earliest time a task held by a worker on [machineId] may be lost to its lease running out, as lostReason reads it now,
+ *  or undefined when none can. Reports that keep its session running with progress no older can only move it later. */
+export function nextLossAt(state: SuperTabState, machineId: string): number | undefined {
+  const ends = workerTasks(state)
+    .filter(({ group, worker, assignment }) => worker.machineId === machineId && !waitingForReview(assignment) && !waitingForRevision(state, group))
+    .map(({ group, assignment, worker }) => leaseEnd(group, assignment, reportRenewedAt(state, worker)))
+    .filter((end): end is number => end !== undefined)
+  return ends.length ? Math.min(...ends) : undefined
+}
+
 /** Why a worker has lost its task now, or null while it still holds it. Only a machine that has reported can be offline. */
 function lostReason(state: SuperTabState, group: Conversation, worker: Agent, assignment: Assignment, now: number): string | null {
   const pool = state.machines?.find(m => m.machineId === worker.machineId)
@@ -152,7 +243,7 @@ function lostReason(state: SuperTabState, group: Conversation, worker: Agent, as
   // Its host alerts only after ten minutes of retries without an answer (cli superTabs/terminal.ts MODEL_WAIT_MS), so a
   // short burst of failures that recovers never gets here.
   if (worker.alerting?.includes('model')) return 'its model keeps failing'
-  if (waitingForReview(assignment)) return null
+  if (waitingForReview(assignment) || waitingForRevision(state, group)) return null
   const end = leaseEnd(group, assignment, reportRenewedAt(state, worker))
   if (end !== undefined && now > end) {
     const progress = lastProgress(state, worker, assignment)
@@ -176,11 +267,10 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
   const result = assignment.result?.replace(/[.\s]+$/, '')
   const pr = group.pullRequestUrls?.at(-1)
   const source = { kind: 'work-lost', agentId: worker.id, assignmentId: assignment.id, reason }
+  // What happened, never the next step (project instructions, phase 4): the instructions say what the coordinator does.
   const wake = `${worker.displayName ?? worker.name} lost its task "${group.title}": ${reason}. Last progress ${since}. `
-    + `Last result: ${result || 'none'}.${pr && !result?.includes(pr) ? ` Pull request: ${pr}.` : ''} `
-    + (resumeAt ? `It resumes by itself when its limit resets at ${resumeAt.slice(11, 16)} UTC, unless you hand it on first. `
-      + 'If another account or engine has allowance now, assign it there now with its branch and last progress note, or cancel it.'
-      : 'Assign it to another agent now, or cancel it.')
+    + `Last result: ${result || 'none'}.${pr && !result?.includes(pr) ? ` Pull request: ${pr}.` : ''}`
+    + (resumeAt ? ` It resumes by itself when its limit resets at ${resumeAt.slice(11, 16)} UTC.` : '')
   // Named by the loss, not the task: a task resumed after a usage limit keeps its id and can be lost again (2026-10-28).
   const loss = String(now)
   return [...leadNoticeRows(toLead(state, worker, { id: stableId('work-lost', assignment.id, loss), conversationId: group.id, author: sender, replyTo: null,
@@ -234,7 +324,7 @@ function leadNotice(state: SuperTabState, start: AgentStart, text: string | null
 /** The time checks, run on the Lead's poll and on any machine's report: every worker task with a reason is lost, and
  *  every start dispatched over 3 minutes ago that is not running fails, unless its machine is still preparing it. */
 export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {
-  const drafts = [...loseTasks(state, now), ...failStalledStarts(state, now), ...unpurged(state, now)]
+  const drafts = [...loseTasks(state, now), ...failStalledStarts(state, now), ...unpurged(state, now), ...staleSwitches(state, now)]
   // A Buddy start that timed out may have been the last on its Buddy-only machine (security review 1 of #2234).
   dropIdleBuddyMachines(state, now)
   return drafts
@@ -281,6 +371,17 @@ export const START_PICKUP_MS = 10 * 60_000
 
 const FINISHED_WORK = ['done', 'cancelled', 'stopped']
 
+/** A task in review waits while one of its linked tasks (reviewOf it) is open. With none open, nothing opens a review by itself
+ *  (project instructions, phase 4), so after TASK_QUIET_MS from its last progress, or from when its last linked task ended, it
+ *  is quiet and its coordinator hears once (final review of the branch). Only loaded linked tasks count: an archived one ended. */
+function reviewWait(state: SuperTabState, group: Conversation, progress: number, now: number): TaskLiveness {
+  const linked = state.conversations.filter(c => c.reviewOf === group.id)
+  const ended = (c: Conversation) => c.archived || (!!c.assignment && FINISHED_WORK.includes(c.assignment.status))
+  if (linked.some(c => !ended(c))) return { state: 'waiting', why: 'review', since: progress }
+  const since = Math.max(progress, ...linked.map(c => (c.lastActivityAt && Date.parse(c.lastActivityAt)) || 0))
+  return { state: now - since >= TASK_QUIET_MS ? 'quiet' : 'waiting', why: 'review', since }
+}
+
 /** The state of a project task now, from what is loaded (never a further read), or null while it is working (its agent
  *  reported in the last 30 minutes) and for anything that is not a task: a Lead or Leads conversation, a private chat (it
  *  never holds work), an archived group, finished work, or none yet. */
@@ -298,10 +399,11 @@ export function taskLiveness(state: SuperTabState, group: Conversation, now: num
       const asked = assignment.askedOf && state.people.some(p => p.id === assignment.askedOf) ? assignment.askedOf : undefined
       return { state: 'waiting', why: 'person', personId: asked ?? waitedOn(state, group), since: group.ledger?.waiting?.since ?? progress }
     }
-    if (assignment.status === 'review' || assignment.status === 'blocked') return { state: 'waiting', why: assignment.status, since: progress }
-    // A review whose build is back with its Engineer waits for the new revision.
-    const build = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
-    if (build && activeWork(build) && build.assignment!.status !== 'review') return { state: 'waiting', why: 'revision', since: progress }
+    if (assignment.status === 'review') return reviewWait(state, group, progress, now)
+    if (assignment.status === 'blocked') return { state: 'waiting', why: 'blocked', since: progress }
+    // A review whose verdict asked for changes waits for the new revision; once it is ready, its quiet time runs from then
+    // (revisionReady restarts its progress).
+    if (waitingForRevision(state, group)) return { state: 'waiting', why: 'revision', since: progress }
     return now - progress >= TASK_QUIET_MS ? { state: 'quiet', why: 'silent', since: progress } : null
   }
   // Only unfinished starts are loaded, with those that ended in this same write.
@@ -347,6 +449,7 @@ function stalledLine(state: SuperTabState, group: Conversation, liveness: TaskLi
   const worker = state.agents.find(a => a.id === group.assignment?.agentId)
   const minutes = plural(Math.max(0, Math.floor((now - liveness.since) / 60_000)), 'minute')
   const why = liveness.why === 'silent' ? `quiet, ${worker?.displayName ?? worker?.name ?? 'its agent'} has reported nothing for ${minutes}`
+    : liveness.why === 'review' ? `waited for review for ${minutes}; no review task is open`
     : liveness.why === 'removed' ? 'orphaned, its agent was removed from the Swarm' : `orphaned, its agent has not started for ${minutes}`
   return `- ${task}: ${why}.`
 }
@@ -375,8 +478,7 @@ function recordTaskStates(state: SuperTabState, now: number): MessageDraft[] {
     const lead = chat?.leadId ? state.agents.find(a => a.id === chat.leadId) : undefined
     if (!chat || !lead) return []
     const one = tasks.length === 1
-    const text = `${one ? 'A task needs' : `${tasks.length} tasks need`} you:\n${tasks.map(t => stalledLine(state, t.group, t.next, now)).join('\n')}\n`
-      + `Act on ${one ? 'it' : 'each'} now: nudge its agent, reassign it, or post in its chat why it waits.`
+    const text = `${one ? 'A task is' : `${tasks.length} tasks are`} stalled:\n${tasks.map(t => stalledLine(state, t.group, t.next, now)).join('\n')}`
     const row = reachable(state, { id: stableId('work-stalled', state.id, projectId, String(now)), conversationId: chat.id, author: writtenBy(state, lead), replyTo: null,
       recipients: chat.agentIds.includes(lead.id) ? [lead.id] : [], text,
       source: { kind: 'work-stalled', tasks: tasks.map(t => ({ conversationId: t.group.id, state: t.next.state, why: t.next.why })) } })
@@ -397,11 +499,13 @@ function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
       const report = state.machines?.find(m => m.machineId === start.request.machineId)?.observation
       if (!report || now - report.receivedAt > MACHINE_FRESH_MS) return []
       if (start.request.leadFor) {
-        start.error = `${machineName(state, start.request.machineId)}${LEAD_PICKUP_SUFFIX}`
+        start.error = `${machineName(state, start.request.machineId)}${leadPickupSuffix(start.request.name)}`
         return leadNotice(state, start, leadStartFailed(state, start, start.error))
       }
-      start.error = `${machineName(state, start.request.machineId)} did not start this Buddy. Update Harness on it, then add the Buddy again.`
-      return buddyNotice(state, start)
+      start.error = start.request.buddySession ? `${machineName(state, start.request.machineId)} did not start this session.`
+        : `${machineName(state, start.request.machineId)} did not start this Buddy. Update Harness on it, then add the Buddy again.`
+      // A thread session's start ends through its own path: its thread says why, never the main chat (buddySessions.ts).
+      return start.request.buddySession ? failedSessionStart(state, start) : buddyNotice(state, start)
     }
     if (!start.dispatched || start.harnessId || start.error || start.dispatchedAt === undefined || now - start.dispatchedAt <= START_RUN_MS) return []
     // Only its own machine's report can say it is preparing; one before preparingStartIds never does, so its starts get 3 minutes.
@@ -415,17 +519,34 @@ function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
     const suspended = noteStartFailed(state, start, now)
     if (start.request.leadFor) return leadNotice(state, start, leadStartFailed(state, start, start.error))
     // Never a lookup that throws: these checks run inside every machine's report.
-    if (start.request.buddyOf) return buddyNotice(state, start)
+    if (start.request.buddyOf) return start.request.buddySession ? failedSessionStart(state, start) : buddyNotice(state, start)
     const group = state.conversations.find(c => c.id === start.request.conversationId)
     // Recorded in this write: once the start has ended, no later poll loads it.
     if (group) recordTaskState(state, group, now)
-    // A grid host that never started the agent steps the work up a tier (stepUp.ts).
-    const stepped = group && start.request.gridModel && !activeWork(group) ? stepUp(state, group, GRID_START_FAILED, now, start.id) : null
-    const lead = group?.leadId ? state.agents.find(a => a.id === group.leadId) : undefined
-    if (!group || !lead) return []
-    return [reachable(state, { id: stableId('start-timeout', start.id), conversationId: group.id, replyTo: null,
-      recipients: group.agentIds.includes(lead.id) ? [lead.id] : [], author: writtenBy(state, lead),
-      text: `${failureNotice(start.request.name, start.error)}${stepped ? `\n\n${stepped.notice}` : ''}${suspended ? `\n\n${suspended}` : ''}`,
-      ...(suspended && start.machineOwnerId ? { mentions: [start.machineOwnerId] } : {}), source: { kind: 'start-timeout', startId: start.id } })]
+    if (!group) return []
+    // Told to the coordinator and the agent that made it, with the model it asked for; nothing is started elsewhere (project
+    // instructions, phase 4, decision 18).
+    const text = `${failureNotice(start.request.name, start.error, askedModel(start), coordinatorOfGroup(state, group))}${suspended ? `\n\n${suspended}` : ''}`
+    const source = { kind: 'start-timeout', startId: start.id }
+    const author = failureAuthor(state, start, group)
+    if (!author) return []
+    const recipients = failureRecipients(start, group)
+    const row = reachable(state, { id: stableId('start-timeout', start.id), conversationId: group.id, replyTo: null, recipients,
+      author, text, ...(suspended && start.machineOwnerId ? { mentions: [start.machineOwnerId] } : {}), source })
+    // A task with no lead, or one its lead left: its coordinator hears it in its own chat.
+    const copy = coordinatorCopy(state, group, recipients)
+    return copy ? [row, reachable(state, { id: stableId('start-timeout', start.id, 'coordinator'), conversationId: copy.conversationId, replyTo: null,
+      recipients: [copy.coordinator], author, text, source: forRecipients(source) })] : [row]
   })
+}
+
+/** Who a failed start's notice is written as: its task's lead, else the agent that made the start, else its project's
+ *  coordinator, else the Swarm's owner, so it is never left unsaid (final review). Undefined only with none of them. */
+function failureAuthor(state: SuperTabState, start: AgentStart, group: Conversation): Author | undefined {
+  const maker = start.actorKey?.startsWith('agent:') ? start.actorKey.slice('agent:'.length) : undefined
+  const chat = projectChatOf(state, group)
+  const writer = [group.leadId, maker, chat?.leadId].map(id => id && state.agents.find(a => a.id === id)).find(a => !!a)
+  if (writer) return writtenBy(state, writer)
+  const owner = state.people.find(p => p.id === state.ownerId)
+  return owner && { kind: 'person', id: owner.id, name: owner.email, membershipGeneration: owner.generation }
 }

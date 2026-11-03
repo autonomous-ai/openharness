@@ -3,8 +3,11 @@ import 'package:flutter/material.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
+import '../widgets/finger_target.dart';
+import 'controller.dart';
 import 'message_row.dart';
 import 'model.dart';
+import 'switch_pm.dart';
 
 /// A Lead's typing into a worker's terminal, or a worker's machine telling its
 /// Lead it waits at a prompt or hit a usage limit
@@ -13,8 +16,56 @@ import 'model.dart';
 /// happened as one sentence; it is a note in the group, not chat from the
 /// agent, so it has no author heading, reply or receipt.
 class SuperTabTerminalRow extends StatelessWidget {
-  const SuperTabTerminalRow({super.key, required this.message});
+  const SuperTabTerminalRow({
+    super.key,
+    required this.message,
+    required this.controller,
+  });
   final SuperTabMessage message;
+  final SuperTabController controller;
+
+  /// Switch PM… on the Product Manager's own limit note, for whoever may switch
+  /// it, while its machine still alerts about the limit (as a prompt note
+  /// stops saying anything once answered, prompt_alerts.dart).
+  bool get _canSwitch {
+    final id = message.leadLimitAgentId, snapshot = controller.snapshot;
+    final lead = id == null ? null : snapshot?.agent(id);
+    final project = id == null ? null : snapshot?.leadProjectForAgent(id);
+    return lead != null &&
+        project != null &&
+        controller.canWrite &&
+        lead.alerting.contains('limit') &&
+        lead.switchRequest == null &&
+        snapshot!.maySwitchLead(project.id, controller.accountId);
+  }
+
+  Widget _action(BuildContext context, String label, VoidCallback onPressed) =>
+      TextButton(
+        onPressed: onPressed,
+        style:
+            TextButton.styleFrom(
+              foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
+              backgroundColor: Colors.transparent,
+              side: BorderSide.none,
+              // A phone's action is a finger's size.
+              minimumSize: workspaceIsCompact(context)
+                  ? const Size.square(kFingerTarget)
+                  : const Size(0, 28),
+              padding: const EdgeInsets.symmetric(
+                horizontal: grid.AppDesktop.controlGap,
+                vertical: grid.AppDesktop.menuInset,
+              ),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              textStyle: DesktopChrome.metadata(),
+            ).copyWith(
+              side: WidgetStateProperty.resolveWith(
+                (states) => states.contains(WidgetState.focused)
+                    ? TextButtonTheme.of(context).style?.side?.resolve(states)
+                    : BorderSide.none,
+              ),
+            ),
+        child: Text(label),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -23,6 +74,13 @@ class SuperTabTerminalRow extends StatelessWidget {
     final style = DesktopChrome.metadata(
       color: Theme.of(context).colorScheme.onSurfaceVariant,
     );
+    // The backend names the time in UTC; the reader reads their own.
+    final until = message.leadLimitAgentId == null
+        ? null
+        : DateTime.tryParse(message.source['limitedUntil'] as String? ?? '');
+    final project = message.leadLimitAgentId == null
+        ? null
+        : controller.snapshot?.leadProjectForAgent(message.leadLimitAgentId!);
     return Padding(
       padding: const EdgeInsets.fromLTRB(
         SuperTabMessageRow.bodyInset,
@@ -41,7 +99,23 @@ class SuperTabTerminalRow extends StatelessWidget {
               color: alert ? grid.AppPalette.warn : style.color,
             ),
           ),
-          Expanded(child: Text.rich(_typed(message.text, style), style: style)),
+          Expanded(
+            child: Wrap(
+              spacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text.rich(_typed(message.text, style), style: style),
+                if (until != null)
+                  Text('until ${switchPmTime(context, until)}', style: style),
+                if (project != null && _canSwitch)
+                  _action(
+                    context,
+                    'Switch PM…',
+                    () => showSwitchPm(context, controller, project.id),
+                  ),
+              ],
+            ),
+          ),
         ],
       ),
     );

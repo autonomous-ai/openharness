@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import { MAX_MENTIONS, tagTokens } from './mentions.js'
+import { checkMentions, MAX_MENTIONS, tagTokens } from './mentions.js'
 import { createSuperTab, type Actor } from './model.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -31,10 +32,10 @@ function fixture() {
   // A conversation only `peer` reads: their chat with their Buddy.
   const pmChat = run({ type: 'buddy.chat', projectId: app.projectId }, peer).result.conversationId as string
   const send = (conversationId: string, mentions: string[], actor: Actor = owner) => run({ type: 'message.send', conversationId,
-    text: 'Please look.', replyTo: null, recipientIds: [], mentions }, actor).messages.at(-1)!
+    text: 'Please look.', replyTo: null, recipientIds: [], mentions }, actor).messages.find(m => !m.source)!
   /** A post that tags only by what its text says, as people type in chat. */
   const say = (conversationId: string, text: string, actor: Actor = owner, mentions?: string[]) => run({ type: 'message.send', conversationId,
-    text, replyTo: null, recipientIds: [], ...(mentions ? { mentions } : {}) }, actor).messages.at(-1)!
+    text, replyTo: null, recipientIds: [], ...(mentions ? { mentions } : {}) }, actor).messages.find(m => !m.source)!
   return { run, send, say, app, lead, worker, group, pmChat, get state() { return state } }
 }
 
@@ -43,6 +44,18 @@ describe('people tagging people', () => {
     const f = fixture()
     expect(f.send(f.group, ['peer', 'third']).mentions).toEqual(['peer', 'third'])
     expect(f.send(f.group, ['owner'], peer).mentions).toEqual(['owner'])
+  })
+
+  it('a thread reply carries its tags and agents as a chat message does (Desktop thread @, 10-31)', () => {
+    const f = fixture()
+    f.run({ type: 'conversation.agent', conversationId: f.group, agentId: f.worker, present: true, lead: false })
+    const root = f.say(f.group, 'Should we ship the copy?')
+    const reply = f.run({ type: 'message.send', conversationId: f.group, text: 'Please check @peer', replyTo: root.id,
+      recipientIds: [f.worker], mentions: ['peer'] }, owner,
+    { reply: { id: root.id, conversationId: f.group, author: root.author, createdAt: 1000, thread: root.thread ?? root.id } }).messages.at(-1)!
+    expect(reply.thread).toBe(root.thread ?? root.id)
+    expect(reply.mentions).toEqual(['peer'])
+    expect(reply.recipients).toEqual([f.worker])
   })
 
   it('drops the author’s own tag', () => {
@@ -56,16 +69,32 @@ describe('people tagging people', () => {
     expect(() => f.send(f.group, ['stranger'])).toThrow(expect.objectContaining({ code: 'INVALID_MENTION' }))
   })
 
-  it('refuses tags in the Leads conversation', () => {
+  it('refuses a post with tags in an older Swarm\'s removed Leads conversation, as every post there', () => {
     const f = fixture()
-    const leads = f.state.leadsConversationId!
-    expect(() => f.send(leads, ['peer'])).toThrow(expect.objectContaining({ code: 'MENTION_FORBIDDEN' }))
+    const leads = storeOldLeads(f.state)
+    expect(() => f.send(leads, ['peer'])).toThrow(expect.objectContaining({ code: 'LEADS_CONVERSATION_REMOVED' }))
   })
 
-  it('still lets only a project’s Lead among agents tag people', () => {
+  // Who tags a person is workflow (project instructions, phase 4): any agent of the project, in its own project only.
+  it('lets any agent of the project tag people', () => {
     const f = fixture()
-    expect(() => f.send(f.app.conversationId, ['peer'], { kind: 'agent', agentId: f.worker, machineOwnerId: 'owner' }))
-      .toThrow(expect.objectContaining({ code: 'MENTION_FORBIDDEN' }))
+    const worker: Actor = { kind: 'agent', agentId: f.worker, machineOwnerId: 'owner' }
+    const group = (id: string) => f.state.conversations.find(c => c.id === id)!
+    expect(checkMentions(f.state, worker, group(f.group), ['peer', 'third', 'peer'])).toEqual(['peer', 'third'])
+    expect(f.send(f.group, ['peer'], worker).mentions).toEqual(['peer'])
+    expect(f.say(f.group, '@third please confirm', worker).mentions).toEqual(['third'])
+    expect(() => checkMentions(f.state, worker, group(storeOldLeads(f.state)), ['peer']))
+      .toThrow(expect.objectContaining({ code: 'INVALID_MENTION' }))
+  })
+
+  it('still refuses an agent of another project', () => {
+    const f = fixture()
+    const other = f.run({ type: 'project.create', name: 'Other', visibility: 'public', brief: '' }).result as { conversationId: string }
+    const outsider: Actor = { kind: 'agent', machineOwnerId: 'owner', agentId: f.run({ type: 'agent.add', conversationId: other.conversationId, harnessId: 'outsider',
+      machineId: 'machine', name: 'Outsider', lead: false, configuration }).result.agentId as string }
+    const group = f.state.conversations.find(c => c.id === f.group)!
+    expect(() => checkMentions(f.state, outsider, group, ['peer'])).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    expect(() => f.send(f.group, ['peer'], outsider)).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
   })
 })
 
@@ -110,18 +139,18 @@ describe('tags in the text', () => {
     expect(f.say(f.group, '@owner and @peer').mentions).toEqual(['peer'])
   })
 
-  it('tags from a Lead’s text in its own project, and from no other agent', () => {
+  it('tags from the text of any agent of the project', () => {
     const f = fixture()
     const lead = { kind: 'agent' as const, agentId: f.lead, machineOwnerId: 'owner' }
     expect(f.say(f.app.conversationId, '@peer please confirm', lead).mentions).toEqual(['peer'])
-    const worker = f.say(f.app.conversationId, '@peer please confirm', { kind: 'agent', agentId: f.worker, machineOwnerId: 'owner' })
-    expect(worker.mentions ?? []).toEqual([])
+    // A worker posts in a task: the project chat holds only its coordinator among agents (#2207).
+    const worker = f.say(f.group, '@peer please confirm', { kind: 'agent', agentId: f.worker, machineOwnerId: 'owner' })
+    expect(worker.mentions).toEqual(['peer'])
     expect(worker.text).toBe('@peer please confirm')
   })
 
-  it('tags nobody from the text of a Leads conversation post or an agent-only notice', () => {
+  it('tags nobody from the text of an agent-only notice', () => {
     const f = fixture()
-    expect(f.say(f.state.leadsConversationId!, '@peer look').mentions ?? []).toEqual([])
     const notice = f.run({ type: 'message.send', conversationId: f.app.conversationId, text: '@peer is away', replyTo: null,
       recipientIds: [f.lead], agentOnly: true }, { kind: 'agent', agentId: f.lead, machineOwnerId: 'owner' }).messages.at(-1)!
     expect(notice.mentions ?? []).toEqual([])

@@ -89,12 +89,31 @@ SwarmAttachmentStore storeIn(io.Directory root, FileService storage) =>
     );
 
 /// The files kept under [root], by their path below it.
-List<String> keptUnder(io.Directory root) => !root.existsSync()
-    ? const []
-    : [
-        for (final entry in root.listSync(recursive: true))
-          if (entry is io.File) entry.path.substring(root.path.length + 1),
-      ];
+List<String> keptUnder(io.Directory root) {
+  if (!root.existsSync()) return const [];
+
+  final pending = <io.Directory>[root];
+  final files = <String>[];
+  while (pending.isNotEmpty) {
+    final directory = pending.removeLast();
+    late final List<io.FileSystemEntity> entries;
+    try {
+      entries = directory.listSync();
+    } on io.PathNotFoundException {
+      // The keeper deletes asynchronously. One subtree may disappear after its
+      // parent was listed; ignore only that vanished subtree and keep scanning.
+      continue;
+    }
+    for (final entry in entries) {
+      if (entry is io.Directory) {
+        pending.add(entry);
+      } else if (entry is io.File) {
+        files.add(entry.path.substring(root.path.length + 1));
+      }
+    }
+  }
+  return files;
+}
 
 /// The one account folder under [root] made read-only, so what is in it
 /// cannot be deleted, as a phone can refuse; returns the undo, which the

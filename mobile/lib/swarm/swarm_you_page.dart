@@ -12,7 +12,6 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
-import 'identity.dart';
 import 'model.dart';
 import 'swarm_devices_page.dart';
 import 'swarm_face.dart';
@@ -26,8 +25,8 @@ import 'swarm_style.dart';
 
 /// You, the person's own tab, as Tony's prototype C4 draws it (2026-10-30):
 /// who they are in the Swarm Home shows — their face, their name and that
-/// Swarm — then their status, and Change for their profile, where it is set
-/// ([showSwarmProfile]); Your models, with how many of their own machines'
+/// Swarm — then their status and their username, each with Change for their
+/// profile, where it is set ([showSwarmProfile]); Your models, with how many of their own machines'
 /// models the Swarms can use now, and Your devices, with how many of their
 /// own computers are online; and Settings. Only what is theirs counts: not a
 /// teammate's, not one shared with them, not a Harness Team account's (#2253's
@@ -102,6 +101,9 @@ class SwarmYouPage extends StatelessWidget {
     void open(Widget page) => unawaited(
       navigator.push(phoneRoute((_) => page, listensForItself: true)),
     );
+    final profile = me == null
+        ? null
+        : () => unawaited(showSwarmProfile(context, swarmId: you!.id));
     return [
       _Me(
         key: const ValueKey('swarm-you-me'),
@@ -114,9 +116,21 @@ class SwarmYouPage extends StatelessWidget {
           _Status(
             key: const ValueKey('swarm-you-status'),
             me: me,
-            onTap: me == null
-                ? null
-                : () => unawaited(showSwarmProfile(context, swarmId: you!.id)),
+            onTap: profile,
+          ),
+        ],
+      ),
+      const SwarmCaption('Username'),
+      SwarmGroup(
+        children: [
+          SwarmRow(
+            key: const ValueKey('swarm-you-username'),
+            leading: const _Glyph(LucideIcons.atSign300),
+            // How the Swarm tags them, as the server keeps it; nothing of a
+            // Swarm before it is read, or once it is taken away.
+            title: me?.username ?? 'Username',
+            trailing: profile == null ? null : const _Change(),
+            onTap: profile,
           ),
         ],
       ),
@@ -217,9 +231,7 @@ class _Me extends StatelessWidget {
     AppTheme.watch(context);
     final me = this.me;
     // A Home kept for a cold start holds no email.
-    final name = me == null || me.email.isEmpty
-        ? 'You'
-        : superTabPersonName(me.email);
+    final name = me == null || me.email.isEmpty ? 'You' : me.username;
     return Padding(
       padding: const EdgeInsets.fromLTRB(
         AppSpace.xs,
@@ -293,23 +305,7 @@ class _Status extends StatelessWidget {
         ),
       ),
       title: title,
-      trailing: onTap == null
-          ? null
-          : Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  'Change',
-                  style: AppType.label(color: AppPalette.textSecondary),
-                ),
-                const SizedBox(width: AppSpace.xs),
-                Icon(
-                  LucideIcons.chevronRight300,
-                  size: 18,
-                  color: AppPalette.textFaint,
-                ),
-              ],
-            ),
+      trailing: onTap == null ? null : const _Change(),
       onTap: onTap,
     );
     if (me == null) return row('Set a status', known: false);
@@ -317,6 +313,28 @@ class _Status extends StatelessWidget {
       until: me.status?.until,
       builder: (context) =>
           row(me.statusAt(clock.now())?.label ?? 'Active', known: true),
+    );
+  }
+}
+
+/// "Change ›", at the end of a row that opens the person's profile.
+class _Change extends StatelessWidget {
+  const _Change();
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text('Change', style: AppType.label(color: AppPalette.textSecondary)),
+        const SizedBox(width: AppSpace.xs),
+        Icon(
+          LucideIcons.chevronRight300,
+          size: 18,
+          color: AppPalette.textFaint,
+        ),
+      ],
     );
   }
 }

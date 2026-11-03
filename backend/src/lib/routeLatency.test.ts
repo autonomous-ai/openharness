@@ -1,6 +1,6 @@
 import Fastify from 'fastify'
 import { expect, it } from 'vitest'
-import { createRouteLatency, registerRouteLatency } from './routeLatency.js'
+import { createRouteLatency, markNothingNew, registerRouteLatency } from './routeLatency.js'
 
 type Logged = { message: string; context: Record<string, unknown> }
 type Route = { n: number; p50: number; p95: number; max: number }
@@ -61,4 +61,47 @@ it('names each request by its route pattern, never its URL', async () => {
   expect(routes['GET /api/items/:id']!.p95).toBeGreaterThanOrEqual(0)
   expect(JSON.stringify(logs)).not.toMatch(/alice|bob|hunter2|nowhere/)
   await app.close()
+})
+
+it('counts each route by kind of client, from its user agent and whether it reads as an agent, never the agent itself', async () => {
+  const app = Fastify()
+  const logs: Logged[] = []
+  const l = registerRouteLatency(app, { pod: 'pod-1', log: (message, context) => logs.push({ message, context }) })
+  app.get('/api/items', async () => ({ ok: true }))
+  const as = (ua: string, url = '/api/items') => app.inject({ method: 'GET', url, headers: { 'user-agent': ua } })
+  await as('Mozilla/5.0 (Macintosh) Chrome/130')
+  await as('Dart/3.5 (dart:io)')
+  await as('Dart/3.5 (dart:io)')
+  await as('node')
+  await as('undici', '/api/items?asAgentId=agent-secret-7')
+  await as('curl/8.4')
+  l.flush()
+  expect((logs[0]!.context.routes as Record<string, { clients: Record<string, number> }>)['GET /api/items']!.clients)
+    .toEqual({ web: 1, app: 2, cli: 1, agent: 1, other: 1 })
+  expect(JSON.stringify(logs)).not.toMatch(/agent-secret|curl|Chrome/)
+  await app.close()
+})
+
+it('a reply marked nothing-new counts as empty, and bytes are summed per route (spec 2026-11-02 poll cost, Part 0)', async () => {
+  const logs: Logged[] = []
+  const app = Fastify()
+  const l = registerRouteLatency(app, { pod: 'p', log: (message, context) => logs.push({ message, context }) })
+  app.get('/poll/:id', async (request) => {
+    if ((request.params as { id: string }).id === 'none') markNothingNew(request)
+    return { rows: (request.params as { id: string }).id === 'none' ? [] : ['abc'] }
+  })
+  await app.inject('/poll/none'); await app.inject('/poll/none'); await app.inject('/poll/some')
+  l.flush()
+  const route = (logs[0]!.context.routes as Record<string, { n: number; empty?: number; bytes?: number }>)['GET /poll/:id']!
+  expect(route.n).toBe(3)
+  expect(route.empty).toBe(2)
+  expect(route.bytes).toBe(2 * '{"rows":[]}'.length + '{"rows":["abc"]}'.length)
+  await app.close()
+})
+
+it('leaves empty and bytes out of a route that has none', () => {
+  const { l, routes } = latency()
+  l.record('GET /a', 1)
+  l.flush()
+  expect(routes()['GET /a']).toEqual({ n: 1, p50: 1, p95: 1, max: 1 })
 })

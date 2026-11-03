@@ -14,7 +14,7 @@ import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/state/harness_placement.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/swarm_catalog.dart';
-import 'package:harness/super_tabs/project_sidebar.dart';
+import 'package:harness/super_tabs/manage_page.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
@@ -126,16 +126,20 @@ void main() {
     final machine = find.byKey(
       const ValueKey('super-machine-teammate-machine'),
     );
-    if (machine.evaluate().isEmpty &&
+    // Machines are in Manage. A narrow window has the sidebar behind a button.
+    final manage = find.byKey(const ValueKey('super-manage'));
+    if (manage.evaluate().isEmpty &&
         find.byTooltip('Conversations').evaluate().isNotEmpty) {
       await tester.tap(find.byTooltip('Conversations'));
       await tester.pumpAndSettle();
     }
-    // The sidebar builds only the rows near its view: at a large text size the
-    // Machines group starts below it.
-    final sidebar = find
+    await tester.tap(manage);
+    await tester.pumpAndSettle();
+    // The page builds only the rows near its view: at a large text size they
+    // may start below it.
+    final page = find
         .descendant(
-          of: find.byType(ProjectSidebar),
+          of: find.byType(SuperTabManagePage),
           matching: find.byType(Scrollable),
         )
         .first;
@@ -146,7 +150,7 @@ void main() {
       i < 50 && machine.evaluate().isEmpty && offline.evaluate().isEmpty;
       i++
     ) {
-      await tester.drag(sidebar, const Offset(0, -100));
+      await tester.drag(page, const Offset(0, -100));
       await tester.pumpAndSettle();
     }
     if (machine.evaluate().isEmpty && offline.evaluate().isNotEmpty) {

@@ -32,7 +32,7 @@ async function git(path: string, args: string[], timeout = 4000, base: NodeJS.Pr
     env: gitEnv(base),
   })).stdout.replace(/\r?\n$/, '')
 }
-function gitEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function gitEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...base, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', GIT_OPTIONAL_LOCKS: '0' }
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_NAMESPACE', 'GIT_PREFIX']) delete (env as NodeJS.ProcessEnv)[key]
   return env
@@ -203,7 +203,7 @@ export async function readGitProject(requested: string, options: { refresh?: boo
 }
 
 /** `refs/remotes/origin/fix/typo` → origin, fix/typo, and a refspec updating exactly that ref. */
-function remoteBranch(ref: string | undefined): { remote: string; branch: string; refspec: string } | null {
+export function remoteBranch(ref: string | undefined): { remote: string; branch: string; refspec: string } | null {
   const match = /^refs\/remotes\/([A-Za-z0-9._][A-Za-z0-9._-]*)\/([A-Za-z0-9._]\S*)$/.exec(ref ?? '')
   if (!match || match[2] === 'HEAD') return null
   return { remote: match[1]!, branch: match[2]!, refspec: `+refs/heads/${match[2]}:refs/remotes/${match[1]}/${match[2]}` }
@@ -211,7 +211,7 @@ function remoteBranch(ref: string | undefined): { remote: string; branch: string
 
 /** The remote's default branch as the ref a clone keeps it in: `origin/HEAD`, else `origin/main` or
  *  `origin/master`, as `readGitProject` offers it. Null when the repository has no such ref. */
-async function originDefaultRef(path: string): Promise<string | null> {
+export async function originDefaultRef(path: string): Promise<string | null> {
   const head = await git(path, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']).catch(() => null)
   for (const ref of [head, 'refs/remotes/origin/main', 'refs/remotes/origin/master']) {
     if (ref && await git(path, ['show-ref', '--verify', '--quiet', '--', ref]).then(() => true, () => false)) return ref

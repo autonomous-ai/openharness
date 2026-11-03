@@ -277,7 +277,16 @@ fn folder_of(a: &crate::fleet::Agent) -> String {
     std::path::Path::new(&a.cwd).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "No folder".into())
 }
 
+/// How long since a harness was last touched before it folds under `▸ N older`.
+const OLDER_THAN_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+/// What a `▸ N older` row's id starts with, the rest the key its folded rows share ([Row::older]).
+pub const OLDER_ROW: &str = "older:";
+
 pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Option<&str>) -> Vec<Row> {
+    // (A project's own list, or a filtered one, was asked for by name: nothing folds there.)
+    let folds = filter == Filter::All && project.is_none();
+    let now = crate::fleet::now_ms();
+    let shown: Vec<(String, String)> = app.panes.values().map(|p| (p.machine_id.clone(), p.agent_id.clone())).collect();
     // By the time each row shows, the shortest first (the one that came to be as it is last) — a
     // query ranks by how well it matches, this order breaking ties. (C-b A lists those waiting
     // on you.)
@@ -290,17 +299,21 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
         .filter(|a| filter.keeps(app.fleet.state_of(a)))
         .map(|a| {
             let state = app.fleet.state_of(a);
-            let (mark, mark_color) = engine_mark(&a.engine);
-            // Headed by where it works — its machine and folder (the folder alone in one machine's
-            // list) — so a row is its agent's icon, its name, and how it is in a word by how long
-            // it has been so (`idle 15s`: waiting on you since its question, working since its turn
-            // began, done since it ended); what it is doing is in the preview. Only one waiting on
-            // you keeps its question in its row, as M-1…9 answer it from here with the preview
-            // hidden too.
+            let (mark, _) = engine_mark(&a.engine);
+            // Headed by where it works — its machine, then its folder under it (the folder alone in
+            // one machine's list) — so a row is its agent's icon, its name, and how it is in a word
+            // by how long it has been so (`idle 15s`: waiting on you since its question, working
+            // since its turn began, done since it ended); what it is doing is in the preview. Only
+            // one waiting on you keeps its question in its row, as M-1…9 answer it from here with
+            // the preview hidden too.
             let question = a.question.as_ref().filter(|_| state == State::NeedsInput).map(|q| q.prompt.clone()).unwrap_or_default();
             let folder = folder_of(a);
-            let group = if machine.is_some() { folder } else { format!("{} · {folder}", app.fleet.machine_name(&a.machine_id)) };
             let since = a.state_since(state);
+            // Folded under its folder's `▸ N older`: last touched over a week ago, nothing going on
+            // in it and not on screen. A search still finds it.
+            let active = matches!(state, State::NeedsInput | State::Working | State::Starting);
+            let older = (folds && !active && !shown.contains(&a.key()) && now.saturating_sub(since) > OLDER_THAN_MS)
+                .then(|| format!("{}\t{folder}", a.machine_id));
             let pr = a.pr.as_ref().map(|p| p.label()).unwrap_or_default();
             let narrow = ago(since);
             let status = match state {
@@ -316,27 +329,63 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
             };
             // Its pull request's state in words too: 'pr, 'open, 'merged.
             let pr_words = a.pr.as_ref().map(|p| format!("pr {}", p.state.to_lowercase())).unwrap_or_default();
-            Row::new(format!("{}:{}", a.machine_id, a.id), a.name.clone())
-                .group(group)
+            let mut row = Row::new(format!("{}:{}", a.machine_id, a.id), a.name.clone()).group(folder);
+            if machine.is_none() { row.section = Some(app.fleet.machine_name(&a.machine_id)) }
+            row.older = older;
+            row
                 .boost(if state == State::NeedsInput { 60 } else if live { 30 } else { 0 })
                 .extra(format!("{} {} {} {} {} {} {} {} {} {}", a.project, a.branch, a.cwd, app.fleet.machine_name(&a.machine_id), a.engine, engine_label(&a.engine), a.dsh, pr, pr_words, words))
                 // How long it has been as it is changes as you look.
                 .volatile(false, narrow.chars().count())
-                .lead(vec![span(mark, fg(mark_color)), span(" ", Style::default())])
+                .lead(vec![span(mark, theme::engine_style(&a.engine)), span(" ", Style::default())])
                 .detail(vec![span(question, fg(theme::ATTENTION))])
                 .right(format!("{status} {narrow}"))
                 .line_first(true)
         })
         .collect();
-    grouped_in_order(rows)
+    with_older_rows(grouped_in_order(rows))
 }
 
-/// [rows] with each group's rows together, in the order of each group's first row (the one
-/// active last's group first), each group's rows in their own order.
+/// [rows] with the heading of each folder that has rows folded away as a row of its own, its name
+/// and `▸ N older` on one line: the button that shows them, opening its folder (see
+/// settings::list_layout, which draws no other heading for it).
+fn with_older_rows(rows: Vec<Row>) -> Vec<Row> {
+    let mut out: Vec<Row> = Vec::with_capacity(rows.len());
+    let mut start = 0;
+    let close = |out: &mut Vec<Row>, start: usize| {
+        let folded = || out[start..].iter().filter_map(|r| r.older.as_ref());
+        let Some(key) = folded().next().cloned() else { return };
+        let n = folded().count();
+        let first = &out[start];
+        let title = first.group.clone().unwrap_or_default();
+        let mut row = Row::new(format!("{OLDER_ROW}{key}"), title.clone()).right(format!("▸ {n} older"));
+        row.label_dim = title.chars().count();
+        row.section = first.section.clone();
+        row.group = first.group.clone();
+        out.insert(start, row);
+    };
+    for row in rows {
+        if out.last().is_some_and(|l| l.section != row.section || l.group != row.group) {
+            close(&mut out, start);
+            start = out.len();
+        }
+        out.push(row);
+    }
+    close(&mut out, start);
+    out
+}
+
+/// [rows] with each section's rows together and each group's within it, in the order of each one's
+/// first row (the one active last's first), each group's rows in their own order, under the heading
+/// row it has if it has folded ones.
 pub fn grouped_in_order(mut rows: Vec<Row>) -> Vec<Row> {
-    let mut first: Vec<Option<String>> = Vec::new();
-    for r in &rows { if !first.contains(&r.group) { first.push(r.group.clone()) } }
-    rows.sort_by_key(|r| first.iter().position(|g| *g == r.group));
+    let mut sections: Vec<Option<String>> = Vec::new();
+    let mut groups: Vec<(Option<String>, Option<String>)> = Vec::new();
+    for r in &rows {
+        if !sections.contains(&r.section) { sections.push(r.section.clone()) }
+        if !groups.iter().any(|(s, g)| *s == r.section && *g == r.group) { groups.push((r.section.clone(), r.group.clone())) }
+    }
+    rows.sort_by_key(|r| (sections.iter().position(|s| *s == r.section), groups.iter().position(|(s, g)| *s == r.section && *g == r.group), !r.id.starts_with(OLDER_ROW)));
     rows
 }
 
@@ -347,7 +396,7 @@ pub fn external_rows(app: &App) -> Vec<Row> {
     let many = app.fleet.visible_machines().filter(|m| m.usable()).count() > 1;
     app.said.iter().chain(app.shell_context.catalog.iter().filter(|_| app.shell_context.sessions_machine.is_some())).filter_map(|s| s.external.as_ref())
         .filter(|x| !app.fleet.agents.values().any(|a| a.machine_id == x.machine && a.session_id == x.session_id)).map(|x| {
-        let (mark, mark_color) = engine_mark(&x.engine);
+        let (mark, _) = engine_mark(&x.engine);
         let folder = x.cwd.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
         let title = if x.title.is_empty() { folder.clone() } else { x.title.clone() };
         let note = if x.open { "open elsewhere" } else if x.cwd.is_empty() { "folder unavailable" } else { "saved" };
@@ -355,7 +404,7 @@ pub fn external_rows(app: &App) -> Vec<Row> {
         let mut row = Row::new(format!("external:{}:{}", x.machine, x.session_id), title)
             .extra(format!("{} {} {} {}", x.cwd, x.engine, engine_label(&x.engine), app.fleet.machine_name(&x.machine)))
             .group("Saved conversations")
-            .lead(vec![span("‖", fg(theme::MUTED)), span(" ", Style::default()), span(mark, fg(mark_color)), span(" ", Style::default())])
+            .lead(vec![span("‖", fg(theme::MUTED)), span(" ", Style::default()), span(mark, theme::engine_style(&x.engine)), span(" ", Style::default())])
             .detail(vec![span(folder, fg(theme::MUTED))])
             .right(right)
             .right_narrow(ago(x.last_at));
@@ -492,6 +541,9 @@ pub fn mode_rows(app: &App) -> Vec<Row> {
         ("#", "projects", "a project folder, then its harnesses", String::new()), (":", "models", "local, shared, subscriptions, APIs", hint("choose-tree -i")),
         ("*", "store", "the Harness Store", hint("choose-tree -S"))];
     let mut rows: Vec<Row> = modes.iter().map(|(p, t, d, k)| Row::new(format!("mode:{p}"), format!("{p} {t}")).detail(vec![span(*d, Style::default().add_modifier(ratatui::style::Modifier::DIM))]).right(k.clone())).collect();
+    // The harness list's keys: its own line shows only the main ones, and points here.
+    const LIST_KEYS: [(&str, &str); 13] = [("enter", "add pane"), ("C-t", "new window"), ("C-v", "beside"), ("C-x", "below"), ("M-enter", "here"), ("tab", "mark"), ("M-1..9", "answer"), ("M-a", "type an answer"), ("M-m", "read"), ("M-s", "message"), ("M-r", "restart"), ("M-p", "pause"), ("C-/", "preview")];
+    rows.extend(LIST_KEYS.iter().map(|(k, what)| Row::new(format!("listkey:{k}"), format!("{k:<7} {what}")).extra("harness list").right("harness list")));
     let prefix = crate::keys::name(&app.keymap.prefix);
     // Each key as part of its line (as fzf would be given it): searched for as any word is
     // (`C-b z`, `PPage`), lit only where the query matches.
@@ -509,12 +561,12 @@ pub fn inbox_rows(app: &App) -> Vec<Row> {
         // a question, answered where it stands (M-1…9, M-a).
         let who = [a.name.clone(), a.project.clone(), app.fleet.machine_name(&a.machine_id)].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
         let options = q.options.iter().enumerate().map(|(i, o)| format!("{} {o}", i + 1)).collect::<Vec<_>>().join(" · ");
-        let (mark, mark_color) = engine_mark(&a.engine);
+        let (mark, _) = engine_mark(&a.engine);
         let since = crate::fleet::now_ms().saturating_sub(q.since.elapsed().as_millis() as u64);
         let mut detail = vec![span(who.clone(), fg(theme::MUTED))];
         if !options.is_empty() { detail.push(span(format!("  {options}"), fg(theme::accent()))) }
         rows.push(Row::new(format!("{}:{}#", a.machine_id, a.id), q.prompt.clone()).extra(format!("{who} {} {options}", a.branch))
-            .lead(vec![span("? ", fg(theme::ATTENTION).add_modifier(ratatui::style::Modifier::BOLD)), span(mark, fg(mark_color)), span(" ", Style::default())])
+            .lead(vec![span("? ", fg(theme::ATTENTION).add_modifier(ratatui::style::Modifier::BOLD)), span(mark, theme::engine_style(&a.engine)), span(" ", Style::default())])
             .detail(detail)
             .right(ago(since)));
     }
@@ -834,9 +886,9 @@ pub fn new_machine_rows(app: &App, prefer: &str) -> Vec<Row> {
 
 pub fn new_what_rows(catalog: &[Value]) -> Vec<Row> {
     let mut rows: Vec<Row> = ENGINES.iter().filter(|e| **e != "terminal").map(|e| {
-        let (mark, color) = engine_mark(e);
+        let (mark, _) = engine_mark(e);
         Row::new(format!("engine:{e}"), engine_label(e)).extra(*e).group("Agents")
-            .lead(vec![span(mark, fg(color)), span(" ", Style::default())])
+            .lead(vec![span(mark, theme::engine_style(e)), span(" ", Style::default())])
     }).collect();
     for row in catalog {
         if row.get("installed").and_then(Value::as_bool) == Some(false) || row.get("kind").and_then(Value::as_str) == Some("viewer") { continue }
@@ -869,10 +921,11 @@ pub fn route_rows(reply: &Value) -> Vec<Row> {
     let mut rows: Vec<Row> = reply.get("candidates").and_then(Value::as_array).cloned().unwrap_or_default().iter().filter_map(|c| {
         let agent = c.get("agentId")?.as_str()?;
         let machine = c.get("machineId")?.as_str()?;
-        let (mark, color) = engine_mark(c.get("engine").and_then(Value::as_str).unwrap_or(""));
+        let engine = c.get("engine").and_then(Value::as_str).unwrap_or("");
+        let mark = engine_mark(engine).0;
         let confidence = c.get("confidence").and_then(Value::as_f64).unwrap_or(0.0);
         Some(Row::new(format!("{machine}:{agent}"), c.get("name").and_then(Value::as_str).unwrap_or(agent).to_string())
-            .lead(vec![span(mark, fg(color)), span(" ", Style::default())])
+            .lead(vec![span(mark, theme::engine_style(engine)), span(" ", Style::default())])
             .detail(vec![span(c.get("recent").and_then(Value::as_str).unwrap_or("").to_string(), fg(theme::MUTED))])
             .right(format!("{}  {}", c.get("machine").and_then(Value::as_str).unwrap_or(""), if confidence > 0.0 { format!("{}%", (confidence * 100.0) as u32) } else { String::new() })))
     }).collect();
@@ -918,19 +971,90 @@ mod agent_row_tests {
         out
     }
 
-    /// C-b s: one heading per machine and folder, the one active last first, each harness under its
-    /// own once (never a heading twice), its folder from where it works when it has no project.
+    /// C-b s: the machine with the newest harness first, each machine's folders under it, the
+    /// newest folder first, a folder of the same name on two machines kept apart.
     #[test]
-    fn harnesses_are_grouped_by_machine_and_folder() {
+    fn harnesses_are_grouped_by_machine_then_folder_newest_first() {
         let app = app();
-        let groups = by_group(&agent_rows(&app, Filter::All, None, None));
-        assert_eq!(groups, vec![
-            ("studio · webapp".to_string(), vec!["fix login".to_string(), "release notes".to_string()]),
-            ("lab · webapp".to_string(), vec!["train".to_string()]),
-            ("studio · api".to_string(), vec!["rate limit".to_string()]),
-            ("lab · ops".to_string(), vec!["ops shell".to_string()]),
-            ("studio · No folder".to_string(), vec!["scratch".to_string()]),
+        let rows = agent_rows(&app, Filter::All, None, None);
+        let got: Vec<(String, String, Vec<String>)> = {
+            let mut out: Vec<(String, String, Vec<String>)> = Vec::new();
+            // (Their fixed dates are long past: each folder also closes with its `▸ N older`.)
+            for r in rows.iter().filter(|r| !r.id.starts_with(OLDER_ROW)) {
+                let (s, g) = (r.section.clone().unwrap_or_default(), r.group.clone().unwrap_or_default());
+                match out.last_mut() { Some((ls, lg, names)) if *ls == s && *lg == g => names.push(r.label.clone()), _ => out.push((s, g, vec![r.label.clone()])) }
+            }
+            out
+        };
+        let s = |t: &str| t.to_string();
+        assert_eq!(got, vec![
+            (s("studio"), s("webapp"), vec![s("fix login"), s("release notes")]),
+            (s("studio"), s("api"), vec![s("rate limit")]),
+            (s("studio"), s("No folder"), vec![s("scratch")]),
+            (s("lab"), s("webapp"), vec![s("train")]),
+            (s("lab"), s("ops"), vec![s("ops shell")]),
         ]);
+    }
+
+    fn make_old(app: &mut App, machine: &str, id: &str) {
+        let a = app.fleet.agents.get_mut(&(machine.to_string(), id.to_string())).unwrap();
+        a.updated_at = crate::fleet::now_ms() - 30 * 24 * 60 * 60 * 1000;
+        a.active_at = 0;
+    }
+
+    fn opened(rows: Vec<Row>) -> Picker {
+        let mut p = Picker::new("t", "t");
+        p.live = true;
+        p.set_rows(rows);
+        p
+    }
+
+    fn visible_labels(p: &Picker) -> Vec<String> { p.visible.iter().map(|(i, _)| { let r = &p.rows[*i]; if r.id.starts_with(OLDER_ROW) { r.right.clone() } else { r.label.clone() } }).collect() }
+
+    /// A harness untouched for over a week folds under its folder's `▸ N older`; Enter's unfolding
+    /// brings it back, a search finds it with no such row, and one active or on screen never folds.
+    #[test]
+    fn old_harnesses_fold_until_opened_or_searched() {
+        let mut app = app();
+        for a in app.fleet.agents.values_mut() { a.updated_at = crate::fleet::now_ms(); }
+        make_old(&mut app, "local", "a1");
+        make_old(&mut app, "local", "a2");
+        assert_eq!(agent_rows(&app, Filter::All, None, None).iter().filter(|r| r.id.starts_with(OLDER_ROW)).count(), 2, "one for webapp, one for api");
+        let mut p = opened(agent_rows(&app, Filter::All, None, None));
+        // The folder's heading is the button: first in its folder, its name and its count.
+        let at = p.rows.iter().position(|r| r.right == "▸ 1 older" && r.group.as_deref() == Some("webapp")).unwrap();
+        assert_eq!(p.rows[at].label, "webapp");
+        assert_eq!(p.rows[at + 1].group.as_deref(), Some("webapp"));
+        assert!(at == 0 || p.rows[at - 1].section != p.rows[at].section || p.rows[at - 1].group != p.rows[at].group);
+        let names = visible_labels(&p);
+        assert!(names.contains(&"▸ 1 older".to_string()), "{names:?}");
+        assert!(!names.contains(&"fix login".to_string()) && !names.contains(&"rate limit".to_string()), "{names:?}");
+
+        let key = p.rows.iter().find(|r| r.label == "fix login").and_then(|r| r.older.clone()).unwrap();
+        p.unfolded.insert(key);
+        p.refilter();
+        let names = visible_labels(&p);
+        assert!(names.contains(&"fix login".to_string()) && !names.contains(&"rate limit".to_string()), "{names:?}");
+
+        let mut p = opened(agent_rows(&app, Filter::All, None, None));
+        p.query = "rate".into();
+        p.refilter();
+        let names = visible_labels(&p);
+        assert!(names.contains(&"rate limit".to_string()) && !names.iter().any(|n| n.contains("older")), "{names:?}");
+
+        app.fleet.agents.get_mut(&("local".to_string(), "a2".to_string())).unwrap().working = true;
+        let p = opened(agent_rows(&app, Filter::All, None, None));
+        assert!(visible_labels(&p).contains(&"rate limit".to_string()));
+    }
+
+    /// A project's own list shows all its harnesses: it was asked for by name.
+    #[test]
+    fn a_projects_list_does_not_fold() {
+        let mut app = app();
+        make_old(&mut app, "lab", "b1");
+        let root = app.fleet.agents[&("lab".to_string(), "b1".to_string())].cwd.clone();
+        let rows = agent_rows(&app, Filter::All, Some("lab"), Some(&root));
+        assert!(rows.iter().all(|r| r.older.is_none() && !r.id.starts_with(OLDER_ROW)));
     }
 
     /// A row is its status, name and time: where it works is its heading, not said again in it.
@@ -985,8 +1109,8 @@ mod agent_row_tests {
         a2.working = true;
         a2.since = crate::fleet::now_ms();
         let groups = by_group(&agent_rows(&app, Filter::All, None, None));
-        assert_eq!(groups[0], ("studio · api".to_string(), vec!["rate limit".to_string()]));
-        assert_eq!(groups[1].0, "studio · webapp");
+        assert_eq!(groups[0], ("api".to_string(), vec!["rate limit".to_string()]));
+        assert_eq!(groups[1].0, "webapp");
     }
 
     /// One machine's harnesses (from the machines list) are headed by their folder alone.

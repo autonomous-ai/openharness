@@ -19,7 +19,7 @@ vi.mock('./bus.js', () => ({
   publishSwarmDeliveries: async (machineId: string, msg: unknown) => { bus.publish(machineId, JSON.parse(JSON.stringify(msg))); return 1 },
 }))
 
-import { announceSwarmDeliveries, relaySwarmDeliveries } from './swarmDeliveryPushes.js'
+import { announceSwarmDeliveries, announceSwarmTerminal, relaySwarmDeliveries } from './swarmDeliveryPushes.js'
 
 const pushes = (send: ReturnType<typeof vi.fn>) => send.mock.calls.map(([frame]) => frame)
 const told = (payload: object) => ({ t: 'down', connId: '', frame: { type: 'super_tab_deliveries', payload } })
@@ -61,6 +61,28 @@ describe('Swarm delivery pushes on a daemon socket', () => {
     send.mockClear()
     bus.publish('machine-b', { tabId: 'tab-1', agentId: 'agent-1' })
     expect(pushes(send)).toEqual([])
+  })
+
+  // Spec 2026-11-02 poll cost, Part 4.2: a terminal request waiting for this machine, as a `__` control frame an older
+  // daemon drops (cli gateway backendControl); the newer one picks it up at once instead of every 3 s.
+  it('carries a terminal request the store announces to its machine as __terminal_waiting', async () => {
+    const a = vi.fn(), b = vi.fn()
+    await relaySwarmDeliveries('machine-a', a)
+    await relaySwarmDeliveries('machine-b', b)
+    a.mockClear(); b.mockClear()
+    announceSwarmTerminal({ machineId: 'machine-a', tabId: 'tab-1', agentId: 'agent-1' })
+    await vi.waitFor(() => expect(pushes(a)).toEqual([{ t: 'down', connId: '', frame: { type: '__terminal_waiting', payload: { tabId: 'tab-1', agentId: 'agent-1' } } }]))
+    expect(pushes(b)).toEqual([])
+  })
+
+  it('a frame an older daemon sees is a __ control frame or a delivery push it already reads', async () => {
+    const send = vi.fn()
+    await relaySwarmDeliveries('machine-a', send)
+    send.mockClear()
+    announceSwarmDeliveries({ machineId: 'machine-a', tabId: 'tab-1', agentId: 'agent-1' })
+    announceSwarmTerminal({ machineId: 'machine-a', tabId: 'tab-1', agentId: 'agent-1' })
+    await vi.waitFor(() => expect(pushes(send)).toHaveLength(2))
+    expect(pushes(send).map(f => (f as { frame: { type: string } }).frame.type).every(type => type === 'super_tab_deliveries' || type.startsWith('__'))).toBe(true)
   })
 
   it('passes on nothing but a Swarm and an agent', async () => {

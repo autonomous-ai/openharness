@@ -3,9 +3,12 @@ import { createHash } from 'node:crypto'
 import { appendFileSync, chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync,
   truncateSync, utimesSync, writeFileSync, type Stats } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { inspect } from 'node:util'
 import { basename, dirname, join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { allowBuddyReads, artifactLinks, buddyGuardCommand, buddyGuardSource, buddyReadsOf, forgetBuddyReads, grantBuddyWide, recordBuddyApprovals } from './buddyGuard.js'
+import { BUDDY_COPIES_FILE, BUDDY_HOMES } from '../superTabs/buddyHome.js'
+import { allowBuddyReads, artifactLinks, buddyGuardCommand, buddyGuardSource, buddyReadsOf, forgetBuddyReads, grantBuddyWide, recordBuddyApprovals,
+  SentListsError } from './buddyGuard.js'
 
 // The guard Claude Code runs before each of a Buddy's tool calls, run here as it runs there: the script, with node, the
 // hook's input on stdin and its decision on stdout.
@@ -41,6 +44,27 @@ function decide(tool: string, input: Record<string, unknown>, guard = script): s
   return output.permissionDecision
 }
 const bash = (command: string) => decide('Bash', { command, description: 'x' })
+
+describe('a one Buddy\'s proposal carries a summary (security review of #2530)', () => {
+  const proposal = (scope: string) => JSON.stringify({ conversationId: 'c', ownerMessageId: 'm', projectId: 'p', goal: 'Cut API CPU', scope, priority: 'normal' })
+  const pasted = [['a code block', 'See:\n```\nconst secret = 1\n```'], ['more than 10 lines', Array.from({ length: 11 }, (_, i) => `line ${i}`).join('\n')]]
+  const home = join(parent, BUDDY_HOMES, 'one')
+  mkdirSync(home, { recursive: true })
+  const guard = join(home, 'buddy-guard.mjs')
+  writeFileSync(guard, buddyGuardSource(home, reads))
+  const propose = (scope: string, at: string) => {
+    const run = hook(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: `harness super-tab propose op-1 '${proposal(scope)}'`, description: 'x' }, cwd: home }), at)
+    return JSON.parse(run.stdout).hookSpecificOutput as { permissionDecision: string; permissionDecisionReason: string }
+  }
+  it.each(pasted)('refuses %s from a one Buddy\'s folder, and lets a summary through', (_, scope) => {
+    expect(propose(scope!, guard)).toMatchObject({ permissionDecision: 'deny', permissionDecisionReason: expect.stringContaining('summar') })
+    expect(propose('Two pods run hot; the change feed is the cost.', guard).permissionDecision).toBe('allow')
+  })
+  // A session of one project sends that project's own material to that project's PM, as it always did.
+  it.each(pasted)('leaves %s alone in a project\'s own folder', (_, scope) => {
+    expect(bash(`harness super-tab propose op-1 '${proposal(scope!)}'`)).toBe('allow')
+  })
+})
 
 describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everything else without one)', () => {
   it.each([
@@ -103,6 +127,9 @@ describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everythi
     // Its Super Tab commands, as the pane it runs in identifies it (superTabs/command.ts callerOf).
     'harness super-tab --tab t status',
     'harness super-tab --tab t messages chat',
+    // A thread session reads its own thread (spec 2026-10-30-buddy-thread-sessions).
+    'harness super-tab --tab t messages chat --thread root-1',
+    'harness super-tab --tab t messages chat --thread root-1 --before 40 m-1',
     'harness super-tab --tab t message chat m1',
     'harness super-tab --tab t decisions --answered',
     "harness super-tab --tab t post chat 'see /etc and ../up, as text' op-3 --reply-to m1",
@@ -163,6 +190,8 @@ describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everythi
     'harness super-tab --tab t --agent me status',
     'harness super-tab --tab t --port 18474 status',
     'harness super-tab --tab t --machine other status',
+    'harness super-tab --tab t messages chat --thread root-1 --agent other',
+    'harness super-tab --tab t messages chat --thread root-1 --machine other',
     'harness super-tab --tab t command op {}',
     'harness super-tab --tab t start op {}',
     'harness super-tab --tab t resume start-1',
@@ -303,6 +332,67 @@ describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everythi
     expect(reason).toContain('an Artifact link they sent, with the Artifact tool\'s read and that link')
   })
 
+  // Since #2355 a post's TEXT - reads the message from stdin, as a proposal's JSON - always has: the guard sees only the dash,
+  // so it could not check what is sent for secrets. A Buddy cannot feed stdin today (no pipes, redirects or heredocs), but
+  // its guard must not depend on that.
+  function refusal(command: string): { permissionDecision: string; permissionDecisionReason: string } {
+    const run = hook(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command, description: 'x' }, cwd: root }))
+    expect(run.status).toBe(0)
+    return JSON.parse(run.stdout).hookSpecificOutput
+  }
+  it.each([
+    'harness super-tab --tab t post chat - op-1',
+    'harness super-tab post chat - op-1',
+    "harness super-tab --tab t post chat '-' op-1",
+    'harness super-tab --tab t post chat "-" op-1',
+    "harness super-tab --tab t post chat ''- op-1",
+    "harness super-tab --tab t post chat -'' op-1",
+    'harness super-tab --tab t --tab t post chat - op-1',
+    'harness super-tab --tab t post chat - op-1 --reply-to m1',
+    'harness super-tab --tab t post chat - op-1 --attach notes/plan.md',
+    'harness super-tab --tab t post chat - op-1 --mention ken',
+  ])('refuses a post whose message would come from stdin, naming the fix: %s', command => {
+    const { permissionDecision, permissionDecisionReason } = refusal(command)
+    expect(permissionDecision).toBe('deny')
+    expect(permissionDecisionReason).toContain('nobody will be asked')
+    expect(permissionDecisionReason).toContain('Harness cannot check it for secrets')
+    expect(permissionDecisionReason).toContain("harness super-tab post GROUP 'your message' OPERATION_ID")
+    expect(permissionDecisionReason).toContain('in double quotes when it holds an apostrophe')
+  })
+  // A Buddy's own files are checked for secrets whole before they go, so they stay at the 10 MB the guard reads: a larger one
+  // would now go by a link, with only its first 10 MB checked.
+  it('refuses to attach a file of its folder over 10 MB, and says so', () => {
+    const big = join(root, 'big.log')
+    writeFileSync(big, 'start\n'); truncateSync(big, 10 * 1024 * 1024 + 1)
+    try {
+      const { permissionDecision, permissionDecisionReason } = refusal('harness super-tab --tab t post chat x op-1 --attach big.log')
+      expect(permissionDecision).toBe('deny')
+      expect(permissionDecisionReason).toContain('up to 10 MB')
+      truncateSync(big, 10 * 1024 * 1024)
+      expect(bash('harness super-tab --tab t post chat x op-1 --attach big.log')).toBe('allow')
+    } finally { rmSync(big) }
+  })
+  // The fix it names goes through: a message with an apostrophe, the one a Buddy might have sent on stdin, in double quotes.
+  it('sends the message the refusal tells it to, in double quotes when it holds an apostrophe', () => {
+    expect(bash('harness super-tab --tab t post chat "it\'s done: the - case is refused" op-1 --reply-to m1')).toBe('allow')
+  })
+  it.each([
+    'harness super-tab --tab t propose op-1 -',
+    "harness super-tab --tab t propose op-1 '-'",
+    'harness super-tab --tab t propose op-1 - --attach notes/plan.md',
+  ])('refuses a proposal whose JSON would come from stdin, naming the fix: %s', command => {
+    const { permissionDecision, permissionDecisionReason } = refusal(command)
+    expect(permissionDecision).toBe('deny')
+    expect(permissionDecisionReason).toContain('nobody will be asked')
+    expect(permissionDecisionReason).toContain('Harness cannot check it for secrets')
+    expect(permissionDecisionReason).toContain("harness super-tab propose OPERATION_ID '{")
+  })
+  // Only a TEXT that is exactly - reads stdin (superTabs/command.ts): any other is the message, dashes and all.
+  it.each(['--', '---', '- ', ' -', '-x', '- P1: fixed in 3f2a', '-1 is the exit code', 'a - b', '- '])('still sends a post whose text is %j', text => {
+    expect(bash(`harness super-tab --tab t post chat '${text}' op-1`)).toBe('allow')
+    expect(bash(`harness super-tab --tab t post chat '${text}' op-1 --reply-to m1`)).toBe('allow')
+  })
+
   it('fails closed: a guard that cannot run blocks the call (exit 2) instead of falling back to other rules', () => {
     const missing = buddyGuardCommand(join(root, 'no-node'), script)
     expect(spawnSync('/bin/sh', ['-c', missing], { input: '{}', encoding: 'utf8' }).status).toBe(2)
@@ -312,6 +402,10 @@ describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everythi
     const working = spawnSync('/bin/sh', ['-c', buddyGuardCommand(process.execPath, script)],
       { input: JSON.stringify({ tool_name: 'Read', tool_input: { file_path: join(root, 'a.txt') } }), encoding: 'utf8' })
     expect([working.status, JSON.parse(working.stdout).hookSpecificOutput.permissionDecision]).toEqual([0, 'allow'])
+    // What its prompt tells a person's one Buddy to read about its project copies (superTabs/buddyHome.ts): a name the guard allows.
+    const copies = spawnSync('/bin/sh', ['-c', buddyGuardCommand(process.execPath, script)],
+      { input: JSON.stringify({ tool_name: 'Read', tool_input: { file_path: join(root, BUDDY_COPIES_FILE) } }), encoding: 'utf8' })
+    expect(JSON.parse(copies.stdout).hookSpecificOutput.permissionDecision).toBe('allow')
   })
 })
 
@@ -541,6 +635,17 @@ describe('the host\'s list of what a Buddy\'s person sent it', () => {
     rmSync(lists, { recursive: true, force: true })
     for (const path of [sent, later]) { rmSync(path, { force: true }); writeFileSync(path, 'bytes') }
   })
+  // Follow-up to #2389's security re-check 2: the host logs what an end failed with, and a filesystem error's message names
+  // its path, under the person's home. It fails by fixed codes alone, carrying nothing of the error it caught.
+  const failsWith = (session: string, codes: string[]) => {
+    let thrown: unknown
+    try { forgetBuddyReads(session, lists) } catch (error) { thrown = error }
+    expect(thrown).toBeInstanceOf(SentListsError)
+    expect((thrown as SentListsError).codes).toEqual(codes)
+    expect((thrown as Error).message).toBe(codes.join(', '))
+    expect((thrown as Error).cause).toBeUndefined()
+    expect(inspect(thrown)).not.toContain(parent)
+  }
 
   it('is kept for each Buddy session apart, in Harness\'s data folder, beside its downloads folder', () => {
     expect(buddyReadsOf('session-key')).toEqual({
@@ -570,10 +675,23 @@ describe('the host\'s list of what a Buddy\'s person sent it', () => {
     ['a file with a second name', () => { const twin = join(drops, 'aaaa0004-twin'); rmSync(twin, { force: true }); linkSync(later, twin); return later }],
     ['a folder', () => drops],
     ['a file that is gone', () => join(drops, 'aaaa0005-gone.png')],
-    ['a file larger than a message\'s file can be', () => { const big = join(drops, 'aaaa0006-big'); writeFileSync(big, Buffer.alloc(10 * 1024 * 1024 + 1)); return big }],
+    // Past the 256 MB a chat file can be: sparse, so it takes no room.
+    ['a file larger than a message\'s file can be', () => { const big = join(drops, 'aaaa0006-big'); writeFileSync(big, ''); truncateSync(big, 256 * 1024 * 1024 + 1); return big }],
   ])('lists no %s', (_, path) => {
     allowBuddyReads(mine, { session: 'harness-1', files: [sent, path()], links: [] }, 1_000)
     expect(held().files).toEqual([{ ...identity(sent), at: 1_000 }])
+  })
+
+  // A chat file may be 256 MB since files over 10 MB go straight to storage: one past the old 10 MB is its person's too. Its
+  // bytes are hashed 64 KiB at a time, never held whole.
+  it('lists a file past the old 10 MB limit, and the guard lets the Buddy read it', () => {
+    const big = join(drops, 'aaaa0007-model.step')
+    writeFileSync(big, 'head'); truncateSync(big, 20 * 1024 * 1024)
+    const now = Date.now()
+    allowBuddyReads(mine, { session: 'harness-1', files: [big], links: [] }, now)
+    expect(held().files).toEqual([{ ...identity(big), at: now }])
+    expect(decide('Read', { file_path: big }, guard)).toBe('allow')
+    rmSync(big)
   })
 
   it('lists only claude.ai Artifact links', () => {
@@ -699,7 +817,7 @@ describe('the host\'s list of what a Buddy\'s person sent it', () => {
       expect(decide('Read', { file_path: later }, theirGuard)).toBe('deny')
       expect(() => forgetBuddyReads('harness-1', lists)).not.toThrow()
       expect(existsSync(mine.file)).toBe(false)
-      expect(() => forgetBuddyReads('harness-2', lists)).toThrow(/director/i)
+      failsWith('harness-2', ['SENT_LIST_KEPT'])
       expect(existsSync(mark(theirs.file, 'harness-2'))).toBe(true)
       expect(decide('Read', { file_path: later }, theirGuard)).toBe('deny')
     } finally { rmSync(theirs.file, { recursive: true, force: true }) }
@@ -713,7 +831,7 @@ describe('the host\'s list of what a Buddy\'s person sent it', () => {
     const own = mark(mine.file, 'harness-1')
     rmSync(own); mkdirSync(join(own, 'held'), { recursive: true })
     try {
-      expect(() => forgetBuddyReads('harness-1', lists)).toThrow(/director/i)
+      failsWith('harness-1', ['SENT_LIST_MARK_KEPT'])
       expect(existsSync(mine.file)).toBe(false)
       expect(decide('Read', { file_path: sent }, guard)).toBe('deny')
     } finally { rmSync(own, { recursive: true, force: true }) }
@@ -746,7 +864,7 @@ describe('the host\'s list of what a Buddy\'s person sent it', () => {
     expect(decide('Read', { file_path: sent }, guard)).toBe('allow')
     chmodSync(lists, 0o500)
     try {
-      expect(() => forgetBuddyReads('harness-1', lists)).toThrow(/EACCES|EPERM/)
+      failsWith('harness-1', ['SENT_LIST_KEPT'])
       expect(existsSync(mine.file)).toBe(true)
       expect(existsSync(mark(mine.file, 'harness-1'))).toBe(true)
       expect(decide('Read', { file_path: sent }, guard)).toBe('deny')
@@ -771,7 +889,7 @@ describe('the host\'s list of what a Buddy\'s person sent it', () => {
     chmodSync(lists, 0o500)
     try {
       expect(() => forgetBuddyReads('harness-2', lists)).not.toThrow()
-      expect(() => forgetBuddyReads('harness-1', lists)).toThrow(/EACCES|EPERM/)
+      failsWith('harness-1', ['SENT_LIST_KEPT'])
       expect(existsSync(mine.file)).toBe(true)
     } finally { chmodSync(lists, 0o700) }
     expect(() => forgetBuddyReads('harness-1', lists)).not.toThrow()
@@ -785,7 +903,7 @@ describe('the host\'s list of what a Buddy\'s person sent it', () => {
     writeFileSync(orphan, JSON.stringify({ version: 1, session: 'harness-2', files: [], links: [] }))
     chmodSync(orphan, 0o000)
     try {
-      expect(() => forgetBuddyReads('harness-1', lists)).toThrow(/EACCES|EPERM/)
+      failsWith('harness-1', ['SENT_LIST_UNREAD'])
       expect(existsSync(orphan)).toBe(true)
       writeFileSync(mark(orphan, 'harness-2'), '')
       expect(() => forgetBuddyReads('harness-1', lists)).not.toThrow()
@@ -819,6 +937,33 @@ describe('the host\'s list of what a Buddy\'s person sent it', () => {
     // The earlier session's end no longer finds the list as its own.
     forgetBuddyReads('harness-0', lists)
     expect(held().session).toBe('harness-1')
+  })
+
+  // Follow-up to #2389's security re-check 2: a lists folder that could not be read threw the read's own error, its path with
+  // it, into the daemon's log. It fails by its kind alone, deletes nothing, and the end is tried again.
+  it('fails by a fixed code, with no path, when the lists folder cannot be read, deletes nothing, and finishes once it can', () => {
+    allowBuddyReads(mine, { session: 'harness-1', files: [sent], links: [] })
+    const before = readdirSync(lists).sort()
+    chmodSync(lists, 0o000)
+    try {
+      failsWith('harness-1', ['SENT_LISTS_UNREAD'])
+    } finally { chmodSync(lists, 0o700) }
+    expect(readdirSync(lists).sort()).toEqual(before)
+    expect(decide('Read', { file_path: sent }, guard)).toBe('allow')
+    expect(() => forgetBuddyReads('harness-1', lists)).not.toThrow()
+    expect(readdirSync(lists)).toEqual([])
+    expect(decide('Read', { file_path: sent }, guard)).toBe('deny')
+  })
+
+  it('names each kind of failure once, in a fixed order, when an end meets several', () => {
+    allowBuddyReads(mine, { session: 'harness-1', files: [sent], links: [] })
+    const orphans = ['orphan-a.json', 'orphan-b.json'].map(name => join(lists, name))
+    for (const orphan of orphans) { writeFileSync(orphan, JSON.stringify({ version: 1, session: 'harness-2', files: [], links: [] })); chmodSync(orphan, 0o000) }
+    chmodSync(lists, 0o500)
+    try {
+      failsWith('harness-1', ['SENT_LIST_UNREAD', 'SENT_LIST_KEPT'])
+      for (const file of [mine.file, ...orphans]) expect(existsSync(file)).toBe(true)
+    } finally { chmodSync(lists, 0o700); for (const orphan of orphans) chmodSync(orphan, 0o600) }
   })
 
   it('forgets nothing, and fails nothing, where no list was ever written', () => {

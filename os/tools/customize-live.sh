@@ -19,6 +19,8 @@ visudo -cf /etc/sudoers.d/20-harness-network
 chown me:me /home/me/projects
 systemctl enable NetworkManager systemd-resolved systemd-timesyncd getty@tty1.service
 systemctl enable harness-keyring.service
+# Started from the recovery partition only (harness.recovery): it installs the computer again.
+systemctl enable harness-recovery.service
 # hn-screen starts the daemon after labwc has published the display environment.
 # Linger keeps that runtime alive if its graphical client is restarted.
 mkdir -p /var/lib/systemd/linger

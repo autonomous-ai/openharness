@@ -50,7 +50,10 @@ import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { redeemHandoff, startHandoff } from '../lib/harnessSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { SuperTabError } from '../superTabs/model.js'
-import { HOT_BODY_LIMIT, superTabRoutes } from './superTabs.js'
+import { HOT_BODY_LIMIT, NOT_AVAILABLE, READINGS_MAX, superTabRoutes } from './superTabs.js'
+import { machineObservationSchema } from '../superTabs/machines.js'
+import { logger } from '../utils/logger.js'
+import { WORKSPACE_ACCESS_REVOKED } from '../superTabs/workspaceStore.js'
 
 describe('Super Tab route failures', () => {
   let app: FastifyInstance
@@ -95,6 +98,60 @@ describe('Super Tab route failures', () => {
     expect(res.statusCode).toBe(503)
     expect(res.headers['retry-after']).toBe('2')
     expect(res.json().error.code).toBe('SWARM_BUSY')
+  })
+})
+
+// One answer for anything the caller cannot reach, on the routes a person's app calls (Huy, 10-30): the route only maps the
+// store's refusal, so a fake store throws each kind. integration/superTabNotAvailable.test.ts runs the real store.
+describe('the person routes\' one not-available answer', () => {
+  let app: FastifyInstance
+  let thrown: unknown
+  const throwing = async () => { throw thrown }
+  beforeEach(async () => {
+    app = Fastify()
+    app.setErrorHandler(errorHandler)
+    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
+    const store = { hostGrids: throwing, messages: throwing, execute: throwing }
+    await app.register(superTabRoutes, { store: store as never, github: null, reads: { firstLoad: throwing } as never, hosts: {} as never })
+    await app.ready()
+  })
+  afterEach(async () => { await app.close(); vi.restoreAllMocks() })
+  const body = JSON.stringify({ success: false, error: { code: NOT_AVAILABLE.code, message: NOT_AVAILABLE.message } })
+  const ask = (url: string, method: 'GET' | 'POST' = 'GET') => app.inject({ method, url,
+    payload: method === 'POST' ? { operationId: 'op-1', command: { type: 'message.send', conversationId: 'c1', text: 'hi', replyTo: null, recipientIds: [] } } : undefined })
+
+  it('answers missing, not a member, out of the Workspace and a refused link alike, and logs which it was', async () => {
+    const warn = vi.spyOn(logger, 'warn')
+    const refusals = [new SuperTabError('NOT_FOUND', 'This Super Tab is unavailable.', 404),
+      new SuperTabError('FORBIDDEN', 'You no longer have access to this Super Tab.', 403, true),
+      new SuperTabError(WORKSPACE_ACCESS_REVOKED, 'You are no longer in this Swarm\'s Workspace.', 403),
+      new SuperTabError('JOIN_UNAVAILABLE', 'This Swarm link is unavailable for this account.', 404),
+      new SuperTabError('NOT_FOUND', 'This conversation is unavailable.', 404)]
+    for (const refusal of refusals) {
+      thrown = refusal
+      for (const [url, method] of [['/api/super-tabs/tab-1/parts'], ['/api/super-tabs/tab-1/conversations/c1/messages'], ['/api/super-tabs/tab-1/commands', 'POST']] as const) {
+        const res = await ask(url, method)
+        expect({ status: res.statusCode, body: res.body }, `${refusal.code} ${url}`).toEqual({ status: 404, body })
+      }
+      expect(warn).toHaveBeenCalledWith('Swarm not available to the caller', expect.objectContaining({ code: refusal.code, reason: refusal.message }))
+    }
+  })
+
+  it('keeps a role refusal inside a Swarm the caller reads, and a FORBIDDEN that is not about reaching it', async () => {
+    for (const refusal of [new SuperTabError('READ_ONLY', 'You have read-only access to this Super Tab.', 403),
+      new SuperTabError('FORBIDDEN', 'Only the owner can remove another person.', 403)]) {
+      thrown = refusal
+      const res = await ask('/api/super-tabs/tab-1/commands', 'POST')
+      expect(res.statusCode).toBe(403)
+      expect(res.json().error).toEqual({ code: refusal.code, message: refusal.message })
+    }
+  })
+
+  it('leaves the routes a machine\'s host calls as they were', async () => {
+    thrown = new SuperTabError('FORBIDDEN', 'You no longer have access to this Super Tab.', 403, true)
+    const res = await ask('/api/super-tabs/grids')
+    expect(res.statusCode).toBe(403)
+    expect(res.json().error.message).toBe('You no longer have access to this Super Tab.')
   })
 })
 
@@ -197,5 +254,55 @@ describe('the browser\'s own sign-in on Swarm routes', () => {
     const res = await app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/commands', payload: command })
     expect(res.statusCode).toBe(401)
     expect(seen).toEqual([])
+  })
+})
+
+describe('a machine\'s readings for all its Swarms in one call (DB 2.5)', () => {
+  let app: FastifyInstance
+  let calls: Array<{ machineId: string; readings: Array<{ tabId: string }> }>
+  let answers: Array<{ tabId: string; error?: unknown }> | null
+  beforeEach(async () => {
+    calls = []
+    answers = null
+    app = Fastify()
+    app.setErrorHandler(errorHandler)
+    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
+    const store = { observeMachines: async (_user: unknown, machineId: string, readings: Array<{ tabId: string }>) => {
+      calls.push({ machineId, readings })
+      return answers ?? readings.map(r => ({ tabId: r.tabId }))
+    } }
+    await app.register(superTabRoutes, { store: store as never, github: null, reads: {} as never, hosts: {} as never })
+    await app.ready()
+  })
+  afterEach(async () => { await app.close(); vi.restoreAllMocks() })
+  const post = (body: unknown) => app.inject({ method: 'POST', url: '/api/super-tabs/hosts/m1/readings', payload: body as object })
+  const readings = (n: number) => Array.from({ length: n }, (_, i) => ({ tabId: `tab-${i}`, observation: { any: 'shape' } }))
+
+  it('answers each Swarm on its own, as the per-Swarm route would answer it', async () => {
+    vi.spyOn(logger, 'error').mockImplementation(() => {})
+    vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    answers = [{ tabId: 'tab-0' }, { tabId: 'tab-1', error: new SuperTabError('CONTRIBUTION_REVOKED', 'Read the current machine contribution.', 403) },
+      { tabId: 'tab-2', error: new SuperTabError('NOT_FOUND', 'This Super Tab is unavailable.', 404) },
+      { tabId: 'tab-3', error: machineObservationSchema.safeParse({ generation: 1 }).error }, { tabId: 'tab-4', error: new Error('boom') }]
+    const res = await post({ readings: readings(5) })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data.results).toEqual([{ tabId: 'tab-0', ok: true },
+      { tabId: 'tab-1', error: { code: 'CONTRIBUTION_REVOKED', message: 'Read the current machine contribution.', status: 403 } },
+      { tabId: 'tab-2', error: { ...NOT_AVAILABLE } },
+      { tabId: 'tab-3', error: { code: 'VALIDATION_ERROR', message: expect.any(String), status: 400 } },
+      { tabId: 'tab-4', error: { code: 'INTERNAL_ERROR', message: expect.any(String), status: 500 } }])
+    // Each observation reaches the store as sent: it is checked there, Swarm by Swarm.
+    expect(calls).toEqual([{ machineId: 'm1', readings: readings(5) }])
+  })
+
+  it(`takes up to ${READINGS_MAX} readings, each Swarm once, and refuses any other body before reaching the store`, async () => {
+    expect((await post({ readings: readings(READINGS_MAX) })).statusCode).toBe(200)
+    for (const body of [{ readings: readings(READINGS_MAX + 1) }, { readings: [] }, { readings: [...readings(1), ...readings(1)] },
+      { readings: [{ tabId: 'bad id!', observation: {} }] }, { readings: readings(1), extra: true }]) {
+      const res = await post(body)
+      expect(res.statusCode, JSON.stringify(body).slice(0, 80)).toBe(400)
+      expect(res.json().error.code).toBe('VALIDATION_ERROR')
+    }
+    expect(calls).toHaveLength(1)
   })
 })

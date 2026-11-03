@@ -12,6 +12,22 @@ abstract interface class PhoneSignInClient {
   });
 }
 
+/// Signing in by a short code another signed-in device approves: a phone (Settings ▸ Sign in a
+/// computer ▸ Type a code instead) or a computer (Machines ▸ Approve a device). The same approval as
+/// the QR (backend `routes/qrSignIn.ts`), for a computer whose screen a phone cannot reach — a remote
+/// one — or a person with no phone at hand. The CLI's (`harness login --code`).
+abstract interface class CodeSignInClient {
+  /// Shows [onCode] the code to type (again, whenever its life is extended), waits for a device to
+  /// approve it, then asks [onConfirm] whose account it is, as [PhoneSignInClient.loginWithPhone].
+  Future<void> loginWithCode({
+    required void Function(String code, int expiresIn) onCode,
+    required Future<bool> Function(String email) onConfirm,
+  });
+}
+
+/// The two ways in another device approves: a phone scanning the QR, or a code typed elsewhere.
+enum ApprovalSignIn { phone, code }
+
 /// Why a phone sign-in did not finish. [code]: `DENIED` (on the phone), `EXPIRED`, `CANCELLED`
 /// (the person here said no, or went back), `BACKEND_ERROR`, `UNAVAILABLE` (a backend without it).
 class PhoneSignInException implements Exception {

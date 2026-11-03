@@ -3,11 +3,12 @@
  * in the last day and the last 7 days, the waste, and at most three routing changes for its owner to approve, each with its
  * expected saving. Pure: lib/routingReflection.ts reads the attempts (costs/read.ts costRows), failed starts and evidence, and
  * posts the text. Counts only: engines, models, efforts and kinds of work, never a task's title, a message or an id.
- * Nothing here changes routing: a proposal is advice asked of the owner, and an approved one is listed every night until
- * routing applies it by itself (piece 3). No rule kind can express a change per kind of work (rules.ts).
+ * Nothing here changes routing: a proposal is advice asked of the owner, with one fixed Routing line (routingLine). A Yes has
+ * the coordinator write that line into the project's instructions; the reflection reads them, and a proposal whose line is
+ * there is reported with how the last 7 days ran, never asked again (project instructions, phase 4, decision 21). A line
+ * approved lately that is not there yet is listed as approved and not in the instructions yet (final review).
  */
 import { stableId, type Conversation } from '../model.js'
-import { modelMatches, type SwarmRule } from '../rules.js'
 import type { ModelKindEvidence } from '../evidence/store.js'
 import { attemptCost } from './cost.js'
 import { MAX_ROWS, summarizeCosts, type CostRow, type CostSummaryRow } from './read.js'
@@ -55,23 +56,22 @@ export interface ReflectionInput {
   truncated: boolean
   /** Titles of proposals the owner answered in the last REASK_DAYS days: not proposed again until then. */
   decided?: readonly string[]
-  /** Proposals approved in the last APPROVED_DAYS days, with the local date and who decided: the owner, or the PM when the
-   *  owner left it to the PM. Listed every night, and not proposed again while listed. */
-  approved?: readonly Approved[]
-  /** Approvals whose APPROVED_DAYS ended in the last LAPSED_DAYS days: a proposal of the same change says it was approved
-   *  and the last 7 days still route the old way, instead of asking cold (Lead, 10-30). */
-  lapsed?: readonly Approved[]
-  /** The project's routing rules: a change one already makes is not proposed. */
-  rules?: ReadonlyArray<SwarmRule['rule']>
+  /** The project's instructions as they read now (the built-in template for a project without a document yet): a proposal
+   *  whose routing line (routingLine) is in them is reported, not proposed. */
+  document: string
+  /** The routing lines of proposals the owner said Yes to in the last REASK_DAYS days (approvedLine), with the local date of
+   *  the answer, and the coordinator's name when the owner left the answer to it: one not in [document] is listed. */
+  approved?: ReadonlyArray<{ line: string; on: string; leftTo?: string }>
 }
 
 type RanOn = Pick<CostSummaryRow, 'engine' | 'model' | 'effort'>
-/** What a proposal changes, for telling whether a rule already does. */
+/** What a proposal changes: its routing line says it (routingLine). */
 export type Change = { kind: 'cheaper'; taskKind: string; from: RanOn; to: RanOn } | { kind: 'stop'; taskKind: string; from: RanOn }
   | { kind: 'grid'; taskKind: string }
-/** A routing change for the owner: what, why, what it would save a week in dollars (API-equivalent) and hours to ship, and
- *  whether its evidence is strong enough to recommend Yes. */
-export interface Proposal { title: string; why: string; saving: string; dollars: number; hours: number; strong: boolean; change: Change }
+/** A routing change for the owner: what, why, what it would save a week in dollars (API-equivalent) and hours to ship,
+ *  whether its evidence is strong enough to recommend Yes, and how many tasks of its kind the last 7 days ran the old way. */
+export interface Proposal { title: string; why: string; saving: string; dollars: number; hours: number; strong: boolean; change: Change
+  ran: { tasks: number; on: string } }
 export interface Reflection {
   /** The report with no note on its proposals. */
   text: string
@@ -81,11 +81,6 @@ export interface Reflection {
 }
 /** Days an answered proposal is not proposed again. */
 export const REASK_DAYS = 14
-/** Days an approved proposal is listed and reminded each night; after that it may be proposed again (Lead's ruling). */
-export const APPROVED_DAYS = 30
-export interface Approved { title: string; on: string; by: 'owner' | 'pm' }
-/** Days after an approval's APPROVED_DAYS during which a proposal of the same change recalls it: the report's own week. */
-export const LAPSED_DAYS = 7
 /** The zone of a project that set no digest: the owner's time zone is stored nowhere; the digest's is the one a project sets. */
 export const DEFAULT_TIME_ZONE = 'Asia/Ho_Chi_Minh'
 /** The local date of [at] in [timeZone], or in the default zone for none or one this runtime does not know. */
@@ -93,18 +88,23 @@ export function localDate(at: number, timeZone: string = DEFAULT_TIME_ZONE): str
   const format = (zone: string) => new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(at)
   try { return format(timeZone) } catch { return format(DEFAULT_TIME_ZONE) }
 }
-const decidedBy = (a: Approved) => `${a.by === 'pm' ? 'PM decided' : 'approved'} ${a.on}`
-/** The Lead's nightly reminder of what was approved: it routes this way until routing does it by itself. */
-export const approvedReminder = (approved: readonly Approved[]): string =>
-  ['Approved routing changes: route this way until routing does it by itself. This reminder repeats each night for 30 days after each approval.',
-    ...approved.map(a => `- ${a.title} (${decidedBy(a)})`)].join('\n')
-
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 const usd = (n: number) => `$${n.toFixed(2)}`
 const percent = (rate: number) => `${Math.round(rate * 100)}%`
 const cents = (n: number) => Math.round(n * 100) / 100
 const tenths = (n: number) => Math.round(n * 10) / 10
 const ranOn = (r: RanOn) => `${r.engine} ${r.model} ${r.effort}`
+const capital = (text: string) => `${text.slice(0, 1).toUpperCase()}${text.slice(1)}`
+const cut = (text: string, max: number) => text.length <= max ? text : `${text.slice(0, max - 1)}…`
+
+/** The one fixed Routing line a proposal carries: what a Yes has the coordinator write into the instructions, and what the
+ *  reflection looks for there. Models as the report names them. */
+export function routingLine(p: Pick<Proposal, 'change'>): string {
+  const c = p.change, kind = capital(c.taskKind)
+  return c.kind === 'cheaper' ? `${kind} work runs on ${ranOn(c.to)} instead of ${ranOn(c.from)}.`
+    : c.kind === 'stop' ? `${kind} work no longer runs on ${ranOn(c.from)}.`
+    : `${kind} work starts on a subscription model, not on the grid.`
+}
 const passed = (r: CostSummaryRow) => `${r.firstReviewPassed} of ${r.firstReviews} (${percent(r.firstReviewPassRate!)})`
 const atApi = 'a week at API prices'
 
@@ -117,7 +117,7 @@ function line(r: CostSummaryRow): string {
 }
 
 /** Per kind, the tasks whose grid attempt failed and stepped up: how many, and the grid attempts' hours and cost. Also how
- *  many tasks of the kind started on the grid. A step up is the attempt that carries it (stepUp.ts); the grid attempts
+ *  many tasks of the kind started on the grid. A step up is the attempt that carries it (decisions from before project instructions); the grid attempts
  *  before it in its task are what it replaced. */
 function gridStepUps(rows: CostRow[], now: number) {
   const byGroup = new Map<string, CostRow[]>()
@@ -167,7 +167,7 @@ function proposals(rows: CostSummaryRow[], grid: ReturnType<typeof gridStepUps>)
         + `${usd(dear.costPerShipped!)} per shipped change at API prices.`
         + (strong ? '' : ` Small samples (${dear.firstReviews} and ${cheap.firstReviews} first reviews): the difference may be chance.`),
       saving: `about ${usd(dollars)} ${atApi}`, dollars, hours: 0, strong,
-      change: { kind: 'cheaper', taskKind: kind, from: pick(dear), to: pick(cheap) } })
+      change: { kind: 'cheaper', taskKind: kind, from: pick(dear), to: pick(cheap) }, ran: { tasks: dear.attempts, on: ranOn(dear) } })
   }
   // A model whose first review clearly fails more often than it passes on a kind of work: even the top of its range is low.
   for (const r of known) {
@@ -179,7 +179,7 @@ function proposals(rows: CostSummaryRow[], grid: ReturnType<typeof gridStepUps>)
         + (strong ? '' : ` Only ${r.firstReviews} first reviews.`),
       saving: dollars ? `about ${usd(dollars)} ${atApi} of attempts that failed their first review`
         : `${plural(failed, 'attempt')} a week that failed their first review`, dollars, hours: 0, strong,
-      change: { kind: 'stop', taskKind: r.kind, from: pick(r) } })
+      change: { kind: 'stop', taskKind: r.kind, from: pick(r) }, ran: { tasks: r.attempts, on: ranOn(r) } })
   }
   // A kind whose tasks keep stepping up from the grid.
   for (const [kind, k] of grid) {
@@ -189,18 +189,12 @@ function proposals(rows: CostSummaryRow[], grid: ReturnType<typeof gridStepUps>)
       why: `${k.stepped} of ${k.tasks} ${kind} tasks started on the grid stepped up after their grid attempt failed.`
         + (strong ? '' : ` Only ${k.tasks} tasks.`),
       saving: `about ${dollars ? `${usd(dollars)} at API prices and ` : ''}${hours} hours to ship a week`, dollars, hours, strong,
-      change: { kind: 'grid', taskKind: kind } })
+      change: { kind: 'grid', taskKind: kind }, ran: { tasks: k.tasks, on: 'the grid' } })
   }
   return found.sort((a, b) => b.dollars - a.dollars || b.hours - a.hours)
 }
 
 const pick = (r: RanOn): RanOn => ({ engine: r.engine, model: r.model, effort: r.effort })
-
-/** Whether one of the project's rules already makes this change: a forbidden model it moves work away from, or no grid first. */
-function ruled(change: Change, rules: ReadonlyArray<SwarmRule['rule']>): boolean {
-  return rules.some(rule => change.kind === 'grid' ? rule.kind === 'noGridFirst'
-    : rule.kind === 'forbidModel' && (!rule.engine || rule.engine === change.from.engine) && modelMatches(rule.model, change.from.model))
-}
 
 function waste(input: ReflectionInput, grid: ReturnType<typeof gridStepUps>, stepUps: number): string {
   const failed = new Map<string, number>()
@@ -225,22 +219,20 @@ function waste(input: ReflectionInput, grid: ReturnType<typeof gridStepUps>, ste
 }
 
 /** The night's report, or null when the last day had no attempt and no failed start: then nothing is posted. At most
- *  MAX_PROPOSALS proposals, the largest saving first, leaving out those the owner answered lately, approved, or a rule makes. */
+ *  MAX_PROPOSALS proposals, the largest saving first, leaving out those the owner answered lately; one whose line the
+ *  instructions hold is reported with how the last 7 days ran instead. A reworded line is not recognized: proposed again. */
 export function routingReflection(input: ReflectionInput): Reflection | null {
   const since = input.now - DAY
   const dayRows = input.rows.filter(r => r.run.startedAt >= since)
   if (!dayRows.length && !input.failedStarts.some(f => f.at >= since)) return null
   const week = summarizeCosts(input.rows, input.groups), day = summarizeCosts(dayRows, input.groups)
   const grid = gridStepUps(input.rows, input.now)
-  const approved = input.approved ?? []
-  const settled = new Set([...input.decided ?? [], ...approved.map(a => a.title)])
-  const lapsed = new Map((input.lapsed ?? []).map(a => [a.title, a]))
-  // A proposal comes from the last 7 days: one of a lapsed approval means those days still routed the old way.
-  const recalled = (p: Proposal): Proposal => {
-    const a = lapsed.get(p.title)
-    return a ? { ...p, why: `${a.by === 'pm' ? 'PM decided' : 'Approved'} on ${a.on}; the last 7 days still route the old way. ${p.why}` } : p
-  }
-  const proposed = proposals(week.rows, grid).filter(p => !settled.has(p.title) && !ruled(p.change, input.rules ?? [])).slice(0, MAX_PROPOSALS).map(recalled)
+  const decided = new Set(input.decided ?? [])
+  const all = proposals(week.rows, grid)
+  const written = all.filter(p => input.document.includes(routingLine(p)))
+  // A Yes writes nothing by itself: the coordinator writes the line, and until it is in the instructions each report says so.
+  const pending = (input.approved ?? []).filter((a, i, all) => !input.document.includes(a.line) && all.findIndex(b => b.line === a.line) === i)
+  const proposed = all.filter(p => !written.includes(p) && !decided.has(p.title)).slice(0, MAX_PROPOSALS)
   const table = [...week.rows].sort((a, b) => b.attempts - a.attempts)
   const render = (note: (p: Proposal) => string | null) => [
     'Routing reflection: what routed work cost and how it went. Counts only; routing changes only as the project owner approves.',
@@ -249,8 +241,8 @@ export function routingReflection(input: ReflectionInput): Reflection | null {
     ...table.slice(0, MAX_LINES).map(line),
     ...table.length > MAX_LINES ? [`- and ${table.length - MAX_LINES} more`] : [],
     waste(input, grid, week.totals.stepUps),
-    ...approved.length ? ['Approved changes: the Lead is reminded each night and routes this way; each is listed for 30 days:',
-      ...approved.map(a => `- ${a.title} (${decidedBy(a)})`)] : [],
+    ...written.map(p => `In the instructions: ${routingLine(p)} The last 7 days ran ${plural(p.ran.tasks, `${p.change.taskKind} task`)} on ${p.ran.on}.`),
+    ...pending.map(a => `Approved ${a.on}${a.leftTo ? ` (left to the ${a.leftTo})` : ''}; not in the instructions yet: ${a.line}`),
     ...proposed.length ? ['Proposed changes (advice: no rule or setting changes by itself):',
       ...proposed.map((p, i) => { const n = note(p); return `${i + 1}. ${p.title}: ${p.saving}. ${p.why}${n ? ` ${n}` : ''}` })]
       : ['No change proposed.'],
@@ -264,14 +256,24 @@ export const reflectionMessageId = (tabId: string, projectId: string, on: string
 
 /** The answer that approves a proposal. */
 export const APPROVE = 0
+/** What an asked proposal's unblocks says before its routing line. */
+const YES_WRITES = 'If you say yes, the coordinator writes into Routing, naming you as who asked: '
 /** A proposal asked of the project owner as a decision. The question starts with the proposal's title, so a proposal waiting
- *  for an answer, answered lately or approved is told by it (proposalTitle). It says plainly what Yes does: nothing changes
- *  by itself; the Lead is reminded each night and routes this way (reviews of #2276). */
+ *  for an answer or answered lately is told by it (proposalTitle). It says plainly what Yes does: the coordinator writes the
+ *  proposal's line into the Routing section of the instructions, naming the owner as who asked (project instructions, phase 4,
+ *  decision 21; the template's PM section says so). */
 export const proposalQuestion = (p: Proposal) => ({ question: `${p.title}? Expected saving: ${p.saving}. ${p.why}`,
-  options: ['Yes: the Lead is reminded each night and routes this way; nothing changes by itself', 'No: keep routing as it is',
+  options: ['Yes: the coordinator writes this into the Routing section of the instructions', 'No: keep routing as it is',
     'Not yet: ask again when there is more evidence'],
   recommended: p.strong ? APPROVE : 2,
-  unblocks: `If you say yes, the Lead is reminded each night for ${APPROVED_DAYS} days and routes ${p.change.taskKind} work this way. `
-    + 'No rule or setting changes.' })
+  // A decision's unblocks is at most 300 characters (decisions.ts decisionChoices); only a model slug that long cuts the line.
+  unblocks: cut(`${YES_WRITES}${routingLine(p)}`, 300) })
+/** The routing line an asked proposal's unblocks names (proposalQuestion), or null for a decision asked before it named one.
+ *  A line cut to fit loses its ellipsis, so its start is still found in the instructions. */
+export function approvedLine(unblocks: string): string | null {
+  if (!unblocks.startsWith(YES_WRITES)) return null
+  const line = unblocks.slice(YES_WRITES.length)
+  return line.endsWith('…') ? line.slice(0, -1) : line
+}
 /** The proposal a decision asked, by the title its question starts with. */
 export const proposalTitle = (question: string): string => question.slice(0, Math.max(0, question.indexOf('?')))

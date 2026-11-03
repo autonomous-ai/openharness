@@ -14,7 +14,7 @@
  * an offline machine is listed but cannot be taken: there is nothing there to open a shell on.
  */
 import { randomUUID } from 'node:crypto'
-import { localCredentialHeaders } from './lib/localCredential.js'
+import { openLocalWs } from './lib/localTransport.js'
 import { env } from './config/env.js'
 import { emitKeypressEvents } from 'node:readline'
 import { WebSocket } from 'ws'
@@ -59,7 +59,7 @@ export interface RemoteCommandDeps {
   output: NodeJS.WriteStream & { isTTY?: boolean }
   error: (line: string) => void
   /** Test seam: what opens a loopback socket. */
-  connect?: (url: string) => LoopbackSocket
+  connect?: (url: string, headers: Record<string, string>) => LoopbackSocket
 }
 
 /** The slice of `ws.WebSocket` the loopback client uses — a test stands one in. */
@@ -148,9 +148,10 @@ export class LoopbackClient {
   private readonly socket: LoopbackSocket
   private readonly opened: Promise<void>
 
-  constructor(url: string, connect: (url: string) => LoopbackSocket = (target) =>
-    new WebSocket(target, { headers: localCredentialHeaders(env.ADAPTER_DATA_DIR) }) as unknown as LoopbackSocket) {
-    this.socket = connect(url)
+  /** To the daemon on [port]: its socket, or on Windows its pipe, never the port (lib/localTransport.ts `openLocalWs`). */
+  constructor(port: number, connect: (url: string, headers: Record<string, string>) => LoopbackSocket = (target, headers) =>
+    new WebSocket(target, { headers }) as unknown as LoopbackSocket, dataDir: string = env.ADAPTER_DATA_DIR) {
+    this.socket = openLocalWs(dataDir, port, connect)
     this.opened = new Promise((resolve, reject) => {
       this.socket.on('open', () => resolve())
       this.socket.on('error', (error) => reject(new LoopbackError('DAEMON_UNREACHABLE', error.message)))
@@ -225,13 +226,9 @@ export class LoopbackClient {
   }
 }
 
-export function loopbackUrl(port: number): string {
-  return `ws://127.0.0.1:${port}/api/local-ws`
-}
-
 /** A `terminal` agent on [machineId], created the way the desktop's ⌘⇧T creates one: at home. */
 export async function openRemoteTerminal(deps: Pick<RemoteCommandDeps, 'port' | 'connect'>, machineId: string): Promise<string> {
-  const client = new LoopbackClient(loopbackUrl(deps.port), deps.connect)
+  const client = new LoopbackClient(deps.port, deps.connect)
   try {
     await client.select(machineId)
     const created = await client.rpc('agent_create', { engine: 'terminal', bypassPermission: false })
@@ -249,7 +246,7 @@ export async function handoffTerminal(
   localMachineId: string,
   handoff: { tmuxPane: string; machineId: string; agentId: string },
 ): Promise<{ fromAgentId: string; windows: number }> {
-  const client = new LoopbackClient(loopbackUrl(deps.port), deps.connect)
+  const client = new LoopbackClient(deps.port, deps.connect)
   try {
     await client.select(localMachineId)
     const reply = await client.rpc('remote_terminal_handoff', handoff, 10_000)

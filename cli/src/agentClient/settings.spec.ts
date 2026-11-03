@@ -1,9 +1,13 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import { loadOrCreateHookCredential } from '../lib/hookAuth.js'
 import { settingsCommand, SETTINGS_SIGNED_OUT, SETTINGS_USAGE } from './settings.js'
+
+// A folder too long for a socket now has one under the home folder: only a home too long as well is left on the port.
+beforeEach(() => { vi.stubEnv('HOME', `/${'h'.repeat(120)}`) })
+afterEach(() => { vi.unstubAllEnvs() })
 
 /** This computer's daemon as `harness settings` meets it: its answers to `/api/agent-settings`, and what was asked. */
 function daemon(answer: (method: string, body: unknown) => { status: number; body: unknown } | Error, env: NodeJS.ProcessEnv = {}) {
@@ -122,8 +126,9 @@ describe('harness settings', () => {
     expect(d.asked).toEqual([])
   })
 
-  it('shows the daemon this OS user\'s local credential, which its loopback port wants', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'settings-cred-'))
+  it('shows the daemon this OS user\'s local credential only where no socket can exist', async () => {
+    const dataDir = join(mkdtempSync(join(tmpdir(), 'settings-cred-')), 'd'.repeat(100))
+    mkdirSync(dataDir, { mode: 0o700 })
     try {
       const credential = loadOrCreateHookCredential(dataDir)
       const asked: Record<string, string>[] = []

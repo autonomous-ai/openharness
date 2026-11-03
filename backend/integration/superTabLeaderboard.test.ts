@@ -56,7 +56,7 @@ afterAll(async () => {
 
 /** A Swarm in parts: peer's request shipped this week, peer's request shipped last week and gone dormant, a private chat
  *  that carries a ship record, a private project with its own shipped request, and the owner's work waiting on them. */
-async function scene() {
+async function scene(before?: (state: SuperTabState) => void) {
   const s = swarm(NOW)
   s.join(peerActor)
   s.join(outsiderActor)
@@ -82,6 +82,7 @@ async function scene() {
   })
   const tabId = `tab-${randomUUID()}`
   const state = { ...structuredClone(s.state), id: tabId } as SuperTabState
+  before?.(state)
   await writeLegacySwarm(db, { state, revision: 50 })
   const report = await migrateSwarm(db, tabId, { now: () => NOW - 60_000 })
   if (!report.ok) throw new Error(report.error)
@@ -152,6 +153,139 @@ describe('the leaderboard read', () => {
     expect(JSON.stringify(now.body.data)).not.toMatch(/Peer and PM|Hidden/)
     const last = await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&week=${WEEK - WEEK_MS}`, peer)
     expect(score(last.body, peer.sub).details.shipped).toEqual([{ title: 'Old', prUrl: PR, mergedAt: WEEK - 2 * 86_400_000 }])
+  })
+
+  describe('a rolling period', () => {
+    it('sums a shipped request by its exact time and says which period', async () => {
+      const s = await scene()
+      const seven = await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&period=7d`, peer)
+      expect(seven.status).toBe(200)
+      expect(seven.body.data.period).toEqual({ name: '7d', start: NOW + 1 - WEEK_MS, end: NOW })
+      // The dormant group shipped 2 days before this week began: inside the 7 days up to now, whichever week that was.
+      expect(score(seven.body, peer.sub)).toMatchObject({ shipped: { count: 2 }, prevWeekPoints: 0 })
+      const thirty = await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&period=30d`, peer)
+      expect(score(thirty.body, peer.sub)).toMatchObject({ shipped: { count: 2 }, prevWeekPoints: null })
+      expect(thirty.body.data.goal.lastWeek).toBeNull()
+      expect(JSON.stringify(thirty.body.data)).not.toMatch(/Peer and PM|Hidden/)
+      const day = await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&period=24h`, peer)
+      expect(score(day.body, peer.sub).shipped.count).toBe(1)
+    })
+
+    it('reads Lent and verdicts stored in parts: an older week once, days and hours beside it, and no other read carries the days', async () => {
+      const s = await scene(state => {
+        const day = Math.floor(NOW / 86_400_000) * 86_400_000
+        state.machines = [{ machineId: 'peer-mac', name: 'Peer Mac', contributorId: peer.sub, membershipGeneration: state.people.find(p => p.id === peer.sub)!.generation, generation: 'g1',
+          cwd: '/repo', engines: ['claude'], maxAgents: 2, paused: false, lent: [{ week: WEEK - WEEK_MS, busyMs: 20 * HOUR }], lentDays: [{ day, projectId: 'lead', busyMs: 10 * HOUR }] }]
+        state.conversations.find(c => c.title === 'Fresh')!.ledger!.reviewHours = [{ hour: NOW - HOUR, engine: 'claude', model: 'opus', effort: 'high', count: 2 }]
+        state.conversations.find(c => c.title === 'Fresh')!.ledger!.reviews = [{ week: WEEK - WEEK_MS, engine: 'claude', model: 'opus', effort: 'high', count: 3 }]
+      })
+      const url = `/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&period=30d`
+      const first = await get(url, peer)
+      expect(score(first.body, peer.sub).lent).toEqual({ machines: 1, agentMs: 30 * HOUR })
+      expect(first.body.data.byModel.find((m: { model: string }) => m.model === 'opus')).toMatchObject({ reviews: 5 })
+      expect((await get(url, peer)).body.data).toEqual(first.body.data)
+      // A week's read is as it was.
+      const week = await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&week=${WEEK - WEEK_MS}`, peer)
+      expect(score(week.body, peer.sub).lent.agentMs).toBe(20 * HOUR)
+      const parts = await get(`/api/super-tabs/${s.tabId}/parts`, peer)
+      expect(JSON.stringify(parts.body.data)).not.toMatch(/lentDays|reviewHours/)
+    })
+
+    it('All projects sums what the reader may read: a private project counts for its reader, and nothing of it reaches anyone else', async () => {
+      const s = await scene()
+      const url = `/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&period=30d`
+      // Peer's own request in the private project they cannot read.
+      const asOwner = await get(`${url}&scope=all`, owner), asOutsider = await get(`${url}&scope=all`, outsider)
+      expect(asOwner.body.data.allProjects).toBe(true)
+      expect(score(asOwner.body, peer.sub).shipped.count).toBe(3)
+      expect(score(asOutsider.body, peer.sub).shipped.count).toBe(2)
+      expect(JSON.stringify(asOutsider.body.data)).not.toMatch(/Hidden|Secret/)
+      expect(JSON.stringify(asOutsider.body.data)).not.toContain(s.secret)
+      expect(asOwner.body.data.goal.thisWeek.shipped).toBe(3)
+      // A private chat's ship record counts for no one, whatever the scope.
+      expect(JSON.stringify(asOwner.body.data)).not.toMatch(/Peer and PM/)
+      const one = await get(url, owner)
+      expect(score(one.body, peer.sub).shipped.count).toBe(2)
+      expect(one.body.data).not.toHaveProperty('allProjects')
+    })
+
+    it('All projects adds Lent earned on a private project only for who reads it', async () => {
+      const s = await scene(state => {
+        const secret = state.projects!.find(p => p.name === 'Secret')!
+        state.machines = [{ machineId: 'peer-mac', name: 'Peer Mac', contributorId: peer.sub, membershipGeneration: state.people.find(p => p.id === peer.sub)!.generation, generation: 'g1',
+          cwd: '/repo', engines: ['claude'], maxAgents: 2, paused: false, lentDays: [{ day: Math.floor(NOW / 86_400_000) * 86_400_000, projectId: secret.id, busyMs: 30 * HOUR }] }]
+      })
+      const url = `/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&period=30d&scope=all`
+      expect(score((await get(url, owner)).body, peer.sub).lent).toEqual({ machines: 1, agentMs: 30 * HOUR })
+      const outsiders = await get(url, outsider)
+      expect(score(outsiders.body, peer.sub).lent).toEqual({ machines: 0, agentMs: 0 })
+      expect(score(outsiders.body, peer.sub).details.lent).toEqual([])
+    })
+
+    it('All projects sums a Swarm from before projects, whose list is not stored', async () => {
+      const s = await scene(state => {
+        const secret = state.projects!.find(p => p.name === 'Secret')!
+        state.conversations = state.conversations.filter(c => c.projectId !== secret.id)
+        state.agents = state.agents.filter(a => state.conversations.some(c => c.agentIds.includes(a.id)))
+        delete state.projects
+      })
+      const { status, body } = await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&period=7d&scope=all`, peer)
+      expect(status).toBe(200)
+      expect(score(body, peer.sub).shipped.count).toBeGreaterThan(0)
+    })
+
+    it('All projects names a private project\'s PM only to who reads that project', async () => {
+      const s = await scene(state => {
+        const project = state.projects!.find(p => p.name === 'Secret')!
+        const lead = state.conversations.find(c => c.id === project.leadConversationId)!
+        const pm = { ...state.agents[0]!, id: 'secret-pm', harnessId: 'secret-pm-harness', name: 'Secret PM', displayName: 'Secret PM' }
+        state.agents.push(pm)
+        lead.leadId = pm.id
+        lead.agentIds = [pm.id]
+      })
+      const url = `/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&period=7d&scope=all`
+      expect(JSON.stringify((await get(url, owner)).body.data.agents)).toContain('Secret PM')
+      expect(JSON.stringify((await get(url, outsider)).body.data)).not.toContain('Secret PM')
+    })
+
+    it('reads All projects\' dormant groups too, and refuses it for a week', async () => {
+      const s = await scene(state => {
+        const secret = state.conversations.find(c => c.title === 'Hidden')!
+        Object.assign(secret, { dormant: true, lastActivityAt: new Date(NOW - 2 * HOUR).toISOString() })
+      })
+      const url = `/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&period=7d&scope=all`
+      expect(score((await get(url, owner)).body, peer.sub).details.shipped.map((d: { title: string }) => d.title)).toContain('Hidden')
+      expect((await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&scope=all`)).status).toBe(400)
+    })
+
+    it('answers the same whatever the reader asks twice', async () => {
+      const s = await scene()
+      const url = `/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&period=30d`
+      expect((await get(url)).body.data).toEqual((await get(url)).body.data)
+    })
+
+    it('keeps a private project\'s board to its readers, refused as any other id is', async () => {
+      const s = await scene()
+      const secret = await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=${s.secret}&period=7d`, outsider)
+      const unknown = await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=no-such-project&period=7d`, outsider)
+      expect(secret.status).toBe(404)
+      expect(unknown.status).toBe(404)
+      expect(secret.body.error).toEqual(unknown.body.error)
+    })
+
+    it('refuses an unknown period, and a week and period together', async () => {
+      const s = await scene()
+      expect((await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&period=90d`)).status).toBe(400)
+      expect((await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&period=7d&week=${WEEK}`)).status).toBe(400)
+    })
+
+    it('still answers an older app that asks for a week, with no period in it', async () => {
+      const s = await scene()
+      const { status, body } = await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead`)
+      expect(status).toBe(200)
+      expect(body.data).toMatchObject({ week: WEEK })
+      expect(body.data).not.toHaveProperty('period')
+    })
   })
 
   it('leaves the ledger out of the groups every reader loads', async () => {

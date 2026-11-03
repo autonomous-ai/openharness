@@ -104,3 +104,9 @@ describe('a Harness Team account on a build too old for its owner\'s subscriptio
     expect(validCreationId(refreshCreationId())).toBe(true)
   })
 })
+
+it('waits for a status read that happens off the main thread (audit W4)', async () => {
+  const look = vi.fn(() => null)
+  await refreshTeamAccount(deps({ status: async () => { await new Promise((r) => setTimeout(r, 5)); return signedOut(2_000) }, lastTry: look }))
+  expect(look).toHaveBeenCalled()
+})
