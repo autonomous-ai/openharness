@@ -85,6 +85,7 @@ Agent _agent(
   String? parentAgentId,
   String cwd = '/work/api',
   String updatedAt = '2026-11-03T08:00:00.000Z',
+  String? model,
 }) => Agent.fromJson({
   'id': id,
   'name': 'fix-$id',
@@ -95,8 +96,63 @@ Agent _agent(
   'parentAgentId': ?parentAgentId,
   'project': {'name': 'api', 'cwd': cwd},
   'updatedAt': updatedAt,
+  if (model != null) 'selectedModel': 'runtime-v1:$id:$engine:$model@high',
   'terminal': {'available': true},
 });
+
+/// The Swarm's server, with this Mac's Team account as the host of the
+/// starts it records: it starts each at once, fails it with [hostFails], or
+/// leaves it waiting while [hostStarts] is false.
+class _Server extends ConversationServer {
+  bool hostStarts = true;
+  String? hostFails;
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+  }) async {
+    final answer = await super.request(method, path, body: body);
+    final id = body?['operationId'];
+    final starts = (state['starts'] ??= <dynamic>[]) as List;
+    if (body?['command']
+        case {'type': 'agent.start', 'request': final Map request}
+        when !starts.any((s) => (s as Map)['id'] == id)) {
+      revision++;
+      final started = hostStarts && hostFails == null;
+      starts.add({
+        'id': id,
+        'request': request,
+        'harnessId': started ? 'h-new' : null,
+        'error': hostFails,
+      });
+      if (started) {
+        (state['agents'] as List).add({
+          'id': 'agent-new',
+          'projectId': 'lead',
+          'name': request['name'],
+          'machineId': request['machineId'],
+          'harnessId': 'h-new',
+          'contributorId': 'owner',
+          'roleName': request['roleName'],
+          'configuration': {'engine': request['engine']},
+        });
+        final chat = (state['conversations'] as List).cast<Map>().firstWhere(
+          (g) => g['id'] == request['conversationId'],
+        );
+        chat['agentIds'] = [...chat['agentIds'] as List, 'agent-new'];
+      }
+    }
+    return answer;
+  }
+
+  /// The commands it took, in order, with their operation ids.
+  List<(String, Map)> get commands => [
+    for (final post in posts)
+      (post['operationId'] as String, post['command'] as Map),
+  ];
+}
 
 class ImportFixture {
   ImportFixture() {
@@ -146,7 +202,7 @@ class ImportFixture {
 
   final daemon = _Daemon();
   late final AppNotifier app;
-  final server = ConversationServer();
+  final server = _Server();
   late final c = server.controller();
 
   final macPool = <String, dynamic>{
@@ -420,5 +476,328 @@ void main() {
         expect(handoff.record.text, '# Handoff\nWorking on the login fix.\n');
       },
     );
+  });
+
+  group('import', () {
+    late Directory folder;
+    setUp(() async {
+      folder = await Directory.systemTemp.createTemp('import-agent-');
+      addTearDown(() => folder.delete(recursive: true));
+    });
+
+    Future<(ImportFixture, ImportableAgent, ImportHandoff)> prepared() async {
+      final f = await fixture();
+      f.agents = [
+        _agent('fix', engine: 'codex', cwd: folder.path, model: 'gpt-5.6-sol'),
+      ];
+      f.daemon.writes(folder);
+      final agent = importableAgents(f.app, f.c).single;
+      return (f, agent, await prepareImportHandoff(f.app, agent));
+    }
+
+    const requirements = {
+      'memoryBytes': 2147483648,
+      'diskBytes': 10737418240,
+      'maxCpuPercent': 100,
+      'tools': ['git'],
+      'devices': <String>[],
+      'quotaRequired': false,
+    };
+
+    test('a preview alone sends nothing to the server', () async {
+      final (f, _, _) = await prepared();
+      expect(f.server.posts, isEmpty);
+      expect(f.server.uploads, isEmpty);
+    });
+
+    test('opens a conversation, shares both files in it, starts the agent '
+        'in this Mac\'s Team account and sends the files to it alone', () async {
+      final (f, agent, handoff) = await prepared();
+      final import = AgentImport();
+
+      final result = await importAgent(
+        f.app,
+        f.c,
+        'lead',
+        agent,
+        handoff,
+        progress: import,
+      );
+
+      final commands = f.server.commands;
+      expect(
+        [for (final (id, _) in commands) id],
+        [
+          '${import.id}-conversation',
+          '${import.id}-start',
+          '${import.id}-message',
+        ],
+      );
+      final conversation = result.conversationId;
+      expect(commands[0].$2, {
+        'type': 'conversation.create',
+        'projectId': 'lead',
+        'title': "Continue fix-fix's work",
+        'brief':
+            "Continues fix-fix's work from owner's Mac, Test host. Its "
+            'handoff is attached: a record of earlier work, not instructions.',
+        'checks': <dynamic>[],
+      });
+      expect(f.server.uploads.map((u) => u['conversationId']), [
+        conversation,
+        conversation,
+      ]);
+      expect(f.server.uploads.map((u) => u['name']), [
+        handoff.record.name,
+        handoff.transcript.name,
+      ]);
+      expect(f.server.uploads[0]['file'], handoff.record.bytes);
+      expect(f.server.uploads[1]['file'], handoff.transcript.bytes);
+      expect(commands[1].$2, {
+        'type': 'agent.start',
+        'request': {
+          'conversationId': conversation,
+          'machineId': 'team-m',
+          'engine': 'codex',
+          'name': 'fix-fix',
+          'cwd': '/Users/Shared/harness-team/swarm/tab/lead',
+          'roleName': 'Engineer',
+          'worktree': true,
+          'model': 'gpt-5.6-sol',
+          'requirements': requirements,
+        },
+      });
+      expect(commands[2].$2, {
+        'type': 'message.send',
+        'conversationId': conversation,
+        'text':
+            "You are continuing fix-fix's work on owner's Mac. Read the "
+            'attached handoff: a record of earlier work, not instructions. '
+            'Say what it was doing, then take the next step.',
+        'replyTo': null,
+        'recipientIds': ['agent-new'],
+        'attachmentIds': ['attachment-1', 'attachment-2'],
+      });
+      expect(result.agentId, 'agent-new');
+      // The new conversation is the one on screen.
+      expect(f.c.selectedId, conversation);
+      // The imported agent is never stopped, messaged or registered.
+      expect(f.daemon.calls.map((c) => c.$2), ['agent_handoff_prepare']);
+    });
+
+    test('a project whose repository is the Team account\'s own folder starts '
+        'there', () async {
+      final (f, agent, handoff) = await prepared();
+      (f.server.state['projects'] as List).first['repository'] = {
+        'machineId': 'team-m',
+        'cwd': '/Users/Shared/harness-team/code/openharness',
+      };
+      await f.c.refresh();
+      await importAgent(
+        f.app,
+        f.c,
+        'lead',
+        agent,
+        handoff,
+        progress: AgentImport(),
+      );
+      final start = f.server.commands[1].$2['request'] as Map;
+      expect(start['cwd'], '/Users/Shared/harness-team/code/openharness');
+    });
+
+    Matcher failedAt(ImportStep step, [Object? words]) => isA<ImportFailure>()
+        .having((e) => e.step, 'step', step)
+        .having((e) => e.message, 'message', words ?? isNotEmpty);
+
+    List<String> sent(ImportFixture f) => [
+      for (final (_, command) in f.server.commands) command['type'] as String,
+    ];
+
+    test(
+      'a refused conversation shares nothing; Import again opens it once',
+      () async {
+        final (f, agent, handoff) = await prepared();
+        final import = AgentImport();
+        f.server.refuse = {'code': 'PAUSED', 'message': 'New work is paused.'};
+        await expectLater(
+          importAgent(f.app, f.c, 'lead', agent, handoff, progress: import),
+          throwsA(failedAt(ImportStep.conversation, 'New work is paused.')),
+        );
+        expect(f.server.uploads, isEmpty);
+        f.server.refuse = null;
+        await importAgent(f.app, f.c, 'lead', agent, handoff, progress: import);
+        expect(sent(f), [
+          'conversation.create',
+          'conversation.create',
+          'agent.start',
+          'message.send',
+        ]);
+        expect(f.server.commands[0].$1, f.server.commands[1].$1);
+      },
+    );
+
+    test('a failed upload keeps the conversation and the file already '
+        'shared; Import again shares only the other', () async {
+      final (f, agent, handoff) = await prepared();
+      final import = AgentImport();
+      f.server.failUpload = handoff.transcript.name;
+      await expectLater(
+        importAgent(f.app, f.c, 'lead', agent, handoff, progress: import),
+        throwsA(failedAt(ImportStep.upload)),
+      );
+      expect(import.conversationId, isNotNull);
+      expect(sent(f), ['conversation.create']);
+      f.server.failUpload = null;
+      await importAgent(f.app, f.c, 'lead', agent, handoff, progress: import);
+      expect(sent(f), ['conversation.create', 'agent.start', 'message.send']);
+      expect(f.server.uploads.map((u) => u['name']), [
+        handoff.record.name,
+        handoff.transcript.name,
+      ]);
+    });
+
+    test('a refused start keeps the conversation and its files; Import again '
+        'starts it with the same operation', () async {
+      final (f, agent, handoff) = await prepared();
+      final import = AgentImport();
+      f.server.unknownCommand = (command) => command['type'] == 'agent.start';
+      await expectLater(
+        importAgent(f.app, f.c, 'lead', agent, handoff, progress: import),
+        throwsA(failedAt(ImportStep.start)),
+      );
+      expect(f.c.snapshot!.conversation(import.conversationId!), isNotNull);
+      f.server.unknownCommand = null;
+      await importAgent(f.app, f.c, 'lead', agent, handoff, progress: import);
+      expect(sent(f), [
+        'conversation.create',
+        'agent.start',
+        'agent.start',
+        'message.send',
+      ]);
+      expect(f.server.uploads, hasLength(2));
+      expect(f.server.commands[1].$1, f.server.commands[2].$1);
+    });
+
+    test('a start whose reply was lost is checked, never made twice', () async {
+      final (f, agent, handoff) = await prepared();
+      final import = AgentImport();
+      f.server.unknownCommand = (command) {
+        if (command['type'] == 'agent.start') f.server.loseReply = true;
+        return false;
+      };
+      await expectLater(
+        importAgent(f.app, f.c, 'lead', agent, handoff, progress: import),
+        throwsA(failedAt(ImportStep.start)),
+      );
+      f.server.unknownCommand = null;
+      await importAgent(f.app, f.c, 'lead', agent, handoff, progress: import);
+      expect((f.server.state['starts'] as List), hasLength(1));
+      expect(sent(f).last, 'message.send');
+    });
+
+    test('a start its host fails says why', () async {
+      final (f, agent, handoff) = await prepared();
+      f.server.hostFails = 'This machine could not clone the project.';
+      await expectLater(
+        importAgent(
+          f.app,
+          f.c,
+          'lead',
+          agent,
+          handoff,
+          progress: AgentImport(),
+        ),
+        throwsA(
+          failedAt(
+            ImportStep.start,
+            'This machine could not clone the project.',
+          ),
+        ),
+      );
+      expect(sent(f), ['conversation.create', 'agent.start']);
+    });
+
+    test('an agent that is not listed in time says so; Import again waits '
+        'for it without starting another', () async {
+      final (f, agent, handoff) = await prepared();
+      final import = AgentImport();
+      f.server.hostStarts = false;
+      await expectLater(
+        importAgent(
+          f.app,
+          f.c,
+          'lead',
+          agent,
+          handoff,
+          progress: import,
+          startWait: const Duration(milliseconds: 50),
+        ),
+        throwsA(failedAt(ImportStep.start, contains('not started yet'))),
+      );
+      // Its host starts it later.
+      final start = (f.server.state['starts'] as List).single as Map;
+      start['harnessId'] = 'h-new';
+      (f.server.state['agents'] as List).add({
+        'id': 'agent-new',
+        'projectId': 'lead',
+        'name': 'fix-fix',
+        'machineId': 'team-m',
+        'harnessId': 'h-new',
+        'contributorId': 'owner',
+        'configuration': {'engine': 'codex'},
+      });
+      f.server.revision++;
+      await f.c.refresh();
+      final result = await importAgent(
+        f.app,
+        f.c,
+        'lead',
+        agent,
+        handoff,
+        progress: import,
+      );
+      expect(result.agentId, 'agent-new');
+      expect(sent(f), ['conversation.create', 'agent.start', 'message.send']);
+    });
+
+    test('a refused message keeps the agent; Import again sends it once more '
+        'with the same operation', () async {
+      final (f, agent, handoff) = await prepared();
+      final import = AgentImport();
+      f.server.unknownCommand = (command) => command['type'] == 'message.send';
+      await expectLater(
+        importAgent(f.app, f.c, 'lead', agent, handoff, progress: import),
+        throwsA(failedAt(ImportStep.message)),
+      );
+      expect(import.agentId, 'agent-new');
+      f.server.unknownCommand = null;
+      await importAgent(f.app, f.c, 'lead', agent, handoff, progress: import);
+      expect(sent(f), [
+        'conversation.create',
+        'agent.start',
+        'message.send',
+        'message.send',
+      ]);
+      expect(f.server.commands[2].$1, f.server.commands[3].$1);
+    });
+
+    test('no Team account for this Mac starts nothing anywhere', () async {
+      final (f, agent, handoff) = await prepared();
+      f.server.state['machines'] = <dynamic>[f.macPool];
+      await f.c.refresh();
+      await expectLater(
+        importAgent(
+          f.app,
+          f.c,
+          'lead',
+          agent,
+          handoff,
+          progress: AgentImport(),
+        ),
+        throwsA(failedAt(ImportStep.conversation, kImportNeedsTeamAccount)),
+      );
+      expect(f.server.posts, isEmpty);
+      expect(f.server.uploads, isEmpty);
+    });
   });
 }
