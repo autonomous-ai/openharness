@@ -767,7 +767,8 @@ describe('SwarmCards open recaps and recap reads', () => {
   })
 })
 
-/** `web` with its three chats at the given sequences, each conversation's page served from `pages` (newest first or not: the code orders). */
+/** `web` with its three chats at the given sequences, each conversation's page served from `pages` (newest first or not: the code orders);
+ *  a thread's page from `${conversation}#${root}`. */
 /** With `withBuddy`, the Swarm has Buddies on and the reader's Buddy (`y1`, "diego's Buddy" on Codex) is in their `web` chat. */
 function chatSwarm(pages: Record<string, unknown[] | (() => unknown[])>, withBuddy = false, delayMs = 0) {
   const state = (lead = 1, pmSeq = 1, groupSeq = 1) => chats({
@@ -776,7 +777,8 @@ function chatSwarm(pages: Record<string, unknown[] | (() => unknown[])>, withBud
       conv('lead-web', 'a1', { projectId: 'web', lastMessageSequence: lead }), conv('lead-mobile', 'a2', { projectId: 'mobile' }),
       pm({ lastMessageSequence: pmSeq, ...(withBuddy ? { agentIds: ['y1'] } : {}) }), group({ lastMessageSequence: groupSeq })] })
   const t = setup({ t1: { lastChangedAt: 1, state: state() } }, { messages: path => {
-    const page = pages[/conversations\/([^/]+)\/messages/.exec(path)?.[1] ?? ''] ?? []
+    const id = /conversations\/([^/]+)\/messages/.exec(path)?.[1] ?? '', thread = /[?&]thread=([^&]+)/.exec(path)?.[1]
+    const page = pages[thread ? `${id}#${thread}` : id] ?? []
     return { messages: typeof page === 'function' ? page() : page, next: null }
   }, delayMs })
   const move = async (lead: number, pmSeq = 1, groupSeq = 1) => { t.tabs.t1.lastChangedAt++; t.tabs.t1.state = state(lead, pmSeq, groupSeq); await t.cards.tick() }
@@ -1199,6 +1201,58 @@ describe('SwarmCards chat recap and threads', () => {
     await vi.waitFor(() => expect(t.seen).toHaveLength(1))
     expect(await t.cards.recap('t1', 'a1', true)).toMatchObject({ text: 'top', chatId: 'lead-web' })
     expect(await t.cards.recap('t1', 'a1')).toMatchObject({ text: 'top' })
+    t.cards.want(false)
+  })
+
+  const threadPages = {
+    'lead-web': [said(1, 'a1', { text: 'top', thread: 'x1' }), said(2, 'a1', { text: 'other top' }), said(5, 'b1', { text: 'worker reply', thread: 'x1' })],
+    'lead-web#x1': [said(1, 'a1', { text: 'top', thread: 'x1' }), said(5, 'b1', { text: 'worker reply', thread: 'x1' }),
+      said(6, 'me', { author: { kind: 'person', id: 'me' }, text: 'mine', thread: 'x1' })],
+  }
+  const onThread = { tabId: 't1', conversationId: 'lead-web', threadRoot: 'x1' }
+
+  it('shows a thread on the face by its newest agent reply, and closing it pushes the chat recap', async () => {
+    const t = chatSwarm(threadPages)
+    const pushed: string[] = []
+    t.cards.onRecap = r => pushed.push(r.text)
+    t.cards.want(true, [], onThread)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    t.cards.open('s1', 't1', 'a1', true)
+    expect(await t.cards.recap('t1', 'a1', true)).toMatchObject({ text: 'worker reply', chatId: 'lead-web', none: false })
+    expect(t.calls.filter(c => c.includes('/messages'))).toEqual(['GET /api/super-tabs/t1/conversations/lead-web/messages?thread=x1'])
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'lead-web' })
+    await vi.waitFor(() => expect(pushed).toEqual(['other top']))
+    // Opened again, the thread's recap is its own, not the chat's.
+    t.cards.want(true, [], onThread)
+    await vi.waitFor(() => expect(pushed).toEqual(['other top', 'worker reply']))
+    t.cards.want(false)
+  })
+
+  it('says words spoken with a thread on the face in that thread, and in the chat once it closed', async () => {
+    const t = chatSwarm(threadPages)
+    t.cards.want(true, [], onThread)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    expect(await t.cards.say('h-a1', 'in the thread', true)).toEqual({ said: true })
+    expect(await t.cards.say('h-a1', 'pinned to the chat', true, 'lead-web')).toEqual({ said: true })
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'lead-web' })
+    expect(await t.cards.say('h-a1', 'in the chat', true, 'lead-web')).toEqual({ said: true })
+    const posts = t.call.mock.calls.filter(c => c[0] === 'POST').map(c => (c[2] as { command: { conversationId: string; text: string; replyTo: string | null } }).command)
+    expect(posts.map(p => [p.conversationId, p.text, p.replyTo])).toEqual([['lead-web', 'in the thread', 'x1'], ['lead-web', 'pinned to the chat', 'x1'], ['lead-web', 'in the chat', null]])
+    t.cards.want(false)
+  })
+
+  it('leaves out a thread whose conversation is not the one on the face', async () => {
+    const t = chatSwarm({ ...threadPages, 'pm-web': [said(2, 'y1', { text: 'from the Buddy' })] }, true)
+    t.cards.want(true, [], onThread)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    t.cards.side('t1', 'buddy')
+    expect(await t.cards.recap('t1', 'a1', 'buddy')).toMatchObject({ text: 'from the Buddy', chatId: 'pm-web' })
+    expect(await t.cards.say('h-a1', 'to the Buddy', 'buddy')).toEqual({ said: true })
+    const [post] = t.call.mock.calls.filter(c => c[0] === 'POST').map(c => (c[2] as { command: { conversationId: string; replyTo: string | null } }).command)
+    expect([post.conversationId, post.replyTo]).toEqual(['pm-web', null])
+    // The Pro's Lead recap never follows the face.
+    expect(await t.cards.recap('t1', 'a1')).toMatchObject({ text: 'other top' })
+    expect(t.calls.filter(c => c.includes('?thread='))).toEqual([])
     t.cards.want(false)
   })
 

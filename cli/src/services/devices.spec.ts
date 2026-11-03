@@ -637,9 +637,9 @@ describe('what the windows say, reaching the dial', () => {
     it('tells the cards the window\'s open Swarm conversation, again only when it changes', () => {
       const superTabRequest = vi.fn(async () => ({ ok: true }))
       const { port, reconnected } = withRequest(superTabRequest)
-      const open = (active: string, conversationId?: string) => ({ active, tiles: [], swarms: [
+      const open = (active: string, conversationId?: string, threadRoot?: string) => ({ active, tiles: [], swarms: [
         { id: 'plain', name: 'plain', agentIds: [], panes: 0 },
-        { id: 'tab-st1', name: 'st1', agentIds: [], panes: 0, superTabId: 'st1', projectId: 'p1', ...(conversationId ? { conversationId } : {}) }] })
+        { id: 'tab-st1', name: 'st1', agentIds: [], panes: 0, superTabId: 'st1', projectId: 'p1', ...(conversationId ? { conversationId } : {}), ...(threadRoot ? { threadRoot } : {}) }] })
       port.swarms(open('tab-st1', 'pm1'))
       seen.host.swarmCardsWanted!(true)
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['st1'], focus: { tabId: 'st1', conversationId: 'pm1' } })
@@ -659,6 +659,12 @@ describe('what the windows say, reaching the dial', () => {
       superTabRequest.mockClear()
       reconnected.forEach((run) => run())
       expect(superTabRequest.mock.calls).toEqual([[{ action: 'cardsWanted', on: true, include: ['st1'], focus: { tabId: 'st1', conversationId: 'g1' } }]])
+      // A thread opened beside it is news, and so is its closing.
+      port.swarms(open('tab-st1', 'g1', 'm1'))
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['st1'], focus: { tabId: 'st1', conversationId: 'g1', threadRoot: 'm1' } })
+      port.swarms(open('tab-st1', 'g1'))
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['st1'], focus: { tabId: 'st1', conversationId: 'g1' } })
+      superTabRequest.mockClear()
       // Nobody wants cards: a focus change says nothing.
       seen.host.swarmCardsWanted!(false)
       superTabRequest.mockClear()
