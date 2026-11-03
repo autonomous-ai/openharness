@@ -307,7 +307,7 @@ export class SwarmCards {
   /** The side a swarmBuddy dial swiped to, per Swarm; cleared by the window's next focus change (the newest wins). */
   private sides = new Map<string, CardSide>()
   /** The thread the dial's own words started, per Swarm (spec 2026-11-03-dial-thread-face); cleared like `sides`. */
-  private threads = new Map<string, { conversationId: string; root: string; title: string }>()
+  private threads = new Map<string, { conversationId: string; root: string; title: string; at: number; opened?: true }>()
   /** Title and reply count of the app's threads, as the recap reads gave them (`${tab}/${root}`). */
   private titles = new Map<string, { title: string; replies?: number; looked?: true }>()
   /** The thread the dial last left, per Swarm: an older Desktop that announces it again does not pull the dial back into it. */
@@ -366,9 +366,14 @@ export class SwarmCards {
     // The dial's thread outlives the window's announce of that very thread (same conversation, same root), which a hidden pane keeps
     // making; another conversation, another root, or no root (the app closed it) ends it.
     if (refocused) this.focusGen++
+    // The window opens the dial's thread only after selecting its chat (up to 10 s): a no-root announce of that chat is not the
+    // person closing it until the window has named the root once, or 15 s have passed.
+    const mine = next && this.threads.get(next.tabId)
+    if (mine && next!.conversationId === mine.conversationId && next!.threadRoot === mine.root) mine.opened = true
     if (refocused && !next?.fromDevice) {
-      const own = next && this.threads.get(next.tabId)
-      const confirmed = !!next && !!own && own.conversationId === next.conversationId && own.root === next.threadRoot
+      const own = mine
+      const confirmed = !!next && !!own && own.conversationId === next.conversationId &&
+        (own.root === next.threadRoot || (next.threadRoot === undefined && !own.opened && this.now() - own.at < 15_000))
       // Only the root appearing beside the same conversation is no move of the person's: the dial's side stays.
       if (!(confirmed && before?.tabId === next!.tabId && before.conversationId === next!.conversationId)) this.sides.clear()
       for (const tabId of [...this.threads.keys()]) if (!(confirmed && tabId === next!.tabId)) this.threads.delete(tabId)
@@ -872,7 +877,7 @@ export class SwarmCards {
       // Only if the person, the face and the window are where the call began: a post out while any moved starts no thread.
       const now = this.target(tabId, agent!.id as string, chat)
       if (this.me !== reader || gen !== this.focusGen || now?.id !== to || now.thread !== undefined) return { said: true }
-      this.threads.set(tabId, { conversationId: to, root, title: titleOf(text) })
+      this.threads.set(tabId, { conversationId: to, root, title: titleOf(text), at: this.now() })
       if (this.timer && this.live) { this.emit(); void this.pushOpen() }
       return { said: true, thread: { tabId, conversationId: to, root } }
     }

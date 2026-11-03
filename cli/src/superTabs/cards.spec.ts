@@ -1404,6 +1404,41 @@ describe('the face thread', () => {
     u.cards.want(false)
   })
 
+  it('the window\'s selecting the thread\'s chat keeps the dial\'s thread until it opens it', async () => {
+    const t = await started()
+    await t.cards.say('h-a1', 'build it', true, undefined, false, asMe)
+    hidden(t)
+    expect(t.webLead()?.chat?.thread?.root).toBe('m9')
+    hidden(t, { threadRoot: 'm9' })
+    expect(t.webLead()?.chat?.thread?.root).toBe('m9')
+    hidden(t)
+    expect(t.webLead()?.chat).not.toHaveProperty('thread')
+    t.cards.want(false)
+  })
+
+  it('an unconfirmed dial thread ends 15 s later without the window naming it', async () => {
+    const t = await started()
+    await t.cards.say('h-a1', 'build it', true, undefined, false, asMe)
+    t.advance(14_999)
+    hidden(t)
+    expect(t.webLead()?.chat?.thread?.root).toBe('m9')
+    t.cards.want(true, [], null)
+    t.advance(1)
+    hidden(t)
+    expect(t.webLead()?.chat).not.toHaveProperty('thread')
+    t.cards.want(false)
+  })
+
+  it('another root named before confirmation ends the dial\'s thread', async () => {
+    const t = await started()
+    await t.cards.say('h-a1', 'build it', true, undefined, false, asMe)
+    hidden(t, { threadRoot: 'x1' })
+    expect(t.webLead()?.chat?.thread?.root).toBe('x1')
+    hidden(t)
+    expect(t.webLead()?.chat).not.toHaveProperty('thread')
+    t.cards.want(false)
+  })
+
   it('a group face\'s thread is kept like a chat\'s', async () => {
     const t = await started()
     t.cards.want(true, [], { tabId: 't1', conversationId: 'g-web' })
