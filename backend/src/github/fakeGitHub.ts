@@ -1,7 +1,7 @@
 /**
  * Tests only: a fake GitHub REST API for the Harness GitHub App, and a throwaway RSA key. Nothing here reaches github.com.
  */
-import { createPublicKey, generateKeyPairSync, verify, type KeyObject } from 'node:crypto'
+import { createHash, createPublicKey, generateKeyPairSync, verify, type KeyObject } from 'node:crypto'
 import { GitHubApp, type GitHubAppConfig } from './app.js'
 
 export const FAKE_API = 'https://github.fake.test'
@@ -11,7 +11,7 @@ export function throwawayKey(): { privateKey: KeyObject; pem: string; publicKey:
   return { privateKey, pem: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), publicKey: createPublicKey(privateKey) }
 }
 
-export interface FakeCall { method: string; path: string; auth: string; body: unknown }
+export interface FakeCall { method: string; path: string; auth: string; body: unknown; ifNoneMatch?: string }
 
 /** One fake GitHub: which repositories have the app (`installed`, by `owner/name`, lower case), what each default branch's
  *  protection is, and every request it was sent. A request whose JWT is not signed by [publicKey] is answered 401. */
@@ -22,8 +22,15 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
   const owners = new Map<string, number>()
   const renamed = new Map<string, string>()
   const protection = new Map<string, { rules?: unknown[]; protected?: boolean; branch?: string; fail?: boolean }>()
-  /** Pull requests by `owner/name#number`, lower case: GitHub's state and when it was merged. */
-  const pulls = new Map<string, { state: 'open' | 'closed'; merged_at: string | null }>()
+  /** Pull requests by `owner/name#number`, lower case: GitHub's state and when it was merged, and what a watch reads. */
+  const pulls = new Map<string, { state: 'open' | 'closed'; merged_at: string | null; draft?: boolean; head?: { sha: string }; base?: { ref: string };
+    mergeable?: boolean | null; html_url?: string }>()
+  /** A head's latest check runs and its check suites, by `owner/name@sha`, lower case. */
+  const checkRuns = new Map<string, Array<{ name: string; status: string; conclusion: string | null; completed_at: string | null }>>()
+  const checkSuites = new Map<string, Array<{ status: string; latest_check_runs_count: number }>>()
+  /** A pull request's reviews and conversation comments, by `owner/name#number`, lower case. */
+  const reviews = new Map<string, Array<{ id: number; user: { login: string }; state: string; body: string; html_url: string }>>()
+  const comments = new Map<string, Array<{ id: number; user: { login: string }; body: string; html_url: string }>>()
   /** Workflow runs by `owner/name`, lower case: each run's status and its jobs' statuses and runner labels. */
   const actions = new Map<string, Array<{ id: number; status: string; jobs: Array<{ status: string; labels: string[] }> }>>()
   const calls: FakeCall[] = []
@@ -47,8 +54,9 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
     const url = new URL(String(input))
     const method = init?.method ?? 'GET'
     const auth = String((init?.headers as Record<string, string> | undefined)?.Authorization ?? '')
+    const ifNoneMatch = (init?.headers as Record<string, string> | undefined)?.['If-None-Match']
     const body = init?.body ? JSON.parse(String(init.body)) : undefined
-    calls.push({ method, path: url.pathname, auth, body })
+    calls.push({ method, path: url.pathname, auth, body, ...(ifNoneMatch ? { ifNoneMatch } : {}) })
     if (control.down) throw new TypeError('fetch failed')
     let match: RegExpExecArray | null
     if (method === 'GET' && (match = /^\/repos\/([^/]+)\/([^/]+)\/installation$/.exec(url.pathname))) {
@@ -105,17 +113,32 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
         const run = runs.find(r => r.id === Number(jobs[1]))
         return run ? json(200, { total_count: run.jobs.length, jobs: run.jobs.map((j, i) => ({ id: i, name: `job ${i}`, ...j })) }) : json(404, { message: 'Not Found' })
       }
+      // As GitHub does: each answer carries an ETag, and a request naming the current one is answered 304 with no body.
+      const tagged = (value: unknown) => {
+        const etag = `"${createHash('sha1').update(JSON.stringify(value)).digest('hex')}"`
+        if (ifNoneMatch === etag) return new Response(null, { status: 304, headers: { etag } })
+        return new Response(JSON.stringify(value), { status: 200, headers: { etag } })
+      }
+      const repoKey = `${repoPath[1]}/${repoPath[2]}`.toLowerCase()
       const pull = /^\/pulls\/(\d+)$/.exec(repoPath[3] ?? '')
       if (pull) {
-        const known = pulls.get(`${repoPath[1]}/${repoPath[2]}#${pull[1]}`.toLowerCase())
-        return known ? json(200, { number: Number(pull[1]), ...known }) : json(404, { message: 'Not Found' })
+        const known = pulls.get(`${repoKey}#${pull[1]}`)
+        return known ? tagged({ number: Number(pull[1]), ...known }) : json(404, { message: 'Not Found' })
       }
+      const head = /^\/commits\/([0-9a-f]+)\/(check-runs|check-suites)$/.exec(repoPath[3] ?? '')
+      if (head) {
+        const key = `${repoKey}@${head[1]}`
+        return head[2] === 'check-runs' ? tagged({ total_count: checkRuns.get(key)?.length ?? 0, check_runs: checkRuns.get(key) ?? [] })
+          : tagged({ total_count: checkSuites.get(key)?.length ?? 0, check_suites: checkSuites.get(key) ?? [] })
+      }
+      const talk = /^\/(pulls|issues)\/(\d+)\/(reviews|comments)$/.exec(repoPath[3] ?? '')
+      if (talk) return tagged((talk[3] === 'reviews' ? reviews : comments).get(`${repoKey}#${talk[2]}`) ?? [])
       if (repoPath[3] === `/rules/branches/${encodeURIComponent(branch)}`) return json(200, known.rules ?? [])
       if (repoPath[3] === `/branches/${encodeURIComponent(branch)}`) return json(200, { name: branch, protected: known.protected ?? false })
     }
     return json(404, { message: 'Not Found' })
   }) as typeof globalThis.fetch
-  return { fetch, calls, installed, owners, renamed, protection, pulls, revoked, issued, control, actions, permissions }
+  return { fetch, calls, installed, owners, renamed, protection, pulls, checkRuns, checkSuites, reviews, comments, revoked, issued, control, actions, permissions }
 }
 
 /** A configured app talking to [github]. */

@@ -1,6 +1,6 @@
 import { createPublicKey, generateKeyPairSync, verify } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { ACTIONS_READ_PERMISSIONS, CI_LOAD_TTL_MS, CI_MAX_CALLS, CI_MAX_RUNS, CI_READS_PER_HOUR, CI_STALE_MS, SERVER_PROCESSES_MAX, cacheSecret, githubAppConfig, GitHubAppError, PULL_READ_PERMISSIONS, readPrivateKey, TOKEN_PERMISSIONS } from './app.js'
+import { ACTIONS_READ_PERMISSIONS, CI_LOAD_TTL_MS, CI_MAX_CALLS, CI_MAX_RUNS, CI_READS_PER_HOUR, CI_STALE_MS, SERVER_PROCESSES_MAX, cacheSecret, githubAppConfig, GitHubAppError, PULL_READ_PERMISSIONS, PULL_WATCH_PERMISSIONS, readPrivateKey, TOKEN_PERMISSIONS } from './app.js'
 import { FAKE_API, fakeApp, fakeGitHub, throwawayKey } from './fakeGitHub.js'
 import { githubRepository } from './repository.js'
 import { GitHubApp, HARNESS_CO_AUTHOR } from './app.js'
@@ -457,5 +457,58 @@ describe('who pushed a pull request, through the app', () => {
     f.pass(3_600_000)
     expect(await f.app.pushOrigin(repository, 7)).toBe('clean')
     expect(logReads()).toBe(settled)
+  })
+})
+
+// Dee, #1891: a task's pull request is watched for its Engineer (superTabs/pullRequestEvents.ts), with what the app holds.
+describe('watching a pull request', () => {
+  const HEAD = 'abc1234def5678'
+  const seed = (github: ReturnType<typeof fakeGitHub>) => {
+    github.pulls.set('acme/app#12', { state: 'open', merged_at: null, draft: false, head: { sha: HEAD }, base: { ref: 'main' }, mergeable: false,
+      html_url: 'https://github.com/acme/app/pull/12' })
+    github.checkRuns.set(`acme/app@${HEAD}`, [{ name: 'build', status: 'completed', conclusion: 'failure', completed_at: '2026-10-24T11:59:00Z' },
+      { name: 'lint', status: 'in_progress', conclusion: null, completed_at: null }])
+    github.checkSuites.set(`acme/app@${HEAD}`, [{ status: 'in_progress', latest_check_runs_count: 2 }])
+    github.reviews.set('acme/app#12', [{ id: 7, user: { login: 'huy' }, state: 'CHANGES_REQUESTED', body: 'Keep the arrow.', html_url: 'https://github.com/acme/app/pull/12#pullrequestreview-7' }])
+    github.comments.set('acme/app#12', [{ id: 9, user: { login: 'dee' }, body: 'Looks good', html_url: 'https://github.com/acme/app/pull/12#issuecomment-9' }])
+  }
+
+  it('reads the pull, its head\'s check runs and suites, its reviews and comments, with a read-only token', async () => {
+    const { app, github } = setup()
+    const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
+    expect(github.calls.at(-1)!.body).toMatchObject({ permissions: { pull_requests: 'read', checks: 'read', metadata: 'read' } })
+    expect(Object.keys(PULL_WATCH_PERMISSIONS).sort()).toEqual(['checks', 'metadata', 'pull_requests'])
+    for (const name of Object.keys(PULL_WATCH_PERMISSIONS)) expect(TOKEN_PERMISSIONS[name as keyof typeof TOKEN_PERMISSIONS]).toBeDefined()
+    seed(github)
+    expect(await app.watchPullRequest(repo, 12, token)).toEqual({ url: 'https://github.com/acme/app/pull/12', number: 12, state: 'open', draft: false,
+      head: HEAD, base: 'main', mergeable: false,
+      checkRuns: [{ name: 'build', status: 'completed', conclusion: 'failure', completedAt: Date.parse('2026-10-24T11:59:00Z') },
+        { name: 'lint', status: 'in_progress', conclusion: null, completedAt: null }],
+      checkSuites: [{ status: 'in_progress', runs: 2 }],
+      reviews: [{ id: 7, login: 'huy', state: 'CHANGES_REQUESTED', body: 'Keep the arrow.', url: 'https://github.com/acme/app/pull/12#pullrequestreview-7' }],
+      comments: [{ id: 9, login: 'dee', body: 'Looks good', url: 'https://github.com/acme/app/pull/12#issuecomment-9' }] })
+    expect(github.calls.slice(-5).map(c => c.path)).toEqual(['/repos/acme/app/pulls/12', `/repos/acme/app/commits/${HEAD}/check-runs`,
+      `/repos/acme/app/commits/${HEAD}/check-suites`, '/repos/acme/app/pulls/12/reviews', '/repos/acme/app/issues/12/comments'])
+  })
+
+  it('asks again with If-None-Match and reuses the body of a 304', async () => {
+    const { app, github } = setup()
+    const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
+    seed(github)
+    const first = await app.watchPullRequest(repo, 12, token)
+    const again = await app.watchPullRequest(repo, 12, token)
+    expect(again).toEqual(first)
+    expect(github.calls.slice(-5).every(c => c.ifNoneMatch)).toBe(true)
+    github.comments.set('acme/app#12', [])
+    expect((await app.watchPullRequest(repo, 12, token))!.comments).toEqual([])
+  })
+
+  it('answers null when GitHub cannot say', async () => {
+    const { app, github } = setup()
+    const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
+    expect(await app.watchPullRequest(repo, 12, token)).toBeNull()
+    seed(github)
+    github.control.down = true
+    expect(await app.watchPullRequest(repo, 12, token)).toBeNull()
   })
 })
