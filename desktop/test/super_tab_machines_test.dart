@@ -2052,6 +2052,57 @@ void main() {
       c.dispose();
     });
 
+    testWidgets('removal preview counts projects the viewer cannot see', (
+      tester,
+    ) async {
+      final server = _RemovalServer();
+      server.state['machines'] = [machine('owner')];
+      server.preview = {
+        'blockedBy': {
+          'reason': "A PM of a project you can't see runs here.",
+        },
+        'agents': <dynamic>[],
+        'hiddenAgentCount': 2,
+        'soleSourceProjects': <dynamic>[],
+        'hiddenSoleSourceProjectCount': 1,
+      };
+      final c = server.controller();
+      await c.refresh();
+      await mount(tester, c);
+      await openMachineDetails(
+        tester,
+        find.byKey(const ValueKey('super-machine-studio')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-machine-remove')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text("A PM of a project you can't see runs here."),
+        findsOneWidget,
+      );
+      expect(
+        find.text("2 agents of projects you can't see will stop."),
+        findsOneWidget,
+      );
+      expect(
+        find.text("1 project you can't see has code only on this machine."),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Secret Project'), findsNothing);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const ValueKey('super-machine-remove-confirm')),
+            )
+            .onPressed,
+        isNull,
+      );
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    });
+
     testWidgets('a failed preview cannot confirm machine removal', (
       tester,
     ) async {
