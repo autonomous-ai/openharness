@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../core/github_repository.dart';
 import '../core/pull_request_status.dart';
 import '../core/open_in_browser.dart';
 import '../shared/theme/pull_request_icon.dart';
@@ -32,13 +33,15 @@ List<Uri> superTabPullRequestLinks(String text) {
   ];
 }
 
-/// The `owner/repo` a GitHub repository address names (https, ssh or scp
-/// form), or null for another host or no address.
-String? superTabGithubRepository(String? address) {
-  final match = RegExp(
-    r'^(?:https?://|ssh://git@|git@)github\.com[/:]([A-Za-z0-9_-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$',
-  ).firstMatch(address ?? '');
-  return match == null ? null : '${match.group(1)}/${match.group(2)}';
+/// The project's own `owner/repo`, lowercased, when [address] is a GitHub
+/// repository in any form git writes one (core/github_repository.dart).
+String? _ownRepository(String? address) {
+  final identity = address == null ? null : repositoryIdentity(address);
+  if (identity == null) return null;
+  final slash = identity.indexOf('/');
+  return slash > 0 && isGitHubHost(identity.substring(0, slash))
+      ? identity.substring(slash + 1)
+      : null;
 }
 
 /// What each pull request chip says: `repo · PR #n`, with `owner/repo` when
@@ -48,7 +51,7 @@ List<String> superTabPullRequestLabels(
   List<Uri> links, {
   String? repositoryUrl,
 }) {
-  final own = superTabGithubRepository(repositoryUrl)?.toLowerCase();
+  final own = _ownRepository(repositoryUrl);
   final owners = <String, Set<String>>{};
   for (final link in links) {
     owners
