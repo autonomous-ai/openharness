@@ -3,7 +3,7 @@ import type { openDaemon } from '../agentClient/daemon.js'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ELSEWHERE, heldLocalModels, leftOut, localProbes, NO_SWARM_AGENTS_ON, offlineModels, routeTask, servedModels, STALL_RETRY_MS, stalled } from './routeCommand.js'
+import { ELSEWHERE, heldByStarts, heldLocalModels, leftOut, localProbes, NO_SWARM_AGENTS_ON, offlineModels, routeTask, servedModels, STALL_RETRY_MS, stalled } from './routeCommand.js'
 import type { describeScmProject } from '../scm/scmProjects.js'
 import { admission, quotaOf, RELAYED_QUOTA, USED_UP_WINDOW } from './capacity.js'
 import { OTHER_REPOSITORY, type Catalog, type Probe, type RoutePlugin } from './route.js'
@@ -1064,6 +1064,42 @@ describe('routing contributed capacity', () => {
     expect(member.answer.ok).toBe(true)
   })
   // Scholes's goals, piece 5 (machineFit.ts): heavy work is judged by the machine's reading, for its members as for new agents.
+  // 2026-11-03: 9 of 25 failed starts in 10 hours were refused by their host for memory or disk set aside for agents still
+  // starting (cli superTabs/reservations.ts), which the route did not count, so it kept offering those machines.
+  const GiB = 2 ** 30
+  const starting = (now: number) => {
+    const req = (memoryBytes: number, diskBytes: number) => ({ machineId: 'm1', requirements: { memoryBytes, diskBytes } })
+    return [
+      // Being created: it holds what it asked for.
+      { id: 's1', request: req(2 * GiB, 1 * GiB), requestedAt: now - 60_000, error: null },
+      // Launched a minute ago: still in its start window.
+      { id: 's2', request: req(2 * GiB, 1 * GiB), requestedAt: now - 120_000, harnessId: 'h9', dispatchedAt: now - 60_000, error: null },
+      // Past the deadline of a start, failed, launched long ago, or on another machine: nothing held.
+      { id: 's3', request: req(8 * GiB, 8 * GiB), requestedAt: now - 30 * 60_000, error: null },
+      { id: 's4', request: req(8 * GiB, 8 * GiB), requestedAt: now - 60_000, error: 'Cloning took too long.' },
+      { id: 's5', request: req(8 * GiB, 8 * GiB), requestedAt: now - 20 * 60_000, harnessId: 'h8', dispatchedAt: now - 10 * 60_000, error: null },
+      { id: 's6', request: { ...req(8 * GiB, 8 * GiB), machineId: 'm2' }, requestedAt: now - 60_000, error: null },
+    ]
+  }
+  it('counts what starts still starting on a machine hold of its memory and disk, as its host does', () => {
+    const now = Date.now()
+    expect(heldByStarts(starting(now), 'm1', now)).toEqual({ memoryBytes: 4 * GiB, diskBytes: 2 * GiB })
+    expect(heldByStarts([], 'm1', now)).toEqual({ memoryBytes: 0, diskBytes: 0 })
+  })
+  it('leaves out new agents on a machine whose free memory is set aside for agents still starting', async () => {
+    const pool = healthy(); Object.assign(pool.observation.resources, { memoryUsedBytes: 26e9 })
+    expect((await runPool(pool)).answer.ok).toBe(true)
+    const { answer } = await runPool(pool, false, {}, undefined, { state: { starts: starting(Date.now()) } })
+    expect(answer.ok).not.toBe(true)
+    expect(JSON.stringify(answer)).toContain('Insufficient measured free memory, with 4.3 GB set aside for agents still starting.')
+  })
+  it('says on each row what its machine has: free slots, free memory less what starts hold, and free disk', async () => {
+    const pool = { ...healthy(), availableSlots: 3 }
+    const { answer } = await runPool(pool, false, {}, undefined, { state: { starts: starting(Date.now()) } })
+    expect((answer.pick as { machine: string }).machine).toBe('3 slots free · 25.7 GB memory free (4.3 GB held by starts) · 197.9 GB disk free')
+    const plain = await runPool({ ...healthy(), availableSlots: 1 })
+    expect((plain.answer.pick as { machine: string }).machine).toBe('1 slot free · 30.0 GB memory free · 200.0 GB disk free')
+  })
   it('judges heavy work by the contributed machine\'s free memory, disk and CPU, for members too, and its start says it is heavy', async () => {
     const pool = healthy(); Object.assign(pool.observation.resources, { memoryUsedBytes: 26e9, cpuPercent: 92 })
     const { answer } = await runPool(pool, true, { heavy: ['build'] })
