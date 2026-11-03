@@ -658,7 +658,7 @@ void main() {
         await tester.tap(find.text('Remove from Swarm'));
         await tester.pumpAndSettle();
         expect(find.textContaining('from this Swarm?'), findsOneWidget);
-        expect(find.text('Could not check this machine.'), findsOneWidget);
+        expect(find.text('Could not check this machine.'), findsNothing);
         expect(find.textContaining('Wren'), findsOneWidget);
         expect(find.textContaining('Wren ·'), findsNothing);
         await tester.tap(
