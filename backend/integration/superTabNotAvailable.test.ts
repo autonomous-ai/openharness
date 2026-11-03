@@ -13,7 +13,7 @@ import { MemoryAttachmentStore, MemoryAvatarStore } from '../src/superTabs/attac
 import type { Command } from '../src/superTabs/commands.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
-import { NOT_AVAILABLE, NOT_AVAILABLE_ROUTES, superTabRoutes } from '../src/routes/superTabs.js'
+import { NOT_AVAILABLE, superTabRoutes } from '../src/routes/superTabs.js'
 
 // The person routes through the real store and read service (Huy, 10-30, the follow-up of #2306): a Swarm, chat, project,
 // decision, file or link the caller cannot reach gets one answer, whether it is missing, refused, revoked or in another
@@ -21,6 +21,7 @@ import { NOT_AVAILABLE, NOT_AVAILABLE_ROUTES, superTabRoutes } from '../src/rout
 let replica: MongoMemoryReplSet
 let db: PrismaClient
 let app: FastifyInstance
+const registeredPersonRoutes = new Set<string>()
 let store: SuperTabStore
 const user = (n: number, name: string): AuthUser => ({ sub: `40000000000000000000000${n}`, email: `${name}@example.com`, autonomousEnv: 'prod', role: 'user' })
 const owner = user(1, 'owner'), member = user(2, 'member'), outsider = user(3, 'outsider'), removed = user(4, 'removed')
@@ -38,6 +39,10 @@ beforeAll(async () => {
   store = new SuperTabStore(db, () => Date.now(), { store: new MemoryAttachmentStore(), prefix: 'super-tabs', publicBase: 'https://cdn.example.test',
     avatars: new MemoryAvatarStore('https://avatars.example.test') })
   app = Fastify()
+  app.addHook('onRoute', route => {
+    if (!/^\/api\/super-tabs\/:tabId(?:\/|$)/.test(route.url)) return
+    for (const method of [route.method].flat()) if (method !== 'HEAD') registeredPersonRoutes.add(`${method} ${route.url}`)
+  })
   app.setErrorHandler(errorHandler)
   app.addHook('onRequest', async request => { request.user = users.get(String(request.headers['x-user'])) as never })
   await app.register(superTabRoutes, { store, reads: new SwarmReads(store), github: null, hosts: {} as never, signIn: null,
@@ -81,6 +86,8 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/parts', `${t}/parts`),
     json('GET', 'GET /api/super-tabs/:tabId/parts', `${t}/parts?asAgentId=${MISSING}`),
     json('GET', 'GET /api/super-tabs/:tabId/changes', `${t}/changes?cursor=abc`),
+    json('GET', 'GET /api/super-tabs/:tabId/activity', `${t}/activity`),
+    json('POST', 'POST /api/super-tabs/:tabId/activity/read', `${t}/activity/read`, { through: '2026-11-01T00:00:00.000Z' }),
     json('GET', 'GET /api/super-tabs/:tabId/inbox', `${t}/inbox`),
     json('GET', 'GET /api/super-tabs/:tabId/threads', `${t}/threads`),
     json('POST', 'POST /api/super-tabs/:tabId/commands', `${t}/commands`,
@@ -101,8 +108,15 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/attachments/:attachmentId',
       `${t}/conversations/${chat}/messages/${MISSING}/attachments/${MISSING}`),
     json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/read', `${t}/conversations/${chat}/read`, { sequence: 1 }),
+    json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/read', `${t}/conversations/${chat}/threads/${MISSING}/read`, { sequence: 1 }),
+    json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/notifications', `${t}/conversations/${chat}/notifications`, { notify: 'all' }),
     json('POST', 'POST /api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/follow', `${t}/conversations/${chat}/threads/${MISSING}/follow`,
       { follow: true }),
+    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/instructions', `${t}/projects/${project}/instructions`),
+    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/instructions/revisions', `${t}/projects/${project}/instructions/revisions`),
+    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/instructions/revisions/:revision', `${t}/projects/${project}/instructions/revisions/1`),
+    json('POST', 'POST /api/super-tabs/:tabId/attachments/uploads', `${t}/attachments/uploads`, { conversationId: chat, name: 'notes.txt', mime: 'text/plain', size: 12_000_000 }),
+    json('POST', 'POST /api/super-tabs/:tabId/attachments/uploads/:uploadId/complete', `${t}/attachments/uploads/${MISSING}/complete`, {}),
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/github', `${t}/projects/${project}/github`),
     json('POST', 'POST /api/super-tabs/:tabId/projects/:projectId/github/approve', `${t}/projects/${project}/github/approve`, { scope: 'project' }),
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/roles/:roleId', `${t}/projects/${project}/roles/${MISSING}`),
@@ -149,8 +163,9 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
   it('answers one not-available answer: a Swarm that does not exist, one never joined, one left, read with a made-up agent id too', async () => {
     const f = await swarm()
     const real = calls(f.tab, 'lead', 'lead'), missing = calls(MISSING, 'lead', 'lead')
-    // Every person route is called here, so a route added to the list without a test fails.
-    expect(new Set(real.map(c => c.route))).toEqual(NOT_AVAILABLE_ROUTES)
+    // Compare against actual registration, so adding a route requires a real refusal test.
+    // The retired full-state read always asks every client to update, without reading a Swarm.
+    expect(new Set([...real.map(c => c.route), 'GET /api/super-tabs/:tabId'])).toEqual(registeredPersonRoutes)
     for (const [i, call] of real.entries()) {
       const cases = { missing: await answer(missing[i]!, outsider), refused: await answer(call, outsider), revoked: await answer(call, removed) }
       // Approving needs the server's GitHub App, which this server has not: it says so to everyone, before any Swarm is read.
@@ -194,6 +209,17 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
       expect(got.status, call.url).toBe(404)
       expect(got.body, call.url).toBe(NOT_AVAILABLE_BODY)
       expect(JSON.parse(got.body).error.message).not.toMatch(about)
+    }
+  })
+
+  it('asks every legacy full-state reader to update without revealing whether the Swarm exists', async () => {
+    const f = await swarm()
+    for (const as of [owner, member, outsider, removed]) {
+      const real = await app.inject({ url: `/api/super-tabs/${f.tab}`, headers: { 'x-user': as.sub } })
+      const missing = await app.inject({ url: `/api/super-tabs/${MISSING}`, headers: { 'x-user': as.sub } })
+      expect(real.statusCode).toBe(426)
+      expect(real.json().error.code).toBe('UPDATE_REQUIRED')
+      expect({ status: real.statusCode, body: real.body }).toEqual({ status: missing.statusCode, body: missing.body })
     }
   })
 

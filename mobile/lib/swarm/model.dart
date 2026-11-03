@@ -127,7 +127,11 @@ class SuperTabAgent {
   SuperTabAgent.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
       hasProjectId = row['projectId'] != null,
-      projectId = row['projectId'] as String? ?? 'lead',
+      // A person's one Buddy reads every project they read: it belongs to none,
+      // as on the desktop (spec 2026-10-31-one-buddy-per-swarm).
+      projectId =
+          row['projectId'] as String? ??
+          (row['buddyScope'] == 'swarm' ? '' : 'lead'),
       buddyScope = row['buddyScope'] as String?,
       buddyNarrow = row['buddyNarrow'] == true,
       name = _text(row, 'name'),
@@ -144,12 +148,16 @@ class SuperTabAgent {
         {'personId': final String person} => person,
         _ => null,
       },
-      // Read as the desktop does; the phone draws no thread sessions yet.
+      // Read as the desktop does.
       buddySession = SuperTabBuddySessionOf.fromJson(row['buddySession']),
       limitedUntil = DateTime.tryParse(row['limitedUntil'] as String? ?? ''),
       alerting = List.unmodifiable(
         (row['alerting'] as List?)?.whereType<String>() ?? const <String>[],
       ),
+      switchRequest = row['switchRequest'] is Map
+          ? Map.unmodifiable(superTabMap(row['switchRequest']))
+          : null,
+      profileId = row['profileId'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
       workDecision = switch (row['workDecision']) {
@@ -178,6 +186,16 @@ class SuperTabAgent {
   /// What its machine is alerting about now (backend terminal.ts): `prompt`
   /// while it waits at a prompt in its terminal, gone once that is answered.
   final List<String> alerting;
+
+  /// A Product Manager's switch to another engine or account that is asked for
+  /// and not yet done (backend `switchRequest`), as the desktop's model reads
+  /// it; null otherwise. Not drawn on the phone yet.
+  final Map<String, dynamic>? switchRequest;
+
+  /// The account on its machine it runs in; `default` when none is chosen.
+  /// Null until the backend reports it: the engine's default account. As the
+  /// desktop's model reads it; not drawn on the phone yet.
+  final String? profileId;
 
   /// Since when its machine has reported its session gone, or its host confirmed a stop (backend machines.ts). Null
   /// while it runs.
@@ -222,9 +240,13 @@ class SuperTabAgent {
 
 /// A thread session's thread and starting sequence (desktop model.dart).
 class SuperTabBuddySessionOf {
-  const SuperTabBuddySessionOf(this.thread, this.from);
+  const SuperTabBuddySessionOf(this.thread, this.from, [this.projectId]);
   final String thread;
   final int from;
+
+  /// The project a session of a person's one Buddy chat works in; null for a
+  /// plain session and every older project chat's.
+  final String? projectId;
 
   static SuperTabBuddySessionOf? fromJson(Object? value) {
     if (value is! Map) return null;
@@ -232,7 +254,12 @@ class SuperTabBuddySessionOf {
     final thread = json['thread'];
     if (thread is! String || thread.isEmpty) return null;
     final from = json['from'];
-    return SuperTabBuddySessionOf(thread, from is num ? from.toInt() : 0);
+    final project = json['projectId'];
+    return SuperTabBuddySessionOf(
+      thread,
+      from is num ? from.toInt() : 0,
+      project is String && project.isNotEmpty ? project : null,
+    );
   }
 }
 
@@ -262,8 +289,12 @@ class SuperTabTask {
 class SuperTabConversation {
   SuperTabConversation.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
-      // A group from before projects belongs to the first.
-      projectId = row['projectId'] as String? ?? 'lead',
+      // A group from before projects belongs to the first; a person's one
+      // Buddy chat for the Swarm belongs to none (spec
+      // 2026-10-31-one-buddy-per-swarm).
+      projectId =
+          row['projectId'] as String? ??
+          (row['kind'] == 'swarm-buddy' ? '' : 'lead'),
       kind = row['kind'] as String?,
       buddyOwnerId = row['buddyOwnerId'] as String?,
       buddyName = row['buddyName'] as String?,
@@ -280,7 +311,9 @@ class SuperTabConversation {
       archived = row['archived'] == true,
       dormant = row['dormant'] == true,
       // A Buddy chat names no audience: its person alone reads it.
-      audience = row['kind'] == 'buddy' && row['buddyOwnerId'] is String
+      audience =
+          (row['kind'] == 'buddy' || row['kind'] == 'swarm-buddy') &&
+              row['buddyOwnerId'] is String
           ? List.unmodifiable([row['buddyOwnerId'] as String])
           : row['audience'] is Map
           ? List.unmodifiable([
@@ -306,6 +339,12 @@ class SuperTabConversation {
           ? SuperTabTask.fromJson(superTabMap(row['task']))
           : null,
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
+      requesterId = row['requesterId'] as String?,
+      shippedAt = row['shippedAt'] is num
+          ? DateTime.fromMillisecondsSinceEpoch(
+              (row['shippedAt'] as num).toInt(),
+            )
+          : null,
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
       reactionSeq = (row['reactionSeq'] as num?)?.toInt() ?? 0,
       changedAt = row['changedAt'] is num
@@ -329,7 +368,11 @@ class SuperTabConversation {
   /// chat with their Buddy. A `leads` one, the removed Product Managers'
   /// conversation, is in no read ([SuperTabSnapshot.fromJson]).
   final String? kind;
-  bool get isBuddyChat => kind == 'buddy';
+  bool get isBuddyChat => kind == 'buddy' || kind == 'swarm-buddy';
+
+  /// A person's one Buddy chat for the whole Swarm (spec
+  /// 2026-10-31-one-buddy-per-swarm): in no project, keyed by the empty id.
+  bool get isSwarmBuddyChat => kind == 'swarm-buddy';
 
   /// The person a Buddy chat belongs to; only they read it.
   final String? buddyOwnerId;
@@ -340,8 +383,20 @@ class SuperTabConversation {
 
   /// A Buddy chat's live or starting thread sessions (desktop model.dart).
   final List<SuperTabBuddySession> buddySessions;
+
+  /// The live or starting session answering [thread], if any.
+  SuperTabBuddySession? sessionFor(String thread) =>
+      buddySessions.where((s) => s.thread == thread).firstOrNull;
   final SuperTabTask? task;
   final int? number;
+
+  /// The person who asked for this task; null on a conversation that is no
+  /// task, and from a server that does not say.
+  final String? requesterId;
+
+  /// When it shipped (its first Done); null until it has, and from a server
+  /// that does not say.
+  final DateTime? shippedAt;
   String get label => number == null ? title : '#$number $title';
   final String? leadId;
   final List<String> agentIds;
@@ -459,7 +514,8 @@ class SuperTabProject {
   final int updateMinutes;
 
   /// The project's status card text, read as the desktop's model reads it
-  /// (`SwarmProjectStatusCard`).
+  /// (`SuperTabProjectStatusCard`); the phone shows it in the project menu's
+  /// Status sheet.
   final SuperTabProjectStatus? status;
   final Map<String, dynamic>? repository;
 }
@@ -527,6 +583,10 @@ class SuperTabSnapshot {
             harness: effort,
       }),
       localModels = SuperTabLocalModels.read(row['localModels']),
+      removedMachines = [
+        for (final id in row['removedMachines'] as List? ?? const [])
+          if (id is String) id,
+      ],
       threadSessions = row['threadSessions'] == true,
       sessionsFromChat = row['sessionsFromChat'] == true,
       swarmBuddy = row['swarmBuddy'] == true,
@@ -609,9 +669,14 @@ class SuperTabSnapshot {
 
   /// Whether this Swarm's server takes a thread reply's New session: true only
   /// where it says so (backend read/contract.ts `threadSessions`). Read as the
-  /// desktop reads it (desktop_parity_test.dart); the phone offers no New
-  /// session yet.
+  /// desktop reads it (desktop_parity_test.dart); the Buddy chat's thread reply
+  /// box offers New session by it (swarm_buddy_sessions.dart).
   final bool threadSessions;
+
+  /// The reader's own machines they took out of this Swarm: an automatic add
+  /// leaves them out (backend model.ts removedMachines). Empty from an older
+  /// backend.
+  final List<String> removedMachines;
 
   /// Whether that server also takes New session on a top-level message in a
   /// Buddy chat (read/contract.ts `sessionsFromChat`); false from an older one.
@@ -777,11 +842,12 @@ class SuperTabSnapshot {
   /// Whether more than one person can start work here: teammates' agents are a question only then.
   bool get hasTeammates => people.where((p) => p.role != 'viewer').length > 1;
 
-  // Resolve the person shown in chat from the same identity as the roster.
-  // Recorded labels remain the fallback for agents no longer in the Swarm.
+  // Resolve people shown in chat from the same identity as the roster.
+  // Recorded labels remain the fallback when a person or agent has left.
   String authorName(SuperTabMessage message) => message.fromAgent
       ? agentName(message.authorId, fallback: message.authorName)
-      : superTabPersonName(message.authorName);
+      : people.where((p) => p.id == message.authorId).firstOrNull?.username ??
+            superTabPersonName(message.authorName);
 }
 
 /// The Swarm's Local models add-on (docs/plans/2026-10-23-swarm-local-models.md): its grid, whether it is on, and what the
@@ -1168,6 +1234,14 @@ class SuperTabMessage {
 
   /// A reply in a Buddy thread session's thread (desktop model.dart).
   final bool buddySession;
+
+  /// The line the server writes in a thread when its session ends.
+  bool get sessionEnded => source['kind'] == 'buddy-session-ended';
+
+  /// Why its session ended, for [sessionEnded] rows: `ended`, `idle`,
+  /// `stopped` or `failed`.
+  String? get sessionEndReason =>
+      sessionEnded ? source['reason'] as String? : null;
   bool get threadReply => thread != null && thread != id;
 
   /// Whether the main stream lists it: a thread reply only when also sent.
@@ -1202,6 +1276,15 @@ class SuperTabMessage {
   /// The agent a "waiting at a prompt" note is about; null for any other row.
   String? get promptAlertAgentId =>
       source['kind'] == 'terminal-alert' && source['alert'] == 'prompt'
+      ? source['agentId'] as String?
+      : null;
+
+  /// The Product Manager a usage-limit note is about; null for any other row
+  /// (desktop model.dart).
+  String? get leadLimitAgentId =>
+      source['kind'] == 'terminal-alert' &&
+          source['alert'] == 'limit' &&
+          source['lead'] == true
       ? source['agentId'] as String?
       : null;
 

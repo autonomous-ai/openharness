@@ -45,6 +45,8 @@ export const NAMED_INDEX = {
     workspace: { autonomousEnv: 1, workspaceId: 1 },
     /** Deleted Swarms by purge time (deletion.ts): the purge sweep. */
     purge: { purgeAt: 1 },
+    /** The Swarms people at a domain join by themselves (autoJoin.ts): one read per person at most every 2 minutes. */
+    autoJoin: { autonomousEnv: 1, autoJoinDomain: 1 },
   },
   /** Each part kind's changes since a cursor; machines also by when they were last read. */
   SwarmHead: { changes: { tabId: 1, changedAt: 1 } },
@@ -70,6 +72,9 @@ export const NAMED_INDEX = {
     agentOpen: { tabId: 1, agentId: 1, status: 1, createdAt: 1 },
     /** Finished deliveries by their last change: those old enough to compact (deliveryCompaction.ts). */
     compaction: { status: 1, updatedAt: 1 },
+    /** Unfinished deliveries in id order, a page at a time (deliverySettle.ts). Named: with a fourth status Mongo planned the pass on
+     *  `compaction` and sorted, reading far more than a page. */
+    settle: { status: 1, _id: 1 },
   },
   /** Compacted receipts (pageReads.ts): a page's by message id, and a host's by the compacted delivery's id. */
   SuperTabReceipt: {
@@ -184,7 +189,7 @@ export const groupsBy = (tx: Transaction, index: GroupIndex, pipeline: Prisma.In
 
 /** A project's quiet conversations last active since `since`, as the project index serves them. A conversation stored with no
  *  project belongs to the first one (projects.ts groupProject); a null match is a missing field too. */
-export function quietSince(tabId: string, projectId: string, since: number): Record<string, Prisma.InputJsonValue> {
+export function quietSince(tabId: string, projectId: string | string[], since: number): Record<string, Prisma.InputJsonValue> {
   return { tabId, deleted: false, dormant: true, lastActivityAt: { $gte: { $date: new Date(since).toISOString() } },
-    projectId: { $in: projectId === 'lead' ? ['lead', null] : [projectId] } }
+    projectId: { $in: [projectId].flat().flatMap(id => id === 'lead' ? ['lead', null] : [id]) } }
 }

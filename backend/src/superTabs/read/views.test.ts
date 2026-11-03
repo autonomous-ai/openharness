@@ -79,6 +79,19 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     for (const hidden of ['reportSeq', 'lastActivityAt', 'dormant', 'audience']) expect(web.data).not.toHaveProperty(hidden)
   })
 
+  it('tells readers when a group shipped, and nothing else of its ledger', () => {
+    const { s } = scene()
+    const shipped = (ledger?: Record<string, unknown>) => {
+      s.edit(state => { const group = state.conversations.find(c => c.id === s.web)!; if (ledger) group.ledger = ledger as never; else delete group.ledger })
+      const parts = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
+      return readerView(parts, peer, NOW, { teamMachines: [] }).parts.groups.find(g => g.key === s.web)!.data
+    }
+    expect(shipped({ shippedAt: NOW - 50 })).toMatchObject({ shippedAt: NOW - 50 })
+    expect(shipped({})).not.toHaveProperty('shippedAt')
+    expect(shipped()).not.toHaveProperty('shippedAt')
+    expect(shipped({ shippedAt: NOW - 50 })).not.toHaveProperty('ledger')
+  })
+
   it('shows an older Swarm\'s stored Leads conversation to nobody, its id neither (model.ts leadsRemoved)', () => {
     const s = richSwarm()
     s.edit(state => { storeOldLeads(state, [s.lead]) })

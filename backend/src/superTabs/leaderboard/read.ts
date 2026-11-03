@@ -22,7 +22,7 @@ const BOARD_FIELDS = ['id', 'kind', 'projectId', 'title', 'leadId', 'audience', 
 
 /** Dormant groups of one project active since [since]: a request shipped in a week the board sums wrote its Done row then.
  *  Only the fields the board reads: every open board reads them once a minute (Diego's issue file, 2026-10-27). */
-export async function recentDormantGroups(tx: Prisma.TransactionClient, tabId: string, projectId: string, since: number): Promise<Conversation[]> {
+export async function recentDormantGroups(tx: Prisma.TransactionClient, tabId: string, projectId: string | string[], since: number): Promise<Conversation[]> {
   // Through the project index by name (parts/indexed.ts): planned, this read could take the dormancy one and read every quiet
   // conversation of the Swarm to return none.
   const rows = await groupsBy(tx, 'project', [{ $match: quietSince(tabId, projectId, since) },

@@ -1,19 +1,21 @@
 import { describe, expect, it, vi } from 'vitest'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { BUDDY_SESSION_ENGINE, HEAVY_NOT_RECORDED, HEAVY_REFUSED, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 import { readCapacityDisk } from './disk.js'
 import { SuperTabHostError } from './wire.js'
+import { PM_HOMES } from './teamDaemon.js'
 const teamDaemon = vi.hoisted(() => ({ value: false, relayed: true, offered: null as null | { slugs: string[]; listed: string[] } }))
 vi.mock('./teamDaemon.js', async (original) => ({ ...await original<object>(), isTeamDaemon: () => teamDaemon.value }))
 vi.mock('../team/relay.js', async (original) => ({ ...await original<object>(), teamRelayed: () => teamDaemon.relayed, offeredCodexModels: async () => teamDaemon.offered }))
-vi.mock('./buddyHome.js', async (original) => ({ ...await original<object>(), prepareBuddyHome: async () => ({ ready: [], missing: [] }), trustBuddyHome: async () => {} }))
+const prepared = vi.hoisted(() => ({ value: { ready: [] as string[], missing: [] as string[] } }))
+vi.mock('./buddyHome.js', async (original) => ({ ...await original<object>(), prepareBuddyHome: async () => prepared.value, trustBuddyHome: async () => {} }))
 const where = { port: 14001, machineId: 'lead-machine', dataDir: '/fixture' }
 /** A queued start is watched before the Lead moves on (startAgent); these tests read the queued answer at once. */
 const noPause = async () => {}
-function fixture(options: { state?: Record<string, unknown> | Error; githubApp?: boolean; refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; acceptedLaunchModel?: { model: string | null; effort: string | null }; refuseModel?: string; frame?: string; guest?: boolean; identity?: { sessionId: string; createdAt: string } } = {}) {
+function fixture(options: { state?: Record<string, unknown> | Error; refused?: string; loseClose?: boolean; githubApp?: boolean; refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; acceptedLaunchModel?: { model: string | null; effort: string | null }; refuseModel?: string; frame?: string; guest?: boolean; identity?: { sessionId: string; createdAt: string } } = {}) {
   const start = { creationId: 'super-native-receipt', error: null as string | null, request: { machineId: 'target', conversationId: 'group', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }, dispatched: false }
   let nativeState = 'missing', lostJoin = false
@@ -30,6 +32,7 @@ function fixture(options: { state?: Record<string, unknown> | Error; githubApp?:
       start.error = String(cmd.error)
     }
     if (cmd.type === 'agent.started' && lostJoin) { lostJoin = false; throw new Error('Join interrupted') }
+    if (cmd.type === 'agent.started' && options.refused) { start.error = options.refused; return { ok: true, value: { result: { refused: options.refused } } } }
     return { ok: true, value: { result: cmd.type === 'agent.start' ? { startId: 'start' } : { agentId: 'worker' } } }
   })
   const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}, _ms?: number): Promise<Record<string, unknown>> => {
@@ -48,6 +51,10 @@ function fixture(options: { state?: Record<string, unknown> | Error; githubApp?:
       if (options.refuseModel && payload.model !== undefined) return { error: options.refuseModel, detail: 'This daemon cannot launch with a model.' }
       if (options.refuse) return { error: options.refuse, detail: 'This agent does not support that permission mode.' }
       nativeState = 'created'; return { creationId: start.creationId, state: 'created', agent: { id: 'native', engine: 'claude', selectedModel: 'runtime-v1:native:claude:fixture-model@high', ...options.identity } }
+    }
+    if (type === 'agent_close') {
+      if (options.loseClose) throw new Error('Close interrupted')
+      return { closed: true, agentId: payload.agentId }
     }
     if (type === 'agent_create_cancel') {
       nativeState = 'cancelled'
@@ -70,6 +77,33 @@ async function onFakeClock<T>(run: () => Promise<T>): Promise<T> {
   } finally { vi.useRealTimers() }
 }
 
+// Task #2248: the server answered that another coordinator was set while this one started, so it never joined.
+describe('a join the server refused', () => {
+  const closes = (f: { request: { mock: { calls: unknown[][] } } }) => f.request.mock.calls.filter(c => c[0] === 'agent_close')
+  const REASON = 'This project already has Mine as its Product Manager.'
+
+  it('closes the session this start created, and says why, with no model switch', async () => {
+    const f = fixture({ refused: REASON, frame: 'claude-opus-5-5' })
+    const result = await onFakeClock(() => startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open))
+    expect(closes(f)).toEqual([['agent_close', { agentId: 'native', mode: 'now' }, expect.any(Number)]])
+    expect(switchCall(f)).toBeUndefined()
+    expect(result).toMatchObject({ ok: false, error: REASON, startId: 'start', creationId: 'super-native-receipt', harnessId: 'native', refused: REASON })
+    expect(result).not.toHaveProperty('agentId')
+  })
+
+  it('says so when the session could not be closed', async () => {
+    const f = fixture({ refused: REASON, frame: 'claude-opus-5-5', loseClose: true })
+    const result = await onFakeClock(() => startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open))
+    expect(result).toMatchObject({ ok: false, refused: REASON, closeFailed: true })
+  })
+
+  it('closes nothing on a join that went through', async () => {
+    const f = fixture({ frame: 'claude-opus-5-5' })
+    expect(await onFakeClock(() => startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open))).toMatchObject({ ok: true, agentId: 'worker' })
+    expect(closes(f)).toEqual([])
+  })
+})
+
 describe('Swarm permission mode', () => {
   it('admits installed Claude when an API environment is opaque to the vendor login probe', async () => {
     const f = fixture(), request = f.request.getMockImplementation()!
@@ -90,6 +124,42 @@ describe('Swarm permission mode', () => {
       const argv = buildEngineCommandArgv(engine, { permissionMode: String(payload.permissionMode) })
       expect(argv).toContain(engine === 'claude' ? '--dangerously-skip-permissions' : '--dangerously-bypass-approvals-and-sandbox')
     }
+  })
+
+  // Audit H2: the launch line that keeps a branch's own settings out. Tried with the real binaries, planted settings.json,
+  // settings.local.json and .mcp.json ran without these flags and not with them (Claude Code 2.1.316, 2026-11-02).
+  it('starts Team-written Claude Code work with project settings off, in a Team account', async () => {
+    teamDaemon.value = true
+    try {
+      const f = fixture()
+      Object.assign(f.start.request, { engine: 'claude', projectSettings: 'off' })
+      expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+      const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
+      expect(payload).toMatchObject({ permissionMode: 'teamWritten', bypassPermission: true })
+      expect(buildEngineCommandArgv('claude', { permissionMode: 'teamWritten' })).toEqual(expect.arrayContaining(['--dangerously-skip-permissions', '--setting-sources', 'user', '--strict-mcp-config']))
+    } finally { teamDaemon.value = false }
+  })
+
+  // A Codex worktree takes its main repository's trust, and `-c` does not turn it off. An engine home of its own does (0.165.0, tried).
+  it('starts Team-written Codex work in an engine home of its own, which trusts no project', async () => {
+    teamDaemon.value = true
+    try {
+      const f = fixture()
+      Object.assign(f.start.request, { engine: 'codex', projectSettings: 'off' })
+      expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+      const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
+      expect(payload).toMatchObject({ permissionMode: 'teamWritten', bypassPermission: true })
+      expect(String(payload.codexHome)).toContain(`/${PM_HOMES}/`)
+      rmSync(dirname(String(payload.codexHome)), { recursive: true, force: true })
+    } finally { teamDaemon.value = false }
+  })
+
+  it.each(['claude', 'codex'] as const)('refuses Team-written %s work in the main account, before anything is created', async engine => {
+    const f = fixture()
+    Object.assign(f.start.request, { engine, projectSettings: 'off' })
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ error: 'START_FAILED' })
+    expect(f.request.mock.calls.some(c => c[0] === 'agent_create')).toBe(false)
+    expect(f.start.error).toContain('Team account')
   })
 
   it.each(['opencode', 'kilo'])('fails a pending legacy %s Swarm start before native creation', async engine => {
@@ -345,6 +415,19 @@ it('admits a person\'s one Buddy by the disk its folder is made on, as the folde
     expect(payload.cwd).toContain(join('worktrees', 'buddy-home'))
     expect(payload.projectSource).toBeUndefined()
   } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+it('tells a person\'s one Buddy where to read which revision each project copy is at, and when it may say it is behind', async () => {
+  const f = fixture()
+  f.start.request = { ...f.start.request, cwd: join(tmpdir(), 'swarm-buddy-prompt', '.buddy-peer'), worktree: false, buddyScope: 'swarm', buddyOf: { personId: 'peer', generation: 'g' } } as typeof f.start.request
+  // The mocked folder has its copies ready.
+  prepared.value = { ready: ['Web'], missing: [] }
+  try {
+    await startAgent({ action: 'start', tabId: 'tab', operationId: 'one-buddy-copies', request: f.start.request }, f.scoped, where, f.open)
+    const prompt = String(f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!.prompt)
+    expect(prompt).toContain('project-copies.txt')
+    expect(prompt).toContain('Say your copy is behind only when that file says it may be')
+  } finally { prepared.value = { ready: [], missing: [] } }
 })
 
 it.each(['claude'])('starts a %s thread session as a Buddy in every way, told its thread and to answer only there, with no message text', async engine => {

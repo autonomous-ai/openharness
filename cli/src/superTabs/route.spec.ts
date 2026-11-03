@@ -1,6 +1,6 @@
 // cli/src/superTabs/route.spec.ts
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { API_BUILDERS, catalogFrom, catalogRow, choose, decide, gridStrength, LOCAL_NONE, OTHER_REPOSITORY, parseAssessment, quotaOf2, recordOf, repoMatch, repositoryKey, strengthOf,
+import { API_BUILDERS, catalogFrom, quotaBrief, catalogRow, choose, decide, gridStrength, LOCAL_NONE, OTHER_REPOSITORY, parseAssessment, quotaOf2, recordOf, repoMatch, repositoryKey, strengthOf,
   type Assessment, type Catalog, type Commitment, type MemberFrame, type Probe, type RoutePlugin, type TaskFolder } from './route.js'
 
 const object = (v: unknown) => v as Record<string, unknown>
@@ -171,10 +171,12 @@ describe('choose', () => {
     expect(short.shown.map(s => [s.machineName, s.fit.status])).toEqual([['mac', 'unknown'], ['remote-1', 'short']])
     expect(short.short).toBeUndefined()
   })
-  it('shows at most 12 candidates', () => {
+  // Every account the coordinator may pick by the project's order is in front of it: the route used to cut the list at 12, one
+  // row a machine, and a Claude account with 99% left on a machine whose cheaper Codex was used up never showed (Ken, 2026-11-03).
+  it('shows a row for every machine and engine, past 12, and fills up to 12 by rank', () => {
     const r = choose(Array.from({ length: 20 }, (_, i) => probe({ machineId: `m${i}`, machineName: `box-${String(i).padStart(2, '0')}` })), policy, a())
     if ('error' in r) throw new Error('unexpected')
-    expect(r.shown).toHaveLength(12)
+    expect(r.shown).toHaveLength(20)
   })
 })
 
@@ -262,14 +264,37 @@ describe('strength, fit and effective cost', () => {
     expect(spent.shown[0].fit).toMatchObject({ status: 'short', effectiveCost: 2 })
     expect(spent.short).toBe('No candidate is expected to cover this task; its weekly quota is expected to run out partway and resets in 7 days.')
   })
-  it('a Codex account that has only a weekly window is read in full; a Claude one missing its 5-hour window is not', () => {
+  // A 5-hour window is never what runs out (Ken, 2026-11-03), and a Team account's Claude, whose 5-hour window its host does not
+  // relay, read as unknown and fell behind every Codex that fit.
+  it('reads an account with a weekly window in full on either engine, with or without its 5-hour window', () => {
     const CODEX = { engine: 'codex', model: 'default', effort: 'default', quality: 2, cost: 2 } as const
     const weekly = quotaOf2({ known: true, windows: [{ usedPercent: 19, resetsAt: (NOW + 6 * D) / 1000, name: 'weekly' }] })
     const r = route([on(CODEX, 'codex', weekly), on(SONNET, 'claude', windows([90, 3 * H], [80, 5 * D]))], { difficulty: 'low' })
     expect(r.shown.map(s => [s.engine, s.fit.status])).toEqual([['claude', 'fits'], ['codex', 'fits']])
     expect(r.excluded).toEqual([])
     const half = route([on(SONNET, 'half', weekly), on(SONNET, 'claude', windows([90, 3 * H], [80, 5 * D]))], { difficulty: 'low' })
-    expect(half.shown.map(s => [s.machineName, s.fit.status])).toEqual([['claude', 'fits'], ['half', 'unknown']])
+    expect(half.shown.map(s => [s.machineName, s.fit.status])).toEqual([['claude', 'fits'], ['half', 'fits']])
+    // A weekly window with no room is short; with no weekly reading the fit is not known.
+    expect(route([on(SONNET, 'a', windows([90, 3 * H], [1, 5 * D]))], {}).shown[0].fit.status).toBe('short')
+    expect(route([on(SONNET, 'a', windows([90, 3 * H], null))], {}).shown[0].fit.status).toBe('unknown')
+  })
+  it('keeps a row for each engine of every machine, though a cheaper engine there is used up', () => {
+    const boxes = Array.from({ length: 14 }, (_, i) => `box-${String(i).padStart(2, '0')}`)
+    const r = route(boxes.flatMap(b => [on(CODEX, b, windows(null, [0, 5 * D], `${b}-x`)), on(OPUS, b, windows(null, [99, D], `${b}-c`))]), { difficulty: 'high' })
+    expect(r.shown).toHaveLength(28)
+    for (const b of boxes) expect(r.shown.filter(s => s.machineName === b).map(s => [s.engine, s.fit.status]).sort()).toEqual([['claude', 'fits'], ['codex', 'short']])
+  })
+  // River, 2026-11-03: a Codex reading "unknown" did not say that its owner's machine must relay it.
+  it('says why an unknown quota is unknown', () => {
+    const why = 'This account runs on its owner\'s subscription; its allowance is read on the owner\'s machine.'
+    expect(quotaBrief({ quota: { known: false, leftPercent: null, resetsAt: null, why }, fit: { status: 'unknown' } }, NOW)).toBe(`unknown: ${why}`)
+    expect(quotaBrief({ quota: { known: false, leftPercent: null, resetsAt: null }, fit: { status: 'unknown' } }, NOW)).toBe('unknown: weekly unknown')
+  })
+  it('shows at most 64 rows, what the backend keeps of a decision, the best-ranked first', () => {
+    const boxes = Array.from({ length: 40 }, (_, i) => `box-${String(i).padStart(2, '0')}`)
+    const r = route(boxes.flatMap(b => [on(CODEX, b, windows(null, [50, 5 * D], `${b}-x`)), on(OPUS, b, windows(null, [99, D], `${b}-c`))]), { difficulty: 'high' })
+    expect(r.shown).toHaveLength(64)
+    expect(r.shown.at(-1)!.id).toBe('c63')
   })
   it('an engine on an API key is metered: it fits with no window, beside a subscription machine', () => {
     const metered = quotaOf2({ known: true, windows: [] })
@@ -291,17 +316,18 @@ describe('strength, fit and effective cost', () => {
     expect(r.shown.map(s => s.machineName)).toEqual([...Array(11).fill('a'), 'z'])
     expect(r.shown.map(s => s.id)).toEqual(Array.from({ length: 12 }, (_, i) => `c${i}`))
   })
-  it('with more machines than rows shown, keeps the best rows of the best-ranked machines', () => {
+  it('with more machines than rows shown, shows a new agent and a member of every one', () => {
     const many = Array.from({ length: 14 }, (_, i) => on(SONNET, `m${String(i).padStart(2, '0')}`, windows([90 - i, 3 * H], [80, 5 * D], `A${i}`)))
     const r = route([...many, ...many.map(p => ({ ...p, kind: 'member' as const, agentId: p.machineId, name: 'Extra' }))], { difficulty: 'low' })
-    expect(new Set(r.shown.map(s => s.machineName)).size).toBe(12)
+    expect(new Set(r.shown.map(s => s.machineName)).size).toBe(14)
+    expect(r.shown).toHaveLength(28)
   })
   it('orders the short by title at equal strength and price, and says when no reset is known', () => {
     const r = route([on(SONNET, 'b', windows([20, null], [80, null], 'B')), on(SONNET, 'a', windows([20, null], [80, null], 'A')), on(SONNET, 'c', windows([25, null], [80, null], 'C'))], {})
     expect(picks(r)).toEqual(['sonnet on a', 'sonnet on b', 'sonnet on c'])
     expect(r.short).toBe('No candidate is expected to cover this task; its 5-hour quota is expected to run out partway.')
     expect(r.shown[2].label).toContain('short: needs about 30% of the 5-hour window (25% left); weekly 4% of 80%')
-    expect(route([on(SONNET, 'a', windows(null, [80, null]))], {}).shown[0].label).toContain('unknown: 5-hour window unknown; weekly 4% of 80%')
+    expect(route([on(SONNET, 'a', windows(null, [80, null]))], {}).shown[0].label).toContain('fits: 5-hour window unknown; weekly 4% of 80%')
   })
 })
 

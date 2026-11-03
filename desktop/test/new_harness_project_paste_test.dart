@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/models.dart';
 import 'package:harness/core/ssh_hosts.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
@@ -31,6 +32,10 @@ class _Connection extends WsConn {
   Map<String, dynamic> harnesses = const {'error': 'NOT_FOUND'};
   Completer<void>? harnessesHeld;
 
+  /// What this computer answers for any other folder asked about by name.
+  final folders = <String, Map<String, dynamic>>{};
+  final asked = <String>[];
+
   @override
   Future<Map<String, dynamic>> request(
     String type, {
@@ -46,6 +51,16 @@ class _Connection extends WsConn {
         };
       case 'fs_list_dir':
         final path = payload['path'] as String? ?? '/home/test';
+        asked.add(path);
+        if (folders[path] case final answer?) {
+          if (answer['error'] case final String code) {
+            throw WsRequestFailure(
+              responseType: 'fs_list_dir_result',
+              code: code,
+            );
+          }
+          return answer;
+        }
         if (path == '/home/test/harnesses') {
           await harnessesHeld?.future;
           // A refusal arrives as WsConn throws it, never as a value.
@@ -190,6 +205,127 @@ void main() {
     expect(box.selected!.title, 'Browse /srv/');
   });
 
+  group('a hidden folder, which its parent does not list', () {
+    const missing = {'error': 'NOT_FOUND'};
+
+    test('opens on another computer when it is there', () async {
+      connection.folders['/srv/.config'] = {
+        'path': '/srv/.config',
+        'entries': const [],
+      };
+      final box = search('/srv/.config');
+      await listed();
+      expect(box.selected!.title, 'Open /srv/.config');
+      expect(box.selected!.project!.folder, '/srv/.config');
+    });
+
+    test('still browses when it is not', () async {
+      connection.folders['/srv/.config'] = missing;
+      final box = search('/srv/.config');
+      await listed();
+      expect(box.selected!.title, 'Browse /srv/');
+    });
+
+    test('a file by that name is no folder', () async {
+      connection.folders['/srv/.env'] = {'error': 'NOT_A_DIRECTORY'};
+      final box = search('/srv/.env');
+      await listed();
+      expect(box.selected!.title, 'Browse /srv/');
+    });
+
+    test('. and .. are not hidden folders', () async {
+      final box = search('/srv/..');
+      await listed();
+      expect(box.selected!.title, 'Browse /srv/');
+      expect(connection.asked, isNot(contains('/srv/..')));
+    });
+
+    test('is asked about once the typing pauses, once', () async {
+      connection.folders['/srv/.config'] = {
+        'path': '/srv/.config',
+        'entries': const [],
+      };
+      final box = search('/srv/.c');
+      box.setQuery('/srv/.config');
+      await listed();
+      expect(connection.asked, isNot(contains('/srv/.c')));
+      box.setQuery('/srv/.config');
+      await listed();
+      expect(
+        connection.asked.where((path) => path == '/srv/.config'),
+        hasLength(1),
+      );
+    });
+
+    test('an answer after the form closed changes nothing', () async {
+      connection.folders['/srv/.config'] = {
+        'path': '/srv/.config',
+        'entries': const [],
+      };
+      final box = NewHarnessController(
+        app,
+        machineId: 'm',
+        engine: 'codex',
+        folder: '/work/repo',
+      )..useDesktopChoices(true);
+      box.focusField(NewHarnessField.projectMenu);
+      box.setQuery('/srv/.config');
+      box.dispose();
+      await listed();
+      expect(connection.asked, isNot(contains('/srv/.config')));
+    });
+
+    test('another computer does not inherit the answer', () async {
+      connection.folders['/srv/.config'] = {
+        'path': '/srv/.config',
+        'entries': const [],
+      };
+      final box = search('/srv/.config');
+      await listed();
+      expect(box.selected!.title, 'Open /srv/.config');
+      connection.folders['/srv/.config'] = missing;
+      const studio = Machine(
+        machineId: 'n',
+        authMode: MachineAuthMode.remote,
+        name: 'Studio',
+      );
+      app.machines = [...app.machines, studio];
+      app.machineStates['n'] = MachineState(studio)
+        ..nodeOnline = true
+        ..connectionStatus = ConnectionStatus.connected
+        ..agentLoadStatus = AgentLoadStatus.loaded
+        ..agents = [];
+      box.focusField(NewHarnessField.machine);
+      box.setQuery('Studio');
+      box.accept();
+      box.focusField(NewHarnessField.projectMenu);
+      box.setQuery('/srv/.config');
+      expect(box.selected!.title, 'Browse /srv/');
+    });
+  });
+
+  test(
+    'an alias ssh cannot read is offered, and its launch checks again',
+    () async {
+      app.machineStates['m']!.localOnly = true;
+      final answer = Completer<String?>();
+      final box = NewHarnessController(
+        app,
+        machineId: 'm',
+        engine: 'codex',
+        folder: '/work/repo',
+      )..useDesktopChoices(true);
+      box.sshHosts = _SlowHosts(answer.future);
+      addTearDown(box.dispose);
+      box.focusField(NewHarnessField.projectMenu);
+      box.setQuery('git@gh-work:org/repo.git');
+      answer.complete(null);
+      await Future<void>.delayed(Duration.zero);
+      expect(box.selected!.title, 'Clone org/repo');
+      expect(box.selected!.enabled, isTrue);
+    },
+  );
+
   test('the GitHub prompt refuses the same alias', () async {
     app.machineStates['m']!.localOnly = true;
     final box = search('', hosts: {'gitlab-work': 'gitlab.com'});
@@ -263,6 +399,79 @@ void main() {
     });
     expect(await outcome, NewHarnessOutcome.created);
     expect(told, ['Cloned via gh-work']);
+  });
+
+  group('Cloned via is told only for the clone of that creation', () {
+    late AppNotifier local;
+    late List<String> told;
+    String? clonedVia;
+
+    setUp(() {
+      told = [];
+      clonedVia = null;
+      local = createApp(
+        connectionForTest: (_) => connection,
+        connected: true,
+        prepareFolder: (_) async {
+          if (clonedVia case final alias?) {
+            local.rememberClonedVia('/home/test/harnesses/repo', alias);
+          }
+          return '/home/test/harnesses/repo';
+        },
+      );
+      addTearDown(local.dispose);
+      local.machineStates['m']!
+        ..agents = []
+        ..localOnly = true;
+      local.agentChangeNotice = told.add;
+    });
+
+    Future<NewHarnessOutcome> start(Map<String, dynamic> reply) async {
+      connection.createReply = null;
+      connection.creates.clear();
+      final box = NewHarnessController(
+        local,
+        machineId: 'm',
+        engine: 'codex',
+        folder: '/home/test',
+        home: '/home/test',
+      )..useDesktopChoices(true);
+      box.sshHosts = _Hosts(const {});
+      addTearDown(box.dispose);
+      box.focusField(NewHarnessField.projectMenu);
+      box.setQuery('https://github.com/org/repo');
+      box.accept();
+      final outcome = box.create();
+      await pumpEventQueue();
+      connection.createReply!.complete({
+        'creationId': connection.creates.single['creationId'],
+        ...reply,
+      });
+      return outcome;
+    }
+
+    const created = {
+      'state': 'created',
+      'agent': {'id': 'a1', 'name': 'Repo', 'engine': 'codex'},
+    };
+    const failed = {
+      'state': 'failed',
+      'failure': {'code': 'INVALID_CWD', 'detail': 'No.'},
+    };
+
+    test('the clone that started the harness is told', () async {
+      clonedVia = 'gh-work';
+      expect(await start(created), NewHarnessOutcome.created);
+      expect(told, ['Cloned via gh-work']);
+    });
+
+    test('a later start in that folder is not told', () async {
+      clonedVia = 'gh-work';
+      expect(await start(failed), NewHarnessOutcome.failed);
+      clonedVia = null;
+      expect(await start(created), NewHarnessOutcome.created);
+      expect(told, isEmpty);
+    });
   });
 
   test('a clone says so while it runs', () async {
@@ -350,6 +559,39 @@ void main() {
         expect(lines, isNot(contains('Cloning org/repo…')));
       },
     );
+
+    test('the same name in another case may be the same folder', () async {
+      connection.harnesses = {
+        'path': '/home/test/harnesses',
+        'entries': [
+          {'name': 'Repo', 'isDir': true},
+        ],
+      };
+      final box = search('https://github.com/org/repo');
+      final lines = await linesWhileCreating(box);
+      expect(lines, isNot(contains('Cloning org/repo…')));
+    });
+
+    test('a Harness OS checkout in ~/projects is used, not cloned', () async {
+      connection.folders['/home/test/projects'] = {
+        'path': '/home/test/projects',
+        'entries': [
+          {'name': 'repo', 'isDir': true},
+        ],
+      };
+      final box = search('https://github.com/org/repo');
+      final lines = await linesWhileCreating(box);
+      expect(lines, isNot(contains('Cloning org/repo…')));
+    });
+
+    test('a ~/projects that cannot be read cannot say', () async {
+      connection.folders['/home/test/projects'] = {
+        'error': 'PERMISSION_DENIED',
+      };
+      final box = search('https://github.com/org/repo');
+      final lines = await linesWhileCreating(box);
+      expect(lines, isNot(contains('Cloning org/repo…')));
+    });
 
     test('another folder in ~/harnesses does not stop it saying so', () async {
       connection.harnesses = {

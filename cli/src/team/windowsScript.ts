@@ -86,7 +86,7 @@ const PRELUDE = [
   "$ErrorActionPreference = 'Stop'",
   "$ProgressPreference = 'SilentlyContinue'",
   '[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)',
-  // LF alone: the owner's side matches the last line with ./script.ts TEAM_COMPUTER_LINE, whose `$` stops before a CR.
+  // LF alone: the owner's side splits this output into lines at LF, and a CR would stay in what it prints.
   'function say([string]$m) { [Console]::Out.Write("harness: $m`n") }',
   'function die([string]$m, [int]$code = 1) { Clear-Stage; [Console]::Error.Write("harness: $m`n"); exit $code }',
   '$script:RT = $null',
@@ -388,6 +388,7 @@ export function buildWindowsSetupScript(input: WindowsSetupScriptInput): string 
     // the new logon. Task Scheduler gives the run a desktop of its own from any session, as it does the team daemon.
     // The output is appended to a file this process made in the stage folder, writable by the team account alone, so
     // nothing is written in the team account's home as the administrator.
+    WINDOWS_CLEAN_LINE,
     'function As-Team([string]$what, [string]$line, [int]$minutes) {',
     "  if (-not $script:scheduler) { $script:scheduler = New-Object -ComObject Schedule.Service; $script:scheduler.Connect() }",
     '  $out = Join-Path $script:RT "$what.out"',
@@ -413,7 +414,8 @@ export function buildWindowsSetupScript(input: WindowsSetupScriptInput): string 
     '    $status = $registered.LastTaskResult',
     '  } finally { $root.DeleteTask($name, 0) }',
     '  if ($late) { die "the team account\'s $what did not finish in $minutes minutes" }',
-    '  $lines = @(Get-Content -LiteralPath $out -ErrorAction SilentlyContinue | Where-Object { $_ })',
+    // The Team account wrote these, and they go to the administrator\'s console (audit W7).
+    '  $lines = @(Get-Content -LiteralPath $out -ErrorAction SilentlyContinue | ForEach-Object { Clean-Line $_ } | Where-Object { $_ })',
     '  return @($status, $lines)',
     '}',
     '',
@@ -693,6 +695,175 @@ ${exec(daemon)}
  * gone: registering it again would need a password, and nobody knows the account's. The profile goes before the account,
  * so a profile Windows keeps (a process still holds it) leaves the account and its task as they were, running again.
  */
+/**
+ * Deletes what the Team account could write, as an administrator (audit W5): renamed first where Windows allows, then through handles
+ * opened relative to each parent and never through a link. Compiled by Windows PowerShell's Add-Type (Microsoft's csc.exe), so it is
+ * C# 5. Not walked by path as Remove-Tree does: a Team process could swap a checked folder for a junction, and the administrator
+ * would delete what is behind it.
+ */
+const TEAM_REMOVE_HELPER = String.raw`using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32.SafeHandles;
+
+public static class HarnessTeamRemove {
+  const uint DELETE = 0x00010000, FILE_LIST_DIRECTORY = 0x1, FILE_READ_ATTRIBUTES = 0x80, FILE_WRITE_ATTRIBUTES = 0x100, SYNCHRONIZE = 0x00100000;
+  const uint WALK = DELETE | FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE, BARE = DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE;
+  const uint SHARE_ALL = 7, OPEN_EXISTING = 3, FILE_FLAG_BACKUP_SEMANTICS = 0x02000000, FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000;
+  const uint OBJ_CASE_INSENSITIVE = 0x40, FILE_SYNCHRONOUS_IO_NONALERT = 0x20, FILE_OPEN_FOR_BACKUP_INTENT = 0x4000, FILE_OPEN_REPARSE_POINT = 0x00200000;
+  const uint ATTR_DIRECTORY = 0x10, ATTR_REPARSE = 0x400, ATTR_NORMAL = 0x80;
+  const int INFO_BASIC = 0, INFO_DISPOSITION = 4, INFO_FULL_DIRECTORY = 14, ERROR_NO_MORE_FILES = 18, MAX_DEPTH = 512;
+
+  [StructLayout(LayoutKind.Sequential)] struct UNICODE_STRING { public ushort Length; public ushort MaximumLength; public IntPtr Buffer; }
+  [StructLayout(LayoutKind.Sequential)] struct OBJECT_ATTRIBUTES { public int Length; public IntPtr RootDirectory; public IntPtr ObjectName; public uint Attributes; public IntPtr SecurityDescriptor; public IntPtr SecurityQualityOfService; }
+  [StructLayout(LayoutKind.Sequential)] struct IO_STATUS_BLOCK { public IntPtr Status; public IntPtr Information; }
+
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+  [DllImport("ntdll.dll")]
+  static extern int NtOpenFile(out SafeFileHandle handle, uint access, ref OBJECT_ATTRIBUTES attributes, out IO_STATUS_BLOCK status, uint share, uint options);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool GetFileInformationByHandleEx(SafeFileHandle handle, int kind, byte[] buffer, uint size);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool SetFileInformationByHandle(SafeFileHandle handle, int kind, byte[] buffer, uint size);
+
+  // What could not be deleted, deepest first. A link is deleted as itself and nothing behind it is touched: every child opens
+  // relative to its parent's open handle and without following a link, so swapping a folder for a junction changes nothing.
+  public static string[] Delete(string path) {
+    List<string> left = new List<string>();
+    string native = path.Length > 2 && path[1] == ':' ? "\\\\?\\" + path : path;
+    SafeFileHandle top = CreateFileW(native, WALK, SHARE_ALL, IntPtr.Zero, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, IntPtr.Zero);
+    if (top.IsInvalid) top = CreateFileW(native, BARE, SHARE_ALL, IntPtr.Zero, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, IntPtr.Zero);
+    if (top.IsInvalid) { left.Add(path); return left.ToArray(); }
+    using (top) { Finish(top, path, 0, left); }
+    return left.ToArray();
+  }
+
+  static void Finish(SafeFileHandle item, string at, int depth, List<string> left) {
+    uint attributes;
+    if (!Attributes(item, out attributes)) { left.Add(at); return; }
+    if ((attributes & ATTR_DIRECTORY) != 0 && (attributes & ATTR_REPARSE) == 0) {
+      if (depth >= MAX_DEPTH) { left.Add(at); return; }
+      Empty(item, at, depth, left);
+    }
+    if (!MarkDeleted(item)) left.Add(at);
+  }
+
+  static void Empty(SafeFileHandle folder, string at, int depth, List<string> left) {
+    List<string> names = new List<string>();
+    byte[] buffer = new byte[64 * 1024];
+    while (true) {
+      if (!GetFileInformationByHandleEx(folder, INFO_FULL_DIRECTORY, buffer, (uint)buffer.Length)) {
+        if (Marshal.GetLastWin32Error() != ERROR_NO_MORE_FILES) left.Add(at);
+        break;
+      }
+      for (int offset = 0; ; ) {
+        int next = BitConverter.ToInt32(buffer, offset), length = BitConverter.ToInt32(buffer, offset + 60);
+        string name = Encoding.Unicode.GetString(buffer, offset + 68, length);
+        if (name != "." && name != "..") names.Add(name);
+        if (next == 0) break;
+        offset += next;
+      }
+    }
+    foreach (string name in names) {
+      string child = at + "\\" + name;
+      SafeFileHandle item = OpenChild(folder, name, WALK);
+      if (item.IsInvalid) item = OpenChild(folder, name, BARE);
+      if (item.IsInvalid) { left.Add(child); continue; }
+      using (item) { Finish(item, child, depth + 1, left); }
+    }
+  }
+
+  static SafeFileHandle OpenChild(SafeFileHandle folder, string name, uint access) {
+    IntPtr text = Marshal.StringToHGlobalUni(name), unicode = IntPtr.Zero;
+    bool added = false;
+    try {
+      folder.DangerousAddRef(ref added);
+      UNICODE_STRING label = new UNICODE_STRING();
+      label.Length = (ushort)(name.Length * 2);
+      label.MaximumLength = label.Length;
+      label.Buffer = text;
+      unicode = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(UNICODE_STRING)));
+      Marshal.StructureToPtr(label, unicode, false);
+      OBJECT_ATTRIBUTES attributes = new OBJECT_ATTRIBUTES();
+      attributes.Length = Marshal.SizeOf(typeof(OBJECT_ATTRIBUTES));
+      attributes.RootDirectory = folder.DangerousGetHandle();
+      attributes.ObjectName = unicode;
+      attributes.Attributes = OBJ_CASE_INSENSITIVE;
+      SafeFileHandle item;
+      IO_STATUS_BLOCK status;
+      int result = NtOpenFile(out item, access, ref attributes, out status, SHARE_ALL, FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT | FILE_OPEN_REPARSE_POINT);
+      if (result >= 0) return item;
+      if (item != null) item.Dispose();
+      return new SafeFileHandle(IntPtr.Zero, true);
+    } finally {
+      if (added) folder.DangerousRelease();
+      if (unicode != IntPtr.Zero) Marshal.FreeHGlobal(unicode);
+      Marshal.FreeHGlobal(text);
+    }
+  }
+
+  static bool Attributes(SafeFileHandle item, out uint attributes) {
+    byte[] basic = new byte[40];
+    attributes = 0;
+    if (!GetFileInformationByHandleEx(item, INFO_BASIC, basic, 40)) return false;
+    attributes = BitConverter.ToUInt32(basic, 32);
+    return true;
+  }
+
+  // A read-only file refuses deletion until that is cleared.
+  static bool MarkDeleted(SafeFileHandle item) {
+    byte[] yes = new byte[] { 1 };
+    if (SetFileInformationByHandle(item, INFO_DISPOSITION, yes, 1)) return true;
+    uint attributes;
+    if (!Attributes(item, out attributes)) return false;
+    byte[] basic = new byte[40];
+    BitConverter.GetBytes(ATTR_NORMAL).CopyTo(basic, 32);
+    return SetFileInformationByHandle(item, INFO_BASIC, basic, 40) && SetFileInformationByHandle(item, INFO_DISPOSITION, yes, 1);
+  }
+}`
+
+/** The PowerShell around that helper, needing $REPARSE-free Item-At and a `die` from the prelude. Run for real on Windows in windowsTeamRemove.real.spec.ts. */
+export const windowsRemoveHelperLines = (): string[] => [
+  // What the Team account named reaches the administrator's console from here too (security review of #2579).
+  WINDOWS_CLEAN_LINE,
+  `$HELPER = ${hereString(TEAM_REMOVE_HELPER)}`,
+  'function Load-Helper { Add-Type -TypeDefinition $HELPER -Language CSharp -ErrorAction Stop }',
+  'function Remove-Held([string]$path, $left = $null) {',
+  '  if (-not (Item-At $path)) { return }',
+  '  $at = $path',
+  "  $moved = Join-Path (Split-Path -Parent $path) ('.harness-removing-' + [guid]::NewGuid().ToString('N'))",
+  '  try { [IO.Directory]::Move($path, $moved); $at = $moved } catch { }',
+  '  $failed = @([HarnessTeamRemove]::Delete($at))',
+  '  if ($failed.Count -eq 0) { return }',
+  '  if ($null -eq $left) { throw "could not delete $(Clean-Line $failed[0]) and $($failed.Count - 1) more" }',
+  '  foreach ($one in $failed) { [void]$left.Add($one) }',
+  '}',
+  // A removal that stopped partway left its renamed folders: only this script makes those names, in folders others cannot write.
+  "function Remove-Renamed([string]$parent) { if (Item-At $parent) { foreach ($old in @(Get-ChildItem -LiteralPath $parent -Force -Filter '.harness-removing-*')) { Remove-Held $old.FullName } } }",
+  // By the Task Scheduler service and the exact name, as setup deletes its own: the ScheduledTasks commands read -TaskName as a
+  // wildcard, so a Team task named [G]oogleUpdate could match the real GoogleUpdate (security review 2 of #2579).
+  'function Task-Folder($own) {',
+  '  if (-not $script:taskService) { $script:taskService = New-Object -ComObject Schedule.Service; $script:taskService.Connect() }',
+  "  $folder = ([string]$own.TaskPath).TrimEnd('\\')",
+  "  $script:taskService.GetFolder($(if ($folder) { $folder } else { '\\' }))",
+  '}',
+  'function Delete-Task($own) { try { (Task-Folder $own).DeleteTask($own.TaskName, 0) } catch { } }',
+  'function Task-There($own) { try { [void](Task-Folder $own).GetTask($own.TaskName); $true } catch { $false } }',
+  // Tasks the account registered for itself: any of them could start it again while it goes. By name or SID, as Windows shows either.
+  'function Team-Tasks {',
+  '  @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {',
+  '    $user = [string]$_.Principal.UserId',
+  "    $parts = $user -split '\\\\'",
+  '    $user -and ($_.TaskPath -ne $TASK_PATH -or $_.TaskName -ne $TASK_NAME) -and (($teamSid -and $user -eq $teamSid) -or ($parts[-1] -eq $TEAM -and ($parts.Count -eq 1 -or $parts[0] -eq $env:COMPUTERNAME)))',
+  '  })',
+  '}',
+]
+
+/** Removes control and format characters, as privacy.ts statusText does, from what the Team account wrote. Cut after that. */
+export const WINDOWS_CLEAN_LINE = "function Clean-Line([string]$text) { $clean = [regex]::Replace($text, '[\\p{Cc}\\p{Cf}\\p{Cs}\\p{Zl}\\p{Zp}]', ''); if ($clean.Length -gt 2000) { $clean.Substring(0, 2000) } else { $clean } }"
+
 export function buildWindowsRemoveScript(input: RemoveScriptInput): string {
   const user = checkWindowsUser(input.user, 'team account')
   const home = checkWindowsPath(input.home, 'team home')
@@ -711,7 +882,6 @@ export function buildWindowsRemoveScript(input: RemoveScriptInput): string {
     `$STATUS_DIR = ${ps(WINDOWS_TEAM_STATUS_DIR)}`,
     `$TASK_PATH = ${ps(WINDOWS_TEAM_TASK_PATH)}`,
     `$TASK_NAME = ${ps(WINDOWS_TEAM_TASK_NAME)}`,
-    `$COMPUTER_ID = ${ps(paths.computerId)}`,
     `$PROFILE_LIST = ${ps('HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList')}`,
     `$SESSION_MANAGER = ${ps('HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager')}`,
     '$account = Get-LocalUser -Name $TEAM -ErrorAction SilentlyContinue',
@@ -728,15 +898,9 @@ export function buildWindowsRemoveScript(input: RemoveScriptInput): string {
     '    $teamSid = $teamProfile[0].SID',
     '  }',
     '}',
-    // Read by the administrator only from a plain file the team account owns, never through a link, and only in the
-    // form a computer id has.
-    '$computer = $null',
-    "$idDir = Item-At (Join-Path $TEAM_HOME '.harness')",
-    '$idFile = Item-At $COMPUTER_ID',
-    'if ($teamSid -and $idDir -and $idFile -and -not ($idDir.Attributes -band $REPARSE) -and -not ($idFile.Attributes -band $REPARSE) -and -not $idFile.PSIsContainer -and $idFile.Length -le 1024 -and (Owner-Of $COMPUTER_ID) -eq $teamSid) {',
-    '  $line = @(Get-Content -LiteralPath $COMPUTER_ID -TotalCount 1)',
-    "  if ($line.Count -eq 1 -and $line[0] -cmatch '^[A-Za-z0-9_-]{1,128}$') { $computer = $line[0] }",
-    '}',
+    '',
+    ...windowsRemoveHelperLines(),
+    `try { Load-Helper } catch { die "could not prepare the safe delete ($($_.Exception.Message)); nothing was removed: the Harness Team account and its daemon run as before" ${WINDOWS_REMOVE_REFUSED} }`,
     '',
     '# 1. The team daemon\'s task stops and is disabled, so it starts nothing while the account goes.',
     '$task = Get-ScheduledTask -TaskPath $TASK_PATH -TaskName $TASK_NAME -ErrorAction SilentlyContinue',
@@ -745,6 +909,21 @@ export function buildWindowsRemoveScript(input: RemoveScriptInput): string {
     '  Stop-ScheduledTask -TaskPath $TASK_PATH -TaskName $TASK_NAME',
     '}',
     '',
+    // Run again after the kill: a process alive at the first look can register a task before it dies (security review of #2579).
+    '$script:seenTasks = @()',
+    '$script:heldTasks = @()',
+    'function Hold-Tasks {',
+    '  foreach ($own in @(Team-Tasks)) {',
+    '    if ($script:seenTasks | Where-Object { $_.TaskPath -eq $own.TaskPath -and $_.TaskName -eq $own.TaskName }) { continue }',
+    '    $script:seenTasks += $own',
+    "    if ($own.State -ne 'Disabled') { $script:heldTasks += $own }",
+    '    Disable-ScheduledTask -InputObject $own -ErrorAction SilentlyContinue | Out-Null',
+    '    Stop-ScheduledTask -InputObject $own -ErrorAction SilentlyContinue',
+    '  }',
+    '}',
+    'function Restore-Tasks { foreach ($own in $script:heldTasks) { Enable-ScheduledTask -InputObject $own -ErrorAction SilentlyContinue | Out-Null } }',
+    'Hold-Tasks',
+    '',
     '# 2. Every process running as the team account: its daemon, its terminal host, teammates\' agents.',
     'function Team-Processes {',
     '  if (-not $teamSid) { return @() }',
@@ -752,6 +931,8 @@ export function buildWindowsRemoveScript(input: RemoveScriptInput): string {
     '}',
     'foreach ($process in @(Team-Processes)) { Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue }',
     'Start-Sleep -Seconds 1',
+    'Hold-Tasks',
+    'foreach ($process in @(Team-Processes)) { Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue }',
     '',
     '# 3. The profile. When something of the account still runs and holds it, the task runs again and nothing was removed.',
     // Windows keeps a profile's registry loaded after its account's last process has gone, and for good: on
@@ -770,6 +951,7 @@ export function buildWindowsRemoveScript(input: RemoveScriptInput): string {
     '  }',
     '  $leftHive = [bool]$why -and $held -and @(Team-Processes).Count -eq 0',
     '  if ($why -and -not $leftHive) {',
+    '    Restore-Tasks',
     '    if ($task) { Enable-ScheduledTask -TaskPath $TASK_PATH -TaskName $TASK_NAME | Out-Null; Start-ScheduledTask -TaskPath $TASK_PATH -TaskName $TASK_NAME }',
     `    die "could not remove the profile $TEAM_HOME ($why). Nothing was removed: the Harness Team account and its daemon run as before" ${WINDOWS_REMOVE_REFUSED}`,
     '  }',
@@ -779,25 +961,35 @@ export function buildWindowsRemoveScript(input: RemoveScriptInput): string {
     '# 4. The account.',
     'if ($account) {',
     '  try { Remove-LocalUser -Name $TEAM } catch {',
+    '    Restore-Tasks',
     '    if ($task) { Enable-ScheduledTask -TaskPath $TASK_PATH -TaskName $TASK_NAME | Out-Null; Start-ScheduledTask -TaskPath $TASK_PATH -TaskName $TASK_NAME }',
     `    die "could not delete the account $TEAM ($($_.Exception.Message)). Its profile was removed; harness team setup makes it again" ${WINDOWS_REMOVE_REFUSED}`,
     '  }',
     '  say "deleted the account $TEAM"',
     '}',
     '',
+    // A task that started in the moment before the last look may have left a process with no account.
+    'foreach ($process in @(Team-Processes)) { Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue }',
+    '',
     '# 5. What it left: its task\'s definition, its batch logon right, a profile folder Windows did not take, what setup',
     '#    made and the sentinel.',
     'if ($task) { Unregister-ScheduledTask -TaskPath $TASK_PATH -TaskName $TASK_NAME -Confirm:$false }',
+    // The ones found while the account was there too: its name may not match once it has gone.
+    'foreach ($own in @($script:seenTasks + @(Team-Tasks))) { Delete-Task $own }',
+    '$stayed = @(@($script:seenTasks) + @(Team-Tasks) | Where-Object { Task-There $_ })',
+    'if ($stayed.Count -gt 0) { say "could not remove $($stayed.Count) task(s) the team account registered: $(($stayed | ForEach-Object { Clean-Line $_.TaskName }) -join \', \')" }',
     `if ($teamSid) { [void](New-Stage ${SDDL.private}); Set-BatchLogon $teamSid $false }`,
     "try { $scheduler = New-Object -ComObject Schedule.Service; $scheduler.Connect(); $scheduler.GetFolder('\\').DeleteFolder($TASK_PATH.Trim('\\'), 0) } catch { }",
     // A folder Windows left behind when it removed the profile record, which named this folder as the team account's.
-    'if ($teamProfile.Count -eq 1 -and -not $leftHive -and (Item-At $TEAM_HOME)) { Remove-Tree $TEAM_HOME }',
+    'if ($teamProfile.Count -eq 1 -and -not $leftHive -and (Item-At $TEAM_HOME)) { Remove-Held $TEAM_HOME }',
+    'Remove-Renamed (Split-Path -Parent $TEAM_HOME)',
+    'Remove-Renamed $SHARED',
     // The profile Windows would not delete: its record, then every file it lets go of now, and the ones it holds (the
     // registry files) at the next restart, through the Session Manager's pending deletions as MoveFileEx records them.
     'if ($leftHive) {',
     '  Remove-Item -LiteralPath "$PROFILE_LIST\\$teamSid" -Recurse -Force -ErrorAction SilentlyContinue',
     '  $left = New-Object System.Collections.ArrayList',
-    '  Remove-Tree $TEAM_HOME $left',
+    '  Remove-Held $TEAM_HOME $left',
     '  if ($left.Count -gt 0) {',
     '    $existing = (Get-ItemProperty -LiteralPath $SESSION_MANAGER -Name PendingFileRenameOperations -ErrorAction SilentlyContinue).PendingFileRenameOperations',
     '    $pending = if ($existing) { @($existing) } else { @() }',
@@ -806,9 +998,9 @@ export function buildWindowsRemoveScript(input: RemoveScriptInput): string {
     '    say "Windows still holds the registry of ${TEAM}; the rest of $TEAM_HOME ($($left.Count) items) is removed at the next restart"',
     '  } else { say "removed the profile $TEAM_HOME" }',
     '}',
-    'Remove-Tree $STATUS_DIR',
+    'Remove-Held $STATUS_DIR',
     'Remove-Tree $CONFIG',
-    "if (Item-At $SHARED) { foreach ($relay in @(Get-ChildItem -LiteralPath $SHARED -Force -Filter 'team-relay-*')) { Remove-Tree $relay.FullName } }",
+    "if (Item-At $SHARED) { foreach ($relay in @(Get-ChildItem -LiteralPath $SHARED -Force -Filter 'team-relay-*')) { Remove-Held $relay.FullName } }",
     '$sentinel = Item-At $SENTINEL',
     'if ($sentinel -and -not $sentinel.PSIsContainer) { [IO.File]::Delete($SENTINEL) }',
     // The shared folder, only when setup made it and nothing else has been put in it since.
@@ -816,7 +1008,6 @@ export function buildWindowsRemoveScript(input: RemoveScriptInput): string {
     '  $others = @(Get-ChildItem -LiteralPath $SHARED -Force | Where-Object { $_.FullName -ne $SHARED_MARK })',
     '  if ($others.Count -eq 0) { [IO.File]::Delete($SHARED_MARK); [IO.Directory]::Delete($SHARED) }',
     '}',
-    'if ($computer) { say "team computer $computer" }',
     'say "removed the Harness Team account, its profile and its daemon\'s task"',
     'Clear-Stage',
     'exit 0',

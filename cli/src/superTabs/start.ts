@@ -10,7 +10,7 @@ import { permissionModeFlags } from '../lib/engineLaunch.js'
 import type { AgentEngine } from '../engines/types.js'
 import { isSwarmSkillMode, swarmSkillUse, wireRole, type SwarmSkillMode } from '../lib/swarmSkills.js'
 import { isTeamDaemon, pmEngineHome } from './teamDaemon.js'
-import { BUDDY_HOMES, buddyProjectsOf, prepareBuddyHome, trustBuddyHome } from './buddyHome.js'
+import { BUDDY_COPIES_FILE, BUDDY_HOMES, buddyProjectsOf, prepareBuddyHome, trustBuddyHome } from './buddyHome.js'
 import { markBuddyNarrow } from '../lib/buddyGuard.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
@@ -23,6 +23,7 @@ const text = (v: unknown) => typeof v === 'string' ? v : null
 const number = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
 // These native validations run before dispatch. Storage errors, conflicts and
 // unknown failures deliberately stay uncertain: they cannot prove no launch.
+const TEAM_WRITTEN_MAIN_ACCOUNT = 'A Harness Team agent wrote this task\'s code, so it runs only in a Team account, never in this machine\'s main account. Choose an agent or machine in a Team account.'
 const PRE_DISPATCH_REFUSALS = new Set([
   'INVALID_ENGINE', 'INVALID_CWD', 'INVALID_PROJECT_SOURCE', 'INVALID_REPOSITORY',
   'INVALID_GRID', 'INVALID_CODEX_HOME', 'INVALID_DSH', 'INVALID_PROMPT',
@@ -31,7 +32,7 @@ const PRE_DISPATCH_REFUSALS = new Set([
 ])
 // A daemon that cannot take the launch model answers these before it makes a receipt, so the same creation id can be
 // sent again without it. Any other refusal still ends the start.
-const LAUNCH_MODEL_REFUSALS = new Set(['LAUNCH_MODEL_UNSUPPORTED', 'INVALID_LAUNCH_MODEL'])
+export const LAUNCH_MODEL_REFUSALS = new Set(['LAUNCH_MODEL_UNSUPPORTED', 'INVALID_LAUNCH_MODEL'])
 // The join turn must finish before the pane accepts a model switch, and it ends only once the roster shows the agent.
 const MODEL_SWITCH_WAIT_MS = 60_000
 const MODEL_SWITCH_RETRY_MS = 1_000
@@ -65,7 +66,7 @@ const LASTING_REFUSALS = new Set(['RULE_BROKEN', 'REQUIREMENT_UNMET', 'REVIEW_RE
 /** A Buddy's start note: its owner's chat, where it talks, and nothing to wait for. */
 /** A project's Product Manager the Swarm started here (backend leadStart.ts): the Lead of the project's conversation, with
  *  the lines Desktop's own-machine launch gives one (desktop super_tabs/launch_prompt.dart). */
-function leadPrompt(tabId: string, chat: string, roleName: string): string {
+export function leadPrompt(tabId: string, chat: string, roleName: string): string {
   return `You are the Product Manager of the project whose conversation is ${chat}, started by the Swarm on this machine. ${roleLine(roleName)}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Read the conversation with harness super-tab --tab ${tabId} messages ${chat}; if it is empty, ask there what to work on. Reply with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID [--reply-to MESSAGE_ID], and answer each message once. ${INSTRUCTIONS_LINE(tabId)} Run harness super-tab help for commands. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
 /** Workflow lives in the project's instructions, not in this prompt (project instructions, phase 3). */
@@ -89,9 +90,9 @@ function buddySessionPrompt(tabId: string, chat: string, thread: string, mode: S
  *  reads, each project's code in its own folder under projects/, and writes only in its person's chat. Names only, never a
  *  message's text: a start record is listed in the Lead's status. */
 function swarmBuddyPrompt(tabId: string, chat: string, home: { ready: string[]; missing: string[] }, mode: SwarmSkillMode | null): string {
-  const code = home.ready.length ? `Each project's code is in its own folder under projects/ (${home.ready.join(', ')}).` : 'No project\'s code is on this machine.'
+  const code = home.ready.length ? `Each project's code is in its own folder under projects/ (${home.ready.join(', ')}). Each copy follows its project's default branch, moved at your start and at most hourly after that. ${BUDDY_COPIES_FILE} in your folder says which revision each copy is at: read it before saying what the code does or does not have. Say your copy is behind only when that file says it may be; otherwise, what is not in the copy is not on the default branch yet.` : 'No project\'s code is on this machine.'
   const none = home.missing.length ? ` Not on this machine: ${home.missing.join(', ')}; you still read their chats and tasks.` : ''
-  return `You are a person's one Buddy in a shared Super Tab, for every project they read. ${mode ? `${swarmSkillUse({ role: 'buddy' }, mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster: it lists your owner's projects, one line each, and the newest tasks; status --project NAME reads one project's tasks. ${code}${none} Your chat with your owner is conversation ${chat}: read it with harness super-tab --tab ${tabId} messages ${chat}, and reply there with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. You send nothing into a project: when your owner wants something sent to a project's PM, tell them to start a New session in that project. Then greet your owner there and ask what they have in mind. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
+  return `You are a person's one Buddy in a shared Super Tab, for every project they read. ${mode ? `${swarmSkillUse({ role: 'buddy' }, mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster: it lists your owner's projects, one line each, and the newest tasks; status --project NAME reads one project's tasks. ${code}${none} Your chat with your owner is conversation ${chat}: read it with harness super-tab --tab ${tabId} messages ${chat}, and reply there with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. When your owner asks you to send something to a project's PM, send their proposal yourself, naming that project; if it is unclear which project, ask them first. Then greet your owner there and ask what they have in mind. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
 /** A project session of a person's one Buddy chat: the Buddy for that one project, in one thread, the only Buddy that sends
  *  into it. It reads that project and its owner's words in its thread alone. */
@@ -363,6 +364,13 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
         if (!refusedByBackend(error)) throw error
         return await releaseRefused(error)
       }
+      // Code a Team agent wrote never runs as this machine's owner (backend superTabs/teamWritten.ts, audit H2). The server sends it
+      // only to a Team account's machine, so this is the last check, for a row or a server that says otherwise.
+      const projectSettingsOff = request.projectSettings === 'off'
+      if (projectSettingsOff && !isTeamDaemon()) {
+        requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: TEAM_WRITTEN_MAIN_ACCOUNT } }))
+        return { error: 'START_FAILED', startId, detail: TEAM_WRITTEN_MAIN_ACCOUNT }
+      }
       // Both direct and contributed-host starts reach this boundary. Existing
       // native receipts are read above and never have their permissions changed.
       // Engines without a full mode retain their existing approving launch flags.
@@ -406,7 +414,7 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       // The role's name from the project's document, when the backend's start request has it; one line, bounded.
       const roleName = typeof request.roleName === 'string' ? request.roleName.replace(/\s+/g, ' ').trim().slice(0, 80) : ''
       const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: !asks,
-        ...(asks ? { permissionMode: asks } : permissionModeFlags(request.engine as AgentEngine, 'full') ? { permissionMode: 'full' } : {}),
+        ...(asks ? { permissionMode: asks } : projectSettingsOff ? { permissionMode: 'teamWritten' } : permissionModeFlags(request.engine as AgentEngine, 'full') ? { permissionMode: 'full' } : {}),
         ...(mode ? { swarmRole: role, swarmSkillMode: mode } : {}),
         ...(github ? { swarmGitHub: true } : {}),
         // A thread session (#2345) gets its own Buddy note; a coordinator's and an agent's notes name their role (phase 3).
@@ -422,7 +430,8 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       for (const key of ['codexHome', 'gridModel', 'gridName']) if (request[key] !== undefined) payload[key] = request[key]
       // A Codex Product Manager in a Harness Team account runs in an engine home of its own, deleted whole when the Swarm
       // ends it, so nothing of its chats stays where the account's next agent reads (teamDaemon.ts, security re-check 2 of #2089).
-      const pmHome = lead ? pmEngineHome(String(request.engine), creationId, isTeamDaemon(), homedir()) : null
+      // Team-written Codex work too: a home that trusts no project keeps the branch's own settings out (engines/codex/launch.ts).
+      const pmHome = lead || projectSettingsOff ? pmEngineHome(String(request.engine), creationId, isTeamDaemon(), homedir()) : null
       if (pmHome) {
         // Codex refuses a CODEX_HOME that is not there; only the Team user reads it.
         mkdirSync(pmHome, { recursive: true, mode: 0o700 })
@@ -525,6 +534,13 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
         reply = await scoped({ action: 'command', operationId: `joined-legacy-${startId}`, command: join })
       }
       joined = requireSuccess(reply)
+      // Another coordinator was set while this one started (backend leadStart.ts leadOvertaken): it is no agent of the Swarm, so
+      // the session this start created goes, and nothing else does.
+      const refused = text(object(joined.result).refused)
+      if (refused) {
+        const closed = await target.request('agent_close', { agentId: nativeId, mode: 'now' }, 60_000).catch((): Json => ({}))
+        return { ok: false, error: refused, refused, startId, machineId: request.machineId, creationId, harnessId: nativeId, ...(closed.closed === true ? {} : { closeFailed: true }) }
+      }
     }
     await target.request('super_tabs', { action: 'wake' }).catch(() => {})
     await target.request('harness_share_rosters', {}).catch(() => {})

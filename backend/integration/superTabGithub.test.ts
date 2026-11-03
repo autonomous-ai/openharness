@@ -16,6 +16,7 @@ import type { Command } from '../src/superTabs/commands.js'
 import { GitHubTokens, MemoryTokenCache } from '../src/github/tokens.js'
 import { fakeApp, fakeGitHub, throwawayKey } from '../src/github/fakeGitHub.js'
 import { poolRows } from './hostRows.test-support.js'
+import { logger } from '../src/utils/logger.js'
 
 // The Harness GitHub App's token endpoint on the real control API: a fresh loopback MongoDB and a fake GitHub. This suite
 // never reads DATABASE_URL, an existing database or github.com.
@@ -50,11 +51,13 @@ afterAll(async () => {
 })
 
 /** One control API with the app configured against a fresh fake GitHub, its store revoking as tasks end. */
-async function fresh(options: { github?: boolean; approveAll?: boolean; signIn?: GitHubSignIn | null } = {}) {
-  const github = fakeGitHub({ publicKey: key.publicKey, appId: '424242' })
-  github.installed.set('example/app', 91)
+async function fresh(options: { github?: boolean; approveAll?: boolean; signIn?: GitHubSignIn | null; now?: () => number
+  /** Another server's GitHub, shared: a second control API on the same database and GitHub, with its own caches. */
+  shared?: ReturnType<typeof fakeGitHub> } = {}) {
+  const github = options.shared ?? fakeGitHub({ publicKey: key.publicKey, appId: '424242' })
+  if (!options.shared) github.installed.set('example/app', 91)
   const log = { warn: vi.fn() }
-  const tokens = new GitHubTokens(fakeApp(key.privateKey, github), new MemoryTokenCache(), { log, secret: randomBytes(32) })
+  const tokens = new GitHubTokens(fakeApp(key.privateKey, github, { now: options.now }), new MemoryTokenCache(), { log, secret: randomBytes(32) })
   const releases: Promise<void>[] = []
   const store = new SuperTabStore(db, Date.now, null, { workEnded: (tab, ended) => { releases.push(tokens.release(tab, ended)) },
     workStarted: (tab, started) => { releases.push(tokens.resume(tab, started)) } })
@@ -133,7 +136,7 @@ describe('the GitHub token endpoint', () => {
     expect(data).toMatchObject({ token: 'ghs_fixture_1', repository: 'example/app', defaultBranch: 'main', defaultBranchProtected: false,
       defaultBranchProtection: 'none', requestedBy: { name: 'Olive Owner', email: owner.email }, agent: expect.any(String), machine: 'Fixture Mac',
       pullRequestLine: `Requested by Olive Owner (${owner.email}) through Harness.` })
-    expect(data.trailers).toEqual([`Co-authored-by: Olive Owner <${owner.email}>`, `Harness-Agent: ${data.agent}`, 'Harness-Machine: Fixture Mac'])
+    expect(data.trailers).toEqual([`Co-authored-by: Olive Owner <${owner.email}>`, 'Co-authored-by: Harness by Autonomous <noreply@autonomous.ai>', `Harness-Agent: ${data.agent}`, 'Harness-Machine: Fixture Mac'])
     expect(Date.parse(data.expiresAt)).toBeGreaterThan(Date.now() + 50 * 60_000)
     const minted = env.github.calls.find(c => c.path === '/app/installations/91/access_tokens')!
     expect(minted.body).toEqual({ repositories: ['app'],
@@ -175,7 +178,7 @@ describe('the GitHub token endpoint', () => {
   })
 
   // A Harness Team account has no git identity of its own (PR #1934, 2026-10-28): its commits are the app's bot account's.
-  it('names the app\'s bot account as who a Harness Team account\'s commits are by', async () => {
+  it('names Harness by Autonomous as who a Harness Team account\'s commits are by, asking GitHub nothing', async () => {
     const env = await fresh()
     const { tab, worker } = await working(env)
     const computerId = createHash('sha256').update('gh-host').digest('hex').slice(0, 32)
@@ -187,15 +190,13 @@ describe('the GitHub token endpoint', () => {
     const response = await env.app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/github-token?asAgentId=${worker}`,
       headers: { authorization: `Bearer ${host.sub}`, 'x-test-team': '1' }, payload: { machineId: 'gh-host' } })
     expect(response.statusCode, response.body).toBe(200)
-    expect(response.json().data.commitAs).toEqual({ name: 'Harness', email: '4242+harness-fixture[bot]@users.noreply.github.com' })
-    // GitHub not saying who the bot is leaves it out, and the token is still given.
-    const other = await fresh()
-    other.github.control.botId = null
-    const second = await working(other)
-    const again = await other.app.inject({ method: 'POST', url: `/api/super-tabs/${second.tab}/github-token?asAgentId=${second.worker}`,
+    expect(response.json().data.commitAs).toEqual({ name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' })
+    // GitHub is not asked: not saying who the bot is changes nothing.
+    env.github.control.botId = null
+    const again = await env.app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/github-token?asAgentId=${worker}`,
       headers: { authorization: `Bearer ${host.sub}`, 'x-test-team': '1' }, payload: { machineId: 'gh-host' } })
-    expect(again.json().data).toMatchObject({ token: expect.any(String) })
-    expect(again.json().data).not.toHaveProperty('commitAs')
+    expect(again.statusCode, again.body).toBe(200)
+    expect(again.json().data.commitAs).toEqual({ name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' })
   })
 
   it('warns, but still gives the token, when the default branch does not require a pull request; and says when it does', async () => {
@@ -306,9 +307,10 @@ describe('a queued start\'s preparation token', () => {
       const pool = (await poolRows(env.store, team, machineId)).find(p => p.tabId === tab)!
       await env.store.observeMachine(team, tab, machineId, { generation: pool.machine.generation, ...observed, privacy: { mode: 'dedicated' } })
     }
-    // A group [requester] asked for, its start's conversation; else the Lead's. The contributor joined above.
-    const conversationId = requester ? String((await env.run(tab, { type: 'conversation.create', title: 'Add search', brief: 'Add a search field',
-      checks: [], requesterId: requester.sub } as Command)).result.conversationId) : 'lead'
+    // A group of the project, its start's conversation: no agent but the coordinator starts into the project chat (#2207).
+    // [requester] asked for it, where given. The contributor joined above.
+    const conversationId = String((await env.run(tab, { type: 'conversation.create', title: 'Add search', brief: 'Add a search field',
+      checks: [], ...(requester ? { requesterId: requester.sub } : {}) } as Command)).result.conversationId)
     const startId = String((await env.run(tab, { type: 'agent.start', request: { conversationId, machineId, engine: 'codex', name: 'Builder',
       cwd: '/swarm-root/lead', permissionMode: 'full', worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } as Command)).result.startId)
     return { tab, startId }
@@ -683,5 +685,122 @@ describe('the CI load', () => {
     const off = await fresh({ github: false })
     const other = await working(off)
     expect((await load(off, other.tab, 'lead')).json().data).toEqual({ state: 'unavailable' })
+  })
+})
+
+// Task #2316 (Dee, 2026-11-03): after lampos's repository was allowed, "Set up GitHub for teammates" stayed on everyone's
+// computer for up to 5 minutes. Each project's GitHub revision moves in the Swarm state, so members' apps read again.
+describe('the GitHub revision', () => {
+  const signIn = { authorizeUrl: (state: string) => `https://github.test/login/oauth/authorize?state=${state}`,
+    permission: async () => ({ login: 'olive', push: true }) } as unknown as GitHubSignIn
+  /** A Swarm whose project and Docs are on example/app, and Other on example/other. */
+  async function swarm(env: Env) {
+    const { tab } = await working(env)
+    const project = async (name: string, repositoryUrl: string) => {
+      const made = (await env.run(tab, { type: 'project.create', name, visibility: 'public', brief: '' } as Command)).result
+      await env.run(tab, { type: 'agent.add', conversationId: made.conversationId, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Lead',
+        configuration: config, lead: true, project: { cwd: `/work/${name}`, repositoryUrl } } as Command)
+      return String(made.projectId)
+    }
+    return { tab, docs: await project('Docs', 'https://github.com/Example/App'), other: await project('Other', 'https://github.com/example/other.git') }
+  }
+  const revisions = async (env: Env, tab: string) =>
+    Object.fromEntries(((await env.store.read(owner, tab)).state.projects ?? []).map(p => [p.id, p.githubRevision ?? 0]))
+  const allow = async (env: Env, tab: string, projectId: string, scope: 'project' | 'swarm') => {
+    const asked = await env.app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/projects/${projectId}/github/approve`,
+      headers: { authorization: `Bearer ${owner.sub}` }, payload: { scope } })
+    const state = new URL((asked.json().data as { authorizeUrl: string }).authorizeUrl).searchParams.get('state')!
+    return { state, page: await env.app.inject({ method: 'GET', url: `/api/github/callback?code=c&state=${encodeURIComponent(state)}` }) }
+  }
+  const check = (env: Env, tab: string, projectId: string, refresh = true, record = true) => env.app.inject({ method: 'GET',
+    url: `/api/super-tabs/${tab}/projects/${projectId}/github${refresh ? `?refresh=1${record ? '' : '&record=0'}` : ''}`,
+    headers: { authorization: `Bearer ${owner.sub}` } })
+
+  it('moves every project on the repository when someone allows it, and a swarm-wide approval moves them all', async () => {
+    teamAccounts()
+    const env = await fresh({ approveAll: false, signIn })
+    const { tab, docs, other } = await swarm(env)
+    const before = await revisions(env, tab)
+    expect((await allow(env, tab, 'lead', 'project')).page.statusCode).toBe(200)
+    const once = await revisions(env, tab)
+    expect(once).toEqual({ ...before, lead: before.lead! + 1, [docs]: before[docs]! + 1 })
+    expect((await allow(env, tab, docs, 'swarm')).page.statusCode).toBe(200)
+    expect(await revisions(env, tab)).toEqual({ lead: once.lead! + 1, [docs]: once[docs]! + 1, [other]: before[other] })
+  })
+
+  it('a dialog read that finds the app installed now moves it once; the same answer again moves nothing', async () => {
+    teamAccounts()
+    let at = Date.now()
+    const env = await fresh({ approveAll: false, signIn, now: () => at })
+    const { tab, docs } = await swarm(env)
+    env.github.installed.delete('example/app')
+    expect((await check(env, tab, 'lead')).json().data).toMatchObject({ state: 'not-installed' })
+    const missing = await revisions(env, tab)
+    // Installed on GitHub's own site; the dialog asks again (at most every 15 s per repository).
+    env.github.installed.set('example/app', 91)
+    at += 16_000
+    expect((await check(env, tab, 'lead')).json().data).toMatchObject({ state: 'not-approved' })
+    const found = await revisions(env, tab)
+    expect(found.lead).toBe(missing.lead! + 1)
+    expect(found[docs]).toBe(missing[docs])
+    at += 16_000
+    expect((await check(env, tab, 'lead')).json().data).toMatchObject({ state: 'not-approved' })
+    expect(await revisions(env, tab)).toEqual(found)
+    // A read that does not ask GitHub again records nothing: another server's cache may be older.
+    expect((await check(env, tab, docs, false)).json().data).toMatchObject({ state: 'not-approved' })
+    expect(await revisions(env, tab)).toEqual(found)
+  })
+
+  // Review of #2713: every member's app reads again when the revision moves, and those reads land on servers whose caches
+  // differ (an installation is kept 10 minutes, "not installed" 1 minute). Had they recorded what they found, two servers
+  // would move the revision back and forth, each move making every app read again.
+  it('a read that follows a revision move records nothing, whatever answer it gets; a person\'s check still does', async () => {
+    teamAccounts()
+    const one = await fresh({ approveAll: false, signIn })
+    const two = await fresh({ approveAll: false, signIn, shared: one.github })
+    const { tab } = await swarm(one)
+    expect((await check(one, tab, 'lead')).json().data).toMatchObject({ state: 'not-approved' })
+    const seen = await revisions(one, tab)
+    // Removed from the repository: the first server still keeps the installation (10 minutes), the second asks GitHub.
+    one.github.installed.delete('example/app')
+    for (const [server, state] of [[one, 'not-approved'], [two, 'not-installed'], [one, 'not-approved'], [two, 'not-installed']] as const) {
+      expect((await check(server, tab, 'lead', true, false)).json().data).toMatchObject({ state })
+      expect(await revisions(one, tab)).toEqual(seen)
+    }
+    // A person checks again: that records the answer, once.
+    expect((await check(two, tab, 'lead')).json().data).toMatchObject({ state: 'not-installed' })
+    expect((await revisions(one, tab)).lead).toBe(seen.lead! + 1)
+  })
+
+  it('GitHub sending a person back after installing forgets the cache and moves every project on the repository', async () => {
+    teamAccounts()
+    const env = await fresh({ approveAll: false, signIn })
+    const { tab, docs, other } = await swarm(env)
+    env.github.installed.delete('example/app')
+    expect((await check(env, tab, 'lead', false)).json().data).toMatchObject({ state: 'not-installed' })
+    const before = await revisions(env, tab)
+    env.github.installed.set('example/app', 91)
+    const asked = await env.app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/projects/lead/github/approve`,
+      headers: { authorization: `Bearer ${owner.sub}` }, payload: { scope: 'project' } })
+    const state = new URL((asked.json().data as { authorizeUrl: string }).authorizeUrl).searchParams.get('state')!
+    const installed = await env.app.inject({ method: 'GET', url: `/api/github/callback?installation_id=9&setup_action=install&state=${encodeURIComponent(state)}` })
+    expect(installed.body).toContain('Harness is installed')
+    expect(await revisions(env, tab)).toEqual({ lead: before.lead! + 1, [docs]: before[docs]! + 1, [other]: before[other] })
+    // Read without asking again: the cache was forgotten, so it is installed now.
+    expect((await check(env, tab, 'lead', false)).json().data).toMatchObject({ state: 'not-approved' })
+  })
+
+  it('an approval whose move fails still says it is allowed, and says why in the log', async () => {
+    teamAccounts()
+    const env = await fresh({ approveAll: false, signIn })
+    const { tab } = await swarm(env)
+    const warn = vi.spyOn(logger, 'warn')
+    onTestFinished(() => { warn.mockRestore() })
+    vi.spyOn(env.store, 'githubChanged').mockRejectedValueOnce(new Error('write conflict'))
+    const { page } = await allow(env, tab, 'lead', 'project')
+    expect(page.statusCode).toBe(200)
+    expect(page.body).toContain('example/app is allowed')
+    expect(warn).toHaveBeenCalledWith('[github] access change not recorded', expect.objectContaining({ tabId: tab, error: 'Error: write conflict' }))
+    expect(env.approved).toHaveLength(1)
   })
 })

@@ -19,8 +19,9 @@ import { SwarmReads } from '../src/superTabs/read/service.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import { buddyChatId } from '../src/superTabs/buddies.js'
 import { resetInboxReads } from '../src/superTabs/read/inbox.js'
-import { MAX_READ_THREADS, resetThreadsReads, THREADS_READS, THREADS_WINDOW_MS } from '../src/superTabs/read/followedThreads.js'
+import { MAX_READ_THREADS, resetThreadsReads, TAGGED_THREADS, THREADS_READS, THREADS_WINDOW_MS } from '../src/superTabs/read/followedThreads.js'
 import type { Author, Conversation, SuperTabState } from '../src/superTabs/model.js'
+import { stableId } from '../src/superTabs/model.js'
 import { THREAD_MARK_CAP, writeThreadFollow, writeThreadMark } from '../src/superTabs/readMarks.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
@@ -485,4 +486,185 @@ describe('a person\'s followed threads (GET /threads)', () => {
     // A long thread's count stops at what the scan read.
     expect(reply.body.data.read.every((t: any) => t.replies <= 100)).toBe(true)
   }, 120_000)
+})
+
+describe('a thread the person is tagged in, in a chat they never opened (GET /threads)', () => {
+  /** The tag row the store writes for a tagged message (mentions.ts writeMentions); `insert` stores messages only. */
+  const tag = (tabId: string, conversationId: string, messageId: string, as: AuthUser = peer, options: { at?: number; resolved?: boolean; projectId?: string } = {}) =>
+    db.superTabMention.create({ data: { id: `${tabId}-${messageId}-${as.sub}`, tabId, personId: as.sub, projectId: options.projectId ?? 'lead', conversationId, messageId,
+      authorAgentId: owner.sub, createdAt: new Date(options.at ?? Date.now()), resolvedAt: options.resolved ? new Date() : null } })
+  /** Owner's root with owner's reply tagging peer: peer never marked the chat read. */
+  async function tagged(tabId: string, conversationId: string, label: string, worker: string) {
+    const [root] = await insert(tabId, conversationId, [{ text: `${label} root`, author: personAuthor(owner) }])
+    const [reply] = await insert(tabId, conversationId, [{ text: `${label} reply`, author: agentAuthor(worker), thread: root!, mentions: [peer.sub] }])
+    await tag(tabId, conversationId, reply!)
+    return { root: root!, reply: reply! }
+  }
+
+  it('lists it as a read thread, though the inbox counts the chat as read and lists none of its threads', async () => {
+    const s = await scene()
+    const t = await tagged(s.tabId, s.web, 'Tagged', s.worker)
+    expect((await inbox(s.tabId, peer)).body.data.threads).toEqual([])
+    const { status, body } = await threads(s.tabId, peer)
+    expect(status).toBe(200)
+    expect(body.data.unread).toEqual([])
+    expect(roots(body.data.read)).toEqual(['Tagged root'])
+    expect(body.data.read[0]).toMatchObject({ conversationId: s.web, rootId: t.root, replies: 1, follow: null })
+    expect(body.data.more).toBe(false)
+    // The tag is the person's own: nobody else is shown the thread for it.
+    expect((await threads(s.tabId, outsider)).body.data).toEqual({ unread: [], read: [], more: false })
+  })
+
+  it('lists a thread whose root is the tagged message, and one whose tag is answered, once each', async () => {
+    const s = await scene()
+    const [rootTagged, answered] = await insert(s.tabId, s.web, [{ text: 'Tagged at the root', author: personAuthor(owner), mentions: [peer.sub] },
+      { text: 'Answered root', author: personAuthor(owner) }])
+    const [, answeredReply] = await insert(s.tabId, s.web, [{ text: 'Reply', author: agentAuthor(s.worker), thread: rootTagged! }, { text: 'Tagged reply', author: agentAuthor(s.worker), thread: answered!, mentions: [peer.sub] }])
+    await tag(s.tabId, s.web, rootTagged!)
+    await tag(s.tabId, s.web, answeredReply!, peer, { resolved: true })
+    await tag(s.tabId, s.web, answeredReply!, owner)
+    const { body } = await threads(s.tabId, peer)
+    expect(roots(body.data.read).sort()).toEqual(['Answered root', 'Tagged at the root'])
+  })
+
+  it('never lists a thread whose tag names a chat they cannot read, another chat\'s message, a hidden root, an archived chat or an expired tag, naming nothing', async () => {
+    const s = await scene()
+    // A private project's thread: peer's tag row exists, as no route would write one.
+    const secret = await tagged(s.tabId, s.secretGroup, 'Secret', s.worker)
+    // A tag row for peer that names the open chat but another chat's message.
+    const [forgedRoot] = await insert(s.tabId, s.secretGroup, [{ text: 'Forged root', author: personAuthor(owner) }])
+    const [forgedReply] = await insert(s.tabId, s.secretGroup, [{ text: 'Forged reply', author: agentAuthor(s.worker), thread: forgedRoot!, mentions: [peer.sub] }])
+    await tag(s.tabId, s.web, forgedReply!)
+    // A thread whose root only agents read.
+    const [hiddenRoot] = await insert(s.tabId, s.web, [{ text: 'Hidden root', author: agentAuthor('hidden-agent'), source: { kind: 'note', recipientsOnly: true }, recipientIds: [s.worker] }])
+    const [hiddenReply] = await insert(s.tabId, s.web, [{ text: 'Reply under a hidden root', author: agentAuthor(s.worker), thread: hiddenRoot!, mentions: [peer.sub] }])
+    await tag(s.tabId, s.web, hiddenReply!)
+    // An expired tag (30 days), and an archived chat's.
+    const old = await tagged(s.tabId, s.openChat, 'Expired', s.worker)
+    await db.superTabMention.updateMany({ where: { tabId: s.tabId, messageId: old.reply }, data: { createdAt: new Date(Date.now() - 31 * 24 * 60 * 60_000) } })
+    const archived = await tagged(s.tabId, s.web, 'Archived', s.worker)
+    expect(roots((await threads(s.tabId, peer)).body.data.read)).toEqual(['Archived root'])
+    await editChat(s.tabId, s.web, data => { data.archived = true })
+    expect((await threads(s.tabId, peer)).body.data).toEqual({ unread: [], read: [], more: false })
+    expect(JSON.stringify((await threads(s.tabId, peer)).body)).not.toMatch(/Secret|Forged|Hidden|hidden-agent|Expired|Archived/)
+    expect([secret.root, archived.root, old.root]).toHaveLength(3)
+  })
+
+  it('leaves out a thread they unfollowed, and a Buddy chat of another person', async () => {
+    const s = await scene()
+    const t = await tagged(s.tabId, s.web, 'Unfollowed', s.worker)
+    await follow(s.tabId, s.web, t.root, false, peer)
+    const other = await tagged(s.tabId, s.web, 'Kept', s.worker)
+    // Peer\'s Buddy chat is theirs alone: a tag of the owner there names nothing for the owner.
+    const [buddyRoot] = await insert(s.tabId, s.buddyId, [{ text: 'Buddy root', author: personAuthor(peer) }])
+    const [buddyReply] = await insert(s.tabId, s.buddyId, [{ text: 'Buddy reply', author: personAuthor(peer), thread: buddyRoot!, mentions: [owner.sub] }])
+    await tag(s.tabId, s.buddyId, buddyReply!, owner)
+    expect(roots((await threads(s.tabId, peer)).body.data.read)).toEqual(['Kept root'])
+    const ownerRead = (await threads(s.tabId, owner)).body.data
+    expect(JSON.stringify(ownerRead)).not.toMatch(/Buddy/)
+    expect(other.root).toBeTruthy()
+  })
+
+  it('stops listing it once they lose the chat, and again lists it when they read it', async () => {
+    const s = await scene()
+    await tagged(s.tabId, s.web, 'Revoked', s.worker)
+    expect(roots((await threads(s.tabId, peer)).body.data.read)).toEqual(['Revoked root'])
+    await editChat(s.tabId, s.web, data => { data.audience = { people: [{ id: owner.sub, generation: 0 }] } })
+    expect((await threads(s.tabId, peer)).body.data).toEqual({ unread: [], read: [], more: false })
+    await editChat(s.tabId, s.web, data => { delete data.audience })
+    expect(roots((await threads(s.tabId, peer)).body.data.read)).toEqual(['Revoked root'])
+    await store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'member.remove', userId: peer.sub } })
+    const left = await threads(s.tabId, peer)
+    expect(left.status).toBe(404)
+    expect(JSON.stringify(left.body)).not.toMatch(/Revoked|Web/)
+  })
+
+  it(`checks at most ${TAGGED_THREADS} tagged threads, newest tag first, and says there are more`, async () => {
+    const s = await scene()
+    const many = await insert(s.tabId, s.web, Array.from({ length: TAGGED_THREADS + 5 }, (_, i) => ({ text: `Root ${i}`, author: personAuthor(owner) })))
+    const replies = await insert(s.tabId, s.web, many.map(thread => ({ text: 'Reply', author: agentAuthor(s.worker), thread, mentions: [peer.sub] })))
+    for (const [i, reply] of replies.entries()) await tag(s.tabId, s.web, reply, peer, { at: Date.now() - (replies.length - i) * 1000 })
+    const { body } = await threads(s.tabId, peer)
+    expect(body.data.read).toHaveLength(TAGGED_THREADS)
+    expect(body.data.more).toBe(true)
+    // The newest tags: the last roots.
+    expect(roots(body.data.read)).toContain(`Root ${TAGGED_THREADS + 4}`)
+    expect(roots(body.data.read)).not.toContain('Root 0')
+  })
+
+  /** An older tag in `older`, and TAGGED_THREADS + 1 newer ones in `chat` (the caller then hides them from the list). */
+  async function olderBehindNewer(tabId: string, older: string, chat: string, worker: string) {
+    const old = await tagged(tabId, older, 'Older', worker)
+    await db.superTabMention.updateMany({ where: { tabId, messageId: old.reply }, data: { createdAt: new Date(Date.now() - 3_600_000) } })
+    const roots = await insert(tabId, chat, Array.from({ length: TAGGED_THREADS + 1 }, (_, i) => ({ text: `Newer ${i}`, author: personAuthor(owner) })))
+    const replies = await insert(tabId, chat, roots.map(thread => ({ text: 'Reply', author: agentAuthor(worker), thread, mentions: [peer.sub] })))
+    for (const reply of replies) await tag(tabId, chat, reply)
+    return roots
+  }
+
+  it('does not let newer tags in an archived chat use up the cap and hide an older tag in an open chat', async () => {
+    const s = await scene()
+    await olderBehindNewer(s.tabId, s.web, s.openChat, s.worker)
+    await editChat(s.tabId, s.openChat, data => { data.archived = true })
+    const { body } = await threads(s.tabId, peer)
+    expect(roots(body.data.read)).toEqual(['Older root'])
+    expect(body.data.more).toBe(false)
+    expect(JSON.stringify(body.data)).not.toMatch(/Newer/)
+  })
+
+  it('does not let newer tags in threads they unfollowed use up the cap and hide an older tag', async () => {
+    const s = await scene()
+    const newer = await olderBehindNewer(s.tabId, s.web, s.web, s.worker)
+    for (const root of newer) expect((await follow(s.tabId, s.web, root, false, peer)).status).toBe(200)
+    const { body } = await threads(s.tabId, peer)
+    expect(roots(body.data.read)).toEqual(['Older root'])
+    expect(body.data.more).toBe(false)
+    expect(JSON.stringify(body.data)).not.toMatch(/Newer/)
+  })
+})
+
+// Task #2265 (Diego): a person's own message from the phone, the web or the dial left the chat bold on their other apps, and a chat
+// set to All could tell them of it, as a send never moved its author's mark.
+describe('a person\'s own message leaves the chat read for them', () => {
+  const send = async (tabId: string, conversationId: string, as: AuthUser, text: string, more: Record<string, unknown> = {}) => {
+    const answer = await call('POST', `/api/super-tabs/${tabId}/commands`, as, { operationId: randomUUID(),
+      command: { type: 'message.send', conversationId, text, replyTo: null, recipientIds: [], ...more } })
+    expect(answer.status).toBe(200)
+    return answer.body.data.result.messageId as string
+  }
+  const markOf = async (tabId: string, conversationId: string, as: AuthUser) =>
+    (await db.superTabReadMark.findUnique({ where: { id: stableId(tabId, conversationId, as.sub) }, select: { sequence: true } }))?.sequence ?? 0
+
+  it('moves their mark to their message, and nobody else\'s', async () => {
+    const s = await scene()
+    const id = await send(s.tabId, s.web, owner, 'From my phone')
+    expect(await markOf(s.tabId, s.web, owner)).toBe(await sequenceOf(id))
+    expect(await markOf(s.tabId, s.web, peer)).toBe(0)
+  })
+
+  it('tells their other apps in the same read that says the chat moved', async () => {
+    const s = await scene()
+    const id = await send(s.tabId, s.web, owner, 'From my phone')
+    const derived = (await call('GET', `/api/super-tabs/${s.tabId}/parts`, owner)).body.data.derived
+    expect(derived.readMarks[s.web]).toBe(await sequenceOf(id))
+  })
+
+  it('leaves the mark for a reply only in a thread, and moves it for one also sent to the chat', async () => {
+    const s = await scene()
+    const root = await send(s.tabId, s.web, owner, 'Root')
+    const at = await markOf(s.tabId, s.web, owner)
+    await send(s.tabId, s.web, owner, 'Only in the thread', { replyTo: root })
+    expect(await markOf(s.tabId, s.web, owner)).toBe(at)
+    const also = await send(s.tabId, s.web, owner, 'Also in the chat', { replyTo: root, alsoSend: true })
+    expect(await markOf(s.tabId, s.web, owner)).toBe(await sequenceOf(also))
+  })
+
+  it('never reads a thread for them: a teammate\'s reply it passes still counts in the inbox', async () => {
+    const s = await scene()
+    const [root] = await insert(s.tabId, s.web, [{ text: 'Owner root', author: personAuthor(owner) }])
+    await markRead(s.tabId, s.web, await sequenceOf(root!), owner)
+    await insert(s.tabId, s.web, [{ text: 'Worker reply', author: agentAuthor(s.worker), thread: root }])
+    await send(s.tabId, s.web, owner, 'From my phone')
+    expect(roots((await inbox(s.tabId, owner)).body.data.threads)).toEqual(['Owner root'])
+  })
 })

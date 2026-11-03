@@ -4,10 +4,10 @@
  * readers show it inside its task. No step name means anything to the server.
  */
 import { describe, expect, it } from 'vitest'
-import { applyCommand, type Command, type CommandContext } from './commands.js'
-import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
+import { applyCommand, PAIR_CHAIN_LIMIT, type Command, type CommandContext } from './commands.js'
+import { agent, createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import { extracted } from './parts/write.js'
-import { stepSleeps } from './steps.js'
+import { stepEndedRows, stepSleeps } from './steps.js'
 import { reportedAs } from './projectUpdates.js'
 import { idleNotices } from './tidy.js'
 
@@ -100,6 +100,95 @@ describe('assigning a step', () => {
     f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
     expect(f.group(id).assignment).toMatchObject({ agentId: rev, status: 'working' })
     expect(f.group(id).assignment!.id).not.toBe(first)
+  })
+
+  // Task #2241: a verdict is a post, in the step's chat or the task's, addressed to the Engineer.
+  describe('a post to its Engineer', () => {
+    const post = (f: ReturnType<typeof stepsFixture>, conversationId: string, recipientIds: string[], actor: string) =>
+      f.run({ type: 'message.send', conversationId, text: 'Ready to merge: No. One Critical.', replyTo: null, recipientIds } as Command, f.as(actor))
+    const reviewing = () => {
+      const f = stepsFixture()
+      const id = f.step('Review')
+      const rev = f.add('rev', id)
+      f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
+      return { f, id, rev }
+    }
+
+    it('from the step\'s own agent is kept, in the step\'s chat or the task\'s', () => {
+      const a = reviewing()
+      post(a.f, a.id, [a.f.dev], a.rev)
+      expect(a.f.group(a.id).assignment!.toldEngineerAt).toBe(a.f.now)
+      // A plain post in a step reaches its Engineer by default, so it counts too.
+      const b = reviewing()
+      post(b.f, b.id, [], b.rev)
+      expect(b.f.group(b.id).assignment!.toldEngineerAt).toBe(b.f.now)
+      // Named from the task's own chat, once the Reviewer is in it.
+      const c = reviewing()
+      c.f.run({ type: 'conversation.agent', conversationId: c.f.task, agentId: c.rev, present: true, lead: false })
+      post(c.f, c.f.task, [c.f.dev], c.rev)
+      expect(c.f.group(c.id).assignment!.toldEngineerAt).toBe(c.f.now)
+    })
+
+    it('is what counts: not a post to someone else, nor the Engineer\'s own post to the step', () => {
+      const f = reviewing()
+      const other = f.f.add('other', f.id)
+      post(f.f, f.id, [other], f.rev)
+      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBeUndefined()
+      post(f.f, f.id, [f.rev], f.f.dev)
+      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBeUndefined()
+    })
+
+    // An existing rule (integration/superTabLiveness.test.ts): a Reviewer's note to a working Engineer keeps no hung Reviewer.
+    it('holds nothing when it\'s a note to an Engineer already working, but a verdict does', () => {
+      const f = reviewing()
+      const note = (text: string) => f.f.run({ type: 'message.send', conversationId: f.id, text, replyTo: null, recipientIds: [f.f.dev] } as Command, f.f.as(f.rev))
+      note('Still reading the parser changes.')
+      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBeUndefined()
+      note('Ready to merge: Yes, once CI is green.')
+      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBeUndefined()
+      note('**Ready to merge: With fixes.** One Important finding.')
+      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBe(f.f.now)
+    })
+
+    it('counts whatever it says when the Engineer was waiting on this review, as a Tester\'s verdict has no set form', () => {
+      const f = reviewing()
+      f.f.run({ type: 'work.status', conversationId: f.f.task, assignmentId: f.f.group(f.f.task).assignment!.id, status: 'review', result: 'PR 7' } as Command, f.f.as(f.f.dev))
+      f.f.run({ type: 'message.send', conversationId: f.id, text: 'Sign-in fails offline, steps below.', replyTo: null, recipientIds: [f.f.dev] } as Command, f.f.as(f.rev))
+      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBe(f.f.now)
+    })
+
+    // Review of #2659: Engineers often ask by post, "fixed at abc, please re-check", so a hung Reviewer must not stay held.
+    it('ends with the Engineer\'s post to it, in the step\'s chat or the task\'s, and its 30 minutes restart', () => {
+      const a = reviewing()
+      post(a.f, a.id, [a.f.dev], a.rev)
+      a.f.tick(60_000)
+      post(a.f, a.id, [a.rev], a.f.dev)
+      expect(a.f.group(a.id).assignment!.toldEngineerAt).toBeUndefined()
+      expect(a.f.group(a.id).assignment).toMatchObject({ status: 'working', progressAt: a.f.now })
+      const b = reviewing()
+      post(b.f, b.id, [b.f.dev], b.rev)
+      b.f.run({ type: 'conversation.agent', conversationId: b.f.task, agentId: b.rev, present: true, lead: false })
+      b.f.tick(60_000)
+      post(b.f, b.f.task, [b.rev], b.f.dev)
+      expect(b.f.group(b.id).assignment!.toldEngineerAt).toBeUndefined()
+      expect(b.f.group(b.id).assignment).toMatchObject({ progressAt: b.f.now })
+    })
+
+    it('gives no time to a Reviewer that isn\'t waiting: the Engineer\'s posts keep no idle Reviewer', () => {
+      const f = reviewing()
+      const before = f.f.group(f.id).assignment!.progressAt
+      f.f.tick(60_000)
+      post(f.f, f.id, [f.rev], f.f.dev)
+      expect(f.f.group(f.id).assignment!.progressAt).toBe(before)
+    })
+
+    it('ends with the Engineer\'s next Ready', () => {
+      const f = reviewing()
+      post(f.f, f.id, [f.f.dev], f.rev)
+      f.f.run({ type: 'work.status', conversationId: f.f.task, assignmentId: f.f.group(f.f.task).assignment!.id, status: 'review', result: 'PR 7, fixed' } as Command, f.f.as(f.f.dev))
+      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBeUndefined()
+      expect(f.f.group(f.id).assignment).toMatchObject({ status: 'working', progressAt: f.f.now })
+    })
   })
 
   // The fix round Reviewers already wait through (liveness.ts waitingForRevision, Diego 2026-11-01), pinned for steps.
@@ -225,6 +314,34 @@ describe('who hears a step', () => {
     expect(to(post(f.task), f.task)).toEqual([[f.dev]])
   })
 
+  // Diego, 2026-11-02: "Fixed in abc123, please re-check" from the Engineer woke the PM and the Reviewer never heard it.
+  it('the owner\'s unnamed post in its active step reaches the step\'s agent only', () => {
+    const { f, id, rev, post } = reviewing()
+    expect(to(post(id, f.dev), id)).toEqual([[rev]])
+  })
+
+  it('the owner\'s post in its step naming the coordinator still reaches the coordinator', () => {
+    const { f, id } = reviewing()
+    const named = f.run({ type: 'message.send', conversationId: id, text: 'Need a ruling.', replyTo: null, recipientIds: [f.lead] } as Command, f.as(f.dev)).messages
+    expect(to(named, id)).toEqual([[f.lead]])
+  })
+
+  // Cleo's review of #2635: nothing is dropped. Where the owner's post does not go to the step's agent, it falls back as before.
+  it('the owner\'s unnamed post after the pair\'s loop guard stops still reaches the coordinator', () => {
+    const { f, id, rev } = reviewing()
+    const recent = Array.from({ length: PAIR_CHAIN_LIMIT }, (_, i) => ({ author: { kind: 'agent', id: i % 2 ? rev : f.dev } as never, recipients: [i % 2 ? f.dev : rev] }))
+    const sent = f.run({ type: 'message.send', conversationId: id, text: 'Fixed, please re-check.', replyTo: null, recipientIds: [] } as Command, f.as(f.dev), { recent }).messages
+    expect(to(sent, id)).toEqual([[f.lead]])
+  })
+
+  it('the owner\'s unnamed reply to someone else in its step still reaches the coordinator', () => {
+    const { f, id } = reviewing()
+    const asked = f.run({ type: 'message.send', conversationId: id, text: 'Status?', replyTo: null, recipientIds: [f.dev] } as Command, f.as(f.lead)).messages[0]!
+    const answer = f.run({ type: 'message.send', conversationId: id, text: 'Almost.', replyTo: asked.id, recipientIds: [] } as Command, f.as(f.dev),
+      { reply: { id: asked.id, conversationId: id, author: asked.author, createdAt: 0 } }).messages
+    expect(to(answer, id)).toEqual([[f.lead]])
+  })
+
   it('an agent with no open step in the task still reaches the coordinator', () => {
     const { f, post } = reviewing()
     const other = f.add('other', f.task)
@@ -267,7 +384,8 @@ describe('a step the PM opened', () => {
     f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.lead))
     expect(f.group(id).agentIds).not.toContain(f.dev)
     const messages = f.run({ type: 'work.status', conversationId: id, assignmentId: f.group(id).assignment!.id, status: 'done', result: 'Passed' } as Command, f.as(rev)).messages
-    expect(messages.filter(m => m.conversationId === id).map(m => m.recipients)).toEqual([[f.dev]])
+    // Its Done, then the row that says the owner joined to hear it (#2207).
+    expect(messages.filter(m => m.conversationId === id).map(m => m.recipients)).toEqual([[f.dev], []])
     expect(f.group(id).agentIds).toContain(f.dev)
   })
 })
@@ -301,13 +419,13 @@ describe('a linked task opened without a step name', () => {
   it('tells the task\'s owner its Ready and Done, and its unnamed posts', () => {
     const { f, id, tester } = linked()
     const done = f.run({ type: 'work.status', conversationId: id, assignmentId: f.group(id).assignment!.id, status: 'done', result: 'Passed' } as Command, f.as(tester)).messages
-    expect(done.filter(m => m.conversationId === id).map(m => m.recipients)).toEqual([[f.dev]])
+    expect(done.filter(m => m.conversationId === id).map(m => m.recipients)).toEqual([[f.dev], []])
     expect(f.group(f.task).agentIds).toContain(tester)
   })
   it('an unnamed post from its agent reaches the owner', () => {
     const { f, id, tester } = linked()
     const posted = f.run({ type: 'message.send', conversationId: id, text: 'Starting on the simulator.', replyTo: null, recipientIds: [] } as Command, f.as(tester)).messages
-    expect(posted.map(m => m.recipients)).toEqual([[f.dev]])
+    expect(posted.map(m => m.recipients)).toEqual([[f.dev], []])
   })
   it('closes with its task, not on its own clock', () => {
     const { f, id, tester } = linked()
@@ -352,5 +470,112 @@ describe('the PM is not told what a step\'s agent says to its task', () => {
     // The Engineer, idle with its task done, is still told: an idle Engineer is stopped.
     expect(notices).toContain(f.dev)
     expect(notices).not.toContain(rev)
+  })
+})
+
+// The archive pass writes these with no command behind it, so they must never stop it: a delivery to an agent that has left throws.
+describe("the row a step's ended work leaves", () => {
+  const state = { people: [{ id: 'owner', generation: 'g' }, { id: 'rejoined', generation: 'new' }], agents: [
+    { id: 'kept', name: 'Reviewer', contributorId: 'owner', membershipGeneration: 'g' },
+    // agent() throws for both of these, as writeMessages calls it for each recipient (review 2 of #2596).
+    { id: 'orphaned', name: 'Reviewer', contributorId: 'left', membershipGeneration: 'g' },
+    { id: 'stale', name: 'Reviewer', contributorId: 'rejoined', membershipGeneration: 'old' },
+  ] } as never
+  const step = (agentId: string) => ({ id: `step-${agentId}`, assignment: { agentId } }) as never
+  const lead = { kind: 'agent', id: 'lead', name: 'Lead', membershipGeneration: 'g' } as const
+
+  it("goes to the step's agent, in that step, as the author given", () => {
+    expect(stepEndedRows(state, [step('kept')], 'Fix was archived.', lead, s => `row-${s.id}`)).toEqual([expect.objectContaining({
+      id: 'row-step-kept', conversationId: 'step-kept', author: lead, text: 'Fix was archived.', recipients: ['kept'], source: { kind: 'system' } })])
+  })
+
+  it('goes to nobody when its agent has left the Swarm', () => {
+    expect(stepEndedRows(state, [step('gone')], 'Fix was archived.', lead, s => s.id)[0]!.recipients).toEqual([])
+  })
+
+  it('goes to nobody, and never throws at its delivery, when its agent\'s contributor is gone or has another generation', () => {
+    for (const id of ['orphaned', 'stale']) {
+      const [row] = stepEndedRows(state, [step(id)], 'Fix was archived.', lead, s => s.id)
+      expect(row!.recipients).toEqual([])
+      expect(() => { for (const recipient of row!.recipients) agent(state, recipient) }).not.toThrow()
+      expect(stepEndedRows(state, [step(id)], 'Fix was archived.', null, s => s.id)).toEqual([])
+    }
+    expect(() => agent(state, 'orphaned')).toThrow()
+  })
+
+  it('is written as the agent told when there is no Lead, and not at all when there is nobody to write it', () => {
+    expect(stepEndedRows(state, [step('kept')], 'Fix was archived.', null, s => s.id)[0]!.author).toMatchObject({ kind: 'agent', id: 'kept' })
+    expect(stepEndedRows(state, [step('gone')], 'Fix was archived.', null, s => s.id)).toEqual([])
+  })
+})
+
+// Diego, 2026-11-03 (#2311): Review and Test record the same checks in parallel, and a Reviewer's pass used to erase the
+// Tester's failure and its crash log, so the check read passed on a pull request whose test failed.
+describe('checks with several checkers', () => {
+  const checkers = () => {
+    const f = stepsFixture()
+    const tester = f.add('tester', f.task), reviewer = f.add('reviewer', f.task)
+    const check = (actor: string, passed: boolean, evidence: string) => f.run({ type: 'work.check', conversationId: f.task,
+      assignmentId: f.group(f.task).assignment!.id, checkId: f.group(f.task).checks[0]!.id, passed, evidence } as Command, f.as(actor))
+    return { f, tester, reviewer, check, read: () => f.group(f.task).checks[0]! }
+  }
+
+  it('Tester fails, Reviewer passes: the check reads failed and keeps the Tester\'s evidence', () => {
+    const { f, tester, reviewer, check, read } = checkers()
+    check(tester, false, 'Crashes offline\nlog')
+    f.tick(1000)
+    check(reviewer, true, 'Diff reads right')
+    expect(read()).toMatchObject({ passedBy: null, evidence: 'Crashes offline\nlog' })
+    expect(read().verdicts).toEqual([
+      { by: `agent:${tester}`, passed: false, evidence: 'Crashes offline\nlog', at: f.now - 1000 },
+      { by: `agent:${reviewer}`, passed: true, evidence: 'Diff reads right', at: f.now },
+    ])
+  })
+
+  it('the same Tester passing it then passes the check', () => {
+    const { tester, reviewer, check, read } = checkers()
+    check(tester, false, 'Crashes offline')
+    check(reviewer, true, 'Diff reads right')
+    check(tester, true, 'Signs in offline now')
+    expect(read()).toMatchObject({ passedBy: `agent:${tester}`, evidence: 'Signs in offline now' })
+    expect(read().verdicts!.map(v => [v.by, v.passed])).toEqual([[`agent:${reviewer}`, true], [`agent:${tester}`, true]])
+  })
+
+  it('the assignee passing a check the Reviewer failed leaves it failed', () => {
+    const { f, reviewer, check, read } = checkers()
+    check(reviewer, false, 'Drops the session')
+    check(f.dev, true, 'Fixed it')
+    expect(read()).toMatchObject({ passedBy: null, evidence: 'Drops the session' })
+  })
+
+  it('two failures: failed until both pass, the latest failure\'s evidence shown', () => {
+    const { tester, reviewer, check, read } = checkers()
+    check(tester, false, 'Crashes offline')
+    check(reviewer, false, 'Leaks the token')
+    expect(read()).toMatchObject({ passedBy: null, evidence: 'Leaks the token' })
+    check(reviewer, true, 'Token kept')
+    expect(read()).toMatchObject({ passedBy: null, evidence: 'Crashes offline' })
+    check(tester, true, 'Works offline')
+    expect(read()).toMatchObject({ passedBy: `agent:${tester}`, evidence: 'Works offline' })
+  })
+
+  it('a pass kept from before verdicts counts as its checker\'s verdict', () => {
+    const { tester, reviewer, check, read } = checkers()
+    // As a check recorded before verdicts were kept: its pass and evidence only.
+    Object.assign(read(), { passedBy: `agent:${reviewer}`, evidence: 'Diff reads right' })
+    check(tester, false, 'Crashes offline')
+    expect(read()).toMatchObject({ passedBy: null, evidence: 'Crashes offline' })
+    check(reviewer, true, 'Still right')
+    expect(read().verdicts!.map(v => [v.by, v.passed, v.evidence])).toEqual([
+      [`agent:${tester}`, false, 'Crashes offline'], [`agent:${reviewer}`, true, 'Still right']])
+  })
+
+  it('a new attempt starts with no verdicts', () => {
+    const { f, tester, check, read } = checkers()
+    check(tester, false, 'Crashes offline')
+    f.run({ type: 'work.cancel', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, reason: 'Again.' } as Command, f.as(f.lead))
+    f.run({ type: 'work.assign', conversationId: f.task, agentId: f.dev }, f.as(f.lead))
+    expect(read()).toMatchObject({ passedBy: null, evidence: null })
+    expect(read()).not.toHaveProperty('verdicts')
   })
 })

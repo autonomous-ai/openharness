@@ -13,6 +13,7 @@ import type { SwarmSkill } from './savedSkill.js'
  * backend's capabilities and the config directory writer) are exactly the parts worth stubbing in a spec.
  */
 
+import { agentTmpEnv, buddyTmpEnv } from './agentTmp.js'
 import type { NativeLaunch, NativeLaunchResult, NativeLaunchSource } from '../engines/nativeLaunch.js'
 import type { AgentEngine } from '../engines/types.js'
 import { subscriptionModelLaunch } from './subscriptionModel.js'
@@ -324,7 +325,9 @@ export async function prepareLaunchOverrides(
       cwd: source.cwd ?? null, profile: source.codexHome, environment: native?.environment, read: deps.readAttribution, ...(swarmInstructions ? { swarmInstructions } : {}),
     })
     if (told.length) overrides = { ...overrides, extraArgs: joinedInstructions(engine, [...overrides.extraArgs, ...told]) }
-    return { ok: true, overrides: { ...overrides, ...(native ? { native, env: { ...overrides.env, ...native.environment } } : {}), clearEnv: [...overrides.clearEnv, ...harnessEnvToClear(overrides.env)] } }
+    // The launch's own variables win over the private temporary folder, as at agent_create.
+    const launchEnv = { ...(source.swarmSkill?.role === 'buddy' && source.cwd ? buddyTmpEnv(engine, source.cwd) : agentTmpEnv(engine, source.swarmSkill?.role)), ...overrides.env, ...native?.environment }
+    return { ok: true, overrides: { ...overrides, ...(native ? { native } : {}), env: launchEnv, clearEnv: [...overrides.clearEnv, ...harnessEnvToClear(overrides.env)] } }
   } }
 }
 

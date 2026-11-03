@@ -1,9 +1,7 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -11,13 +9,14 @@ import '../shared/theme/app_space.dart';
 import '../shared/theme/app_theme.dart';
 import '../shared/theme/app_type.dart';
 import 'model.dart';
+import 'swarm_home_keeper.dart';
 import 'swarm_inbox.dart';
+import 'swarm_leaderboard.dart' show SwarmProjectSheetFrame;
 import 'swarm_need_rows.dart';
 import 'swarm_activity_page.dart' show openSwarmActivity;
 import 'swarm_needs_page.dart';
 import 'swarm_reader.dart';
 import 'swarm_session.dart';
-import 'swarm_style.dart';
 
 /// The decisions waiting on the person in [projectId] of Swarm [swarmId], as
 /// Activity lists them ([swarmNeedsOf]): each asked in a conversation of that
@@ -76,48 +75,78 @@ String swarmStatusUpdatedAt(DateTime at, DateTime now) {
 Future<bool> Function(Uri url) swarmOpenStatusLink = (url) =>
     launchUrl(url, mode: LaunchMode.inAppBrowserView);
 
-/// The status card at the top of a project's chat, as the desktop draws it
-/// (`desktop/lib/super_tabs/project_status_card.dart`): what the coordinator
-/// last reported, replaced in place by each report, and the decisions in this
+/// What a project's menu opens as Status: the project's report and what waits
+/// on the person, in a sheet over its chat (Tony, 2026-11-02: the chat shows
+/// no box of its own). The report as the coordinator last wrote it, replaced
+/// in place by each report, under "updated 09:52"; then the decisions in this
 /// project waiting on the person, each opening Activity at it, where the
-/// desktop opens Notifications. Hidden while there is neither; folded to its
-/// heading by the person, remembered on this phone
-/// ([SwarmHomePrefs.folded]), and while the keyboard is up, so it never
-/// pushes the composer.
-///
-/// It reads nothing of its own: the text comes with the Swarm read, the
-/// decisions are Activity's ([swarmProjectNeedsYou]).
-class SwarmProjectStatusCard extends StatelessWidget {
-  const SwarmProjectStatusCard({
+/// desktop opens Notifications. Nothing is read here: the text comes with the
+/// Swarm read, the decisions are Activity's ([swarmProjectNeedsYou]). The page
+/// under it closes it when the read, the access or the project is gone.
+class SwarmProjectStatusSheet extends StatelessWidget {
+  const SwarmProjectStatusSheet({
+    super.key,
+    required this.swarmId,
+    required this.projectId,
+    this.now = DateTime.now,
+  });
+
+  final String swarmId, projectId;
+  final DateTime Function() now;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final session = SwarmScope.of(context);
+    return SwarmProjectSheetFrame(
+      title: 'Status',
+      closeKey: 'swarm-status-close',
+      child: session == null
+          ? const SizedBox.shrink()
+          : ListenableBuilder(
+              listenable: session.inbox,
+              builder: (context, _) => switch (session.inbox.reader(swarmId)) {
+                final reader? => SwarmProjectStatus(
+                  session: session,
+                  reader: reader,
+                  swarmId: swarmId,
+                  projectId: projectId,
+                  now: now,
+                ),
+                null => const SizedBox.shrink(),
+              },
+            ),
+    );
+  }
+}
+
+/// The body of [SwarmProjectStatusSheet] for [projectId] of [reader]'s Swarm.
+/// Nothing at all once the access is revoked, the project is gone or the
+/// person no longer reads it: no text, no time, no decision stays.
+class SwarmProjectStatus extends StatelessWidget {
+  const SwarmProjectStatus({
     super.key,
     required this.session,
     required this.reader,
     required this.swarmId,
     required this.projectId,
-    this.typing = false,
     this.now = DateTime.now,
   });
 
   final SwarmSession session;
   final SwarmReader reader;
   final String swarmId, projectId;
-
-  /// The keyboard is up. Told by the page: inside its Scaffold the inset is
-  /// taken away, so the card cannot see it.
-  final bool typing;
   final DateTime Function() now;
-
-  /// How tall the open card grows before its text scrolls inside it.
-  static const maxBody = 200.0;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    // The session tells of answers held for Undo, which the rows say.
+    // The session tells of answers held for Undo, which the rows say; the
+    // asks, of what waits on the person being read.
     listenable: Listenable.merge([
       reader,
       session.inbox,
-      session.home,
       session,
+      ?session.inbox.asks(swarmId),
     ]),
     builder: (context, _) {
       AppTheme.watch(context);
@@ -128,173 +157,69 @@ class SwarmProjectStatusCard extends StatelessWidget {
       }
       final status = project.status;
       final waiting = swarmProjectNeedsYou(session, reader, swarmId, projectId);
-      if (status == null && waiting.isEmpty) return const SizedBox.shrink();
-      final chosen = session.home.folded(swarmId, projectId);
-      final folded = chosen || typing;
-      return Padding(
+      if (status == null && waiting.isEmpty) {
+        // "Nothing to report" only once the Swarm was read and what waits on
+        // the person with it: the view kept on the phone holds neither, and a
+        // read that failed says so rather than "nothing".
+        final asks = session.inbox.asks(swarmId);
+        final (key, line) = switch ((
+          swarmHomeKept(reader),
+          reader.error ?? asks?.error,
+          asks == null || asks.loading,
+        )) {
+          (_, final error?, _) => ('error', error),
+          (true, _, _) || (_, _, true) => ('updating', 'Updating…'),
+          _ => ('empty', 'Nothing to report yet.'),
+        };
+        return Padding(
+          padding: const EdgeInsets.all(AppSpace.screenInset),
+          child: Text(
+            line,
+            key: ValueKey('swarm-project-status-$key-$projectId'),
+            style: AppType.body(color: AppPalette.textSecondary),
+          ),
+        );
+      }
+      return ListView(
+        key: ValueKey('swarm-project-status-$projectId'),
         padding: const EdgeInsets.fromLTRB(
           AppSpace.screenInset,
           AppSpace.xs,
           AppSpace.screenInset,
-          AppSpace.xs,
+          AppSpace.l,
         ),
-        child: Semantics(
-          container: true,
-          label: 'Project status',
-          child: DecoratedBox(
-            key: ValueKey('swarm-project-status-$projectId'),
-            decoration: BoxDecoration(
-              color: AppPalette.cardBg,
-              borderRadius: BorderRadius.circular(AppCard.radius),
-              border: Border.all(color: AppGlass.hair),
-            ),
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(
-                AppSpace.m,
-                0,
-                0,
-                folded ? 0 : AppSpace.s,
+        children: [
+          if (status != null) ...[
+            if (status.at case final at?) ...[
+              Text(
+                'updated ${swarmStatusUpdatedAt(at, now())}',
+                key: ValueKey('swarm-project-status-heading-$projectId'),
+                style: AppType.caption(color: AppPalette.textSecondary),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _heading(context, status?.at, waiting.length, folded, chosen),
-                  if (!folded)
-                    // A long report, or many decisions, scroll inside the
-                    // card, so the chat keeps its room. Each part takes what
-                    // it needs; only when both overflow do they share it
-                    // half and half, so a long report never hides what waits
-                    // on the person.
-                    _Shares(
-                      maxHeight: maxBody,
-                      gap: AppSpace.s,
-                      children: [
-                        if (status != null)
-                          SingleChildScrollView(
-                            key: ValueKey(
-                              'swarm-project-status-body-$projectId',
-                            ),
-                            padding: const EdgeInsets.only(right: AppSpace.m),
-                            child: _StatusText(status.text),
-                          ),
-                        if (waiting.isNotEmpty)
-                          SingleChildScrollView(
-                            key: ValueKey(
-                              'swarm-project-status-needs-$projectId',
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                for (final need in waiting)
-                                  SwarmNeedLine(
-                                    key: ValueKey(
-                                      'swarm-project-status-need-${need.key}',
-                                    ),
-                                    session: session,
-                                    need: need,
-                                    chevron: LucideIcons.chevronRight300,
-                                    onTap: () => openSwarmActivity(
-                                      context,
-                                      focus: need.key,
-                                      swarmId: swarmId,
-                                      projectId: projectId,
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
-                      ],
-                    ),
-                ],
+              const SizedBox(height: AppSpace.s),
+            ],
+            _StatusText(status.text),
+          ],
+          if (waiting.isNotEmpty) ...[
+            if (status != null) const SizedBox(height: AppSpace.m),
+            for (final need in waiting)
+              SwarmNeedLine(
+                key: ValueKey('swarm-project-status-need-${need.key}'),
+                session: session,
+                need: need,
+                chevron: LucideIcons.chevronRight300,
+                onTap: () => openSwarmActivity(
+                  context,
+                  focus: need.key,
+                  swarmId: swarmId,
+                  projectId: projectId,
+                ),
               ),
-            ),
-          ),
-        ),
+          ],
+        ],
       );
     },
   );
-
-  /// "Status · updated 09:52", with how many wait on the person while
-  /// folded, and the fold at its end. "N need you" opens Activity on this
-  /// project's rows, where they are answered: no chat shows decisions. While
-  /// the keyboard alone folds it, there is no button, only its room: a tap
-  /// then would save a fold, or an unfold, the person never saw.
-  Widget _heading(
-    BuildContext context,
-    DateTime? at,
-    int waiting,
-    bool folded,
-    bool chosen,
-  ) => Row(
-    children: [
-      Expanded(
-        child: Row(
-          children: [
-            Flexible(
-              child: Text.rich(
-                TextSpan(
-                  children: [
-                    TextSpan(
-                      text: 'Status',
-                      style: AppType.label(color: AppPalette.textPrimary),
-                    ),
-                    if (at != null)
-                      TextSpan(
-                        text: ' · updated ${swarmStatusUpdatedAt(at, now())}',
-                        style: AppType.caption(color: AppPalette.textSecondary),
-                      ),
-                  ],
-                ),
-                key: ValueKey('swarm-project-status-heading-$projectId'),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            // Folded, the heading still says something waits, and leads to it.
-            if (folded && waiting > 0) _needYou(context, waiting),
-          ],
-        ),
-      ),
-      if (typing)
-        const SizedBox.square(dimension: 44)
-      else
-        SwarmIconButton(
-          key: ValueKey('swarm-project-status-fold-$projectId'),
-          label: chosen ? 'Show status' : 'Fold status',
-          icon: chosen ? LucideIcons.chevronDown300 : LucideIcons.chevronUp300,
-          size: 18,
-          onPressed: () => session.home.fold(swarmId, projectId, !chosen),
-        ),
-    ],
-  );
-
-  /// " · 2 need you", a tap target as tall as the fold beside it: Activity,
-  /// on what waits on the person in this project.
-  Widget _needYou(BuildContext context, int waiting) {
-    final text = '$waiting ${waiting == 1 ? 'needs' : 'need'} you';
-    return Semantics(
-      button: true,
-      label: text,
-      excludeSemantics: true,
-      child: GestureDetector(
-        key: ValueKey('swarm-project-status-needs-you-$projectId'),
-        behavior: HitTestBehavior.opaque,
-        onTap: () =>
-            openSwarmActivity(context, swarmId: swarmId, projectId: projectId),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 44),
-          child: Align(
-            widthFactor: 1,
-            child: Text(
-              ' · $text',
-              maxLines: 1,
-              style: AppType.caption(color: AppPalette.swarmAccent),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 /// The report as the coordinator wrote it, line for line, with its web links
@@ -395,102 +320,4 @@ class _StatusTextState extends State<_StatusText> {
       ),
     );
   }
-}
-
-/// One or two scrolling parts, one over the other, no taller together than
-/// [maxHeight]: each as tall as it needs while they fit; when they do not,
-/// one that needs no more than half keeps all it needs and the other takes
-/// the rest; only when both need more than half does each take half.
-class _Shares extends MultiChildRenderObjectWidget {
-  const _Shares({
-    required this.maxHeight,
-    required this.gap,
-    required super.children,
-  });
-
-  final double maxHeight, gap;
-
-  @override
-  RenderObject createRenderObject(BuildContext context) =>
-      _RenderShares(maxHeight, gap);
-
-  @override
-  void updateRenderObject(BuildContext context, _RenderShares render) => render
-    ..maxHeight = maxHeight
-    ..gap = gap;
-}
-
-class _ShareData extends ContainerBoxParentData<RenderBox> {}
-
-class _RenderShares extends RenderBox
-    with
-        ContainerRenderObjectMixin<RenderBox, _ShareData>,
-        RenderBoxContainerDefaultsMixin<RenderBox, _ShareData> {
-  _RenderShares(this._maxHeight, this._gap);
-
-  double _maxHeight, _gap;
-  set maxHeight(double value) {
-    if (value == _maxHeight) return;
-    _maxHeight = value;
-    markNeedsLayout();
-  }
-
-  set gap(double value) {
-    if (value == _gap) return;
-    _gap = value;
-    markNeedsLayout();
-  }
-
-  @override
-  void setupParentData(RenderBox child) {
-    if (child.parentData is! _ShareData) child.parentData = _ShareData();
-  }
-
-  /// The heights [needs] get within [room], as [_Shares] says.
-  static List<double> share(List<double> needs, double room) {
-    if (needs.fold(0.0, (a, b) => a + b) <= room) return needs;
-    if (needs.length == 1) return [room];
-    final half = room / 2;
-    final [a, b] = needs;
-    if (a <= half) return [a, room - a];
-    if (b <= half) return [room - b, b];
-    return [half, half];
-  }
-
-  @override
-  void performLayout() {
-    final width = constraints.maxWidth;
-    final kids = getChildrenAsList();
-    final gaps = kids.isEmpty ? 0.0 : _gap * (kids.length - 1);
-    final room = math.max(
-      0.0,
-      math.min(_maxHeight, constraints.maxHeight) - gaps,
-    );
-    BoxConstraints within(double height) =>
-        BoxConstraints(minWidth: width, maxWidth: width, maxHeight: height);
-    // What each needs, within all the room: a scroll view is as tall as its
-    // content, up to its bound.
-    final needs = [
-      for (final kid in kids)
-        (kid..layout(within(room), parentUsesSize: true)).size.height,
-    ];
-    final heights = share(needs, room);
-    var y = 0.0;
-    for (final (i, kid) in kids.indexed) {
-      if (heights[i] != needs[i]) {
-        kid.layout(within(heights[i]), parentUsesSize: true);
-      }
-      (kid.parentData! as _ShareData).offset = Offset(0, y);
-      y += kid.size.height + (i < kids.length - 1 ? _gap : 0);
-    }
-    size = constraints.constrain(Size(width, y));
-  }
-
-  @override
-  void paint(PaintingContext context, Offset offset) =>
-      defaultPaint(context, offset);
-
-  @override
-  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) =>
-      defaultHitTestChildren(result, position: position);
 }

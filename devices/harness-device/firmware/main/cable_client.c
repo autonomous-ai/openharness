@@ -407,6 +407,18 @@ void cable_client_supertab_side(const char *tab, bool buddy)
     send_json(root);
 }
 
+// The Buddy side a restart took off the face, for a daemon that remembers none: `kept` says no finger moved, so the
+// window stays where it is. An older daemon ignores the word, and its window follows.
+void cable_client_supertab_side_kept(const char *tab)
+{
+    if (!tab || !tab[0] || strlen(tab) >= ID_MAX) return;
+    cJSON *root = msg("supertab.side");
+    msg_string(&root, "tab", tab);
+    msg_string(&root, "side", "buddy");
+    msg_bool(&root, "kept", true);
+    send_json(root);
+}
+
 
 void cable_client_send_turn(const char *agent_id, const char *text)
 {

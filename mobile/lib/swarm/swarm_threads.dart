@@ -145,14 +145,25 @@ class SwarmThreads extends ChangeNotifier {
   /// The Threads row's number: tags of the reader inside threads they have
   /// not read past, in chats this Swarm lists for them. A muted chat's
   /// threads never count (#2455). None until the phone's marks are back.
+  ///
+  /// Only threads the Threads page lists count ([unread] and [read]): the
+  /// number promises something to open there. A tag in a thread the server
+  /// left out (older than its bounds, unfollowed, a root the reader cannot
+  /// read) stays in Activity and counts nothing here. None until the list
+  /// has been read, and none once it is taken away (access lost).
   int get threadMentions {
     final snapshot = reader.snapshot;
     final marks = reader.readMarks;
-    if (reader.accessRevoked || snapshot == null || marks == null) return 0;
+    if (reader.accessRevoked || snapshot == null || marks == null || !loaded) {
+      return 0;
+    }
+    final listed = {for (final t in unread) t.key, for (final t in read) t.key};
     var count = 0;
     for (final m in asks?.mentions ?? const <SuperTabMention>[]) {
       final root = m.threadId;
-      if (root == null || snapshot.conversation(m.conversationId) == null) {
+      if (root == null ||
+          snapshot.conversation(m.conversationId) == null ||
+          !listed.contains('${m.conversationId}/$root')) {
         continue;
       }
       if (reader.notifyOf(m.conversationId) == SwarmNotify.muted) continue;

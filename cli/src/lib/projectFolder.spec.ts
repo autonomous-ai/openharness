@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  cloneFailure, otherGitHubTransport, parseProjectFolder, prepareProjectFolder, ProjectFolderError, projectsRoot, repositoryIdentity, RepositoryAccessError,
+  cloneFailure, otherGitHubTransport, parseProjectFolder, prepareProjectFolder, ProjectFolderError, projectsRoot, repositoryIdentity, RepositoryAccessError, RepositoryHostKeyError,
 } from './projectFolder.js'
 
 /** A checkout at [folder] whose origin is [origin] (none when null), made by the real git, with no network. */
@@ -132,11 +132,22 @@ describe('project folder preparation', () => {
       expect(error.code).toBe('CLONE_FAILED')
       expect(error.message).toContain('GitHub access on the selected machine')
     }
-    for (const diagnostic of ['fatal: unable to access: Could not resolve host: github.com', 'Host key verification failed.', '']) {
+    for (const diagnostic of ['fatal: unable to access: Could not resolve host: github.com', '']) {
       const error = cloneFailure(diagnostic)
       expect(error, diagnostic).not.toBeInstanceOf(RepositoryAccessError)
       expect(error).toMatchObject({ code: 'CLONE_FAILED', message: 'Could not clone the repository. Check the URL and connection, then retry.' })
     }
+  })
+
+  it('names an untrusted host key, which is no refusal: GitHub was never asked', () => {
+    const error = cloneFailure('Host key verification failed.\nfatal: Could not read from remote repository.')
+    expect(error).toBeInstanceOf(RepositoryHostKeyError)
+    expect(error).not.toBeInstanceOf(RepositoryAccessError)
+    expect(error.code).toBe('CLONE_FAILED')
+    expect(error.message).toContain('ssh -T git@github.com')
+    // A changed key's warning mentions authentication: it is still the key, and never "No access".
+    expect(cloneFailure('@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@\nPassword authentication is disabled to avoid man-in-the-middle attacks.\nHost key verification failed.'))
+      .toBeInstanceOf(RepositoryHostKeyError)
   })
 
   it('names the same GitHub repository over the other transport, and nothing for another address', () => {
@@ -270,6 +281,41 @@ describe('a clone GitHub refuses', () => {
       .rejects.toBeInstanceOf(RepositoryAccessError)
     expect(tried).toHaveLength(3)
     expect(await readdir(root)).toStrictEqual([])
+  })
+
+  describe('with a host key this computer does not trust', () => {
+    const untrusted = () => new RepositoryHostKeyError('CLONE_FAILED', 'host key')
+    /** HTTPS refused, as with no credential stored; ssh to github.com stopped by its host key; an alias [reachable]. */
+    function gitWithoutKnownHost(reachable: string | null) {
+      const tried: string[] = []
+      const clone = vi.fn(async (url: string, destination: string) => {
+        tried.push(url)
+        if (url === reachable) return mkdir(destination)
+        throw url.startsWith('https://') ? refused() : untrusted()
+      })
+      return { clone, tried }
+    }
+
+    it('still tries the aliases, one of which may reach it', async () => {
+      const { clone, tried } = gitWithoutKnownHost('git@gh-a:owner/repo.git')
+      await prepareProjectFolder(remote('owner/repo'), { root, clone, cloneFallback: true, githubAliases: async () => ['gh-a'] })
+      expect(tried).toStrictEqual(['https://github.com/owner/repo.git', 'git@github.com:owner/repo.git', 'git@gh-a:owner/repo.git'])
+    })
+
+    it('says so when nothing got in, rather than calling it no access', async () => {
+      const { clone, tried } = gitWithoutKnownHost(null)
+      await expect(prepareProjectFolder(remote('owner/repo'), { root, clone, cloneFallback: true, githubAliases: async () => [] }))
+        .rejects.toBeInstanceOf(RepositoryHostKeyError)
+      expect(tried).toHaveLength(2)
+      expect(await readdir(root)).toStrictEqual([])
+    })
+
+    it('says so even when a later way in was refused', async () => {
+      const refusedLast = vi.fn(async (url: string) => { throw url === 'git@github.com:owner/repo.git' ? untrusted() : refused() })
+      await expect(prepareProjectFolder(remote('git@github.com:owner/repo'), { root, clone: refusedLast, cloneFallback: true, githubAliases: async () => [] }))
+        .rejects.toBeInstanceOf(RepositoryHostKeyError)
+      expect(refusedLast).toHaveBeenCalledTimes(2)
+    })
   })
 
   it('stops at a failure other than a refusal: another way in would fail the same', async () => {

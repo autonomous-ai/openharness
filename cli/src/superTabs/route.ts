@@ -46,7 +46,13 @@ export interface TaskFolder { cwd: string; kind: 'git' | 'none' | 'missing' | 'u
 export interface MemberFrame { title: string | null; project: string | null; cwd: string | null; root: string | null; remote: string | null; branch: string | null; updatedAt: number | null }
 /** What a machine offers an agent. Each field is null when it could not be read; `freeDiskBytes` (the project's disk) and
  * `cpuPercent` are absent where the probe did not read them. */
-export interface MachineLoad { agents: number | null; freeMemoryBytes: number | null; hasFolder: boolean | null; freeDiskBytes?: number | null; cpuPercent?: number | null }
+/** What a new start on a machine can use, as its host admits it: the Swarm's free agent slots there, and free memory and disk
+ *  less what starts still starting hold (routeCommand.ts heldByStarts). */
+export interface MachineRoom { slots: number | null; freeMemoryBytes: number | null; heldMemoryBytes: number; freeDiskBytes: number | null }
+/** `freeMemoryBytes` and `freeDiskBytes` leave heavy starts in, which the machine fit holds itself (machineFit.ts
+ *  placedHeavyWork); `room` is what a start can use. */
+export interface MachineLoad { agents: number | null; freeMemoryBytes: number | null; hasFolder: boolean | null; freeDiskBytes?: number | null; cpuPercent?: number | null
+  room?: MachineRoom }
 export interface Probe {
   kind: 'member' | 'new'; agentId?: string; name?: string; machineId: string; machineName: string
   /** `quality` is the catalog's strength, 1 for a model it does not rate (`unrated`). */
@@ -185,6 +191,10 @@ export const SIZES: Record<Size, { minutes: number; spend: Record<Window, number
 }
 const WINDOWS: Window[] = ['5-hour', 'weekly']
 const MAX_SHOWN = 12
+/** The most rows a decision keeps (backend superTabs/routeRecord.ts), past [MAX_SHOWN] only for every engine on every machine; a
+ *  backend from before them keeps [MAX_SHOWN] (routeCommand.ts routeTask). */
+export const RECORD_MAX = 64
+export const OLD_RECORD_MAX = MAX_SHOWN
 const ENGINE = { claude: 'Claude', codex: 'Codex' } as const
 const ENGINES = Object.keys(ENGINE)
 const cut = (text: string, max: number) => text.length <= max ? text : `${text.slice(0, max - 1)}…`
@@ -373,7 +383,7 @@ function quotaText(q: Quota, now: number): string {
   if (q.resetsAt === null) return `quota ${Math.round(q.leftPercent)}% left`
   return `quota ${Math.round(q.leftPercent)}% left, resets in ${resetsIn(q.resetsAt, now)}`
 }
-const bytes = (n: number) => n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.round(n / 1e6)} MB`
+export const bytes = (n: number) => n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.round(n / 1e6)} MB`
 /** What a member is doing and has done, or one phrase saying it is not known. */
 function memberText(p: Probe, now: number): string[] {
   const f = p.frame
@@ -434,12 +444,12 @@ function sizeUp(p: Probe, a: Assessment, now: number, open: Commitment[]): Sized
     return [{ name, usable: w.leftPercent - committed(name), resetsIn,
       needed: resetsIn !== null && resetsIn < runMs ? spend[name] * resetsIn / runMs : spend[name] }]
   })
-  // Every account has a weekly window; a Codex account may have no 5-hour one at all, reporting its weekly alone (2026-10-24),
-  // and that reading is complete.
-  const complete = windows.length === WINDOWS.length || (p.engine === 'codex' && windows.length === 1 && windows[0]!.name === 'weekly')
-  const status = windows.some(w => w.usable < w.needed) ? 'short' : complete ? 'fits' : 'unknown'
-  const tight = windows.length ? windows.reduce((x, y) => y.usable / y.needed < x.usable / x.needed ? y : x) : null
+  // A weekly reading is complete on either engine: the 5-hour window is never what runs out (Ken, 2026-11-03), and a Team
+  // account's Claude, whose host relays no 5-hour window, read as unknown and ranked behind every Codex that fit. A 5-hour
+  // window that is read still counts when it is short.
   const five = windows.find(w => w.name === '5-hour'), week = windows.find(w => w.name === 'weekly')
+  const status = windows.some(w => w.usable < w.needed) ? 'short' : week ? 'fits' : 'unknown'
+  const tight = windows.length ? windows.reduce((x, y) => y.usable / y.needed < x.usable / x.needed ? y : x) : null
   // A 5-hour window that resets before the task ends, or soon after, loses what is left of it: spending it costs nothing.
   const expiring = five && five.resetsIn !== null && five.resetsIn <= runMs + 3_600_000 ? Math.min(1, Math.max(0, five.usable) / five.needed) : 0
   let effectiveCost = p.cost * (1 - expiring)
@@ -470,14 +480,40 @@ function compare(x: Probe & Sized & { rank: Ranked }, y: Probe & Sized & { rank:
     || titleOf(x).localeCompare(titleOf(y))
 }
 
-/** The rows shown: each machine's best row first (the best-ranked machines, if there are more than the limit), then the rest by rank,
- * all in rank order, so the agent choosing can always choose another machine. */
-function withEveryMachine<T extends { machineId: string }>(ranked: T[]): T[] {
-  const firsts = new Set<T>(), seen = new Set<string>()
-  for (const p of ranked) if (!seen.has(p.machineId)) { seen.add(p.machineId); firsts.add(p) }
-  const keep = new Set([...firsts].slice(0, MAX_SHOWN))
+/** An engine on a machine, or the machine's local models, as a new agent or an idle member: what the project's order picks
+ *  between (an account, then whether to reuse an agent on it). */
+export const slotOf = (p: Pick<Probe, 'machineId' | 'engine' | 'gridModel' | 'kind'>) => `${p.machineId}\0${p.gridModel ? 'grid' : p.engine}\0${p.kind}`
+
+/** The rows shown: the best new agent and the best member of every engine on every machine, up to [RECORD_MAX], then the rest by rank up to the limit, all in rank
+ *  order. The agent choosing picks between accounts by the project's order; one row a machine, cut at 12, hid a Claude account with
+ *  99% left behind its machine's used-up Codex (Ken, 2026-11-03). */
+function withEveryAccount<T extends Pick<Probe, 'machineId' | 'engine' | 'gridModel' | 'kind'>>(ranked: T[]): T[] {
+  const keep = new Set<T>(), seen = new Set<string>()
+  for (const p of ranked) if (!seen.has(slotOf(p)) && keep.size < RECORD_MAX) { seen.add(slotOf(p)); keep.add(p) }
   for (const p of ranked) if (keep.size < MAX_SHOWN) keep.add(p)
   return ranked.filter(p => keep.has(p))
+}
+
+/** What the agent choosing reads of a row's machine: whether a start there would be admitted (River, 2026-11-03: starts
+ *  failed on slots, memory and disk the rows did not show). */
+export function machineBrief(room: MachineRoom): string {
+  const slots = room.slots === null ? [] : [`${room.slots} ${room.slots === 1 ? 'slot' : 'slots'} free`]
+  const memory = room.freeMemoryBytes === null ? 'free memory unknown'
+    : `${bytes(Math.max(0, room.freeMemoryBytes))} memory free${room.heldMemoryBytes ? ` (${bytes(room.heldMemoryBytes)} held by starts)` : ''}`
+  const disk = room.freeDiskBytes === null ? [] : [`${bytes(Math.max(0, room.freeDiskBytes))} disk free`]
+  return [...slots, memory, ...disk].join(' · ')
+}
+
+/** What the agent choosing reads of a row's quota: its fit and its weekly window, the one the project's order compares. */
+export function quotaBrief(p: Pick<Probe, 'quota' | 'gridModel'> & { fit: Pick<Fit, 'status'> }, now: number): string {
+  if (p.gridModel) return 'local model, no subscription'
+  if (p.quota.metered) return 'metered'
+  const week = p.quota.windows?.find(w => w.name === 'weekly')
+  const left = week ? week.leftPercent : p.quota.windows?.length ? null : p.quota.leftPercent
+  const resetsAt = week ? week.resetsAt : p.quota.resetsAt
+  // Why it is unknown says what would make it known (River, 2026-11-03): a Team account's reading its owner's machine relays.
+  if (!p.quota.known || left === null) return `${p.fit.status}: ${p.quota.why ? cut(p.quota.why, 200) : 'weekly unknown'}`
+  return `${p.fit.status}: weekly ${Math.round(left)}% left${resetsAt === null ? '' : `, resets in ${resetsIn(resetsAt, now)}`}`
 }
 
 /** One unrated new agent per machine of the named model's engine, on that machine's first row of the engine, which carries
@@ -546,7 +582,7 @@ export function choose(given: Probe[], catalog: Catalog, a: Assessment, now: num
     return [{ ...p, notes: [...p.notes, ...reasons], rank }]
   }).sort(compare)
   if (!ranked.length) return { error: 'NO_CANDIDATE', excluded, ...warned() }
-  const shown = withEveryMachine(ranked).map(({ tight, text, rank: _rank, ...p }, i) => ({ ...p, id: `c${i}`, title: titleOf(p), label: labelOf({ ...p, tight, text }, now) }))
+  const shown = withEveryAccount(ranked).map(({ tight, text, rank: _rank, ...p }, i) => ({ ...p, id: `c${i}`, title: titleOf(p), label: labelOf({ ...p, tight, text }, now) }))
   const first = ranked[0]!
   return { shown, excluded, floor: 1, belowFloor: false, ...(first.fit.status === 'short' ? { short: shortOf(first, ranked) } : {}),
     ...(adjusted ? { adjusted: true as const } : {}), ...warned() }

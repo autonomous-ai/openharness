@@ -29,6 +29,7 @@ SwarmHomeSwarm swarmHomeSwarm(
     'name': snapshot.name,
     'ownerId': snapshot.ownerId,
     'paused': snapshot.paused,
+    if (snapshot.swarmBuddy) 'swarmBuddy': true,
     'projects': [for (final p in snapshot.projects) _project(p)],
     'people': [
       for (final p in snapshot.people)
@@ -42,7 +43,9 @@ SwarmHomeSwarm swarmHomeSwarm(
     ],
     'agents': [
       for (final a in snapshot.agents)
-        {
+        // A thread's own session is not drawn: kept, it would read as the
+        // Buddy until the next read.
+        if (a.buddySession == null) {
           ..._agent(a),
           if (buddies.buddyOwners[a.id] case final owner?)
             'buddyOf': {'personId': owner},
@@ -53,7 +56,7 @@ SwarmHomeSwarm swarmHomeSwarm(
         {
           ..._conversation(c),
           if (buddies.chatOwners[c.id] case final owner?) ...{
-            'kind': 'buddy',
+            'kind': c.isSwarmBuddyChat ? 'swarm-buddy' : 'buddy',
             'buddyOwnerId': owner,
           },
         },
@@ -92,6 +95,7 @@ Map<String, dynamic> _agent(SuperTabAgent a) => {
   'projectId': a.hasProjectId ? a.projectId : null,
   'name': a.name,
   'displayName': ?a.displayName,
+  'buddyScope': ?a.buddyScope,
   'machineId': a.machineId,
   'harnessId': a.harnessId,
   'contributorId': a.contributorId,

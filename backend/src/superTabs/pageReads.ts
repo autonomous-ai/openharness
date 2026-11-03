@@ -86,6 +86,20 @@ export async function compactedDelivery(tx: Transaction, tabId: string, agentId:
 
 /** The deliveries a host is still told about (the rest are answered, cancelled or confirmed). */
 export const OPEN_DELIVERY = ['queued', 'claimed', 'uncertain'] as const
+/** The deliveries a cancel ends: the open ones, and those gathered for a digest (noticeDigest.ts), which hosts are not told about
+ *  yet: a gathered delivery outlives its reason no more than an open one. */
+export const CANCELLABLE_DELIVERY = [...OPEN_DELIVERY, 'gathered'] as const
+
+/** An agent's deliveries gathered for its digest, oldest first, at most [limit]: one indexed read, the agent's as its open ones are. */
+export async function agentGatheredDeliveries(tx: Transaction, tabId: string, agentId: string, limit: number): Promise<SuperTabDelivery[]> {
+  const rows = await readBy(tx, 'SuperTabDelivery', 'agentOpen', [{ $match: { tabId, agentId, status: 'gathered' } }, { $sort: { createdAt: 1 } }, { $limit: limit }])
+  return inConversationOrder(tx, tabId, rows.map(row => prismaRow<SuperTabDelivery>('SuperTabDelivery', row)))
+}
+
+/** How many deliveries an agent has gathered: read only when a digest is full, to say how many more wait. */
+export async function agentGatheredCount(tx: Transaction, tabId: string, agentId: string): Promise<number> {
+  return Number((await readBy(tx, 'SuperTabDelivery', 'agentOpen', [{ $match: { tabId, agentId, status: 'gathered' } }, { $count: 'n' }]))[0]?.n ?? 0)
+}
 
 /** An agent's open deliveries, oldest first and each conversation's tied rows in its order: one indexed read, and the tied
  *  messages' sequences only when there are ties. */

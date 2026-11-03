@@ -8,6 +8,7 @@ import { readProfile, renderProfile, startProfiling } from './profile.js'
 import { renderMarkdown } from './report.js'
 import { benchStamps } from './stamps.js'
 import { listGroupIndexes } from '../../src/superTabs/parts/indexed.js'
+import { readDelta } from '../../src/superTabs/cachedReads.js'
 
 /** `npm run bench:swarm-state -- [options] [--profile]` (README.md). Writes `<driver>-<time>.json` and `.md` to the results
  *  folder; with `--profile`, every database operation of the run goes through Mongo's profiler and the report adds what each
@@ -19,7 +20,9 @@ async function main() {
   const database = await localDatabase()
   // As each server does at startup (server.ts): hot reads name the indexes the database has.
   await listGroupIndexes(database.db)
-  const stamps = await benchStamps(cache)
+  // As the server: deltas unless SWARM_CACHE_DELTA=off (spec 2026-11-02), so one flag compares the two.
+  const stamps = await benchStamps(cache, process.env.SWARM_CACHE_DELTA === 'off' ? undefined
+    : readDelta(database.db))
   try {
     if (profile) await startProfiling(database.db)
     const peak = profile ? peakConnections(database.db) : null

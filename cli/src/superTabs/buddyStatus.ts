@@ -108,7 +108,7 @@ async function swarmIndex(input: BuddyStatusInput, deps: BuddyStatusDeps): Promi
   return {
     projects: projects.slice(0, BUDDY_PROJECTS_MAX).map(p => {
       const mine = open.filter(c => (c.projectId ?? 'lead') === p.id)
-      return { name: p.name ?? null, chat: p.leadConversationId, open: mine.length, changed: mine.filter(c => changed(c.id)).length }
+      return { id: p.id, name: p.name ?? null, chat: p.leadConversationId, open: mine.length, changed: mine.filter(c => changed(c.id)).length }
     }),
     moreProjects: Math.max(0, projects.length - BUDDY_PROJECTS_MAX),
     chat: ownChat(state, agentId),

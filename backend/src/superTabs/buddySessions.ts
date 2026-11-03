@@ -7,8 +7,6 @@ import { isBuddy, isBuddyChat, isSwarmBuddyChat } from './buddies.js'
 import { canReadProject, projectsOf } from './projects.js'
 import { fail, stableId, type Agent, type AgentStart, type Author, type BuddySessionEntry, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 
-/** At most this many live or starting sessions per Buddy chat, the main Buddy not counted. */
-export const MAX_BUDDY_SESSIONS = 3
 /** At most this many of the person's messages wait for a session that is still starting. */
 export const MAX_SESSION_WAITING = 20
 /** What a machine's host reports (`capabilities`) when it can run thread sessions. */
@@ -132,7 +130,8 @@ export function sessionReadsRow(reader: Pick<Agent, 'id' | 'buddyOf' | 'buddySes
   if (own?.projectId) {
     const owner = chatOwner(group as Conversation)
     return row => (row.id === own.thread || row.thread === own.thread) && !lost(row) && (ownWords(row, owner?.id, reader.id)
-      || (row.source as { kind?: unknown } | null | undefined)?.kind === SESSION_ENDED_KIND)
+      || (row.source as { kind?: unknown } | null | undefined)?.kind === SESSION_ENDED_KIND
+      || earlierSessionOf(row, own.projectId!))
   }
   if (own) return row => (row.id === own.thread || row.thread === own.thread) && !lost(row)
   return row => !row.buddySession && !lost(row)
@@ -142,6 +141,12 @@ export function sessionReadsRow(reader: Pick<Agent, 'id' | 'buddyOf' | 'buddySes
 function ownWords(row: SessionRow, personId: string | undefined, selfId: string): boolean {
   const author = row.author as { kind?: unknown; id?: unknown } | null | undefined
   return !!author && ((author.kind === 'person' && author.id === personId) || (author.kind === 'agent' && author.id === selfId))
+}
+
+/** Whether [row] is an agent's row of a session of [projectId] in this thread, so one reopened there has its history (Scholes,
+ *  11-02). The server sets the mark on the row: a main Buddy's rows and another project's session's never carry it. */
+function earlierSessionOf(row: SessionRow, projectId: string): boolean {
+  return (row.author as { kind?: unknown } | null | undefined)?.kind === 'agent' && row.buddySession === true && row.buddyProject === projectId
 }
 
 /** In a person's one Buddy chat, the rows of a project its person no longer reads, or that is gone: each row of a project

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { cloneData } from './cloneData.js'
+import { autoJoinOn } from './autoJoinDomain.js'
 import { lostReasonWithoutMachine } from './lostReason.js'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
@@ -22,6 +23,8 @@ export interface Person {
   avatar?: import('./profile.js').Avatar
   /** The name they chose (usernames.ts), or one kept for them; absent, readers work out their default. Only members read it. */
   username?: string
+  /** `domain`: joined by themselves as someone at the owner's email domain (autoJoin.ts), so the people list says so. */
+  joinedVia?: 'domain'
 }
 export interface AgentConfiguration {
   engine: string
@@ -63,6 +66,14 @@ export interface Agent {
    *  close it (agent.stopRefused). */
   idleStop?: { previous: 'awaiting' | 'keep' | null }
   releaseId?: string
+  /** A person's request to move this Product Manager to another engine or account (lead.switch), carried out by its host.
+   *  `id` is the operation that asked; `claimedUntil` is set once the host took it (agent.switchClaim). */
+  /** The switch request the last rebind settled, until its result arrives: that result is the one line the chat gets, and
+   *  it still tells the machine owner who asked. */
+  switchLanded?: { id: string; requestedBy: string }
+  switchRequest?: { id: string; engine: string; profileId: string; model?: string; effort?: string; requestedBy: string; at: string; claimedUntil?: string }
+  /** The account it runs in on its machine once a switch moved it; absent for the machine's default account. */
+  profileId?: string
   /** Captured from the original Swarm launch, never inferred from a later live session with the same id. */
   startedSession?: { creationId: string; sessionId: string; createdAt: string }
   /** The model on the Swarm's grid its start named, which its engine never reports. Kept here because a command does not
@@ -112,7 +123,7 @@ export interface Agent {
 /** A thread session's thread root and the main chat's last sequence it may read (buddySessions.ts). A project session also
  *  names its project (buddies.ts; Dee, 10-31): it reads that project alone, and is the only Buddy that writes into it. */
 export interface BuddySession { thread: string; from: number; projectId?: string }
-/** A Buddy chat's live or starting thread session, at most MAX_BUDDY_SESSIONS (buddySessions.ts). `agentId` once it runs;
+/** A Buddy chat's live or starting thread session (buddySessions.ts); it leaves when the session ends. `agentId` once it runs;
  *  `waiting`, the person's messages sent while it started, delivered to it when it joins. */
 export interface BuddySessionEntry { thread: string; startId: string; agentId?: string; at: number; waiting?: string[] }
 export type AgentRole = 'builder' | 'reviewer'
@@ -131,6 +142,8 @@ export interface AgentStartRequest {
   cwd: string
   worktree: boolean
   branchRef?: string
+  /** Stamped by the server for Team-written code (teamWritten.ts): the agent reads no project settings and its folder gets no trust. */
+  projectSettings?: 'off'
   permissionMode?: string
   codexHome?: string
   gridModel?: string
@@ -198,7 +211,12 @@ export interface Check {
   independent: boolean
   evidence: string | null
   passedBy: string | null
+  /** Each checker's latest verdict during this attempt (checkVerdicts.ts); `evidence` and `passedBy` are derived from them.
+   *  Absent until the first verdict recorded since verdicts were kept. */
+  verdicts?: CheckVerdict[]
 }
+/** One checker's verdict on a check: its actor key (`agent:ID` or `person:ID`), what it found and when. */
+export interface CheckVerdict { by: string; passed: boolean; evidence: string; at: number }
 export interface Assignment {
   id: string
   agentId: string
@@ -220,6 +238,9 @@ export interface Assignment {
   /** On a linked task (reviewOf): when its own Reviewer's verdict in the build asked for changes. Its quiet time does not count
    *  until the build's next Ready clears it (liveness.ts waitingForRevision). */
   changesRequestedAt?: number
+  /** On a linked task: when its agent last wrote to the build's Engineer, as a verdict usually is. It holds the quiet time while
+   *  the Engineer isn't waiting on a review, until the build's next Ready clears it (liveness.ts waitingForRevision). */
+  toldEngineerAt?: number
   /** A two-review task's hand-overs and reviewers' verdicts, from the automatic reviews (#2382) before project instructions;
    *  never written since (phase 4: the server opens and counts no review), kept on older rows. */
   handoffs?: number
@@ -292,6 +313,9 @@ export interface Conversation {
   task?: WorkTask
   /** A review group names the group whose work it reviews; only a Reviewer is assigned it, and a Reviewer nothing else. */
   reviewOf?: string
+  /** A Harness Team agent worked on this task, or GitHub shows the app's bot pushed to its branch: its code runs only in a
+   *  Team account (teamWritten.ts, audit H2). Set once and never cleared. */
+  teamWritten?: true
   /** A step of the task `reviewOf` names (task steps design, 2026-11-02): its name as the instructions give it, in any
    *  language. Readers show it inside its task, never as a task of its own. Absent on a linked group opened before steps. */
   step?: string
@@ -378,6 +402,16 @@ export interface Invitation {
   conversationId: string
   expiresAt: number
 }
+/** An agent a machine's report removed as closed: as it was, and where it was (closedAgents.ts). */
+export interface RemovedSession {
+  machineId: string
+  harnessId: string
+  agent: Agent
+  groupIds: string[]
+  leadOf: string[]
+  removedAt: number
+}
+
 export interface SuperTabState {
   version: 1
   id: string
@@ -402,6 +436,11 @@ export interface SuperTabState {
   rules?: import('./rules.js').SwarmRule[]
   /** Owner-only sharing configuration; visibleState always removes it. */
   sharing?: import('./sharing.js').SwarmSharing
+  /** People who left or were removed, whom auto-join never adds again (autoJoin.ts); visibleState always removes it. */
+  autoJoinDeclined?: string[]
+  /** Only in what a reader gets (visibleState), never stored: people at the owner's domain join by themselves, so the leave
+   *  dialog says someone who leaves is not added back. */
+  autoJoin?: true
   paused: boolean
   /** Its owner deleted it (deletion.ts): nobody reads or writes it, its row lists no member, and its owner may restore it until
    *  `purgeAt` (ISO times). Absent on a live Swarm. */
@@ -428,10 +467,16 @@ export interface SuperTabState {
    *  host confirms the close, which it does once its saved session there is deleted (machines.ts productManagerOn); `since`
    *  when it was removed, and `noticed` once the Swarm said it lasts (liveness.ts). */
   /** `buddyOnly`: a Buddy's session on a Buddy-only machine, kept from every reader as its machine is (read/changes.ts). */
+  /** What a report's removal of a closed agent must restore if its session reopens (closedAgents.ts): only its machine's host hears
+   *  of it (read/hostRows.ts), and no reader gets it, as it names private chats. */
+  removedSessions?: RemovedSession[]
   closingSessions?: Array<{ agentId: string; machineId: string; harnessId: string; machineOwnerId: string; heldFor?: string; since?: number; noticed?: true
     buddyOnly?: true }>
   /** Removed machines whose host still has to clean up (machines.ts expireRemovals), listed only to that host. */
   machineCleanups?: import('./machines.js').MachineCleanup[]
+  /** The machines their person took out of this Swarm, so a sync that adds machines by itself leaves them out; a reader gets only
+   *  the ids of their own (visibleState). */
+  removedMachines?: Array<{ machineId: string; contributorId: string }>
   /** Conversations of a kind a later release added, set aside unchanged by a release that does not know it (parkLaterConversations). */
   parkedConversations?: Conversation[]
   /** The Local models add-on (docs/plans/2026-10-23-swarm-local-models.md): off until the owner turns it on, and only
@@ -512,14 +557,18 @@ export const NOTICE_READERS = {
   'update-request': 'recipients', 'digest-request': 'recipients', overlap: 'recipients',
   // Two agents that may be talking in a loop, told to the coordinator (commands.ts pairLoop, project instructions phase 1).
   'pair-loop': 'recipients',
+  // The server's routine notices to the coordinator, gathered into one message (noticeDigest.ts).
+  'notice-digest': 'recipients',
   // Each its own case in commands.ts, decided by the row (forRecipients): statuses, briefs, merges, starts, removals.
   system: 'people',
   // A save of the project's instructions, with its summary: the team sees it without opening the document (instructions.ts).
   instructions: 'people',
   // A member removed one of the coordinator's notes: told to the coordinator alone (instructions.ts).
   'note-removed': 'recipients',
-  'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people', 'buddy-session-ended': 'people',
+  'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people', 'buddy-proposal-sent': 'people', 'buddy-session-ended': 'people',
   'decision-delegated': 'people', 'machine-removed': 'people', 'machine-left': 'people', ship: 'people',
+  // A task's one line in its project chat, edited as it moves (taskLine.ts): people read a task's state there.
+  'task-line': 'people',
   // A project PM's private line in a person's one Buddy chat, marked with its project (commands.ts person.tell): its person
   // reads it, as they read the line in their older project chat.
   'pm-line': 'people',
@@ -533,6 +582,10 @@ export const NOTICE_READERS = {
   // longer written (the automatic review's `auto-review`, a routing rule's `rule`) read as people's, as any kind not listed does.
   'review-capacity': 'recipients',
   // #2177's rulings: a failed start and a terminal's alert or typed input stay the people's to see.
+  // A PM switch nobody answered, in its project chat (tidy.ts staleSwitches).
+  switch: 'people',
+  // The machine owner's one line when another person moves a PM onto one of their non-default accounts (commands.ts agent.switchResult).
+  'pm-switch-notice': 'people',
   'start-timeout': 'people', 'terminal-alert': 'people', 'terminal-input': 'people',
 } as const satisfies Record<string, 'people' | 'recipients' | 'agent'>
 const readersOf = (kind: unknown): 'people' | 'recipients' | 'agent' =>
@@ -602,6 +655,8 @@ export interface CommandEffects {
   instructions?: import('./instructions.js').InstructionsWrite
   /** A coordinator's note kept or a note removed, written outside the tab state by the store (instructions.ts). */
   notes?: import('./instructions.js').NotesWrite
+  /** Stored messages given new words: a task's line as the task moves (taskLine.ts). */
+  edits?: import('./taskLine.js').MessageEdit[]
 }
 /** `details` go to the caller with the code: what it needs to act on the refusal (a stale save's current text). */
 export class SuperTabError extends Error {
@@ -618,13 +673,31 @@ export const actorKey = (actor: Actor): string => actor.kind === 'person' ? `per
 export const activeWork = (group: Conversation): boolean => !!group.assignment &&
   !['done', 'stopped', 'cancelled', 'lost'].includes(group.assignment.status)
 
-/** Old states derive the finished-work mark from their closed assignments; new states persist it on the worker. */
-export function awaitingWorkers(state: SuperTabState, projectId: string): Agent[] {
-  return state.agents.filter(a => {
-    if (state.conversations.some(c => c.leadId === a.id)
-      || state.conversations.some(c => activeWork(c) && c.assignment?.agentId === a.id)) return false
+/** What awaitingWorkers reads of the conversations, from one pass over them: the agents leading any conversation, those with
+ *  active work, and each agent's assigned groups (not lost) in conversation order. Scanning every conversation per agent and
+ *  project was 2.6 M calls in the 2026-11-02 prod profiles (12 profiles), on every read. Built per call or per caller's loop
+ *  over projects, never kept on the state, since a command changes it. */
+export interface WorkerIndex { leaders: ReadonlySet<string>; working: ReadonlySet<string>; groupsByAgent: ReadonlyMap<string, Conversation[]> }
+export function workerIndex(state: SuperTabState): WorkerIndex {
+  const leaders = new Set<string>(), working = new Set<string>(), groupsByAgent = new Map<string, Conversation[]>()
+  for (const c of state.conversations) {
+    if (c.leadId !== null) leaders.add(c.leadId)
+    if (!c.assignment) continue
+    if (activeWork(c)) working.add(c.assignment.agentId)
     // A lost task's agent did not finish it, even once the task is cancelled: it may be gone.
-    const groups = state.conversations.filter(c => c.assignment?.agentId === a.id && !c.assignment.lost)
+    if (c.assignment.lost) continue
+    const groups = groupsByAgent.get(c.assignment.agentId)
+    if (groups) groups.push(c)
+    else groupsByAgent.set(c.assignment.agentId, [c])
+  }
+  return { leaders, working, groupsByAgent }
+}
+
+/** Old states derive the finished-work mark from their closed assignments; new states persist it on the worker. */
+export function awaitingWorkers(state: SuperTabState, projectId: string, index = workerIndex(state)): Agent[] {
+  return state.agents.filter(a => {
+    if (index.leaders.has(a.id) || index.working.has(a.id)) return false
+    const groups = index.groupsByAgent.get(a.id) ?? []
     return (a.projectId ?? groups.map(c => groupProject(state, c).id)[0] ?? 'lead') === projectId &&
       (a.workDecision === 'awaiting' || (!a.workDecision && groups.some(c => !activeWork(c))))
   })
@@ -749,12 +822,19 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // and closing sessions (only that machine's host roster lists them: read/hostRows.ts; a removed private agent's session is
   // not every member's), and overlap alerts. Nor a dormant conversation: it is read on demand, never in a whole-Swarm read
   // (spec, Archive); a command may still load one.
-  const { sharing: _sharing, harnessReservations: _reservations, releasedHarnesses: _released, overlapAlerts: _alerts, closingSessions: _closing,
-    ...kept } = state
+  const { sharing: _sharing, autoJoinDeclined: _declined, harnessReservations: _reservations, releasedHarnesses: _released, overlapAlerts: _alerts, closingSessions: _closing,
+    removedSessions: _removed, ...kept } = state
   const visible = cloneData({ ...kept, conversations: state.conversations.filter(c => !c.dormant) })
+  if (autoJoinOn(state)) visible.autoJoin = true
   // A Buddy-only machine is no machine of the Swarm to anyone, its own person included (machines.ts buddyOnly): their Buddy
   // shows as a Buddy, and their machine stays theirs. Machines, status and the leaderboard's lent hours all read this.
   if (visible.machines) visible.machines = visible.machines.filter(m => !m.buddyOnly)
+  // A machine taken out says who owned it: a reader gets the ids of their own, which is all their sync asks.
+  const ownRemoved = actor.kind === 'person' ? (visible.removedMachines ?? []).filter(r => r.contributorId === actor.userId).map(r => r.machineId) : []
+  if (ownRemoved.length) (visible as { removedMachines?: unknown }).removedMachines = ownRemoved
+  else delete visible.removedMachines
+  // Rows by day and project that only the leaderboard read uses, and it takes them from the Swarm itself.
+  for (const pool of visible.machines ?? []) delete pool.lentDays
   // Nor its id, which a Buddy's row carries (machineHiddenFrom).
   visible.agents = visible.agents.map(a => machineHiddenFrom(state, actor, a) ? agentWithoutMachine(a) : a)
   // The removed Leads conversation reaches nobody (leadsRemoved), its id included.
@@ -775,6 +855,16 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   for (const pool of visible.machines ?? []) {
     const privacy = pool.observation?.privacy
     if (privacy && 'detail' in privacy && !(actor.kind === 'person' && actor.userId === pool.contributorId)) delete (privacy as { detail?: string }).detail
+  }
+  // A machine's accounts (labels, percent left) are for those who may switch a PM running there: its owner, and the owners of
+  // projects whose PM runs on it. Agents and everyone else read the machine without them.
+  for (const pool of visible.machines ?? []) {
+    if (!pool.observation?.profiles) continue
+    const there = state.agents.filter(a => a.machineId === pool.machineId)
+    const owners = new Set(there.length ? there.map(a => a.machineOwnerId) : [pool.contributorId])
+    const mayMove = actor.kind === 'person' && (owners.has(actor.userId) ||
+      there.some(a => projectsOf(state).some(p => p.ownerId === actor.userId && state.conversations.some(c => c.id === p.leadConversationId && c.leadId === a.id))))
+    if (!mayMove) delete pool.observation.profiles
   }
   expireRemovals(visible, now)
   // A read never hands out the cleanup records it just applied (read/hostRows.ts delivers them to the machine's host).
@@ -818,7 +908,9 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     for (const start of visible.starts ?? []) if (startPreparing(state, start, now)) start.preparing = true
     visible.invitations = visible.invitations.filter(i => visible.conversations.some(c => c.id === i.conversationId))
   }
-  for (const project of projectsOf(visible)) for (const target of awaitingWorkers(visible, project.id)) target.workDecision = 'awaiting'
+  // One index for every project: the loop sets only workDecision, which the index does not hold.
+  const workers = workerIndex(visible)
+  for (const project of projectsOf(visible)) for (const target of awaitingWorkers(visible, project.id, workers)) target.workDecision = 'awaiting'
   for (const project of visible.projects ?? []) project.skillSet = skillSetOf(project)
   // An uploaded avatar's stored key stays on the server; readers get a link with each parts read (avatarLinks.ts).
   // Each person as the Swarm names them (usernames.ts), their default included.

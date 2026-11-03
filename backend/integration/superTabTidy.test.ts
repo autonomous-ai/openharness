@@ -100,11 +100,12 @@ describe('an agent left idle', () => {
     await f.timed.deliveries(host, f.tab, f.lead)
     expect(await f.lines()).toEqual([])
     f.clock.now += MINUTE + 1_000
-    const inbox = await f.timed.deliveries(host, f.tab, f.lead)
+    await f.timed.deliveries(host, f.tab, f.lead)
     const lines = await f.lines()
     expect(lines).toEqual([expect.objectContaining({ conversationId: 'lead', recipientIds: [f.lead], text: 'Worker has had no open task for 15 minutes.',
       source: { kind: 'idle', agentId: f.worker } })])
-    expect(inbox.map(d => d.messageId)).toContain(lines[0]!.id)
+    // It waits for the coordinator's next digest (noticeDigest.ts).
+    expect((await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: lines[0]!.id } })).map(d => d.status)).toEqual(['gathered'])
     const member = await f.member()
     expect(member.workDecision).toBe('awaiting')
     expect(member.releaseId).toBeUndefined()
@@ -278,8 +279,9 @@ describe('a review nobody reviews', () => {
     await ready(`Ready: yes, revision abc..def. ${PR}`)
     const opened = String((await f.execute({ type: 'conversation.create', title: 'Review: Parser v2', brief: `Review ${PR} against the task.`,
       reviewOf: reviewed, checks: [{ description: 'Verdict', independent: false }] }, host, builder)).result.conversationId)
+    let reviewer = ''
     if (withReviewer) {
-      const reviewer = await f.add('lead', 'test-host', randomUUID(), 'Reviewer')
+      reviewer = await f.add('lead', 'test-host', randomUUID(), 'Reviewer')
       await f.execute({ type: 'work.assign', conversationId: opened, agentId: reviewer }, host, builder)
     }
     const reviews = async () => (await db.swarmGroup.findMany({ where: { tabId: f.tab, deleted: false } }))
@@ -288,22 +290,20 @@ describe('a review nobody reviews', () => {
     const closeLines = async () => (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: review.key } }))
       .filter(m => (m.source as { kind?: string } | null)?.kind === 'auto-archive')
     const isArchived = async () => (await db.swarmGroup.findUniqueOrThrow({ where: { id: review.id } })).archived
-    return { ...f, reviewed, builder, work, ready, reviews, review, closeLines, isArchived }
+    return { ...f, reviewed, builder, work, ready, reviews, review, closeLines, isArchived, reviewer }
   }
 
-  it('closes 30 minutes after its last message once every pull request of the work it reviews is merged, with one line saying why', async () => {
+  // Task steps design (#2511): a review is a step of the work it reviews and archives with that task, never on its own clock,
+  // so a review nobody holds stays open while its task does, merged pull requests or not.
+  it('is not closed on its own clock once every pull request of the work it reviews is merged: it stays with its task', async () => {
     const f = await waiting()
     expect((f.review.data as { assignment: unknown }).assignment).toBeNull()
-    expect(f.review.workFinished).toBe(true)
-    f.clock.now += 29 * MINUTE
+    expect(f.review.workFinished).toBe(false)
+    f.clock.now += 40 * MINUTE
     await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged' }), f.clock.now)
     expect(await f.isArchived()).toBe(false)
-    f.clock.now += MINUTE
-    await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged' }), f.clock.now)
-    expect(await f.isArchived()).toBe(true)
-    expect(await f.closeLines()).toEqual([expect.objectContaining({ recipientIds: [], author: expect.objectContaining({ id: f.lead }),
-      text: 'Closed: #9 merged; no Swarm review is needed now.' })])
-    // The work it reviews is untouched: its Builder still waits, for the Lead to settle.
+    expect(await f.closeLines()).toEqual([])
+    // The work it reviews is untouched too: its Builder still waits, for the Lead to settle.
     expect((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.reviewed } })).archived).toBe(false)
   })
 
@@ -329,34 +329,176 @@ describe('a review nobody reviews', () => {
     expect(await f.isArchived()).toBe(false)
   })
 
-  it('is found once the worker marks it at startup when it was written before reviews took the mark', async () => {
-    const f = await waiting()
-    await db.swarmGroup.update({ where: { id: f.review.id }, data: { workFinished: false } })
+  /** The Reviewer's verdict: its step done, with its check recorded. */
+  async function verdict(f: Awaited<ReturnType<typeof waiting>>) {
+    const row = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.review.key } })
+    const data = row.data as { assignment: { id: string }; checks: Array<{ id: string }> }
+    for (const check of data.checks) {
+      await f.execute({ type: 'work.check', conversationId: f.review.key, assignmentId: data.assignment.id, checkId: check.id, passed: true, evidence: 'Read it' }, host, f.reviewer)
+    }
+    await f.execute({ type: 'work.status', conversationId: f.review.key, assignmentId: data.assignment.id, status: 'done', result: 'Passed at def' }, host, f.reviewer)
+  }
+  const marked = async (f: { tab: string }, key: string) => (await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key } })).workFinished
+
+  // Task steps design (#2511), found in #2544's review: an archived step refuses the re-check, which then fails silently.
+  it('a step that finished is not archived after a worker restart while its task is open, and takes a second round', async () => {
+    const f = await waiting(true)
+    await verdict(f)
+    await markFinishedGroups(db)
+    expect(await marked(f, f.review.key)).toBe(false)
     f.clock.now += 40 * MINUTE
     await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged' }), f.clock.now)
     expect(await f.isArchived()).toBe(false)
-    expect(await markFinishedGroups(db)).toBeGreaterThanOrEqual(1)
+    await f.execute({ type: 'work.assign', conversationId: f.review.key, agentId: f.reviewer }, host, f.builder)
+    expect(((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.review.key } })).data as { assignment: { status: string } }).assignment.status).toBe('working')
+  })
+
+  it('a step nobody holds is not marked at a worker restart while its task is open', async () => {
+    const f = await waiting()
+    await db.swarmGroup.update({ where: { id: f.review.id }, data: { workFinished: false } })
+    await markFinishedGroups(db)
+    expect(await marked(f, f.review.key)).toBe(false)
+    f.clock.now += 40 * MINUTE
     await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged' }), f.clock.now)
+    expect(await f.isArchived()).toBe(false)
+  })
+
+  it('a mark an earlier startup left on a step of an open task is taken back, and the pass would not act on it anyway', async () => {
+    const f = await waiting(true)
+    await verdict(f)
+    await db.swarmGroup.update({ where: { id: f.review.id }, data: { workFinished: true } })
+    f.clock.now += 40 * MINUTE
+    // The mark left by the release before this one, read by a pass before the worker's startup clears it. The pass does not
+    // even ask for the write, which would refuse by itself (below).
+    const archiveFinished = vi.fn(async () => false)
+    await archiveFinishedGroups(db, { archiveFinished }, github({ [PR]: 'merged' }), f.clock.now)
+    expect(archiveFinished.mock.calls.filter(call => (call as unknown[])[1] === f.review.key)).toEqual([])
+    await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged' }), f.clock.now)
+    expect(await f.isArchived()).toBe(false)
+    await markFinishedGroups(db)
+    expect(await marked(f, f.review.key)).toBe(false)
+  })
+
+  it('the write itself refuses a step whose task is open, or a task it was not told to read', async () => {
+    const f = await waiting(true)
+    await verdict(f)
+    f.clock.now += 40 * MINUTE
+    // As if the pass read the task done, and the task was handed on again before this write.
+    expect(await f.timed.archiveFinished(f.tab, f.review.key, { [PR]: 'merged' }, f.reviewed)).toBe(false)
+    expect(await f.timed.archiveFinished(f.tab, f.review.key, { [PR]: 'merged' })).toBe(false)
+    expect(await f.isArchived()).toBe(false)
+  })
+
+  // Forced by a security review of #2572: the other write commits after this one loaded the task and before it saved.
+  it('a task handed on while the write runs keeps its step: the touch on the task makes the write retry and decline', async () => {
+    const f = await waiting(true)
+    await verdict(f)
+    await f.execute({ type: 'work.cancel', conversationId: f.reviewed, assignmentId: f.work, reason: 'Landed outside the Swarm' }, host, f.lead)
+    f.clock.now += 40 * MINUTE
+    const store = f.timed as unknown as { save: (...args: unknown[]) => Promise<unknown> }
+    const save = store.save
+    let raced = false
+    store.save = async function (this: unknown, ...args: unknown[]) {
+      if (!raced) {
+        raced = true
+        await f.execute({ type: 'work.assign', conversationId: f.reviewed, agentId: f.builder })
+      }
+      return save.apply(this, args)
+    }
+    try {
+      expect(await f.timed.archiveFinished(f.tab, f.review.key, { [PR]: 'merged' }, f.reviewed)).toBe(false)
+    } finally { store.save = save }
+    expect(raced).toBe(true)
+    expect(await f.isArchived()).toBe(false)
+    expect(((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.reviewed } })).data as { assignment: { status: string } }).assignment.status).toBe('working')
+  })
+
+  it('is marked at a worker restart once its task ended, and archives then alone only when the task\'s pull requests are settled', async () => {
+    const SECOND = 'https://github.com/example/parser/pull/10'
+    const f = await waiting(true)
+    await verdict(f)
+    // Linked to the task alone: the step's own brief names only the first.
+    await f.execute({ type: 'message.send', conversationId: f.reviewed, text: `Follow-up: ${SECOND}`, replyTo: null, recipientIds: [] })
+    await f.execute({ type: 'work.cancel', conversationId: f.reviewed, assignmentId: f.work, reason: 'Landed outside the Swarm' }, host, f.lead)
+    expect(await marked(f, f.review.key)).toBe(false)
+    expect(await markFinishedGroups(db)).toBeGreaterThanOrEqual(1)
+    expect(await marked(f, f.review.key)).toBe(true)
+    f.clock.now += 40 * MINUTE
+    // The task's other pull request is still open: neither the pass nor the write takes its step.
+    const archiveFinished = vi.fn(async () => false)
+    await archiveFinishedGroups(db, { archiveFinished }, github({ [PR]: 'merged', [SECOND]: 'open' }), f.clock.now)
+    expect(archiveFinished.mock.calls.filter(call => (call as unknown[])[1] === f.review.key)).toEqual([])
+    expect(await f.timed.archiveFinished(f.tab, f.review.key, { [PR]: 'merged' }, f.reviewed)).toBe(false)
+    await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged', [SECOND]: 'open' }), f.clock.now)
+    expect(await f.isArchived()).toBe(false)
+    // A task archived before steps archived with it, so only its step is left to the pass.
+    await db.swarmGroup.updateMany({ where: { tabId: f.tab, key: f.reviewed }, data: { archived: true, workFinished: false } })
+    await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged', [SECOND]: 'merged' }), f.clock.now)
     expect(await f.isArchived()).toBe(true)
   })
 
-  // Review of #2322: a Ready committed inside the close's write linked a new pull request to the work; the close then
-  // archived its review on the older ones, and the work was left with no review, silently (the 10-28 failure).
-  it('stays open when a Ready for review with a new pull request commits during its close, so the work keeps a review', async () => {
+  // Review of #2322 (a Ready committed inside a review's close left the work with no review): a review step no longer closes
+  // on its own clock, so a Ready with a new pull request after the older ones merged still finds the work's review open.
+  it('stays open when a Ready for review with a new pull request comes after the older ones merged, so the work keeps a review', async () => {
     const f = await waiting()
-    let during: (() => Promise<unknown>) | null = () => f.ready('Ready: yes, revision fff. https://github.com/example/parser/pull/11')
-    // Paused at the close's first write, which closes the decisions still waiting there.
-    const hooked = db.$extends({ query: { superTabDecision: { async updateMany({ args, query }) {
-      if (during && (args.where as { conversationId?: string } | undefined)?.conversationId === f.review.key) { const run = during; during = null; await run() }
-      return query(args)
-    } } } })
-    const closing = new SuperTabStore(hooked as unknown as PrismaClient, () => f.clock.now)
     f.clock.now += 40 * MINUTE
-    await archiveFinishedGroups(db, closing, github({ [PR]: 'merged' }), f.clock.now)
-    expect(during).toBeNull()
+    await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged' }), f.clock.now)
+    await f.ready('Ready: yes, revision fff. https://github.com/example/parser/pull/11')
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged', 'https://github.com/example/parser/pull/11': 'merged' }), f.clock.now)
     expect(await f.isArchived()).toBe(false)
     expect(await f.closeLines()).toEqual([])
     expect((await f.reviews()).filter(row => !row.archived)).toHaveLength(1)
+  })
+
+  /** The task's check recorded by its Reviewer, and the task set done by its Builder, its step as it stands. */
+  const finishTask = async (f: Awaited<ReturnType<typeof waiting>>) => {
+    const row = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.reviewed } })
+    for (const check of (row.data as unknown as { checks: Array<{ id: string }> }).checks) {
+      await f.execute({ type: 'work.check', conversationId: f.reviewed, assignmentId: f.work, checkId: check.id, passed: true, evidence: 'Read it' }, host, f.reviewer)
+    }
+    await f.execute({ type: 'work.status', conversationId: f.reviewed, assignmentId: f.work, status: 'done', result: `Done ${PR}` }, host, f.builder)
+  }
+
+  // Diego, 2026-11-02: an Engineer set its task done before its Tester's verdict, the pull request merged, and 30 minutes later
+  // the pass cancelled the Tester's step without a word; its verdict was then refused, and lost.
+  it('the archive pass tells a working step agent its task was archived', async () => {
+    const f = await waiting(true)
+    await finishTask(f)
+    await db.superTabDelivery.updateMany({ where: { tabId: f.tab, conversationId: f.review.key, status: 'queued' }, data: { status: 'delivered' } })
+    f.clock.now += 40 * MINUTE
+    expect(await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged' }), f.clock.now)).toBeGreaterThan(0)
+    expect((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.reviewed } })).archived).toBe(true)
+    const rows = (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: f.review.key } }))
+      .filter(row => row.recipientIds.includes(f.reviewer) && row.text === 'Parser v2 was archived.')
+    expect(rows).toHaveLength(1)
+    // It can still reach its agent: the step stays open to deliver it, cancelled.
+    expect((await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: rows[0]!.id, agentId: f.reviewer } })).map(d => d.status)).toEqual(['queued'])
+    expect(await f.isArchived()).toBe(false)
+    expect((await db.swarmGroup.findUniqueOrThrow({ where: { id: f.review.id } })).data).toMatchObject({ assignment: { status: 'cancelled', result: 'Parser v2 was archived.' } })
+  })
+
+  it('the archive pass ends the deliveries of a step it archives, and tells a finished step\'s agent nothing', async () => {
+    const f = await waiting(true)
+    await verdict(f)
+    await f.execute({ type: 'message.send', conversationId: f.review.key, text: 'One more thing', replyTo: null, recipientIds: [f.reviewer] }, host, f.lead)
+    const left = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, conversationId: f.review.key, text: 'One more thing' } })
+    expect((await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: left.id } })).map(d => d.status)).toEqual(['queued'])
+    await finishTask(f)
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged' }), f.clock.now)
+    expect(await f.isArchived()).toBe(true)
+    expect((await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: left.id } })).map(d => d.status)).toEqual(['cancelled'])
+    expect((await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: f.review.key } })).filter(row => row.text.includes('was archived'))).toEqual([])
+  })
+
+  it('archives with its task once the task ends and its pull requests are merged, the task\'s pass closing it in the same write', async () => {
+    const f = await waiting()
+    await f.execute({ type: 'work.cancel', conversationId: f.reviewed, assignmentId: f.work, reason: 'Landed outside the Swarm' }, host, f.lead)
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, f.timed, github({ [PR]: 'merged' }), f.clock.now)
+    expect((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.reviewed } })).archived).toBe(true)
+    expect(await f.isArchived()).toBe(true)
   })
 
   it('is cancelled by its coordinator with "current": it archives with the reason, and what waited there for the coordinator ends', async () => {

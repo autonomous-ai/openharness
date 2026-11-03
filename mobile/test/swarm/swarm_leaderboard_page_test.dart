@@ -192,7 +192,95 @@ void main() {
     const dee = 'swarm-leaderboard-person-dee';
     expect(inside(dee, find.text('Former member')), findsOneWidget);
     expect(y(tester, 'swarm-leaderboard-person-ken'), lessThan(y(tester, dee)));
-    expect(fake.paths.where((p) => p.contains('/leaderboard')), [path]);
+    expect(fake.paths.where((p) => p.contains('/leaderboard')), [
+      '$path&period=7d',
+    ]);
+  });
+
+  group('the rolling periods', () {
+    Map<String, dynamic> rolling(String name, int shipped) => {
+      ...leaderboardData(week: monday, shipped: shipped),
+      'period': {'name': name, 'start': 1, 'end': 2},
+      if (name == '30d')
+        'goal': {
+          'openRequests': 4,
+          'thisWeek': {'shipped': shipped},
+          'lastWeek': null,
+        },
+    };
+    FakeSwarm periods() => backend()
+      ..routes['$path&period=7d'] = ((_) => rolling('7d', 19))
+      ..routes['$path&period=24h'] = ((_) => rolling('24h', 2))
+      ..routes['$path&period=30d'] = (_) => rolling('30d', 40);
+
+    testWidgets('opens on Last 7d, picks a period, and says what it covers', (
+      tester,
+    ) async {
+      final fake = periods();
+      await pump(tester, fake);
+      await tester.pumpAndSettle();
+      expect(
+        inside('swarm-leaderboard-week', find.text('Last 7d')),
+        findsOneWidget,
+      );
+      expect(
+        find.text('19 shipped in the last 7 days · 11 the 7 days before'),
+        findsOneWidget,
+      );
+
+      await tester.tap(key('swarm-leaderboard-week'));
+      await tester.pumpAndSettle();
+      expect(find.text('This week'), findsNothing);
+      expect(key('swarm-leaderboard-period-24h'), findsOneWidget);
+      await tester.tap(key('swarm-leaderboard-period-30d'));
+      await tester.pumpAndSettle();
+      expect(fake.paths.last, '$path&period=30d');
+      expect(
+        inside('swarm-leaderboard-week', find.text('Last 30d')),
+        findsOneWidget,
+      );
+      // Only five weeks are kept: Last 30d has nothing to compare with.
+      expect(find.text('40 shipped in the last 30 days'), findsOneWidget);
+    });
+
+    testWidgets('from a server before periods: the week picker, as before', (
+      tester,
+    ) async {
+      final fake = backend();
+      fake.routes['$path&period=7d'] = (_) => throw const SuperTabFailure(
+        'VALIDATION',
+        'Unrecognized key',
+        statusCode: 400,
+      );
+      await pump(tester, fake);
+      await tester.pumpAndSettle();
+      expect(
+        inside('swarm-leaderboard-week', find.text('This week')),
+        findsOneWidget,
+      );
+      await tester.tap(key('swarm-leaderboard-week'));
+      await tester.pumpAndSettle();
+      expect(find.text('Last week'), findsOneWidget);
+      expect(key('swarm-leaderboard-period-30d'), findsNothing);
+    });
+
+    testWidgets(
+      'signed out with the picker up: it closes and nothing is read',
+      (tester) async {
+        final fake = periods();
+        final account = ValueNotifier<String?>(me);
+        await pump(tester, fake, signedIn: account);
+        await tester.pumpAndSettle();
+        await tester.tap(key('swarm-leaderboard-week'));
+        await tester.pumpAndSettle();
+        expect(key('swarm-leaderboard-period-30d'), findsOneWidget);
+        final reads = fake.paths.length;
+        account.value = null;
+        await tester.pumpAndSettle();
+        expect(key('swarm-leaderboard-period-30d'), findsNothing);
+        expect(fake.paths.length, reads);
+      },
+    );
   });
 
   testWidgets('a display name from the board wins over the email name', (
@@ -756,7 +844,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(fake.paths.where((p) => p == path), hasLength(2));
+    expect(fake.paths.where((p) => p.startsWith(path)), hasLength(2));
   });
 
   group("another account's board never stays", () {

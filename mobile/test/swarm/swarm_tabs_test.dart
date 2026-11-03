@@ -7,14 +7,12 @@ import 'package:harness_mobile/phone/out_of_sight.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/swarm/swarm_activity_page.dart';
-import 'package:harness_mobile/swarm/swarm_buddies_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_tabs.dart';
 import 'package:harness_mobile/swarm/swarm_you_page.dart';
 
 import '../voice_fakes.dart';
-import 'swarm_buddies_fixture.dart';
 import 'swarm_fixture.dart';
 
 /// A tab's screen that says which it is, whether it is out of sight, and how
@@ -63,7 +61,7 @@ class _ProbeState extends State<_Probe> {
 
 const _names = {
   SwarmTab.home: 'Home',
-  SwarmTab.buddies: 'Buddies',
+  SwarmTab.buddy: 'Buddy',
   SwarmTab.activity: 'Activity',
   SwarmTab.you: 'You',
 };
@@ -186,7 +184,7 @@ void main() {
 
   Finder said(String text) => find.text(text, skipOffstage: false);
 
-  testWidgets('the bar reads Home, Buddies, Activity and You, and opens on '
+  testWidgets('the bar reads Home, Buddy, Activity and You, and opens on '
       'Swarm Home', (tester) async {
     await pump(tester, _tabs);
 
@@ -254,13 +252,13 @@ void main() {
     await pump(tester, SwarmTabsPage(tabs: _probes(made)));
     expect(made, [SwarmTab.home]);
 
-    await open(tester, SwarmTab.buddies);
+    await open(tester, SwarmTab.buddy);
     await open(tester, SwarmTab.activity);
-    await open(tester, SwarmTab.buddies);
+    await open(tester, SwarmTab.buddy);
     await open(tester, SwarmTab.home);
     await open(tester, SwarmTab.home);
 
-    expect(made, [SwarmTab.home, SwarmTab.buddies, SwarmTab.activity]);
+    expect(made, [SwarmTab.home, SwarmTab.buddy, SwarmTab.activity]);
   });
 
   testWidgets('a count shows on its tab while there is one, and follows the '
@@ -324,7 +322,7 @@ void main() {
     testWidgets('$count tabs share the bar alike, each a thumb\'s width or '
         'more, and each opens its own screen', (tester) async {
       final tabs = _probes([]);
-      if (count == 3) tabs.removeWhere((e) => e.tab == SwarmTab.buddies);
+      if (count == 3) tabs.removeWhere((e) => e.tab == SwarmTab.buddy);
       await pump(tester, SwarmTabsPage(tabs: tabs));
 
       final rects = [for (final e in tabs) tester.getRect(tabOf(e.tab))];
@@ -476,62 +474,6 @@ void main() {
       reason: 'the tab, not a page',
     );
     expect(find.text('Ship it?'), findsOneWidget);
-  });
-
-  testWidgets('Buddies opens Buddies, as a tab with no way back, and counts '
-      'the Buddy chats with something unread', (tester) async {
-    await pump(tester, _tabs, fake: buddiesBackend());
-    final badge = find.byKey(const ValueKey('swarm-tab-badge-buddies'));
-    expect(
-      find.descendant(of: badge, matching: find.text('1')),
-      findsOneWidget,
-    );
-
-    await open(tester, SwarmTab.buddies);
-
-    expect(find.byType(SwarmBuddiesView), findsOneWidget);
-    expect(
-      tester.widget<Text>(find.byKey(const ValueKey('swarm-title'))).data,
-      'Buddies',
-    );
-    expect(find.byKey(const ValueKey('tty-back')), findsNothing);
-    expect(find.text('Done: the build is up.'), findsOneWidget);
-  });
-
-  testWidgets('Buddies reads its chats only while its tab is open', (
-    tester,
-  ) async {
-    final fake = buddiesBackend();
-    int reads() => fake.paths.where((p) => p.contains('/messages')).length;
-    await pump(tester, _tabs, fake: fake);
-    expect(reads(), 0, reason: 'its count needs no chat read');
-
-    await open(tester, SwarmTab.buddies);
-    expect(reads(), 2);
-
-    await open(tester, SwarmTab.home);
-    expect(host.session!.buddyList.shown, isFalse);
-    // A new message in the Buddy chat while Buddies is out of sight.
-    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
-      cursor: 'c3',
-      groups: [
-        part(
-          buddiesMobileChat,
-          30,
-          buddyChatData(
-            buddiesMobileChat,
-            agentIds: ['agent-wren'],
-            lastMessageSequence: 9,
-          ),
-        ),
-      ],
-    );
-    await host.session!.inbox.refresh();
-    await tester.pumpAndSettle();
-    expect(reads(), 2, reason: 'out of sight, nothing is read');
-
-    await open(tester, SwarmTab.buddies);
-    expect(reads(), 3);
   });
 
   testWidgets('You opens the person\'s own page, and its Settings the '

@@ -16,7 +16,7 @@
 
 import http from 'node:http'
 import { execFile, execFileSync } from 'node:child_process'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import {
   accessSync,
   closeSync,
@@ -277,22 +277,129 @@ function boundedPrompt(prompt) {
 const DELIVERY_ID = randomUUID()
 const FIRED_AT = Date.now() - Math.round(process.uptime() * 1000)
 
+/** Mirrors MAX_SOCKET_PATH_BYTES in src/lib/localSocket.ts. */
+const MAX_SOCKET_PATH_BYTES = 96
+
+/** A socket file only this account could have made: never send the credential to anything else. */
+function privateSocket(file) {
+  try {
+    const entry = lstatSync(file)
+    const uid = typeof process.getuid === 'function' ? process.getuid() : null
+    return entry.isSocket() && (entry.mode & 0o077) === 0 && (uid === null || entry.uid === uid)
+  } catch { return false }
+}
+
+/**
+ * The daemon's socket in this data folder. It is named for the daemon's configured port, and this hook's port may be
+ * the one the daemon was given instead when another account held that one, so the daemon's records say which
+ * (mirrors localSocketRoute in src/lib/localTransport.ts).
+ */
+function socketIn(dataDir, port) {
+  const beside = join(dataDir, `daemon-${port}.sock`)
+  if (Buffer.byteLength(beside) <= MAX_SOCKET_PATH_BYTES) return beside
+  const short = join(homedir(), '.harness', 's', createHash('sha256').update(dataDir).digest('hex').slice(0, 16), `daemon-${port}.sock`)
+  return Buffer.byteLength(short) <= MAX_SOCKET_PATH_BYTES ? short : null
+}
+
+function daemonSocket(port, dataDir) {
+  const named = socketIn(dataDir, port)
+  if (named && privateSocket(named)) return named
+  try {
+    for (const name of readdirSync(dataDir)) {
+      const configured = /^daemon-(\d+)\.json$/.exec(name)?.[1]
+      if (!configured) continue
+      const socket = socketIn(dataDir, Number(configured))
+      if (socket && JSON.parse(readPrivateStateFile(join(dataDir, name), 4096))?.port === port && privateSocket(socket)) return socket
+    }
+  } catch { /* An unreadable folder has no socket to offer. */ }
+  return null
+}
+
+/** Mirrors LOCAL_PIPE_RE in src/lib/windows/pipeAuth.ts: a pipe on this computer named harness-<id>, nothing else. A
+ *  file, or another computer's pipe (an SMB connection that can carry this user's NTLM credentials), is none. */
+const LOCAL_PIPE_RE = /^\\\\\.\\pipe\\harness-([0-9a-f]{32})$/
+/** Mirrors TOKEN_TEXT in src/lib/windows/pipeAuth.ts. */
+const DAEMON_TOKEN_RE = /^[0-9a-f]{64}\n?$/
+
+/**
+ * The record's daemon still runs. Once it is gone, any account can create a pipe of the recorded name, and would hear
+ * this request, the prompt in it, before its answer can fail the proof. The daemon is this account's, so a pid that
+ * answers EPERM is another account's process now, one that took the pid since: no daemon (Quinn 2's review of #2605).
+ * Unlike processProof.ts pidAlive, which counts it alive for callers that also read the process table.
+ */
+function pidRuns(pid) {
+  try { process.kill(pid, 0); return true } catch { return false }
+}
+
+/**
+ * The daemon's pipe on Windows, as the CLI finds it (src/lib/windows/daemonPipe.ts): the record the core writes,
+ * `daemon-<configured port>.json`, names the pipe and the core's pid, both new on each start. This hook's port may be the
+ * one the daemon was given instead, so the records say which. Null with no record of a local pipe, no token, or a core
+ * that has exited. The pipe auth (src/lib/windows/pipeAuth.ts) proves the token without sending it, and the answer must
+ * prove it back.
+ */
+function windowsDaemonPipe(port, dataDir) {
+  const read = (name) => { try { return JSON.parse(readWindowsStateFile(dataDir, join(dataDir, name), 4096)) } catch { return null } }
+  let record = read(`daemon-${port}.json`)
+  if (!record) {
+    try {
+      for (const name of readdirSync(dataDir)) {
+        if (!/^daemon-\d+\.json$/.test(name)) continue
+        const candidate = read(name)
+        if (candidate?.port === port) { record = candidate; break }
+      }
+    } catch { /* An unreadable folder has no record to offer. */ }
+  }
+  const id = typeof record?.pipe === 'string' ? LOCAL_PIPE_RE.exec(record.pipe)?.[1] : null
+  if (!id || !Number.isSafeInteger(record.pid) || record.pid <= 0 || !pidRuns(record.pid)) return null
+  let text = ''
+  try { text = readWindowsStateFile(dataDir, join(dataDir, 'daemon-token'), 128) } catch { return null }
+  if (!DAEMON_TOKEN_RE.test(text)) return null
+  const token = Buffer.from(text.slice(0, 64), 'hex')
+  const nonce = id + randomBytes(16).toString('hex')
+  const mac = (separator) => createHmac('sha256', token).update(Buffer.of(separator)).update(nonce, 'utf8').digest('hex')
+  const proof = Buffer.from(mac(0x00), 'hex')
+  return {
+    address: { socketPath: record.pipe },
+    headers: { 'X-Harness-Auth': `${nonce}.${mac(0x01)}` },
+    proven: (value) => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value) && timingSafeEqual(Buffer.from(value, 'hex'), proof),
+  }
+}
+
+/**
+ * How this hook reaches the daemon, and what it shows. Any account can bind the TCP port while the daemon restarts (audit
+ * H1, docs/security/2026-11-02-team-account-boundary.md), and whoever holds it would hear this request, the user's
+ * prompt in it included. So on macOS and Linux it goes over the 0600 socket; with none there the daemon is down, and
+ * this is the same as a failed post. A data folder too long to hold a socket has one under the home folder (socketIn). A
+ * home too long as well is the one case with no way but TCP, and then the hook-only token goes, never the credential. Over the socket the credential still goes because a daemon from
+ * before the hook token (an update not yet handed over) checks it there. On Windows it goes over the daemon's pipe, and
+ * never to the port: the Team account's daemon starts at boot, before the owner's, and could hold it (audit W1,
+ * docs/security/2026-11-02-team-account-windows.md).
+ */
+function hookRoute(port) {
+  const dataDir = paths().dataDir
+  if (process.platform === 'win32') return windowsDaemonPipe(port, dataDir)
+  const tokenRoute = (address, token) => token ? { address, headers: { 'X-Harness-Hook-Token': token } } : null
+  if (!socketIn(dataDir, port)) return tokenRoute({ host: '127.0.0.1', port }, readHookCredential('hook-token'))
+  const socketPath = daemonSocket(port, dataDir)
+  return socketPath ? tokenRoute({ socketPath }, readHookCredential()) : null
+}
+
 function post(port, path, body, onResponse) {
   return new Promise((resolve) => {
     const payload = JSON.stringify(body)
-    const credential = readHookCredential()
-    if (!credential) { resolve(false); return }
+    const route = hookRoute(port)
+    if (!route) { resolve(false); return }
     let connected = false
     const req = http.request(
       {
-        host: '127.0.0.1',
-        port,
+        ...route.address,
         path,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(payload),
-          'X-Harness-Hook-Token': credential,
+          ...route.headers,
           // When the engine ran this hook: this process's start, not its arrival, which can be seconds later on
           // a loaded machine, after the engine has moved on to its next prompt (src/hookServer.ts hookFiredAt).
           'X-Harness-Hook-Fired-At': String(FIRED_AT),
@@ -301,6 +408,9 @@ function post(port, path, body, onResponse) {
         timeout: Math.max(1, Math.min(500, remainingBudget())),
       },
       (res) => {
+        // Before the body is read: an answer on the pipe without the daemon's proof is whatever took its name, not the
+        // daemon, and is never taken (src/lib/windows/pipeClient.ts pipeRequest).
+        if (route.proven && !route.proven(res.headers['x-harness-proof'])) { resolve(false); req.destroy(); return }
         let response = ''
         res.setEncoding('utf8')
         res.on('data', (chunk) => { if (response.length < 16_384) response += chunk })
@@ -397,14 +507,17 @@ function hardenPrivateStateFileIfPresent(file, maxBytes = Number.MAX_SAFE_INTEGE
   } finally { closeSync(fd) }
 }
 
-function readHookCredential() {
+function readHookCredential(name = 'hook-credential') {
   let fd = null
   try {
     const dataDir = paths().dataDir
-    if (process.platform === 'win32') return readWindowsHookCredential(dataDir, join(dataDir, 'hook-credential'))
+    if (process.platform === 'win32') {
+      const value = readWindowsStateFile(dataDir, join(dataDir, name), 128).trim()
+      return /^[A-Za-z0-9_-]{43}$/.test(value) ? value : ''
+    }
     secureStateDirectory(dataDir, false)
     const uid = typeof process.getuid === 'function' ? process.getuid() : null
-    const file = join(dataDir, 'hook-credential')
+    const file = join(dataDir, name)
     fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
     const stat = fstatSync(fd)
     if (!stat.isFile() || stat.size > 128 || (stat.mode & 0o777) !== 0o600) return ''
@@ -418,26 +531,26 @@ function readHookCredential() {
 
 /**
  * NTFS gives Node no owner or mode bits, so on Windows the hook trusts its own data folder (the --data-dir it was
- * installed with) and the profile. Below the data folder, the credential must be a plain file, not a link or
- * junction (lstat does not call one a file): that check is what protects it. Its real path must also lie inside the
- * profile or the data folder, as defence in depth. The file is opened and must be the very file lstat saw, so it
- * cannot be swapped between the check and the read.
+ * installed with) and the profile. Below the data folder, a state file (the credential, the daemon's token and record)
+ * must be a plain file, not a link or junction (lstat does not call one a file): that check is what protects it. Its
+ * real path must also lie inside the profile or the data folder, as defence in depth. The file is opened and must be the
+ * very file lstat saw, so it cannot be swapped between the check and the read. Throws when there is none; '' when it is
+ * refused.
  */
-function readWindowsHookCredential(dataDir, file) {
+function readWindowsStateFile(dataDir, file, maxBytes) {
   const roots = [homedir(), dataDir].flatMap((root) => { try { return [realpathSync.native(root)] } catch { return [] } })
   const inside = (target) => roots.some((root) => {
     const rel = win32.relative(root, target)
     return rel === '' || (rel !== '..' && !rel.startsWith('..\\') && !win32.isAbsolute(rel))
   })
   const link = lstatSync(file, { bigint: true })
-  if (!link.isFile() || link.size > 128n || !inside(realpathSync.native(file))) return ''
+  if (!link.isFile() || link.size > BigInt(maxBytes) || !inside(realpathSync.native(file))) return ''
   let fd = null
   try {
     fd = openSync(file, 'r')
     const opened = fstatSync(fd, { bigint: true })
     if (!opened.isFile() || opened.dev !== link.dev || opened.ino !== link.ino) return ''
-    const value = readFileSync(fd, 'utf8').trim()
-    return /^[A-Za-z0-9_-]{43}$/.test(value) ? value : ''
+    return readFileSync(fd, 'utf8')
   } finally {
     if (fd !== null) closeSync(fd)
   }

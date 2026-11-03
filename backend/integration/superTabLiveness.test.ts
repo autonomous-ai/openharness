@@ -81,11 +81,14 @@ async function swarm({ legacy = false, client = db, hooks, independent = false, 
   /** The member name people and the Lead read for an agent. */
   const name = async (agentId: string) => (await timed.read(owner, tab)).state.agents.find(a => a.id === agentId)!.displayName
   const assignment = async () => (await timed.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!
-  /** What the Lead's host receives now (this poll is also the Lead's wake-up path), with each row's text. */
+  /** What the Lead's host receives now (this poll is also the Lead's wake-up path), with each row's text, and what it hears in a
+   *  digest (noticeDigest.ts): gathered for one, or named by one. Those of no digest of its own come first, in the order written. */
   const leadInbox = async () => {
     const rows = await timed.deliveries(host, tab, lead)
-    const messages = await db.superTabMessage.findMany({ where: { id: { in: rows.map(r => r.messageId) } } })
-    return rows.map(r => messages.find(m => m.id === r.messageId)!)
+    const digest = await db.superTabDelivery.findMany({ where: { tabId: tab, agentId: lead, status: { in: ['gathered', 'digested'] } }, orderBy: { createdAt: 'asc' } })
+    const ids = [...rows, ...digest].map(r => r.messageId)
+    const messages = await db.superTabMessage.findMany({ where: { id: { in: ids } } })
+    return ids.map(id => messages.find(m => m.id === id)!).filter(m => (m.source as { kind?: string } | null)?.kind !== 'notice-digest')
   }
   const lostRows = async () => (await db.superTabMessage.findMany({ where: { tabId: tab }, orderBy: { sequence: 'asc' } }))
     .filter(m => (m.source as { kind?: string } | null)?.kind === 'work-lost')
@@ -626,7 +629,8 @@ describe('messages from an agent whose task moved', () => {
     await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
     const other = await f.add(f.group, 'test-host', f.harness.other, 'Other')
     const next = String((await f.execute({ type: 'work.assign', conversationId: f.group, agentId: other })).result.assignmentId)
-    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker, f.harness.other] })
+    // The first worker is back and running; only the second's session stopped.
+    await f.observe('test-host', [f.harness.worker], { stoppedHarnessIds: [f.harness.other] })
     expect(await f.assignment()).toMatchObject({ id: next, status: 'lost' })
     expect(await deliveredTo(await post(f, f.worker, 'Severe: the worker is down.'))).toEqual([f.lead])
     expect(await deliveredTo(await post(f, other, 'Lost my session.'))).toEqual([f.lead])
@@ -773,15 +777,18 @@ describe('a review task while its build is back with the Engineer', () => {
     expect(await f.task()).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 5 minutes' } })
   })
 
-  it('still loses it to time once its build is cancelled after its verdict', async () => {
+  // Task steps design (#2511): a review is a step of its build, and a task that ends cancels its open steps with its reason,
+  // so a cancelled build no longer leaves its review to be lost by time later.
+  it('is cancelled with its build, and is never lost by time after', async () => {
     const f = await reviewing()
     await f.requestChanges()
     await f.minutes(10)
     await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Not needed' })
+    expect(await f.task()).toMatchObject({ status: 'cancelled', result: 'Ship the parser was cancelled.' })
     await f.minutes(20, { heartbeats: false })
-    expect(await f.task()).toMatchObject({ status: 'working' })
     await f.reviewerReport(f.waitFrom + 30 * MINUTE + 1)
-    expect(await f.task()).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 30 minutes' } })
+    expect(await f.task()).toMatchObject({ status: 'cancelled', result: 'Ship the parser was cancelled.' })
+    expect(await f.lost()).toEqual([])
   })
 })
 
@@ -1061,34 +1068,38 @@ describe('an agent whose task was lost', () => {
 })
 
 describe('a start that never runs', () => {
-  /** The Lead starts "Builder" on Worker Mac, and Worker Mac launches it. */
+  /** The Lead starts "Builder" on Worker Mac for a second task, and Worker Mac launches it. A task: no agent but its coordinator
+   *  starts into the project chat (#2207). */
   const launch = async (f: Awaited<ReturnType<typeof swarm>>) => {
+    const group = String((await f.execute({ type: 'conversation.create', title: 'Write the docs', brief: 'Document it',
+      checks: [{ description: 'Read', independent: false }] })).result.conversationId)
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task.' },
       candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high',
         quality: 2, cost: 2, title: 'New agent', label: 'New agent' }],
       excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
-    const routeDecisionId = String((await f.execute({ type: 'route.record', conversationId: 'lead', decision } as Command, host, f.lead)).result.routeDecisionId)
-    const request = { conversationId: 'lead', machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high', name: 'Builder',
+    const routeDecisionId = String((await f.execute({ type: 'route.record', conversationId: group, decision } as Command, host, f.lead)).result.routeDecisionId)
+    const request = { conversationId: group, machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high', name: 'Builder',
       cwd: '/repo', worktree: false, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const startId = String((await f.execute({ type: 'agent.start', request, routeDecisionId } as Command, host, f.lead)).result.startId)
     // The start's own machine dispatches and confirms it.
     const onMachine = (command: Command) => f.timed.execute(host, f.tab, { operationId: randomUUID(), command }, undefined, 'test-host')
     await onMachine({ type: 'agent.startDispatch', startId })
-    return { startId, onMachine }
+    return { group, startId, onMachine }
   }
 
   it('fails 3 minutes after dispatch, naming its machine to its Lead only, and tells the Lead in its group', async () => {
     const f = await swarm()
     await f.beat(f.clock.now)
-    const { startId, onMachine } = await launch(f)
+    const { group, startId, onMachine } = await launch(f)
     const dispatched = f.clock.now
     f.clock.now = dispatched + 3 * MINUTE
     await f.leadInbox()
     expect((await f.timed.read(owner, f.tab)).state.starts!.find(s => s.id === startId)!.error).toBeNull()
-    f.clock.now = dispatched + 3 * MINUTE + 1
+    // Nothing open for its Lead, so its next full poll is the sweep's, 30 s on.
+    f.clock.now = dispatched + 3 * MINUTE + 30_001
     const told = (await f.leadInbox()).find(m => (m.source as { kind?: string }).kind === 'start-timeout')!
     // Every group member reads the notice, so it names no machine (review of #1847); the start's Lead reads which one.
-    expect(told).toMatchObject({ conversationId: 'lead', text: 'Could not start Builder on fixture-model: its machine did not start it within 3 minutes.' })
+    expect(told).toMatchObject({ conversationId: group, text: 'Could not start Builder on fixture-model: its machine did not start it within 3 minutes.' })
     expect((await f.timed.start(host, f.tab, startId, f.lead)).error).toBe('Worker Mac did not start it within 3 minutes')
     await expect(onMachine({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config }))
       .rejects.toMatchObject({ code: 'START_FAILED' })
@@ -1097,7 +1108,7 @@ describe('a start that never runs', () => {
   it('waits while its own machine reports it preparing, shows the Lead it is preparing, and fails it after 15 minutes', async () => {
     const f = await swarm()
     await f.beat(f.clock.now)
-    const { startId } = await launch(f)
+    const { group, startId } = await launch(f)
     const dispatched = f.clock.now
     const ownerState = async () => (await f.timed.read(owner, f.tab)).state
     // Another machine cannot keep it waiting, and a machine keeps only its own launched starts in its report.
@@ -1119,7 +1130,7 @@ describe('a start that never runs', () => {
     await f.observe('test-host', [f.harness.worker], { preparingStartIds: [startId] })
     await f.observe('lead-host', [f.harness.lead])
     const told = (await f.leadInbox()).find(m => (m.source as { kind?: string }).kind === 'start-timeout')!
-    expect(told).toMatchObject({ conversationId: 'lead', text: 'Could not start Builder on fixture-model: its machine was still preparing it after 15 minutes.' })
+    expect(told).toMatchObject({ conversationId: group, text: 'Could not start Builder on fixture-model: its machine was still preparing it after 15 minutes.' })
     expect((await f.timed.start(host, f.tab, startId, f.lead)).error).toBe('Worker Mac was still preparing it after 15 minutes')
     expect((await ownerState()).starts!.find(s => s.id === startId)!.error).toBe('Its machine was still preparing it after 15 minutes.')
     expect((await ownerState()).starts!.find(s => s.id === startId)).not.toHaveProperty('preparing')
@@ -1510,6 +1521,17 @@ describe('the delivery poll of an agent with a held delivery', () => {
     expect(rows.map(r => [r.id, r.status, r.holdReason])).toEqual([[row.id, 'claimed', 'team_waiting_user']])
   })
 
+  // Spec 2026-11-02 poll cost, Part 3.4: a host asks about its journal's entries; the answer is the delivery's own row.
+  it('answers a receipt from its row and the machine, loading no Swarm parts', async () => {
+    const counted = counting()
+    const f = await swarm({ client: counted.client })
+    const sent = await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [f.worker] })
+    const row = (await f.timed.deliveries(host, f.tab, f.worker)).find(r => r.messageId === sent.result.messageId)!
+    counted.ops.length = 0
+    expect(await f.timed.deliveryReceipt(host, f.tab, f.worker, row.id)).toEqual({ id: row.id, status: 'queued' })
+    expect(counted.ops.filter(op => /^Swarm(Head|Member|Agent|Group|Machine|Start|Progress)\./.test(op))).toEqual([])
+  })
+
   it('answers a worker\'s held delivery from the same reads', async () => {
     const counted = counting()
     const f = await swarm({ client: counted.client })
@@ -1637,6 +1659,9 @@ describe('the delivery poll of an agent with a held delivery', () => {
     }
     f.clock.now += 6 * MINUTE
     const expectedIds = assignments.map(assignment => stableId(stableId('work-lost', assignment, String(f.clock.now)), 'lead'))
+    await f.timed.deliveries(host, f.tab, f.lead)
+    // Gathered for a digest; each goes on its own after the settle pass's 30 minutes, the ones these cases are about.
+    await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: f.lead, status: 'gathered' }, data: { status: 'queued' } })
     const first = (await f.timed.deliveries(host, f.tab, f.lead)).filter(row => expectedIds.includes(row.messageId))
     expect(first).toHaveLength(3)
     await f.timed.delivery(host, f.tab, f.lead, first[0]!.id, { type: 'claim', claimId: 'claim-1' })
@@ -1714,6 +1739,9 @@ describe('the push for a new delivery', () => {
     // Each loss notice is named by its task and the time of the loss (this poll).
     const expectedIds = assignments.map(assignment => stableId(stableId('work-lost', assignment, String(f.clock.now)), 'lead'))
     // One poll expires all three assignments and inserts their messages/deliveries together.
+    await f.timed.deliveries(host, f.tab, f.lead)
+    // Gathered for a digest; each goes on its own after the settle pass's 30 minutes, the ones these cases are about.
+    await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: f.lead, status: 'gathered' }, data: { status: 'queued' } })
     const first = (await f.timed.deliveries(host, f.tab, f.lead)).filter(row => expectedIds.includes(row.messageId))
     expect(first).toHaveLength(3)
     expect(new Set(first.map(row => row.messageId))).toEqual(new Set(expectedIds))
@@ -1778,6 +1806,103 @@ describe('the push for a new delivery', () => {
     await f.timed.native.append(host, f.tab, contextId, { turnId: 'turn_2', kind: 'gap', previousEventId: typed.eventId, text: '',
       truncated: false, interrupted: false, gap: { incidentId: 'restart_1', reason: 'recording_restarted', detectedAt: f.clock.now + 1_000 } })
     expect(waiting).toEqual([{ machineId: 'lead-host', tabId: f.tab, agentId: f.lead }])
+  })
+
+  // Spec 2026-11-02 poll cost, Part 3.2: a held delivery is read only every 30 s, so ending it must say so at once.
+  // Final review, Important 4: a host holds a claimed delivery locally for 30 s before it says `hold`.
+  it('tells the machine when a claimed delivery, not yet held, is answered by its agent', async () => {
+    const { waiting, hooks } = announcing()
+    const f = await swarm({ hooks })
+    const sent = await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [f.worker] })
+    const row = (await f.timed.deliveries(host, f.tab, f.worker)).find(r => r.messageId === sent.result.messageId)!
+    await f.timed.delivery(host, f.tab, f.worker, row.id, { type: 'claim', claimId: 'claim-1' })
+    waiting.length = 0
+    await f.execute({ type: 'message.send', conversationId: f.group, text: 'Done.', replyTo: sent.result.messageId as string, recipientIds: [] }, host, f.worker)
+    expect(waiting).toContainEqual({ machineId: 'test-host', tabId: f.tab, agentId: f.worker })
+  })
+
+  // Cleo, reviewing #2632: each agent reply answers a delivery, and each machine told reads that agent's list.
+  describe('ending deliveries tells only the machines holding what ended', () => {
+    const claimedFor = async (f: Awaited<ReturnType<typeof swarm>>, agentId: string, text: string, claimId: string) => {
+      const sent = await f.execute({ type: 'message.send', conversationId: f.group, text, replyTo: null, recipientIds: [agentId] })
+      const row = (await f.timed.deliveries(host, f.tab, agentId)).find(r => r.messageId === sent.result.messageId)!
+      await f.timed.delivery(host, f.tab, agentId, row.id, { type: 'claim', claimId })
+      return sent.result.messageId as string
+    }
+
+    it('an agent answering one delivery tells its own machine, not another agent\'s holding a claim', async () => {
+      const { waiting, hooks } = announcing()
+      const f = await swarm({ hooks })
+      const forWorker = await claimedFor(f, f.worker, 'For the worker', 'claim-worker')
+      await claimedFor(f, f.lead, 'For the lead', 'claim-lead')
+      waiting.length = 0
+      await f.execute({ type: 'message.send', conversationId: f.group, text: 'Done.', replyTo: forWorker, recipientIds: [] }, host, f.worker)
+      expect(waiting).toContainEqual({ machineId: 'test-host', tabId: f.tab, agentId: f.worker })
+      // The reply is itself a new delivery for the Lead, told once for it: not told again for the claim it holds.
+      expect(waiting.filter(w => w.agentId === f.lead)).toHaveLength(1)
+    })
+
+    /** A conversation with no task in it, so its agent may leave and it may be archived, with a claimed delivery of the worker's. */
+    const asideWithClaim = async (f: Awaited<ReturnType<typeof swarm>>) => {
+      const other = (await f.execute({ type: 'conversation.create', title: 'Aside', brief: 'On the side', checks: [] })).result.conversationId as string
+      await f.execute({ type: 'conversation.agent', conversationId: other, agentId: f.worker, present: true, lead: false })
+      const aside = await f.execute({ type: 'message.send', conversationId: other, text: 'Aside', replyTo: null, recipientIds: [f.worker] })
+      const row = (await f.timed.deliveries(host, f.tab, f.worker)).find(r => r.messageId === aside.result.messageId)!
+      await f.timed.delivery(host, f.tab, f.worker, row.id, { type: 'claim', claimId: 'claim-worker' })
+      return other
+    }
+
+    it('an agent leaving a conversation tells its machine, not another\'s', async () => {
+      const { waiting, hooks } = announcing()
+      const f = await swarm({ hooks })
+      const other = await asideWithClaim(f)
+      await claimedFor(f, f.lead, 'For the lead', 'claim-lead')
+      waiting.length = 0
+      await f.execute({ type: 'conversation.agent', conversationId: other, agentId: f.worker, present: false, lead: false })
+      expect(waiting).toContainEqual({ machineId: 'test-host', tabId: f.tab, agentId: f.worker })
+      expect(waiting).not.toContainEqual({ machineId: 'lead-host', tabId: f.tab, agentId: f.lead })
+    })
+
+    it('a conversation archived tells those holding its deliveries, not one holding another conversation\'s', async () => {
+      const { waiting, hooks } = announcing()
+      const f = await swarm({ hooks })
+      const other = await asideWithClaim(f)
+      await claimedFor(f, f.lead, 'For the lead', 'claim-lead')
+      waiting.length = 0
+      await f.execute({ type: 'conversation.archive', conversationId: other, archived: true })
+      expect(waiting).toContainEqual({ machineId: 'test-host', tabId: f.tab, agentId: f.worker })
+      expect(waiting).not.toContainEqual({ machineId: 'lead-host', tabId: f.tab, agentId: f.lead })
+    })
+
+    it('nothing ended tells nobody', async () => {
+      const { waiting, hooks } = announcing()
+      const f = await swarm({ hooks })
+      const other = (await f.execute({ type: 'conversation.create', title: 'Empty', brief: 'On the side', checks: [] })).result.conversationId as string
+      await f.execute({ type: 'conversation.agent', conversationId: other, agentId: f.worker, present: true, lead: false })
+      await claimedFor(f, f.lead, 'For the lead', 'claim-lead')
+      waiting.length = 0
+      await f.execute({ type: 'conversation.agent', conversationId: other, agentId: f.worker, present: false, lead: false })
+      expect(waiting).toEqual([])
+    })
+  })
+
+  it('tells the machine when a held delivery is answered by its agent', async () => {
+    const { waiting, hooks } = announcing()
+    const f = await swarm({ hooks })
+    const sent = await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [f.worker] })
+    const row = (await f.timed.deliveries(host, f.tab, f.worker)).find(r => r.messageId === sent.result.messageId)!
+    await f.timed.delivery(host, f.tab, f.worker, row.id, { type: 'claim', claimId: 'claim-1' })
+    await f.timed.delivery(host, f.tab, f.worker, row.id, { type: 'hold', claimId: 'claim-1', reason: 'team_waiting_draft' })
+    waiting.length = 0
+    await f.execute({ type: 'message.send', conversationId: f.group, text: 'Done.', replyTo: sent.result.messageId as string, recipientIds: [] }, host, f.worker)
+    expect(waiting).toContainEqual({ machineId: 'test-host', tabId: f.tab, agentId: f.worker })
+  })
+
+  it('tells the machine when a terminal request waits for its agent', async () => {
+    const heard: Array<{ machineId: string; tabId: string; agentId: string }> = []
+    const f = await swarm({ hooks: { terminalWaiting: w => { heard.push(w) } } })
+    await f.execute({ type: 'agent.screen', agentId: f.worker, scrollback: 50 })
+    expect(heard).toEqual([{ machineId: 'test-host', tabId: f.tab, agentId: f.worker }])
   })
 
   it('announces the update request the Lead\'s own poll writes for it', async () => {
@@ -2003,5 +2128,423 @@ describe('the morning digest', () => {
     f.clock.now += 24 * 60 * 60_000
     await f.leadInbox()
     expect(await digests()).toHaveLength(2)
+  })
+
+  it('drops a PM switch nobody claimed on another machine\'s next report, with one line in the project chat', async () => {
+    const f = await swarm()
+    await f.observe('lead-host', [f.harness.lead], { capabilities: ['leadSwitch'] })
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    await f.execute({ type: 'lead.switch', projectId, engine: 'codex', profileId: 'default' })
+    const pending = async () => (await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === f.lead)!.switchRequest
+    expect(await pending()).toBeDefined()
+    const lines = async () => (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => (m.source as { kind?: string } | null)?.kind === 'switch')
+    f.clock.now += 2 * MINUTE + 1000
+    await f.observe('test-host', [f.harness.worker])
+    expect(await pending()).toBeUndefined()
+    expect((await lines()).map(m => m.text)).toEqual(["Couldn't switch the PM: its machine did not answer."])
+    f.clock.now += MINUTE
+    await f.observe('test-host', [f.harness.worker])
+    expect(await lines()).toHaveLength(1)
+  })
+
+  it('tells the machine owner in their quiet Buddy chat after a rebind, and never opens that chat twice', async () => {
+    const f = await swarm()
+    const WORK = 'a'.repeat(16)
+    const reading = { capabilities: ['leadSwitch'], profiles: [{ engine: 'codex' as const, id: WORK, label: 'Work', leftPercent: 80, resetsAt: null }] }
+    await f.observe('lead-host', [f.harness.lead], reading)
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    const notices = async () => (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => (m.source as { kind?: string } | null)?.kind === 'pm-switch-notice')
+    /** What a real host sends: its claim, then the rebind, and only then the result. */
+    const move = async (previousHarnessId: string, harnessId: string) => {
+      const asked = await f.execute({ type: 'lead.switch', projectId, engine: 'codex', profileId: WORK })
+      const switchId = (await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === f.lead)!.switchRequest!.id
+      expect(asked).toBeDefined()
+      await f.execute({ type: 'agent.switchClaim', agentId: f.lead, switchId }, host, f.lead)
+      await f.execute({ type: 'agent.rebind', agentId: f.lead, machineId: 'lead-host', projectId, previousHarnessId, harnessId, profileId: WORK, configuration: config }, host, f.lead)
+      await f.execute({ type: 'agent.switchResult', agentId: f.lead, switchId, ok: true }, host, f.lead)
+    }
+    await move(f.harness.lead, 'second-session')
+    const [first] = await notices()
+    expect(first!.text).toContain('your Codex account "Work"')
+    await db.swarmGroup.update({ where: { id: `${f.tab}:${first!.conversationId}` }, data: { dormant: true } })
+    await f.observe('lead-host', ['second-session'], reading)
+    await move('second-session', 'third-session')
+    expect((await notices()).map(m => m.conversationId)).toEqual([first!.conversationId, first!.conversationId])
+    expect(await db.swarmGroup.count({ where: { tabId: f.tab, key: first!.conversationId } })).toBe(1)
+  })
+})
+
+// Huy, 2026-11-02: four agents closed on MacBookPro2021 sat under Idle for hours, each in the machine's stopped list. A
+// session closed on its machine is recorded as stopped and leaves the list; only a kept one stays, shown as closed.
+describe('an agent closed on its machine', () => {
+  const agents = async (f: Awaited<ReturnType<typeof swarm>>) => (await f.timed.read(owner, f.tab)).state.agents
+  const ids = async (f: Awaited<ReturnType<typeof swarm>>) => (await agents(f)).map(a => a.id)
+  type Fixture = Awaited<ReturnType<typeof swarm>>
+  /** Both machines report every 5 seconds for `seconds`; the worker host lists `running` and `stopped`. */
+  const reports = async (f: Fixture, seconds: number, running: string[], stopped: string[] = [], store?: SuperTabStore) => {
+    for (let t = 0; t < seconds; t += 5) {
+      f.clock.now += 5_000
+      await f.observe('lead-host', [f.harness.lead])
+      await f.observe('test-host', running, { stoppedHarnessIds: stopped }, store)
+    }
+  }
+  const closing = async (f: Fixture) => (await rosterRows(f.timed, host, 'test-host')).filter(r => r.tabId === f.tab && 'closeSession' in r)
+
+  it('leaves the list when its machine keeps reporting its session stopped, never on the first report', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const idle = await f.add(f.group, 'test-host', f.harness.other, 'Idle one')
+    expect(await ids(f)).toContain(idle)
+    await reports(f, 5, [f.harness.worker], [f.harness.other])
+    expect(await ids(f)).toContain(idle)
+    await reports(f, 20, [f.harness.worker], [f.harness.other])
+    expect(await ids(f)).toContain(idle)
+    await reports(f, 10, [f.harness.worker], [f.harness.other])
+    expect(await ids(f)).toEqual([f.lead, f.worker])
+    const group = (await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === f.group)!
+    expect(group.agentIds).not.toContain(idle)
+  })
+
+  it('has its host close the session it leaves (security reviews of #2569)', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const idle = await f.add(f.group, 'test-host', f.harness.other, 'Idle one')
+    await reports(f, 40, [f.harness.worker], [f.harness.other])
+    expect(await ids(f)).not.toContain(idle)
+    expect(await closing(f)).toEqual([expect.objectContaining({ agent: expect.objectContaining({ id: idle, harnessId: f.harness.other }) })])
+    await f.execute({ type: 'agent.sessionClosed', agentId: idle, harnessId: f.harness.other } as Command, host)
+    expect(await closing(f)).toEqual([])
+  })
+
+  it('keeps an agent whose task was just lost, tells its Lead, and removes it once the Lead cancels the task', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    f.clock.now += MINUTE
+    await f.observe('lead-host', [f.harness.lead])
+    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
+    expect(await f.assignment()).toMatchObject({ status: 'lost', lost: { reason: 'its session on Worker Mac stopped' } })
+    expect((await f.leadInbox()).some(m => (m.source as { kind?: string }).kind === 'work-lost')).toBe(true)
+    await reports(f, 60, [], [f.harness.worker])
+    expect(await ids(f)).toContain(f.worker)
+    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Not needed' })
+    await reports(f, 10, [], [f.harness.worker])
+    expect(await ids(f)).toEqual([f.lead])
+  })
+
+  it('stays when it was kept, and shows as down; a coordinator or a running session stays too', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const kept = await f.add(f.group, 'test-host', f.harness.other, 'Kept one')
+    await f.execute({ type: 'agent.release', agentId: kept, decision: 'keep' })
+    await reports(f, 60, [f.harness.worker], [f.harness.other])
+    // The Lead's session is in its machine's stopped list; the worker's is running.
+    for (let i = 0; i < 12; i++) {
+      f.clock.now += 5_000
+      await f.observe('lead-host', [], { stoppedHarnessIds: [f.harness.lead] })
+      await f.observe('test-host', [f.harness.worker], { stoppedHarnessIds: [f.harness.other] })
+    }
+    expect((await ids(f)).sort()).toEqual([f.lead, f.worker, kept].sort())
+    expect((await agents(f)).find(a => a.id === kept)).toMatchObject({ workDecision: 'keep', downSince: expect.any(String) })
+  })
+
+  it('stays when its session is in both lists, as a host resuming it reports', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    await reports(f, 60, [f.harness.worker], [f.harness.worker])
+    expect(await ids(f)).toContain(f.worker)
+  })
+
+  it('stays when a stop was asked for: its host closes it and takes it out', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const idle = await f.add(f.group, 'test-host', f.harness.other, 'Idle one')
+    await f.execute({ type: 'agent.release', agentId: idle, decision: 'stop' })
+    await reports(f, 60, [f.harness.worker], [f.harness.other])
+    expect(await ids(f)).toContain(idle)
+    expect(await closing(f)).toEqual([])
+  })
+
+  it('stays when its host lists it stopped for a moment and then running again, as after a restart', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const idle = await f.add(f.group, 'test-host', f.harness.other, 'Idle one')
+    await reports(f, 25, [f.harness.worker], [f.harness.other])
+    await reports(f, 5, [f.harness.worker, f.harness.other])
+    await reports(f, 25, [f.harness.worker], [f.harness.other])
+    expect(await ids(f)).toContain(idle)
+  })
+
+  it('leaves after 15 minutes down while its machine keeps reporting without it, never on the first report after silence', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const idle = await f.add(f.group, 'test-host', f.harness.other, 'Idle one')
+    await f.observe('test-host', [f.harness.worker, f.harness.other])
+    // Down from here, in no stopped list: the host just does not list it. Reports come every 15 seconds.
+    const report = async (seconds = 15) => {
+      f.clock.now += seconds * 1000
+      await f.observe('lead-host', [f.harness.lead])
+      await f.observe('test-host', [f.harness.worker])
+    }
+    for (let i = 0; i < 24; i++) await report()
+    expect(await ids(f)).toContain(idle)
+    // Silent past 15 minutes, then back: not removed on the report that ends the silence, nor soon after.
+    await report(15 * 60)
+    await report()
+    expect(await ids(f)).toContain(idle)
+    // The full report that follows (at least every two minutes) removes it.
+    for (let i = 0; i < 10; i++) await report()
+    expect(await ids(f)).not.toContain(idle)
+    expect(await ids(f)).toContain(f.worker)
+    expect(await closing(f)).toHaveLength(1)
+  })
+
+  it('removes nobody by time while its machine lists no session running (a fault in its listing)', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const idle = await f.add(f.group, 'test-host', f.harness.other, 'Idle one')
+    await reports(f, 20 * 60, [])
+    expect(await ids(f)).toContain(idle)
+  })
+
+  it('does not lose an assignment that lands while it is being removed (the report retries against it)', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const idle = await f.add(f.group, 'test-host', f.harness.other, 'Idle one')
+    const second = String((await f.execute({ type: 'conversation.create', title: 'Second', brief: 'More', checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
+    await reports(f, 30, [f.harness.worker], [f.harness.other])
+    let raced = false
+    const racing = new SuperTabStore(beforeFirstWrite(db, async () => {
+      if (raced) return
+      raced = true
+      await f.execute({ type: 'work.assign', conversationId: second, agentId: idle })
+    }), () => f.clock.now)
+    await reports(f, 10, [f.harness.worker], [f.harness.other], racing)
+    expect(raced).toBe(true)
+    const state = (await f.timed.read(owner, f.tab)).state
+    const group = state.conversations.find(c => c.id === second)!
+    expect(group.assignment).toMatchObject({ agentId: idle })
+    expect(state.agents.map(a => a.id)).toContain(idle)
+    expect(group.agentIds).toContain(idle)
+    expect(await closing(f)).toEqual([])
+  })
+})
+
+// Huy, 2026-11-02 (task #2131, after #2569): once a closed agent left the list, reopening its session left it outside the Swarm until
+// someone added it from Desktop. The removal keeps a record in its machine's part, and that machine's own report brings it back.
+describe('a session reopened after its agent was removed', () => {
+  const state = async (f: Awaited<ReturnType<typeof swarm>>) => (await f.timed.read(owner, f.tab)).state
+  const machinePart = async (f: { tab: string }, machineId: string) => (await db.swarmMachine.findFirstOrThrow({ where: { tabId: f.tab, key: machineId } })).data as { removedSessions?: Array<Record<string, any>> }
+  /** A Swarm with an idle agent of a role, in the task's group, that its machine's report just removed. */
+  async function removed(over: Record<string, unknown> = {}) {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const idle = await f.add(f.group, 'test-host', f.harness.other, 'Idle one')
+    const row = await db.swarmAgent.findFirstOrThrow({ where: { tabId: f.tab, key: idle } })
+    await db.swarmAgent.update({ where: { id: row.id }, data: { data: { ...row.data as object, roleName: 'Reviewer', ...over } } })
+    // A session listed stopped leaves once it has stayed so, by a machine that keeps reporting (closedAgents.ts STOPPED_REMOVE_MS).
+    for (let seconds = 0; seconds < 35; seconds += 5) {
+      f.clock.now += 5_000
+      await f.observe('lead-host', [f.harness.lead])
+      await f.observe('test-host', [f.harness.worker], { stoppedHarnessIds: [f.harness.other] })
+    }
+    expect((await state(f)).agents.map(a => a.id)).not.toContain(idle)
+    return { ...f, idle }
+  }
+  const resume = (f: Awaited<ReturnType<typeof removed>>) => { f.clock.now += MINUTE; return f.observe('test-host', [f.harness.worker, f.harness.other]) }
+  const patchRecord = async (f: Awaited<ReturnType<typeof removed>>, change: (record: Record<string, any>) => void) => {
+    const row = await db.swarmMachine.findFirstOrThrow({ where: { tabId: f.tab, key: 'test-host' } })
+    const data = structuredClone(row.data) as { removedSessions: Array<Record<string, any>> }
+    change(data.removedSessions[0]!)
+    await db.swarmMachine.update({ where: { id: row.id }, data: { data: data as object } })
+  }
+
+  it('is listed again with its group, role and configuration, once, and its record goes', async () => {
+    const f = await removed()
+    await resume(f)
+    const read = await state(f), back = read.agents.find(a => a.id === f.idle)!
+    expect(back).toMatchObject({ harnessId: f.harness.other, machineId: 'test-host', name: 'Idle one', roleName: 'Reviewer', configuration: config })
+    expect(back.downSince).toBeUndefined()
+    expect(read.conversations.find(c => c.id === f.group)!.agentIds).toContain(f.idle)
+    expect((await machinePart(f, 'test-host')).removedSessions ?? []).toEqual([])
+    await resume(f)
+    expect((await state(f)).agents.filter(a => a.id === f.idle)).toHaveLength(1)
+  })
+
+  // Reviews of #2207 (Cleo, Orion, Luna, Echo): a report closed and reopened sessions with no row, so an agent could come back to
+  // read its chats unrecorded. Each chat it leaves or rejoins says so, written as the agent, waking nobody.
+  it('says in its group that it left when its session closed, and that it rejoined when the session reopened', async () => {
+    const f = await removed()
+    const said = async () => (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: f.group }, orderBy: { sequence: 'asc' } }))
+      .filter(m => m.text.startsWith('"Idle one"')).map(m => [m.text, m.recipientIds])
+    expect(await said()).toEqual([['"Idle one" left: its session closed.', []]])
+    await resume(f)
+    expect(await said()).toEqual([['"Idle one" left: its session closed.', []], ['"Idle one" rejoined: its session reopened.', []]])
+    // A report that changes nothing says nothing again.
+    await resume(f)
+    expect(await said()).toHaveLength(2)
+  })
+
+  it('stays out while the report does not list it running', async () => {
+    const f = await removed()
+    f.clock.now += MINUTE
+    await f.observe('test-host', [f.harness.worker])
+    expect((await state(f)).agents.map(a => a.id)).not.toContain(f.idle)
+    expect((await machinePart(f, 'test-host')).removedSessions).toHaveLength(1)
+  })
+
+  it('comes back only from its own machine: another machine\'s report leaves it out, and a stranger\'s is refused', async () => {
+    const f = await removed()
+    f.clock.now += MINUTE
+    await f.observe('lead-host', [f.harness.lead, f.harness.other])
+    expect((await state(f)).agents.map(a => a.id)).not.toContain(f.idle)
+    expect((await machinePart(f, 'test-host')).removedSessions).toHaveLength(1)
+    const generation = (await poolRows(f.timed, host, 'test-host')).find(p => p.tabId === f.tab)!.machine.generation
+    await expect(f.timed.observeMachine(owner, f.tab, 'test-host', { generation, tools: [], quotas: [], resources: {} as never,
+      runningHarnessIds: [f.harness.other], stoppedHarnessIds: [] } as never)).rejects.toBeTruthy()
+    expect((await state(f)).agents.map(a => a.id)).not.toContain(f.idle)
+    expect((await machinePart(f, 'test-host')).removedSessions).toHaveLength(1)
+  })
+
+  it('no command brings it back: nothing a person or an agent sends names the record', async () => {
+    const f = await removed()
+    await expect(f.execute({ type: 'agent.rejoin', machineId: 'test-host', harnessId: f.harness.other } as unknown as Command)).rejects.toBeTruthy()
+    expect((await state(f)).agents.map(a => a.id)).not.toContain(f.idle)
+  })
+
+  it('is told only to its own machine\'s host, and is in no person\'s read', async () => {
+    const f = await removed()
+    expect((await poolRows(f.timed, host, 'test-host')).find(p => p.tabId === f.tab)).toMatchObject({ removedHarnessIds: [f.harness.other] })
+    expect((await poolRows(f.timed, host, 'lead-host')).find(p => p.tabId === f.tab)!.removedHarnessIds ?? []).toEqual([])
+    expect(JSON.stringify(await state(f))).not.toContain('removedSessions')
+    expect(JSON.stringify(await f.timed.read(host, f.tab))).not.toContain('removedSessions')
+  })
+
+  it('keeps no record of an agent someone asked to stop, or a confidential one', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const stop = await f.add(f.group, 'test-host', f.harness.other, 'Stop one')
+    await f.execute({ type: 'agent.release', agentId: stop, decision: 'stop' })
+    f.clock.now += MINUTE
+    await f.observe('lead-host', [f.harness.lead])
+    await f.observe('test-host', [f.harness.worker], { stoppedHarnessIds: [f.harness.other] })
+    expect((await machinePart(f, 'test-host')).removedSessions ?? []).toEqual([])
+    const secret = await removed({ confidential: true })
+    expect((await machinePart(secret, 'test-host')).removedSessions ?? []).toEqual([])
+  })
+
+  it('keeps no record of a session that reads a private chat, though nothing marked it confidential', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const idle = await f.add(f.group, 'test-host', f.harness.other, 'Idle one')
+    const group = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.group } })
+    await db.swarmGroup.update({ where: { id: group.id }, data: { data: { ...group.data as object, audience: { kind: 'people', people: [{ id: owner.sub }] } } } })
+    for (let seconds = 0; seconds < 35; seconds += 5) {
+      f.clock.now += 5_000
+      await f.observe('lead-host', [f.harness.lead])
+      await f.observe('test-host', [f.harness.worker], { stoppedHarnessIds: [f.harness.other] })
+    }
+    expect((await state(f)).agents.map(a => a.id)).not.toContain(idle)
+    expect((await machinePart(f, 'test-host')).removedSessions ?? []).toEqual([])
+  })
+
+  it.each([
+    ['a machine owner who is not the report\'s', (r: Record<string, any>) => { r.agent.machineOwnerId = 'someone-else' }],
+    ['a contributor no longer in the Swarm', (r: Record<string, any>) => { r.agent.contributorId = 'someone-else' }],
+    ['its contributor left and came back', (r: Record<string, any>) => { r.agent.membershipGeneration = 'an-older-one' }],
+    ['its project gone', (r: Record<string, any>) => { r.agent.projectId = 'no-such-project' }],
+    ['a share grant that changed', (r: Record<string, any>) => { r.agent.hostGrant = 'revoked' }],
+    ['a harness that does not match', (r: Record<string, any>) => { r.agent.harnessId = 'other-session' }],
+  ])('is not restored with %s, and its record goes', async (_, change) => {
+    const f = await removed()
+    await patchRecord(f, change)
+    await resume(f)
+    expect((await state(f)).agents.map(a => a.id)).not.toContain(f.idle)
+    expect((await machinePart(f, 'test-host')).removedSessions ?? []).toEqual([])
+  })
+
+  it('does not come back into an archived group, a private chat, or one that is gone; it is listed all the same', async () => {
+    const f = await removed()
+    const open = String((await f.execute({ type: 'conversation.create', title: 'Open one', brief: 'b', checks: [] })).result.conversationId)
+    await patchRecord(f, r => { r.groupIds = [f.group, open, 'no-such-group'] })
+    await f.execute({ type: 'conversation.archive', conversationId: open, archived: true })
+    const group = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.group } })
+    await db.swarmGroup.update({ where: { id: group.id }, data: { data: { ...group.data as object, audience: { people: [] } } } })
+    await resume(f)
+    const read = await db.swarmGroup.findMany({ where: { tabId: f.tab, key: { in: [f.group, open] } } })
+    for (const row of read) expect((row.data as { agentIds: string[] }).agentIds).not.toContain(f.idle)
+    expect((await state(f)).agents.map(a => a.id)).toContain(f.idle)
+  })
+
+  it('leaves one added by hand meanwhile as it is, and one registered in another Swarm out', async () => {
+    const f = await removed()
+    const again = await f.add(f.group, 'test-host', f.harness.other, 'Added by hand')
+    expect(again).toBe(f.idle)
+    await resume(f)
+    expect((await state(f)).agents.find(a => a.id === f.idle)!.name).toBe('Added by hand')
+    expect((await machinePart(f, 'test-host')).removedSessions ?? []).toEqual([])
+
+    const moved = await removed()
+    const elsewhere = await swarm()
+    await elsewhere.add(elsewhere.group, 'test-host', moved.harness.other, 'Elsewhere now')
+    await resume(moved)
+    expect((await state(moved)).agents.map(a => a.id)).not.toContain(moved.idle)
+    expect((await machinePart(moved, 'test-host')).removedSessions ?? []).toEqual([])
+  })
+
+  // Rowan's review of #2569: the removal now also orders its host to close the session.
+  it('stays open when it comes back before its host closed it: the close order goes with the record', async () => {
+    const f = await removed()
+    expect((await poolRows(f.timed, host, 'test-host')).length).toBeGreaterThan(0)
+    const closing = () => db.swarmMachine.findFirstOrThrow({ where: { tabId: f.tab, key: 'test-host' } }).then(row => (row.data as { closingSessions: Array<{ harnessId: string }> }).closingSessions)
+    expect((await closing()).map(c => c.harnessId)).toContain(f.harness.other)
+    await resume(f)
+    expect((await state(f)).agents.map(a => a.id)).toContain(f.idle)
+    expect((await closing()).map(c => c.harnessId)).not.toContain(f.harness.other)
+  })
+
+  it('rejoins after its host closed it, once the session is opened again', async () => {
+    const f = await removed()
+    const row = await db.swarmMachine.findFirstOrThrow({ where: { tabId: f.tab, key: 'test-host' } })
+    await db.swarmMachine.update({ where: { id: row.id }, data: { data: { ...row.data as object, closingSessions: [] } } })
+    await resume(f)
+    expect((await state(f)).agents.map(a => a.id)).toContain(f.idle)
+  })
+
+  it('never past a hold: a session its Team account is held for stays out, and the hold stands', async () => {
+    const f = await removed()
+    const row = await db.swarmMachine.findFirstOrThrow({ where: { tabId: f.tab, key: 'test-host' } })
+    const data = structuredClone(row.data) as { closingSessions: Array<Record<string, unknown>> }
+    for (const close of data.closingSessions) if (close.harnessId === f.harness.other) Object.assign(close, { heldFor: 'lead', since: f.clock.now })
+    await db.swarmMachine.update({ where: { id: row.id }, data: { data: data as object } })
+    await resume(f)
+    expect((await state(f)).agents.map(a => a.id)).not.toContain(f.idle)
+    const after = (await db.swarmMachine.findFirstOrThrow({ where: { tabId: f.tab, key: 'test-host' } })).data as { closingSessions: Array<Record<string, unknown>>; removedSessions?: unknown[] }
+    expect(after.closingSessions.find(c => c.harnessId === f.harness.other)).toMatchObject({ heldFor: 'lead' })
+    expect(after.removedSessions ?? []).toEqual([])
+  })
+
+  // Security review 1 of #2601: the record every Swarm registering this session writes (sessionScope.ts bindSession).
+  it.each([
+    ['withdrawn from this Swarm', (tab: string) => ({ releasedTabIds: [tab] })],
+    ['being stopped', () => ({ stopReleaseId: 'release-1' })],
+    ['tied to another private project', () => ({ privateScope: 'another-scope' })],
+  ])('stays out of a session %s, and its record goes', async (_, fields) => {
+    const f = await removed()
+    const row = await db.superTab.findUniqueOrThrow({ where: { id: f.tab }, select: { autonomousEnv: true } })
+    const scope = stableId('swarm-session', row.autonomousEnv, host.sub, f.idle)
+    await db.superTabSessionScope.upsert({ where: { id: scope }, create: { id: scope, scopeIds: [], ...fields(f.tab) }, update: fields(f.tab) })
+    await resume(f)
+    expect((await state(f)).agents.map(a => a.id)).not.toContain(f.idle)
+    expect((await machinePart(f, 'test-host')).removedSessions ?? []).toEqual([])
+  })
+
+  it('goes after 30 days, and with its machine', async () => {
+    const f = await removed()
+    f.clock.now += 31 * 24 * 60 * MINUTE
+    await f.observe('test-host', [f.harness.worker])
+    expect((await machinePart(f, 'test-host')).removedSessions ?? []).toEqual([])
+    const g = await removed()
+    await g.execute({ type: 'machine.remove', machineId: 'test-host' }, host)
+    expect((await machinePart(g, 'test-host')).removedSessions ?? []).toEqual([])
   })
 })

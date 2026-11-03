@@ -22,8 +22,8 @@ import 'swarm_fixture.dart';
 /// prototype draws it (2026-10-30): its chat with the New messages line,
 /// a task card and a PR card, a code block, reactions with the add-reaction
 /// chip and a replies row; ☰ open; its Leaderboard sheet; its Team sheet with
-/// open tasks on top, See all and the agents in their states; and Approve's
-/// question. On 390- and 320-point phones in both phone themes, from made-up
+/// open tasks on top, See all and the agents in their states; Work and Older;
+/// and Approve's question. On 390- and 320-point phones in both phone themes, from made-up
 /// data only, to the folder `SWARM_PROJECT_C_SHOTS` names.
 final shots = Platform.environment['SWARM_PROJECT_C_SHOTS'];
 void main() {
@@ -214,6 +214,21 @@ void main() {
       };
       fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
           changes(cursor: 'c2', derived: derived);
+      fake.routes['/api/super-tabs/$tab/groups?dormant=1&projectId=$project'] =
+          (_) => {
+            'groups': [
+              part('g-old', 50, {
+                ...groupData(
+                  'g-old',
+                  title: 'Old chat',
+                  number: 23,
+                  dormant: true,
+                ),
+                'archived': true,
+              }),
+            ],
+            'next': null,
+          };
       fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
         'decisions': [
           {
@@ -363,6 +378,30 @@ void main() {
       await tester.tap(key('swarm-project-menu'));
       await tester.pumpAndSettle();
       await capture('menu');
+      await tester.tap(key('swarm-project-menu-work'));
+      await tester.pumpAndSettle();
+      await capture('work');
+      final workList = find.descendant(
+        of: find.byType(SwarmProjectSheet),
+        matching: find.byType(CustomScrollView),
+      );
+      await tester.dragUntilVisible(
+        key('swarm-older'),
+        workList,
+        const Offset(0, -200),
+      );
+      await tester.tap(key('swarm-older'));
+      await tester.pumpAndSettle();
+      await tester.dragUntilVisible(
+        key('swarm-conversation-g-old'),
+        workList,
+        const Offset(0, -200),
+      );
+      await capture('older');
+      await tester.tap(key('swarm-team-close'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-project-menu'));
+      await tester.pumpAndSettle();
       await tester.tap(key('swarm-project-menu-leaderboard'));
       await tester.pumpAndSettle();
       await capture('leaderboard');

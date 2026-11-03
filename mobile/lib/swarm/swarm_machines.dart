@@ -8,9 +8,9 @@ import '../shared/theme/app_icon_size.dart';
 import '../shared/theme/app_space.dart';
 import '../shared/theme/app_theme.dart';
 import '../shared/theme/app_type.dart';
-import 'identity.dart';
 import 'model.dart';
 import 'swarm_buddy.dart';
+import 'swarm_machine_menu.dart';
 import 'swarm_reader.dart';
 import 'swarm_style.dart';
 import 'team_glance.dart';
@@ -22,11 +22,16 @@ class SwarmMachinesSection extends StatefulWidget {
     super.key,
     required this.reader,
     required this.open,
+    this.menu,
     this.swarmName,
   });
   final SwarmReader reader;
   final String? swarmName;
   final void Function(String machineId) open;
+
+  /// A long press on a machine: its Details / Pause / Remove menu ([showSwarmMachineMenu]); null leaves the row with
+  /// its tap alone.
+  final void Function(String machineId, String name)? menu;
 
   @override
   State<SwarmMachinesSection> createState() => _SwarmMachinesSectionState();
@@ -105,6 +110,9 @@ class _SwarmMachinesSectionState extends State<SwarmMachinesSection> {
   Widget _machineRow(_MachineView view) => _tap(
     key: ValueKey('swarm-machine-${widget.reader.tabId}-${view.id}'),
     onTap: () => widget.open(view.id),
+    onLongPress: widget.menu == null
+        ? null
+        : () => widget.menu!(view.id, view.name),
     child: Row(
       children: [
         Icon(
@@ -135,7 +143,7 @@ class _SwarmMachinesSectionState extends State<SwarmMachinesSection> {
           const SizedBox(width: AppSpace.s),
           SwarmAvatar(
             id: owner.id,
-            name: superTabPersonName(owner.email),
+            name: owner.username,
             picture: owner.avatar,
             size: AppIconSize.standalone,
           ),
@@ -155,21 +163,23 @@ class _SwarmMachinesSectionState extends State<SwarmMachinesSection> {
   );
 }
 
-Widget _tap({Key? key, required VoidCallback onTap, required Widget child}) =>
-    Material(
-      color: Colors.transparent,
-      child: InkWell(
-        key: key,
-        onTap: onTap,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 52),
-          child: Padding(
-            padding: const EdgeInsets.all(AppSpace.s),
-            child: child,
-          ),
-        ),
-      ),
-    );
+Widget _tap({
+  Key? key,
+  required VoidCallback onTap,
+  VoidCallback? onLongPress,
+  required Widget child,
+}) => Material(
+  color: Colors.transparent,
+  child: InkWell(
+    key: key,
+    onTap: onTap,
+    onLongPress: onLongPress,
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 52),
+      child: Padding(padding: const EdgeInsets.all(AppSpace.s), child: child),
+    ),
+  ),
+);
 
 /// A read-only sheet that keeps following the same reader as the drawer.
 Future<void> showSwarmMachine(
@@ -260,7 +270,7 @@ class SwarmMachineSheet extends StatelessWidget {
               ),
               _detail('Status', view.status),
               if (view.owner case final owner?)
-                _detail('Owner', superTabPersonName(owner.email)),
+                _detail('Owner', owner.username),
               _heading('Hardware'),
               if (view.dim)
                 _detail('Readings', 'Current readings unavailable')
@@ -301,6 +311,7 @@ class SwarmMachineSheet extends StatelessWidget {
                     a.name,
                     '${snapshot.roleOf(a.agent.id)?.badge ?? 'Dev'} · ${a.label}',
                   ),
+              SwarmMachinePauseButton(reader: reader, machineId: machineId),
             ],
           ),
         ),

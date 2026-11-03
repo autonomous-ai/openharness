@@ -1,0 +1,250 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/swarm/model.dart';
+import 'package:harness_mobile/swarm/swarm_message_row.dart';
+
+InlineSpan? paragraph(WidgetTester tester, String text) {
+  for (final rich in tester.widgetList<RichText>(find.byType(RichText))) {
+    if (rich.text.toPlainText() == text) return rich.text;
+  }
+  return null;
+}
+
+List<TextSpan> spans(InlineSpan root) {
+  final found = <TextSpan>[];
+  root.visitChildren((span) {
+    if (span is TextSpan) found.add(span);
+    return true;
+  });
+  return found;
+}
+
+void main() {
+  Future<void> show(
+    WidgetTester tester,
+    String text, {
+    VoidCallback? onTap,
+    VoidCallback? onLongPress,
+  }) async {
+    final message = SuperTabMessage.fromJson({
+      'id': 'm1',
+      'conversationId': 'g1',
+      'text': text,
+      'sequence': 1,
+      'author': {'kind': 'agent', 'id': 'agent-lead', 'name': 'Lead'},
+      'createdAt': DateTime.utc(2026, 1, 1).toIso8601String(),
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ListView(
+            children: [
+              SwarmMessageRow(
+                message: message,
+                name: 'River',
+                look: (picture: null, status: null),
+                role: null,
+                mentions: SwarmMentions(const []),
+                grouped: false,
+                lit: false,
+                quote: null,
+                actions: false,
+                onTap: onTap ?? () {},
+                onLongPress: onLongPress ?? () {},
+                onReply: null,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('headings render as headings', (tester) async {
+    await show(tester, '## Build report\n\nA short summary.');
+
+    expect(find.text('## Build report'), findsNothing);
+    expect(find.text('Build report'), findsOneWidget);
+  });
+
+  testWidgets('strong and emphasis render with Markdown styles', (
+    tester,
+  ) async {
+    await show(tester, 'A **bold** and *italic* report.');
+
+    final paragraphText = paragraph(tester, 'A bold and italic report.');
+    expect(paragraphText?.toPlainText(), 'A bold and italic report.');
+    final rendered = spans(paragraphText ?? const TextSpan());
+    expect(
+      rendered.any(
+        (span) =>
+            span.text == 'bold' && span.style?.fontWeight == FontWeight.w600,
+      ),
+      isTrue,
+    );
+    expect(
+      rendered.any(
+        (span) =>
+            span.text == 'italic' && span.style?.fontStyle == FontStyle.italic,
+      ),
+      isTrue,
+    );
+  });
+
+  testWidgets('ordered and unordered lists render their items', (tester) async {
+    await show(tester, '1. First\n2. Second\n\n- Third');
+
+    expect(find.text('1. First'), findsNothing);
+    expect(find.text('2. Second'), findsNothing);
+    expect(find.text('- Third'), findsNothing);
+    for (final item in ['First', 'Second', 'Third']) {
+      expect(find.text(item), findsOneWidget);
+    }
+  });
+
+  testWidgets('inline code renders without Markdown delimiters', (
+    tester,
+  ) async {
+    await show(tester, 'Run `flutter test` before review.');
+
+    final paragraphText = paragraph(tester, 'Run flutter test before review.');
+    expect(paragraphText?.toPlainText(), 'Run flutter test before review.');
+    final rendered = spans(paragraphText ?? const TextSpan());
+    expect(
+      rendered.any(
+        (span) => span.text == 'flutter test' && span.style?.fontFamily != null,
+      ),
+      isTrue,
+    );
+  });
+
+  testWidgets('quotes render without the Markdown quote marker', (
+    tester,
+  ) async {
+    await show(tester, '> No agent work was lost.');
+
+    expect(find.text('> No agent work was lost.'), findsNothing);
+    expect(find.text('No agent work was lost.'), findsOneWidget);
+  });
+
+  testWidgets('GFM tables render rows and cells', (tester) async {
+    await show(tester, '| Area | Result |\n| --- | --- |\n| Chat | Ready |');
+
+    expect(find.textContaining('| Area |'), findsNothing);
+    for (final cell in ['Area', 'Result', 'Chat', 'Ready']) {
+      expect(find.text(cell), findsOneWidget);
+    }
+  });
+
+  testWidgets('a prose tap still opens the message reply action', (
+    tester,
+  ) async {
+    var taps = 0;
+    await show(tester, '## Findings', onTap: () => taps++);
+
+    await tester.tap(find.text('Findings'));
+    expect(taps, 1);
+  });
+
+  testWidgets('a long report list remains scrollable', (tester) async {
+    final report = [for (var i = 1; i <= 80; i++) '- Finding $i'].join('\n');
+    await show(tester, report);
+
+    await tester.scrollUntilVisible(
+      find.text('Finding 80'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('Finding 80'), findsOneWidget);
+  });
+
+  testWidgets('Markdown web links open their destination without replying', (
+    tester,
+  ) async {
+    final opened = <Object?>[];
+    var replies = 0;
+    const launcher = MethodChannel('plugins.flutter.io/url_launcher');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(launcher, (call) async {
+      opened.add((call.arguments as Map)['url']);
+      return true;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(launcher, null));
+    await show(
+      tester,
+      '[Review](https://example.com/review)',
+      onTap: () => replies++,
+    );
+
+    await tester.tap(find.text('Review', findRichText: true));
+    await tester.pump();
+
+    expect(opened, ['https://example.com/review']);
+    expect(replies, 0);
+  });
+
+  testWidgets('bare web links open in the in-app browser', (tester) async {
+    final opened = <Object?>[];
+    const launcher = MethodChannel('plugins.flutter.io/url_launcher');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(launcher, (call) async {
+      opened.add((call.arguments as Map)['url']);
+      return true;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(launcher, null));
+    await show(tester, 'https://example.com/review');
+
+    await tester.tap(
+      find.text('https://example.com/review', findRichText: true),
+    );
+    await tester.pump();
+
+    expect(opened, ['https://example.com/review']);
+  });
+
+  testWidgets('non-web Markdown destinations do not open', (tester) async {
+    final opened = <Object?>[];
+    const launcher = MethodChannel('plugins.flutter.io/url_launcher');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(launcher, (call) async {
+      opened.add((call.arguments as Map)['url']);
+      return true;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(launcher, null));
+    await show(tester, '[Unsafe](javascript:alert(1))');
+
+    await tester.tap(find.text('Unsafe', findRichText: true));
+    await tester.pump();
+
+    expect(opened, isEmpty);
+  });
+
+  testWidgets('Markdown images show a label without creating an image', (
+    tester,
+  ) async {
+    await show(tester, '![private report](https://example.com/private.png)');
+
+    expect(find.text('Image: private report'), findsOneWidget);
+    expect(find.byType(Image), findsNothing);
+  });
+
+  testWidgets('long pressing a rendered link opens the message menu', (
+    tester,
+  ) async {
+    var holds = 0;
+    await show(
+      tester,
+      '[Guide](https://example.com/guide)',
+      onLongPress: () => holds++,
+    );
+
+    await tester.longPress(find.text('Guide', findRichText: true));
+
+    expect(holds, 1);
+  });
+}

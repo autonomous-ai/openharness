@@ -166,6 +166,22 @@ const placementOf = (state: SuperTabState, start: AgentStart): LeadPlacement | u
   return lead?.startId === start.id ? lead : undefined
 }
 
+/** A person set another coordinator while this start ran (both security reviews of #2636): it never joins the project chat. The
+ *  start ends with the reason and its placement is forgotten, as the project has its coordinator. The line its conversation
+ *  shows and its source, a system row naming the machine as leadJoined's does; null when no coordinator holds the chat. */
+export function leadOvertaken(state: SuperTabState, start: AgentStart, home: Conversation): { text: string; reason: string; source: { kind: 'system'; machine?: string } } | null {
+  const holder = home.leadId && home.agentIds.includes(home.leadId) ? state.agents.find(a => a.id === home.leadId) : undefined
+  const project = start.request.leadFor && projectsOf(state).find(p => p.id === start.request.leadFor!.projectId)
+  if (!holder || !project) return null
+  const placement = placementOf(state, start)
+  const machine = placement?.machineName ?? state.machines?.find(m => m.machineId === start.request.machineId)?.name
+  if (placement) delete project.lead
+  const name = coordinatorNameOf(project)
+  const reason = `This project already has ${holder.displayName ?? holder.name} as its ${name}.`
+  return { reason, text: `${name} started on ${machine ?? 'its machine'}, but this project already has ${holder.displayName ?? holder.name} as its ${name}, so it did not join.`,
+    source: machine ? { kind: 'system', machine } : { kind: 'system' } }
+}
+
 /** Its agent [agentId] joined the project's Lead conversation [home]: it leads it, unless a Lead was added there by hand
  *  meanwhile, which stays. The line its conversation shows, and its source: a system row naming the machine, so a Buddy reads
  *  it without the name (store.ts withoutMachineNames; Diego, 10-30). */

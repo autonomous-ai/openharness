@@ -2,10 +2,10 @@
 import type { SuperTabState } from '../model.js'
 
 /** Lists the parts store keeps only when they have entries: absent and empty are the same list. */
-const OPTIONAL_LISTS = ['starts', 'machines', 'harnessReservations', 'releasedHarnesses', 'closingSessions', 'machineCleanups',
+const OPTIONAL_LISTS = ['starts', 'machines', 'harnessReservations', 'releasedHarnesses', 'closingSessions', 'removedSessions', 'machineCleanups',
   'parkedConversations', 'overlapAlerts'] as const
 /** Lists whose order carries no meaning; machine parts regroup them by machine. */
-const UNORDERED = ['harnessReservations', 'releasedHarnesses', 'closingSessions', 'machineCleanups', 'overlapAlerts'] as const
+const UNORDERED = ['harnessReservations', 'releasedHarnesses', 'closingSessions', 'removedSessions', 'machineCleanups', 'overlapAlerts'] as const
 
 /** The state as stored JSON sees it (no undefined), unordered lists sorted, empty optional lists removed. */
 function canonical(state: SuperTabState): Record<string, unknown> {

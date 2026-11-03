@@ -6,15 +6,17 @@
 import { logger } from '../utils/logger.js'
 
 export type RelayKind = 'termup' | 'up targeted' | 'up broadcast' | 'pod hop' | 'pod json'
-interface Counts { local: number; published: number; receivers: number }
+// `none` counts the publishes that reached no subscription: work for nobody, which is what the daemon's UI gate removes
+// (spec 2026-11-02-swarm-cache-delta-design, Part 4).
+interface Counts { local: number; published: number; receivers: number; none: number }
 
 let kinds = new Map<RelayKind, Counts>()
 
 export function recordRelay(kind: RelayKind, path: 'local' | 'published', receivers = 0): void {
   let counts = kinds.get(kind)
-  if (!counts) kinds.set(kind, counts = { local: 0, published: 0, receivers: 0 })
+  if (!counts) kinds.set(kind, counts = { local: 0, published: 0, receivers: 0, none: 0 })
   if (path === 'local') counts.local++
-  else { counts.published++; counts.receivers += receivers }
+  else { counts.published++; counts.receivers += receivers; if (receivers === 0) counts.none++ }
 }
 
 export function startRelayStats({ everyMs = 60_000, log = (message: string, context: Record<string, unknown>) => logger.info(message, context) }:

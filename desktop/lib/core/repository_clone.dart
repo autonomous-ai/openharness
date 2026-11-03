@@ -46,6 +46,7 @@ class RepositoryClone {
   /// The `~/.ssh/config` alias the clone went through, when it needed one: a
   /// second GitHub account, which later pushes from the checkout use too.
   String? clonedVia;
+  bool _hostKeyUntrusted = false;
   bool _cancelled = false;
   bool _started = false;
 
@@ -148,11 +149,19 @@ class RepositoryClone {
           '“${repository.name}” already exists here. Choose another destination, or open that folder.',
         );
       }
-      if (repository.alias case final alias?
-          when !isGitHubHost(await _sshHosts.resolveHost(alias))) {
-        throw RepositoryCloneException(
-          '$alias isn\'t a GitHub host on this computer.',
-        );
+      if (repository.alias case final alias?) {
+        final host = await _sshHosts.resolveHost(alias);
+        // No answer is not "another host": ssh timed out, or is missing.
+        if (host == null) {
+          throw RepositoryCloneException(
+            'Could not read $alias from ssh on this computer. Check that ssh works, then retry.',
+          );
+        }
+        if (!isGitHubHost(host)) {
+          throw RepositoryCloneException(
+            '$alias isn\'t a GitHub host on this computer.',
+          );
+        }
       }
       final checkout = await _cloneWithAccess(repository, parent);
       if (await FileSystemEntity.type(destination, followLinks: false) !=
@@ -195,7 +204,8 @@ class RepositoryClone {
 
   /// Clones through each way this computer may reach [repository] — what was
   /// pasted, the other transport, then its `~/.ssh/config` GitHub aliases —
-  /// moving on only when GitHub refused access. On 2026-10-30 a developer Mac
+  /// moving on only when GitHub refused access or ssh would not trust its host
+  /// key. On 2026-10-30 a developer Mac
   /// with SSH keys and no HTTPS credential failed every browser link, and its
   /// second account's repositories answered only through an alias.
   Future<String> _cloneWithAccess(
@@ -221,11 +231,19 @@ class RepositoryClone {
         i = -1;
       }
     }
+    // What the person can act on: a computer that may have access once it
+    // trusts the key has not been refused.
+    if (_hostKeyUntrusted) {
+      throw const RepositoryCloneException(
+        "This computer doesn't trust GitHub's SSH host key. Check it by connecting once with ssh -T git@github.com, then retry.",
+      );
+    }
     throw RepositoryAccessDenied(repository);
   }
 
   /// One `git clone` of [url] into a fresh staging folder: the checkout, or
-  /// null when GitHub refused access. Any other failure ends the clone.
+  /// null when this way in is closed, by GitHub's refusal or an untrusted host
+  /// key ([_hostKeyUntrusted]). Any other failure ends the clone.
   Future<String?> _cloneOnce(String url, String parent) async {
     if (_cancelled) throw const RepositoryCloneException('Clone cancelled.');
     final staging = await Directory(parent).createTemp('.harness-clone-');
@@ -273,6 +291,16 @@ class RepositoryClone {
         );
       }
       if (code == 0) return checkout;
+      // Checked first: ssh's warning about a changed key also says "Password
+      // authentication is disabled". GitHub was never asked, so this is no
+      // refusal, but an alias may carry its own HostKeyAlias.
+      if (RegExp(
+        r'host key verification failed',
+        caseSensitive: false,
+      ).hasMatch(diagnostic)) {
+        _hostKeyUntrusted = true;
+        return null;
+      }
       // A private repository answers "not found" to whoever cannot see it.
       if (RegExp(
         r'authentication|permission denied|could not read Username|repository not found',

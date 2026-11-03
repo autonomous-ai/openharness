@@ -66,9 +66,19 @@ export interface SwarmProject {
   instructionsHash?: string
   /** Moves on each note the coordinator keeps or a member removes (instructions.ts), so an open panel knows to read them. */
   notesRevision?: number
+  /** Moves when its repository's GitHub access may have changed: someone allowed it, GitHub sent someone back after
+   *  installing the app, or a check that asked GitHub again found a different answer (store.ts githubChanged, githubSeen).
+   *  Members' apps read the access again when it moves rather than keeping it 5 minutes (task #2316, Dee 2026-11-03). */
+  githubRevision?: number
+  /** What the last check that asked GitHub again found (github/projectAccess.ts), so only a different answer moves it. */
+  githubSeen?: GitHubSeen
   /** What its coordinator is called; reads give "Product Manager" when absent (instructions.ts coordinatorNameOf). */
   coordinatorName?: string
 }
+
+/** The GitHub access states a check records (github/projectAccess.ts): the others are no answer from GitHub. */
+export const GITHUB_SEEN = ['not-installed', 'not-approved', 'covered'] as const
+export type GitHubSeen = typeof GITHUB_SEEN[number]
 
 /** A project's status card: its text, when (ISO time) and by which agent it was written. */
 export interface ProjectStatus { text: string; at: string; by: string }
@@ -127,7 +137,11 @@ export const NO_PROJECT = ''
 
 /** The project whose Lead (Product Manager) this agent is: the Lead of that project's Lead conversation. */
 export function ledProject(state: SuperTabState, agentId: string): SwarmProject | undefined {
-  return projectsOf(state).find(p => state.conversations.some(c => c.id === p.leadConversationId && c.leadId === agentId))
+  // One scan of the conversations, then one of the projects in their order: a scan of every conversation per project was
+  // ledProject's callback, 13.5 M calls in the 2026-11-02 prod profiles (12 profiles), mostly from markConfidential.
+  const led = new Set<string>()
+  for (const c of state.conversations) if (c.leadId === agentId) led.add(c.id)
+  return led.size ? projectsOf(state).find(p => led.has(p.leadConversationId)) : undefined
 }
 
 /** Whose active work other projects' Leads see and are alerted about. A private project's work stays with its own people. */
@@ -263,9 +277,24 @@ export function canReadAgent(state: SuperTabState, actor: Actor, target: Agent):
 
 /** A session that reads people's private messages: its project's Lead (the Product Manager each person chats with privately),
  *  or any agent in a private conversation, so a replaced Lead's earlier screen stays closed too. */
-export const confidentialSession = (state: SuperTabState, target: Agent): boolean =>
-  !!ledProject(state, target.id) || privateMember(state, target.id)
-const privateMember = (state: SuperTabState, agentId: string) => state.conversations.some(c => !!c.audience && c.agentIds.includes(agentId))
+export const confidentialSession = (state: SuperTabState, target: Agent): boolean => {
+  const { leaders, privateMembers } = confidentialSets(state)
+  return leaders.has(target.id) || privateMembers.has(target.id)
+}
+
+/** Who confidentialSession holds confidential, for every agent at once: the Leads of a project's Lead conversation, and every
+ *  member of a private conversation (one with an audience). One pass over the conversations: asking per agent scanned them
+ *  per project and agent on every command (markConfidential), 13.5 M of ledProject's callbacks and 1.6 M of the private
+ *  member check's in the 2026-11-02 prod profiles. Built per call, never kept on the state, since a command changes it. */
+export function confidentialSets(state: SuperTabState): { leaders: ReadonlySet<string>; privateMembers: ReadonlySet<string> } {
+  const leadChats = new Set(projectsOf(state).map(p => p.leadConversationId))
+  const leaders = new Set<string>(), privateMembers = new Set<string>()
+  for (const c of state.conversations) {
+    if (c.leadId !== null && leadChats.has(c.id)) leaders.add(c.leadId)
+    if (c.audience) for (const id of c.agentIds) privateMembers.add(id)
+  }
+  return { leaders, privateMembers }
+}
 
 /** Whether an agent's session is confidential: marked, or a Lead or private member now, here or (`elsewhere`) in another Swarm. */
 export const isConfidential = (state: SuperTabState, target: Agent, elsewhere = false): boolean =>
@@ -281,13 +310,14 @@ export interface OtherRegistrations { registered: Set<string>; confidential: Set
  *  a session registered elsewhere a Lead or a private conversation's member. Registrations from before the rule stay. */
 export function requireSingleRegistration(before: SuperTabState, after: SuperTabState, elsewhere: OtherRegistrations): void {
   const prior = new Map(before.agents.map(a => [a.id, a]))
+  const then = confidentialSets(before), now = confidentialSets(after)
   for (const target of after.agents) {
     const was = prior.get(target.id), key = sessionKey(target.machineId, target.harnessId)
     if ((!was || was.harnessId !== target.harnessId) && elsewhere.confidential.has(key)) {
       fail('SESSION_CONFIDENTIAL', 'This terminal reads private chats in another Swarm. Start a new agent here.')
     }
-    const lead = !!ledProject(after, target.id) && !(was && ledProject(before, target.id))
-    const member = privateMember(after, target.id) && !(was && privateMember(before, target.id))
+    const lead = now.leaders.has(target.id) && !(was && then.leaders.has(target.id))
+    const member = now.privateMembers.has(target.id) && !(was && then.privateMembers.has(target.id))
     if ((lead || member) && elsewhere.registered.has(key)) {
       fail('SESSION_CONFIDENTIAL', 'This terminal also works in another Swarm, so it cannot lead or read private chats. Start a new agent for this.')
     }
@@ -297,7 +327,9 @@ export function requireSingleRegistration(before: SuperTabState, after: SuperTab
 /** A session becomes confidential the moment it is a Lead or in a private conversation, and stays so until it leaves the
  *  Swarm (its session closes), even once that membership ends (Lead ruling, final review Critical 1). */
 export function markConfidential(state: SuperTabState): void {
-  for (const target of state.agents) if (!target.confidential && confidentialSession(state, target)) target.confidential = true
+  // Every command runs this for every agent: one pass for all of them, not one per agent (confidentialSets).
+  const { leaders, privateMembers } = confidentialSets(state)
+  for (const target of state.agents) if (!target.confidential && (leaders.has(target.id) || privateMembers.has(target.id))) target.confidential = true
 }
 
 /** Whether a session's terminal is closed to watching in this Swarm. A confidential session's screen and scrollback hold
@@ -326,6 +358,25 @@ export const teamAccountPool = (pool: import('./machines.js').ContributedMachine
  *  #2089), and kept from when it joined one, so a machine row that went never brings back the old rules (its re-review). */
 export const onTeamAccount = (state: SuperTabState, target: Agent): boolean =>
   !!target.teamAccount || teamAccountPool(state.machines?.find(m => m.machineId === target.machineId))
+
+/** Which account [agent] acts as (audit M3, task #2021): its machine owner's own on any of their machines, or, [onTeam], that
+ *  one machine's Harness Team account. */
+export const accountOf = (agent: Pick<Agent, 'machineId' | 'machineOwnerId'>, onTeam: boolean): string =>
+  onTeam ? `team:${agent.machineOwnerId}:${agent.machineId}` : `own:${agent.machineOwnerId}`
+
+/** Notices the server writes in its own words under an agent's name (security reviews of #2570): they quote no agent, task
+ *  titles and names aside. */
+const SERVER_WORDS: ReadonlySet<unknown> = new Set(['work-stalled', 'work-resumed', 'idle', 'review-capacity', 'overlap', 'pm-switch-notice'])
+/** Whose words a row carries, for the mark of another account's (audit M3): its author's (a post, a status row, a brief, a
+ *  route's reason); a lost task's notice, its worker's last result; none, a notice in the server's own words. A review's
+ *  failed findings name no reviewer: they count as unknown, which is marked. */
+export function wordsOf(source: unknown): 'author' | 'none' | 'unknown' | { agentId: string } {
+  const row = source as { kind?: unknown; agentId?: unknown } | null | undefined
+  if (SERVER_WORDS.has(row?.kind)) return 'none'
+  if (row?.kind === 'review-failed') return 'unknown'
+  if (row?.kind === 'work-lost') return typeof row.agentId === 'string' ? { agentId: row.agentId } : 'unknown'
+  return 'author'
+}
 
 /**
  * A confidential session in a Harness Team account (#895 R2): every teammate's work there runs as one macOS user whose

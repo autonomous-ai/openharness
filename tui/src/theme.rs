@@ -1255,15 +1255,20 @@ pub fn engine_mark(engine: &str) -> (&'static str, Color) {
     (mark, paint(color))
 }
 
+/// An engine's mark as drawn: its colour.
+pub fn engine_style(engine: &str) -> Style { fg(engine_mark(engine).1) }
+
 /// A colour as this terminal can show it: none under NO_COLOR, the nearest it has otherwise.
 pub fn paint(c: Color) -> Color { if no_color() { Color::Reset } else { depth_fit(c) } }
 
 fn engine_mark_raw(engine: &str) -> (&'static str, Color) {
     match engine {
         "claude" => ("✳", Color::Rgb(0xD9, 0x77, 0x57)),
-        "codex" => ("◎", Color::Rgb(0x10, 0xA3, 0x7F)),
+        // (As their icons in assets/engine-icons: Codex's rounded cloud, in its purple; OpenCode's
+        // hollow frame, a line in the text's colour.)
+        "codex" => ("☁", Color::Rgb(0x8F, 0x83, 0xF8)),
         "cursor" => ("▲", TEXT),
-        "opencode" => ("▣", Color::Rgb(0xF5, 0xA7, 0x42)),
+        "opencode" => ("□", TEXT),
         "pi" => ("π", ACCENT_SOFT),
         "hermes" => ("☿", Color::Rgb(0xC7, 0x92, 0xEA)),
         "amp" => ("ϟ", DANGER),

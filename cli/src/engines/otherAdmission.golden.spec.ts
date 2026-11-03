@@ -133,7 +133,8 @@ describe('how the core admits a Hermes session and learns its home', () => {
       const started = await m.hookServer.startHookServer(0, {
         onRegistered: (entry) => { registered.push({ sessionId: entry.sessionId, engine: entry.engine, hermesHome: entry.hermesHome ?? null }) },
         onSessionEnd: () => {},
-      })
+      // This spec fakes the platform, so the real lookup of who is calling cannot run (lib/peerAccount.spec.ts tests it).
+      }, { peerAccount: async () => true })
       server = started.server
       const headers = { 'content-type': 'application/json', 'x-harness-hook-token': m.hookAuth.readHookCredential(join(root, 'data'))! }
       const results: unknown[] = []

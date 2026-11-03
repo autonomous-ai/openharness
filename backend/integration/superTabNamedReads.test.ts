@@ -80,7 +80,9 @@ describe('a person\'s Swarm list', () => {
     mine.sort()
   })
 
-  const memberReads = (entries: Awaited<ReturnType<typeof profiled>>) => reads(entries, 'SuperTab', ['memberIds'])
+  /** The auto-join read (superTabs/autoJoin.ts) also names memberIds, as `$ne`: it is checked on its own below. */
+  const isAutoJoin = (row: ReturnType<typeof reads>[number]) => JSON.stringify(row.command ?? {}).includes('autoJoinDomain')
+  const memberReads = (entries: Awaited<ReturnType<typeof profiled>>) => reads(entries, 'SuperTab', ['memberIds']).filter(row => !isAutoJoin(row))
   const bounded = (rows: ReturnType<typeof memberReads>, returned: number) => {
     expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
     expect(rows[0]!.nreturned).toBe(returned)
@@ -95,6 +97,11 @@ describe('a person\'s Swarm list', () => {
     expect(listed!.tabs.map(t => t.id)).toEqual(mine)
     expect(listed!.next).toBeNull()
     bounded(memberReads(entries), mine.length)
+    // Before it, the person's try for Swarms of their domain: one read on its own index, which finds none and examines none.
+    const autoJoins = reads(entries, 'SuperTab', ['memberIds']).filter(isAutoJoin)
+    expect(autoJoins, JSON.stringify(plan(autoJoins))).toHaveLength(1)
+    expect(autoJoins[0]!.docsExamined).toBe(0)
+    expect(autoJoins[0]!.command?.hint).toEqual({ autonomousEnv: 1, autoJoinDomain: 1 })
   })
 
   it('the store\'s list and its later page read the same way', async () => {

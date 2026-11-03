@@ -23,7 +23,11 @@ import { startTurnCredentialRefresh } from './lib/turnCredentials.js'
 import { closeBus, pub, redisCount, redisSsoProfileStore, redisSwarmStamps } from './lib/bus.js'
 import { prisma } from './lib/prisma.js'
 import { backendReadinessChecks, createReadiness, drainBeforeClosing, processDrain } from './lib/readiness.js'
-import { configureSwarmStamps } from './superTabs/cache.js'
+import { configureSwarmStamps, swarmReadCache } from './superTabs/cache.js'
+import { startCacheStats } from './superTabs/cacheStats.js'
+import { startDeliveryCalls } from './lib/deliveryCalls.js'
+import { startMemoryStats } from './lib/memoryStats.js'
+import { readDelta } from './superTabs/cachedReads.js'
 import { watchGroupIndexes } from './superTabs/parts/indexed.js'
 import { startMessageReadStats } from './superTabs/messageReadStats.js'
 import { useSharedSsoProfileStore } from './lib/ssoAuth.js'
@@ -149,6 +153,12 @@ async function start(): Promise<void> {
   const stopQueryStats = startQueryStats()
   // Every minute, how often Swarm transactions ran again and commands loaded twice (superTabs/retryStats.ts, DB 2.1).
   const stopRetryStats = startRetryStats()
+  // Every minute: re-claims, refused receipt reads and holds, what the daemons' delivery loop costs (spec 2026-11-02 poll cost).
+  const stopDeliveryCalls = startDeliveryCalls()
+  // Every minute: how the Swarm read cache served reads (hit, patched, loaded in full and why) and what its checks found.
+  const stopCacheStats = startCacheStats()
+  // Every minute: the process's memory and what the read cache holds of it (lib/memoryStats.ts; the HPA scales on memory).
+  const stopMemoryStats = startMemoryStats({ cache: () => swarmReadCache()?.size ?? null })
   const stopRouteLatency = startRouteLatency(registerRouteLatency(app))
   // Every minute: who reads messages how, with the rows each page decoded and showed (superTabs/messageReadStats.ts).
   const stopMessageReadStats = startMessageReadStats()
@@ -177,7 +187,9 @@ async function start(): Promise<void> {
   startWsCounterLog()
   // Each pod's machine reports a minute, stored without a Swarm load (fast) or in full (DB roadmap 2.5).
   const stopMachineReportLog = startMachineReportLog()
-  configureSwarmStamps(redisSwarmStamps(), { reads: env.SWARM_READ_CACHE === 'on', maxBytes: env.SWARM_CACHE_MB * 2 ** 20 })
+  configureSwarmStamps(redisSwarmStamps(), { reads: env.SWARM_READ_CACHE === 'on', maxBytes: env.SWARM_CACHE_MB * 2 ** 20,
+    ...(env.SWARM_CACHE_DELTA === 'on' ? { delta: readDelta(prisma) } : {}),
+    verifyRate: env.SWARM_CACHE_VERIFY_RATE })
   // Hot Swarm reads name their indexes once the database is seen to have them (superTabs/parts/indexed.ts).
   watchGroupIndexes(prisma)
 
@@ -237,6 +249,9 @@ async function start(): Promise<void> {
       // The last partial minute of these logs, once the drain and the usage flush have run their queries.
       stopQueryStats()
       stopRetryStats()
+      stopDeliveryCalls()
+      stopCacheStats()
+      stopMemoryStats()
       stopRouteLatency()
       stopMachineReportLog()
       stopMessageReadStats()

@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client'
 import { agentOnly, conversation, fail, isLeads, type AgentStart, type MessageDraft, type SuperTabState } from '../model.js'
+import { autoJoinOn } from '../autoJoinDomain.js'
 import { split } from './shape.js'
 import { guardedWrite, PartConflict, type HeadColumns, type HostColumns, type PartWrite } from './write.js'
 import type { GroupData, MachineData, Part, PartKind, SwarmParts } from './types.js'
@@ -83,6 +84,8 @@ export function indexesOf(state: SuperTabState) {
       ...(state.closingSessions ?? []).map(c => c.machineId), ...(state.machineCleanups ?? []).map(c => c.machineId)])],
     cleanupMachineIds: [...new Set([...(state.machines ?? []).flatMap(m => m.removal ? [m.machineId] : []),
       ...(state.machineCleanups ?? []).map(c => c.machineId)])],
+    // Who joins by domain (autoJoin.ts): a deleted Swarm, or one whose owner turned it off, is found by nobody.
+    autoJoinDomain: autoJoinOn(state), autoJoinDeclined: state.autoJoinDeclined ?? [],
   }
 }
 
@@ -132,7 +135,7 @@ export function capReleased(state: SuperTabState): void {
  *  that machine's host needs to hear about. */
 const withoutReading = (data: unknown) => {
   const machine = data as MachineData | undefined
-  return machine && { ...machine, contribution: machine.contribution && { ...machine.contribution, observation: undefined, lent: undefined } }
+  return machine && { ...machine, contribution: machine.contribution && { ...machine.contribution, observation: undefined, lent: undefined, lentDays: undefined } }
 }
 
 /**

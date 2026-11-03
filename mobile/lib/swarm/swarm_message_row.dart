@@ -12,35 +12,19 @@ import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 export 'swarm_file_links.dart' show swarmAttachmentHost, swarmAttachmentLink;
+export 'swarm_message_style.dart'
+    show swarmChatCard, swarmChatHair, swarmChatText;
 
 import 'model.dart';
 import 'swarm_attachment.dart';
 import 'swarm_code_block.dart';
 import 'swarm_file_links.dart';
+import 'swarm_message_text.dart';
+import 'swarm_message_style.dart';
 import 'swarm_face.dart';
 import 'swarm_ship_row.dart';
-
-/// The chat's prose in the app's own face, as prototype v2 draws it: the
-/// messages, quotes, names and the field. Times, roles and day dividers stay
-/// in the terminal's.
-TextStyle swarmChatText(
-  double size, {
-  Color? color,
-  FontWeight weight = FontWeight.w400,
-  double height = 1.35,
-}) => TextStyle(
-  fontSize: size,
-  height: height,
-  color: color ?? AppPalette.textPrimary,
-  fontWeight: weight,
-);
-
-/// The hairline around the chat's cards, picker and field.
-Color swarmChatHair(Tty tty) => tty.text.withValues(alpha: 0.12);
-
-/// The ground of a card in the chat: a decision, the picker, a file.
-Color swarmChatCard(Tty tty) =>
-    Color.alphaBlend(tty.text.withValues(alpha: 0.05), tty.ground);
+import 'swarm_special_rows.dart';
+import 'swarm_task_line.dart';
 
 /// `@name` or `@name@domain`, as people tag in chat. Never right after a
 /// letter, digit, `@` or `/` (an address, a path, a link), and a name never
@@ -291,6 +275,10 @@ class SwarmMessageRow extends StatelessWidget {
     this.receipt,
     this.card,
     this.onLongPress,
+    this.onOpenTask,
+    this.onOpenProposal,
+    this.references = const {},
+    this.onOpenConversation,
   });
 
   final SuperTabMessage message;
@@ -323,6 +311,19 @@ class SwarmMessageRow extends StatelessWidget {
   final bool followed;
   final Widget? quote;
   final VoidCallback onTap;
+
+  /// Opens a task held by the current reader; null for an unavailable target.
+  final VoidCallback? onOpenTask;
+
+  /// Opens a Buddy's proposal's thread: given in the chat, where a proposal is
+  /// one line; none in its thread, where it reads whole.
+  final VoidCallback? onOpenProposal;
+
+  /// The numbered conversations `#N` links in a message can open.
+  final Map<int, String> references;
+
+  /// Opens a conversation resolved from [references].
+  final ValueChanged<String>? onOpenConversation;
 
   /// Null where the person cannot post, or in the thread itself.
   final VoidCallback? onReply;
@@ -375,12 +376,35 @@ class SwarmMessageRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (swarmIsTaskLine(message)) {
+      return SwarmTaskLine(
+        key: ValueKey('swarm-message-${message.id}'),
+        message: message,
+        readerId: readerId,
+        onOpen: onOpenTask,
+      );
+    }
     // A ship line is a card, not a message from its author.
     if (swarmShips(message)) {
       return SwarmShipRow(
         key: ValueKey('swarm-message-${message.id}'),
         message: message,
       );
+    }
+    // Notes that are not chat from their author, as Desktop draws them.
+    final special = ValueKey('swarm-message-${message.id}');
+    if (message.proposalOwnerId != null && onOpenProposal != null) {
+      return SwarmProposalLine(
+        key: special,
+        message: message,
+        onOpen: onOpenProposal!,
+      );
+    }
+    if (message.terminalEvent) {
+      return SwarmTerminalRow(key: special, message: message);
+    }
+    if (message.route case final route?) {
+      return SwarmRouteRow(key: special, message: message, route: route);
     }
     // A row kept as it was is not built again: it follows a theme or font
     // change itself.
@@ -417,34 +441,26 @@ class SwarmMessageRow extends StatelessWidget {
       body: [
         if (lit) SizedBox(key: ValueKey('swarm-lit-${message.id}')),
         ?quote,
+        if (message.proposalOwnerId != null)
+          SwarmProposalLabel(owner: swarmProposalOwner(context, message)),
+        ?swarmTerminalNote(message),
         for (final part in swarmTextParts(message.text))
           if (part.code)
             SwarmCodeBlock(code: part.text, name: part.name, onTap: onTap)
           else
-            Semantics(
-              button: true,
-              hint: 'Reply to this message',
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
+            Padding(
+              padding: const EdgeInsets.only(top: SwarmMessageFrame.bodyGap),
+              child: SwarmMessageText(
+                text: part.text,
+                mentionNames: mentions.names,
+                references: references,
+                tagged: tagged,
+                addresses: taggedAddresses,
                 onTap: onTap,
-                child: Padding(
-                  padding: const EdgeInsets.only(
-                    top: SwarmMessageFrame.bodyGap,
-                  ),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: Text.rich(
-                      mentions.span(
-                        part.text,
-                        swarmChatText(16, height: 1.42),
-                        tagged: tagged,
-                        addresses: taggedAddresses,
-                      ),
-                    ),
-                  ),
-                ),
+                onOpenConversation: onOpenConversation,
               ),
             ),
+        ?swarmCutShort(message),
         for (final file in message.attachments) _attachment(context, file),
         ?card,
         ?reactions,
@@ -467,13 +483,7 @@ class SwarmMessageRow extends StatelessWidget {
                     label: inThread ? 'Reply in thread' : 'Reply',
                     onTap: reply,
                   ),
-                SwarmSmallButton(
-                  icon: LucideIcons.copy,
-                  label: 'Copy',
-                  onTap: () => unawaited(
-                    Clipboard.setData(ClipboardData(text: message.text)),
-                  ),
-                ),
+                SwarmCopyButton(text: message.text),
               ],
             ),
           ),
@@ -780,6 +790,59 @@ class SwarmSmallButton extends StatelessWidget {
       ),
     );
   }
+}
+
+/// How long Copy reads Copied after a copy.
+const kSwarmCopiedFor = Duration(seconds: 3);
+
+/// A message's Copy (Tony, 11-02): once the clipboard has [text] it reads
+/// Copied with a check for [kSwarmCopiedFor]. Taps meanwhile neither copy again
+/// nor restart that time. A copy that failed stays Copy, to try again.
+class SwarmCopyButton extends StatefulWidget {
+  const SwarmCopyButton({super.key, required this.text});
+
+  final String text;
+
+  @override
+  State<SwarmCopyButton> createState() => _SwarmCopyButtonState();
+}
+
+class _SwarmCopyButtonState extends State<SwarmCopyButton> {
+  bool _copying = false;
+  Timer? _reset;
+
+  bool get _copied => _reset != null;
+
+  Future<void> _copy() async {
+    if (_copying || _copied) return;
+    _copying = true;
+    try {
+      await Clipboard.setData(ClipboardData(text: widget.text));
+    } on PlatformException {
+      return;
+    } finally {
+      _copying = false;
+    }
+    if (!mounted) return;
+    setState(() {
+      _reset = Timer(kSwarmCopiedFor, () {
+        if (mounted) setState(() => _reset = null);
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _reset?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => SwarmSmallButton(
+    icon: _copied ? LucideIcons.check : LucideIcons.copy,
+    label: _copied ? 'Copied' : 'Copy',
+    onTap: () => unawaited(_copy()),
+  );
 }
 
 /// A file's size as a chat shows it: whole kilobytes, rounded up, or megabytes to one place.

@@ -1456,7 +1456,8 @@ export class CableSession {
         const tab = str('tab') ?? '', side = str('side')
         if (this.swarmBuddy && CARD_ID.test(tab) && (side === 'pm' || side === 'buddy')) {
           this.host.swarmCardSide?.(tab, side)
-          this.followSide(tab, side)
+          // `kept`: the side a restart took off the dial's face, with no finger on it. The window stays where the person left it.
+          if (msg.kept !== true) this.followSide(tab, side)
           if (side === 'buddy') this.queued(() => this.readSharedBuddyNotices(tab)).catch((err) => this.log(`cable: Buddy notices not cleared (${(err as Error).message})`))
         }
         return

@@ -7,6 +7,7 @@ import { callerOf, outsideCaller, type Frame } from '../agentClient/model.js'
 import { identifier } from './host.js'
 import { resolve } from 'node:path'
 import { readInsideFolder, uploadAttachments, type UploadTarget } from './attach.js'
+import { buddyProjectFolder } from './buddyHome.js'
 import { keyName } from './terminal.js'
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
@@ -457,15 +458,21 @@ async function proposalFiles(paths: string[], operationId: string, command: Reco
   const caller = callerOf(frames, deps.pane, String(daemon.machineId))
   const folder = frames.find(f => f.id === caller?.agentId)?.project?.cwd
   if (!folder) throw new Error('Attach files to a proposal from your Buddy\'s own terminal.')
-  const files = readInsideFolder(paths, folder)
   const state = object(object((await scoped({ action: 'status' })).value).state)
   const chat = (Array.isArray(state.conversations) ? state.conversations : []).map(object).find(c => c.id === target.conversationId)
   // A person's one Buddy chat has no project (Dee, 10-31): a project session proposes into its own project, and the Swarm-wide
-  // Buddy into none (the backend refuses it too).
+  // Buddy into the one its JSON names (Scholes, 11-02), with only that project's files: its folder holds every project's.
   const self = (Array.isArray(state.agents) ? state.agents : []).map(object).find(a => a.id === caller?.agentId)
-  const projectId = chat?.kind === 'swarm-buddy' ? object(self?.buddySession).projectId : chat?.projectId
+  const session = object(self?.buddySession).projectId
+  const wide = chat?.kind === 'swarm-buddy' && typeof session !== 'string'
+  const projectId = wide ? command.projectId : chat?.kind === 'swarm-buddy' ? session : chat?.projectId
   const home = (Array.isArray(state.projects) ? state.projects : []).map(object).find(p => p.id === projectId)?.leadConversationId
-  if (typeof home !== 'string') throw new Error('Name your own chat: a proposal comes from there.')
+  // Refused here too, before any upload: the backend would refuse it and leave the file behind.
+  if (!wide && command.projectId && command.projectId !== projectId) throw new Error('A session sends only to its own project\'s PM: leave the project out.')
+  if (typeof home !== 'string') throw new Error(wide ? 'Name the project to send this to, from your status.' : 'Name your own chat: a proposal comes from there.')
+  const inside = wide ? buddyProjectFolder(folder, String(projectId)) : folder
+  if (!inside) throw new Error('That project\'s code is not on this machine: attach only a file your owner sent in your chat.')
+  const files = readInsideFolder(paths, inside)
   const uploaded = await uploadAttachments(files, operationId, { ...target, sentIn: home }, scoped, deps.fetch)
   return [...new Set([...named, ...uploaded])]
 }

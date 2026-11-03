@@ -127,8 +127,6 @@ export function teamPaths(home: string = TEAM_HOME) {
     runtime: `${harness}/runtime`,
     auth: `${harness}/auth`,
     session: `${harness}/auth/session.json`,
-    /** Its daemon's computer id, at the product root as every daemon keeps it (config/env.ts). */
-    computerId: `${harness}/computer-id`,
     bin: `${home}/.local/bin`,
     /** The single-use sign-in code setup hands over; the team daemon redeems it on its next start and deletes it. */
     handoff: `${harness}/team-handoff`,

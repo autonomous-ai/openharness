@@ -79,6 +79,34 @@ describe('circuit breaker', () => {
     expect(breaker.state()).toBe('closed')
   })
 
+  // The Redis guard counts a command it sent itself with these, so they must keep `run`'s accounting exactly.
+  it('success and failure count as a call through run would', async () => {
+    const c = clock()
+    const breaker = createCircuitBreaker({ name: 'redis', failureThreshold: 2, openMs: 1_000, now: c.now,
+      isFailure: err => !(err instanceof Error && err.message === 'answer') })
+    breaker.failure(new Error('down'))
+    breaker.success()
+    breaker.failure(new Error('down'))
+    breaker.failure(new Error('answer'))
+    breaker.failure(new Error('down'))
+    expect(breaker.state()).toBe('closed')
+    breaker.failure(new Error('down'))
+    expect(breaker.state()).toBe('open')
+    await expect(breaker.run(ok)).rejects.toBeInstanceOf(CircuitOpenError)
+    c.advance(1_000)
+    await expect(breaker.run(ok)).resolves.toBe('ok')
+    expect(breaker.state()).toBe('closed')
+  })
+
+  it('without a timeout, a call is handed one shared signal that never aborts instead of a new controller', async () => {
+    const breaker = createCircuitBreaker({ name: 'redis' })
+    const signals: AbortSignal[] = []
+    await breaker.run(async signal => { signals.push(signal) })
+    await breaker.run(async signal => { signals.push(signal) })
+    expect(signals[0]).toBe(signals[1])
+    expect(signals[0]!.aborted).toBe(false)
+  })
+
   it('reports each change of state once', async () => {
     const c = clock()
     const changes: string[] = []

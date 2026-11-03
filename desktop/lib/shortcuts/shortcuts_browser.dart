@@ -15,6 +15,7 @@ import 'keymap.dart';
 import 'keymap_settings.dart';
 import 'keyboard_practice.dart';
 import 'shortcut_recorder.dart';
+import '../widgets/laid_out_list.dart';
 
 /// Searchable help built from the same resolved bindings that handle input.
 /// Shared by the shortcut dialog and Settings; no separate shortcut catalog.
@@ -347,7 +348,7 @@ class _ShortcutsBrowserState extends State<ShortcutsBrowser> {
                               : 1;
                           return Scrollbar(
                             controller: _scroll,
-                            child: ListView(
+                            child: LaidOutListView(
                               controller: _scroll,
                               padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
                               children: [

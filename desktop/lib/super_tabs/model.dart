@@ -46,6 +46,7 @@ class SuperTabPerson {
       email = _text(row, 'email'),
       role = _text(row, 'role'),
       generation = row['generation'] as String?,
+      joinedVia = row['joinedVia'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       status = SuperTabPersonStatus.fromJson(row['status']),
       chosenUsername = row['username'] as String?,
@@ -57,6 +58,7 @@ class SuperTabPerson {
       email = person.email,
       role = person.role,
       generation = person.generation,
+      joinedVia = person.joinedVia,
       avatar = person.avatar,
       status = person.status,
       chosenUsername = person.chosenUsername;
@@ -79,6 +81,10 @@ class SuperTabPerson {
   /// This membership: a new one each time the person joins the Swarm. Null
   /// from a backend that does not send it.
   final String? generation;
+
+  /// How they joined: `domain` when they were added automatically for their
+  /// email's domain. Null otherwise and from an older server.
+  final String? joinedVia;
   bool get canWrite => role == 'owner' || role == 'collaborator';
 }
 
@@ -154,8 +160,13 @@ class SuperTabAgent {
       alerting = List.unmodifiable(
         (row['alerting'] as List?)?.whereType<String>() ?? const <String>[],
       ),
+      switchRequest = row['switchRequest'] is Map
+          ? Map.unmodifiable(superTabMap(row['switchRequest']))
+          : null,
+      profileId = row['profileId'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
+      workDecision = row['workDecision'] as String?,
       confidential = row['confidential'] == true,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
@@ -171,9 +182,24 @@ class SuperTabAgent {
   /// while it waits at a prompt in its terminal, gone once that is answered.
   final List<String> alerting;
 
+  /// A Product Manager's switch to another engine or account that is asked for
+  /// and not yet done (backend `switchRequest`); null otherwise.
+  final Map<String, dynamic>? switchRequest;
+
+  /// The account on its machine it runs in; `default` when none is chosen.
+  /// Null until the backend reports it: the engine's default account.
+  final String? profileId;
+
   /// Since when its machine has reported its session gone, or its host confirmed a stop (backend machines.ts). Null
   /// while it runs.
   final DateTime? downSince;
+
+  /// What its coordinator or a person chose for it once its work ended: `keep` or `stop`; `awaiting` while nobody has.
+  final String? workDecision;
+
+  /// Its session is closed on its machine and someone chose to keep the agent: the backend removes every other closed
+  /// agent from the list (backend closedAgents.ts), so this one is shown as closed, never as Idle.
+  bool get keptClosed => workDecision == 'keep' && downSince != null;
 
   /// The account whose computer runs it; a contributor may run agents on a computer another account shared with them.
   final String machineOwnerId;
@@ -320,8 +346,15 @@ class SuperTabConversation {
       task = row['task'] is Map
           ? SuperTabTask.fromJson(superTabMap(row['task']))
           : null,
+      requesterId = row['requesterId'] as String?,
+      shippedAt = row['shippedAt'] is num
+          ? DateTime.fromMillisecondsSinceEpoch(
+              (row['shippedAt'] as num).toInt(),
+            )
+          : null,
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
+      reactionSeq = (row['reactionSeq'] as num?)?.toInt() ?? 0,
       assignment = row['assignment'] == null
           ? null
           : Map.unmodifiable(superTabMap(row['assignment'])),
@@ -395,6 +428,19 @@ class SuperTabConversation {
   /// leaves it. Null from a backend before threads, or before this
   /// conversation's first message since.
   final int? lastMainSequence;
+
+  /// Counts reaction changes here (backend reactions.ts), as its messages
+  /// pages also say: a move asks for the page shown again. Absent, as before
+  /// the first reaction, it is 0, the pages' own value then.
+  final int reactionSeq;
+
+  /// The person who asked for this task; null on a conversation that is no
+  /// task, and from a server that does not say.
+  final String? requesterId;
+
+  /// When it shipped (its first Done); null until it has, and from a server
+  /// that does not say.
+  final DateTime? shippedAt;
   final Map<String, dynamic>? assignment;
 
   /// Whether its task waits on purpose or is stuck, as the server last found
@@ -417,6 +463,7 @@ class SuperTabProject {
       instructionsRevision =
           (row['instructionsRevision'] as num?)?.toInt() ?? 0,
       notesRevision = (row['notesRevision'] as num?)?.toInt() ?? 0,
+      githubRevision = (row['githubRevision'] as num?)?.toInt() ?? 0,
       isPrivate = row['visibility'] == 'private',
       memberIds = [
         for (final member in row['members'] as List? ?? const [])
@@ -435,6 +482,10 @@ class SuperTabProject {
   /// What this project calls its coordinator; null from a backend before project instructions.
   final String? coordinatorName;
   final int instructionsRevision, notesRevision;
+
+  /// Moves when its repository's GitHub access may have changed (someone allowed it, or the app was installed): the
+  /// app reads that access again at once rather than keeping it 5 minutes. 0 from a backend before it (task #2316).
+  final int githubRevision;
 
   /// Whether the backend keeps an instruction document for it.
   bool get hasInstructions => coordinatorName != null;
@@ -492,10 +543,7 @@ class SuperTabSnapshot {
           : Map.unmodifiable(superTabMap(row['project'])),
       people = superTabUsernames(_list(row['people'], SuperTabPerson.fromJson)),
       agents = _list(row['agents'], SuperTabAgent.fromJson),
-      machines = _list(
-        row['machines'] ?? const [],
-        (m) => Map<String, dynamic>.unmodifiable(m),
-      ),
+      _machines = _machineRows(row['machines'] ?? const []),
       // The Product Managers chat is gone (Dee, 2026-10-31): an older server
       // still sends it, by its kind or the id the head names, and no screen
       // may list or open it.
@@ -520,9 +568,14 @@ class SuperTabSnapshot {
       }),
       localModels = SuperTabLocalModels.read(row['localModels']),
       teamAccounts = row['teamAccounts'] != false,
+      removedMachines = [
+        for (final id in row['removedMachines'] as List? ?? const [])
+          if (id is String) id,
+      ],
       threadSessions = row['threadSessions'] == true,
       sessionsFromChat = row['sessionsFromChat'] == true,
       swarmBuddy = row['swarmBuddy'] == true,
+      autoJoin = row['autoJoin'] == true,
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
@@ -590,7 +643,17 @@ class SuperTabSnapshot {
   late final List<SuperTabAgent> teamAgents = List.unmodifiable(
     agents.where((a) => !a.isBuddy),
   );
-  final List<Map<String, dynamic>> machines;
+  List<Map<String, dynamic>> get machines => _machines;
+  List<Map<String, dynamic>> _machines;
+
+  static List<Map<String, dynamic>> _machineRows(Object? rows) =>
+      _list(rows, (m) => Map<String, dynamic>.unmodifiable(m));
+
+  /// A machine's report arrived and nothing else moved: only the machines are
+  /// new, so nothing worked out from the rest of the Swarm is done again
+  /// (`SuperTabController.machinesChanged` says so).
+  void replaceMachines(List<Map<String, dynamic>> rows) =>
+      _machines = _machineRows(rows);
   final List<SuperTabConversation> conversations;
   late final List<SuperTabProject> projects;
   final List<Map<String, dynamic>> invitations;
@@ -608,6 +671,11 @@ class SuperTabSnapshot {
   /// it says it does not try them yet (backend read/contract.ts `teamAccounts`).
   final bool teamAccounts;
 
+  /// The reader's own machines they took out of this Swarm: an automatic add
+  /// leaves them out (backend model.ts removedMachines). Empty from an older
+  /// backend.
+  final List<String> removedMachines;
+
   /// Whether this Swarm's server takes a thread reply's New session: true only
   /// where it says so (backend read/contract.ts `threadSessions`); an older
   /// server's schema refuses the field.
@@ -623,6 +691,10 @@ class SuperTabSnapshot {
   /// session in a project. False from an older one, whose Buddies are per
   /// project.
   final bool swarmBuddy;
+
+  /// People at the owner's email domain are added automatically (head
+  /// `autoJoin`, every member reads it): someone who leaves is not added back.
+  final bool autoJoin;
   final int mentionsWaiting;
 
   /// Which tags wait, as a digest that moves when they change though the
@@ -668,11 +740,39 @@ class SuperTabSnapshot {
   bool isProjectLead(String conversationId) =>
       projects.any((p) => p.leadConversationId == conversationId);
 
+  /// The agents whose terminals [conversationId] opens: a project chat's
+  /// coordinator alone, whoever else an older Swarm still holds there (#2207);
+  /// any other group's members.
+  List<String> paneAgentIds(String conversationId) {
+    final group = conversation(conversationId);
+    if (group == null) return const [];
+    if (!isProjectLead(conversationId)) return group.agentIds;
+    final lead = group.leadId;
+    return lead != null && group.agentIds.contains(lead) ? [lead] : const [];
+  }
+
   SuperTabProject? leadProjectForAgent(String agentId) => projects
       .where((p) => conversation(p.leadConversationId)?.leadId == agentId)
       .firstOrNull;
 
   bool isLead(String agentId) => leadProjectForAgent(agentId) != null;
+
+  /// [projectId]'s Product Manager, while it has one.
+  SuperTabAgent? leadOf(String projectId) {
+    final id = conversation(projectById(projectId)?.leadConversationId ?? '')
+        ?.leadId;
+    return id == null ? null : agent(id);
+  }
+
+  /// Whether [accountId] may switch [projectId]'s Product Manager: the project's
+  /// owner, or the owner of the machine it runs on (the backend decides again).
+  bool maySwitchLead(String projectId, String? accountId) {
+    final lead = leadOf(projectId);
+    return lead != null &&
+        accountId != null &&
+        (projectById(projectId)?.ownerId == accountId ||
+            lead.machineOwnerId == accountId);
+  }
 
   /// What [projectId] calls its coordinator: its `coordinatorName`, or [kDefaultCoordinatorName] from a backend
   /// that names none.
@@ -896,6 +996,37 @@ List<SuperTabServedModel> superTabServedModels(
           name: m['name'] is String
               ? m['name'] as String
               : m['model'] as String,
+        ),
+  ];
+}
+
+/// One account of a machine as its report lists it (backend
+/// `observation.profiles`): opaque id, a label with no path or email, and what
+/// is left of its allowance when known.
+typedef SuperTabProfile = ({
+  String engine,
+  String id,
+  String label,
+  int? leftPercent,
+  DateTime? resetsAt,
+});
+
+/// The accounts [pool] reports; empty from a machine that reports none.
+List<SuperTabProfile> superTabProfilesOf(Map<String, dynamic>? pool) {
+  final observation = pool?['observation'];
+  final rows = observation is Map ? observation['profiles'] : null;
+  return [
+    for (final p in rows is List ? rows : const [])
+      if (p is Map &&
+          p['engine'] is String &&
+          p['id'] is String &&
+          p['label'] is String)
+        (
+          engine: p['engine'] as String,
+          id: p['id'] as String,
+          label: p['label'] as String,
+          leftPercent: (p['leftPercent'] as num?)?.toInt(),
+          resetsAt: DateTime.tryParse(p['resetsAt'] as String? ?? ''),
         ),
   ];
 }
@@ -1153,6 +1284,10 @@ class SuperTabMessage {
   /// The line the server writes in a thread when its session ends.
   bool get sessionEnded => source['kind'] == 'buddy-session-ended';
 
+  /// A task's own message, the server keeps current as the task moves (Quiet
+  /// Swarm 2/6): its text is the task's name.
+  bool get isTaskLine => source['kind'] == 'task-line';
+
   /// Why its session ended, for [sessionEnded] rows: `ended`, `idle`,
   /// `stopped` or `failed`.
   String? get sessionEndReason =>
@@ -1195,6 +1330,14 @@ class SuperTabMessage {
   /// The agent a "waiting at a prompt" note is about; null for any other row.
   String? get promptAlertAgentId =>
       source['kind'] == 'terminal-alert' && source['alert'] == 'prompt'
+      ? source['agentId'] as String?
+      : null;
+
+  /// The Product Manager a usage-limit note is about; null for any other row.
+  String? get leadLimitAgentId =>
+      source['kind'] == 'terminal-alert' &&
+          source['alert'] == 'limit' &&
+          source['lead'] == true
       ? source['agentId'] as String?
       : null;
 

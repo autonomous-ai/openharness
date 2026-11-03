@@ -20,6 +20,7 @@ import 'swarm_message_row.dart';
 import 'swarm_outbox.dart';
 import 'swarm_paste.dart';
 import 'swarm_session.dart';
+import 'swarm_session_widgets.dart';
 import 'swarm_thread.dart';
 import 'swarm_voice.dart';
 
@@ -30,6 +31,8 @@ typedef SwarmThreadRow = Widget Function(
   SuperTabMessage message, {
   required bool grouped,
   required bool acting,
+  required bool lit,
+  required bool followed,
   required VoidCallback onTap,
 });
 
@@ -56,6 +59,7 @@ class SwarmThreadPage extends StatefulWidget {
     required this.title,
     required this.row,
     required this.pending,
+    this.focus,
   });
 
   final String swarmId;
@@ -68,6 +72,9 @@ class SwarmThreadPage extends StatefulWidget {
   final String? title;
   final SwarmThreadRow row;
   final SwarmThreadPending pending;
+
+  /// Where the thread lands once it is read; none shows it from its top.
+  final SwarmThreadFocus? focus;
 
   @override
   State<SwarmThreadPage> createState() => _SwarmThreadPageState();
@@ -109,6 +116,100 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     });
   }
 
+  /// The thread's read mark as it was when the page opened, before showing
+  /// the thread moves it: the first unread reply is the first after it.
+  late final int _readThrough = widget.focus?.after ?? _markAtOpen();
+
+  int _markAtOpen() {
+    final chat = widget.chat, reader = chat.reader;
+    return reader.readMarks?.threadThrough(chat.id, widget.root) ??
+        reader.snapshot?.threadMarks[chat.id]?[widget.root] ??
+        0;
+  }
+
+  /// The message the thread landed on, lit for a moment and keyed to be
+  /// brought into view.
+  String? _target, _lit;
+  Timer? _litTimer;
+  final _targetKey = GlobalKey();
+  bool _landing = false;
+
+  /// Once the thread is read: finds the focus (reading earlier replies back
+  /// to it, a bounded number of pages), scrolls to it and lights it for
+  /// 2 seconds, as the chat does for a quoted message.
+  void _land() {
+    final focus = widget.focus;
+    if (focus == null || _landing || _thread.state != SwarmChatState.loaded) {
+      return;
+    }
+    _landing = true;
+    unawaited(_findFocus(focus));
+  }
+
+  Future<void> _findFocus(SwarmThreadFocus focus) async {
+    // The read that brought the thread is still finishing: its listeners run
+    // before it lets another one start.
+    await Future<void>.delayed(Duration.zero);
+    final id = focus.messageId;
+    String? target;
+    if (id != null) {
+      var pages = 0;
+      bool found() => _thread.messages.any((m) => m.id == id);
+      while (mounted &&
+          !found() &&
+          _thread.hasEarlier &&
+          _thread.error == null &&
+          pages++ < SwarmThreadFocus.maxEarlierPages) {
+        await _thread.loadEarlier();
+      }
+      if (found()) target = id;
+    } else {
+      final replies = _thread.replies;
+      target = replies.where((m) => m.sequence > _readThrough).firstOrNull?.id;
+      target ??= replies.lastOrNull?.id;
+    }
+    if (!mounted || target == null) return;
+    setState(() {
+      _target = target;
+      _lit = target;
+    });
+    _litTimer?.cancel();
+    _litTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _lit = null);
+    });
+    _reveal(target, 0);
+  }
+
+  /// The list builds only the rows near what is shown: it jumps near the
+  /// target by its place in the list until its row is built, then brings it
+  /// to the middle (as the chat's `_reveal` does).
+  void _reveal(String id, int attempt) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _target != id) return;
+      if (_targetKey.currentContext case final row?) {
+        unawaited(
+          Scrollable.ensureVisible(
+            row,
+            alignment: 0.5,
+            duration: const Duration(milliseconds: 250),
+          ),
+        );
+        return;
+      }
+      final index = _thread.messages.indexWhere((m) => m.id == id);
+      if (!_scroll.hasClients || index < 0 || attempt > 20) return;
+      final count = _thread.messages.length;
+      _scroll.position.jumpTo(
+        (_scroll.position.maxScrollExtent * index / count).clamp(
+          0,
+          _scroll.position.maxScrollExtent,
+        ),
+      );
+      _reveal(id, attempt + 1);
+    });
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
   /// What the last pick left out, or why it could not pick, under the box.
   final _attachNote = ValueNotifier<String?>(null);
   bool _picking = false;
@@ -130,6 +231,9 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     _thread.composer.addListener(_drafted);
     _thread.addListener(_seen);
     _thread.addListener(_guardVoice);
+    _thread.addListener(_land);
+    // Before the thread shows, so showing it does not move the mark first.
+    _readThrough;
     unawaited(_thread.load());
   }
 
@@ -188,6 +292,8 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     _thread.composer.removeListener(_drafted);
     _thread.removeListener(_seen);
     _thread.removeListener(_guardVoice);
+    _thread.removeListener(_land);
+    _litTimer?.cancel();
     _voice?.dispose();
     _thread.dispose();
     _attachNote.dispose();
@@ -297,6 +403,10 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _header(context, tty),
+            ListenableBuilder(
+              listenable: _thread,
+              builder: (context, _) => SwarmThreadSessionLine(thread: _thread),
+            ),
             Expanded(
               child: Stack(
                 children: [
@@ -304,7 +414,13 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                     child: NotificationListener<Notification>(
                       onNotification: _measured,
                       child: ListenableBuilder(
-                        listenable: _thread,
+                        // Message links resolve against the inbox's current
+                        // reader, which can change independently of this
+                        // thread's older conversation reader.
+                        listenable: Listenable.merge([
+                          _thread,
+                          if (_session case final session?) session.inbox,
+                        ]),
                         builder: (context, _) => _body(tty),
                       ),
                     ),
@@ -418,10 +534,13 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
         m,
         grouped: grouped,
         acting: _acting == m.id,
+        lit: _lit == m.id,
+        followed: _target == m.id,
         onTap: () => _toggleActions(m.id),
       );
-      return _acting == m.id
-          ? KeyedSubtree(key: _actingKey, child: built)
+      if (_acting == m.id) return KeyedSubtree(key: _actingKey, child: built);
+      return _target == m.id
+          ? KeyedSubtree(key: _targetKey, child: built)
           : built;
     }
 
@@ -606,6 +725,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                 style: AppType.caption(color: AppPalette.textSecondary),
               ),
             ),
+          if (t.offersSessions && !talking) SwarmNewSessionCheck(thread: t),
           SwarmComposerCard(
             focus: _focus,
             chips: t.files.files.isEmpty ? null : SwarmOutgoingChips(box: t),
@@ -634,13 +754,16 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                               ? () => unawaited(_pickFiles())
                               : null,
                         ),
-                      Expanded(
-                        child: _AlsoSend(
-                          label: t.alsoSendLabel,
-                          value: t.alsoSend,
-                          onChanged: (on) => t.alsoSend = on,
-                        ),
-                      ),
+                      if (t.offersAlsoSend)
+                        Expanded(
+                          child: _AlsoSend(
+                            label: t.alsoSendLabel,
+                            value: t.alsoSend,
+                            onChanged: (on) => t.alsoSend = on,
+                          ),
+                        )
+                      else
+                        const Spacer(),
                       // The main chat's mic, beside Send as there.
                       if (voice != null) SwarmVoiceMic(voice: voice),
                       SwarmRoundButton(

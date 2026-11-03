@@ -59,7 +59,7 @@ void main() {
   });
 
   testWidgets(
-    'clicking around the Swarm screen and toggling Machines logs no error',
+    'clicking around the Swarm screen and toggling Projects logs no error',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1300, 500));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -102,16 +102,27 @@ void main() {
       }
 
       for (var round = 0; round < 3; round++) {
-        await click(find.byTooltip('Collapse Machines'));
-        expect(controller.machinesGroupOpen, isFalse);
-        await click(find.byTooltip('Expand Machines'));
-        expect(controller.machinesGroupOpen, isTrue);
-        // Hover a row below Machines, then open Machines as its tooltip opens.
-        await click(find.byTooltip('Collapse Machines'));
-        await mouse.moveTo(const Offset(100, 480));
+        await click(find.byTooltip('Collapse Projects'));
+        expect(controller.projectsGroupOpen, isFalse);
+        await click(find.byTooltip('Expand Projects'));
+        expect(controller.projectsGroupOpen, isTrue);
+        // Hover a project's row, then close Projects as its tooltip opens: the
+        // row leaves the list.
+        await mouse.moveTo(
+          tester.getCenter(find.byKey(const ValueKey('super-group-lead'))),
+        );
         await tester.pump();
         await tester.binding.delayed(_pastHoverWait);
-        controller.toggleMachinesGroup();
+        controller.toggleProjectsGroup();
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+        // And open it again as a row under it, moved down, is hovered.
+        await mouse.moveTo(
+          tester.getCenter(find.byKey(const ValueKey('super-buddy-lead'))),
+        );
+        await tester.pump();
+        await tester.binding.delayed(_pastHoverWait);
+        controller.toggleProjectsGroup();
         await tester.pump();
         expect(tester.takeException(), isNull);
         await mouse.moveTo(const Offset(100, 60));

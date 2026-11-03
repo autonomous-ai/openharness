@@ -376,6 +376,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   String? _blocked(_Row row) => switch (row) {
     _Row.branch || _Row.worktree when box.checkingGit => '',
     _Row.branch when box.gitError != null => box.gitError,
+    _Row.branch || _Row.worktree when box.noCommitsYet => 'No commits yet',
     _Row.branch when !box.isGitProject => 'Not a Git repository',
     _Row.worktree when box.gitError != null => box.gitError,
     _Row.worktree when box.inWorktree => 'Already a worktree',
@@ -2425,7 +2426,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
             ),
           if (!box.isCloud &&
               !box.leadThroughSwarm &&
-              (box.isGitProject || box.checkingGit || box.gitError != null))
+              (box.choosesBranch || box.checkingGit || box.gitError != null))
             _desktopField(
               order: 9,
               anchor: _desktopAnchors[_Row.branch]!,
@@ -4190,7 +4191,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       _activateRow(
         !box.isTerminal
             ? _Row.model
-            : box.isGitProject
+            : box.choosesBranch
             ? _Row.branch
             : _Row.project,
       );

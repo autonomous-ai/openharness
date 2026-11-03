@@ -307,15 +307,15 @@ The native desktop target uses the CLI for cloud access and SSO tokens:
   the only one asking. A hidden tab reads nothing on this pace; the one read it still makes is the
   5-minute safety net every window keeps (`machineListSafetyNetInterval`). The browser's connect
   page and asleep band keep no timer of their own.
-- **Both REST and the local WS prefer the daemon's Unix socket** (`lib/ws/local_daemon_transport.dart`;
+- **Both REST and the local WS use the daemon's Unix socket** (`lib/ws/local_daemon_transport.dart`;
   CLI `lib/localSocket.ts`): `~/.harness/cli/data/daemon-<port>.sock`, 0600, named for the port in
-  `localCliBaseUrl` so it always leads to the same daemon as the TCP fallback. The loopback port takes
-  any local user's process; the socket only this user's. One `LocalDaemonTransport`, owned by
-  `LocalCliDiscovery`, is shared by `ApiClient` (a Dio adapter that only routes the daemon's own
-  address) and `WsPool`/`WsConn`. Discovery probes the socket first and the port second; a request or
-  dial that cannot reach the socket retries on the port, and each WS connect re-checks whether the
-  socket file exists, so a daemon restart does not strand the app on TCP. Windows and paths over 96
-  bytes have no socket. The CLI, engine hooks and the dashboard stay on TCP. Under `flutter test`
+  `localCliBaseUrl`. The loopback port takes any local user's process and any account can bind it once
+  it is free, after a reboot until this user logs in or during a restart (audit H1); the socket is this
+  user's alone. So while a socket can exist the app never asks the port: with the socket gone, the
+  daemon is down. One `LocalDaemonTransport`, owned by `LocalCliDiscovery`, is shared by `ApiClient` (a
+  Dio adapter that only routes the daemon's own address) and `WsPool`/`WsConn`. Each WS connect
+  re-checks whether the socket file exists. Windows and paths over 96 bytes have no socket, and only
+  those use the port. Under `flutter test`
   `LocalDaemonTransport.detect` finds no socket, so tests never reach a real daemon.
 - **On Windows the trusted routes go over the daemon's pipe** (`ws/trusted_pipe.dart`, B's §2):
   `POST /api/auth/handoff`, and this computer's window connection (`WsConn.trustedLocal`), where

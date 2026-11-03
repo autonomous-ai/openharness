@@ -159,8 +159,13 @@ Git projects enable Branch and Worktree. Worktree defaults to **Yes** until a
 successful Git launch remembers another global choice.
 The checkbox supports pointer and keyboard activation through the form's active
 keymap. Its label and branch icon remain together as the form narrows.
-An empty repository explains that a commit is required for a worktree and asks
-for a choice. Folders without Git keep both rows disabled. Discovery runs on the selected machine
+A repository with no commit yet — or a folder inside one, as `git init` in the
+home folder makes `~/Downloads` — starts in the folder itself, as Claude Code's
+app does: Branch and Worktree are hidden (the row form says "No commits yet"),
+nothing blocks Start, and the remembered Worktree choice is left for the next
+repository (`hasNoCommits`). A Swarm's Product Manager is the exception: it
+never works in the person's checkout, so such a project is refused for it.
+Folders without Git keep both rows disabled. Discovery runs on the selected machine
 without fetching, switching branches, or creating a worktree. A failed
 discovery offers Retry and blocks starting until the result is known.
 
@@ -304,13 +309,20 @@ included, filters the recent projects as before.
 - A terminal takes no project, so it clones nothing: a link shows a disabled **A terminal
   can't clone**, and changing to Terminal with a clone chosen asks for a folder or an agent.
 - While it clones the line reads **Cloning owner/repo…**. A checkout of that
-  repository already in the projects folder is used, not cloned, and the line
+  repository already in the projects folder (`~/harnesses`, or `~/projects` on Harness
+  OS, under any spelling of its name) is used, not cloned, and the line
   stays **Starting harness…**, as it does when the computer cannot say. A clone refused
   access tries the other transport, then up to three `~/.ssh/config` aliases
-  leading to github.com. It moves on only after a refusal, never after a network
-  failure or a timeout. Through an alias, the workspace says **Cloned via
-  \<alias\>** once. Refused everywhere: **No access to owner/repo on \<computer\>**,
-  with the task and choices kept.
+  leading to github.com. It moves on after a refusal or a host key ssh will not
+  trust, never after a network failure or a timeout. Through an alias, the workspace
+  says **Cloned via \<alias\>** once. Refused everywhere: **No access to owner/repo on
+  \<computer\>**, with the task and choices kept. When an untrusted host key was among
+  the failures, the line names the key and `ssh -T git@github.com` instead: GitHub
+  was not asked, and that key may have changed.
+- A remote path ending in a hidden folder is asked about by its own path, because
+  its parent's listing leaves it out; there it shows **Open**.
+- An alias `ssh -G` cannot read stays offered, and its launch says so; only an
+  answered host other than github.com is refused in the row.
 
 ## Regression coverage
 

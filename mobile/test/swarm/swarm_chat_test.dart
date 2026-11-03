@@ -14,6 +14,7 @@ import 'package:harness_mobile/swarm/swarm_chat_cache.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_file_picker.dart';
 import 'package:harness_mobile/swarm/swarm_message_row.dart';
+import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_outgoing_files.dart';
@@ -103,6 +104,7 @@ void main() {
     List<Map<String, dynamic>>? members,
     List<Map<String, dynamic>>? projects,
     List<Map<String, dynamic>>? agents,
+    List<Map<String, dynamic>> additionalGroups = const [],
     Map<String, dynamic> g1 = const {},
   }) {
     // The Swarm's counts say a decision waits: what has its list read.
@@ -119,6 +121,7 @@ void main() {
         head: projects == null ? null : headData(projects: projects),
         agents: agents,
         groups: [
+          ...additionalGroups,
           {
             ...groupData(
               'g1',
@@ -317,7 +320,7 @@ void main() {
     expect(find.text('PM'), findsOneWidget);
     expect(find.text('Nova'), findsOneWidget);
     expect(find.text('Dev'), findsOneWidget);
-    expect(find.text('tony'), findsOneWidget);
+    expect(find.text('person-me'), findsOneWidget);
     expect(find.text(time(0)), findsOneWidget);
     expect(find.text(time(1)), findsNothing, reason: 'a follow-up has none');
     expect(find.text(time(2)), findsOneWidget);
@@ -470,6 +473,137 @@ void main() {
     await tester.pump();
 
     expect(opened, ['https://cdn.harness.autonomous.ai/f1/plan.md']);
+  });
+
+  testWidgets('a numbered task message opens that task conversation', (
+    tester,
+  ) async {
+    await pump(
+      tester,
+      backend(
+        [message('m1', 1, text: '#42')],
+        additionalGroups: [groupData('task-42', number: 42, title: 'Task 42')],
+      ),
+    );
+
+    await tester.tap(find.text('#42', findRichText: true));
+    await tester.pumpAndSettle();
+
+    final pages = tester.widgetList<SwarmConversationPage>(
+      find.byType(SwarmConversationPage),
+    );
+    expect(pages.last.conversationId, 'task-42');
+  });
+
+  testWidgets('a message links when its numbered conversation arrives', (
+    tester,
+  ) async {
+    final fake = backend([message('m1', 1, text: '#42')]);
+    final host = await pump(tester, fake);
+    expect(find.text('#42', findRichText: true), findsOneWidget);
+    final cachedRow = tester.widget<SwarmMessageRow>(
+      find.byWidgetPredicate(
+        (widget) => widget is SwarmMessageRow && widget.message.id == 'm1',
+      ),
+    );
+    expect(cachedRow.references, isEmpty);
+
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+      cursor: 'c3',
+      lastChangedAt: 200,
+      groups: [
+        part('task-42', 2, groupData('task-42', number: 42, title: 'Task 42')),
+      ],
+    );
+    await host.session!.inbox.reader(tab)!.refresh();
+    await tester.pumpAndSettle();
+
+    expect(
+      host.session!.inbox
+          .reader(tab)!
+          .snapshot!
+          .conversation('task-42')
+          ?.number,
+      42,
+    );
+    final row = tester.widget<SwarmMessageRow>(
+      find.byWidgetPredicate(
+        (widget) => widget is SwarmMessageRow && widget.message.id == 'm1',
+      ),
+    );
+    expect(row.references[42], 'task-42');
+    expect(row, isNot(same(cachedRow)));
+
+    await tester.tap(find.text('#42', findRichText: true));
+    await tester.pumpAndSettle();
+    var pages = tester.widgetList<SwarmConversationPage>(
+      find.byType(SwarmConversationPage),
+    );
+    expect(pages.last.conversationId, 'task-42');
+    final openPages = pages.length;
+    Navigator.of(tester.element(find.byType(SwarmConversationPage).last)).pop();
+    await tester.pumpAndSettle();
+
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+      cursor: 'c4',
+      lastChangedAt: 300,
+      groups: [
+        {'key': 'task-42', 'version': 3, 'changedAt': 3, 'deleted': true},
+      ],
+    );
+    await host.session!.inbox.reader(tab)!.refresh();
+    await tester.pumpAndSettle();
+
+    final revokedRow = tester.widget<SwarmMessageRow>(
+      find.byWidgetPredicate(
+        (widget) => widget is SwarmMessageRow && widget.message.id == 'm1',
+      ),
+    );
+    expect(revokedRow.references, isEmpty);
+    expect(revokedRow, isNot(same(row)));
+
+    await tester.tap(find.text('#42', findRichText: true));
+    await tester.pumpAndSettle();
+    pages = tester.widgetList<SwarmConversationPage>(
+      find.byType(SwarmConversationPage),
+    );
+    expect(pages, hasLength(openPages));
+  });
+
+  testWidgets('a numbered PR message opens that PR conversation', (
+    tester,
+  ) async {
+    await pump(
+      tester,
+      backend(
+        [message('m1', 1, text: '#43')],
+        additionalGroups: [groupData('pr-43', number: 43, title: 'PR 43')],
+      ),
+    );
+
+    await tester.tap(find.text('#43', findRichText: true));
+    await tester.pumpAndSettle();
+
+    final pages = tester.widgetList<SwarmConversationPage>(
+      find.byType(SwarmConversationPage),
+    );
+    expect(pages.last.conversationId, 'pr-43');
+  });
+
+  testWidgets('an unknown conversation number does not open a chat', (
+    tester,
+  ) async {
+    await pump(tester, backend([message('m1', 1, text: '#999')]));
+
+    await tester.tap(find.text('#999', findRichText: true));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widgetList<SwarmConversationPage>(
+        find.byType(SwarmConversationPage),
+      ),
+      hasLength(1),
+    );
   });
 
   testWidgets('a notification opens an earlier message and highlights it', (
@@ -1206,6 +1340,28 @@ void main() {
       find.text('Your message was not sent. Retry to check it.'),
       findsOneWidget,
     );
+  });
+
+  testWidgets('Delete takes a Not sent post away, and sends nothing', (
+    tester,
+  ) async {
+    final fake = backend([message('m1', 1)]);
+    fake.routes[commands] = (_) =>
+        throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.');
+    await pump(tester, fake);
+    await tester.enterText(find.byType(TextField), 'Never mind');
+    await tester.pump();
+    await tester.tap(key('swarm-send'));
+    await tester.pumpAndSettle();
+    expect(find.text('Not sent'), findsOneWidget);
+    final sends = fake.commands.length;
+
+    await tester.tap(key('swarm-delete-post'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Not sent'), findsNothing);
+    expect(find.text('Never mind'), findsNothing);
+    expect(fake.commands, hasLength(sends));
   });
 
   testWidgets('a post whose answer was lost reads Not sent under it, and '
@@ -2208,6 +2364,114 @@ void main() {
       matching: find.text(text),
     );
 
+    testWidgets('an open thread refreshes numbered links when its target '
+        'arrives and is revoked', (tester) async {
+      final rootMessage = message('m1', 1, text: '#42', thread: 'm1');
+      final threadLine = line('m1', 1, 2);
+      final fake = backend([rootMessage], threads: [threadLine]);
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': [
+          {
+            'id': tab,
+            'name': 'Phone Swarm',
+            'ownerId': me,
+            'lastChangedAt': 100,
+          },
+        ],
+        'next': null,
+      };
+      fake.routes['$messages?thread=m1'] = (_) => {
+        'messages': [rootMessage],
+        'next': null,
+        'threads': [threadLine],
+      };
+      final host = await pump(tester, fake);
+
+      await tester.tap(key('swarm-thread-line-m1'));
+      await tester.pumpAndSettle();
+      expect(find.text('Thread'), findsOneWidget);
+      final before = tester.widget<SwarmMessageRow>(
+        key('swarm-thread-message-m1'),
+      );
+      expect(before.references, isEmpty);
+
+      final currentReader = host.session!.inbox.reader(tab)!;
+      SuperTabSnapshot currentSnapshot({required bool includeTarget}) =>
+          SuperTabSnapshot.fromJson({
+            'version': 1,
+            'id': tab,
+            'name': 'Phone Swarm',
+            'ownerId': me,
+            'people': <Object>[],
+            'agents': <Object>[],
+            'machines': <Object>[],
+            'projects': <Object>[],
+            'invitations': <Object>[],
+            'conversations': [
+              groupData('g1', title: 'Fix login'),
+              if (includeTarget)
+                groupData('task-42', number: 42, title: 'Task 42'),
+            ],
+          });
+      // Update what the inbox currently exposes without notifying the older
+      // reader held by the open thread. The changed listing emits an inbox
+      // notification, as a reader replacement does.
+      currentReader.snapshot = currentSnapshot(includeTarget: true);
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': [
+          {
+            'id': tab,
+            'name': 'Phone Swarm updated',
+            'ownerId': me,
+            'lastChangedAt': 100,
+          },
+        ],
+        'next': null,
+      };
+      await host.session!.inbox.refresh();
+      await tester.pumpAndSettle();
+
+      final arrived = tester.widget<SwarmMessageRow>(
+        key('swarm-thread-message-m1'),
+      );
+      expect(arrived.references[42], 'task-42');
+      expect(arrived, isNot(same(before)));
+
+      final pagesBeforeRevocation = tester
+          .widgetList<SwarmConversationPage>(find.byType(SwarmConversationPage))
+          .length;
+      currentReader.snapshot = currentSnapshot(includeTarget: false);
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': [
+          {
+            'id': tab,
+            'name': 'Phone Swarm changed again',
+            'ownerId': me,
+            'lastChangedAt': 100,
+          },
+        ],
+        'next': null,
+      };
+      await host.session!.inbox.refresh();
+      await tester.pumpAndSettle();
+
+      final revoked = tester.widget<SwarmMessageRow>(
+        key('swarm-thread-message-m1'),
+      );
+      expect(revoked.references, isEmpty);
+      expect(revoked, isNot(same(arrived)));
+
+      await tester.tap(inThread('#42'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widgetList<SwarmConversationPage>(
+          find.byType(SwarmConversationPage),
+        ),
+        hasLength(pagesBeforeRevocation),
+      );
+      expect(find.text('Thread'), findsOneWidget);
+    });
+
     Future<void> back(WidgetTester tester) async {
       await tester.tap(find.bySemanticsLabel('Back'));
       await tester.pumpAndSettle();
@@ -2293,6 +2557,41 @@ void main() {
       expect(key('swarm-reply-bar'), findsNothing);
     });
 
+    testWidgets('in the main chat, Copy on a message says Copied, then Copy '
+        'again (Tony, 11-02)', (tester) async {
+      final copied = <String?>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'Clipboard.setData') {
+              copied.add((call.arguments as Map)['text'] as String?);
+            }
+            return null;
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null),
+      );
+      const words = 'The build is green';
+      await pump(tester, backend([message('m1', 1, text: words)]));
+      await tester.tap(find.text(words));
+      await tester.pumpAndSettle();
+
+      Finder inRow(String label) => find.descendant(
+        of: key('swarm-message-m1'),
+        matching: find.text(label),
+      );
+      await tester.tap(inRow('Copy'));
+      await tester.pumpAndSettle();
+      expect(copied, [words]);
+      expect(inRow('Copied'), findsOneWidget);
+
+      await tester.tap(inRow('Copied'));
+      await tester.pump(kSwarmCopiedFor);
+      await tester.pump();
+      expect(copied, [words], reason: 'one copy');
+      expect(inRow('Copy'), findsOneWidget);
+    });
+
     testWidgets('in a thread, a tap on a message offers Copy, as in the chat, '
         'and Copy copies its text (Dee, 11-01)', (tester) async {
       String? copied;
@@ -2322,6 +2621,14 @@ void main() {
         await tester.tap(copy);
         await tester.pumpAndSettle();
         expect(copied, text);
+        expect(
+          find.descendant(
+            of: key('swarm-thread-message-$id'),
+            matching: find.text('Copied'),
+          ),
+          findsOneWidget,
+          reason: '$id says it copied',
+        );
       }
     });
 

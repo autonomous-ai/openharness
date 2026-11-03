@@ -143,7 +143,7 @@ export const PRODUCT_USAGE_SETUP_METRICS = [...PRODUCT_USAGE_SURFACES.flatMap(su
  * codes (listed below). Codes only, never a message. */
 export const LAUNCH_ERROR_CODES = [
   // What a new harness asked for, refused before anything starts (core/agents/launches.ts, lib/engineLaunch.ts).
-  'invalid_codex_home', 'invalid_prompt', 'prompt_too_long', 'prompt_unsupported', 'invalid_agent', 'invalid_session',
+  'invalid_codex_home', 'invalid_claude_home', 'invalid_prompt', 'prompt_too_long', 'prompt_unsupported', 'invalid_agent', 'invalid_session',
   'invalid_started_by', 'agent_unsupported', 'invalid_runtime_profile', 'grid_engine_unsupported', 'codex_cli_too_old',
   'invalid_launch_model', 'launch_model_unsupported',
   // A new project's folder (lib/projectFolder.ts) and the launch's durable receipt (lib/agentCreationReceipt.ts).

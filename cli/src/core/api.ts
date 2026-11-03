@@ -729,6 +729,7 @@ export const MODELS_REQUESTS = [
   'grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop',
   'grid_fleet_run', 'grid_fleet_cancel', 'grid_swarm_sync', 'grid_swarm_api_share', 'grid_swarm_api_shares', 'grid_swarm_offer', 'grid_swarm_offers', 'grid_swarm_heal',
   'api_connections', 'codex_profiles_list', 'codex_profile_link',
+  'claude_profiles_list', 'claude_profile_link', 'swarm_account_offer',
 ] as const
 
 const MINUTE = 60_000
@@ -867,7 +868,11 @@ export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[];
   memory: { requests: MEMORY_REQUESTS, state: [] },
   // Request-only too: it keeps nothing, and asks Jev only when a client asks it.
   router: { requests: ROUTER_REQUESTS, state: [] },
-  superTabs: { requests: SUPER_TAB_REQUESTS, state: ['super-tabs/host-*.json'] },
+  // A Swarm host here, or the Harness Team account's relay grant (team/relay.ts TEAM_RELAY_GRANT_FILE), kept while a Team
+  // account exists on this Mac: the relay runs in this service, and running Team agents need it back at once after an
+  // update. Woken by the journal alone, a Mac that only lent its Team account restarted it at the first request that
+  // happened to come, and its Team agents got "Connection refused" for four hours (Pro-9 and Pro-10, 2026-11-03).
+  superTabs: { requests: SUPER_TAB_REQUESTS, state: ['super-tabs/host-*.json', 'team-relay-grant.json'] },
   // Cloud agents. Its harnesses: one was started here, and is watched again as the daemon starts. A New Harness
   // for one, an answer or a message to one wakes it too (its port's calls, core/agents/cloud.ts).
   cloud: { requests: CLOUD_REQUESTS, state: ['cloud/harnesses.json'] },
@@ -940,6 +945,10 @@ export interface RecapSession {
    *  where a turn ends, a cancel or a forget (reading it reads the orchestrator); absent, the recaps keep
    *  what they were last told. */
   subagent?: boolean
+  /** Its finished turns are silent on the devices (the dial, the phone): its news reaches people another way. The core
+   *  only carries this; who says it is outside the core (a Swarm agent's, through the Swarm's door: superTabs/inCore.ts).
+   *  Said with every event, since the recaps in their own process have no agent list to look it up in (#2540's review). */
+  quietOnDevices?: boolean
 }
 
 /** Who watches this machine's turn cards: a device at all (through the backend or on the cable), and one
@@ -1590,6 +1599,9 @@ export type BackendNotice =
   /** Work waits for an agent of this machine's (backend lib/adapterWs.ts): its Swarm host reads that agent's deliveries now.
    *  Naming none, the server says it pushes them, and every list is read once (superTabs/host.ts PUSH_LEASE_MS). */
   | { type: 'super_tab_deliveries'; tabId?: string; agentId?: string }
+  /** A Lead's terminal request waits for an agent of this machine (backend lib/swarmDeliveryPushes.ts): its Swarm host picks
+   *  it up now rather than at its next poll (superTabs/terminal.ts). The backend's `__` frame, kept by name. */
+  | { type: '__terminal_waiting'; tabId: string; agentId: string }
   /** A commit changed what this machine's Swarm host reads (backend lib/swarmHostPushes.ts): it reads its changes now. Naming
    *  none, the server says it pushes them, and the host reads only when told (superTabs/hostFeed.ts HOST_PUSH_LEASE_MS). */
   | { type: 'swarm_host_changed'; tabId?: string; lastChangedAt?: number }

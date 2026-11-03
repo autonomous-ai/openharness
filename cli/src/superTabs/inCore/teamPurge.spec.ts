@@ -1,9 +1,12 @@
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { buddyTmpFolder, buddyTmpParent } from '../../lib/agentTmp.js'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { describe, expect, it, vi } from 'vitest'
+import { dirname, join, win32 } from 'node:path'
+import { PM_HOMES } from '../teamDaemon.js'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { PurgeAgentService } from '../../lib/purgeAgentService.js'
 import { createSwarmAgents } from './agents.js'
-import { OWN_LEFT, SHARED_LEFT, SWEEP_LEFT, UNREADABLE_DETAIL, createConfidentialPurge, purgeRecord, recordsOtherFolder, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
+import { OWN_LEFT, SHARED_LEFT, SWEEP_LEFT, UNREADABLE_DETAIL, createConfidentialPurge, isPmCodexHome, ownHomeFolder, purgeRecord, withPurgeRetries, recordsOtherFolder, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
 
 /** A folder that goes between the sweep's listing of its parent and its own read: removed just before that read. */
 const vanish = vi.hoisted(() => ({ path: '' }))
@@ -71,6 +74,53 @@ const transcript = (cwd: string | null, ...lines: string[]) => [JSON.stringify({
 const call = (cwd: string, name: string, input: Record<string, string>) => JSON.stringify({ type: 'assistant', cwd, message: { content: [{ type: 'tool_use', name, input }] } })
 /** What a failed sweep of a shared transcript folder answers. */
 const left = (kind: keyof typeof SHARED_LEFT) => SHARED_LEFT[kind]
+
+describe('a Buddy\'s private temporary folder when its session ends', () => {
+  // A plain session of the one Buddy chat shares its folder with the main Buddy and closes itself when idle (review of #2563).
+  const claudeFiles = (temp: string, folder: string, session: string) =>
+    join(temp, `claude-${process.getuid?.() ?? 0}`, realpathSync(folder).replace(/[^A-Za-z0-9]/g, '-'), session)
+
+  it('keeps it while its Buddy folder is there, another session may run in it, and removes only this session\'s output', async () => {
+    const home = dir(), folder = join(dir(), 'buddy-one')
+    mkdirSync(folder)
+    const temp = buddyTmpFolder(folder), SESSION = '11111111-1111-4111-8111-111111111111', OTHER = '22222222-2222-4222-8222-222222222222'
+    for (const session of [SESSION, OTHER]) { mkdirSync(claudeFiles(temp, folder, session), { recursive: true }); writeFileSync(join(claudeFiles(temp, folder, session), 'output'), 'private') }
+    writeFileSync(join(temp, 'a-tool'), 'x')
+    await scrubClaudeSession(home, target({ sessionId: SESSION, cwd: folder }))
+    expect(existsSync(claudeFiles(temp, folder, SESSION))).toBe(false)
+    expect(existsSync(claudeFiles(temp, folder, OTHER))).toBe(true)
+    expect(existsSync(join(temp, 'a-tool'))).toBe(true)
+    await scrubClaudeSession(home, target({ sessionId: null, cwd: folder }))
+    expect(existsSync(temp)).toBe(true)
+    rmSync(buddyTmpParent(), { recursive: true, force: true })
+  })
+
+  // Windows has no user id: Claude Code's temp folder there is under uid 0's name (agentTmp's own fallback).
+  it('finds a session\'s files where the platform has no user id', async () => {
+    const home = dir(), folder = join(dir(), 'buddy-no-uid'), SESSION = '11111111-1111-4111-8111-111111111111'
+    mkdirSync(folder)
+    const files = join(buddyTmpFolder(folder), 'claude-0', realpathSync(folder).replace(/[^A-Za-z0-9]/g, '-'), SESSION)
+    mkdirSync(files, { recursive: true })
+    const getuid = process.getuid
+    Object.defineProperty(process, 'getuid', { value: undefined, configurable: true, writable: true })
+    try { await scrubClaudeSession(home, target({ sessionId: SESSION, cwd: folder })) }
+    finally { Object.defineProperty(process, 'getuid', { value: getuid, configurable: true, writable: true }) }
+    expect(existsSync(files)).toBe(false)
+    rmSync(buddyTmpParent(), { recursive: true, force: true })
+  })
+
+  it('goes whole once its Buddy folder is gone, and another Buddy\'s stays', async () => {
+    const home = dir(), folder = join(dir(), 'buddy-one'), other = join(dir(), 'buddy-two')
+    mkdirSync(folder); mkdirSync(other)
+    const mine = buddyTmpFolder(folder), theirs = buddyTmpFolder(other)
+    for (const at of [mine, theirs]) { mkdirSync(at, { recursive: true }); writeFileSync(join(at, 'output'), 'private') }
+    rmSync(folder, { recursive: true })
+    await scrubClaudeSession(home, target({ sessionId: null, cwd: folder }))
+    expect(existsSync(mine)).toBe(false)
+    expect(existsSync(theirs)).toBe(true)
+    rmSync(buddyTmpParent(), { recursive: true, force: true })
+  })
+})
 
 describe('scrubbing a Claude Code session from the Team user\'s shared home', () => {
   // Security review 2 of #2375: Claude Code's transcript folder name makes every '/' and '.' a dash, so a removed worktree
@@ -293,6 +343,28 @@ describe('scrubbing a Claude Code session from the Team user\'s shared home', ()
   })
 })
 
+describe('a Claude Code config with part of it missing', () => {
+  it('takes the folder from its repository paths when it has no projects at all', async () => {
+    const home = dir(), folder = join(home, 'project-folder')
+    mkdirSync(join(home, '.claude'), { recursive: true })
+    writeFileSync(join(home, '.claude.json'), JSON.stringify({ githubRepoPaths: { 'acme/app': [folder, '/kept'] } }))
+    await scrubClaudeSession(home, target({ sessionId: null, cwd: folder }))
+    expect(JSON.parse(readFileSync(join(home, '.claude.json'), 'utf8'))).toEqual({ githubRepoPaths: { 'acme/app': ['/kept'] } })
+  })
+})
+
+describe('Windows, with the projects folder unreadable', () => {
+  // A listing that fails names only what the slug says, and the removal reports it unread, never as gone.
+  it('tries the one name the folder gives, and says what it could not read', async () => {
+    const home = dir(), told: string[] = []
+    mkdirSync(join(home, '.claude'), { recursive: true })
+    writeFileSync(join(home, '.claude', 'projects'), 'not a folder')
+    await scrubClaudeSession(home, target({ sessionId: null, cwd: 'C:\\Users\\team\\work' }), [], undefined, what => told.push(what), win32)
+    expect(existsSync(join(home, '.claude', 'projects'))).toBe(true)
+    expect(told).toEqual(['unread'])
+  })
+})
+
 describe('the sweep for what a scrub left', () => {
   // Re-check 2 of 68ec6f0: what the sweep found was named by its path, the Team home's and all. It names its kind.
   it('finds the session or folder where Claude Code and Codex write its own data, and nowhere else, by its kind', async () => {
@@ -478,6 +550,55 @@ describe('the purge of a confidential session the Swarm ended', () => {
     return { purge, session, record, calls }
   }
 
+  it('finds an agent\'s own engine home on either separator, and nothing outside it (audit H2, Windows pass)', () => {
+    expect(ownHomeFolder('/Users/team/.harness-pm-homes', '/Users/team/.harness-pm-homes/super-start/codex')).toBe('/Users/team/.harness-pm-homes/super-start')
+    expect(ownHomeFolder('C:\\Users\\team\\.harness-pm-homes', 'C:\\Users\\team\\.harness-pm-homes\\super-start\\codex')).toBe('C:\\Users\\team\\.harness-pm-homes\\super-start')
+    for (const [homes, path] of [
+      ['/Users/team/.harness-pm-homes', '/Users/team/.harness-pm-homes-other/x/codex'],
+      ['/Users/team/.harness-pm-homes', '/Users/team/.harness-pm-homes/codex'],
+      ['/Users/team/.harness-pm-homes', '/Users/team/.harness-pm-homes/../x/codex'],
+      ['C:\\Users\\team\\.harness-pm-homes', 'C:\\Users\\team\\.harness-pm-homes\\..\\x\\codex'],
+      ['/Users/team/.harness-pm-homes', '/Users/team/.codex'],
+    ] as const) expect(ownHomeFolder(homes, path), path).toBeNull()
+    expect(ownHomeFolder('/Users/team/.harness-pm-homes', null)).toBeNull()
+  })
+
+  // Windows drops a name's trailing spaces and dots: `.. ` is `..`, and this path's folder is then the whole Team home, which
+  // purge deletes. The rule pmEngineHome names a home by (teamDaemon.ts PM_START_ID), as isPmCodexHome holds it to (#2568).
+  it('takes only a start id pmEngineHome could have made: never `.. `, nor a name Windows would cut, nor a separator inside it', () => {
+    const win = 'C:\\Users\\team\\.harness-pm-homes', posix = '/Users/team/.harness-pm-homes'
+    for (const id of ['.. ', '. ', '.', '..', 'super-start.', 'super-start ', 'a b', 'a.b', '..\u00a0', 'caf\u00e9', 'x'.repeat(161)]) {
+      expect(ownHomeFolder(win, `${win}\\${id}\\codex`), `win ${id}`).toBeNull()
+      expect(ownHomeFolder(posix, `${posix}/${id}/codex`), `posix ${id}`).toBeNull()
+    }
+    for (const path of [`${win}\\a\\b\\codex`, `${win}/.. /codex`, `${win}\\.. /codex`, `${win}/..\\codex`]) expect(ownHomeFolder(win, path), path).toBeNull()
+    expect(ownHomeFolder(posix, `${posix}/a\\b/codex`)).toBeNull()
+    expect(ownHomeFolder(win, `${win}\\super-start_1\\codex`)).toBe(`${win}\\super-start_1`)
+    expect(ownHomeFolder(win, `${win}/super-start_1/codex`)).toBe(`${win}/super-start_1`)
+    expect(ownHomeFolder(posix, `${posix}/${'x'.repeat(160)}/codex`)).toBe(`${posix}/${'x'.repeat(160)}`)
+  })
+
+  it('a session\'s `.. ` home is left alone, the Team home with it, confidential or not', async () => {
+    const { home } = teamHome()
+    const s = service(home)
+    writeFileSync(join(home, 'keep.txt'), 'kept')
+    const purge = createConfidentialPurge({ confidential: () => false, home, record: purgeRecord(join(dir(), 'purges.json')), purge: s.purge,
+      session: () => ({ agentId: 'r', sessionId: 's', registeredAt: 1, engine: 'codex', cwd: CWD, codexHome: join(home, PM_HOMES, '.. ', 'codex') }) })
+    expect(await purge('r')).toEqual({ skipped: true })
+    expect(readFileSync(join(home, 'keep.txt'), 'utf8')).toBe('kept')
+  })
+
+  it('removes Team-written work\'s own Codex home when the agent ends, confidential or not, and nothing else (audit H2)', async () => {
+    const { home } = teamHome()
+    const s = service(home), own = join(home, PM_HOMES, 'super-start', 'codex'), other = join(home, 'elsewhere', 'codex')
+    mkdirSync(own, { recursive: true }); mkdirSync(other, { recursive: true })
+    const session = (codexHome: string) => () => ({ agentId: 'r', sessionId: 's', registeredAt: 1, engine: 'codex', cwd: CWD, codexHome })
+    expect(await createConfidentialPurge({ confidential: () => false, home, session: session(other), purge: s.purge, record: s.record })('r')).toEqual({ skipped: true })
+    expect(existsSync(other)).toBe(true)
+    expect(await createConfidentialPurge({ confidential: () => false, home, session: session(own), purge: s.purge, record: s.record })('r')).toEqual({ skipped: true })
+    expect(existsSync(dirname(own))).toBe(false)
+  })
+
   it('deletes through the reviewed purge, scrubs, sweeps, and keeps the session in its record until the sweep passes', async () => {
     const { home, claude } = teamHome()
     const s = service(home)
@@ -565,6 +686,16 @@ describe('the purge of a confidential session the Swarm ended', () => {
     const ended = createConfidentialPurge({ confidential: () => true, home, session: s.session, purge: s.purge, record: s.record })
     expect(await ended('pm')).toEqual({ ok: true })
     expect(existsSync(join(home, '.harness-pm-homes', 'super-start-1'))).toBe(false)
+  })
+
+  it('of a Codex session whose home is not one of pmEngineHome\'s, leaves every Product Manager\'s home', async () => {
+    // One level under the PM homes folder, its parent is that folder: a purge of it took every other PM's home with it.
+    const home = dir(), other = join(home, '.harness-pm-homes', 'super-start-2', 'codex')
+    mkdirSync(other, { recursive: true })
+    const s = service(home, join(home, '.harness-pm-homes', 'codex'))
+    const ended = createConfidentialPurge({ confidential: () => true, home, session: s.session, purge: s.purge, record: s.record })
+    expect(await ended('pm')).toEqual({ ok: true })
+    expect(existsSync(other)).toBe(true)
   })
 
   it('leaves any other session alone; a refused review or delete stops it, the session kept in its record', async () => {
@@ -686,5 +817,335 @@ describe('the record of purges still to finish', () => {
     expect(warn.mock.calls.map(([line]) => String(line))).toEqual([said(aside), said(aside), said(`${aside}, ${aside}.1`),
       said([aside, ...Array.from({ length: 10 }, (_, i) => `${aside}.${i + 1}`)].join(', '))])
     warn.mockRestore()
+  })
+})
+
+// Windows audit (task #2022): the check looked for `${homes}/`, and Windows' paths have `\`, so a purged Codex Product
+// Manager's own home stayed in the Team account for its next agent to read.
+describe('isPmCodexHome', () => {
+  it('is the home pmEngineHome makes, by Windows\' separators as well as this platform\'s', () => {
+    expect(isPmCodexHome('C:\\Users\\harnessteam', 'C:\\Users\\harnessteam\\.harness-pm-homes\\super-start-1\\codex', win32)).toBe(true)
+    expect(isPmCodexHome('/Users/harnessteam', '/Users/harnessteam/.harness-pm-homes/super-start-1/codex')).toBe(true)
+  })
+
+  it('is nothing else: not the PM homes folder or one level under it, a sibling folder, a way out, or another home', () => {
+    const home = 'C:\\Users\\harnessteam', homes = `${home}\\.harness-pm-homes`
+    for (const codexHome of [homes, `${homes}\\codex`, `${homes}\\super-start-1`, `${homes}\\super-start-1\\codex\\sessions`,
+      `${homes}\\super-start-1\\other`, `${home}\\.harness-pm-homes-old\\super-start-1\\codex`, `${homes}\\..\\x\\codex`,
+      // Windows drops a name's trailing spaces and dots: `.. ` is `..`, and purge deletes the parent, the whole Team home.
+      `${homes}\\.. \\codex`, `${homes}\\. \\codex`, `${homes}\\super-start-1.\\codex`, `${homes}\\a b\\codex`,
+      'C:\\Users\\owner\\.harness-pm-homes\\super-start-1\\codex', 'D:\\.harness-pm-homes\\super-start-1\\codex', '']) {
+      expect(isPmCodexHome(home, codexHome, win32), codexHome).toBe(false)
+    }
+  })
+})
+
+// Windows audit W3 (task #2096): `folderOf` wanted a leading '/', so a Windows worktree had no folder, and the sweep then held the
+// account at every retry, with its memory unread. The folder's forms are what Claude Code 2.1.316 writes on Windows: `C:/...` as a
+// config key (its `U3`), `C:\\...` elsewhere, and `C--...` as the project folder's name.
+describe('on Windows', () => {
+  const WIN = 'C:\\Users\\team\\swarm\\app\\.worktrees\\pm', KEY = WIN.replaceAll('\\', '/')
+  const WSLUG = WIN.replace(/[^A-Za-z0-9]/g, '-')
+  /** A folder sharing its name in `projects` ('.' and '\\' both become '-'), and folders that only start like it. */
+  const SHARES = 'C:\\Users\\team\\swarm\\app\\-worktrees\\pm', EVIL = `${WIN}-evil`, TWO = `${WIN}2`
+  const pm = (over: Partial<PurgeTarget> = {}): PurgeTarget => ({ agentId: 'pm', sessionId: 'pm-session', cwd: WIN, engine: 'claude', codexHome: null, ...over })
+  const row = (cwd: string) => `${JSON.stringify({ type: 'user', cwd })}\n`
+  function windowsHome() {
+    const parent = dir(), home = join(parent, 'home'), claude = join(home, '.claude')
+    for (const sub of [`projects/${WSLUG}/memory`, 'projects/C--other', 'backups', 'paste-cache']) mkdirSync(join(claude, sub), { recursive: true })
+    mkdirSync(join(home, '.codex'), { recursive: true })
+    writeFileSync(join(claude, 'history.jsonl'), [
+      JSON.stringify({ display: 'secret', pastedContents: { 1: { contentHash: 'abc123' } }, project: WIN, sessionId: 'pm-session' }),
+      JSON.stringify({ display: 'evil work', pastedContents: {}, project: EVIL, sessionId: 'evil' }),
+      JSON.stringify({ display: 'two work', pastedContents: {}, project: TWO, sessionId: 'two' }), ''].join('\n'))
+    writeFileSync(join(claude, 'paste-cache', 'abc123.txt'), 'pasted')
+    writeFileSync(join(claude, 'projects', WSLUG, 'pm-session.jsonl'), row(WIN) + row(`${WIN}\\sub`))
+    writeFileSync(join(claude, 'projects', WSLUG, 'memory', 'MEMORY.md'), 'remembered')
+    writeFileSync(join(claude, 'projects', 'C--other', 'other.jsonl'), row(EVIL))
+    const config = { projects: { [KEY]: { history: ['secret'] }, [WIN]: { history: ['old'] }, [EVIL.replaceAll('\\', '/')]: { keep: 1 }, [TWO]: { keep: 2 } },
+      githubRepoPaths: { 'example/app': [WIN, EVIL], 'example/pm': [KEY] } }
+    writeFileSync(join(home, '.claude.json'), JSON.stringify(config, null, 2))
+    writeFileSync(join(claude, 'backups', '.claude.json.backup.1'), JSON.stringify(config))
+    return { parent, home, claude }
+  }
+  const scrub = (home: string, target: PurgeTarget, told?: (what: string) => void) => scrubClaudeSession(home, target, [], undefined, told, win32)
+  const sweep = (home: string, target: PurgeTarget) => sweepForSession(home, target, [], win32)
+
+  it('scrubs the PM and only the PM, its memory too, and the sweep then finds nothing', async () => {
+    const { home, claude } = windowsHome()
+    await scrub(home, pm())
+    expect(existsSync(join(claude, 'projects', WSLUG))).toBe(false)
+    expect(existsSync(join(claude, 'paste-cache', 'abc123.txt'))).toBe(false)
+    const history = readFileSync(join(claude, 'history.jsonl'), 'utf8')
+    expect(history).not.toContain('pm-session')
+    expect(history).toContain('evil work')
+    expect(history).toContain('two work')
+    for (const file of [join(home, '.claude.json'), join(claude, 'backups', '.claude.json.backup.1')]) {
+      const config = JSON.parse(readFileSync(file, 'utf8')) as { projects: Record<string, unknown>; githubRepoPaths: Record<string, string[]> }
+      expect(Object.keys(config.projects)).toEqual([EVIL.replaceAll('\\', '/'), TWO])
+      expect(config.githubRepoPaths).toEqual({ 'example/app': [EVIL] })
+    }
+    expect(existsSync(join(claude, 'projects', 'C--other', 'other.jsonl'))).toBe(true)
+    expect(await sweep(home, pm())).toBeNull()
+  })
+
+  it.each([['forward slashes', KEY], ['both separators', 'C:\\Users\\team/swarm\\app/.worktrees\\pm'], ['a lower-case drive', `c${WIN.slice(1)}`],
+    ['a trailing separator', `${WIN}\\`]])('finds the same folder written with %s', async (_, cwd) => {
+    const { home, claude } = windowsHome()
+    await scrub(home, pm({ cwd }))
+    expect(readFileSync(join(claude, 'history.jsonl'), 'utf8')).not.toContain('pm-session')
+    expect(Object.keys((JSON.parse(readFileSync(join(home, '.claude.json'), 'utf8')) as { projects: object }).projects)).toEqual([EVIL.replaceAll('\\', '/'), TWO])
+    expect(existsSync(join(claude, 'projects', WSLUG))).toBe(false)
+    expect(await sweep(home, pm({ cwd }))).toBeNull()
+  })
+
+  it.each(['C:\\', 'C:/', 'C:', '\\', '/', 'C:foo', 'foo\\bar', '\\\\server', '\\\\server\\', '\\\\server\\share', '\\\\server\\share\\', 'C:\\a\\..', '/Users/team/pm', '\\Users\\team', ''])(
+    'takes no folder from %j: with no session either, nothing is touched', async (cwd) => {
+      const { home, claude } = windowsHome()
+      // A line that does name it, to show it stays: a form with no drive could be any drive's folder.
+      appendFileSync(join(claude, 'history.jsonl'), `${JSON.stringify({ display: 'named', pastedContents: {}, project: cwd, sessionId: 'named' })}\n`)
+      const before = readFileSync(join(claude, 'history.jsonl'), 'utf8'), config = readFileSync(join(home, '.claude.json'), 'utf8')
+      expect(await scrub(home, pm({ cwd, sessionId: null }))).toEqual([])
+      expect(readFileSync(join(claude, 'history.jsonl'), 'utf8')).toBe(before)
+      expect(readFileSync(join(home, '.claude.json'), 'utf8')).toBe(config)
+      expect(existsSync(join(claude, 'projects', WSLUG))).toBe(true)
+      expect(await sweep(home, pm({ cwd, sessionId: null }))).toBeNull()
+    })
+
+  it('reads a transcript in a folder only as inside it past a separator, in any case', async () => {
+    const { home } = windowsHome()
+    const file = join(home, 't.jsonl')
+    for (const [cwd, other] of [[WIN, false], [`${WIN}\\sub`, false], [`${KEY}/sub`, false], [WIN.toUpperCase(), false], [EVIL, true], [TWO, true], [SHARES, true]] as const) {
+      writeFileSync(file, row(cwd))
+      expect(await recordsOtherFolder(file, WIN, win32)).toBe(other)
+    }
+  })
+
+  it('the sweep sees a folder as JSON holds it, by either separator, and not one that only starts like it', async () => {
+    for (const [text, left] of [[`{"project":${JSON.stringify(WIN)},"sessionId":"x"}\n`, SWEEP_LEFT.claudeHistory], [`{"project":${JSON.stringify(KEY)}}\n`, SWEEP_LEFT.claudeHistory],
+      [`{"project":${JSON.stringify(`${WIN}\\sub`)}}\n`, SWEEP_LEFT.claudeHistory], [`{"project":${JSON.stringify(EVIL)}}\n`, null], [`{"project":${JSON.stringify(TWO)}}\n`, null]] as const) {
+      const home = dir()
+      mkdirSync(join(home, '.claude'), { recursive: true })
+      writeFileSync(join(home, '.claude', 'history.jsonl'), text)
+      expect(await sweep(home, pm({ sessionId: null }))).toBe(left)
+    }
+    for (const key of [KEY, WIN]) {
+      const home = dir()
+      mkdirSync(join(home, '.claude'), { recursive: true })
+      writeFileSync(join(home, '.claude.json'), JSON.stringify({ projects: { [key]: {} } }, null, 2))
+      expect(await sweep(home, pm({ sessionId: null }))).toBe(SWEEP_LEFT.config)
+    }
+  })
+
+  it('keeps another folder\'s transcript that shares the name, says so, and the memory left holds the account', async () => {
+    const { home, claude } = windowsHome()
+    writeFileSync(join(claude, 'projects', WSLUG, 'shared.jsonl'), row(SHARES))
+    const told: string[] = []
+    await scrub(home, pm(), what => told.push(what))
+    expect(told).toEqual(['shared'])
+    expect(existsSync(join(claude, 'projects', WSLUG, 'shared.jsonl'))).toBe(true)
+    expect(existsSync(join(claude, 'projects', WSLUG, 'pm-session.jsonl'))).toBe(false)
+    expect(await sweep(home, pm())).toBe(SHARED_LEFT.memory)
+    rmSync(join(claude, 'projects', WSLUG, 'memory'), { recursive: true })
+    expect(await sweep(home, pm())).toBeNull()
+  })
+
+  it('finishes the whole purge, and frees the account, touching nothing outside the home', async () => {
+    const { parent, home, claude } = windowsHome()
+    const outside = join(parent, '.claude', 'projects', WSLUG, 'pm-session.jsonl')
+    mkdirSync(join(parent, '.claude', 'projects', WSLUG), { recursive: true })
+    writeFileSync(outside, 'someone else\'s')
+    writeFileSync(join(parent, '.claude.json'), JSON.stringify({ projects: { [KEY]: {} } }))
+    const record = purgeRecord(join(parent, 'purges.json'))
+    const purge = createConfidentialPurge({ confidential: () => true, home, record, paths: win32,
+      session: () => ({ agentId: 'pm', sessionId: 'pm-session', registeredAt: 1, engine: 'claude', cwd: WIN }),
+      purge: async request => request.mode === 'inspect' ? { reviewId: 'review' } : { ok: true } })
+    expect(await purge('pm')).toEqual({ ok: true })
+    expect(existsSync(join(claude, 'projects', WSLUG))).toBe(false)
+    expect(readFileSync(outside, 'utf8')).toBe('someone else\'s')
+    expect(readFileSync(join(parent, '.claude.json'), 'utf8')).toContain(KEY)
+  })
+})
+
+// Task #2264, Echo and Reed on #2675: nothing tried again once a host gave up, not even a restart.
+describe('a purge that did not finish', () => {
+  const MINUTE = 60_000
+  const realTimeout = globalThis.setTimeout
+  const fixture = (home: string, recordFile = join(home, 'super-tabs', 'team-purges.json')) => {
+    const own = join(home, PM_HOMES, 'super-start', 'codex')
+    mkdirSync(own, { recursive: true })
+    const record = purgeRecord(recordFile)
+    const state = { failing: true }
+    const purge = vi.fn(async (request: Record<string, unknown>) => {
+      if (state.failing) return { error: 'SERVICE_DOWN' }
+      return request.mode === 'inspect' ? { reviewId: 'review-1' } : { ok: true }
+    })
+    const ended = createConfidentialPurge({ confidential: () => true, home, record, purge,
+      session: agentId => ({ agentId, sessionId: 'session', registeredAt: 1, engine: 'codex', cwd: null, codexHome: own }) })
+    const reports: unknown[] = [], logs: string[] = []
+    const start = () => withPurgeRetries(ended, { record, sessions: () => ({ live: [], stopped: [] }), report: status => reports.push(status), log: line => logs.push(line) })
+    return { own, record, state, purge, ended, reports, logs, start, recordFile }
+  }
+  /** Lets a due retry's disk work finish: it reads real folders, which fake timers do not wait for. */
+  const pass = async (ms: number) => {
+    await vi.advanceTimersByTimeAsync(ms)
+    await new Promise(resolve => realTimeout(resolve, 60))
+  }
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }) })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('is retried after a restart and clears, its engine home gone', async () => {
+    const home = dir()
+    const before = fixture(home)
+    const first = before.start()
+    expect(await first('pm')).toMatchObject({ error: 'SERVICE_DOWN' })
+    first.stop()
+    expect(existsSync(before.own)).toBe(true)
+    // The daemon starts again, with only the file left.
+    const after = fixture(home)
+    expect(after.record.pending().map(t => t.agentId)).toEqual(['pm'])
+    after.state.failing = false
+    const second = after.start()
+    await pass(MINUTE + 1)
+    expect(existsSync(dirname(after.own))).toBe(false)
+    expect(after.record.pending()).toEqual([])
+    expect(after.reports.at(-1)).toMatchObject({ pending: 0, unreadable: false })
+    second.stop()
+  })
+
+  it('tries again with growing waits while it fails, and stops once none is left', async () => {
+    const f = fixture(dir())
+    const retried = f.start()
+    await retried('pm')
+    const tries = () => f.purge.mock.calls.length
+    const first = tries()
+    await pass(MINUTE - 1)
+    expect(tries()).toBe(first)
+    await pass(1)
+    expect(tries()).toBe(first + 1)
+    await pass(MINUTE)
+    expect(tries()).toBe(first + 1)
+    await pass(MINUTE)
+    expect(tries()).toBe(first + 2)
+    for (const wait of [5, 15, 30, 30]) await pass(wait * MINUTE)
+    expect(tries()).toBe(first + 6)
+    expect(f.record.pending().map(t => t.agentId)).toEqual(['pm'])
+    expect(f.reports.at(-1)).toMatchObject({ pending: 1, unreadable: false })
+    f.state.failing = false
+    await pass(30 * MINUTE)
+    expect(f.record.pending()).toEqual([])
+    const done = tries()
+    await pass(120 * MINUTE)
+    expect(tries()).toBe(done)
+    retried.stop()
+  })
+
+  // Security review 2 of #2680: the real service stops a live session in delete mode and erases it, and refuses nothing here.
+  describe('with its session or folder in use again', () => {
+    /** A retry against the real purge service, its stop watched, on what the registry holds now. */
+    type Rows = { live: Array<Record<string, unknown>>; stopped: Array<Record<string, unknown>> }
+    const inUse = (home: string, rows_: Rows | ((paths: { own: string; cwd: string }) => Rows)) => {
+      const own = join(home, PM_HOMES, 'super-start', 'codex'), cwd = join(home, 'work')
+      const registry = typeof rows_ === 'function' ? rows_({ own, cwd }) : rows_
+      mkdirSync(own, { recursive: true }); mkdirSync(cwd, { recursive: true })
+      const record = purgeRecord(join(home, 'super-tabs', 'team-purges.json'))
+      record.put({ agentId: 'pm', sessionId: 'session', cwd, engine: 'codex', codexHome: own })
+      const stop = vi.fn(async () => {})
+      const rows = () => [...registry.live, ...registry.stopped] as never[]
+      const byId = (id: string) => registry.live.find(s => s.agentId === id) as never
+      const service = new PurgeAgentService({ live: byId, sessions: rows, stop, restarting: () => false, deleted: () => {},
+        stopped: { get: (id: string) => registry.stopped.find(s => s.agentId === id), list: () => registry.stopped, remove: () => {}, delete: () => {} } as never,
+        checkpoints: { forSession: () => [], delete: () => {}, list: () => [] } as never,
+        inspect: (async () => ({ sessions: [], files: [] })) as never, erase: (async () => ({ ok: true })) as never })
+      const purge = vi.fn(async (request: Record<string, unknown>) => service.request(request as never) as Promise<Record<string, unknown>>)
+      const sessions = () => ({ live: registry.live as never, stopped: registry.stopped as never })
+      const ended = createConfidentialPurge({ confidential: () => true, home, record, purge, sessions,
+        session: id => (byId(id) ?? registry.stopped.find(s => s.agentId === id) ?? null) as never })
+      const retried = withPurgeRetries(ended, { record, sessions, report: () => {}, log: () => {} })
+      return { own, cwd, record, stop, purge, ended, retried, registry }
+    }
+    const row = (over: Record<string, unknown>) => ({ agentId: 'other', sessionId: 'other-session', registeredAt: 1, engine: 'codex', cwd: '/elsewhere', codexHome: null, ...over })
+
+    it('a retry leaves its own agent alone while it is live, and finishes once it stops', async () => {
+      const registry = { live: [row({ agentId: 'pm', sessionId: 'session' })], stopped: [] as Array<Record<string, unknown>> }
+      const f = inUse(dir(), registry)
+      await pass(MINUTE)
+      expect(f.purge).not.toHaveBeenCalled()
+      expect(f.stop).not.toHaveBeenCalled()
+      expect(existsSync(f.own)).toBe(true)
+      expect(f.record.pending().map(t => t.agentId)).toEqual(['pm'])
+      // It stopped: the next try goes through the service as any purge does.
+      registry.stopped.push(registry.live.pop()!)
+      await pass(2 * MINUTE)
+      expect(f.purge).toHaveBeenCalled()
+      f.retried.stop()
+    })
+
+    it('a conversation running under a new agent id keeps its engine home and traces, in a retry and a host\'s close', async () => {
+      const f = inUse(dir(), { live: [row({ agentId: 'new', sessionId: 'session' })], stopped: [] })
+      expect(await f.ended('pm')).toMatchObject({ error: 'SESSION_IN_USE' })
+      await pass(MINUTE)
+      expect(existsSync(f.own)).toBe(true)
+      expect(f.record.pending().map(t => t.agentId)).toEqual(['pm'])
+      f.retried.stop()
+    })
+
+    it('a later session in its folder or on its engine home stops it too', async () => {
+      for (const clash of [(p: { own: string; cwd: string }) => ({ cwd: p.cwd }), (p: { own: string; cwd: string }) => ({ codexHome: p.own })]) {
+        const f = inUse(dir(), paths => ({ live: [row(clash(paths))], stopped: [] }))
+        expect(await f.ended('pm')).toMatchObject({ error: 'SESSION_IN_USE' })
+        expect(existsSync(f.own)).toBe(true)
+        f.retried.stop()
+      }
+    })
+
+    it('a stopped session under a new id holds it unless that one is ending too, so two can\'t wait on each other', async () => {
+      const held = inUse(dir(), { live: [], stopped: [row({ agentId: 'new', sessionId: 'session' })] })
+      expect(await held.ended('pm')).toMatchObject({ error: 'SESSION_IN_USE' })
+      held.retried.stop()
+      const both = inUse(dir(), { live: [], stopped: [row({ agentId: 'new', sessionId: 'session' })] })
+      both.record.put({ agentId: 'new', sessionId: 'session', cwd: null, engine: 'codex', codexHome: null })
+      expect((await both.ended('pm')).error).not.toBe('SESSION_IN_USE')
+      both.retried.stop()
+    })
+  })
+
+  it('runs nothing with its record unreadable, and says so', async () => {
+    const home = dir(), file = join(home, 'super-tabs', 'team-purges.json')
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, 'not json')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const f = fixture(home, file)
+    warn.mockRestore()
+    const retried = f.start()
+    await pass(MINUTE)
+    expect(f.purge).not.toHaveBeenCalled()
+    expect(f.reports.at(-1)).toMatchObject({ pending: 0, unreadable: true })
+    retried.stop()
+  })
+
+  it('shares one run between a host\'s close and a retry of the same agent', async () => {
+    const f = fixture(dir())
+    f.state.failing = false
+    let open!: () => void
+    const held = new Promise<void>(resolve => { open = resolve })
+    const slow = vi.fn(async (agentId: string) => { await held; return f.ended(agentId) })
+    const retried = withPurgeRetries(slow, { record: f.record, sessions: () => ({ live: [], stopped: [] }), report: () => {}, log: () => {} })
+    const both = [retried('pm'), retried('pm')]
+    expect(slow).toHaveBeenCalledTimes(1)
+    open()
+    await Promise.all(both)
+    retried.stop()
+  })
+
+  it('reports a count only: no agent, session or path', async () => {
+    const f = fixture(dir())
+    const retried = f.start()
+    await retried('pm-secret')
+    const said = JSON.stringify(f.reports.at(-1))
+    expect(Object.keys(f.reports.at(-1) as object).sort()).toEqual(['at', 'pending', 'unreadable'])
+    expect(said).not.toContain('pm-secret')
+    expect(said).not.toContain('session')
+    retried.stop()
   })
 })

@@ -57,6 +57,21 @@ export interface RelayGatewayOptions {
 export const TUI_ONLY_EVENTS: ReadonlySet<string> = new Set(['tool_end', 'subagent_finished', 'done', 'context_compact'])
 /** The longest the backend's word that a terminal app is open is taken for (backend bus.ts TUI_OPEN_FOR_MS). */
 export const TUI_OPEN_MAX_MS = 180_000
+/** A machine's live events: what an app viewing it shows as it happens, and none of it read by the backend. While the
+ *  backend counts no app on the machine they stay off the relay, a publish that reached no one
+ *  (docs/superpowers/specs/2026-11-02-swarm-cache-delta-design.md, Part 4). `turn_started`, `agent_synced` and
+ *  `agent_deleted` are not here: the backend counts turns and keeps the machine's agents from them. An app that connects
+ *  lists the sessions itself, so what was held leaves nothing missing. */
+export const UI_GATED_EVENTS: ReadonlySet<string> = new Set([
+  'text_delta', 'tool_start', 'tool_end', 'user_message', 'thinking_delta', 'thinking_title', 'turn_heartbeat',
+  'agent_activity', 'turn_ended', 'turn_summary', 'subagent_finished', 'done', 'context_compact',
+])
+/** How long a frame from a remote app keeps live events flowing without the backend's count: an app's first frame, its
+ *  E2EE hello, comes before the `__clients` that counts it. */
+export const UI_QUIET_MS = 60_000
+/** How long the backend's "no app views this machine" is believed without being said again. It repeats `__clients` every
+ *  15 s (backend nodeRole PRESENCE_REFRESH_MS); a word six repeats old may come from a backend that stopped counting. */
+export const UI_SNAPSHOT_MAX_MS = 90_000
 
 export class RelayGateway implements GatewayPort {
   /** Optional scalar-only measurement hooks. Never hand a frame or user payload to the collector. */
@@ -103,6 +118,12 @@ export class RelayGateway implements GatewayPort {
   /** Until when a terminal app of the account counts as open, from the backend's `__tui_open`; null until it has said
    *  (an older backend, a team account, the link not yet back), when every event is relayed as before. */
   private tuiUntil: number | null = null
+  /** The backend's count of apps viewing this machine, from `__clients`, kept only when the backend says live events may be
+   *  held on it (`uiGate`). null until it has said so (an older backend, or its RELAY_UI_GATE off) and while the link is
+   *  down, when every event is relayed as before. */
+  private uiGate: { ui: number; at: number } | null = null
+  /** When a remote app (not a device, not the backend, not a Share viewer) last sent a frame. */
+  private lastRemoteFrameAt = 0
   /** Subset of commanderCount whose device is ACTIVELY rendering this machine (multi-attach). null = the
    *  backend doesn't send the signal (old build). */
   private commanderActive: number | null = null
@@ -235,6 +256,7 @@ export class RelayGateway implements GatewayPort {
     this.staleRouteLogged.clear()
     this.replayCommanderOnNextSnapshot = true
     this.tuiUntil = null
+    this.uiGate = null
   }
 
   /** The ONE place commander presence changes. Both callers — the `__clients` snapshot and the link going
@@ -307,7 +329,7 @@ export class RelayGateway implements GatewayPort {
       } catch { /* Work continues without metrics. */ }
     }
     if (this.link.servesThisComputerOnly()) return
-    if (!this.heldForNoTerminalApp(frame.type)) this.link.enqueue({ t: 'up', frame: this.e2ee.wrapUp(frame) })
+    if (!this.heldForNoTerminalApp(frame.type) && !this.heldForNoUi(frame.type)) this.link.enqueue({ t: 'up', frame: this.e2ee.wrapUp(frame) })
     if (guest) {
       for (const connId of this.e2ee.guestSessions(guest)) {
         const sealed = this.e2ee.wrapFor(connId, frame)
@@ -320,6 +342,14 @@ export class RelayGateway implements GatewayPort {
    *  (docs/plans/2026-10-31-live-events-relay-design.md, change 5). A guest's own sealed copy is never held. */
   private heldForNoTerminalApp(type: unknown): boolean {
     return this.tuiUntil !== null && Date.now() >= this.tuiUntil && typeof type === 'string' && TUI_ONLY_EVENTS.has(type)
+  }
+
+  /** Whether [type] is a live event and no app can see it now: the backend said it may be held and counts none, and no
+   *  remote app has sent a frame for a minute. A guest's own sealed copy, and every reply and targeted frame, are never held. */
+  private heldForNoUi(type: unknown): boolean {
+    return this.uiGate !== null && this.uiGate.ui === 0 && Date.now() - this.uiGate.at < UI_SNAPSHOT_MAX_MS
+      && Date.now() - this.lastRemoteFrameAt >= UI_QUIET_MS
+      && typeof type === 'string' && UI_GATED_EVENTS.has(type)
   }
 
   /** The guest a remote connection's session is (gateway/sharedTrust.ts), '' when its store did not
@@ -550,6 +580,10 @@ export class RelayGateway implements GatewayPort {
       return
     }
     if (type.startsWith('observer_')) return
+    // An app that connects sends its E2EE hello first, before the backend's next `__clients` counts it: live events flow
+    // again from that frame on, so it misses nothing it could open. The backend's own frames (connId '' or `__`) and a
+    // device's are no app viewing. A reconnecting device's hello, before it is known as one, opens it for a minute.
+    if (connId && !type.startsWith('__') && !this.isDeviceConn(connId)) this.lastRemoteFrameAt = Date.now()
     // E2EE control frames (pairing/handshake) are handled by the manager, never as node RPCs.
     if (type.startsWith('e2e_')) {
       const deviceBefore = deviceDump.enabled && (this.isDeviceConn(connId) || (type === 'e2e_pair_intent' && (frame.payload as { role?: unknown } | undefined)?.role === 'device'))
@@ -635,7 +669,9 @@ export class RelayGateway implements GatewayPort {
     // Cross-instance client snapshot. Generation detects leave/join cycles that coalesce to the same
     // count; count rise remains the compatibility fallback for older backends.
     if (type === '__clients') {
-      const payload = (frame.payload ?? {}) as { commander?: number; commanderActive?: number; commanderJoinGeneration?: number }
+      const payload = (frame.payload ?? {}) as { ui?: number; commander?: number; commanderActive?: number; commanderJoinGeneration?: number; uiGate?: unknown }
+      // A count that is no number is never 0, so it holds nothing.
+      this.uiGate = payload.uiGate === true ? { ui: Number(payload.ui ?? 0), at: Date.now() } : null
       const commander = Number(payload.commander ?? 0)
       const rawGeneration = payload.commanderJoinGeneration
       const generation = typeof rawGeneration === 'number' && Number.isSafeInteger(rawGeneration) && rawGeneration >= 0
@@ -674,6 +710,13 @@ export class RelayGateway implements GatewayPort {
       this.liveStreams.delete(connId)
       this.forgetRoutes(connId)
       await this.core.disconnected(connId)
+      return
+    }
+    // A Lead's terminal request waits for an agent of this machine (spec 2026-11-02-poll-cost Part 4.2): the Swarm host picks
+    // it up now. A `__` frame, so a daemon from before it drops it below; one naming no agent is no request.
+    if (type === '__terminal_waiting') {
+      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as Record<string, unknown>
+      if (typeof p.tabId === 'string' && typeof p.agentId === 'string') this.core.notice({ type, tabId: p.tabId, agentId: p.agentId })
       return
     }
     // Other backend-hub internal control frames (__clients_dirty) — not for us; drop silently.

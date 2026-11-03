@@ -44,6 +44,26 @@ describe('restartAgent', () => {
     expect(d.calls).toEqual(['holdOpen', 'terminate', 'prepareResume', 'buildArgv', 'respawn', 'waitForProcess'])
   })
 
+  it('resumes the prepared fork of a moved conversation, once its writer has stopped', async () => {
+    const seen: unknown[] = []
+    const d = deps({ buildArgv: (opts) => { seen.push(opts); return ['codex'] } })
+    const prepareFork = vi.fn(async () => { seen.push(d.calls.includes('terminate')); return 'prepared' })
+    const outcome = await restartAgent({ engine: 'codex', sessionId: 's1', continueInFork: true }, false, { ...d, prepareFork })
+    expect(outcome.ok).toBe(true)
+    expect(seen).toEqual([true, { bypassPermission: false, resumeSessionId: 'prepared' }])
+  })
+
+  it('continues the moved conversation in a plain fork when preparing it fails', async () => {
+    const seen: unknown[] = []
+    const logs: string[] = []
+    const d = deps({ buildArgv: (opts) => { seen.push(opts); return ['codex'] } })
+    const outcome = await restartAgent({ engine: 'codex', sessionId: 's1', continueInFork: true }, false,
+      { ...d, log: (message) => logs.push(message), prepareFork: async () => { throw new Error('grid is down') } })
+    expect(outcome.ok).toBe(true)
+    expect(seen.at(-1)).toEqual({ bypassPermission: false, forkSessionId: 's1' })
+    expect(logs.join()).toContain('grid is down')
+  })
+
   it('never prepares history while the old writer may still be alive', async () => {
     const prepareResume = vi.fn()
     const d = deps({ terminate: async () => 'failed', prepareResume })

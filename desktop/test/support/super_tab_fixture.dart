@@ -511,6 +511,12 @@ class ConversationServer {
   Map<String, dynamic>? leaderboard;
   final leaderboardReads = <String>[];
 
+  /// Answers by the read's path instead of [leaderboard], as a server does.
+  Map<String, dynamic> Function(String path)? leaderboardAnswer;
+
+  /// Holds the next reads' answers until it completes.
+  Future<void>? leaderboardGate;
+
   /// How many leaderboard reads fail as a server that is down does, before
   /// they answer again.
   var failLeaderboardReads = 0;
@@ -637,32 +643,6 @@ class ConversationServer {
   /// answers as a server that no longer shows the reader that message.
   final fileLinkReads = <String>[];
   FutureOr<Map<String, dynamic>> Function(String attachmentId)? fileLink;
-
-  /// The catch-up summary the backend answers per conversation (catchUp.ts);
-  /// one not set answers an empty summary.
-  final catchUps = <String, Map<String, dynamic>>{};
-
-  /// Every catch-up read, by path; [failCatchUp] makes them fail as offline.
-  final catchUpReads = <String>[];
-  bool failCatchUp = false;
-
-  /// While set, catch-up reads wait for it: a summary that arrives late.
-  Completer<void>? holdCatchUp;
-
-  Map<String, dynamic> _catchUp(String conversationId, int after) {
-    const empty = {'total': 0, 'items': <dynamic>[]};
-    return catchUps[conversationId] ??
-        {
-          'after': after,
-          'through': after,
-          'unread': 0,
-          'more': false,
-          'decisions': 0,
-          'landed': empty,
-          'blocked': empty,
-          'needsYou': empty,
-        };
-  }
 
   /// Every read-mark write fails, as offline.
   bool failReadMarks = false;
@@ -1508,15 +1488,6 @@ class ConversationServer {
       }
       return {'attachment': await answer(uri.pathSegments.last)};
     }
-    if (uri.pathSegments.last == 'catch-up') {
-      catchUpReads.add(path);
-      if (holdCatchUp case final hold?) await hold.future;
-      if (failCatchUp) throw StateError('Offline');
-      final id = uri.pathSegments[uri.pathSegments.length - 2];
-      final after = int.parse(uri.queryParameters['after']!);
-      return jsonDecode(jsonEncode(_catchUp(id, after)))
-          as Map<String, dynamic>;
-    }
     if (uri.pathSegments.last == 'threads' ||
         uri.pathSegments.last == 'inbox') {
       threadListReads.add(path);
@@ -1580,7 +1551,8 @@ class ConversationServer {
           statusCode: 503,
         );
       }
-      final board = leaderboard;
+      if (leaderboardGate case final gate?) await gate;
+      final board = leaderboardAnswer?.call(path) ?? leaderboard;
       if (board == null) {
         throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
       }

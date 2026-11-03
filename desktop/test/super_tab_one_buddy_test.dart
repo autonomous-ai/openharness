@@ -1,17 +1,20 @@
+import 'dart:async';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
-import 'package:harness/super_tabs/attention.dart';
+import 'package:harness/state/harness_attachments.dart';
+import 'package:harness/super_tabs/attachment_upload.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/section_heading.dart';
-import 'package:harness/super_tabs/threads_view.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/buddy_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
 /// One Buddy per person per Swarm (Dee, 10-31; spec
-/// 2026-10-31-one-buddy-per-swarm): `# buddy` is the first row under
+/// 2026-10-31-one-buddy-per-swarm): `Buddy` is the row over
 /// Projects, with no Buddies section; New session picks a project; older
 /// project Buddy chats read only.
 void main() {
@@ -26,10 +29,11 @@ void main() {
     WidgetTester tester,
     ConversationServer server, {
     Brightness brightness = Brightness.light,
+    SuperTabUpload? upload,
   }) async {
     await tester.binding.setSurfaceSize(const Size(1280, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final c = server.controller(account: 'peer');
+    final c = server.controller(account: 'peer', upload: upload);
     await c.refresh();
     await tester.pumpWidget(
       MaterialApp(
@@ -137,40 +141,45 @@ void main() {
   });
 
   group('the sidebar', () {
-    testWidgets('shows # buddy first under Projects and no Buddies section', (
-      tester,
-    ) async {
-      final server = oneBuddySwarm();
-      giveSwarmBuddy(server);
-      final c = await show(tester, server);
+    testWidgets(
+      'shows Buddy above Projects, with no # and no Buddies section',
+      (tester) async {
+        final server = oneBuddySwarm();
+        giveSwarmBuddy(server);
+        final c = await show(tester, server);
 
-      expect(buddyRow, findsOneWidget);
-      expect(
-        find.descendant(of: buddyRow, matching: find.text('buddy')),
-        findsOneWidget,
-      );
-      expect(titles(tester), isNot(contains('Buddies')));
-      expect(titles(tester), contains('Projects'));
-      // First under Projects: above every project's row.
-      final projectsHeading = tester.getBottomLeft(find.text('Projects')).dy;
-      final top = tester.getTopLeft(buddyRow).dy;
-      expect(top, greaterThan(projectsHeading));
-      expect(
-        top,
-        lessThan(
-          tester
-              .getTopLeft(find.byKey(const ValueKey('super-project-lead')))
-              .dy,
-        ),
-      );
+        expect(buddyRow, findsOneWidget);
+        expect(
+          find.descendant(of: buddyRow, matching: find.text('Buddy')),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: buddyRow, matching: find.text('#')),
+          findsNothing,
+        );
+        expect(titles(tester), isNot(contains('Buddies')));
+        expect(titles(tester), contains('Projects'));
+        // Over Projects' heading, so over every project's row (Quiet Swarm,
+        // screen 1).
+        final projectsHeading = tester.getTopLeft(find.text('Projects')).dy;
+        expect(tester.getBottomLeft(buddyRow).dy, lessThan(projectsHeading));
+        expect(
+          projectsHeading,
+          lessThan(
+            tester
+                .getTopLeft(find.byKey(const ValueKey('super-project-lead')))
+                .dy,
+          ),
+        );
 
-      await tester.tap(buddyRow);
-      await tester.pumpAndSettle();
-      expect(c.selectedId, 'swarm-buddy-peer');
-      // Its chat says it reads every project, and only its person reads it.
-      expect(find.textContaining('reads all your projects'), findsOneWidget);
-      await close(tester, c);
-    });
+        await tester.tap(buddyRow);
+        await tester.pumpAndSettle();
+        expect(c.selectedId, 'swarm-buddy-peer');
+        // Its chat says it reads every project, and only its person reads it.
+        expect(find.textContaining('reads all your projects'), findsOneWidget);
+        await close(tester, c);
+      },
+    );
 
     testWidgets(
       'opens the one Buddy chat on the server before any Buddy, from the row',
@@ -422,79 +431,77 @@ void main() {
         await close(tester, c);
       },
     );
-  });
 
-  testWidgets('the Threads list offers no reply in an earlier Buddy chat, '
-      'and still offers one in # buddy (merge with #2434)', (tester) async {
-    final server = oneBuddySwarm()..threads = true;
-    giveSwarmBuddy(server);
-    giveBuddy(server, id: 'old', name: 'Wren');
-    Map<String, dynamic> thread(String chat) {
-      server.append('Root in $chat', conversationId: chat);
-      final root = server.messages.last['id'] as String;
-      server.append('New reply in $chat', conversationId: chat);
-      server.messages.last['thread'] = root;
-      return {
-        'conversationId': chat,
-        'rootId': root,
-        'root': {
-          'id': root,
-          'sequence': 1,
-          'author': {'kind': 'agent', 'id': 'wren', 'name': 'Wren'},
-          'text': 'Root in $chat',
-          'createdAt': '2026-10-31T01:00:00Z',
-          'attachments': 0,
-        },
-        'lastReplyAt': '2026-10-31T02:00:00Z',
-        'lastReplySequence': 2,
-        'lastReplier': {'kind': 'agent', 'id': 'wren', 'name': 'Wren'},
-        'unreadReplies': 1,
-        'follow': null,
-      };
-    }
+    // The check of the chat came after the upload's wait and read the selected
+    // chat, so opening another during it sent the session with no project: it
+    // started as All projects and could not hand work to the project's PM.
+    testWidgets('keeps its project when another chat opens during the upload', (
+      tester,
+    ) async {
+      final server = oneBuddySwarm();
+      giveSwarmBuddy(server);
+      final hold = Completer<void>();
+      final c = await show(
+        tester,
+        server,
+        upload:
+            ({
+              required tabId,
+              required conversationId,
+              required name,
+              required mime,
+              required file,
+              required cancel,
+              required onProgress,
+            }) async {
+              await hold.future;
+              return server.upload(
+                tabId: tabId,
+                conversationId: conversationId,
+                name: name,
+                mime: mime,
+                file: file,
+                cancel: cancel,
+                onProgress: onProgress,
+              );
+            },
+      );
+      await tester.tap(buddyRow);
+      await tester.pumpAndSettle();
+      final buddyChat = c.selectedId;
+      await tester.tap(find.byKey(const ValueKey('super-chat-new-session')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('super-chat-session-project')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('super-chat-session-in-lead')).last,
+      );
+      await tester.pumpAndSettle();
+      c.attachments(buddyChat).add([
+        HarnessAttachment('notes.txt', Uint8List.fromList([104, 105])),
+      ]);
+      await tester.enterText(
+        find.byKey(const ValueKey('super-message-composer')),
+        'Hand this off',
+      );
+      await tester.pump();
+      await tester.tap(find.byTooltip('Send message'));
+      await tester.pump();
+      expect(c.uploading, isTrue);
 
-    final earlier = thread('buddy-peer-lead');
-    final current = thread('swarm-buddy-peer');
-    server.followedThreads = {
-      'unread': [earlier, current],
-      'read': [],
-      'more': false,
-    };
-    final c = server.controller(account: 'peer');
-    await c.refresh();
-    final attention = SuperTabAttention.of(c);
-    await attention.load();
-    expect(attention.shown, hasLength(2));
-    await tester.binding.setSurfaceSize(const Size(700, 900));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.dark),
-        home: Scaffold(
-          body: SuperTabThreadsView(attention: attention, onOpen: (_, _) {}),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-    expect(find.text('Root in buddy-peer-lead'), findsOneWidget);
-    expect(
-      find.byKey(
-        ValueKey(
-          'super-thread-open-reply-buddy-peer-lead/${earlier['rootId']}',
-        ),
-      ),
-      findsNothing,
-    );
-    expect(
-      find.byKey(
-        ValueKey(
-          'super-thread-open-reply-swarm-buddy-peer/${current['rootId']}',
-        ),
-      ),
-      findsOneWidget,
-    );
-    await tester.pumpWidget(const SizedBox());
-    await c.flush();
-    c.dispose();
+      await c.select('lead');
+      await tester.pump();
+      expect(c.selectedId, 'lead');
+      hold.complete();
+      await tester.pumpAndSettle();
+
+      final sent = commands(server, 'message.send').last;
+      expect(sent['conversationId'], buddyChat);
+      expect(sent['newSession'], isTrue);
+      expect(sent['sessionProjectId'], 'lead');
+      await close(tester, c);
+    });
   });
 }

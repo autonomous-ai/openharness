@@ -137,7 +137,7 @@ class _SwarmModelsWindowState extends State<_SwarmModelsWindow> {
     final c = widget.controller, app = widget.app;
     final size = MediaQuery.sizeOf(context);
     return ListenableBuilder(
-      listenable: c,
+      listenable: Listenable.merge([c, c.machinesChanged]),
       builder: (context, _) {
         final local = c.snapshot?.localModels;
         final on = local?.enabled == true;

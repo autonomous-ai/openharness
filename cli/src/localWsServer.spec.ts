@@ -1,3 +1,4 @@
+import type { Socket } from 'node:net'
 import http from 'node:http'
 import net, { type AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -220,6 +221,30 @@ describe('local CLI WebSocket', () => {
       expect(await connected).toMatchObject({ type: 'connected', payload: { machineId } })
       ws.close()
     }
+  })
+
+  // Audit H1: another account may have heard it while it held this port during a restart.
+  it('refuses a TCP upgrade with the right credential from another account', async () => {
+    const credential = 'c'.repeat(43)
+    const url = await start(new FakeBackend(), { localCredential: credential, peerAccount: async () => false })
+    const ws = new WebSocket(url, { headers: { 'x-harness-local': credential } })
+    expect(await new Promise<number>((resolve) => ws.once('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0)))).toBe(401)
+  })
+
+  it('survives a client that resets while the lookup of who it is runs', async () => {
+    const credential = 'c'.repeat(43)
+    let release: (mine: boolean) => void = () => {}
+    let held: Socket | undefined
+    const url = await start(new FakeBackend(), { localCredential: credential, peerAccount: (socket) => { held = socket; return new Promise((resolve) => { release = resolve }) } })
+    const ws = new WebSocket(url, { headers: { 'x-harness-local': credential } })
+    ws.on('error', () => {})
+    for (let n = 0; n < 200 && !held; n++) await new Promise(resolve => setTimeout(resolve, 5))
+    expect(held!.listenerCount('error')).toBeGreaterThan(0)
+    held!.emit('error', new Error('read ECONNRESET'))
+    held!.destroy()
+    release(true)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(ws.readyState).not.toBe(WebSocket.OPEN)
   })
 
   it('takes an upgrade over the daemon\'s socket with no credential, the TCP port still wanting one', async () => {

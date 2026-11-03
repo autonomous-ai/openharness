@@ -440,15 +440,10 @@ export interface RemoveScriptInput {
 /** The exit status of a removal that deleted nothing because macOS kept the account: the team daemon runs again. */
 export const REMOVE_REFUSED = 9
 
-/** What the removal says last on success when it read the team account's computer id: `harness team remove` then takes
- *  that computer off the owner's Harness account, which ends its team sign-in (./command.ts). */
-export const TEAM_COMPUTER_LINE = /^harness: team computer ([A-Za-z0-9_-]{1,128})$/m
-
 export function buildRemoveScript(input: RemoveScriptInput): string {
   const user = checkUser(input.user, 'team account')
   const home = checkPath(input.home, 'team home')
   const ownerHome = checkPath(input.ownerHome, 'owner home')
-  const paths = teamPaths(home)
   return [
     '#!/bin/sh',
     '# Harness Team account removal (cli/src/team/script.ts), run once as root: behind the macOS administrator prompt, or',
@@ -471,7 +466,6 @@ export function buildRemoveScript(input: RemoveScriptInput): string {
     `SHARED=${sh(TEAM_SHARED_DIR)}`,
     `SHARED_MARK=${sh(TEAM_SHARED_MARK)}`,
     `SENTINEL=${sh(`${ownerHome}/${SENTINEL_NAME}`)}`,
-    `COMPUTER_ID=${sh(paths.computerId)}`,
     // What Users & Groups leaves when the account is deleted there with "Don't change the home folder".
     `DELETED_HOME=${sh(`${home} (Deleted)`)}`,
     '[ "$(id -u)" = 0 ] || die "run as root"',
@@ -496,13 +490,6 @@ export function buildRemoveScript(input: RemoveScriptInput): string {
     '    *) die "$left belongs to $holder; nothing was removed" 4 ;;',
     '  esac',
     'done',
-    // Read as the team account, never followed as root, and only in the form a computer id has.
-    'computer=',
-    'if [ -n "$exists" ]; then',
-    '  computer=$(/usr/bin/sudo -n -u "$TEAM" /bin/cat "$COMPUTER_ID" 2>/dev/null | head -n 1) || computer=',
-    '  case $computer in \'\'|*[!A-Za-z0-9_-]*) computer= ;; esac',
-    '  [ "${#computer}" -le 128 ] || computer=',
-    'fi',
     '',
     '# 1. The team daemon stops, so it starts nothing while the account goes. Its agents keep running in tmux.',
     'launchctl bootout "system/$LABEL" >/dev/null 2>&1 || true',
@@ -529,19 +516,6 @@ export function buildRemoveScript(input: RemoveScriptInput): string {
     '',
     '# 3. What it left: its processes, its daemon\'s definition, its home, what setup made and the privacy sentinel.',
     'if [ -n "$team_uid" ] && [ "$team_uid" -gt 500 ]; then pkill -KILL -u "$team_uid" >/dev/null 2>&1 || true; sleep 1; fi',
-    // An account deleted elsewhere cannot be asked for its computer id: read it from the home it left, now that nothing
-    // runs under its id, only from a plain file that id owns, never through a link.
-    'if [ -z "$exists" ] && [ -n "$team_uid" ]; then',
-    '  for left in "$TEAM_HOME" "$DELETED_HOME"; do',
-    '    f="$left/.harness/computer-id"',
-    '    [ ! -L "$left" ] && [ ! -L "$left/.harness" ] && [ ! -L "$f" ] && [ -f "$f" ] || continue',
-    '    [ "$(stat -f %u "$f")" = "$team_uid" ] || continue',
-    '    computer=$(head -n 1 "$f") || computer=',
-    '    case $computer in \'\'|*[!A-Za-z0-9_-]*) computer= ;; esac',
-    '    [ "${#computer}" -le 128 ] || computer=',
-    '    [ -z "$computer" ] || break',
-    '  done',
-    'fi',
     'rm -f "$PLIST"',
     'rm -rf "$TEAM_HOME" "$STATUS_DIR"',
     '[ ! -e "$DELETED_HOME" ] || [ -L "$DELETED_HOME" ] || rm -rf "$DELETED_HOME"',
@@ -551,7 +525,6 @@ export function buildRemoveScript(input: RemoveScriptInput): string {
     '  rm -f "$SHARED_MARK"',
     '  rmdir "$SHARED" 2>/dev/null || true',
     'fi',
-    '[ -z "$computer" ] || say "team computer $computer"',
     'say "removed the Harness Team account, its home folder and its daemon"',
     '',
   ].join('\n')
@@ -863,7 +836,6 @@ export function buildLinuxRemoveScript(input: RemoveScriptInput): string {
     `STATE=${sh(state)}`,
     `STATE_MARK=${sh(`${state}/${mark}`)}`,
     `SENTINEL=${sh(`${ownerHome}/${SENTINEL_NAME}`)}`,
-    `COMPUTER_ID=${sh(paths.computerId)}`,
     '[ "$(id -u)" = 0 ] || die "run as root"',
     'exists=',
     'team_uid=',
@@ -882,13 +854,6 @@ export function buildLinuxRemoveScript(input: RemoveScriptInput): string {
     '    \'\') [ -n "$team_uid" ] || team_uid=$holder_uid ;;',
     '    *) die "$TEAM_HOME belongs to $holder; nothing was removed" 4 ;;',
     '  esac',
-    'fi',
-    // Read as the team account, never followed as root, and only in the form a computer id has.
-    'computer=',
-    'if [ -n "$exists" ]; then',
-    '  computer=$(runuser -u "$TEAM" -- cat "$COMPUTER_ID" 2>/dev/null | head -n 1) || computer=',
-    '  case $computer in \'\'|*[!A-Za-z0-9_-]*) computer= ;; esac',
-    '  [ "${#computer}" -le 128 ] || computer=',
     'fi',
     '',
     '# 1. The team daemon stops and stays off, so it starts nothing while the account goes.',
@@ -915,16 +880,6 @@ export function buildLinuxRemoveScript(input: RemoveScriptInput): string {
     'if getent group "$TEAM_GROUP" >/dev/null && [ -z "$(getent group "$TEAM_GROUP" | cut -d: -f4)" ]; then groupdel "$TEAM_GROUP" >/dev/null 2>&1 || true; fi',
     '',
     '# 4. What it left: its home when the account was deleted elsewhere, its unit, what setup made and the sentinel.',
-    // An account deleted elsewhere cannot be asked for its computer id: read it from the home it left, only from a plain file
-    // that id owns, never through a link.
-    'if [ -z "$exists" ] && [ -n "$team_uid" ]; then',
-    '  f="$TEAM_HOME/.harness/computer-id"',
-    '  if [ ! -L "$TEAM_HOME" ] && [ ! -L "$TEAM_HOME/.harness" ] && [ ! -L "$f" ] && [ -f "$f" ] && [ "$(stat -c %u "$f")" = "$team_uid" ]; then',
-    '    computer=$(head -n 1 "$f") || computer=',
-    '    case $computer in \'\'|*[!A-Za-z0-9_-]*) computer= ;; esac',
-    '    [ "${#computer}" -le 128 ] || computer=',
-    '  fi',
-    'fi',
     'rm -f "$UNIT"',
     'systemctl daemon-reload >/dev/null 2>&1 || true',
     'systemctl reset-failed "$UNIT_NAME" >/dev/null 2>&1 || true',
@@ -933,7 +888,6 @@ export function buildLinuxRemoveScript(input: RemoveScriptInput): string {
     // The shared folders, only when setup made them and nothing else has been put in them since.
     ...removeMarked('SHARED', 'SHARED_MARK'),
     ...removeMarked('STATE', 'STATE_MARK'),
-    '[ -z "$computer" ] || say "team computer $computer"',
     'say "removed the Harness Team account, its home folder and its daemon"',
     '',
   ].join('\n')

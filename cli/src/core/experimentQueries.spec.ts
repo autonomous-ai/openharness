@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
+import { processCoreApi } from '../services/processCoreApi.js'
 import { answerExperimentQuery, answerMachineAddonsQuery, createForExperiment, creationForExperiment } from './experimentQueries.js'
 
 const agent = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/w' }) as RegisteredSession
@@ -27,6 +28,22 @@ describe('the cloud agents\' doors', () => {
 })
 
 describe('the Super Tab service\'s door', () => {
+  it('answers a Buddy session\'s turn through the real process path, to the Super Tab service alone', async () => {
+    const activity = vi.fn(async () => ({ harness: 'working' as const }))
+    const core = fakeCore({ agents: { activity } } as never)
+    const both = new Set(['superTabs', 'cloud'])
+    const api = (service: string) => processCoreApi('/data', service, { ask: async (query: string, payload: Record<string, unknown>) => {
+      const answer = await answerExperimentQuery(core, both, service, query, payload)
+      if (!answer) throw new Error('UNKNOWN_QUERY')
+      return answer
+    } })
+    expect(await api('superTabs').agents.activity(['harness'])).toEqual({ harness: 'working' })
+    expect(activity).toHaveBeenCalledWith(['harness'])
+    activity.mockClear()
+    expect(await api('cloud').agents.activity(['harness'])).toEqual({})
+    expect(activity).not.toHaveBeenCalled()
+  })
+
   it('is the Super Tab service\'s alone, and hands its members\' waits to the core whole', async () => {
     const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
     const core = fakeCore({ superTabs })
@@ -278,6 +295,25 @@ it('exposes identity-bound close only to the Swarm service and validates its nat
     expect(await answerExperimentQuery(core, allowed, 'superTabs', 'close_swarm', invalid)).toEqual({ error: 'INVALID_REQUEST' })
   }
   expect(await answerExperimentQuery(fakeCore(), allowed, 'superTabs', 'close_swarm', payload)).toEqual({ error: 'UNSUPPORTED' })
+})
+
+it('asks the core about the agents it is given, keeping only the first 64 ids that are strings, to the Swarm service alone', async () => {
+  const activity = vi.fn(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, 'working' as const])))
+  const core = fakeCore({ agents: { activity } } as never)
+  const allowed = new Set(['superTabs', 'orchestrator'])
+  expect(await answerExperimentQuery(core, allowed, 'superTabs', 'activity', { agentIds: ['a', 4, null, 'b'] })).toEqual({ activity: { a: 'working', b: 'working' } })
+  expect(activity).toHaveBeenLastCalledWith(['a', 'b'])
+  const many = Array.from({ length: 70 }, (_, i) => `agent-${i}`)
+  await answerExperimentQuery(core, allowed, 'superTabs', 'activity', { agentIds: many })
+  expect(activity).toHaveBeenLastCalledWith(many.slice(0, 64))
+  // Without a list of ids, the core is asked about none rather than failing.
+  for (const payload of [{}, { agentIds: 'a' }, { agentIds: { 0: 'a' } }]) {
+    expect(await answerExperimentQuery(core, allowed, 'superTabs', 'activity', payload)).toEqual({ activity: {} })
+    expect(activity).toHaveBeenLastCalledWith([])
+  }
+  activity.mockClear()
+  expect(await answerExperimentQuery(core, allowed, 'orchestrator', 'activity', { agentIds: ['a'] })).toEqual({ error: 'NOT_SUPER_TABS' })
+  expect(activity).not.toHaveBeenCalled()
 })
 
 it('lets only the Swarm service reopen a Lead or close a member, by a valid agent id', async () => {

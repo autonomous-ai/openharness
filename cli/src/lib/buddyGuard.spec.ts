@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { inspect } from 'node:util'
 import { basename, dirname, join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { BUDDY_COPIES_FILE, BUDDY_HOMES } from '../superTabs/buddyHome.js'
 import { allowBuddyReads, artifactLinks, buddyGuardCommand, buddyGuardSource, buddyReadsOf, forgetBuddyReads, grantBuddyWide, recordBuddyApprovals,
   SentListsError } from './buddyGuard.js'
 
@@ -43,6 +44,27 @@ function decide(tool: string, input: Record<string, unknown>, guard = script): s
   return output.permissionDecision
 }
 const bash = (command: string) => decide('Bash', { command, description: 'x' })
+
+describe('a one Buddy\'s proposal carries a summary (security review of #2530)', () => {
+  const proposal = (scope: string) => JSON.stringify({ conversationId: 'c', ownerMessageId: 'm', projectId: 'p', goal: 'Cut API CPU', scope, priority: 'normal' })
+  const pasted = [['a code block', 'See:\n```\nconst secret = 1\n```'], ['more than 10 lines', Array.from({ length: 11 }, (_, i) => `line ${i}`).join('\n')]]
+  const home = join(parent, BUDDY_HOMES, 'one')
+  mkdirSync(home, { recursive: true })
+  const guard = join(home, 'buddy-guard.mjs')
+  writeFileSync(guard, buddyGuardSource(home, reads))
+  const propose = (scope: string, at: string) => {
+    const run = hook(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: `harness super-tab propose op-1 '${proposal(scope)}'`, description: 'x' }, cwd: home }), at)
+    return JSON.parse(run.stdout).hookSpecificOutput as { permissionDecision: string; permissionDecisionReason: string }
+  }
+  it.each(pasted)('refuses %s from a one Buddy\'s folder, and lets a summary through', (_, scope) => {
+    expect(propose(scope!, guard)).toMatchObject({ permissionDecision: 'deny', permissionDecisionReason: expect.stringContaining('summar') })
+    expect(propose('Two pods run hot; the change feed is the cost.', guard).permissionDecision).toBe('allow')
+  })
+  // A session of one project sends that project's own material to that project's PM, as it always did.
+  it.each(pasted)('leaves %s alone in a project\'s own folder', (_, scope) => {
+    expect(bash(`harness super-tab propose op-1 '${proposal(scope!)}'`)).toBe('allow')
+  })
+})
 
 describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everything else without one)', () => {
   it.each([
@@ -380,6 +402,10 @@ describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everythi
     const working = spawnSync('/bin/sh', ['-c', buddyGuardCommand(process.execPath, script)],
       { input: JSON.stringify({ tool_name: 'Read', tool_input: { file_path: join(root, 'a.txt') } }), encoding: 'utf8' })
     expect([working.status, JSON.parse(working.stdout).hookSpecificOutput.permissionDecision]).toEqual([0, 'allow'])
+    // What its prompt tells a person's one Buddy to read about its project copies (superTabs/buddyHome.ts): a name the guard allows.
+    const copies = spawnSync('/bin/sh', ['-c', buddyGuardCommand(process.execPath, script)],
+      { input: JSON.stringify({ tool_name: 'Read', tool_input: { file_path: join(root, BUDDY_COPIES_FILE) } }), encoding: 'utf8' })
+    expect(JSON.parse(copies.stdout).hookSpecificOutput.permissionDecision).toBe('allow')
   })
 })
 

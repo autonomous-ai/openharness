@@ -64,13 +64,12 @@ it, and says so.
   - The message is a thread reply (`replyTo` set, landing in a thread).
   - The thread has no live or starting session.
   - The main Buddy exists, and its machine's host says it can run sessions (see Compatibility).
-  - The chat has fewer than 3 live or starting sessions (`BUDDY_SESSIONS_FULL`: "3 sessions are running. End one to
-    start another.").
+  - Its machine has a free place (`MACHINE_FULL`, in plain words). Sessions have no count of their own (Scholes, 11-02).
 - **What it writes,** in the same command:
   - The message, tagged `buddySession: true`.
   - An `AgentStart` with `buddyOf`, `buddySession: { thread: root, from: <the message's sequence> }`, and the main
     Buddy's machine, engine and model.
-  - An entry `{ thread, startId, at }` in the chat's `buddySessions` (at most 3).
+  - An entry `{ thread, startId, at }` in the chat's `buddySessions`.
 - **First delivery.** On `agent.started` for a thread session, the server sets `agentId` on the chat's entry and writes
   a delivery to the new agent for each of the person's `buddySession` messages in that thread, in order, that is still
   waiting. So the first message reaches it through the same `accept()` as any other: the person check, the `run:`
@@ -123,7 +122,8 @@ A session ends in these cases:
 2. **30 minutes idle.** The host on the person's machine judges this from what it already reports per session:
    - no screen or transcript change (`harnessProgress`) for 30 minutes;
    - no open delivery to the session;
-   - no person message in its thread for 30 minutes.
+   - no person message in its thread for 30 minutes;
+   - no open turn: a long job's screen can stay the same, and a busy session never ends (Scholes, 11-02).
 
    A session still working on a long question changes its screen, so it is not idle. The host sends
    `buddy.sessionEnd { agentId, reason: 'idle' }` as the machine's owner, who is the person.
@@ -208,9 +208,7 @@ it is checked, **Also send to the chat** is hidden: a session's thread stays in 
 
 **2. At the limit.** The checkbox is disabled and says why.
 
-```
-││☐ New session · 3 running, end one first  📎 ↑││
-```
+A machine with no free place refuses the send, in plain words, and the reply stays in the box.
 
 **3. A thread with a session.** One line under the header shows which session answers and whether it's working, with
 **End session** as a quiet text button. The states are: `Starting…`, `⠋ Working`, `✓ Idle` and `◌ Your Mac is
@@ -257,7 +255,8 @@ there would be refused.
 ```
 
 Ruling: no session list in the sidebar or the header. Why: "less is better". The threads are where the sessions are,
-and the thread line shows which ones are working. Cost if wrong: with 3 sessions, the person scrolls to find them.
+and the thread line shows which ones are working, with its own **End session** (Scholes, 11-02). Cost if wrong: with many
+sessions, the person scrolls to find them.
 
 ## Design (docs/feature-design-rules.md)
 
@@ -267,7 +266,7 @@ Reviewed revision: ______ Reviewer (another engine): ______
 
    | Record | Created | Updated | Finished / removed |
    |---|---|---|---|
-   | Chat `buddySessions` entry | New session | `agentId` at start | End, idle, failed start, unexpected stop, main Buddy removed, access lost. At most 3, so it can't grow. |
+   | Chat `buddySessions` entry | New session | `agentId` at start | End, idle, failed start, unexpected stop, main Buddy removed, access lost. Bounded by its machine's agent limit and the idle end. |
    | Session `Agent` | `agent.started` | liveness, as any agent | `removeAgent`, then `closingSessions` until the host confirms (existing) |
    | Session `AgentStart` | New session | dispatch and start (existing) | Existing start lifecycle (`finishedAt`, purge) |
    | Message `buddySession` tag | each message in a session thread | never | with its message (existing message lifecycle) |
@@ -287,7 +286,7 @@ Reviewed revision: ______ Reviewer (another engine): ______
      delivery, nor the reverse. Test: a delivery held for the main session while a session's delivery is accepted.
    - Thin slice: two concurrent New session sends against a live store; exactly one start.
 3. **Read cost.**
-   - Routing reads only the chat's `buddySessions` (at most 3 entries), which is already loaded.
+   - Routing reads only the chat's `buddySessions` (at most its machine's agent limit), which is already loaded.
    - A session's reads are thread reads on the existing `[tabId, conversationId, thread, sequence]` index.
    - The excerpt is one indexed read of at most 10 main-stream messages before `from`.
    - The main session's reads add `buddySession != true` to the query it already runs.
@@ -296,7 +295,7 @@ Reviewed revision: ______ Reviewer (another engine): ______
    - Removals: an ended session leaves `agentIds` and `buddySessions` through the existing change feed, so Desktop drops
      its marks.
 4. **Scale.**
-   - At most 3 sessions per person per project.
+   - At most its machine's agent limit, which its owner sets; idle sessions end by themselves.
    - At 10x people, there are 10x Claude processes, each on its own person's Mac. The server holds at most 3 small
      entries per chat.
    - The first warning is sessions refused because the machine is full, and Macs low on memory: each session is one
@@ -304,7 +303,7 @@ Reviewed revision: ______ Reviewer (another engine): ______
    - **Where it shows** (security review 1: the usage counters this line first named do not exist, and the fixed usage
      vocabulary is shared with the CLI, so this uses the server log instead). The backend logs three lines with ids only:
      - `Buddy session started` (Swarm and start id);
-     - `Buddy session refused` (Swarm and refusal code: `BUDDY_SESSIONS_FULL`, `BUDDY_SESSION_UNSUPPORTED`,
+     - `Buddy session refused` (Swarm and refusal code: `MACHINE_FULL`, `BUDDY_SESSION_UNSUPPORTED`,
        `BUDDY_SESSION_ENGINE`, `BUDDY_SESSION_NO_BUDDY` and the machine's capacity refusals);
      - `Buddy session ended`, with the reason (`ended`, `idle`, `stopped`, `failed`, `removed`, `maintenance`), logged
        once committed.
@@ -432,7 +431,7 @@ Records and views:
   the sequence of the message that started it. The main Buddy has none.
 - `AgentStartRequest.buddySession?`: the same, written only by `message.send` with `newSession`. Never any message text.
 - `Conversation.buddySessions?: Array<{ thread: string; startId: string; agentId?: string; at: number }>`: a Buddy chat's
-  live or starting sessions, at most 3. `agentId` is set once started.
+  live or starting sessions. `agentId` is set once started.
 - `Message.buddySession?: true`: a reply in a session thread, from the person or the session.
 - Message `source.kind === 'buddy-session-ended'` with `source.reason` (`ended` | `idle` | `stopped` | `failed`) and
   `source.thread`: the quiet line in the thread when a session ends.
@@ -441,7 +440,7 @@ Records and views:
 
 Commands:
 - `message.send` takes `newSession?: true`. Refusals:
-  - `BUDDY_SESSIONS_FULL`: 3 running.
+  - `MACHINE_FULL`: its machine has no free place.
   - `BUDDY_SESSION_EXISTS`: the thread has one.
   - `BUDDY_SESSION_UNSUPPORTED`: old host.
   - `BUDDY_SESSION_CHAT`: not the person's own Buddy chat, or not a thread reply.

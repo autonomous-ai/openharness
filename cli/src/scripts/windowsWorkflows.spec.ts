@@ -37,7 +37,7 @@ describe('the Windows release workflows', () => {
     expect(release).toContain('OBJECT_PREFIX="$STAGING_PREFIX" METADATA_PATH="$STAGING_PREFIX/pty/metadata.json" bash cli/scripts/publish-pty-payload.sh')
     expect(release).toMatch(/staging=harness\/staging; else staging=harness\/staging-dry-run; fi/)
     expect(release).not.toMatch(/bash cli\/scripts\/promote-pty-payload\.sh/)
-    expect(release).toMatch(/windows-staging:\n\s+needs: \[version, preflight, publish, pty-build\]/)
+    expect(release).toMatch(/windows-staging:\n\s+needs: \[version, preflight, publish, pty-build, pty-sign\]/)
     expect(release).toMatch(/github-release:\n\s+needs: \[version, publish\]/)
     expect(release).toMatch(/publish:\n\s+needs: \[version, preflight, process-images\]/)
     expect(release).not.toMatch(/METADATA_PATH=harness\/pty\/metadata\.json/)
@@ -104,7 +104,7 @@ describe('the Windows release workflows', () => {
     expect(desktop).toContain("'desktop-windows-installer': 'harness-install.exe'")
   })
 
-  // Installer spec §2.2: every desktop release ships Windows, unsigned, from the same manifest write.
+  // Installer spec §2.2: every desktop release ships Windows from the same manifest write.
   it('builds Windows in the desktop release and publishes it with the other platforms', () => {
     const release = read('release-desktop.yml')
     const job = (name: string) => release.match(new RegExp(`\n  ${name}:\n([\\s\\S]*?)(?=\n  [\\w-]+:\n|$)`))?.[1] ?? ''
@@ -123,5 +123,37 @@ describe('the Windows release workflows', () => {
     expect(release).toMatch(/candidate:\n\s+needs: \[version, build-macos, build-linux, upload-windows\]/)
     expect(release).toMatch(/cleanup:\n\s+needs: \[version, preflight, build-macos, build-linux, build-windows, upload-windows, candidate, publish\]/)
     expect(release).toContain('[harness-install.exe](${base}/harness-install.exe)')
+  })
+
+  // docs/windows-code-signing.md: one x64 signing job per release (Artifact Signing does not run on Windows Arm), off
+  // until WINDOWS_SIGNING is `required`, and then nothing Windows publishes without it.
+  it('signs the Windows files of both releases before they publish, once signing is required', () => {
+    const job = (workflow: string, name: string) => workflow.match(new RegExp(`\n  ${name}:\n([\\s\\S]*?)(?=\n  [\\w-]+:\n|$)`))?.[1] ?? ''
+    const gate = (signing: string) =>
+      `(needs.${signing}.result == 'success' || (needs.${signing}.result == 'skipped' && vars.WINDOWS_SIGNING != 'required'))`
+    for (const [file, signing, build, next] of [
+      ['release-desktop.yml', 'sign-windows', 'build-windows', 'upload-windows'],
+      ['release.yml', 'pty-sign', 'pty-build', 'windows-staging'],
+    ]) {
+      const workflow = read(file)
+      const sign = job(workflow, signing)
+      expect(sign).toContain(`needs: [version, ${build}]`)
+      expect(sign).toContain("if: vars.WINDOWS_SIGNING == 'required'")
+      expect(sign).toContain('runs-on: windows-latest')
+      expect(sign).toContain('environment: release')
+      expect(sign).toContain('uses: ./.github/actions/windows-signing')
+      expect(sign.match(/overwrite: true/g)).toHaveLength(2)
+      expect(job(workflow, next)).toContain(gate(signing))
+    }
+    // A skipped sign-windows is an ancestor of `candidate`: an implicit success() there would skip every candidate
+    // prepared while signing is off.
+    expect(job(read('release-desktop.yml'), 'candidate')).toContain(
+      "if: ${{ !cancelled() && inputs.prepare_only && needs.version.result == 'success' && needs.build-macos.result == 'success' && needs.build-linux.result == 'success' && needs.upload-windows.result == 'success' }}",
+    )
+    const action = readFileSync(join(workflows, '..', 'actions', 'windows-signing', 'action.yml'), 'utf8')
+    expect(action).toContain('uses: azure/login@v3')
+    expect(action).toContain('uses: azure/artifact-signing-action@v2')
+    expect(action).toContain('timestamp-rfc3161: http://timestamp.acs.microsoft.com')
+    expect(action).not.toMatch(/client-secret|azure-password/)
   })
 })

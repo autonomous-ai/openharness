@@ -5,10 +5,8 @@
  */
 import { randomBytes } from 'node:crypto'
 import { env } from '../config/env.js'
-import { localCredentialHeaders } from '../lib/localCredential.js'
-import { existsSync } from 'node:fs'
 import { WebSocket } from 'ws'
-import { unixSocketPath } from '../lib/localSocket.js'
+import { localWsTarget } from '../lib/localTransport.js'
 import { daemonPipe, type LocalDaemonOptions } from '../lib/windows/daemonPipe.js'
 import { pipeWebSocket } from '../lib/windows/pipeClient.js'
 import { NOT_RUNNING, pidIn, unreachableText } from '../lib/unreachable.js'
@@ -23,19 +21,17 @@ export interface RpcTarget { port: number; machineId: string; dataDir?: string; 
 export type Rpc = (target: RpcTarget, payload: Record<string, unknown>, timeoutMs?: number) => Promise<Record<string, unknown>>
 
 /**
- * The Unix socket on macOS/Linux, with the loopback port and the local credential as its legacy fallback. On Windows
- * only the daemon's proven pipe (agentClient/daemon.ts `connectSocket` does the same): the configured port may be
- * another OS user's daemon on a shared PC, and this user's credential must never reach it.
+ * The Unix socket on macOS/Linux; on Windows the daemon's proven pipe (agentClient/daemon.ts `connectSocket` does the
+ * same). Never the port when those are gone: it may be another OS user's, and this user's credential and messages must
+ * never reach it (lib/localTransport.ts).
  */
 export function createMessagesRpc(options: LocalDaemonOptions = {}): Rpc {
   const windows = (options.platform ?? process.platform) === 'win32'
   return (target, payload, timeoutMs = 20_000) => new Promise((resolve, reject) => {
     let ws: WebSocket | null = null
     if (!windows) {
-      const socketPath = target.dataDir ? unixSocketPath(target.dataDir, target.port) : null
-      ws = socketPath && existsSync(socketPath)
-        ? new WebSocket(`ws+unix://${socketPath}:/api/local-ws`)
-        : new WebSocket(`ws://127.0.0.1:${target.port}/api/local-ws`, { headers: localCredentialHeaders(target.dataDir ?? env.ADAPTER_DATA_DIR) })
+      const line = localWsTarget(target.dataDir ?? env.ADAPTER_DATA_DIR, target.port)
+      ws = new WebSocket(line.url, { headers: line.headers })
     }
     const requestId = randomBytes(16).toString('hex')
     let finished = false, selected = false

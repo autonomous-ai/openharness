@@ -39,10 +39,17 @@ const envSchema = z.object({
   // What each process keeps of the Swarms it read, by their stamps in Redis (superTabs/cache.ts). 'off' is the kill switch:
   // every read goes to Mongo again, while writes still bump the stamps, so processes that keep theirs on stay right.
   SWARM_READ_CACHE: z.enum(['on', 'off']).default('on'),
+  // The read cache patches what it holds from the parts that changed (superTabs/cache.ts, spec 2026-11-02); off: a bump drops it.
+  SWARM_CACHE_DELTA: z.enum(['on', 'off']).default('on'),
+  // The share of patches checked against a full load in the background: the drift alarm in the `swarm cache` log.
+  SWARM_CACHE_VERIFY_RATE: z.coerce.number().min(0).max(1).default(0.01),
   // A frame an adapter sends for one viewer goes to the process holding that viewer (lib/terminalRoute.ts), found by its
   // record in Redis, instead of to every process with a viewer of the machine. 'off' is the kill switch: such frames go
   // through the machine's channels again; a viewer on the adapter's own process is still served directly.
   TERMINAL_POD_ROUTES: z.enum(['on', 'off']).default('on'),
+  // `__clients` tells each daemon it may hold a machine's live events while no app views it (lib/hub.ts). 'off' is the
+  // kill switch: the frame stops saying so, and daemons send every event again with no release of their own.
+  RELAY_UI_GATE: z.enum(['on', 'off']).default('on'),
   // Its size per process, counted as the JSON size of what it holds.
   SWARM_CACHE_MB: z.string().default('64').transform(Number),
   // The worker's hourly move of finished deliveries older than 14 days into their messages' receipts
