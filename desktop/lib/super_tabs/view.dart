@@ -3626,6 +3626,14 @@ class _SuperTabViewState extends State<SuperTabView>
     ]);
     // No conversation read yet: its error is the page itself, not a line over "Loading".
     final unread = _readsFirst && c.snapshot == null;
+    // The reader's own Buddy chat shows what the PM asked them.
+    final decisions = group != null && _isBuddyChat(group)
+        ? ({required bool edge}) => SuperTabDecisionsPanel(
+            decisions: SuperTabDecisions.of(c),
+            projectId: group.projectId,
+            edge: edge,
+          )
+        : null;
     return Column(
       children: [
         if (c.error != null && !unread)
@@ -3642,9 +3650,7 @@ class _SuperTabViewState extends State<SuperTabView>
               ],
             ),
           ),
-        if (group != null &&
-            _isBuddyChat(group) &&
-            !c.isEarlierBuddyChat(group))
+        if (group != null && decisions != null && !c.isEarlierBuddyChat(group))
           // The list stops at an edge under the Buddy's line, as it does under
           // the header: without one, a message scrolled up to the line read as
           // cut off under it (Huy, 11-03).
@@ -3658,19 +3664,14 @@ class _SuperTabViewState extends State<SuperTabView>
               mainAxisSize: MainAxisSize.min,
               children: [
                 SuperTabBuddyBar(controller: c, chat: group, app: widget.app),
-                // The reader's own Buddy chat shows what the PM asked them.
-                SuperTabDecisionsPanel(
-                  decisions: SuperTabDecisions.of(c),
-                  projectId: group.projectId,
-                ),
+                decisions(edge: false),
               ],
             ),
           )
-        else if (group != null && _isBuddyChat(group))
-          SuperTabDecisionsPanel(
-            decisions: SuperTabDecisions.of(c),
-            projectId: group.projectId,
-          ),
+        // An earlier Buddy chat has no Buddy line: its decisions, when it has
+        // any, end at the same edge.
+        else if (decisions != null)
+          decisions(edge: true),
         Expanded(
           child: c.loading
               ? const Center(child: CircularProgressIndicator())
