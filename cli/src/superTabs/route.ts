@@ -434,12 +434,12 @@ function sizeUp(p: Probe, a: Assessment, now: number, open: Commitment[]): Sized
     return [{ name, usable: w.leftPercent - committed(name), resetsIn,
       needed: resetsIn !== null && resetsIn < runMs ? spend[name] * resetsIn / runMs : spend[name] }]
   })
-  // Every account has a weekly window; a Codex account may have no 5-hour one at all, reporting its weekly alone (2026-10-24),
-  // and that reading is complete.
-  const complete = windows.length === WINDOWS.length || (p.engine === 'codex' && windows.length === 1 && windows[0]!.name === 'weekly')
-  const status = windows.some(w => w.usable < w.needed) ? 'short' : complete ? 'fits' : 'unknown'
-  const tight = windows.length ? windows.reduce((x, y) => y.usable / y.needed < x.usable / x.needed ? y : x) : null
+  // A weekly reading is complete on either engine: the 5-hour window is never what runs out (Ken, 2026-11-03), and a Team
+  // account's Claude, whose host relays no 5-hour window, read as unknown and ranked behind every Codex that fit. A 5-hour
+  // window that is read still counts when it is short.
   const five = windows.find(w => w.name === '5-hour'), week = windows.find(w => w.name === 'weekly')
+  const status = windows.some(w => w.usable < w.needed) ? 'short' : week ? 'fits' : 'unknown'
+  const tight = windows.length ? windows.reduce((x, y) => y.usable / y.needed < x.usable / x.needed ? y : x) : null
   // A 5-hour window that resets before the task ends, or soon after, loses what is left of it: spending it costs nothing.
   const expiring = five && five.resetsIn !== null && five.resetsIn <= runMs + 3_600_000 ? Math.min(1, Math.max(0, five.usable) / five.needed) : 0
   let effectiveCost = p.cost * (1 - expiring)
@@ -470,14 +470,29 @@ function compare(x: Probe & Sized & { rank: Ranked }, y: Probe & Sized & { rank:
     || titleOf(x).localeCompare(titleOf(y))
 }
 
-/** The rows shown: each machine's best row first (the best-ranked machines, if there are more than the limit), then the rest by rank,
- * all in rank order, so the agent choosing can always choose another machine. */
-function withEveryMachine<T extends { machineId: string }>(ranked: T[]): T[] {
-  const firsts = new Set<T>(), seen = new Set<string>()
-  for (const p of ranked) if (!seen.has(p.machineId)) { seen.add(p.machineId); firsts.add(p) }
-  const keep = new Set([...firsts].slice(0, MAX_SHOWN))
+/** An engine on a machine, or the machine's local models, as a new agent or an idle member: what the project's order picks
+ *  between (an account, then whether to reuse an agent on it). */
+export const slotOf = (p: Pick<Probe, 'machineId' | 'engine' | 'gridModel' | 'kind'>) => `${p.machineId}\0${p.gridModel ? 'grid' : p.engine}\0${p.kind}`
+
+/** The rows shown: the best new agent and the best member of every engine on every machine, however many, then the rest by rank up to the limit, all in rank
+ *  order. The agent choosing picks between accounts by the project's order; one row a machine, cut at 12, hid a Claude account with
+ *  99% left behind its machine's used-up Codex (Ken, 2026-11-03). */
+function withEveryAccount<T extends Pick<Probe, 'machineId' | 'engine' | 'gridModel' | 'kind'>>(ranked: T[]): T[] {
+  const keep = new Set<T>(), seen = new Set<string>()
+  for (const p of ranked) if (!seen.has(slotOf(p))) { seen.add(slotOf(p)); keep.add(p) }
   for (const p of ranked) if (keep.size < MAX_SHOWN) keep.add(p)
   return ranked.filter(p => keep.has(p))
+}
+
+/** What the agent choosing reads of a row's quota: its fit and its weekly window, the one the project's order compares. */
+export function quotaBrief(p: Pick<Probe, 'quota' | 'gridModel'> & { fit: Pick<Fit, 'status'> }, now: number): string {
+  if (p.gridModel) return 'local model, no subscription'
+  if (p.quota.metered) return 'metered'
+  const week = p.quota.windows?.find(w => w.name === 'weekly')
+  const left = week ? week.leftPercent : p.quota.windows?.length ? null : p.quota.leftPercent
+  const resetsAt = week ? week.resetsAt : p.quota.resetsAt
+  if (!p.quota.known || left === null) return `${p.fit.status}: weekly unknown`
+  return `${p.fit.status}: weekly ${Math.round(left)}% left${resetsAt === null ? '' : `, resets in ${resetsIn(resetsAt, now)}`}`
 }
 
 /** One unrated new agent per machine of the named model's engine, on that machine's first row of the engine, which carries
@@ -546,7 +561,7 @@ export function choose(given: Probe[], catalog: Catalog, a: Assessment, now: num
     return [{ ...p, notes: [...p.notes, ...reasons], rank }]
   }).sort(compare)
   if (!ranked.length) return { error: 'NO_CANDIDATE', excluded, ...warned() }
-  const shown = withEveryMachine(ranked).map(({ tight, text, rank: _rank, ...p }, i) => ({ ...p, id: `c${i}`, title: titleOf(p), label: labelOf({ ...p, tight, text }, now) }))
+  const shown = withEveryAccount(ranked).map(({ tight, text, rank: _rank, ...p }, i) => ({ ...p, id: `c${i}`, title: titleOf(p), label: labelOf({ ...p, tight, text }, now) }))
   const first = ranked[0]!
   return { shown, excluded, floor: 1, belowFloor: false, ...(first.fit.status === 'short' ? { short: shortOf(first, ranked) } : {}),
     ...(adjusted ? { adjusted: true as const } : {}), ...warned() }

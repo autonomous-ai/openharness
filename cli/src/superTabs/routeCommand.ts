@@ -7,7 +7,7 @@ import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { RELAYED_QUOTA, requiredToolReason, startRequirements, USED_UP_WINDOW } from './capacity.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
-import { accountOf, API_BUILDERS, catalogFrom, catalogRow, choose, decide, gridStrength, parseAssessment, quotaOf2, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type HeldModel, type MemberFrame, type Probe, type TaskFolder } from './route.js'
+import { accountOf, API_BUILDERS, catalogFrom, catalogRow, choose, decide, gridStrength, parseAssessment, quotaBrief, quotaOf2, slotOf, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type HeldModel, type MemberFrame, type Probe, type TaskFolder } from './route.js'
 import { makePlugins, ROUTE_PLUGIN_MAKERS, type PluginMaker } from './routePlugins.js'
 import { CI_HOLD_OPENING, CI_RETRY_MINUTES, MACHINE_FIT_MAKER } from './machineFit.js'
 import { stat } from 'node:fs/promises'
@@ -348,7 +348,8 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     .map(d => ({ account: d.account, spend: object(d.spend), size: d.size, createdAt: Date.parse(String(d.createdAt)) }) as Commitment)
   // A model a host now offline served is left out with that reason, and a person naming it gets no stand-in (route.ts choose).
   const offline = offlineModels(state)
-  const choice = choose(probes, catalog, assessment, Date.now(), working, heldLocalModels(state), offline, made.plugins)
+  const now = Date.now()
+  const choice = choose(probes, catalog, assessment, now, working, heldLocalModels(state), offline, made.plugins)
   const skipped = [...made.warnings, ...(choice.warnings ?? [])]
   choice.excluded.push(...offline, ...(catalog.models.length ? [] : [{ title: 'New agents', reason: CATALOG_UNREADABLE }]))
   // The task stays in the agent's queue rather than going where it cannot be done.
@@ -373,7 +374,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // What the agent choosing reads of a candidate: where it runs, and what the route knows of it beside the ranking.
   const publicOf = (s: typeof verdict.pick) => ({ id: s.id, kind: s.kind, ...(s.agentId ? { agentId: s.agentId } : {}), machineId: s.machineId,
     engine: s.engine, model: s.model, effort: s.effort, title: s.title, ...(s.gridModel ? { gridModel: s.gridModel, gridName: s.gridName } : {}),
-    ...(s.unrated ? { unrated: true } : {}), ...(s.notes.length ? { notes: s.notes } : {}) })
+    ...(s.unrated ? { unrated: true } : {}), quota: quotaBrief(s, now), ...(s.notes.length ? { notes: s.notes } : {}) })
   return {
     ok: true, ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : { unrecorded: true }),
     ...(instructions ? { instructions } : { instructionsUnreadable: true }),
@@ -414,9 +415,12 @@ export function leftOut(excluded: Excluded[], shown: Array<{ machineName: string
 const MAX_LEFT_OUT = 20, MAX_REASONS = 4
 
 /** The next two rows, and the best row of every other machine, so the agent choosing can take another machine. */
-function alternativesTo<T extends { id: string; machineId: string }>(pick: T, shown: T[]): T[] {
-  const seen = new Set([pick.machineId])
-  return shown.filter(s => s.id !== pick.id).filter((s, i) => { const best = !seen.has(s.machineId); seen.add(s.machineId); return i < 2 || best })
+/** The best new agent and the best member of every engine on every machine, in rank order, the pick's own left out: the project's
+ *  order picks between accounts, then whether to reuse an agent there, so each is in front of the agent choosing once (Ken,
+ *  2026-11-03). */
+function alternativesTo<T extends { id: string } & Parameters<typeof slotOf>[0]>(pick: T, shown: T[]): T[] {
+  const seen = new Set([slotOf(pick)])
+  return shown.filter(s => { const best = !seen.has(slotOf(s)); seen.add(slotOf(s)); return best })
 }
 
 /** A reading this old says nothing is served (backend `MACHINE_FRESH_MS`). */
