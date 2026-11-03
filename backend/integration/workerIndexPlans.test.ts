@@ -168,3 +168,24 @@ describe('the operation receipts\' expiry (superTabs/operations.ts)', () => {
     expect(answer.executionStats.totalDocsExamined).toBe(3)
   })
 })
+
+describe('the usage-receipt sweep\'s stuck check (lib/productUsageReceiptSweep.ts lastOldReceipt)', () => {
+  // backend/AGENTS.md rule 3: its hourly read while the rule is refused takes one key of the expiry index, never a scan of millions.
+  it('reads the newest old receipt by one key of the product_usage_expiry index', async () => {
+    const { lastOldReceipt } = await import('../src/lib/productUsageReceiptSweep.js')
+    const now = new Date('2026-11-02T03:00:00Z')
+    // New receipts (4-day life) and old ones (36-day life): a read the index does not bound examines them all.
+    await db.productUsageReceipt.createMany({ data: [
+      ...Array.from({ length: 30 }, (_, i) => ({ id: `new-${i}`, expiresAt: new Date(now.getTime() + (i % 4) * DAY), life: 4 })),
+      ...Array.from({ length: 30 }, (_, i) => ({ id: `old-${i}`, expiresAt: new Date(now.getTime() + (6 + i) * DAY) })),
+    ] })
+    let newest: Date | null = null
+    const entries = await profiled(db, async () => { newest = await lastOldReceipt(db, now) })
+    expect(newest).toEqual(new Date(now.getTime() + 35 * DAY))
+    const rows = reads(entries, 'product_usage_receipts', ['expiresAt'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ expiresAt: 1/)
+    expect(rows[0]!.keysExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(1)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(1)
+  })
+})
