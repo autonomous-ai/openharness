@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
-import type { ContributedMachine } from './machines.js'
+import { admitMachineStart, type ContributedMachine } from './machines.js'
 import { createSuperTab, SuperTabError, visibleState, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 
 // Task #2390 (Tony, 11-03): a machine's owner chooses which of the Swarm's projects may run agents on it. Default all, as
@@ -42,7 +42,20 @@ function swarm() {
   const machine = (machineId: string) => state.machines!.find(m => m.machineId === machineId)!
   const limit = (projectIds: string[] | null, machineId = 'tony-mac', actor: Actor = tony, context: Partial<CommandContext> = {}, extra: Record<string, unknown> = {}) =>
     run({ type: 'machine.projects', machineId, projectIds, ...extra } as Command, actor, context)
-  return { run, machine, limit, lampos, secret, leadActor, pool, get state() { return state } }
+  const group = (projectId: string) => String(run({ type: 'conversation.create', projectId, title: 'Work', brief: 'Build it.', checks: [] }).result.conversationId)
+  const requirements = { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false }
+  const request = (conversationId: string, machineId: string, projectId: string) =>
+    ({ conversationId, machineId, engine: 'codex', name: 'Builder', cwd: `/swarm/${projectId}`, worktree: true, requirements })
+  const start = (conversationId: string, machineId: string, projectId: string) => run({ type: 'agent.start', request: request(conversationId, machineId, projectId) },
+    owner, { contribution: { machineOwnerId: machine(machineId).contributorId, contributorId: machine(machineId).contributorId, hostGrant: null } })
+  /** An agent already in the Swarm on [machineId], of [projectId]. */
+  const member = (id: string, machineId: string, projectId: string) => {
+    const contributorId = machine(machineId).contributorId
+    state.agents.push({ id, machineId, harnessId: `harness-${id}`, projectId, machineOwnerId: contributorId, contributorId,
+      membershipGeneration: generation(contributorId), hostGrant: null, name: id, configuration: config })
+    return id
+  }
+  return { run, machine, limit, lampos, secret, leadActor, pool, group, request, start, member, get state() { return state } }
 }
 
 describe('a machine\'s projects', () => {
@@ -105,5 +118,84 @@ describe('a machine\'s projects', () => {
     const seen = (actor: Actor) => visibleState(f.state, actor, NOW).machines!.find(m => m.machineId === 'owner-mac')!.projects
     expect(seen(owner)).toEqual(['lead', f.secret])
     expect(seen(tony)).toEqual(['lead'])
+  })
+})
+
+describe('a machine kept for some projects', () => {
+  const candidate = (id: string, machineId: string, patch: Record<string, unknown> = {}) => ({ id, kind: 'new', machineId, engine: 'codex',
+    model: 'default', effort: 'default', quality: 3, cost: 2, title: `${id} on ${machineId}`, label: `Label ${id}`, ...patch })
+  const record = (candidates: unknown[], pick = 'c0') => ({ assessment: { difficulty: 'medium', risk: 'low', why: 'A small change.' },
+    candidates, excluded: [], floor: 2, notes: false, pick, via: 'order', p: null, belowFloor: false, why: 'Policy order.' })
+
+  it('refuses a start for another project, and takes one for its own', () => {
+    const f = swarm()
+    f.limit(['lead'])
+    expect(refusal(() => f.start(f.group(f.lampos), 'tony-mac', f.lampos))).toMatchObject({ code: 'MACHINE_PROJECTS', message: 'MacBook Pro runs only Pilot.' })
+    expect(f.start(f.group('lead'), 'tony-mac', 'lead').result.startId).toBeTruthy()
+  })
+
+  it('refuses another project\'s Product Manager there', () => {
+    const f = swarm()
+    f.limit(['lead'])
+    const chat = f.state.projects!.find(p => p.id === f.lampos)!.leadConversationId
+    expect(refusal(() => admitMachineStart(f.state, { ...f.request(chat, 'tony-mac', f.lampos), leadFor: { projectId: f.lampos, personId: 'owner', generation: 'g' } }, NOW))
+      ?.code).toBe('MACHINE_PROJECTS')
+  })
+
+  it('gives an agent there no task of another project, and lets none join one, while it keeps its own', () => {
+    const f = swarm()
+    const there = f.member('there', 'tony-mac', f.lampos)
+    f.limit(['lead'])
+    const work = f.group(f.lampos)
+    expect(refusal(() => f.run({ type: 'work.assign', conversationId: work, agentId: there }))?.code).toBe('MACHINE_PROJECTS')
+    expect(refusal(() => f.run({ type: 'conversation.agent', conversationId: work, agentId: there, present: true, lead: false }))?.code).toBe('MACHINE_PROJECTS')
+    // Not removed: it stays listed, as an agent whose machine stopped taking teammates' work does.
+    expect(f.state.agents.some(a => a.id === there)).toBe(true)
+    const ours = f.member('ours', 'tony-mac', 'lead'), own = f.group('lead')
+    f.run({ type: 'work.assign', conversationId: own, agentId: ours })
+    expect(f.state.conversations.find(c => c.id === own)!.assignment).toMatchObject({ agentId: ours })
+  })
+
+  it('is left out of another project\'s route, saying why, and refused as its pick', () => {
+    const f = swarm()
+    f.limit(['lead'])
+    const work = f.group(f.lampos)
+    const effects = f.run({ type: 'route.record', conversationId: work, decision: record([candidate('c0', 'owner-mac'), candidate('c1', 'tony-mac')]) } as Command)
+    expect(effects.routeDecisions[0]).toMatchObject({ op: 'create', record: { candidates: [{ id: 'c0' }],
+      excluded: [{ title: 'c1 on tony-mac', reason: 'MacBook Pro runs only Pilot.' }] } })
+    expect(refusal(() => f.run({ type: 'route.record', conversationId: f.group(f.lampos), decision: record([candidate('c0', 'tony-mac')]) } as Command))).toMatchObject({ code: 'MACHINE_PROJECTS', message: 'MacBook Pro runs only Pilot. Route again.' })
+  })
+
+  it('holds for its Mac\'s Harness Team account too', () => {
+    const f = swarm()
+    f.state.machines!.push(f.pool('tony-team', 'tony', 'MacBook Pro · Team', { hostMachineId: 'tony-mac',
+      observation: { ...f.machine('tony-mac').observation!, sessionKind: 'team', privacy: { mode: 'dedicated', seenAt: NOW } } }))
+    f.limit(['lead'])
+    const theirs = f.group(f.lampos), ours = f.group('lead')
+    expect(refusal(() => admitMachineStart(f.state, f.request(theirs, 'tony-team', f.lampos), NOW, undefined, ['tony-team']))?.code).toBe('MACHINE_PROJECTS')
+    expect(admitMachineStart(f.state, f.request(ours, 'tony-team', 'lead'), NOW, undefined, ['tony-team'])?.machineId).toBe('tony-team')
+    // It is set on the Mac, never on its account.
+    expect(refusal(() => f.limit(['lead'], 'tony-team'))?.code).toBe('NOT_FOUND')
+  })
+
+  it('counts a private project it is kept for, never naming it', () => {
+    const f = swarm()
+    f.limit(['lead', f.secret], 'owner-mac', owner)
+    expect(refusal(() => f.start(f.group(f.lampos), 'owner-mac', f.lampos))?.message).toBe('Owner Mac runs only Pilot and 1 other project.')
+    f.limit([f.secret], 'owner-mac', owner)
+    expect(refusal(() => f.start(f.group(f.lampos), 'owner-mac', f.lampos))?.message).toBe('Owner Mac runs only 1 other project.')
+  })
+
+  it('kept only for a deleted project, takes no project\'s work, and says so', () => {
+    const f = swarm()
+    f.limit([f.lampos])
+    f.run({ type: 'project.delete', projectId: f.lampos })
+    expect(refusal(() => f.start(f.group('lead'), 'tony-mac', 'lead'))?.message).toBe('MacBook Pro runs no project now: its owner can choose its projects again.')
+  })
+
+  it('with no list, takes every project\'s work as before', () => {
+    const f = swarm()
+    expect(f.start(f.group(f.lampos), 'tony-mac', f.lampos).result.startId).toBeTruthy()
+    expect(f.start(f.group('lead'), 'tony-mac', 'lead').result.startId).toBeTruthy()
   })
 })
