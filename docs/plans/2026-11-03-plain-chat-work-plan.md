@@ -47,10 +47,10 @@
 
 **Interfaces:** Consumes existing buddy.propose and validated proposalAsk/attachments. Produces optional `title?: string` on buddy.propose, one person-authored root with existing buddy-proposal source plus Buddy attribution, one Buddy-authored reply (`replyTo` and `thread` equal root id) with full proposal and attachments. Existing command result/message ids remain stable.
 
-- [ ] Write/commit failing tests: explicit title produces `Let's build: Offline drafts` from the Buddy owner; first reply has full Goal/Scope/Priority and attachments and PM recipient. Test fallback `Requested by Dee. Save drafts. Keep them.` gives `Let's build: Save drafts.`; title boundary; owner generation; duplicate asks; project access.
-- [ ] Run `cd backend && npm test -- src/superTabs/buddies.test.ts src/superTabs/buddyNews.test.ts --maxWorkers=2`; record expected missing-root/details failures.
-- [ ] Add title schema and root-name helper in buddies.ts; write two ordinary messages in buddy.propose preserving validated owner/attachment/PM delivery. Update Buddy instructions/help to supply a short title.
-- [ ] Run affected tests and proposal integration tests; commit passing code and push.
+- [x] Write/commit failing tests: explicit title produces `Let's build: Offline drafts` from the Buddy owner; first reply has full Goal/Scope/Priority and attachments and PM recipient. Test fallback `Requested by Dee. Save drafts. Keep them.` gives `Let's build: Save drafts.`; title boundary; owner generation; duplicate asks; project access.
+- [x] Run `cd backend && npm test -- src/superTabs/buddies.test.ts src/superTabs/buddyNews.test.ts --maxWorkers=2`; record expected missing-root/details failures.
+- [x] Add title schema and root-name helper in buddies.ts; write two ordinary messages in buddy.propose preserving validated owner/attachment/PM delivery. Update Buddy instructions/help to supply a short title.
+- [x] Run affected tests and proposal integration tests; commit passing code and push.
 
 ### Task 2: One task root and ordinary progress thread
 
@@ -58,10 +58,10 @@
 
 **Interfaces:** Consumes existing Conversation/cards.line, proposalMessageId and proposal context; produces one linked ordinary project root at conversation.create, first brief reply, and append-only transition replies. Existing task conversation ids and CLI work commands stay valid. Reused proposal source carries Buddy id for credit. Existing source kind remains readable; no client needs new rendering fields.
 
-- [ ] Write/commit failing tests: opening a task immediately posts requester-authored `Let's build: Offline drafts` plus brief reply; no requester uses PM. Assignment/status/PR/merge produce replies, no root edit; unchanged/retried status and repeated merge produce none. Proposal conversion reuses root. Exclude steps/project/Buddy chats; private project isolation; old lines remain readable. Verify task posts appear in linked thread without repeated delivery.
-- [ ] Run `cd backend && npm test -- src/superTabs/taskLine.test.ts src/superTabs/buddyNews.test.ts --maxWorkers=2`; record red.
-- [ ] Replace root-state editing with transactional root/link/reply handling. Preserve legacy metadata and assignment tracking, validate proposal reuse and stable operation IDs. Use existing ordinary thread summary/read/delivery paths.
-- [ ] Run affected tests and `npm run test:super-tabs -- --maxWorkers=2` (full integration suite); commit passing code and push.
+- [x] Write/commit failing tests: opening a task immediately posts requester-authored `Let's build: Offline drafts` plus brief reply; no requester uses PM. Assignment/status/PR/merge produce replies, no root edit; unchanged/retried status and repeated merge produce none. Proposal conversion reuses root. Exclude steps/project/Buddy chats; private project isolation; old lines remain readable. Verify task posts appear in linked thread without repeated delivery.
+- [x] Run `cd backend && npm test -- src/superTabs/taskLine.test.ts src/superTabs/buddyNews.test.ts --maxWorkers=2`; record red.
+- [x] Replace root-state editing with transactional root/link/reply handling. Preserve legacy metadata and assignment tracking, validate proposal reuse and stable operation IDs. Use existing ordinary thread summary/read/delivery paths.
+- [x] Run affected tests and `npm run test:super-tabs -- --maxWorkers=2` (full integration suite); commit passing code and push.
 
 ### Task 3: Desktop ordinary message/thread rendering
 
@@ -69,10 +69,10 @@
 
 **Interfaces:** Consumes existing SuperTabMessage text, author, thread, replyTo and source. Produces ordinary SuperTabMessageRow and normal thread opener for proposal/task roots, including legacy source kinds. No backend or phone file changes.
 
-- [ ] Write/commit failing widget tests proving requester avatar/name, full root text, ordinary Reply/reactions/thread affordances, and root-to-normal-thread navigation. Include legacy proposal/task-line fixtures and narrow viewport.
-- [ ] Run bounded affected widget tests and record red before implementation.
-- [ ] Remove special proposal/task rendering and task-panel navigation from the chat row path; use ordinary message/thread behavior. Preserve unrelated task management surfaces.
-- [ ] Run affected tests and capture Desktop screenshot with fake sign-in/memory state. Commit passing code and push.
+- [x] Write/commit failing widget tests proving requester avatar/name, full root text, ordinary Reply/reactions/thread affordances, and root-to-normal-thread navigation. Include legacy proposal/task-line fixtures and narrow viewport.
+- [x] Run bounded affected widget tests and record red before implementation.
+- [x] Remove special proposal/task rendering and task-panel navigation from the chat row path; use ordinary message/thread behavior. Preserve unrelated task management surfaces.
+- [x] Run affected tests and capture Desktop screenshot with fake sign-in/memory state. Commit passing code and push.
 
 ### Task 4: Phone ordinary message/thread rendering
 
@@ -80,10 +80,10 @@
 
 **Interfaces:** Consumes existing phone SuperTabMessage ordinary author/text/thread fields; produces ordinary SwarmMessageRow with standard avatar, reactions, reply and thread opening. No backend or Desktop file changes; no new model fields required.
 
-- [ ] Write/commit failing widget tests for ordinary task/proposal roots and legacy messages, requester identity, reactions, reply/thread affordance, and narrow screen reading.
-- [ ] Run affected Flutter tests and record red before implementation.
-- [ ] Remove special task row routing/rendering, retaining unrelated task status screens and legacy text; use existing thread navigation.
-- [ ] Run affected tests, `test/swarm/desktop_parity_test.dart`, and capture phone screenshot. Commit passing code and push.
+- [x] Write/commit failing widget tests for ordinary task/proposal roots and legacy messages, requester identity, reactions, reply/thread affordance, and narrow screen reading.
+- [x] Run affected Flutter tests and record red before implementation.
+- [x] Remove special task row routing/rendering, retaining unrelated task status screens and legacy text; use existing thread navigation.
+- [x] Run affected tests, `test/swarm/desktop_parity_test.dart`, and capture phone screenshot. Commit passing code and push.
 
 ## Validation and handoff
 
@@ -119,7 +119,7 @@ is named. Every thread reply is authored by the project's coordinator, wakes nob
 Agents' posts in the task's own conversation stay there. A proposal's first reply is `Goal: …\nScope: …\nPriority: …` from the
 Buddy, and a task from it adds no brief reply. Queued, Released and Duplicate have no server event yet and are not posted.
 
-- [ ] Write/commit failing tests for each line, coordinator authorship, no mirrored chatter, no brief reply under a proposal,
+- [x] Write/commit failing tests for each line, coordinator authorship, no mirrored chatter, no brief reply under a proposal,
   the chat-asked root (and refusals: another chat, a reply, a server row, an agent's message), and the proposal details text.
-- [ ] Run `cd backend && npm test -- src/superTabs/taskLine.test.ts src/superTabs/buddies.test.ts`; record red.
-- [ ] Implement; run affected tests, typecheck and `npm run test:super-tabs -- --maxWorkers=2`; commit and push.
+- [x] Run `cd backend && npm test -- src/superTabs/taskLine.test.ts src/superTabs/buddies.test.ts`; record red.
+- [x] Implement; run affected tests, typecheck and `npm run test:super-tabs -- --maxWorkers=2`; commit and push.
