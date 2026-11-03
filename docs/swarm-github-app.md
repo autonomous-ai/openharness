@@ -124,7 +124,7 @@ project or for every project of the Swarm (`backend/src/github/approvals.ts`). I
 access**, **Approve for this project** (or **for every project here**). The person signs in to GitHub through the app;
 their own short-lived token reads whether they can push, is revoked at once and is never stored. **Install on GitHub**
 in the same place approves too, once installed. A project without an approval gets
-`GITHUB_REPOSITORY_NOT_APPROVED`.
+`GITHUB_REPOSITORY_NOT_APPROVED`, in every Swarm, whatever `SWARM_TEAM_ACCOUNT_REQUIRED` says.
 
 ## Which agents use it
 

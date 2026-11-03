@@ -640,7 +640,7 @@ describe('a machine\'s CLI version, on its starts and in reads', () => {
 describe('a project\'s repository, for its GitHub access', () => {
   it('is read by those who may open the project, and by nobody else', async () => {
     const f = await fixture()
-    expect(await store.projectRepository(owner, f.tab, 'lead')).toEqual({ repositoryUrl: null, approvalRequired: false, name: expect.any(String),
+    expect(await store.projectRepository(owner, f.tab, 'lead')).toEqual({ repositoryUrl: null, name: expect.any(String),
       others: [{ id: expect.any(String), name: 'Own' }] })
     await run(f.tab, { type: 'tab.project', machineId: 'owner-host', project: { cwd: '/work', repositoryUrl: 'https://github.com/acme/app' } })
     expect(await store.projectRepository(owner, f.tab, 'lead')).toMatchObject({ repositoryUrl: 'https://github.com/acme/app' })

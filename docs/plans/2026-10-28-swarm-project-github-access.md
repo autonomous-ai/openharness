@@ -46,7 +46,9 @@ can push to it approved it, for that project or for every project of the Swarm:
 - **Rollout:** approvals are rolled out with the team account (`SWARM_TEAM_ACCOUNT_REQUIRED=1`). From 2026-10-28 to 11-02
   both were held to the Swarms of `SWARM_TEAM_ACCOUNT_OWNERS`: every other Swarm got tokens as before, read `covered`, kept
   Harness Team accounts out, and its reads said `teamAccounts: false`. Since 2026-11-02 every Swarm takes part: the owner
-  list is no longer read, and `teamAccounts: false` is no longer sent.
+  list is no longer read, and `teamAccounts: false` is no longer sent. Since task #1694 (2026-11-03, option B) approvals
+  no longer follow the switch: every Swarm needs one, with `SWARM_TEAM_ACCOUNT_REQUIRED` on or off, and
+  `scripts/swarm-github-approvals/approve-current.ts` approves once, on the owner's go, the pairs in use before it.
 
 ## Build
 
