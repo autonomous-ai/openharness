@@ -28,7 +28,6 @@ import 'swarm_message_style.dart';
 import 'swarm_face.dart';
 import 'swarm_ship_row.dart';
 import 'swarm_special_rows.dart';
-import 'swarm_task_line.dart';
 
 /// `@name` or `@name@domain`, as people tag in chat. Never right after a
 /// letter, digit, `@` or `/` (an address, a path, a link), and a name never
@@ -263,6 +262,7 @@ class SwarmMessageRow extends StatelessWidget {
     required this.mentions,
     this.tagged = const [],
     this.taggedAddresses = const {},
+    this.taggedLabels = const {},
     this.readerId = '',
     required this.grouped,
     required this.lit,
@@ -279,8 +279,6 @@ class SwarmMessageRow extends StatelessWidget {
     this.receipt,
     this.card,
     this.onLongPress,
-    this.onOpenTask,
-    this.onOpenProposal,
     this.references = const {},
     this.onOpenConversation,
   });
@@ -306,6 +304,10 @@ class SwarmMessageRow extends StatelessWidget {
   /// it is this one.
   final Map<String, String> taggedAddresses;
 
+  /// What a tagged person's pill reads, by username: the name they set. The
+  /// text keeps `@username`; one with no name here reads as it is written.
+  final Map<String, String> taggedLabels;
+
   /// Who reads it: a message that tags them stands out.
   final String readerId;
   final bool grouped, lit, actions;
@@ -315,13 +317,6 @@ class SwarmMessageRow extends StatelessWidget {
   final bool followed;
   final Widget? quote;
   final VoidCallback onTap;
-
-  /// Opens a task held by the current reader; null for an unavailable target.
-  final VoidCallback? onOpenTask;
-
-  /// Opens a Buddy's proposal's thread: given in the chat, where a proposal is
-  /// one line; none in its thread, where it reads whole.
-  final VoidCallback? onOpenProposal;
 
   /// The numbered conversations `#N` links in a message can open.
   final Map<int, String> references;
@@ -380,14 +375,6 @@ class SwarmMessageRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (swarmIsTaskLine(message)) {
-      return SwarmTaskLine(
-        key: ValueKey('swarm-message-${message.id}'),
-        message: message,
-        readerId: readerId,
-        onOpen: onOpenTask,
-      );
-    }
     // A ship line is a card, not a message from its author.
     if (swarmShips(message)) {
       return SwarmShipRow(
@@ -397,13 +384,6 @@ class SwarmMessageRow extends StatelessWidget {
     }
     // Notes that are not chat from their author, as Desktop draws them.
     final special = ValueKey('swarm-message-${message.id}');
-    if (message.proposalOwnerId != null && onOpenProposal != null) {
-      return SwarmProposalLine(
-        key: special,
-        message: message,
-        onOpen: onOpenProposal!,
-      );
-    }
     if (message.terminalEvent) {
       return SwarmTerminalRow(key: special, message: message);
     }
@@ -445,8 +425,6 @@ class SwarmMessageRow extends StatelessWidget {
       body: [
         if (lit) SizedBox(key: ValueKey('swarm-lit-${message.id}')),
         ?quote,
-        if (message.proposalOwnerId != null)
-          SwarmProposalLabel(owner: swarmProposalOwner(context, message)),
         ?swarmTerminalNote(message),
         for (final part in swarmTextParts(message.text))
           if (part.code)
@@ -460,6 +438,7 @@ class SwarmMessageRow extends StatelessWidget {
                 references: references,
                 tagged: tagged,
                 addresses: taggedAddresses,
+                labels: taggedLabels,
                 onTap: onTap,
                 onOpenConversation: onOpenConversation,
               ),

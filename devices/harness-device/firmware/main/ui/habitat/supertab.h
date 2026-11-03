@@ -23,6 +23,10 @@ typedef struct {
     uint32_t since_at_ms;       // the dial's clock when since_s arrived
     ht_chat_kind_t chat;
     char chat_id[ID_MAX], chat_name[HT_SUPERTAB_NAME];   // "" from a daemon without swarmChat
+    // The thread the face is in (spec 2026-11-03-dial-thread-face, a swarmThread daemon only): its root message id ("" = the
+    // main chat), its title (the first line, at most 80 bytes) and its reply count (-1 unknown).
+    char thread_root[ID_MAX], thread_title[HT_SUPERTAB_NAME * 2];
+    int32_t thread_replies;
     // The Swarm has Buddies on, and the reader's own Buddy in this project: its chat, name, engine, the 15 half bits of
     // Desktop's avatar pattern (bit i = half cell i) and its colour 0xRRGGBB. `live` false while the Buddy is down.
     bool buddies;
@@ -45,7 +49,7 @@ typedef struct {
     int id_n;
     // One slot: the recap of the Lead on the face, and nothing else.
     // `chat_id`: the chat the text is the last message of ("" from a daemon without swarmChat).
-    struct { char tab[ID_MAX], lead[ID_MAX], chat_id[ID_MAX], text[HT_SUPERTAB_TEXT]; uint32_t at, asked_ms; ht_recap_state_t state; } recap;
+    struct { char tab[ID_MAX], lead[ID_MAX], chat_id[ID_MAX], thread[ID_MAX], text[HT_SUPERTAB_TEXT]; uint32_t at, asked_ms; ht_recap_state_t state; } recap;
 } ht_supertabs_t;
 typedef enum { HT_LEAD_RAISED_ASK, HT_LEAD_RAISED_STUCK, HT_LEAD_CLEARED } ht_lead_event_kind_t;
 typedef struct { ht_lead_event_kind_t kind; char tab[ID_MAX], lead[ID_MAX]; } ht_lead_event_t;
@@ -54,6 +58,7 @@ typedef struct { ht_lead_event_kind_t kind; char tab[ID_MAX], lead[ID_MAX]; } ht
 // `color` is "#rrggbb"; a block that does not read (no chat id, a bad colour, cells past 15 bits) is dropped, not the Lead.
 typedef struct { bool present, live; const char *chat_id, *name, *engine, *color; long cells; } ht_buddy_in_t;
 typedef struct { const char *id, *project_id, *project, *engine, *owner, *local, *state; int order; long since; const char *chat, *chat_id, *chat_name;
+                 const char *thread, *thread_title; long thread_replies;
                  bool buddies; ht_buddy_in_t buddy; } ht_lead_in_t;
 // false: an empty or overlong id or tab. Names are cut on a UTF-8 boundary.
 bool ht_supertab_init(ht_supertab_t *, const char *id, const char *tab, const char *name, int count);
@@ -71,7 +76,10 @@ const ht_supertab_t *ht_supertabs_find(const ht_supertabs_t *, const char *id);
 const ht_supertab_t *ht_supertabs_at(const ht_supertabs_t *, int i);
 const ht_supertab_t *ht_supertabs_for_desk(const ht_supertabs_t *, const char *desk_tab_id);
 const ht_lead_t *ht_supertabs_lead_by_local(const ht_supertabs_t *, const char *harness_id, const ht_supertab_t **tab);
-// LOADING with no text; an empty lead closes the slot (NONE).
+// LOADING with no text; an empty lead closes the slot (NONE). A held recap is kept only for the same chat and thread.
 void ht_supertabs_recap_open(ht_supertabs_t *, const char *tab, const char *lead, uint32_t now_ms);
-// false: not the open Lead, or not the chat on its face (`chat_id` "" is the Lead's own, from a daemon without swarmChat).
-bool ht_supertabs_recap_put(ht_supertabs_t *, const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t at, bool none);
+// false: not the open Lead, or not the chat on its face (`chat_id` "" is the Lead's own, from a daemon without swarmChat),
+// or not its thread (`thread` "" or NULL is the main chat).
+bool ht_supertabs_recap_put(ht_supertabs_t *, const char *tab, const char *lead, const char *chat_id, const char *thread, const char *text, uint32_t at, bool none);
+// The face's Lead leaves its thread at once (the dial's swipe): true when it was in one.
+bool ht_supertabs_thread_leave(ht_supertabs_t *, const char *tab, const char *lead);

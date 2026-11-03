@@ -25,7 +25,7 @@ final _swarmRoute = RegExp(
   '|messages/$_id/attachments/$_id)'
   '|projects/$_id/(?:github|github/approve'
   '|instructions(?:/revisions(?:/[0-9]+)?)?)'
-  '|route-decisions/$_id|machines/$_id/removal)'
+  '|route-decisions/$_id|machines/$_id/removal(?:/v2)?)'
   r')(?:\?[A-Za-z0-9_=&%-]+)?$',
 );
 

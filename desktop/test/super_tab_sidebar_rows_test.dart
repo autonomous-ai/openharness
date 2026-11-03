@@ -6,6 +6,7 @@ import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
+import 'package:harness/super_tabs/task_groups.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/humans_fixture.dart';
@@ -20,12 +21,12 @@ void main() {
   final project = find.byKey(const ValueKey('super-group-lead'));
   final workgroup = find.byKey(const ValueKey('super-group-offline'));
   final machine = find.byKey(const ValueKey('super-machine-studio'));
-  final more = find.byKey(const ValueKey('super-project-more-lead'));
 
   Future<SuperTabController> show(
     WidgetTester tester,
-    ConversationServer server,
-  ) async {
+    ConversationServer server, {
+    bool restFolded = false,
+  }) async {
     await tester.binding.setSurfaceSize(const Size(1300, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final controller = server.controller(
@@ -33,6 +34,9 @@ void main() {
       initial: {'tabId': 'tab', 'accountId': 'peer', 'selectedId': 'lead'},
     );
     await controller.refresh();
+    // These workgroups have no work, so they are in The rest, which starts
+    // folded (#2309): unfolded here, where the rows are what is tested.
+    if (!restFolded) controller.toggleTaskGroup('lead', SuperTabTaskGroup.rest);
     await tester.pumpWidget(
       MaterialApp(
         theme: grid.buildAppTheme(brightness: Brightness.light),
@@ -335,6 +339,7 @@ void main() {
       Future<SuperTabController> reopen(String account) async {
         final next = server.controller(account: account, initial: server.saved);
         await next.refresh();
+        next.toggleTaskGroup('lead', SuperTabTaskGroup.rest);
         await tester.pumpWidget(
           MaterialApp(
             home: Scaffold(
@@ -363,7 +368,7 @@ void main() {
   );
 
   testWidgets(
-    'an open project lists its 8 newest conversations, and "… N more" shows the rest',
+    'an open project lists every open conversation newest first, with no "… N more"',
     (tester) async {
       final server = humansSwarm();
       addNumberedWorkgroups(server, 11);
@@ -372,7 +377,8 @@ void main() {
       await tester.pumpAndSettle();
 
       Finder row(String id) => find.byKey(ValueKey('super-group-$id'));
-      final shown = [for (var n = 11; n >= 4; n--) row('g$n')];
+      // The unnumbered "Offline editing" predates numbering: last.
+      final shown = [for (var n = 11; n >= 1; n--) row('g$n'), workgroup];
       for (final finder in shown) {
         expect(finder, findsOneWidget);
       }
@@ -382,46 +388,27 @@ void main() {
           greaterThan(tester.getTopLeft(shown[i - 1]).dy),
         );
       }
-      // #3, #2, #1 and the unnumbered "Offline editing" wait behind the row.
-      expect(row('g3'), findsNothing);
-      expect(workgroup, findsNothing);
-      expect(more, findsOneWidget);
-      expect(find.text('… 4 more'), findsOneWidget);
-      expect(
-        tester.getTopLeft(more).dy,
-        greaterThan(tester.getTopLeft(row('g4')).dy),
-      );
-
-      await tester.tap(more);
-      await tester.pumpAndSettle();
-      expect(more, findsNothing);
-      for (final id in ['g3', 'g2', 'g1', 'offline']) {
-        expect(row(id), findsOneWidget);
-      }
-      expect(
-        tester.getTopLeft(workgroup).dy,
-        greaterThan(tester.getTopLeft(row('g1')).dy),
-      );
+      expect(find.textContaining('more'), findsNothing);
       await close(tester, controller);
     },
   );
 
-  testWidgets('an older conversation that is open stays listed', (
-    tester,
-  ) async {
-    final server = humansSwarm();
-    addNumberedWorkgroups(server, 11);
-    final controller = await show(tester, server);
-    await controller.select('g1');
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('super-group-g1')), findsOneWidget);
-    expect(find.byKey(const ValueKey('super-group-g2')), findsNothing);
-    expect(find.text('… 3 more'), findsOneWidget);
-    await close(tester, controller);
-  });
+  testWidgets(
+    'an older conversation that is open stays listed in a folded group',
+    (tester) async {
+      final server = humansSwarm();
+      addNumberedWorkgroups(server, 11);
+      final controller = await show(tester, server, restFolded: true);
+      await controller.select('g1');
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('super-group-g1')), findsOneWidget);
+      expect(find.byKey(const ValueKey('super-group-g2')), findsNothing);
+      await close(tester, controller);
+    },
+  );
 
   testWidgets(
-    'unread and waiting conversations older than the 8 newest stay listed',
+    'a conversation waiting on a person is listed under Needs you while The rest is folded',
     (tester) async {
       final server = humansSwarm();
       addNumberedWorkgroups(server, 11);
@@ -431,15 +418,15 @@ void main() {
           .firstWhere((g) => g['id'] == 'g2')
         ..['agentIds'] = ['lead-agent']
         ..['assignment'] = {'agentId': 'lead-agent', 'status': 'needs_human'};
-      final controller = await show(tester, server);
-      server.append('New work', conversationId: 'g1');
-      await controller.refresh();
+      final controller = await show(tester, server, restFolded: true);
       controller.toggleProject('lead');
       await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('super-group-g1')), findsOneWidget);
       expect(find.byKey(const ValueKey('super-group-g2')), findsOneWidget);
       expect(find.byKey(const ValueKey('super-group-g3')), findsNothing);
-      expect(find.text('… 2 more'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('super-task-group-lead-needsYou')),
+        findsOneWidget,
+      );
       await close(tester, controller);
     },
   );

@@ -799,7 +799,7 @@ void main() {
     expect(fake.commands.single['replyTo'], isNull);
   });
 
-  testWidgets('the composer has an @ Tag chip (Tony, 11-01): it and an @ '
+  testWidgets('the composer has an @ button (Tony, 11-01): it and an @ '
       'typed in the field open the same picker', (tester) async {
     await pump(tester, backend([message('m1', 1)]));
 

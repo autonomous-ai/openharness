@@ -1,4 +1,4 @@
-import { agentOnly, pullRequestLinks, type Conversation, type MessageDraft } from './model.js'
+import { agentOnly, appendPullRequestUrls, projectPullRequestUrl, pullRequestLinks, type Conversation, type MessageDraft } from './model.js'
 
 /**
  * Live cards (Slack parity, Dee 10-29): like a Slack app's message that updates itself, a task or a pull request is one
@@ -28,10 +28,10 @@ export function bindTaskCard(group: Conversation, brief: MessageDraft): void {
 
 /** A main-chat row linking a pull request this group has no card for becomes its card. A thread reply or an agent-only
  *  notice never does: people read the main chat. */
-export function bindPullRequestCards(group: Conversation, message: MessageDraft): void {
+export function bindPullRequestCards(group: Conversation, message: MessageDraft, repositoryUrl?: string | null): void {
   if (message.thread || agentOnly(message.source, message.recipients) || !cardable(message)) return
   const known = new Set(group.cards?.pullRequests?.map(card => card.url))
-  const fresh = pullRequestLinks(message.text).filter(url => !known.has(url))
+  const fresh = pullRequestLinks(message.text, repositoryUrl).filter(url => !known.has(url))
   if (fresh.length) group.cards = { ...group.cards, pullRequests: [...group.cards?.pullRequests ?? [], ...fresh.map(url => ({ url, messageId: message.id }))] }
 }
 
@@ -44,4 +44,22 @@ export const pullRequestCard = (group: Conversation, url: string): PullRequestCa
 export function recordCardMerged(group: Conversation, url: string, mergedAt: number): void {
   const card = pullRequestCard(group, url)
   if (card) card.mergedAt = Math.min(card.mergedAt ?? mergedAt, mergedAt)
+}
+
+/** Every link [group] holds is its project's own pull request, once: a link into any other repository (another owner's
+ *  included) is dropped, a spelling is made the project's, and cards that now name one pull request become one (the earliest
+ *  message, the earliest merge). */
+export function cleanPullRequestLinks(group: Conversation, repositoryUrl: string | null | undefined): void {
+  if (group.pullRequestUrls) appendPullRequestUrls(group, [], repositoryUrl)
+  const cards = group.cards?.pullRequests
+  if (!cards?.some(card => projectPullRequestUrl(card.url, repositoryUrl) !== card.url)) return
+  const kept = new Map<string, PullRequestCard>()
+  for (const card of cards) {
+    const url = projectPullRequestUrl(card.url, repositoryUrl)
+    if (!url) continue
+    const known = kept.get(url)
+    if (!known) kept.set(url, { ...card, url })
+    else if (card.mergedAt !== undefined) known.mergedAt = Math.min(known.mergedAt ?? card.mergedAt, card.mergedAt)
+  }
+  group.cards = { ...group.cards, pullRequests: [...kept.values()] }
 }

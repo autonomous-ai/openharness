@@ -495,13 +495,15 @@ it('gives up after three pending reads, and passes on a refused request without 
 it('lets a machine owner preview and then remove their machine, as the person, without a participating harness', async () => {
   const print = vi.fn(), close = vi.fn()
   const request = vi.fn(async (_type: string, payload?: Record<string, unknown>) => payload?.method === 'GET'
-    ? { ok: true, value: { blockedBy: null, agents: [{ id: 'a1', name: 'Builder', projectName: 'App' }], soleSourceProjects: [] } }
+    ? { ok: true, value: { previewVersion: 2, blockedBy: null, agents: [{ id: 'a1', name: 'Builder', projectName: 'App' }],
+      hiddenAgentCount: 1, soleSourceProjects: [], hiddenSoleSourceProjectCount: 1 } }
     : { ok: true, value: { revision: 2 } })
   const deps = { where: () => where, open: async () => ({ request, close, machineId: 'machine' }), print, pane: '%99', env: {} }
   expect(await superTabCommand(['--tab', 'tab', 'remove-machine', 'box'], deps)).toBe(0)
   expect(request.mock.calls.filter(c => c[0] === 'super_tabs')).toHaveLength(1)
-  expect(request).toHaveBeenLastCalledWith('super_tabs', expect.objectContaining({ action: 'backend', method: 'GET', path: '/api/super-tabs/tab/machines/box/removal' }), 30_000)
+  expect(request).toHaveBeenLastCalledWith('super_tabs', expect.objectContaining({ action: 'backend', method: 'GET', path: '/api/super-tabs/tab/machines/box/removal/v2' }), 30_000)
   expect(print.mock.calls.at(-1)![0]).toContain('Builder')
+  expect(print.mock.calls.at(-1)![0]).toContain('hiddenAgentCount')
   expect(await superTabCommand(['--tab', 'tab', 'remove-machine', 'box', '--yes'], deps)).toBe(0)
   const sent = request.mock.calls.at(-1)![1]!
   expect(sent).toMatchObject({ action: 'backend', method: 'POST', path: '/api/super-tabs/tab/commands', body: { command: { type: 'machine.remove', machineId: 'box' } } })

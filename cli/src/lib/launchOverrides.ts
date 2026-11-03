@@ -232,6 +232,9 @@ export async function prepareLaunchOverrides(
   const swarm = deps.swarm
   const owner = current
   source = structuredClone(source)
+  // A Buddy starts no MCP server, and the grid's web tools are one: with `--strict-mcp-config` among its flags it would
+  // load exactly that server (docs/swarms.md, Buddies). Launched from the grid without it, as on its own login.
+  if (source.swarmSkill?.role === 'buddy' && source.gridLaunch) delete source.gridLaunch.mcpUrl
   const inspected = capturedNative ? { ok: true as const, launch: capturedNative } : await deps.native?.(engine, source, { id: configKey, current: owner })
   if (!current()) return changed
   if (inspected && !inspected.ok) return inspected

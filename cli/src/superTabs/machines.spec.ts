@@ -343,7 +343,7 @@ describe('contributed machine executor', () => {
     Object.assign(f.pool, { capabilitiesWanted: true })
     await f.machine.tick()
     const posted = (g: typeof f) => g.backend.mock.calls.filter(c => c[1] === 'POST').map(c => c[3] as Record<string, unknown>)
-    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart', 'buddySessions', 'swarmBuddy', 'leadSwitch'] })
+    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart', 'buddySessions', 'swarmBuddy', 'leadSwitch', 'buddyModel'] })
     // A backend from before them does not ask, and would refuse the field.
     const older = fixture()
     await older.machine.tick()
@@ -829,6 +829,70 @@ describe('contributed machine executor', () => {
     expect(posts().map(c => 'harnessProgress' in (c[3] as object))).toEqual([true, false, false])
     f.step(600_000); await machine.tick()
     expect(posts().map(c => 'harnessProgress' in (c[3] as object))).toEqual([true, false, false, true, false])
+  })
+
+  // Task #2441: the backend refused this host's own reports for a start (its pool check), and the start waited out the backend's
+  // 3 minutes with the refusal in this machine's log alone. The host now names it in its next reading, and the backend fails it.
+  describe('a start whose host reports the backend refused', () => {
+    const machinePosts = (f: ReturnType<typeof fixture>) => f.backend.mock.calls
+      .filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).map(c => c[3] as Record<string, unknown>)
+    const REFUSAL = 'This start does not belong to this machine contribution.'
+
+    it('is reported refused, with the refusal, in the next reading, and no longer once it is not pending', async () => {
+      const f = fixture()
+      f.start.mockRejectedValue(new SuperTabHostError('FORBIDDEN', REFUSAL, 403))
+      // The pass that meets the refusal reports first; the next pass names it at once.
+      await f.machine.tick()
+      expect(machinePosts(f).at(-1)).not.toHaveProperty('refusedStarts')
+      f.step(5_000); await f.machine.tick()
+      expect(machinePosts(f).at(-1)!.refusedStarts).toEqual([{ startId: 'start', reason: REFUSAL }])
+      f.pool.starts = []
+      f.advance(); await f.machine.tick()
+      f.advance(); await f.machine.tick()
+      expect(machinePosts(f).at(-1)).not.toHaveProperty('refusedStarts')
+    })
+
+    it('reports nothing for a 5xx, a timeout or a refusal that is not the backend\'s 403', async () => {
+      for (const failure of [new SuperTabHostError('GITHUB_UNAVAILABLE', 'GitHub did not answer.', 502), new Error('The operation timed out.'),
+        new SuperTabHostError('VALIDATION_ERROR', 'Bad request.', 400)]) {
+        const f = fixture()
+        f.start.mockRejectedValue(failure)
+        await f.machine.tick()
+        f.step(5_000); await f.machine.tick()
+        expect(machinePosts(f).at(-1)).not.toHaveProperty('refusedStarts')
+      }
+    })
+
+    // Review of #2793: a 403 with an empty message left an empty reason, which the backend's schema refuses, so the whole reading
+    // was refused and the field dropped for 10 minutes as if the backend were old.
+    it('names a refusal with no message by its code, never an empty reason', async () => {
+      const f = fixture()
+      f.start.mockRejectedValue(new SuperTabHostError('FORBIDDEN', '', 403))
+      await f.machine.tick()
+      f.step(5_000); await f.machine.tick()
+      expect(machinePosts(f).at(-1)!.refusedStarts).toEqual([{ startId: 'start', reason: 'The server refused this machine\'s report for it (FORBIDDEN).' }])
+    })
+
+    it('keeps the refusal to 300 characters', async () => {
+      const f = fixture()
+      f.start.mockRejectedValue(new SuperTabHostError('FORBIDDEN', 'x'.repeat(400), 403))
+      await f.machine.tick()
+      f.step(5_000); await f.machine.tick()
+      expect((machinePosts(f).at(-1)!.refusedStarts as Array<{ reason: string }>)[0]!.reason).toHaveLength(300)
+    })
+
+    it('sends the reading without it to a backend that refuses the field', async () => {
+      const f = fixture()
+      f.start.mockRejectedValue(new SuperTabHostError('FORBIDDEN', REFUSAL, 403))
+      const original = f.backend.getMockImplementation()!
+      f.backend.mockImplementation(async (core, method, path, body) => {
+        if (method === 'POST' && (body as Record<string, unknown>)?.refusedStarts) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: refusedStarts', 400)
+        return original(core, method, path, body)
+      })
+      await f.machine.tick()
+      f.step(5_000); await f.machine.tick()
+      expect(machinePosts(f).slice(-2).map(post => 'refusedStarts' in post)).toEqual([true, false])
+    })
   })
 
   describe('a start this machine launched and is still preparing', () => {

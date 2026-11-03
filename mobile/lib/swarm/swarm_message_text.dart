@@ -21,6 +21,7 @@ class SwarmMessageText extends StatelessWidget {
     this.references = const {},
     this.tagged = const [],
     this.addresses = const {},
+    this.labels = const {},
     this.onTap,
     this.onOpenConversation,
   });
@@ -30,6 +31,10 @@ class SwarmMessageText extends StatelessWidget {
   final Map<int, String> references;
   final List<String> tagged;
   final Map<String, String> addresses;
+
+  /// What a tagged person's pill reads, by username: `@` and the name they
+  /// set, while the text keeps `@username`.
+  final Map<String, String> labels;
   final VoidCallback? onTap;
   final ValueChanged<String>? onOpenConversation;
 
@@ -58,7 +63,7 @@ class SwarmMessageText extends StatelessWidget {
             inlineSyntaxes: [
               _WebAutolink(),
               _ConversationReference(references),
-              _SwarmMention(names, addresses),
+              _SwarmMention(names, addresses, labels),
             ],
             builders: {'mention': _SwarmMentionBuilder()},
             styleSheet: swarmMarkdownStyle(context),
@@ -187,25 +192,30 @@ class _ConversationReference extends md.InlineSyntax {
 }
 
 class _SwarmMention extends md.InlineSyntax {
-  _SwarmMention(this.names, this.addresses)
+  _SwarmMention(this.names, this.addresses, this.labels)
     : super(r'(?<![\w@/])@([\w+-]+(?:\.[\w+-]+)*)(@[\w-]+(?:\.[\w-]+)+)?');
 
   final List<String> names;
   final Map<String, String> addresses;
+  final Map<String, String> labels;
 
   @override
   bool onMatch(md.InlineParser parser, Match match) {
     final name = match[1]!.toLowerCase();
     final domain = match[2]?.toLowerCase();
-    final tagged = names.any((candidate) {
+    final tagged = names.where((candidate) {
       final key = candidate.toLowerCase();
       final email = addresses[candidate]?.toLowerCase();
       if (domain == null) return key == name;
       if (email != null) return '$name$domain' == email;
       return key == name;
-    });
+    }).firstOrNull;
+    // A person who set a name reads by it; the tag stays theirs by username.
+    final label = tagged == null ? null : labels[tagged];
     parser.addNode(
-      tagged ? md.Element.text('mention', match[0]!) : md.Text(match[0]!),
+      tagged == null
+          ? md.Text(match[0]!)
+          : md.Element.text('mention', label == null ? match[0]! : '@$label'),
     );
     return true;
   }

@@ -7,6 +7,7 @@ import 'package:harness/super_tabs/view.dart';
 import 'package:harness/super_tabs/section_heading.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/project_visibility.dart';
+import 'package:harness/super_tabs/task_groups.dart';
 
 import 'support/super_tab_fixture.dart';
 import 'support/super_tab_members.dart';
@@ -95,6 +96,9 @@ void main() {
     // Already open: a click on it shows its workgroups.
     await tester.tap(find.byKey(const ValueKey('super-group-lead')));
     await tester.pumpAndSettle();
+    // A workgroup with no work is in The rest, which starts folded (#2309).
+    await tester.tap(find.byKey(const ValueKey('super-task-group-lead-rest')));
+    await tester.pumpAndSettle();
     expect(find.text('12  Offline editing'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('super-group-offline')));
     await tester.pumpAndSettle();
@@ -118,6 +122,8 @@ void main() {
     (tester) async {
       final server = projectsServer(), c = server.controller();
       await mount(tester, c);
+      // Workgroups with no work are in The rest, unfolded here (#2309).
+      c.toggleTaskGroup('lead', SuperTabTaskGroup.rest);
       final project = find.byKey(const ValueKey('super-group-lead'));
       final projectName = find.descendant(
         of: project,

@@ -202,7 +202,7 @@ static bool queue(action_t a) {
     if (a.kind==A_NOTICE_READ) { notice_reads_sent++; notice_read_queued=a; }
     if (a.kind==A_DESKTOP) { desktop_opens++; COPY(opened_agent,a.id); }
     if (a.kind==A_SUPERTAB && swarm_sent<64) {
-        static const char *ops[]={"recap.get","open","select","side","side-kept"};
+        static const char *ops[]={"recap.get","open","select","side","side-kept","thread-leave"};
         snprintf(swarm_wire[swarm_sent++],sizeof swarm_wire[0],"%s %s %s",ops[a.value],a.text,a.id);
     }
     if (a.kind==A_STOP_YES) COPY(stopped_agent,a.id);
@@ -228,7 +228,7 @@ swarm_parts = {
     # with the last `swarms` list it keeps beside it
     'swarms_apply': source[source.index('// The last `swarms` list as it came'):source.index('void ui_swarms_replace(')],
 }
-for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'swarm_core', 'swarm_voice_id', 'voice_lead', 'tabs_open', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_skin', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'command_face', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'mix_black', 'face_buddy_disc', 'face_buddy_ring', 'face_buddy_dots', 'face_buddy_avatar', 'render_buddy_empty', 'render_swarm_face', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'swarms_apply', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
+for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'swarm_core', 'swarm_voice_id', 'voice_lead', 'tabs_open', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_skin', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'command_face', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'mix_black', 'face_buddy_disc', 'face_buddy_ring', 'face_buddy_dots', 'face_buddy_avatar', 'render_buddy_empty', 'thread_line', 'thread_rest', 'face_thread', 'render_swarm_face', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'swarms_apply', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
     code += swarm_parts[name] if name in swarm_parts else function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
@@ -1516,8 +1516,8 @@ static void swarm_pane_checks(const char *dir) {
     fake_ms += 6000; scene_take(); assert(scene_says("2:20"));   // the dial's own clock carries it on
     // 2b a long name, done: the recap card. A recap for another Lead is dropped.
     enter_at("s1", "L1");
-    ui_supertab_recap("s1", "L2", "", "Not this one.", 1792560000u, false); scene_take(); assert(!scene_says("Not this one."));
-    ui_supertab_recap("s1", "L1", "", "Release candidate built and checked on both dials.", 1792560000u, false); scene_take();
+    ui_supertab_recap("s1", "L2", "", "", "Not this one.", 1792560000u, false); scene_take(); assert(!scene_says("Not this one."));
+    ui_supertab_recap("s1", "L1", "", "", "Release candidate built and checked on both dials.", 1792560000u, false); scene_take();
     assert(scene_says("Release candidate built"));
     FOCUS_PAGE("swarm-2b");
     // 2g a 1,500-byte recap: four lines, the last ending in "…".
@@ -1525,13 +1525,13 @@ static void swarm_pane_checks(const char *dir) {
         char longer[HT_SUPERTAB_TEXT]; size_t n = 0;
         while (n + 6 < sizeof longer - 1) { memcpy(longer + n, "words ", 6); n += 6; }
         longer[n] = 0;
-        ui_supertab_recap("s1", "L1", "", longer, 1792560000u, false); scene_take();
+        ui_supertab_recap("s1", "L1", "", "", longer, 1792560000u, false); scene_take();
         const char *last = ""; int lines = card_lines(&last);
         assert(lines >= 1 && lines <= 4 && strstr(last, "\xe2\x80\xa6"));
         FOCUS_PAGE("swarm-2g");
     }
     // 2f no message yet: the resting face, no card.
-    ui_supertab_recap("s1", "L1", "", "", 0, true); scene_take();
+    ui_supertab_recap("s1", "L1", "", "", "", 0, true); scene_take();
     { const char *last; assert(!card_lines(&last)); }
     // With nothing unread the bell leaves the lower arc to the resting face's one line, as in the mockup.
     for (int i = 0; i < s.notice_count; i++) notice_mark_read(&s.notice[i]);
@@ -1539,7 +1539,7 @@ static void swarm_pane_checks(const char *dir) {
     FOCUS_PAGE("swarm-2f");
     // 2c "docs" needs you, here: its wait's question takes the recap's place, in the asking pose.
     enter_at("s1", "L2");
-    ui_supertab_recap("s1", "L2", "", "Docs drafted.", 1792560000u, false);
+    ui_supertab_recap("s1", "L2", "", "", "Docs drafted.", 1792560000u, false);
     assert(!ui_supertab_wait("h2", "supertab:w1", "openharness", false, "Publish the docs today?"));   // on the face: no beep
     scene_take(); assert(scene_says("Publish the docs") && !scene_says("Docs drafted."));
     FOCUS_PAGE("swarm-2c");
@@ -1553,7 +1553,7 @@ static void swarm_pane_checks(const char *dir) {
         static const void *asking[64], *done[64]; int asking_n = pet_frames(asking);
         card_begin("s1", "t1", "openharness"); openharness_card(); card.leads[1].state = HT_LEAD_DONE;   // L3, firmware
         assert(!strcmp(card.leads[1].id, "L3")); card_send(); ui_supertab_wait_close("h3", "supertab:w2");
-        ui_supertab_recap("s1", "L3", "", "Release key found; build signed.", 1792560000u, false);
+        ui_supertab_recap("s1", "L3", "", "", "Release key found; build signed.", 1792560000u, false);
         int done_n = pet_frames(done); bool other = false;
         for (int i = 0; i < asking_n; i++) { bool shared = false; for (int k = 0; k < done_n; k++) shared |= asking[i] == done[k]; other |= !shared; }
         assert(asking_n && done_n && other);
@@ -1575,7 +1575,7 @@ static void swarm_pane_checks(const char *dir) {
     card_lead("L0", "mobile", "claude", "h0", "work", 0, 134); card_lead("L1", "Round dial firmware release candidate", "claude", "h1", "done", 1, -1);
     card_lead("L2", "docs", "claude", "h2", "ask", 2, -1); card_lead("L3", "firmware", "codex", "h3", "stuck", 3, -1);
     card_lead("L4", "backend", "cursor", "", "ask", 4, -1); card_send();
-    ui_supertab_recap("s1", "L4", "", "Need a decision on the cache size.", 1792560000u, false); scene_take();
+    ui_supertab_recap("s1", "L4", "", "", "Need a decision on the cache size.", 1792560000u, false); scene_take();
     assert(scene_says("Need a decision") && !scene_says("Working"));
     FOCUS_PAGE("swarm-2e-ask");
     // 2h a Swarm with no projects: PANES' own empty page, and "Choose a tab" goes to TABS.
@@ -1601,7 +1601,7 @@ static void swarm_pane_checks(const char *dir) {
     // A swipe on a Swarm of one project lands on the project already on the face: nothing happens. It used to empty
     // the recap for 5 s and pick the project again, which reopened its Lead chat on the desktop (Diego, 2026-10-29).
     swarm_setup(); enter_at("s2", "P0");
-    ui_supertab_recap("s2", "P0", "", "Sandbox rebuilt.", 1792560000u, false); scene_take();
+    ui_supertab_recap("s2", "P0", "", "", "Sandbox rebuilt.", 1792560000u, false); scene_take();
     assert(swarm.recap.state == HT_RECAP_LOADED); swarm_sent = 0;
     habitat_touch(true, 320, 220, fake_ms); habitat_touch(false, 150, 220, fake_ms + 120); scene_take();
     habitat_touch(true, 150, 220, fake_ms + 1000); habitat_touch(false, 320, 220, fake_ms + 1120); scene_take();
@@ -1933,7 +1933,7 @@ static void swarm_chat_checks(const char *dir) {
     enter_at("s1", "C0");
     assert(title_is("mobile") && scene_says("0:09") && inner_arc() && !strcmp(inner_arc()->text, "Fix login"));
     FOCUS_PAGE("swarm-6c");
-    ui_supertab_recap("s1", "C0", "g1", "Tests green on both dials.", 1792560000u, false); scene_take();
+    ui_supertab_recap("s1", "C0", "g1", "", "Tests green on both dials.", 1792560000u, false); scene_take();
     assert(!scene_says("Tests green"));
     // A done group shows its recap.
     assert(!chat_card("done", "pm", "pm1")); scene_take();
@@ -1941,7 +1941,7 @@ static void swarm_chat_checks(const char *dir) {
 
     // The PM chat: its recap, never working.
     enter_at("s1", "C1");
-    ui_supertab_recap("s1", "C1", "pm1", "The release notes are ready.", 1792560000u, false); scene_take();
+    ui_supertab_recap("s1", "C1", "pm1", "", "The release notes are ready.", 1792560000u, false); scene_take();
     assert(scene_says("release notes") && !scene_says("Working"));
     // The desktop moved that project to its Lead chat: the PM chat's recap is no longer this face's.
     assert(!chat_card("done", "lead", "lead-docs")); scene_take();
@@ -2147,6 +2147,130 @@ static void swarm_restart_checks(void) {
     assert(swarm_mode() && !strcmp(sw.lead, "B1") && swarm_side_buddy("s1") && wire_has(0, "side-kept s1 buddy") && !wire_has(0, "side s1 buddy"));
     puts("Swarm restart: the face keeps its Swarm, Lead and side across a session down or an empty list with no time limit, follows the app, and only the person or a Swarm really gone ends it");
 }
+// A face in a thread (spec 2026-11-03-dial-thread-face): the teal face, the card, and the swipe out that selects nothing.
+static void thread_lead(const char *id, const char *project, const char *thread, const char *title, long replies) {
+    ht_lead_in_t in = {.id = id, .project = project, .engine = "claude", .local = "", .state = "done", .order = card.lead_n, .since = -1,
+                       .chat = "pm", .chat_id = "pm1", .chat_name = "PM", .thread = thread, .thread_title = title, .thread_replies = replies};
+    assert(ht_supertab_lead_add(&card, &in));
+}
+static bool teal_ring(void) {
+    for (int i = 0; i < scene.count; i++) {
+        const ht_run_t *r = &scene.runs[i];
+        if (r->ring.set && r->ring.w16 == 5 * 16 && r->ring.r16 == 229 * 16 && r->ring.colour == ht_rgb(0x197569)) return true;   // #2dd4bf at 55 % over black
+    }
+    return false;
+}
+// The label is "Thread" with a teal hook arrow of boxes left of it (Inter has no U+21B3, and no "›" stands in); the card starts at
+// x 60 and "chat" ends 8 px or more left of it.
+static void thread_chrome_checks(void) {
+    const ht_run_t *label = NULL, *chat = NULL; int card_x = -1;
+    for (int i = 0; i < scene.count; i++) {
+        const ht_run_t *r = &scene.runs[i];
+        if (!strcmp(r->text, "Thread")) label = r;
+        if (!strcmp(r->text, "chat")) chat = r;
+        if (!r->text[0] && r->w == 340 && r->box.h >= 60) card_x = r->x;
+    }
+    assert(label && chat && card_x == 63 && !scene_says("\xe2\x80\xba"));
+    assert(chat->x + chat->w + 8 <= card_x);
+    // Both runs of the way out: every corner of the box is 6 px or more inside the ring's inner edge (r 226.5 from 233, 233).
+    const ht_run_t *out[2] = {chat, NULL};
+    for (int i = 0; i < scene.count; i++) if (!strcmp(scene.runs[i].text, "\xe2\x80\xb9")) out[1] = &scene.runs[i];
+    assert(out[1]);
+    for (int k = 0; k < 2; k++) {
+        ht_rect_t b = ht_run_bounds(out[k]);
+        for (int c = 0; c < 4; c++) {
+            int dx = (c & 1 ? b.x + b.w : b.x) - 233, dy = (c & 2 ? b.y + b.h : b.y) - 233;
+            assert(dx * dx + dy * dy <= 220 * 220 + 220 / 2);   // 220.5 squared, to the pixel
+        }
+    }
+    int strokes = 0;
+    for (int i = 0; i < scene.count; i++) {
+        const ht_run_t *r = &scene.runs[i];
+        if (!r->text[0] && r->box.fill == ht_rgb(0x2dd4bf) && r->y >= 100 && r->y <= 116 && r->x + r->w <= label->x) strokes++;
+    }
+    assert(strokes >= 6);   // the down stroke, the right stroke and the head's four columns, all left of the label
+}
+static void swarm_thread_checks(const char *dir) {
+    reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); fake_ms = 100000;
+    desk_open();
+    const char ids[1][ID_MAX] = {"s1"};
+    ui_supertabs_ids(ids, 1);
+    card_begin("s1", "t1", "openharness");
+    thread_lead("T0", "web-api", "m9", "Fix the login bug on Safari when the session expires", 1);
+    thread_lead("T1", "firmware", "", "", -1);
+    assert(!card_send());
+    enter_at("s1", "T0"); swarm_sent = 0;
+    // Before a reply: the thread, its title on two lines, and what it waits for; no pet, no working time.
+    scene_take();
+    assert(title_is("web-api") && scene_says("Thread") && scene_says("Fix the login bug on Safari") && scene_says("session expires"));
+    thread_chrome_checks();
+    portrait(dir, "thread-a-waiting-1line");
+    assert(scene_says("Waiting for the PM") && scene_says("chat") && !scene_says("Working") && teal_ring() && !pet_frame());
+    // The main chat's recap is not the thread's; the thread's is, with who spoke and how many.
+    ui_supertab_recap("s1", "T0", "pm1", "", "Merged #2704.", 1792560000u, false); scene_take();
+    assert(!scene_says("Merged") && scene_says("Waiting for the PM"));
+    ui_supertab_recap("s1", "T0", "pm1", "m9", "Taken: Milo fixes it now.", 1792560000u, false); scene_take();
+    portrait(dir, "thread-1line-recap");
+    // 2-line title, 3-line recap, "PM · 2 replies": the largest card.
+    card_begin("s1", "t1", "openharness");
+    thread_lead("T0", "web-api", "m9", "Fix the login bug on Safari when the session expires", 2); thread_lead("T1", "firmware", "", "", -1); assert(!card_send());
+    ui_supertab_recap("s1", "T0", "pm1", "m9", "Taken: Milo fixes the login bug now and Quinn reviews it before the end of the day, then we ship the release to everyone on the beta channel.", 1792560000u, false); scene_take();
+    assert(scene_says("PM \xc2\xb7 2 replies")); thread_chrome_checks();
+    portrait(dir, "thread-b-2line-3line-recap");
+    // A Buddy thread: "Thread · Buddy" and the same chrome.
+    { ht_lead_in_t in = {.id = "T0", .project = "web-api", .engine = "claude", .local = "", .state = "done", .order = 0, .since = -1,
+                         .chat = "buddy", .chat_id = "b0", .chat_name = "Buddy", .thread = "m5", .thread_title = "Plan the Pro voice", .thread_replies = 2,
+                         .buddies = true, .buddy = {.present = true, .chat_id = "b0", .name = "Buddy", .engine = "claude", .color = "#d6a79a", .cells = 25513, .live = true}};
+      card_begin("s1", "t1", "openharness"); assert(ht_supertab_lead_add(&card, &in)); thread_lead("T1", "firmware", "", "", -1); card.leads[0].buddies = true;
+      card.side = HT_SIDE_BUDDY; assert(!card_send()); }
+    ui_supertab_recap("s1", "T0", "b0", "m5", "Two options: push-to-talk or wake word.", 1792560000u, false); scene_take();
+    assert(scene_says("Thread \xc2\xb7 Buddy") && scene_says("Buddy \xc2\xb7 2 replies")); portrait(dir, "thread-c-buddy");
+    // Back to the PM thread for the rest of the checks.
+    card_begin("s1", "t1", "openharness");
+    thread_lead("T0", "web-api", "m9", "Fix the login bug on Safari when the session expires", 1); thread_lead("T1", "firmware", "", "", -1); assert(!card_send());
+    ui_supertab_recap("s1", "T0", "pm1", "m9", "Taken: Milo fixes it now.", 1792560000u, false); scene_take();
+    assert(scene_says("Taken: Milo") && scene_says("PM \xc2\xb7 1 reply") && !scene_says("Waiting"));
+    // A Lead that starts waiting on the person stays visible on the thread face: the wait takes the card, the chrome stays.
+    card_begin("s1", "t1", "openharness");
+    thread_lead("T0", "web-api", "m9", "Fix the login bug on Safari when the session expires", 1); thread_lead("T1", "firmware", "", "", -1);
+    strcpy(card.leads[0].local, "h5"); assert(!card_send());
+    assert(!ui_supertab_wait("h5", "supertab:w1", "openharness", false, "Publish the docs today?")); scene_take();
+    assert(scene_says("Publish the docs today?") && !scene_says("Taken: Milo") && !scene_says("1 reply") && scene_says("Thread") && teal_ring());
+    thread_chrome_checks();
+    portrait(dir, "thread-e-waiting-lead");
+    ui_supertab_wait_close("h5", "supertab:w1"); scene_take();
+    assert(scene_says("Taken: Milo") && !scene_says("Publish the docs"));
+    // The swipe sideways leaves the thread: the daemon is told, the main chat's recap is asked for, nothing is selected, and the
+    // face stays on the same project.
+    swarm_sent = 0; swipe_next();
+    assert(swarm_sent == 2 && !strcmp(swarm_wire[0], "thread-leave s1 T0") && !strcmp(swarm_wire[1], "recap.get s1 T0"));
+    assert(!strcmp(sw.lead, "T0") && !scene_says("Thread") && !teal_ring() && !scene_says("Taken: Milo") && swarm.recap.state == HT_RECAP_LOADING);
+    ui_supertab_recap("s1", "T0", "pm1", "", "Merged #2704. Next: the Kilo picker fix.", 1792560000u, false); scene_take(); portrait(dir, "thread-d-main-pm-after-leave");
+    // The thread's recap arriving late is refused; the main chat's lands.
+    ui_supertab_recap("s1", "T0", "pm1", "m9", "Late.", 1792560000u, false); scene_take(); assert(!scene_says("Late."));
+    ui_supertab_recap("s1", "T0", "pm1", "", "Merged #2704.", 1792560000u, false); scene_take(); assert(scene_says("Merged #2704."));
+    // A card made before the swipe still names the thread left: it does not bring the face back. One without it, or 3 s, ends that.
+    swarm_sent = 0; card_begin("s1", "t1", "openharness");
+    thread_lead("T0", "web-api", "m9", "Fix the login bug on Safari when the session expires", 1); thread_lead("T1", "firmware", "", "", -1); assert(!card_send());
+    scene_take(); assert(!scene_says("Thread") && !teal_ring() && swarm_sent == 0 && swarm.recap.state == HT_RECAP_LOADED);
+    card_begin("s1", "t1", "openharness"); thread_lead("T0", "web-api", "", "", -1); thread_lead("T1", "firmware", "", "", -1); assert(!card_send());
+    card_begin("s1", "t1", "openharness");
+    thread_lead("T0", "web-api", "m9", "Fix the login bug on Safari when the session expires", 1); thread_lead("T1", "firmware", "", "", -1); assert(!card_send());
+    scene_take(); assert(scene_says("Thread") && teal_ring());   // a thread entered again after the mask ended
+    ui_supertab_recap("s1", "T0", "pm1", "m9", "Back.", 1792560000u, false);
+    // A frame that puts the face in a thread (the app opened one, or the dial's words started it) asks for that thread's recap.
+    swarm_sent = 0; card_begin("s1", "t1", "openharness");
+    thread_lead("T0", "web-api", "m10", "Plan the release", 0); thread_lead("T1", "firmware", "", "", -1); assert(!card_send());
+    assert(swarm_sent == 1 && !strcmp(swarm_wire[0], "recap.get s1 T0") && swarm.recap.state == HT_RECAP_LOADING);
+    scene_take(); assert(scene_says("Plan the release") && scene_says("Waiting for the PM"));
+    ui_supertab_recap("s1", "T0", "pm1", "m10", "Two options.", 1792560000u, false); scene_take(); assert(scene_says("PM \xc2\xb7 0 replies"));
+    swarm_sent = 0; card_begin("s1", "t1", "openharness"); thread_lead("T0", "web-api", "", "", -1); thread_lead("T1", "firmware", "", "", -1); assert(!card_send());
+    assert(swarm_sent == 1 && !strcmp(swarm_wire[0], "recap.get s1 T0"));   // and one that ends it (the app closed it) asks the main chat's
+    // Now on the main chat, the same swipe moves to the next project as before.
+    swarm_sent = 0; swipe_next();
+    assert(!strcmp(sw.lead, "T1") && swarm_sent >= 1 && !strcmp(swarm_wire[0], "select s1 T1"));
+    puts("Swarm thread face: title, waiting, a recap only for the thread, swipe out sends the leave and the main recap ask and selects nothing, then swipes move on PASS");
+}
 static void swarm_buddy_checks(const char *dir) {
     // 7a the PM side: today's face and two dots, the upper one lit.
     buddy_setup();
@@ -2177,7 +2301,7 @@ static void swarm_buddy_checks(const char *dir) {
     { int n = swarm_sent; buddy_card("lead"); assert(swarm_sent == n); }
     buddy_setup();
     // The PM chat's recap is on the face.
-    ui_supertab_recap("s1", "B0", "lead-web", "Merged.", 1792560000u, false); scene_take(); assert(scene_says("Merged."));
+    ui_supertab_recap("s1", "B0", "lead-web", "", "Merged.", 1792560000u, false); scene_take(); assert(scene_says("Merged."));
     // 7b swipe up: the dial says so, and draws the Buddy side at once: the ring, the avatar, the lower dot lit.
     swipe_up();
     // A flick is the side's: it scrolls nothing (it used to scroll the pane still active behind it).
@@ -2187,25 +2311,25 @@ static void swarm_buddy_checks(const char *dir) {
     // The Buddy chat's recap can come before the frame that puts that chat on the face (a card is held 300 ms, a recap is
     // not), and is refused as another chat's. The frame then asks for it again: the Buddy side showed no last message
     // (Diego's dial, 2026-10-29).
-    ui_supertab_recap("s1", "B0", "b0", "Too early.", 1792560000u, false);
+    ui_supertab_recap("s1", "B0", "b0", "", "Too early.", 1792560000u, false);
     // The daemon puts the Buddy chat on the face; its recap is the Buddy's last message.
     buddy_card("buddy");
     assert(swarm_sent == 2 && !strcmp(swarm_wire[1], "recap.get s1 B0"));
-    ui_supertab_recap("s1", "B0", "b0", "Two ways: cache the read, or move it to the host. I'd cache it.", 1792560000u, false); scene_take();
+    ui_supertab_recap("s1", "B0", "b0", "", "Two ways: cache the read, or move it to the host. I'd cache it.", 1792560000u, false); scene_take();
     assert(scene_says("Two ways") && lilac_ring() && avatar());
     // Without a recap it stands at 233, 158 exactly.
     { const ht_run_t *a = avatar_sprite(); assert(a); }
     {
         // A four-line recap: the card rises, the avatar with it.
-        ui_supertab_recap("s1", "B0", "b0", "Two ways: cache the read, or move it to the host. I'd cache it. Want me to write it up and send it to the PM?", 1792560000u, false);
+        ui_supertab_recap("s1", "B0", "b0", "", "Two ways: cache the read, or move it to the host. I'd cache it. Want me to write it up and send it to the PM?", 1792560000u, false);
         scene_take(); assert(avatar() && card_top());
         // With the bell too (an unread notice off the face) every run still fits the scene.
         assert(ui_supertab_notice("s1", "B1", HT_CHAT_LEAD, "lead-fw", "Flashed.", 1792560001u));
         scene_take(); assert(avatar() && scene.count < HT_RUNS);
-        ui_supertab_recap("s1", "B0", "b0", "", 1792560000u, true);
+        ui_supertab_recap("s1", "B0", "b0", "", "", 1792560000u, true);
         // Nothing said yet: whatever the face writes instead stands clear of the avatar, at any of its captions.
         for (int k = 0; k < 40; k++) { fake_ms += 9000; scene_take(); assert(avatar() && clear_of_text()); }
-        ui_supertab_recap("s1", "B0", "b0", "Two ways: cache the read, or move it to the host. I'd cache it.", 1792560000u, false); scene_take();
+        ui_supertab_recap("s1", "B0", "b0", "", "Two ways: cache the read, or move it to the host. I'd cache it.", 1792560000u, false); scene_take();
     }
     FOCUS_PAGE("buddy-7b");
     {
@@ -2302,7 +2426,7 @@ static void swarm_buddy_checks(const char *dir) {
     // 7d the quiet notice: on the PM side the Buddy's word turns the lower dot lilac and writes a line on the lower arc, with
     // no beep, no inbox entry and no wake. The run count holds.
     buddy_setup();
-    ui_supertab_recap("s1", "B0", "lead-web", "Assigned #2083 to web-api. I'll post here when the PR is up.", 1792560000u, false);
+    ui_supertab_recap("s1", "B0", "lead-web", "", "Assigned #2083 to web-api. I'll post here when the PR is up.", 1792560000u, false);
     scene_take(); pm_runs = scene.count;
     assert(!badge() && pm_dots() && !offset_disc() && !scene_says("Your Buddy replied"));
     int entries = s.notice_count; int woke = wakes;
@@ -2316,7 +2440,7 @@ static void swarm_buddy_checks(const char *dir) {
     // Opening the Buddy side reads it.
     swipe_up(); assert(!badge()); swipe_down(); assert(!badge() && !scene_says("Your Buddy replied"));
     // The resting face keeps its own line on the lower arc: there the badge alone tells it.
-    ui_supertab_recap("s1", "B0", "lead-web", "", 1792560000u, true);
+    ui_supertab_recap("s1", "B0", "lead-web", "", "", 1792560000u, true);
     assert(!ui_supertab_notice("s1", "B0", HT_CHAT_BUDDY, "b0", "Later.", 1792560002u));
     scene_take(); assert(badge() && !offset_disc() && !scene_says("Your Buddy replied"));
     swipe_up(); swipe_down(); assert(!badge() && pm_dots());
@@ -3932,6 +4056,7 @@ int main(int argc, char **argv) {
     swarm_chat_checks(argc>1 ? argv[1] : NULL);
     swarm_restart_checks();
     swarm_buddy_checks(argc>1 ? argv[1] : NULL);
+    swarm_thread_checks(argc>1 ? argv[1] : NULL);
 }
 '''
 extra_sources = []
