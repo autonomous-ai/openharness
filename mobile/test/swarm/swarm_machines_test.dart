@@ -395,6 +395,7 @@ void main() {
       int hiddenAgentCount = 0,
       int hiddenSoleSourceProjectCount = 0,
     }) => {
+      'previewVersion': 2,
       'blockedBy': blockedBy,
       'agents': agents,
       'hiddenAgentCount': hiddenAgentCount,
@@ -403,7 +404,7 @@ void main() {
     };
 
     int removalReads() => fake.calls
-        .where((c) => c.path.endsWith('/machines/mac-1/removal'))
+        .where((c) => c.path.contains('/machines/mac-1/removal'))
         .length;
 
     testWidgets(
@@ -565,6 +566,10 @@ void main() {
         await press(tester);
         await tester.tap(find.text('Remove from Swarm'));
         await tester.pumpAndSettle();
+        expect(
+          fake.calls.singleWhere((c) => c.path.contains('/removal')).path,
+          '/api/super-tabs/$tab/machines/mac-1/removal/v2',
+        );
         expect(find.text('Remove Tony’s Mac from this Swarm?'), findsOneWidget);
         expect(find.textContaining('Nova · Mobile'), findsOneWidget);
         expect(
@@ -653,7 +658,7 @@ void main() {
         await tester.tap(find.text('Remove from Swarm'));
         await tester.pumpAndSettle();
         expect(find.textContaining('from this Swarm?'), findsOneWidget);
-        expect(find.text('Could not check this machine.'), findsNothing);
+        expect(find.text('Could not check this machine.'), findsOneWidget);
         expect(find.textContaining('Wren'), findsOneWidget);
         expect(find.textContaining('Wren ·'), findsNothing);
         await tester.tap(
@@ -709,7 +714,7 @@ void main() {
     testWidgets(
       'an unreadable Product Manager blocks with the generic reason',
       (tester) async {
-        const reason = "A PM of a project you can't see runs here.";
+        const reason = "A Product Manager of a project you can't see runs on this machine.";
         await open(
           tester,
           agents: plain,
@@ -725,6 +730,32 @@ void main() {
         expect(find.text('Could not check this machine.'), findsNothing);
         expect(
           find.textContaining('Remove Tony’s Mac from this Swarm?'),
+          findsNothing,
+        );
+        expect(fake.commands, isEmpty);
+      },
+    );
+
+    testWidgets(
+      'fails closed when the backend lacks the versioned preview',
+      (tester) async {
+        await open(
+          tester,
+          agents: plain,
+          routes: (f) =>
+              f.routes['/api/super-tabs/$tab/machines/mac-1/removal'] = (_) => {
+                'blockedBy': null,
+                'agents': <Object>[],
+                'soleSourceProjects': <Object>[],
+              },
+        );
+        await press(tester);
+        await tester.tap(find.text('Remove from Swarm'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Could not check this machine.'), findsOneWidget);
+        expect(
+          find.text('Remove Tony’s Mac from this Swarm?'),
           findsNothing,
         );
         expect(fake.commands, isEmpty);
