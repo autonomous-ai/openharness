@@ -15,7 +15,10 @@ void main() {
   final project = find.byKey(const ValueKey('super-group-lead'));
   final g1 = find.byKey(const ValueKey('super-group-g1'));
 
-  Future<SuperTabController> show(WidgetTester tester, ConversationServer server) async {
+  Future<SuperTabController> show(
+    WidgetTester tester,
+    ConversationServer server,
+  ) async {
     await tester.binding.setSurfaceSize(const Size(1300, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final controller = server.controller(
@@ -63,7 +66,8 @@ void main() {
     );
     TextStyle? found;
     text.text.visitChildren((span) {
-      if (span is TextSpan && (span.text ?? '').contains(title)) found = span.style;
+      if (span is TextSpan && (span.text ?? '').contains(title))
+        found = span.style;
       return found == null;
     });
     return (found ?? text.text.style!).merge(null);
@@ -75,12 +79,18 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('a task with only agents\' new messages reads regular and grey', (tester) async {
+  testWidgets('a task with only agents\' new messages reads regular and grey', (
+    tester,
+  ) async {
     final server = humansSwarm();
     addNumberedWorkgroups(server, 1);
     final controller = await show(tester, server);
     server.append('Working on it.', conversationId: 'g1', agent: true);
-    server.append('Pushed the first commit.', conversationId: 'g1', agent: true);
+    server.append(
+      'Pushed the first commit.',
+      conversationId: 'g1',
+      agent: true,
+    );
     await news(tester, controller);
     final style = titleStyle(tester, g1, 'Workgroup 1');
     expect(style.fontWeight, isNot(grid.AppFont.semibold));
@@ -88,36 +98,53 @@ void main() {
     // Collapsed, the project is not bold for agents' messages either.
     controller.toggleProject('lead');
     await tester.pumpAndSettle();
-    expect(titleStyle(tester, project, 'Pilot').fontWeight, isNot(grid.AppFont.semibold));
+    expect(
+      titleStyle(tester, project, 'Pilot').fontWeight,
+      isNot(grid.AppFont.semibold),
+    );
     await close(tester, controller);
   });
 
-  testWidgets('a person\'s new message makes a task bold, and its collapsed project', (tester) async {
-    final server = humansSwarm();
-    addNumberedWorkgroups(server, 1);
-    final controller = await show(tester, server);
-    server.append('Can you check this?', conversationId: 'g1');
-    await news(tester, controller);
-    final style = titleStyle(tester, g1, 'Workgroup 1');
-    expect(style.fontWeight, grid.AppFont.semibold);
-    expect(style.color, DesktopChrome.foreground);
-    controller.toggleProject('lead');
-    await tester.pumpAndSettle();
-    expect(titleStyle(tester, project, 'Pilot').fontWeight, grid.AppFont.semibold);
-    await close(tester, controller);
-  });
+  testWidgets(
+    'a person\'s new message makes a task bold, and its collapsed project',
+    (tester) async {
+      final server = humansSwarm();
+      addNumberedWorkgroups(server, 1);
+      final controller = await show(tester, server);
+      server.append('Can you check this?', conversationId: 'g1');
+      await news(tester, controller);
+      final style = titleStyle(tester, g1, 'Workgroup 1');
+      expect(style.fontWeight, grid.AppFont.semibold);
+      expect(style.color, DesktopChrome.foreground);
+      controller.toggleProject('lead');
+      await tester.pumpAndSettle();
+      expect(
+        titleStyle(tester, project, 'Pilot').fontWeight,
+        grid.AppFont.semibold,
+      );
+      await close(tester, controller);
+    },
+  );
 
-  testWidgets('a mention of the reader makes a task bold, though an agent wrote it', (tester) async {
-    final server = humansSwarm();
-    addNumberedWorkgroups(server, 1);
-    final controller = await show(tester, server);
-    server.tag('tag-1', conversationId: 'g1');
-    await news(tester, controller);
-    expect(titleStyle(tester, g1, 'Workgroup 1').fontWeight, grid.AppFont.semibold);
-    await close(tester, controller);
-  });
+  testWidgets(
+    'a mention of the reader makes a task bold, though an agent wrote it',
+    (tester) async {
+      final server = humansSwarm();
+      addNumberedWorkgroups(server, 1);
+      final controller = await show(tester, server);
+      server.tag('tag-1', conversationId: 'g1');
+      await news(tester, controller);
+      expect(
+        titleStyle(tester, g1, 'Workgroup 1').fontWeight,
+        grid.AppFont.semibold,
+      );
+      await close(tester, controller);
+    },
+  );
 
-  testWidgets('the open task is regular weight, carried by its highlight', (tester) async {
+  testWidgets('the open task is regular weight, carried by its highlight', (
+    tester,
+  ) async {
     final server = humansSwarm();
     addNumberedWorkgroups(server, 1);
     final controller = await show(tester, server);

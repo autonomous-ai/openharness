@@ -240,10 +240,12 @@ class ProjectSidebar extends StatelessWidget {
         ? needsHuman(group) > 0
         : reading.waiting.isNotEmpty;
     // Open, a project's row is its own chat's, as each workgroup under it
-    // has its own; collapsed, it is bold for anything it hides.
-    final unread =
-        reading == null || controller.expandedProjects.contains(project?.id)
+    // has its own; collapsed, it is bold for anything it hides. Both by what
+    // is for a person (#2427), never agents' progress alone.
+    final unread = reading == null
         ? controller.unreadShown(group)
+        : controller.expandedProjects.contains(project?.id)
+        ? reading.forPeople(group)
         : reading.unread.isNotEmpty;
     // Only what opening this row shows, so opening it clears the number (Dee,
     // Slack's way). Tags in the task conversations it hides make it bold, and
@@ -327,9 +329,10 @@ class ProjectSidebar extends StatelessWidget {
     // A muted chat stays listed, greyed, never bold (Slack); the open one
     // keeps its highlight.
     final muted = controller.notifyOf(group.id) == SuperTabNotify.muted;
+    // Regular weight when open too, as Slack's: the highlight carries it,
+    // and bold stays for unread alone (Huy, 11-03, #2427).
     final style = SwarmType.sidebar(
       compact: compact,
-      medium: highlighted,
       color: highlighted || (unread && !muted)
           ? DesktopChrome.foreground
           : DesktopChrome.muted,
@@ -1192,12 +1195,21 @@ class _ProjectReading {
                 attention.mentionsIn(g.id),
           ].fold(0, (a, b) => a + b),
   };
+
+  /// Whether [g]'s row is bold: a person wrote there, the reader is tagged
+  /// there, or it waits on a person (#2427). Agents' progress alone is not.
+  bool forPeople(SuperTabConversation g) =>
+      sidebar.controller.unreadForPeople(g) ||
+      (sidebar.attention?.mentionsIn(g.id) ?? 0) > 0 ||
+      (sidebar.needsHuman(g) > 0 &&
+          sidebar.controller.notifyOf(g.id) != SuperTabNotify.muted);
+
   late final _open = () {
     final waiting = <String>{}, unread = <String>{};
     for (final g in conversations) {
       if (g.closed || g.isBuddyChat || g.audience != null) continue;
       if (sidebar.needsHuman(g) > 0) waiting.add(g.id);
-      if (sidebar.controller.unreadShown(g)) unread.add(g.id);
+      if (forPeople(g)) unread.add(g.id);
     }
     return (waiting: waiting, unread: unread);
   }();

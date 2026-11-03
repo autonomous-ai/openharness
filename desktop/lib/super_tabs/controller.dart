@@ -3389,6 +3389,15 @@ class SuperTabController extends ChangeNotifier {
   bool unreadShown(SuperTabConversation group) =>
       notifyOf(group.id) != SuperTabNotify.muted && unread(group);
 
+  /// A person wrote in [group]'s main stream since the reader's mark, and it
+  /// is not muted: what makes a project's or a task's sidebar row bold, with
+  /// a tag of the reader or a wait on a person (Huy, 11-03, #2427). Agents'
+  /// progress messages and system rows leave it, so a busy Swarm's sidebar
+  /// does not read all bold.
+  bool unreadForPeople(SuperTabConversation group) =>
+      notifyOf(group.id) != SuperTabNotify.muted &&
+      group.lastPersonSequence > readMark(group.id);
+
   /// Keeps [level] for [id] on every device of the reader. Shown at once;
   /// false, and the old setting back, when the server did not keep it. A
   /// later choice for the same chat wins over an earlier one still on its way.
