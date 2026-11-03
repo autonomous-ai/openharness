@@ -101,6 +101,27 @@ void main() {
     expect(line('message-4'), findsNothing);
   });
 
+  testWidgets('a thread line says @ you when an unread reply tags the reader', (
+    tester,
+  ) async {
+    final server = threaded();
+    server.tag(
+      'message-2',
+      threadId: 'message-1',
+      messageSequence: server.revision,
+    );
+    final c = await show(tester, server);
+    final tag = find.descendant(
+      of: line('message-1'),
+      matching: find.text('@ you'),
+    );
+    expect(tag, findsOneWidget);
+    c.markThreadRead('lead', 'message-1', server.revision);
+    await tester.pumpAndSettle();
+    expect(tag, findsNothing);
+    await c.flush();
+  });
+
   testWidgets('a reply also sent to the chat shows in both, marked as a '
       'thread reply', (tester) async {
     await show(tester, threaded(alsoSend: true));

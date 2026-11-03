@@ -327,7 +327,7 @@ void main() {
     });
 
     test(
-      'a tag in a thread-only reply is a new reply, not Needs you',
+      'a tag in a thread-only reply is Needs you and a new reply',
       () async {
         final server = swarm();
         server.tag(
@@ -342,8 +342,10 @@ void main() {
           'more': false,
         };
         final activity = await load(server);
-        expect(activity.needsYou, isEmpty);
-        expect(activity.count, 0);
+        expect(activity.needsYou, hasLength(1));
+        expect(activity.needsYou.single.kind, SuperTabNeedKind.mention);
+        expect(activity.needsYou.single.conversationId, 'offline');
+        expect(activity.count, 1);
         expect(activity.newReplies.map((t) => t.rootId), ['message-1']);
       },
     );
