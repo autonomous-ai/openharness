@@ -151,7 +151,8 @@ class SwarmInvitationRow extends StatelessWidget {
 /// it and how many agents are running ([swarmProjectLine]), and at its right
 /// how long ago it last moved, over the tags waiting in it ("@2", filled) or,
 /// unread, a dot; a skeleton in their place while what waits is on its way
-/// ([tagsLoading]). A tap opens it; a long press offers its pin ([onLongPress]).
+/// ([tagsLoading]). A private project has a lock after its name. A tap opens
+/// it; a long press offers its pin ([onLongPress]).
 class SwarmHomeProjectRow extends StatelessWidget {
   const SwarmHomeProjectRow({
     super.key,
@@ -224,22 +225,39 @@ class SwarmHomeProjectRow extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Semantics(
-                      label: bright && news.tags == 0
-                          ? 'Unread messages'
-                          : null,
-                      child: Text(
-                        '#${project.project.name}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppType.label(
-                          color: bright
-                              ? AppPalette.textPrimary
-                              : AppPalette.textSecondary,
-                          height: 1.3,
-                          fontWeight: bright ? AppFont.semibold : null,
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Semantics(
+                            label: bright && news.tags == 0
+                                ? 'Unread messages'
+                                : null,
+                            child: Text(
+                              '#${project.project.name}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppType.label(
+                                color: bright
+                                    ? AppPalette.textPrimary
+                                    : AppPalette.textSecondary,
+                                height: 1.3,
+                                fontWeight: bright ? AppFont.semibold : null,
+                              ),
+                            ),
+                          ),
                         ),
-                      ),
+                        // After its name, as the desktop's sidebar marks it.
+                        if (project.project.isPrivate) ...[
+                          const SizedBox(width: AppSpace.s),
+                          Icon(
+                            LucideIcons.lock300,
+                            key: const ValueKey('swarm-project-private'),
+                            size: 14,
+                            color: AppPalette.textSecondary,
+                            semanticLabel: 'Private project',
+                          ),
+                        ],
+                      ],
                     ),
                     if (line.isNotEmpty) ...[
                       const SizedBox(height: 3),
