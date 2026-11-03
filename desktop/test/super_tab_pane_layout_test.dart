@@ -314,13 +314,14 @@ void main() {
   // Huy, 11-03: an open thread (or task, or Members) is set apart from the
   // chat by a soft shadow on its left edge, as in Slack, in both themes.
   for (final brightness in Brightness.values) {
-    testWidgets('the right pane casts the shared shadow over the chat on its '
+    testWidgets('the right pane lays the shared shade over the chat along its '
         'left edge; the chat casts none (${brightness.name})', (tester) async {
       await tester.binding.setSurfaceSize(const Size(1400, 800));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       grid.AppTheme.brightness.value = brightness;
       addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
       final page = grid.AppDesktop.surface;
+      var chatTaps = 0;
       await tester.pumpWidget(
         MaterialApp(
           theme: grid.buildAppTheme(brightness: brightness),
@@ -328,47 +329,55 @@ void main() {
             body: SuperTabPaneLayout(
               storage: MemoryStore(),
               onLeave: () {},
-              left: ColoredBox(color: page),
-              right: ColoredBox(color: page),
-              center: ColoredBox(color: page),
+              left: SizedBox.expand(child: ColoredBox(color: page)),
+              right: SizedBox.expand(child: ColoredBox(color: page)),
+              center: GestureDetector(
+                onTap: () => chatTaps++,
+                child: SizedBox.expand(child: ColoredBox(color: page)),
+              ),
             ),
           ),
         ),
       );
       await tester.pumpAndSettle();
 
-      List<BoxShadow> shadowsIn(Finder pane) => [
-        for (final box in tester.widgetList<DecoratedBox>(
-          find.descendant(of: pane, matching: find.byType(DecoratedBox)),
-        ))
-          if (box.decoration case BoxDecoration(:final boxShadow?))
-            ...boxShadow,
-      ];
-      expect(shadowsIn(right), grid.AppDesktop.paneEdgeShadow);
-      for (final shadow in shadowsIn(right)) {
-        expect(shadow.offset.dx, lessThan(0), reason: 'falls to the left');
-        expect(shadow.offset.dy, 0, reason: 'only to the left');
-      }
-      expect(shadowsIn(center), isEmpty);
-      expect(shadowsIn(left), isEmpty);
-
-      // It is painted to the pane's left, and after the chat, so it lies
-      // over the chat rather than under it.
-      final box = find.descendant(
-        of: right,
-        matching: find.byType(DecoratedBox),
+      // A strip of the design system's one gradient just outside the pane's
+      // left edge, darkest at the pane, fading out over the chat. A gradient,
+      // not a blurred shadow: a straight edge needs no blur, and a blur costs
+      // every repaint of the window (ENGINEERING.md 4).
+      Finder shadesIn(Finder pane) => find.descendant(
+        of: pane,
+        matching: find.byWidgetPredicate(
+          (w) =>
+              w is DecoratedBox &&
+              w.decoration is BoxDecoration &&
+              ((w.decoration as BoxDecoration).gradient != null ||
+                  (w.decoration as BoxDecoration).boxShadow != null),
+        ),
       );
-      final size = tester.getSize(right);
-      var painted = paints;
-      for (final shadow in grid.AppDesktop.paneEdgeShadow) {
-        painted = painted
-          ..rect(
-            rect: (Offset.zero & size)
-                .shift(shadow.offset)
-                .inflate(shadow.spreadRadius),
-          );
-      }
-      expect(tester.renderObject(box.first), painted);
+      expect(shadesIn(center), findsNothing);
+      expect(shadesIn(left), findsNothing);
+      final shade = shadesIn(right);
+      expect(shade, findsOne);
+      final decoration =
+          tester.widget<DecoratedBox>(shade).decoration as BoxDecoration;
+      expect(decoration.boxShadow, isNull);
+      final gradient = grid.AppDesktop.paneEdgeShade;
+      expect(decoration.gradient, gradient);
+      expect(gradient.begin, Alignment.centerRight);
+      expect(gradient.colors.first.a, greaterThan(0));
+      expect(gradient.colors.last.a, 0);
+      final strip = tester.getRect(shade), pane = tester.getRect(right);
+      expect(strip.right, pane.left);
+      expect(strip.width, grid.AppDesktop.paneEdgeShadeWidth);
+      expect(strip.top, pane.top);
+      expect(strip.bottom, pane.bottom);
+      expect(strip.left, greaterThan(tester.getRect(center).left));
+
+      // It never takes a click meant for the chat beneath it.
+      await tester.tapAt(strip.centerLeft + const Offset(2, 0));
+      expect(chatTaps, 1);
+
       final row = tester.widget<Row>(
         find.ancestor(of: right, matching: find.byType(Row)).first,
       );

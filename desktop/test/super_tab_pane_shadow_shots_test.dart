@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/pane_layout.dart';
 import 'package:harness/super_tabs/roster.dart';
 import 'package:harness/super_tabs/view.dart';
 
@@ -40,10 +41,6 @@ void main() {
         tester,
       ) async {
         final picture = GlobalKey();
-        // flutter_test paints shadows as hard edges unless told not to; the
-        // real, blurred shadow is what this looks at.
-        debugDisableShadows = false;
-        addTearDown(() => debugDisableShadows = true);
         const peer = {
           'kind': 'person',
           'id': 'peer',
@@ -123,16 +120,61 @@ void main() {
             image.dispose();
           });
         }
-        final shadows = [
-          for (final box in tester.widgetList<DecoratedBox>(
-            find.ancestor(of: pane, matching: find.byType(DecoratedBox)),
-          ))
-            if (box.decoration case BoxDecoration(:final boxShadow?))
-              ...boxShadow,
-        ];
-        // Before the test ends: flutter_test checks its debug flags then.
-        debugDisableShadows = true;
-        expect(shadows, grid.AppDesktop.paneEdgeShadow);
+        final container = find.ancestor(
+          of: pane,
+          matching: find.byType(SuperTabRightPane),
+        );
+        expect(container, findsOne);
+        final shade = find.descendant(
+          of: container,
+          matching: find.byWidgetPredicate(
+            (w) =>
+                w is DecoratedBox &&
+                w.decoration is BoxDecoration &&
+                (w.decoration as BoxDecoration).gradient != null,
+          ),
+        );
+        expect(shade, findsOne);
+        expect(
+          (tester.widget<DecoratedBox>(shade).decoration as BoxDecoration)
+              .gradient,
+          grid.AppDesktop.paneEdgeShade,
+        );
+
+        // What a person sees (where the chat is not under the dark drawer
+        // veil, which is already black): on most rows down the pane, the chat just left
+        // of its edge is darker than the chat a little further in.
+        if (!name.endsWith('drawer') || brightness == Brightness.light) {
+          final edge = tester.getRect(container);
+          final rows = [
+            for (var i = 1; i <= 9; i++) edge.top + edge.height * i / 10,
+          ];
+          final darker = await tester.runAsync(() async {
+            final boundary =
+                picture.currentContext!.findRenderObject()!
+                    as RenderRepaintBoundary;
+            final image = await boundary.toImage();
+            final data = (await image.toByteData(
+              format: ui.ImageByteFormat.rawRgba,
+            ))!;
+            int luma(double x, double y) {
+              final at = (y.round() * image.width + x.round()) * 4;
+              return (data.getUint8(at) * 299 +
+                      data.getUint8(at + 1) * 587 +
+                      data.getUint8(at + 2) * 114) ~/
+                  1000;
+            }
+
+            final count = rows
+                .where(
+                  (y) => luma(edge.left - 40, y) - luma(edge.left - 2, y) >= 3,
+                )
+                .length;
+            image.dispose();
+            return count;
+          });
+          expect(darker, greaterThanOrEqualTo(6), reason: 'shaded rows of 9');
+        }
 
         await tester.pumpWidget(const SizedBox());
         await c.flush();
