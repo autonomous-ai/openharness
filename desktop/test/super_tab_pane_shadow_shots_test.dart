@@ -40,6 +40,10 @@ void main() {
         tester,
       ) async {
         final picture = GlobalKey();
+        // flutter_test paints shadows as hard edges unless told not to; the
+        // real, blurred shadow is what this looks at.
+        debugDisableShadows = false;
+        addTearDown(() => debugDisableShadows = true);
         const peer = {
           'kind': 'person',
           'id': 'peer',
@@ -126,6 +130,8 @@ void main() {
             if (box.decoration case BoxDecoration(:final boxShadow?))
               ...boxShadow,
         ];
+        // Before the test ends: flutter_test checks its debug flags then.
+        debugDisableShadows = true;
         expect(shadows, grid.AppDesktop.paneEdgeShadow);
 
         await tester.pumpWidget(const SizedBox());

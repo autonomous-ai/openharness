@@ -1,9 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -322,14 +320,12 @@ void main() {
       addTearDown(() => tester.binding.setSurfaceSize(null));
       grid.AppTheme.brightness.value = brightness;
       addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
-      final picture = GlobalKey();
       final page = grid.AppDesktop.surface;
       await tester.pumpWidget(
         MaterialApp(
           theme: grid.buildAppTheme(brightness: brightness),
-          home: RepaintBoundary(
-            key: picture,
-            child: SuperTabPaneLayout(
+          home: Scaffold(
+            body: SuperTabPaneLayout(
               storage: MemoryStore(),
               onLeave: () {},
               left: ColoredBox(color: page),
@@ -356,40 +352,28 @@ void main() {
       expect(shadowsIn(center), isEmpty);
       expect(shadowsIn(left), isEmpty);
 
-      // The shadow is painted, over the chat: the chat just left of the pane
-      // is darker than the chat further in, which is the plain page.
-      final edge = tester.getTopLeft(right).dx;
-      final y = 400;
-      final pixels = await tester.runAsync(() async {
-        final boundary =
-            picture.currentContext!.findRenderObject()!
-                as RenderRepaintBoundary;
-        final image = await boundary.toImage();
-        final data = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
-        int luma(double x) {
-          final at = (y * image.width + x.round()) * 4;
-          final b = data!.buffer.asUint8List();
-          return (b[at] * 299 + b[at + 1] * 587 + b[at + 2] * 114) ~/ 1000;
-        }
-
-        final read = (near: luma(edge - 6), far: luma(edge - 120));
-        image.dispose();
-        return read;
-      });
-      expect(
-        pixels!.far - pixels.near,
-        greaterThanOrEqualTo(3),
-        reason: 'shadow beside the pane: $pixels',
+      // It is painted to the pane's left, and after the chat, so it lies
+      // over the chat rather than under it.
+      final box = find.descendant(
+        of: right,
+        matching: find.byType(DecoratedBox),
       );
-      // The chat's own middle stays the page colour.
-      expect(pixels.far, closeTo(_luma(page), 1));
+      final size = tester.getSize(right);
+      var painted = paints;
+      for (final shadow in grid.AppDesktop.paneEdgeShadow) {
+        painted = painted
+          ..rect(
+            rect: (Offset.zero & size)
+                .shift(shadow.offset)
+                .inflate(shadow.spreadRadius),
+          );
+      }
+      expect(tester.renderObject(box.first), painted);
+      final row = tester.widget<Row>(
+        find.ancestor(of: right, matching: find.byType(Row)).first,
+      );
+      expect(row.children.last.key, const ValueKey('super-right-pane'));
       expect(tester.takeException(), isNull);
     });
   }
 }
-
-int _luma(Color c) =>
-    ((c.r * 255).round() * 299 +
-        (c.g * 255).round() * 587 +
-        (c.b * 255).round() * 114) ~/
-    1000;
