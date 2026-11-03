@@ -37,7 +37,7 @@ interface MarkRows {
  *  every retry follows a write that raised the mark, so a few settle it. */
 async function raise(rows: MarkRows, id: string, sequence: number, updatedAt: Date, data: Record<string, unknown>): Promise<{ sequence: number; created: boolean }> {
   for (let attempt = 0; attempt < 4; attempt++) {
-    const moved = await rows.updateMany({ where: { id, sequence: { lt: sequence } }, data: { sequence, updatedAt } })
+    const moved = await rows.updateMany({ where: { id, sequence: { not: sequence } }, data: { sequence, updatedAt } })
     if (moved.count) return { sequence, created: false }
     const held = await rows.findUnique({ where: { id }, select: { sequence: true } })
     if (held && held.sequence >= sequence) return { sequence: held.sequence, created: false }
