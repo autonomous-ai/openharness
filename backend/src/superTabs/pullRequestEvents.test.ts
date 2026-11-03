@@ -96,6 +96,22 @@ describe('pullRequestEvents', () => {
       .toEqual([`ci-red:${HEAD}`])
   })
 
+  // Review of #2750, Important 1: push to a draft, then mark it ready, within one minute. The new head was never read as a
+  // draft, and the draft run's failed ci/required is still the latest of its name.
+  it('ignores a draft\'s failure when a new head and ready land in the same minute', () => {
+    const drafted = pullRequestEvents(watch({ draft: true, head: 'aaaaaaa1111' }), [], null, NOW - 120_000).keys
+    const ready = watch({ head: 'bbbbbbb2222', checkRuns: [run('ci/required', 'failure', NOW - 30_000)] })
+    expect(pullRequestEvents(ready, drafted, null, NOW).events).toEqual([])
+  })
+
+  // Review of #2750, Minor: ready, back to a draft, ready again on the same head: the second draft spell's failure is the draft's too.
+  it('a second draft spell is ready again from its own moment', () => {
+    let seen = pullRequestEvents(watch({ draft: true }), [], null, NOW - 600_000).keys
+    seen = pullRequestEvents(watch(), seen, null, NOW - 500_000).keys
+    seen = pullRequestEvents(watch({ draft: true }), seen, null, NOW - 400_000).keys
+    expect(pullRequestEvents(watch({ checkRuns: [run('ci/required', 'failure', NOW - 300_000)] }), seen, null, NOW).events).toEqual([])
+  })
+
   it('a new head is news again', () => {
     const red = events(watch({ mergeable: false, checkRuns: [run('build', 'failure')] }))
     const next = watch({ head: 'fff0000aaa', mergeable: false, checkRuns: [run('build', 'failure', NOW + 30_000)] })
