@@ -212,7 +212,12 @@ void main() {
       var replies = 0;
       await pumpRow(tester, data, onReply: () => replies++);
       expect(find.text('Dee'), findsOneWidget);
-      expect(find.byKey(const ValueKey('swarm-author-line-1')), findsOneWidget);
+      final avatar = tester.widget<SwarmChatAvatar>(
+        find.byType(SwarmChatAvatar),
+      );
+      expect(avatar.name, 'Dee');
+      expect(avatar.id, me);
+      expect(avatar.agent, isFalse);
       expect(find.text("Let's build: Offline drafts"), findsOneWidget);
       expect(find.text('Old metadata title'), findsNothing);
       await tester.tap(find.byKey(const ValueKey('swarm-reply-line-1')));
@@ -269,7 +274,7 @@ void main() {
         };
         final fake = taskLineBackend([root]);
         await pumpTaskChat(tester, fake);
-        expect(find.text('dee'), findsOneWidget);
+        expect(find.text('Dee'), findsOneWidget);
         expect(
           find.byKey(const ValueKey('swarm-author-line-1')),
           findsOneWidget,
