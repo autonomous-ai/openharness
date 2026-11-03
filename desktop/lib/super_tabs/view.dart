@@ -4515,7 +4515,7 @@ class _SuperTabViewState extends State<SuperTabView>
                               constraints.maxWidth,
                               max: SuperTabPaneLayout.threadWidth,
                             ),
-                            child: thread,
+                            child: SuperTabRightPane(child: thread),
                           ),
                         ),
                       ),
@@ -4548,7 +4548,7 @@ class _SuperTabViewState extends State<SuperTabView>
                             width: SuperTabPaneLayout.drawerWidth(
                               constraints.maxWidth,
                             ),
-                            child: roster,
+                            child: SuperTabRightPane(child: roster),
                           ),
                         ),
                       ),
