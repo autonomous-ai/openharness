@@ -817,6 +817,38 @@ void main() {
       expect(lc.snapshot!.projectById(code.id)?.name, 'code');
     });
 
+    // ENGINEERING.md §6 (River, 11-03): a failed rename waits, as a failed
+    // create does, instead of being asked again on every sync.
+    test(
+      'a refused rename of a tab\'s project waits before it is asked again',
+      () async {
+        final f = SuperTabLaunchFixture();
+        _huyDesk(f);
+        final c = await _personal(f);
+        var now = DateTime(2026, 11, 3, 9);
+        Future<void> sync() => withClock(
+          Clock(() => now),
+          () => PersonalProjects.of(f.app).sync(c),
+        );
+        f.connection.server.unknownCommand = (command) =>
+            command['type'] == 'project.rename';
+        await sync();
+        expect(_commands(f, 'project.rename'), hasLength(2));
+        await sync();
+        expect(
+          _commands(f, 'project.rename'),
+          hasLength(2),
+          reason: 'waits before asking again',
+        );
+        f.connection.server.unknownCommand = null;
+        now = now.add(const Duration(seconds: 11));
+        await sync();
+        expect(_commands(f, 'project.rename'), hasLength(4));
+        final names = [for (final p in c.snapshot!.projects) p.name];
+        expect(names, containsAll(['code', 'Harness Monitor']));
+      },
+    );
+
     test('a tab with no usable name still gets a project, under a name the server takes', () async {
       final f = SuperTabLaunchFixture();
       final p = _huyDesk(f);
