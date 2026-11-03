@@ -339,6 +339,8 @@ export interface AppSwarms {
     superTabId?: string; projectId?: string
     /** The conversation the window has open in that Swarm tab, when it is one (its Lead's, Chat with PM or a group). */
     conversationId?: string
+    /** The root of the thread whose pane is on screen beside that conversation, which the round dial's face follows. */
+    threadRoot?: string
   }>
   /** The ACTIVE swarm's grid. Empty from a window that predates the field, or one with no panes. */
   tiles: CableTile[]
@@ -417,7 +419,7 @@ export interface CableHost {
    *  reader's Buddy chat there ('buddy') or the project's Lead chat ('pm'), so the desktop follows the dial's side. */
   superTabSelected?(superTabId: string, projectId: string, chat?: CardSide): void
   /** The Swarm tab the window has on screen and the project open in it ('' when none is); null when the active tab is not a Swarm or there is no window. */
-  activeSwarmProject?(): { superTabId: string; projectId: string; conversationId?: string; fromDevice: boolean } | null
+  activeSwarmProject?(): { superTabId: string; projectId: string; conversationId?: string; threadRoot?: string; fromDevice: boolean } | null
   appName(): string
   voiceLang(): string
   /** The window's latest selected pane, including selections made before this dial attached. */
@@ -1756,13 +1758,15 @@ export class CableSession {
         // start. Quoted text, carried text, questions and edits already have their own pinned targets.
         // Except words for a Swarm face's chat: the dial shows that chat, so a pane focused in the window never takes them.
         const plain = str('agentId') && !formVoice && !searchVoice && !draftVoice && !questionVoice && !carryVoice && !('selectionId' in msg)
-        const dialFace = plain ? this.voiceFaceOf(str('agentId')!) : undefined
+        // A Pro says `face` when the words were spoken on its Lead view, which shows that chat (Swarm parity, part 3).
+        const proFace = msg.face === true
+        const dialFace = plain ? this.voiceFaceOf(str('agentId')!, proFace) : undefined
         // A Swarm Lead's id (the backend's 24 hex; a harness's is a UUID) with no card here yet (the devices process just
         // restarted) or any more: words for a Lead on another machine, which the focused pane must not take (review of #2232).
         const swarmId = plain && !dialFace && SWARM_AGENT_ID.test(str('agentId')!)
         const focused = plain && !dialFace && !swarmId ? this.host.appFocus?.() : undefined
         const agentId = focused?.agentId ?? str('agentId')
-        const swarmFace = dialFace ?? (agentId ? this.voiceFaceOf(agentId) : undefined)
+        const swarmFace = dialFace ?? (agentId ? this.voiceFaceOf(agentId, proFace) : undefined)
         this.voice = {
           agentId,
           ...(swarmFace ? { swarmFace } : {}),
@@ -2770,6 +2774,8 @@ export class CableSession {
   /** The project this Pro itself picked last and when: the desktop's announce of it is no news, and a stale one of another is held off. */
   private picked: { key: string; at: number } | null = null
   private lastRecapGet: { key: string; at: number; read: Promise<LeadRecap | null> } | null = null
+  /** `${lead} ${why}` of each recap that came back with nothing and was logged (recapMissed). */
+  private readonly recapsMissed = new Set<string>()
   /** A swarmChat dial's alerts (`${tab}:${lead}`): the notice it was last given or shown as already there, and whether it
    *  was read on the desktop since. A notice is sent once, never on an attach or resync (it was there before), never for
    *  the chat the desktop has open; `notice.read` once when the desktop opens the chat of one that was sent. */
@@ -2795,10 +2801,12 @@ export class CableSession {
    * The chat words spoken to this Lead are posted in: its face chat, for a dial that names where words go. Never for a Pro:
    * it shows the face chat but no "Sending to", and its plain agent room shows no chat at all, so following the desktop's
    * open chat would post the person's words in a group or PM chat they cannot see they are talking to (review of #2298). Its
-   * words go to the Lead conversation, as before it said swarmChat, until voice comes to the Pro (Swarm parity, part 3).
+   * words go to the Lead conversation, as before it said swarmChat, unless its voice.begin says `face`: spoken on its Lead
+   * view, which shows the face chat and the PM | Buddy side (Swarm parity, part 3). Without it, a Buddy-side word would be
+   * posted in the shared Lead chat.
    */
-  private voiceFaceOf(harnessId: string): SwarmFace | undefined {
-    return this.seqOn ? undefined : this.swarmFaceOf(harnessId)
+  private voiceFaceOf(harnessId: string, proFace: boolean): SwarmFace | undefined {
+    return this.seqOn && !proFace ? undefined : this.swarmFaceOf(harnessId)
   }
 
   /** Whether `harnessId` is a Swarm Lead's harness on this machine. */
@@ -2808,8 +2816,9 @@ export class CableSession {
 
   /** The extra arguments of words spoken to a Swarm Lead: the dial's chat flag, and the chat they were spoken to. */
   private sayArgs(face: SwarmFace | undefined): [chat?: CardChat, chatId?: string] {
-    // A chat flag with no id means "the chat open on the desktop" to the Swarm service: a Pro sends neither (voiceFaceOf).
-    if (this.seqOn) return []
+    // A chat flag with no id means "the chat open on the desktop" to the Swarm service: a Pro sends neither unless its words
+    // were for the face chat it showed (voiceFaceOf), and then names that chat.
+    if (this.seqOn && !face) return []
     const [chat] = this.chatFlag()
     if (chat === undefined) return []
     return face ? [chat, face.id] : [chat]
@@ -3056,12 +3065,22 @@ export class CableSession {
     if (this.lastRecapGet?.key !== asked || now - this.lastRecapGet.at >= RECAP_REPEAT_MS || !listed) {
       const read = Promise.resolve()
         .then(() => this.host.swarmCardRecap?.(tab, lead, ...this.chatFlag()) ?? null)
-        .catch((err) => { this.log(`cable: recap for ${lead} failed (${(err as Error).message})`); return null })
+        .then((recap) => { this.recapMissed(lead, recap ? null : 'came back empty'); return recap },
+          (err) => { this.recapMissed(lead, `failed (${(err as Error).message})`); return null })
       this.lastRecapGet = { key: asked, at: now, read }
     }
     const recap = await this.lastRecapGet.read
     // Nothing on a failure: the Pro keeps its "…" and asks again on the next open.
     if (recap) await this.queued(async () => { await this.send(recapFrame(recap)) })
+  }
+
+  /** A recap the dial asked for that came back with nothing leaves its face on the resting pet: said once per Lead and why,
+   *  and again after one came back (`why` null). */
+  private recapMissed(lead: string, why: string | null): void {
+    if (why === null) { for (const key of [...this.recapsMissed]) if (key.startsWith(`${lead} `)) this.recapsMissed.delete(key); return }
+    if (this.recapsMissed.has(`${lead} ${why}`)) return
+    this.recapsMissed.add(`${lead} ${why}`)
+    this.log(`cable: recap for ${lead} ${why}`)
   }
 
   /** Open a project's chat in its Swarm tab for this dial. Remembered before the window answers, so its announce of this very

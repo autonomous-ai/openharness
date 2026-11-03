@@ -461,6 +461,29 @@ void main() {
     expect(row(after.last)['conversationId'], 'design-fix');
   });
 
+  // Diego's dial, 2026-11-03: a thread open on Desktop was neither shown nor
+  // answered on the dial.
+  test('the Swarm row names the open thread while its pane shows, and not after it closes', () async {
+    final (f, c) = await openChats();
+    c.select('design-fix');
+    await settle();
+    expect(row(announces(f).last).containsKey('threadRoot'), isFalse);
+    c.openThread('m-root');
+    await settle();
+    expect(row(announces(f).last)['conversationId'], 'design-fix');
+    expect(row(announces(f).last)['threadRoot'], 'm-root');
+    c.closeThread();
+    await settle();
+    expect(row(announces(f).last)['conversationId'], 'design-fix');
+    expect(row(announces(f).last).containsKey('threadRoot'), isFalse);
+    // A thread of another conversation is not on screen beside this one.
+    c.openThread('m-root');
+    c.select('design-lead');
+    await settle();
+    expect(row(announces(f).last)['conversationId'], 'design-lead');
+    expect(row(announces(f).last).containsKey('threadRoot'), isFalse);
+  });
+
   test('a decisions view or an unloaded Swarm leaves conversationId out', () async {
     final (f, c) = await openChats();
     c.select('design-pm');

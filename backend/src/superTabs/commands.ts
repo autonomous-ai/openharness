@@ -39,7 +39,7 @@ import { syncTaskLines } from './taskLine.js'
 import { assignedNotice, tellBuddies } from './buddyNews.js'
 import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged } from './cards.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
-import { switchExpired } from './tidy.js'
+import { cancelledTags, cancelReason, switchExpired, unfinishedWork } from './tidy.js'
 import { BUILT_IN_ROLE_DEFAULTS, agentProjectId, audienceOf, canReadProject, deleteProject, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { recordClosing } from './closedAgents.js'
 import { declinedWith, declinedWithout } from './sharing.js'
@@ -146,6 +146,8 @@ export const commandSchema = z.discriminatedUnion('type', [
     unlessRemoved: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('machine.pause'), machineId: id, paused: z.boolean() }).strict(),
   z.object({ type: z.literal('machine.engineResume'), machineId: id, engine: z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), askedIn: askedInSchema.optional() }).strict(),
+  // The projects that may use a machine; null: every project (Tony, 11-03).
+  z.object({ type: z.literal('machine.projects'), machineId: id, projectIds: z.array(id).min(1).max(64).nullable(), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('machine.remove'), machineId: id }).strict(),
   z.object({ type: z.literal('machine.cleaned'), machineId: id, removalId: id }).strict(),
   z.object({ type: z.literal('localModels.set'), enabled: z.boolean() }).strict(),
@@ -397,6 +399,8 @@ export interface CommandContext {
   deletedMachineIds?: string[]
   /** Read from host ownership/access records by the store, never copied from the request. */
   contribution?: { machineOwnerId: string; contributorId: string; hostGrant?: string | null
+    /** The name the machine's owner gave it, from its account row (machines.ts accountMachineName); absent when it has none. */
+    machineName?: string
     /** A Harness Team account's machine: the Mac it lives on, from its account row (machines.ts ContributedMachine). */
     hostMachineId?: string
     /** The machine's account row is signed in as a Harness Team account (lib/teamSession.ts), with or without a Mac. */
@@ -620,7 +624,7 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if ('agentId' in command) readAgent(state, actor, command.agentId)
   if (command.type === 'agent.start') readConversation(state, actor, command.request.conversationId)
   if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
-    || command.type === 'machine.engineResume') && command.askedIn) {
+    || command.type === 'machine.engineResume' || command.type === 'machine.projects') && command.askedIn) {
     readConversation(state, actor, command.askedIn.conversationId)
   }
   if ('startId' in command && command.type !== 'route.modelResult') {
@@ -830,6 +834,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   const sender = author(state, actor, !leaving && command.type !== 'decision.answer' && command.type !== 'member.username')
   authorizeCommandAccess(state, actor, command, context)
+  /** A machine's owner said so: they sent the command, or the Lead of the chat [askedIn] names passes on a message they wrote
+   *  there in the last day, as routing rules are (machine.engineResume, machine.projects). */
+  const machineOwnerWord = (pool: ContributedMachine, askedIn: { conversationId: string } | undefined) => {
+    if (actor.kind === 'person') return actor.userId === pool.contributorId
+    const asked = askedIn && context.askedIn
+    return !!asked && asked.author.kind === 'person' && asked.author.id === pool.contributorId && !asked.source
+      && context.now - asked.createdAt <= RULE_MESSAGE_MS && state.conversations.find(c => c.id === askedIn.conversationId)?.leadId === actor.agentId
+  }
   const rememberAttempt = (group: ReturnType<typeof conversation>) => {
     if (group.assignment) effects.previousAttempts.push(structuredClone({ conversationId: group.id,
       brief: group.brief, checks: group.checks, assignment: group.assignment }))
@@ -1115,7 +1127,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const projectId = command.sessionProjectId ?? context.reply?.sessionProject
       const project = swarm ? projectId ? readProject(state, actor, projectId) : undefined : groupProject(state, chat)
       const me = person(state, owner.id)
-      const folder = project ? { cwd: projectFolder(pool, project), worktree: true, ...(swarm ? { buddyNarrow: true as const } : {}) }
+      // A session of one project never reads beyond its folder, in either chat (task #2356: one in an older project chat ran
+      // wide, so it read its person's whole home, other projects' clones included, while that chat's own Buddy was narrow).
+      const folder = project ? { cwd: projectFolder(pool, project), worktree: true, buddyNarrow: true as const }
         : { cwd: buddyHomeFolder(pool, me), worktree: false, buddyScope: 'swarm' as const, buddyProjects: buddyProjectsOn(state, pool, me) }
       const request: AgentStartRequest = { conversationId: chat.id, machineId: main.machineId, engine: main.configuration.engine,
         ...(main.configuration.model ? { model: main.configuration.model } : {}), ...(main.configuration.effort ? { effort: main.configuration.effort } : {}),
@@ -1545,6 +1559,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (start.request.buddySession?.projectId === project.id && !start.harnessId && !start.error) start.error = 'Its project was deleted.'
       }
       deleteProject(state, actor, command.projectId)
+      // No machine keeps it any more; one kept only for it now serves none (machines.ts machineProjectRefusal).
+      for (const pool of state.machines ?? []) if (pool.projects) pool.projects = pool.projects.filter(id => id !== project.id)
       break
     }
     case 'project.sharing': {
@@ -1709,14 +1725,16 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Added as its person joined (Desktop's join): teammates' work only through its Harness Team account, for as long as
       // it stays contributed. Saving its settings sends the contribution without the field, and must not drop the rule.
       const teamAccountOnly = command.teamAccountOnly || state.machines.find(m => m.machineId === command.machineId)?.teamAccountOnly
+      // Its owner's choice of projects is its own command's (machine.projects): saving the settings keeps it.
+      const projects = state.machines.find(m => m.machineId === command.machineId && !m.buddyOnly)?.projects
       state.machines = state.machines.filter(m => m.machineId !== command.machineId)
       state.machineCleanups = state.machineCleanups?.filter(c => c.machineId !== command.machineId)
       if (!state.machineCleanups?.length) delete state.machineCleanups
       const host = context.contribution?.hostMachineId
-      state.machines.push({ machineId: command.machineId, name: mac?.name ?? command.name, cwd: command.cwd, engines: [...new Set(command.engines)],
+      state.machines.push({ machineId: command.machineId, name: mac?.name ?? context.contribution?.machineName ?? command.name, cwd: command.cwd, engines: [...new Set(command.engines)],
         maxAgents: mac?.maxAgents ?? command.maxAgents, ...(command.scope ? { scope: command.scope } : {}),
         contributorId: actor.userId, membershipGeneration: contributor.generation, generation: operationId, paused,
-        ...(host ? { hostMachineId: host } : {}), ...(teamAccountOnly ? { teamAccountOnly: true as const } : {}) })
+        ...(host ? { hostMachineId: host } : {}), ...(teamAccountOnly ? { teamAccountOnly: true as const } : {}), ...(projects && !host ? { projects } : {}) })
       // A Mac given other slots or a new name gives its team account the same, and its pause; its own folder, engines and grant stay.
       const added = state.machines.at(-1)!
       for (const team of teamPoolsOf(state, added)) if (!team.removal) Object.assign(team, { name: added.name, maxAgents: added.maxAgents, paused: added.paused })
@@ -1735,14 +1753,25 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A suspended engine (engineHealth.ts) is offered again at its owner's word: theirs, or a Lead's passing on a chat
       // message they wrote in the last day, as routing rules are. No new button: the only visible change is the struck name.
       const pool = machineContribution(state, command.machineId) ?? fail('NOT_FOUND', 'This machine has not been contributed.', 404)
-      const asked = actor.kind === 'agent' && command.askedIn && context.askedIn
-      const ownerAsked = !!asked && asked.author.kind === 'person' && asked.author.id === pool.contributorId && !asked.source
-        && context.now - asked.createdAt <= RULE_MESSAGE_MS && !!state.conversations.find(c => c.id === command.askedIn!.conversationId)?.leadId
-        && state.conversations.find(c => c.id === command.askedIn!.conversationId)!.leadId === actor.agentId
-      if (!(actor.kind === 'person' && actor.userId === pool.contributorId) && !ownerAsked) {
+      if (!machineOwnerWord(pool, command.askedIn)) {
         fail('OWNER_REQUIRED', "Only the machine's owner, or the Lead passing on a chat message the owner wrote in the last day, resumes an engine there.", 403)
       }
       resumeEngine(pool, command.engine)
+      break
+    }
+    case 'machine.projects': {
+      // Which projects may run agents here (Tony, 11-03): its owner's choice, or a Lead's passing on their chat message. A Mac's
+      // Harness Team account follows its Mac (machines.ts machineProjectRefusal), so it is set on the Mac.
+      const pool = machineContribution(state, command.machineId) ?? fail('NOT_FOUND', 'This machine has not been contributed.', 404)
+      if (pool.hostMachineId || pool.buddyOnly) fail('NOT_FOUND', 'This machine has not been contributed.', 404)
+      if (!machineOwnerWord(pool, command.askedIn)) {
+        fail('OWNER_REQUIRED', "Only the machine's owner, or the Lead passing on a chat message the owner wrote in the last day, chooses its projects.", 403)
+      }
+      if (command.projectIds === null) { delete pool.projects; break }
+      // Only projects its owner may read: they cannot keep a machine for a project they do not see.
+      const keeper = person(state, pool.contributorId)
+      const asOwner: Actor = { kind: 'person', userId: keeper.id, email: keeper.email }
+      pool.projects = [...new Set(command.projectIds)].map(projectId => readProject(state, asOwner, projectId).id)
       break
     }
     case 'machine.remove': {
@@ -1976,6 +2005,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const group = conversation(state, command.conversationId)
       if (group.id === groupProject(state, group).leadConversationId) fail('LEAD_CONVERSATION', 'The Lead conversation stays available.')
       if (command.archived && activeWork(group)) fail('WORK_ACTIVE', 'Resolve the active assignment before archiving this conversation.')
+      if (command.archived && unfinishedWork(group)) fail('WORK_UNFINISHED', 'This task did not finish. Hand it on, or cancel it with a reason, before archiving.')
+      const tags = command.archived && !group.archived ? cancelledTags(state, group, actor) : []
+      if (tags.length) message(group.id, `Archived without shipping: the task was cancelled${cancelReason(group) ? ` (${cancelReason(group)})` : ''}.`, [], null, SYSTEM_ROW, undefined, tags)
       group.archived = command.archived
       if (command.archived) endStepsOf(group, `${group.title} was archived.`, true)
       // Archived by hand, it leaves the active set until it is reopened (spec, Archive), once its reports are acknowledged:
@@ -3172,14 +3204,15 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (!allowed) fail('FORBIDDEN', 'Only an agent of this project or the tab owner can cancel work.', 403)
       // A retry after the cancel keeps the first reason and tells the worker once.
       if (assignment.status === 'cancelled') break
-      const lost = assignment.status === 'lost'
-      if (!activeWork(group) && !lost) fail('ATTEMPT_CLOSED', 'This attempt has already ended.')
+      // A stopped task is unfinished too, and only a cancel closes it (tidy.ts unfinishedWork): its worker is finished already.
+      const lost = assignment.status === 'lost', stopped = assignment.status === 'stopped'
+      if (!activeWork(group) && !lost && !stopped) fail('ATTEMPT_CLOSED', 'This attempt has already ended.')
       // A removed worker (reconciling) can never confirm a stop, so this is the only way to close its task; nobody is left to tell.
       // A lost task's agent was told already that its task moved, and does not wait for a decision.
-      const gone = assignment.status === 'reconciling' || lost
+      const gone = assignment.status === 'reconciling' || lost || stopped
       assignment.status = 'cancelled'
       assignment.result = command.reason
-      if (!lost) finishWorker(state, assignment.agentId)
+      if (!lost && !stopped) finishWorker(state, assignment.agentId)
       // Its steps' work ends with it; finished ones stay until it archives (task steps design; final review, finding 2).
       endStepsOf(group, `${group.title} was cancelled.`, false)
       message(group.id, `${who} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}.${gone ? '' : ' Stop working on it.'}`,
