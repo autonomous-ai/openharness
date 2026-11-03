@@ -3360,10 +3360,11 @@ class _SuperTabViewState extends State<SuperTabView>
     return data is SliverMultiBoxAdaptorParentData ? data.layoutOffset : null;
   }
 
-  /// The rows that join the one above them, without their name: runs of
-  /// one author's short updates, three to a group. Groups are counted from
-  /// the list's dividing row both ways, so a page read in above regroups
-  /// none of the rows already shown.
+  /// The rows that join the one above them, without their name: one
+  /// sender's messages within five minutes of each other, up to
+  /// [SuperTabMessageRow.groupLimit] to a group. Groups are counted from the
+  /// list's dividing row both ways, so a page read in above regroups none of
+  /// the rows already shown.
   static Set<String> _joined(
     List<SuperTabMessage> messages,
     SuperTabMessage? split,
@@ -3377,11 +3378,9 @@ class _SuperTabViewState extends State<SuperTabView>
     // oldest row.
     var group = [at - 1];
     for (var i = at - 2; i >= -1; i--) {
-      final newest = group.first;
       if (i >= 0 &&
-          newest - i < 3 &&
-          SuperTabMessageRow.groupsWith(messages[i + 1], messages[i]) &&
-          SuperTabMessageRow.groupsWith(messages[newest], messages[i])) {
+          group.first - i < SuperTabMessageRow.groupLimit &&
+          SuperTabMessageRow.groupsWith(messages[i + 1], messages[i])) {
         group.add(i);
         continue;
       }
@@ -3624,6 +3623,14 @@ class _SuperTabViewState extends State<SuperTabView>
     ]);
     // No conversation read yet: its error is the page itself, not a line over "Loading".
     final unread = _readsFirst && c.snapshot == null;
+    // The reader's own Buddy chat shows what the PM asked them.
+    final decisions = group != null && _isBuddyChat(group)
+        ? ({required bool edge}) => SuperTabDecisionsPanel(
+            decisions: SuperTabDecisions.of(c),
+            projectId: group.projectId,
+            edge: edge,
+          )
+        : null;
     return Column(
       children: [
         if (c.error != null && !unread)
@@ -3640,16 +3647,28 @@ class _SuperTabViewState extends State<SuperTabView>
               ],
             ),
           ),
-        if (group != null &&
-            _isBuddyChat(group) &&
-            !c.isEarlierBuddyChat(group))
-          SuperTabBuddyBar(controller: c, chat: group, app: widget.app),
-        // The reader's own Buddy chat shows what the PM asked them.
-        if (group != null && _isBuddyChat(group))
-          SuperTabDecisionsPanel(
-            decisions: SuperTabDecisions.of(c),
-            projectId: group.projectId,
-          ),
+        if (group != null && decisions != null && !c.isEarlierBuddyChat(group))
+          // The list stops at an edge under the Buddy's line, as it does under
+          // the header: without one, a message scrolled up to the line read as
+          // cut off under it (Huy, 11-03).
+          DecoratedBox(
+            key: const ValueKey('super-buddy-edge'),
+            decoration: BoxDecoration(
+              border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SuperTabBuddyBar(controller: c, chat: group, app: widget.app),
+                decisions(edge: false),
+              ],
+            ),
+          )
+        // An earlier Buddy chat has no Buddy line: its decisions, when it has
+        // any, end at the same edge.
+        else if (decisions != null)
+          decisions(edge: true),
         Expanded(
           child: c.loading
               ? const Center(child: CircularProgressIndicator())
@@ -4458,6 +4477,8 @@ class _SuperTabViewState extends State<SuperTabView>
                                             widget.onOpenTerminal)
                                         .call(agent);
                                   },
+                                  onOpenConversation: _openConversation,
+                                  facts: _facts,
                                 )
                               : const SizedBox.shrink(),
                         ],

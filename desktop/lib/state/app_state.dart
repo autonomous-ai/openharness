@@ -2255,18 +2255,23 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// The Harness Team account on this computer (cli/src/team/autoSetup.ts),
-  /// offered while the person is here: as they join a Swarm ([reason]
-  /// `join`), add this computer to one (`contribute`), or open the app
-  /// (`startup`). This computer's own daemon decides whether it is wanted: no
-  /// account yet, not declined before, and at start only while this computer
-  /// is in a Swarm with other people in it. It is then explained before the
-  /// system asks ([teamSetupAsks]): macOS's prompt is titled "osascript",
-  /// which nobody recognised as Harness (2026-10-27). On a Mac, Linux and
-  /// Windows ([teamAccountOn]), and never for another machine, where nobody
-  /// may be at it.
+  /// asked of this computer's own daemon while the person is here: as they
+  /// join a Swarm ([reason] `join`), add this computer to one (`contribute`),
+  /// or open the app (`startup`). On a Mac, Linux and Windows
+  /// ([teamAccountOn]), and never for another machine, where nobody may be at
+  /// it.
+  ///
+  /// A join or a contribution with the account missing locks the app until it
+  /// exists ([teamSetupLocked]; Scholes, 2026-11-03: Macs that joined stayed
+  /// "not set up" until someone found their row in Machines). A cancel or a
+  /// failure the daemon remembers from before locks too: this is a new join.
+  /// At start the daemon decides (no account, not declined, in a Swarm with
+  /// other people), and it is explained once a launch ([teamSetupAsks]),
+  /// never behind the lock.
   ///
   /// [tabId]: the Swarm joined or added to, so a Swarm its server does not
-  /// try team accounts in yet asks nothing (the daemon reads it).
+  /// try team accounts in yet asks nothing (the daemon reads it), and the lock
+  /// knows where Remove this Mac from the Swarm removes it from.
   ///
   /// True when the daemon answered, whatever it decided; false when it was not
   /// asked or could not say.
@@ -2279,18 +2284,18 @@ class AppNotifier extends ChangeNotifier {
         'reason': reason,
         'tabId': ?tabId,
       });
-      appLog.info(
-        'super-tabs',
-        'team account offer ($reason): ${answer['state']}',
-      );
-      if (answer['state'] == 'wanted') {
+      final state = answer['state'];
+      appLog.info('super-tabs', 'team account offer ($reason): $state');
+      if (reason == 'startup') {
         // The start check runs once for each daemon process, so a restart
         // with the explanation still open must not show it again: once a
-        // launch at start. A join, a contribution or the machine row's Set up
-        // is the person asking, and always explains.
-        if (reason != 'startup' || !_teamStartExplained)
+        // launch.
+        if (state == 'wanted' && !_teamStartExplained && !teamSetupLocked) {
           _teamSetupAsks.add(reason);
-        if (reason == 'startup') _teamStartExplained = true;
+        }
+        if (state == 'wanted') _teamStartExplained = true;
+      } else if (tabId != null && _teamLockStates.contains(state)) {
+        await _lockForTeamSetup(tabId);
       }
       return true;
     } catch (error) {
@@ -2298,6 +2303,208 @@ class AppNotifier extends ChangeNotifier {
       appLog.info('super-tabs', 'team account not offered ($reason): $error');
       return false;
     }
+  }
+
+  /// The daemon's answers that leave the account to be made here: wanted, or
+  /// held back only by an earlier cancel or failure, already running, or with
+  /// no prompt to ask in (the window then says how).
+  static const _teamLockStates = {
+    'wanted',
+    'declined',
+    'waiting',
+    'running',
+    'no-prompt',
+  };
+
+  /// The Swarms this computer joined, or was added to, while its Harness Team
+  /// account was missing, for [_teamLockAccount]. Kept on this computer so a
+  /// restart locks again.
+  final _teamLockTabs = <String>{};
+  String? _teamLockAccount;
+  String? _teamLockRestored;
+
+  static String _teamLockKey(String account) => 'team_setup_lock.$account';
+
+  /// Whether the app is held until this computer's Harness Team account exists
+  /// (super_tabs/team_account_setup.dart `TeamAccountSetupLock`).
+  bool get teamSetupLocked =>
+      _teamLockTabs.isNotEmpty &&
+      _teamLockAccount != null &&
+      _teamLockAccount == currentUser?.id &&
+      _teamAccountHere() != null;
+
+  Future<void> _lockForTeamSetup(String tabId) async {
+    final account = currentUser?.id;
+    if (account == null) return;
+    if (_teamLockAccount != account) {
+      _teamLockAccount = account;
+      _teamLockTabs.clear();
+    }
+    if (!_teamLockTabs.add(tabId)) return;
+    notifyListeners();
+    await _saveTeamLock(account);
+  }
+
+  Future<void> _saveTeamLock(String account) async {
+    final store = localStore;
+    if (store == null) return;
+    try {
+      if (_teamLockTabs.isEmpty) {
+        await store.delete(_teamLockKey(account));
+      } else {
+        await store.write(
+          _teamLockKey(account),
+          jsonEncode(_teamLockTabs.toList()),
+        );
+      }
+    } catch (error) {
+      appLog.info('super-tabs', 'team account lock not saved: $error');
+    }
+  }
+
+  /// At each connection of this computer's daemon: a lock left by a join
+  /// before the app closed holds again, unless the account exists by now.
+  /// Read once for each account.
+  Future<void> _restoreTeamSetupLock() async {
+    final account = currentUser?.id;
+    final store = localStore;
+    if (account == null || store == null || _teamLockRestored == account) {
+      return;
+    }
+    if (_teamAccountHere() == null) return;
+    _teamLockRestored = account;
+    List<String> tabs;
+    try {
+      final raw = await store.read(_teamLockKey(account));
+      tabs = raw == null
+          ? const []
+          : [
+              for (final id in jsonDecode(raw) as List)
+                if (id is String) id,
+            ];
+    } catch (error) {
+      appLog.info('super-tabs', 'team account lock not read: $error');
+      return;
+    }
+    if (tabs.isEmpty || _disposed || currentUser?.id != account) return;
+    final setup = await teamSetupStatus();
+    if (_disposed || currentUser?.id != account) return;
+    if (_teamLockAccount != account) {
+      _teamLockAccount = account;
+      _teamLockTabs.clear();
+    }
+    _teamLockTabs.addAll(tabs);
+    if (setup?.state == 'exists') {
+      await teamAccountMade();
+      return;
+    }
+    // A Swarm that let this computer go meanwhile (removed from Machines on
+    // another device, or the person's access gone) holds nothing.
+    final here = _teamAccountHere();
+    if (here != null) {
+      for (final tabId in tabs) {
+        if (await _swarmHolds(tabId, here) == false) {
+          _teamLockTabs.remove(tabId);
+        }
+      }
+    }
+    if (_disposed || currentUser?.id != account) return;
+    notifyListeners();
+    if (_teamLockTabs.length != tabs.length) await _saveTeamLock(account);
+  }
+
+  /// Whether Swarm [tabId] still has computer [here] in its Machines list, not
+  /// being removed: false when it does not, or when this person can no longer
+  /// open it; null when it cannot be read now (offline), which keeps the lock.
+  Future<bool?> _swarmHolds(String tabId, String here) async {
+    try {
+      final c = await superTabs.open(tabId);
+      await c.refresh();
+      if (c.accessRevoked) return false;
+      final snapshot = c.snapshot;
+      if (snapshot == null || c.error != null) return null;
+      return snapshot.machines.any(
+        (m) => m['machineId'] == here && m['removal'] == null,
+      );
+    } on SuperTabFailure catch (failure) {
+      return const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)
+          ? false
+          : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// The Swarms the lock holds for, by the names they go by, read now so
+  /// Remove can say which it leaves; "a Swarm" for one that cannot be read.
+  Future<List<String>> readTeamSetupLockSwarmNames() async => [
+    for (final id in [..._teamLockTabs])
+      switch (await _swarmName(id)) {
+        final String name when name.isNotEmpty => name,
+        _ => 'a Swarm',
+      },
+  ];
+
+  /// A Swarm's name, given up after [_teamLockNameWait] (offline): Remove
+  /// still asks, naming it "a Swarm".
+  Future<String?> _swarmName(String tabId) async {
+    try {
+      return await () async {
+        final c = await superTabs.open(tabId);
+        if (c.snapshot == null) await c.refresh();
+        return c.snapshot?.name.trim();
+      }().timeout(_teamLockNameWait);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static const _teamLockNameWait = Duration(seconds: 5);
+
+  /// This computer's Harness Team account exists: the lock ends.
+  Future<void> teamAccountMade() async {
+    final account = _teamLockAccount;
+    if (account == null || _teamLockTabs.isEmpty) return;
+    _teamLockTabs.clear();
+    notifyListeners();
+    await _saveTeamLock(account);
+  }
+
+  /// The lock's one way out, where setup can never finish here: removes this
+  /// computer from each Swarm it is held for. Null when that is done;
+  /// otherwise why not, and the lock stays for the Swarms not done.
+  Future<String?> removeLockedMachine() async {
+    final here = _teamAccountHere();
+    final account = currentUser?.id;
+    if (here == null || account == null || _teamLockAccount != account) {
+      return null;
+    }
+    for (final tabId in [..._teamLockTabs]) {
+      // Already gone from it, being removed, or no longer this person's to
+      // open: nothing to remove, and the lock lets it go.
+      final holds = await _swarmHolds(tabId, here);
+      if (holds != false) {
+        try {
+          final c = await superTabs.open(tabId);
+          final result = await c.command({
+            'type': 'machine.remove',
+            'machineId': here,
+          });
+          if (result == null) {
+            return c.operationError ?? 'Could not do that. Try again.';
+          }
+        } on SuperTabFailure catch (failure) {
+          return failure.message;
+        } catch (error) {
+          appLog.info('super-tabs', 'machine not removed for the lock: $error');
+          return 'Could not reach the Swarm. Try again.';
+        }
+      }
+      _teamLockTabs.remove(tabId);
+      notifyListeners();
+      await _saveTeamLock(account);
+    }
+    return null;
   }
 
   /// The start offer, once for each process of this Mac's daemon: Macs
@@ -5910,6 +6117,7 @@ class AppNotifier extends ChangeNotifier {
       // joined a Swarm before teammates' work went only to Team machines never
       // met the join or contribute moment.
       if (!machine.machine.isSharedMachine) {
+        unawaited(_restoreTeamSetupLock());
         unawaited(_offerTeamAccountAtStart());
       }
     } else {

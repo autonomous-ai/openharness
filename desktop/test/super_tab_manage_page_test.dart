@@ -82,11 +82,17 @@ void main() {
     return (c: c, server: server);
   }
 
-  testWidgets('its four tabs, Devices only where this build has them', (
+  testWidgets('its five tabs, Devices only where this build has them', (
     tester,
   ) async {
     await show(tester);
-    for (final label in const ['Machines', 'Models', 'Devices', 'Swarm']) {
+    for (final label in const [
+      'Machines',
+      'Models',
+      'Devices',
+      'Swarm',
+      'Backlog',
+    ]) {
       expect(find.text(label), findsOneWidget, reason: label);
     }
     await tester.tap(find.text('Swarm'));

@@ -247,6 +247,17 @@ describe('durable group pull request links', () => {
     return (group as unknown as { pullRequestUrls?: string[] }).pullRequestUrls
   }
 
+  it('records a link under the project\'s repository and corrects the record it held before', async () => {
+    const tab = (await store.create(owner, randomUUID(), 'Links')).id
+    await run(tab, { type: 'tab.project', machineId: 'test-host', project: { cwd: '/work/project', repositoryUrl: null } })
+    // Without a repository to judge by, a link is kept as written.
+    await run(tab, message('Opened https://github.com/other/project/pull/50'))
+    expect(await links(tab, 'lead')).toEqual(['https://github.com/other/project/pull/50'])
+    await run(tab, { type: 'project.repository', projectId: 'lead', repositoryUrl: 'https://github.com/example/project' })
+    await run(tab, message(`Again ${pr(50)}, and elsewhere https://github.com/example/other/pull/51`))
+    expect(await links(tab, 'lead')).toEqual([pr(50)])
+  })
+
   it('keeps one link beyond the latest 100 messages', async () => {
     const { tab } = await fixture()
     await run(tab, message(`Review ${pr(41)}`))
