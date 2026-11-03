@@ -55,9 +55,10 @@ const said = (association: string, body: string, url: string) => {
 /**
  * What is new in [watch] since the keys in [seen], and the keys to keep from now on. The first read of a pull request
  * ([seen] empty) records what is already there and posts only a merge conflict, which still needs acting on. Nothing from
- * [botLogin], the app's own account, which the Engineer's own comments go out as. While a draft, no CI: a head read as a
- * draft (`draft:<head>`) is marked when first read as ready (`ready:<head>:<ms>`), and a failure finished before that was
- * the draft's own run, still the latest of its name until the ready run's start.
+ * [botLogin], the app's own account, which the Engineer's own comments go out as. While a draft, no CI: a pull request read
+ * as a draft (`draft`), whatever its head, is marked when next read as ready (`ready:<ms>`), and a failure finished before
+ * that was a draft's own run, still the latest of its name until the ready run starts (review of #2750: a push and Ready
+ * in the same minute leave the new head never read as a draft).
  */
 export function pullRequestEvents(watch: PullRequestWatch, seen: readonly string[], botLogin: string | null, now: number): { events: PullRequestEvent[]; keys: string[] } {
   const first = seen.length === 0, known = new Set(seen), events: PullRequestEvent[] = [], found: string[] = []
@@ -66,12 +67,13 @@ export function pullRequestEvents(watch: PullRequestWatch, seen: readonly string
     found.push(key)
     if (!known.has(key) && post) events.push({ key, text })
   }
-  if (watch.draft) found.push(`draft:${head}`)
+  const readyMark = seen.find(key => key.startsWith('ready:'))
+  if (watch.draft) found.push('draft')
   else {
-    const readyMark = seen.find(key => key.startsWith(`ready:${head}:`))
-    found.push(readyMark ?? `ready:${head}:${now}`)
-    // On the first read everything there is recorded, whenever it finished.
-    const since = !first && known.has(`draft:${head}`) ? readyMark ? Number(readyMark.split(':')[2]) : now : -Infinity
+    // Ready since a draft read: from now, unless it was ready already. On the first read everything there is recorded.
+    const readyAt = known.has('draft') ? now : readyMark ? Number(readyMark.slice('ready:'.length)) : null
+    if (readyAt !== null) found.push(`ready:${readyAt}`)
+    const since = !first && readyAt !== null ? readyAt : -Infinity
     const failing = (run: PullRequestWatch['checkRuns'][number]) => !!run.conclusion && FAILED.has(run.conclusion)
     const failed = watch.checkRuns.filter(run => failing(run) && (run.completedAt ?? now) >= since)
     const stale = watch.checkRuns.some(run => failing(run) && (run.completedAt ?? now) < since)
@@ -93,11 +95,12 @@ export function pullRequestEvents(watch: PullRequestWatch, seen: readonly string
     if (comment.login === botLogin) continue
     add(`comment:${comment.id}`, `${comment.login} commented on your pull request #${number}${said(comment.association, comment.body, comment.url)}`)
   }
-  // The newest first: what this read found, then what was seen before; the current head's ready mark always stays.
-  const keys = [...new Set([...found, ...seen])]
-  const mark = keys.find(key => key.startsWith(`ready:${head}:`))
-  const kept = keys.filter(key => key !== mark).slice(0, mark ? SEEN_KEPT - 1 : SEEN_KEPT)
-  return { events, keys: mark ? [mark, ...kept] : kept }
+  // The newest first: what this read found, then what was seen before. The draft and ready marks stand for the pull request
+  // as it is now: a stale one goes, and the current one always stays.
+  const state = (key: string) => key === 'draft' || key.startsWith('ready:')
+  const marks = found.filter(state).length ? found.filter(state) : seen.filter(state).slice(0, 1)
+  const kept = [...new Set([...found, ...seen])].filter(key => !state(key)).slice(0, SEEN_KEPT - marks.length)
+  return { events, keys: [...marks, ...kept] }
 }
 
 /** What a pass asks GitHub: a pull request's watch (null: it cannot say), the app's own login, and `done` once it is over. */

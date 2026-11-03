@@ -9,8 +9,8 @@ const watch = (patch: Partial<PullRequestWatch> = {}): PullRequestWatch => ({ ur
   base: 'main', mergeable: true, checkRuns: [], checkSuites: [], reviews: [], comments: [], ...patch })
 const run = (name: string, conclusion: string | null, completedAt: number | null = NOW - 1_000) =>
   ({ name, status: conclusion ? 'completed' : 'in_progress', conclusion, completedAt })
-/** Seen before: the pull request was read once already, ready at this head long ago. */
-const SEEN = [`ready:${HEAD}:${NOW - 3_600_000}`]
+/** Seen before: the pull request was read once already, a draft marked ready long ago. */
+const SEEN = [`ready:${NOW - 3_600_000}`]
 const events = (w: PullRequestWatch, seen: readonly string[] = SEEN, bot: string | null = 'harness[bot]') => pullRequestEvents(w, seen, bot, NOW)
 
 describe('pullRequestEvents', () => {
@@ -72,7 +72,7 @@ describe('pullRequestEvents', () => {
     const busy = watch({ mergeable: false, checkRuns: [run('build', 'failure')], reviews: [{ id: 7, login: 'huy', association: 'MEMBER', state: 'COMMENTED', body: 'ok', url: URL }] })
     const first = pullRequestEvents(busy, [], 'harness[bot]', NOW)
     expect(first.events.map(e => e.key)).toEqual([`conflict:${HEAD}`])
-    expect(first.keys).toEqual(expect.arrayContaining([`ci-red:${HEAD}`, 'review:7', `conflict:${HEAD}`, `ready:${HEAD}:${NOW}`]))
+    expect(first.keys).toEqual(expect.arrayContaining([`ci-red:${HEAD}`, 'review:7', `conflict:${HEAD}`]))
     expect(pullRequestEvents(busy, first.keys, 'harness[bot]', NOW + 60_000).events).toEqual([])
   })
 
@@ -90,7 +90,7 @@ describe('pullRequestEvents', () => {
     const ready = watch({ checkRuns: [run('ci/required', 'failure', NOW - 300_000)] })
     const marked = pullRequestEvents(ready, seen, null, NOW)
     expect(marked.events).toEqual([])
-    expect(marked.keys).toContain(`ready:${HEAD}:${NOW}`)
+    expect(marked.keys).toContain(`ready:${NOW}`)
     // The ready run's own failure is news.
     expect(pullRequestEvents(watch({ checkRuns: [run('ci/required', 'failure', NOW + 30_000)] }), marked.keys, null, NOW + 60_000).events.map(e => e.key))
       .toEqual([`ci-red:${HEAD}`])
