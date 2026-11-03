@@ -472,4 +472,16 @@ describe('reading a model that keeps failing off a screen', () => {
     expect(modelFailing('I will handle the case where the API response is slow.\n> ')).toBe(false)
     expect(modelFailing(`Waiting for API response\n${'line\n'.repeat(30)}> `)).toBe(false)
   })
+
+  it('knows a relay that is gone: Claude Code\'s connection lines and Codex\'s reconnect', () => {
+    // Claude Code 2.1 names the connection's failure in place of "Connection error." (Pro-10's Team agent, 2026-11-03).
+    for (const line of ['⎿  API Error: Unable to connect to API (ECONNREFUSED)', '  ⎿  Unable to connect to API (ECONNREFUSED) · Retrying in 4s · attempt 3/10',
+      '⎿  API Error: No internet route — check your connection or VPN (ENETUNREACH)']) {
+      expect(modelFailing(`work\n${line}\n> `)).toBe(true)
+    }
+    // Pro-9's Team Codex agents, four hours after the update.
+    expect(modelFailing('• Reconnecting... waiting for network (4h 21m 27s • esc to interrupt)\n  └ Connection failed: error sending request\n› Ask Codex to do anything')).toBe(true)
+    expect(modelFailing('work\n  └ Connection failed: error sending request\n› ')).toBe(true)
+    expect(modelFailing(`I will make the client say "Unable to connect to API" when the relay is down.\n${'line\n'.repeat(30)}> `)).toBe(false)
+  })
 })
