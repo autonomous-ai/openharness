@@ -1,5 +1,5 @@
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
-import { expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, recordAgentPresence, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
+import { expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, recordAgentPresence, removalPreview, startPreparing, storedObservation, swarmGridRow, teamWorkRefusal, type MachineObservation } from './machines.js'
 import { readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { createHash } from 'node:crypto'
@@ -1944,7 +1944,7 @@ export class SuperTabStore {
       const contributed = state.machines?.find(m => m.machineId === target.machineId)?.name
       const machineName = contributed ?? await tx.machine.findFirst({ where: { machineId: target.machineId, userId: target.machineOwnerId },
         select: { name: true, hostname: true } }).then(m => m?.name ?? m?.hostname ?? null)
-      return { tabId, projectId: project.id, approvalRequired: teamAccountRequired(), agentId: target.id, assignmentId: group.assignment!.id,
+      return { tabId, projectId: project.id, agentId: target.id, assignmentId: group.assignment!.id,
         repositoryUrl: project.repository?.repositoryUrl ?? null,
         requester: { name: requester.name?.trim() || null, email: requester.email },
         agentName: agentDisplayName(state.agents, target.id) ?? target.displayName ?? target.name, machineName: machineName?.trim() || null }
@@ -1974,7 +1974,7 @@ export class SuperTabStore {
       const project = startProject(state, start.request) ?? fail('NOT_FOUND', 'This start has no project folder to prepare.', 404)
       const owner = await tx.user.findUnique({ where: { id: project.ownerId }, select: { name: true, email: true } })
       const email = owner?.email ?? state.people.find(p => p.id === project.ownerId)?.email ?? ''
-      return { tabId, projectId: project.id, repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(),
+      return { tabId, projectId: project.id, repositoryUrl: project.repository?.repositoryUrl ?? null,
         startId, own: project.ownerId === start.machineOwnerId,
         requester: { name: owner?.name?.trim() || null, email } }
     })
@@ -2898,19 +2898,17 @@ export class SuperTabStore {
 
   /** What removing a machine would do, for its owner's confirmation (machines.ts removalPreview). */
   /** A project's repository address, for a person who may open the project (routes/superTabs.ts, its GitHub access):
-   *  a private project's members only. Null when it has none yet. [approvalRequired]: whether this Swarm's projects need a
-   *  repository approved before the app gives them tokens, rolled out with the team account (machines.ts
-   *  `teamAccountRequired`). */
+   *  a private project's members only. Null when it has none yet. */
   /** `name`: the project's own, for the page after approving its repository (routes/superTabs.ts). `others`: the reader's
    *  other projects in the Swarm, those they may open, to name the ones its repository is approved for. */
   async projectRepository(user: AuthUser, tabId: string, projectId: string):
-    Promise<{ repositoryUrl: string | null; approvalRequired: boolean; name: string; others: Array<{ id: string; name: string }> }> {
+    Promise<{ repositoryUrl: string | null; name: string; others: Array<{ id: string; name: string }> }> {
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)
       const actor = await this.actor(tx, user, state)
       const projects = visibleState(state, actor, this.now()).projects ?? []
       const project = projects.find(p => p.id === projectId) ?? fail('NOT_FOUND', 'This project is unavailable.', 404)
-      return { repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(), name: project.name,
+      return { repositoryUrl: project.repository?.repositoryUrl ?? null, name: project.name,
         others: projects.filter(p => p.id !== projectId).map(p => ({ id: p.id, name: p.name })) }
     })
   }

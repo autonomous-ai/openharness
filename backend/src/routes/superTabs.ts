@@ -264,12 +264,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   const signIn = options.signIn !== undefined ? options.signIn : githubSignIn(env)
   const approvalSecret = github ? stateSecret(github.app.config) : null
   // No token for a repository nobody who can push to it approved for this project: a project names its repository as
-  // text, and the app is on other people's repositories too.
-  // Rolled out with the team account (machines.ts `teamAccountRequired`): a Swarm outside it gets tokens as before, so a
-  // bug here cannot stop other people's Swarms.
-  const requireApproval = async (user: { autonomousEnv: string }, grant: { tabId: string; projectId: string; approvalRequired: boolean },
-    repository: GitHubRepository) => {
-    if (!grant.approvalRequired) return
+  // text, and the app is on other people's repositories too. In every Swarm, whatever the team account switch says (task
+  // #1694, 11-03): it was held to the Swarms with that switch on, and every other Swarm got a token for any repository the
+  // app is installed on.
+  const requireApproval = async (user: { autonomousEnv: string }, grant: { tabId: string; projectId: string }, repository: GitHubRepository) => {
     const { tabId, projectId } = grant
     if (await approvals.approved(user.autonomousEnv, tabId, projectId, repository.fullName)) return
     throw new SuperTabError('GITHUB_REPOSITORY_NOT_APPROVED', `Nobody who can push to ${repository.fullName} has approved it for this project yet, `
@@ -327,7 +325,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     (req, reply) => respond(reply, async () => {
       const project = await store.projectRepository(req.user!, req.params.tabId, req.params.projectId)
       const access = await projectGitHubAccess(github?.app ?? null, project.repositoryUrl, { canApprove: !!signIn,
-        approved: async repository => !project.approvalRequired || approvals.approved(req.user!.autonomousEnv, req.params.tabId, req.params.projectId, repository),
+        approved: repository => approvals.approved(req.user!.autonomousEnv, req.params.tabId, req.params.projectId, repository),
         approvedFor: async repository => {
           const ids = await approvals.approvedProjects(req.user!.autonomousEnv, req.params.tabId, repository)
           return project.others.filter(other => ids.includes(other.id)).map(other => other.name)
