@@ -129,6 +129,14 @@ describe('when a request ships', () => {
     expect(f.group(id).ledger?.shippedAt).toBe(9_000)
   })
 
+  it('records the machine each attempt ran on, and the attempt it shipped on keeps it (contributor view, #2444)', () => {
+    const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
+    f.passChecks(id, assignmentId)
+    f.status(id, assignmentId, worker, 'done', 'Merged https://github.com/o/r/pull/7')
+    expect(f.group(id).ledger?.runs?.at(-1)?.machineId).toBe('host')
+    expect(f.group(id).ledger?.shippedBy?.machineId).toBe('host')
+  })
+
   it('keeps the first ship time when the same group finishes again', () => {
     const f = fixture(), id = f.create()
     const first = f.assign(id)
