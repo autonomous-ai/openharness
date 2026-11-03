@@ -369,6 +369,30 @@ ProcessRunner offUiIsolate([ProcessRunner run = Process.run]) =>
     (executable, arguments) =>
         Isolate.run(() => run(executable, arguments), debugName: executable);
 
+/// A `notify-send` waiting for a click: its answer once it exits, and a way to
+/// stop it.
+typedef NoticeWait = ({Future<ProcessResult> result, void Function() kill});
+
+/// Starts one waiting `notify-send`, which stops by itself after [limit].
+typedef NoticeWaiter = NoticeWait Function(
+  String executable,
+  List<String> arguments, {
+  required Duration limit,
+});
+
+/// A [NoticeWaiter] on an isolate of its own, as [offUiIsolate] runs.
+NoticeWait waitOffUiIsolate(
+  String executable,
+  List<String> arguments, {
+  required Duration limit,
+}) => (
+  result: Isolate.run(
+    () => Process.run(executable, arguments),
+    debugName: executable,
+  ),
+  kill: () {},
+);
+
 /// Linux: `notify-send`, which talks to whatever notification daemon the
 /// desktop already runs. No native dependency. A Swarm tag's or chat's notice
 /// offers its default action and waits for it (`--action`, `--wait`, libnotify
@@ -377,9 +401,17 @@ ProcessRunner offUiIsolate([ProcessRunner run = Process.run]) =>
 /// which a waiting notice cannot learn, so a click on it does what the
 /// desktop's own default is.
 class LinuxSystemNotifier implements SystemNotifier {
-  LinuxSystemNotifier({ProcessRunner? run}) : _run = run ?? offUiIsolate();
+  LinuxSystemNotifier({ProcessRunner? run, NoticeWaiter? wait})
+    : _run = run ?? offUiIsolate(),
+      _wait =
+          wait ??
+          (run == null
+              ? waitOffUiIsolate
+              : (exe, args, {required limit}) =>
+                    (result: run(exe, args), kill: () {}));
 
   final ProcessRunner _run;
+  final NoticeWaiter _wait;
 
   /// The daemon's id for each agent's notification, so the next one REPLACES it
   /// (`--replace-id`) rather than stacking — the banner's rule.
@@ -438,14 +470,14 @@ class LinuxSystemNotifier implements SystemNotifier {
     if (opens && _canAct && _waiting < _maxWaiting) {
       _waiting++;
       unawaited(
-        _run('notify-send', [
+        _wait('notify-send', [
               '--app-name=Harness',
               '--action=default=Open',
               '--wait',
               '--',
               title,
               body,
-            ])
+            ], limit: const Duration(minutes: 10)).result
             .then((result) async {
               if (result.exitCode == 0) {
                 // The invoked action's name, on a line of its own; nothing when the notice
