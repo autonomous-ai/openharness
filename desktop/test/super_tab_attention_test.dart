@@ -659,8 +659,8 @@ void main() {
       },
     );
 
-    test('a tag stops counting once the reader has read past it, answered '
-        'or not; a decision once its chat is read', () async {
+    test('a tag stops counting after reading, but a decision waits for an '
+        'answer', () async {
       final server = projectServer();
       server.followedThreads = {
         'unread': [],
@@ -684,6 +684,12 @@ void main() {
       server.markReadElsewhere('offline', server.revision);
       await c.refresh();
       expect(attention.mentions.waiting, hasLength(1));
+      expect(attention.mentionsIn('offline'), 1);
+      expect(
+        await attention.decisions.answer(attention.decisions.open.single, 0),
+        isTrue,
+      );
+      await attention.decisions.load();
       expect(attention.mentionsIn('offline'), 0);
       // A tag in a thread clears once the thread is read past it.
       server.tag(

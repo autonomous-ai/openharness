@@ -166,6 +166,18 @@ class SuperTabAttention extends ChangeNotifier {
   int mentionsIn(String conversationId) =>
       tagsIn(conversationId) + decisionsIn(conversationId);
 
+  /// What a conversation's red number counts, for its hover label.
+  String? badgeTooltipIn(String conversationId) {
+    final tags = tagsIn(conversationId);
+    final asked = decisionsIn(conversationId);
+    if (tags == 0 && asked == 0) return null;
+    return [
+      if (tags > 0) '$tags ${tags == 1 ? 'tag' : 'tags'}',
+      if (asked > 0)
+        '$asked ${asked == 1 ? 'decision' : 'decisions'} waiting for you',
+    ].join(', ');
+  }
+
   /// Whether [threadId] contains an unread tag of the reader.
   bool hasUnreadTagInThread(String conversationId, String threadId) {
     if (controller.accessRevoked ||
