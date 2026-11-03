@@ -108,7 +108,11 @@ GitHub).
     (`repository`: `owner/name`, lower case, from `githubRepository(url).fullName`)
   - `export interface CurrentApprovalsReport { apply: boolean; swarms: number; pairs: CurrentPair[]; alreadyApproved: number;
     written: number; skipped: string[]; failed: Array<{ tabId: string; error: string }> }`
-  - `export async function approveCurrentPairs(db: PrismaClient, opts: { apply: boolean }): Promise<CurrentApprovalsReport>`
+  - `export async function approveCurrentPairs(db: PrismaClient, opts: { apply: boolean; installed: (repository: GitHubRepository) => Promise<boolean> }): Promise<CurrentApprovalsReport>`
+  - After security reviews 1 and 2: only pairs whose repository the app is installed on now are approved (the script passes
+    `GitHubApp.resolve(...) !== null`, so it needs `GITHUB_APP_ID`/`GITHUB_APP_PRIVATE_KEY`); the report adds
+    `notInstalled: CurrentPair[]` and `unknown: Array<CurrentPair & { error: string }>`, neither ever approved. Errors print
+    their code only; a live Swarm without a head is `skipped`; a person approving mid-run counts as already approved.
 - Script: `DATABASE_URL=… node --import tsx scripts/swarm-github-approvals/approve-current.ts [--apply]`; prints the report
   as JSON then one line (`Dry run: N pairs would be approved. Nothing was written; add --apply to write them.`); usage
   and exit 2 for any other argument or no `DATABASE_URL`; exit 1 when `failed` is not empty.
