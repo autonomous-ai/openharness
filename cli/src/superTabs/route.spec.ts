@@ -285,6 +285,15 @@ describe('strength, fit and effective cost', () => {
     for (const b of boxes) expect(r.shown.filter(s => s.machineName === b).map(s => [s.engine, s.fit.status]).sort()).toEqual([['claude', 'fits'], ['codex', 'short']])
   })
   // River, 2026-11-03: a Codex reading "unknown" did not say that its owner's machine must relay it.
+  // The PM paces its own account by the day since its weekly reset (project instructions, 2026-11-03): "resets in 7 days", a
+  // whole day either way, left it half a day off.
+  it('says when a weekly window resets to the hour past two days', () => {
+    const brief = (resetsIn: number) => quotaBrief({ quota: windows(null, [80, resetsIn]), fit: { status: 'fits' } }, NOW)
+    expect(brief(6 * D + 13 * H + 10 * M)).toBe('fits: weekly 80% left, resets in 6d13h')
+    expect(brief(5 * D)).toBe('fits: weekly 80% left, resets in 5d')
+    expect(brief(2 * D + 23 * H + 40 * M)).toBe('fits: weekly 80% left, resets in 3d')
+    expect(brief(30 * H)).toBe('fits: weekly 80% left, resets in 30h')
+  })
   it('says why an unknown quota is unknown', () => {
     const why = 'This account runs on its owner\'s subscription; its allowance is read on the owner\'s machine.'
     expect(quotaBrief({ quota: { known: false, leftPercent: null, resetsAt: null, why }, fit: { status: 'unknown' } }, NOW)).toBe(`unknown: ${why}`)
