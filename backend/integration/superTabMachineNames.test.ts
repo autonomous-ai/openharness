@@ -1,0 +1,101 @@
+import { randomUUID } from 'node:crypto'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
+import { PrismaClient } from '@prisma/client'
+import type { AuthUser } from '../src/lib/ssoAuth.js'
+import { SuperTabStore } from '../src/superTabs/store.js'
+import type { Command } from '../src/superTabs/commands.js'
+import { poolRows } from './hostRows.test-support.js'
+
+// A Swarm machine goes by the name its owner gave it in Machines (Dee, #2308: Mac 3 kept showing as Macs-Mac-Studio-2 in
+// New Project). The server takes it from the owner's own account row, never from what a client sends. A fresh loopback
+// replica set, created here.
+let replica: MongoMemoryReplSet
+let db: PrismaClient
+let store: SuperTabStore
+const TEAM_COMPUTER = 'tttttttttttttttttttttttttttttttt'
+const dee: AuthUser = { sub: '400000000000000000000001', email: 'dee@example.com', autonomousEnv: 'prod', role: 'user' }
+const huy: AuthUser = { sub: '400000000000000000000002', email: 'huy@example.com', autonomousEnv: 'prod', role: 'user' }
+const deeTeam: AuthUser = { ...dee, harnessSessionId: 'dee-team-session', harnessSessionKind: 'team', harnessComputerId: TEAM_COMPUTER }
+const run = (tab: string, command: Command, user: AuthUser = dee) => store.execute(user, tab, { operationId: randomUUID(), command })
+const reading = (generation: string) => ({ generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
+  diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Desktop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
+  quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] }) as Parameters<SuperTabStore['observeMachine']>[3]
+const rename = (machineId: string, name: string | null) => db.machine.update({ where: { machineId }, data: { name } })
+const contribute = (tab: string, machineId: string, name: string, user: AuthUser = dee, extra: Partial<Extract<Command, { type: 'machine.contribute' }>> = {}) =>
+  run(tab, { type: 'machine.contribute', machineId, name, cwd: '/work', scope: 'swarm', engines: ['codex'], maxAgents: 3, ...extra }, user)
+const nameIn = async (tab: string, machineId: string, user: AuthUser = dee) =>
+  (await store.read(user, tab)).state.machines!.find(m => m.machineId === machineId)!.name
+/** The machine's host reports once, as its own session. */
+const report = async (tab: string, machineId: string, user: AuthUser = dee) => {
+  const generation = (await poolRows(store, user, machineId)).find(p => p.tabId === tab)!.machine.generation
+  await store.observeMachine(user, tab, machineId, reading(generation))
+}
+
+beforeAll(async () => {
+  replica = await MongoMemoryReplSet.create({ binary: { version: '7.0.24', downloadDir: join(tmpdir(), 'harness-super-tab-mongodb-binaries') },
+    replSet: { count: 1, ip: '127.0.0.1', storageEngine: 'wiredTiger' } })
+  const uri = replica.getUri(`super_tab_machine_names_${randomUUID().replaceAll('-', '_')}`)
+  await promisify(execFile)(join(process.cwd(), 'node_modules/.bin/prisma'), ['db', 'push', '--skip-generate'], {
+    env: { ...process.env, DATABASE_URL: uri }, timeout: 60000,
+  })
+  db = new PrismaClient({ datasources: { db: { url: uri } } })
+  store = new SuperTabStore(db)
+  for (const user of [dee, huy]) await db.user.create({ data: { id: user.sub, externalId: `fixture-${user.sub}`, email: user.email, autonomousEnv: 'prod' } })
+  const machine = (machineId: string, userId: string, computerId: string, sessionKind: string, hostMachineId?: string) => db.machine.create({ data: {
+    machineId, userId, computerId, sessionKind, ...hostMachineId ? { hostMachineId } : {}, hostname: 'Macs-Mac-Studio-2.local',
+    apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+  await machine('studio-2', dee.sub, 'ssssssssssssssssssssssssssssssss', 'computer')
+  await machine('studio-2-team', dee.sub, TEAM_COMPUTER, 'team', 'studio-2')
+  await machine('huy-mini', huy.sub, 'hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh', 'computer')
+})
+afterAll(async () => {
+  await db?.$disconnect()
+  await replica?.stop()
+})
+beforeEach(async () => {
+  // Seeded from the computer's hostname on its first connect (MachineService), as an account row is until its owner renames it.
+  await rename('studio-2', 'Macs-Mac-Studio-2.local')
+  await rename('studio-2-team', 'Macs-Mac-Studio-2 · Team')
+  await rename('huy-mini', 'Huy Mini')
+})
+
+async function swarm() {
+  const tab = (await store.create(dee, randomUUID(), 'Names')).id
+  const invitation = await run(tab, { type: 'invite.create', email: huy.email, role: 'collaborator', conversationId: 'lead' })
+  await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, huy)
+  return tab
+}
+
+describe('a machine joins under the name its owner gave it', () => {
+  it('takes the account name over the name its client sent', async () => {
+    await rename('studio-2', 'Mac 3')
+    const tab = await swarm()
+    await contribute(tab, 'studio-2', 'Macs-Mac-Studio-2')
+    expect(await nameIn(tab, 'studio-2')).toBe('Mac 3')
+  })
+
+  it('keeps its computer name while never renamed', async () => {
+    const tab = await swarm()
+    await contribute(tab, 'studio-2', 'Macs-Mac-Studio-2')
+    // Clients drop '.local' (Desktop superTabMachineName); the Swarm keeps the account's name as it is.
+    expect(await nameIn(tab, 'studio-2')).toBe('Macs-Mac-Studio-2.local')
+  })
+
+  it('keeps the name its client sent when its account row has none', async () => {
+    await rename('studio-2', null)
+    const tab = await swarm()
+    await contribute(tab, 'studio-2', 'Macs-Mac-Studio-2')
+    expect(await nameIn(tab, 'studio-2')).toBe('Macs-Mac-Studio-2')
+  })
+
+  it('shows a teammate\'s machine by the name its owner gave it', async () => {
+    const tab = await swarm()
+    await contribute(tab, 'huy-mini', 'huys-mac-mini.local', huy)
+    expect(await nameIn(tab, 'huy-mini', dee)).toBe('Huy Mini')
+  })
+})
