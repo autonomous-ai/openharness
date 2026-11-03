@@ -286,7 +286,10 @@ void main() {
         ),
       );
       expect(mark.color!.a, lessThan(.5));
-      expect(find.byTooltip('New work is paused in this Swarm'), findsOneWidget);
+      expect(
+        find.byTooltip('New work is paused in this Swarm'),
+        findsOneWidget,
+      );
     });
 
     testBox('off is an empty square, on a checked square; tapping toggles it', (
