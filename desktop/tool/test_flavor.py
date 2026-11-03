@@ -7,6 +7,8 @@ app gets its own bundle id and gives up the harness:// links.
 """
 import copy
 import hashlib
+import os
+import subprocess
 from pathlib import Path
 
 TEST_ID = 'ai.autonomous.harness.test'
@@ -57,3 +59,28 @@ def patch_info(info):
     patched['CFBundleExecutable'] = TEST_NAME
     patched.pop('CFBundleURLTypes', None)
     return patched
+
+
+def install_cli(cli_dir, test_home, node):
+    """The PR's own CLI, bundled into [test_home] where Desktop looks first (lib/core/harness_cli_runner.dart).
+
+    `npm run bundle` writes one self-contained cli.js to BUNDLE_OUT_DIR. Desktop runs it with the Node that
+    runtime/current-node names, which must sit inside runtime/, so [node] is linked there. Returns cli.js.
+    """
+    harness = test_home / '.harness'
+    out = harness / 'cli'
+    out.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, BUNDLE_OUT_DIR=str(out), PATH=f'{node.parent}{os.pathsep}{os.environ.get("PATH", "")}')
+    subprocess.run(['npm', 'run', '--silent', 'bundle'], cwd=cli_dir, env=env, check=True,
+                   stdout=subprocess.DEVNULL)
+    runtime = harness / 'runtime'
+    runtime.mkdir(parents=True, exist_ok=True)
+    linked = runtime / 'node'
+    if linked.is_symlink() or linked.exists():
+        linked.unlink()
+    linked.symlink_to(node.resolve())
+    (runtime / 'current-node').write_text(f'{linked}\n')
+    cli = out / 'cli.js'
+    if not cli.is_file():
+        raise RuntimeError(f'the CLI bundle did not write {cli}')
+    return cli

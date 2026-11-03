@@ -111,7 +111,8 @@ class IsolationProofTest(unittest.TestCase):
 
         status = self.harness('auth', 'status', '--json')
         self.assertNotIn('owner@example.com', status.stdout, "the test CLI never sees the person's session")
-        signed_out = self.harness('logout')
+        # As Desktop's Sign out runs it (desktop/lib/auth/cli_login.dart).
+        signed_out = self.harness('logout', '--from-sign-out-button')
         self.assertEqual(signed_out.returncode, 0, signed_out.stdout + signed_out.stderr)
         stopped = self.harness('stop')
         self.assertEqual(stopped.returncode, 0, stopped.stdout + stopped.stderr)
