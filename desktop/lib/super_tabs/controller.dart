@@ -2960,6 +2960,14 @@ class SuperTabController extends ChangeNotifier {
     return !_disposed && snapshot?.conversation(id) != null;
   }
 
+  /// When group [groupId] last changed, a message included (parts.dart
+  /// `groupChangedAt`); null for one this reader does not hold.
+  DateTime? groupChangedAt(String groupId) =>
+      switch (_parts?.groupChangedAt(groupId)) {
+        final int at => DateTime.fromMillisecondsSinceEpoch(at),
+        null => null,
+      };
+
   /// [projectId]'s conversations, open and closed, in the snapshot's order.
   List<SuperTabConversation> projectConversations(String projectId) =>
       _indexed()?.byProject[projectId] ?? const [];
