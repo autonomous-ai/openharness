@@ -233,7 +233,8 @@ describe('work the PM opens from a Buddy\'s proposal without naming anyone (grou
     const web = f.run({ type: 'project.create', name: 'Web', visibility: 'public', brief: '' }).result as { projectId: string; conversationId: string }
     const before = f.state.conversations.length
     const wrongs = [{ ...sent, conversationId: web.conversationId }, { ...sent, conversationId: f.chat },
-      { ...sent, author: { kind: 'person' as const, id: 'peer', name: 'peer', membershipGeneration: 'first' } },
+      { ...sent, author: { kind: 'person' as const, id: 'owner', name: 'owner', membershipGeneration: 'first' } },
+      { ...sent, source: { ...sent.source, buddyId: f.pm } },
       { ...sent, author: { ...sent.author, id: f.pm } }, { ...sent, source: { kind: 'route', personId: 'peer' } }]
     for (const wrong of wrongs) {
       expect(() => f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline', brief: 'Save.',

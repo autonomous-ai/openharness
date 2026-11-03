@@ -205,3 +205,9 @@ export const proposalSentText = (project: string, proposal: { goal: string; scop
 export function proposalText(owner: string, proposal: { goal: string; scope: string; priority: string }): string {
   return `Proposal from ${owner}'s Buddy, on ${owner}'s behalf.\n\nGoal: ${proposal.goal}\nScope: ${proposal.scope}\nPriority: ${proposal.priority}`
 }
+
+/** A short opening message, with the complete goal kept in its thread. */
+export function proposalTitle(proposal: { title?: string; goal: string }): string {
+  const goal = proposal.goal.replace(/^Requested by [^\r\n]+?\.(?:\s+|$)/i, '').trim() || proposal.goal.trim()
+  return (proposal.title?.trim() || goal.match(/^[^.!?。！？\r\n]+[.!?。！？]?/)?.[0] || goal).slice(0, 80).trim()
+}

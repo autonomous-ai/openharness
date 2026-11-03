@@ -416,10 +416,10 @@ describe('a Buddy through the store', () => {
     await expect(propose([plan, 'a'.repeat(24), 'b'.repeat(24), 'c'.repeat(24), 'd'.repeat(24), 'e'.repeat(24)])).rejects.toThrow('at most 5 files')
     const sent = await propose([plan, shot, log])
     const id = String(sent.result.messageId)
-    const read = (await f.store.messages(owner, f.tab, 'lead', {}, f.lead)).messages.find(m => m.id === id)
+    const read = (await f.store.messages(owner, f.tab, 'lead', {}, f.lead)).messages.find(m => m.replyTo === id)
     expect(read?.attachments?.map(a => [a.name, a.mime, a.url.startsWith('https://cdn.example.test/super-tabs/')])).toEqual([
       ['plan.md', 'text/markdown', true], ['shot.png', 'image/png', true], ['sync.log', 'text/plain', true]])
-    expect((await f.store.messages(owner, f.tab, 'lead', {})).messages.find(m => m.id === id)?.attachments).toHaveLength(3)
+    expect((await f.store.messages(owner, f.tab, 'lead', {})).messages.find(m => m.replyTo === id)?.attachments).toHaveLength(3)
     // Each opens from its link as the apps open it: the picture shown in place, the plan and the log as their own text.
     // And from the signed link each read adds (fileLinks.ts), as apps that know links open it.
     expect(read!.attachments!.map(a => f.files.open(a.link!)?.length)).toEqual(read!.attachments!.map(a => a.size))
@@ -442,8 +442,8 @@ describe('a Buddy through the store', () => {
     const [first, second] = [await ask(), await ask()]
     const raced = await Promise.allSettled([propose([again], first), propose([again], second)])
     expect(raced.map(r => r.status).sort()).toEqual(['fulfilled', 'rejected'])
-    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: 'lead', source: { equals: { kind: 'buddy-proposal', personId: peer.sub, ownerMessageId: first } } } })
-      + await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: 'lead', source: { equals: { kind: 'buddy-proposal', personId: peer.sub, ownerMessageId: second } } } })).toBe(1)
+    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: 'lead', source: { equals: { kind: 'buddy-proposal', personId: peer.sub, buddyId: agentId, ownerMessageId: first } } } })
+      + await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: 'lead', source: { equals: { kind: 'buddy-proposal', personId: peer.sub, buddyId: agentId, ownerMessageId: second } } } })).toBe(1)
     const elsewhere = await upload('other.txt', 'text/plain', Buffer.from('project chat'), 'lead', false)
     await f.execute({ type: 'message.send', conversationId: 'lead', text: 'FYI', replyTo: null, recipientIds: [], attachmentIds: [elsewhere] }, peer)
     await expect(propose([elsewhere])).rejects.toThrow('Upload this file again')
@@ -881,7 +881,7 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
     await buddy(f)
     expect((await read()).deliveries).toEqual([])
     // Ordinary deliveries still show: the proposal's to the PM, its listed recipient.
-    const sent = (await f.store.messages(owner, f.tab, 'lead', {})).messages.find(m => m.id === proposal)!
+    const sent = (await f.store.messages(owner, f.tab, 'lead', {})).messages.find(m => m.replyTo === proposal)!
     expect(sent.deliveries.map(d => d.agentId)).toEqual([f.lead])
   })
 
