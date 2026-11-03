@@ -1552,9 +1552,15 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (previousPlacement) project.lead = previousPlacement
         else delete project.lead
         destination = state.machines!.find(m => m.machineId === start.request.machineId)!
-        // A refused command keeps none of its writes, the start above included.
-        if (!destination.observation?.capabilities?.includes(SWITCH_CAPABILITY)) fail('HOST_OUTDATED', `Update Harness on ${destination.name} to move the ${name}.`, 409)
-        start.request.leadFor!.switchId = operationId
+        if (destination.machineId === pool.machineId) {
+          // A Mac whose Team account already runs it placed it back there: a switch where it runs, with no candidate to start
+          // (security review 2 of #2705).
+          state.starts = state.starts!.filter(candidate => candidate.id !== start.id)
+        } else {
+          // A refused command keeps none of its writes, the start above included.
+          if (!destination.observation?.capabilities?.includes(SWITCH_CAPABILITY)) fail('HOST_OUTDATED', `Update Harness on ${destination.name} to move the ${name}.`, 409)
+          start.request.leadFor!.switchId = operationId
+        }
       }
       if (!contributedEngines(destination).includes(command.engine)) fail('ENGINE_NOT_OFFERED', `${ENGINE_NAMES[command.engine]} isn’t offered on ${destination.name}.`, 403)
       // The default account has one id per destination machine (a literal 'default' is the same account).
