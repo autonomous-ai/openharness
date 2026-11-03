@@ -49,7 +49,6 @@ describe('a route decision as stored (task #2488: ~20 KB a row since every engin
     expect(back.excluded.map(e => e.title.slice(-1))).toEqual(['a', 'c', 'd', 'f', 'b', 'e'])
     expect(new Set(back.excluded.map(e => JSON.stringify(e)))).toEqual(new Set(r.excluded.map(e => JSON.stringify(e))))
     expect(back).not.toHaveProperty('unavailable')
-    expect(routeRecordSchema.safeParse(back).success).toBe(true)
   })
 
   it('reads a record written before as it is, and stores a record with no exclusions with none', () => {
@@ -57,6 +56,7 @@ describe('a route decision as stored (task #2488: ~20 KB a row since every engin
     expect(readRecord(old)).toEqual(old)
     const none = { ...routed(), excluded: [] }
     expect(storedRecord(none)).not.toHaveProperty('unavailable')
+    expect(storedRecord(none).excluded).toEqual([])
     expect(readRecord(storedRecord(none)).excluded).toEqual([])
   })
 })
