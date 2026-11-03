@@ -120,6 +120,12 @@ Future<void> showSwitchPm(
               final name = superTabMachineName(
                 pool['name'] as String? ?? 'Mac',
               );
+              // The PM machine's owner switches its engine or account there;
+              // the backend moves it elsewhere only for the project's owner.
+              if (currentSnapshot?.projectById(projectId)?.ownerId !=
+                  c.accountId) {
+                return 'Only the project’s owner moves its PM to another machine.';
+              }
               if (!fresh(pool)) return '$name is offline.';
               final observation = part(pool['observation']);
               final capabilities =
@@ -280,41 +286,49 @@ Future<void> showSwitchPm(
                           ),
                         ],
                       ),
-                      if (profiles.isEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 12),
-                          child: Text(
-                            unavailable(activePool ?? const {}) ?? 'No engine or account is available on this machine.',
-                            style: DesktopChrome.metadata(),
-                          ),
+                      if (profiles.isEmpty) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          unavailable(activePool ?? const {}) ?? 'No engine or account is available on this machine.',
+                          style: DesktopChrome.metadata(),
                         ),
+                      ],
+                      // Rows line up under the pickers, past their 74-point label.
                       for (final p in profiles)
-                        ListTile(
-                          key: ValueKey('switch-pm-${p.engine}-${p.id}'),
-                          dense: true,
-                          contentPadding: const EdgeInsets.only(left: 74),
-                          enabled:
-                              !current(p) &&
-                              p.leftPercent != 0 &&
-                              unavailable(activePool ?? const {}) == null,
-                          selected:
-                              picked?.engine == p.engine && picked?.id == p.id,
-                          title: Text(
-                            '${leadEngineLabel(p.engine)} · ${p.label}',
-                          ),
-                          subtitle: Text(
-                            [
-                              if (current(p)) 'Current',
-                              if (p.leftPercent != null)
-                                '${p.leftPercent}% left',
-                              if (p.resetsAt != null)
-                                'resets ${switchPmTime(context, p.resetsAt!)}',
-                            ].join(' · '),
-                          ),
-                          onTap: () => update(() {
-                            picked = (engine: p.engine, id: p.id);
-                            model = null;
-                          }),
+                        Row(
+                          children: [
+                            const SizedBox(width: 74),
+                            Expanded(
+                              child: ListTile(
+                                key: ValueKey('switch-pm-${p.engine}-${p.id}'),
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                enabled:
+                                    !current(p) &&
+                                    p.leftPercent != 0 &&
+                                    unavailable(activePool ?? const {}) == null,
+                                selected:
+                                    picked?.engine == p.engine &&
+                                    picked?.id == p.id,
+                                title: Text(
+                                  '${leadEngineLabel(p.engine)} · ${p.label}',
+                                ),
+                                subtitle: Text(
+                                  [
+                                    if (current(p)) 'Current',
+                                    if (p.leftPercent != null)
+                                      '${p.leftPercent}% left',
+                                    if (p.resetsAt != null)
+                                      'resets ${switchPmTime(context, p.resetsAt!)}',
+                                  ].join(' · '),
+                                ),
+                                onTap: () => update(() {
+                                  picked = (engine: p.engine, id: p.id);
+                                  model = null;
+                                }),
+                              ),
+                            ),
+                          ],
                         ),
                       const SizedBox(height: 8),
                       Row(
@@ -342,26 +356,23 @@ Future<void> showSwitchPm(
                           ),
                         ],
                       ),
-                      if (sourceRefusal case final reason?)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 12),
-                          child: Text(
-                            reason,
-                            key: const ValueKey('switch-pm-no-choice'),
-                            style: DesktopChrome.metadata(),
-                          ),
-                        )
-                      else if (noChoice)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 12),
-                          child: Text(
-                            otherMachines.isEmpty
-                                ? 'No other machine or account can run a Product Manager right now.'
-                                : 'No engine or account can run a Product Manager right now.',
-                            key: const ValueKey('switch-pm-no-choice'),
-                            style: DesktopChrome.metadata(),
-                          ),
+                      if (sourceRefusal case final reason?) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          reason,
+                          key: const ValueKey('switch-pm-no-choice'),
+                          style: DesktopChrome.metadata(),
                         ),
+                      ] else if (noChoice) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          otherMachines.isEmpty
+                              ? 'No other machine or account can run a Product Manager right now.'
+                              : 'No engine or account can run a Product Manager right now.',
+                          key: const ValueKey('switch-pm-no-choice'),
+                          style: DesktopChrome.metadata(),
+                        ),
+                      ],
                       if (activePool != null &&
                           activePool['contributorId'] != c.accountId) ...[
                         const SizedBox(height: 8),

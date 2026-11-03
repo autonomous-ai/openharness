@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -118,6 +120,17 @@ void main() {
   }
 
   final item = find.text('Switch PM…');
+
+  // Screenshots for the pull request, written only when asked: rasterized
+  // text differs between machines, so they are not compared here.
+  final renderDir = Platform.environment['SWITCH_PM_RENDER_DIR'];
+  Future<void> capture(WidgetTester tester, String name) async {
+    if (renderDir == null) return;
+    await expectLater(
+      find.byType(AlertDialog),
+      matchesGoldenFile(Uri.file('$renderDir/$name.png')),
+    );
+  }
 
   Future<void> finish(WidgetTester tester) async {
     await tester.pump(const Duration(milliseconds: 250));
@@ -301,10 +314,7 @@ void main() {
     await tester.tap(item);
     await tester.pumpAndSettle();
     expect(find.text('Machine'), findsOneWidget);
-    await expectLater(
-      find.byType(AlertDialog),
-      matchesGoldenFile('goldens/switch-pm-machine-model.png'),
-    );
+    await capture(tester, 'switch-pm-machine-model');
     await tester.tap(find.byKey(const ValueKey('switch-pm-machine')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Mac Two').last);
@@ -352,10 +362,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.byKey(const ValueKey('switch-pm-machine')), findsOneWidget);
-    await expectLater(
-      find.byType(AlertDialog),
-      matchesGoldenFile('goldens/switch-pm-no-choice.png'),
-    );
+    await capture(tester, 'switch-pm-no-choice');
     await tester.tap(find.text('Cancel'));
     await finish(tester);
   });
