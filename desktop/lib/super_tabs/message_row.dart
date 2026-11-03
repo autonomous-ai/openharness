@@ -47,7 +47,6 @@ class SuperTabMessageRow extends StatefulWidget {
     this.readerId = '',
     this.reactorName,
     this.onReact,
-    this.proposalOwner,
     this.headerStatus,
     this.dimmed = false,
     this.thread,
@@ -84,10 +83,6 @@ class SuperTabMessageRow extends StatefulWidget {
   /// Who a thread's reply author is in the Swarm now, for the faces on its
   /// reply line; without it each shows the face its recorded name gives.
   final SuperTabMemberOf? member;
-
-  /// The person a Buddy's proposal speaks for, by name, from the server's tag
-  /// on it ([SuperTabMessage.proposalOwnerId]); null for any other message.
-  final String? proposalOwner;
 
   /// The names of the people [message] tags.
   final List<String> mentions;
@@ -467,30 +462,6 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     onTap: widget.onOpenReply == null
                                         ? null
                                         : () => widget.onOpenReply!(context),
-                                  ),
-                                ),
-                              if (widget.proposalOwner case final owner?)
-                                Padding(
-                                  padding: const EdgeInsets.only(
-                                    bottom: grid.AppDesktop.menuInset,
-                                  ),
-                                  child: Container(
-                                    key: const ValueKey('super-proposal-label'),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: grid.AppDesktop.controlGap,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      border: Border.all(
-                                        color: DesktopChrome.rim,
-                                      ),
-                                      borderRadius: BorderRadius.circular(
-                                        DesktopChrome.rowRadius,
-                                      ),
-                                    ),
-                                    child: Text(
-                                      "Proposal · on $owner's behalf",
-                                      style: DesktopChrome.metadata(),
-                                    ),
                                   ),
                                 ),
                               if (message.terminalNote case final note?)

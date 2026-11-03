@@ -75,27 +75,34 @@ void main() {
     expect(find.byType(SuperTabShipRow), findsOneWidget);
   });
 
-  testWidgets('a Shipped card leaves the chat once the task has its line', (
-    tester,
-  ) async {
-    final c = await showView(
-      tester,
-      project([
-        shipped(),
-        row(
-          'l1',
-          2,
-          'Avatars · shipped',
-          kind: 'task-line',
-          source: {'taskId': 'task-1', 'title': 'Avatars', 'state': 'shipped'},
-        ),
-      ]),
-    );
-    await c.loadMessages('lead');
-    await tester.pumpAndSettle();
-    expect(find.byType(SuperTabShipRow), findsNothing);
-    expect(find.text('Avatars'), findsOneWidget);
-  });
+  // Plain chat (#2294): a stored Shipped card and a task's old line both stay,
+  // each read as it was written (super_tab_task_line_test.dart).
+  testWidgets(
+    'a Shipped card stays beside a task\'s old line, read as written',
+    (tester) async {
+      final c = await showView(
+        tester,
+        project([
+          shipped(),
+          row(
+            'l1',
+            2,
+            'Avatars · shipped',
+            kind: 'task-line',
+            source: {
+              'taskId': 'task-1',
+              'title': 'Avatars',
+              'state': 'shipped',
+            },
+          ),
+        ]),
+      );
+      await c.loadMessages('lead');
+      await tester.pumpAndSettle();
+      expect(find.byType(SuperTabShipRow), findsOneWidget);
+      expect(find.text('Avatars · shipped'), findsOneWidget);
+    },
+  );
 
   for (final kind in [
     'work-stalled',

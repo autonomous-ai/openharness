@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -68,7 +69,6 @@ import 'project_options.dart';
 import 'project_status.dart';
 import 'ship_row.dart';
 import 'switch_pm.dart';
-import 'task_line.dart';
 import 'pane_layout.dart';
 import 'view_room.dart';
 import 'swarm_type.dart';
@@ -720,7 +720,10 @@ class _SuperTabViewState extends State<SuperTabView>
   bool _jumpUnread(int step) {
     final snapshot = c.snapshot;
     if (snapshot == null || c.accessRevoked) return false;
-    final order = superTabSidebarOrder(c);
+    final order = superTabSidebarOrder(
+      c,
+      needsHuman: (group) => _needsHuman(group).length,
+    );
     var at = order.indexOf(c.selectedId);
     if (at < 0) at = step > 0 ? -1 : order.length;
     for (var i = at + step; i >= 0 && i < order.length; i += step) {
@@ -2002,20 +2005,12 @@ class _SuperTabViewState extends State<SuperTabView>
       messages,
       (agentId) => c.snapshot?.agent(agentId),
     );
-    // A task's line says it shipped: its Shipped card, from before it had the
-    // line, leaves. One with no line stays (Quiet Swarm, part 2).
-    final lined = {
-      for (final m in messages)
-        if (m.isTaskLine) m.source['taskId'],
-    };
     return messages
         .where(
           (m) =>
               _shown(m) &&
               (replies || m.inMainStream) &&
-              !answered.contains(m.id) &&
-              !(SuperTabShipRow.shows(m) &&
-                  lined.contains(m.source['conversationId'])),
+              !answered.contains(m.id),
         )
         .toList();
   }
@@ -2210,12 +2205,6 @@ class _SuperTabViewState extends State<SuperTabView>
   bool get _terminalsVisible =>
       !_devicesVisible && (widget.terminalsVisible || widget.terminal != null);
 
-  /// Whom a Buddy's proposal speaks for, by name; null for other messages.
-  String? _proposalOwner(SuperTabMessage message) =>
-      message.proposalOwnerId == null
-      ? null
-      : buddyPersonName(c, message.proposalOwnerId!);
-
   /// The reader's own chat with their Buddy.
   bool _isBuddyChat(SuperTabConversation group) =>
       c.buddyChat(group.projectId)?.id == group.id;
@@ -2350,15 +2339,56 @@ class _SuperTabViewState extends State<SuperTabView>
         ],
       );
     }
+    // A phone with too little height keeps its squeezed row as it was.
+    if (_phone) {
+      return ConstrainedBox(
+        constraints: BoxConstraints(
+          minHeight: grid.AppControl.heightFieldScaled,
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(child: field),
+            ...options,
+            attach,
+            send,
+          ],
+        ),
+      );
+    }
+    // The controls stay at the bottom-right as the message grows, level with
+    // its last line (Scholes, 11-03: centred, they drifted up the box). The
+    // field is padded to the row's height, so one line sits where it did,
+    // centred on the controls, and a longer message's last line keeps that
+    // place.
+    final row = grid.AppControl.heightFieldScaled;
+    // The line of the style the field draws with: a padding measured on
+    // another one left the chips a pixel off the line once the composer took
+    // Slack's 15 px on 22 px lines (#2732).
+    final style = SwarmType.composer(context);
+    final line =
+        MediaQuery.textScalerOf(context).scale(style.fontSize!) * style.height!;
+    final inset = math.max(0.0, (row - line) / 2);
     return ConstrainedBox(
-      constraints: BoxConstraints(minHeight: grid.AppControl.heightFieldScaled),
+      constraints: BoxConstraints(minHeight: row),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          Expanded(child: field),
-          ...options,
-          attach,
-          send,
+          Expanded(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: inset),
+              child: field,
+            ),
+          ),
+          // As tall as the row at least, the controls centred in it as before;
+          // taller with larger text.
+          ConstrainedBox(
+            constraints: BoxConstraints(minHeight: row),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [...options, attach, send],
+            ),
+          ),
         ],
       ),
     );
@@ -2423,11 +2453,10 @@ class _SuperTabViewState extends State<SuperTabView>
     setState(() => _showPullRequests = true);
   }
 
-  /// Members takes the right side from an open thread or task, as in Slack.
+  /// Members takes the right side from an open thread, as in Slack.
   void _toggleRoster() {
     if (!_rosterOpen) c.closeThread();
     setState(() {
-      if (!_rosterOpen) _openedTask = null;
       _rosterOpen = !_rosterOpen;
     });
   }
@@ -2935,7 +2964,6 @@ class _SuperTabViewState extends State<SuperTabView>
         message: message,
         dimmed: sent.state == SuperTabOutgoingState.sending,
         author: _shownAuthor(c, message),
-        proposalOwner: _proposalOwner(message),
         person: person,
         member: _member,
         grouped: grouped,
@@ -3012,31 +3040,6 @@ class _SuperTabViewState extends State<SuperTabView>
     bool inThread = false,
   }) {
     _index();
-    // A task's message and a Buddy's proposal are one line that opens (Quiet
-    // Swarm, screens 1 and 2); inside its own thread, a proposal reads whole.
-    if (message.isTaskLine) {
-      final taskId = message.source['taskId'];
-      return SuperTabTaskLine(
-        key: ValueKey('super-message-${message.id}'),
-        message: message,
-        readerId: c.accountId,
-        onOpen: taskId is String && c.snapshot?.conversation(taskId) != null
-            ? () => _openTask(taskId, message.id)
-            : null,
-      );
-    }
-    final proposer = inThread ? null : _proposalOwner(message);
-    if (proposer != null) {
-      return SuperTabProposalLine(
-        key: ValueKey('super-message-${message.id}'),
-        message: message,
-        owner: proposer,
-        onOpen: () {
-          setState(() => _openedTask = null);
-          c.openThread(message.id);
-        },
-      );
-    }
     if (SuperTabShipRow.shows(message)) {
       return SuperTabShipRow(
         key: ValueKey(
@@ -3108,7 +3111,6 @@ class _SuperTabViewState extends State<SuperTabView>
               facts: _facts,
             ),
       author: _shownAuthor(c, message),
-      proposalOwner: _proposalOwner(message),
       // A person is named by their username, as they are tagged.
       mentions: [
         for (final id in message.mentions)
@@ -3227,9 +3229,6 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The open thread of the selected conversation, beside the chat.
   Widget? _threadPanel() {
     final open = c.openedThread;
-    // A thread opened from anywhere takes the panel's place, for good.
-    if (open != null) _openedTask = null;
-    if (_taskPanel() case final panel?) return panel;
     if (open == null || open.conversationId != c.selectedId) return null;
     final rows = c.threadMessages(open.root);
     final byId = {for (final m in rows) m.id: m};
@@ -3243,42 +3242,6 @@ class _SuperTabViewState extends State<SuperTabView>
       sessionActivity: (session) =>
           superTabSessionActivity(c, widget.app, session),
       machineName: widget.machineName,
-    );
-  }
-
-  /// The task a line opened beside its project's chat (Quiet Swarm, screen 3):
-  /// which, and the line, whose word the panel says.
-  ({String id, String line, String chat})? _openedTask;
-
-  void _openTask(String taskId, String line) {
-    c.closeThread();
-    setState(() => _openedTask = (id: taskId, line: line, chat: c.selectedId));
-  }
-
-  Widget? _taskPanel() {
-    final open = _openedTask;
-    final task = open == null ? null : c.snapshot?.conversation(open.id);
-    if (open == null || task == null || open.chat != c.selectedId) return null;
-    final line = c
-        .messages(open.chat)
-        .where((m) => m.id == open.line)
-        .firstOrNull;
-    final byId = {for (final m in c.taskMessages(open.id)) m.id: m};
-    return SuperTabTaskPanel(
-      key: ValueKey('super-task-panel-${open.id}'),
-      controller: c,
-      taskId: open.id,
-      word: line == null ? '' : superTabTaskWord(line, c.accountId),
-      mark: line == null ? null : superTabTaskMark(line),
-      // The whole conversation (screen 3): agents answer with replies.
-      rows: () => _shownMessages(open.id, replies: true),
-      row: (message) => _message(message, false, byId, inThread: true),
-      outgoing: (sent) => _outgoingRow(sent, byId, grouped: false),
-      onClose: () => setState(() => _openedTask = null),
-      onOpenInFull: () {
-        setState(() => _openedTask = null);
-        unawaited(c.select(open.id));
-      },
     );
   }
 
@@ -4509,7 +4472,6 @@ class _SuperTabViewState extends State<SuperTabView>
                 child: BlockSemantics(
                   child: GestureDetector(
                     onTap: () {
-                      setState(() => _openedTask = null);
                       c.closeThread();
                     },
                     child: ColoredBox(
