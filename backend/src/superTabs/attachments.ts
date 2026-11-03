@@ -38,6 +38,11 @@ export const MAX_AVATAR_BYTES = 1024 * 1024
 export const AVATAR_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/webp'])
 /** The `purpose` of an avatar upload (schema.prisma SuperTabAttachment): never sendable as a chat file. */
 export const AVATAR_PURPOSE = 'avatar'
+/** How long an upload may wait to be sent. */
+export const UNSENT_LIFE_MS = 24 * 3_600_000
+/** `usedBy` of an upload the expiry sweep took (lib/attachmentSweep.ts): its file is being removed and nothing may use it.
+ *  Message and receipt ids are 24 hex characters (model.ts stableId), so the colon keeps it from ever matching one. */
+export const EXPIRED_UPLOAD = 'expired:unsent'
 
 // Control, format (bidi overrides, zero-width) and line/paragraph separators: a name that hides its real shape.
 export const attachmentName = z.string().trim().min(1).max(255).refine(value => !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value), 'Use a printable file name.')
@@ -87,6 +92,8 @@ export interface AttachmentStore {
   /** A link that opens [objectKey] until [expiresAt] (epoch ms) and never after, whether or not the bucket is public. Storage
    *  checks it when a request starts, so a long download that started in time finishes. */
   signedUrl(objectKey: string, expiresAt: number): Promise<string>
+  /** Removes the object. One that is already gone counts as removed. */
+  delete(objectKey: string): Promise<void>
 }
 /** Where avatars are kept, and the link a member read carries for one (avatarLinks.ts). */
 export interface AvatarStore extends AttachmentStore {}
@@ -246,6 +253,7 @@ export class SharedAvatarStore implements AvatarStore {
   constructor(readonly store: AttachmentStore) {}
   put(objectKey: string, file: { name: string; mime: string }, body: Readable, cap: number) { return this.store.put(objectKey, file, body, cap) }
   signedUrl(objectKey: string, expiresAt: number) { return this.store.signedUrl(objectKey, expiresAt) }
+  delete(objectKey: string) { return this.store.delete(objectKey) }
 }
 
 export class MemoryAttachmentStore implements AttachmentStore, DirectUploads {

@@ -3,12 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import 'package:harness_mobile/phone/fzf.dart' show fzfAge;
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
-import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
-import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'model.dart';
 import 'swarm_inbox.dart';
@@ -20,8 +17,8 @@ import 'swarm_start.dart';
 import 'swarm_style.dart';
 
 /// The top of Swarm Home, direction C, as Tony's prototype C1 draws it
-/// (2026-10-30): the Swarm switcher in its title ([showSwarmSwitcher]) and
-/// While you were away ([SwarmAwayCard]).
+/// (2026-10-30): the Swarm switcher in its title ([showSwarmSwitcher]). While
+/// you were away is a tile since 2026-11-03 (`SwarmAwayTile`).
 
 /// Whether the account's Swarms are still to come, a failed read still trying:
 /// never from a server without the list, which no read will bring.
@@ -212,140 +209,3 @@ int swarmDoneSince(SuperTabSnapshot snapshot, DateTime since) => snapshot
           (swarmProgressAt(g)?.isAfter(since) ?? false),
     )
     .length;
-
-/// While you were away, as C1 draws it: how long the person was away, from
-/// leaving the app ([since]) to coming back ([back]), then the work done
-/// since ([done], green) and what needs them now ([needs], yellow), each a
-/// skeleton until it is known. A tap opens what needs them ([onTap]).
-class SwarmAwayCard extends StatelessWidget {
-  const SwarmAwayCard({
-    super.key,
-    required this.since,
-    required this.back,
-    required this.done,
-    required this.needs,
-    required this.onTap,
-  });
-
-  final DateTime since, back;
-  final int? done, needs;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    final age = fzfAge(since.toLocal(), back.toLocal());
-    return Semantics(
-      button: true,
-      label:
-          'While you were away, $age: ${done ?? 'not known how many'} done, '
-          '${needs ?? 'not known how many'} need you',
-      excludeSemantics: true,
-      onTap: onTap,
-      child: Material(
-        color: AppGlass.rowFill,
-        borderRadius: BorderRadius.circular(AppCard.radius),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(AppCard.radius),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(
-              AppSpace.l,
-              AppSpace.m,
-              AppSpace.m,
-              AppSpace.m,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'While you were away',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppType.label(
-                          color: AppPalette.textPrimary,
-                          fontWeight: AppFont.semibold,
-                        ),
-                      ),
-                    ),
-                    Text(
-                      age,
-                      style: AppType.caption(color: AppPalette.textFaint),
-                    ),
-                    const SizedBox(width: AppSpace.xs),
-                    Icon(
-                      LucideIcons.chevronRight300,
-                      size: 18,
-                      color: AppPalette.textFaint,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: AppSpace.s),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _Stat(
-                        key: const ValueKey('swarm-away-done'),
-                        count: done,
-                        label: 'done',
-                        color: AppColors.success,
-                      ),
-                    ),
-                    Expanded(
-                      child: _Stat(
-                        key: const ValueKey('swarm-away-needs'),
-                        count: needs,
-                        label: 'need you',
-                        color: AppColors.warning,
-                      ),
-                    ),
-                    // Where new threads goes, once the server can tell them.
-                    const Spacer(),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// One figure of While you were away: its count, large, over its words.
-class _Stat extends StatelessWidget {
-  const _Stat({
-    super.key,
-    required this.count,
-    required this.label,
-    required this.color,
-  });
-
-  /// Null until it is known: a skeleton as tall as the figure.
-  final int? count;
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    final count = this.count;
-    final style = AppType.title(
-      color: (count ?? 0) > 0 ? color : AppPalette.textSecondary,
-      fontWeight: AppFont.semibold,
-      height: 1.2,
-    );
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (count == null)
-          SkeletonText(style: style, width: 28)
-        else
-          Text('$count', style: style),
-        Text(label, style: AppType.caption(color: AppPalette.textSecondary)),
-      ],
-    );
-  }
-}

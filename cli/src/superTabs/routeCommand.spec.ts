@@ -1511,6 +1511,26 @@ describe('routing contributed capacity', () => {
     const silent = await runPool(offline, false, {}, owners)
     expect(silent.answer.excluded).not.toEqual(expect.arrayContaining([expect.objectContaining({ reason: expect.stringContaining('Contributed laptop is offline.') })]))
   })
+  // Task #2390 (Tony, 11-03): a machine its owner keeps for some projects (backend machines.ts machine.projects) is left out of
+  // every other project's route, new agents and members alike, with why. The backend refuses it too.
+  it('leaves out a machine its owner keeps for other projects, new agents and members alike, and offers it to those projects', async () => {
+    const projects = [{ id: 'lead', ownerId: 'owner', name: 'Pilot', visibility: 'public' }, { id: 'oh', ownerId: 'owner', name: 'openharness', visibility: 'public' },
+      { id: 'hidden', ownerId: 'owner', name: 'secret', visibility: 'private' }]
+    const kept = (ids: string[]) => ({ ...healthy(), projects: ids })
+    const other = await runPool(kept(['oh']), true, {}, undefined, { state: { projects } })
+    expect(other.answer).toMatchObject({ error: 'NO_CANDIDATE' })
+    expect(other.answer.excluded).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: expect.stringContaining('Multiply'), reason: 'Contributed laptop runs only openharness.' }),
+      expect.objectContaining({ title: expect.not.stringContaining('Multiply'), reason: 'Contributed laptop runs only openharness.' })]))
+    // A private project's name is never written into another project's route.
+    const secret = await runPool(kept(['hidden']), false, {}, undefined, { state: { projects } })
+    expect(secret.answer.excluded).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reason: 'Contributed laptop is kept by its owner for other projects.' })]))
+    expect(JSON.stringify(secret.answer)).not.toContain('secret')
+    // Kept for this project, or for none in particular: offered as before.
+    expect((await runPool(kept(['oh', 'lead']), true, {}, undefined, { state: { projects } })).answer.ok).toBe(true)
+    expect((await runPool(healthy(), true, {}, undefined, { state: { projects } })).answer.ok).toBe(true)
+  })
   // One machine (docs/plans/2026-10-24-swarm-team-account.md): a Mac's Harness Team account is that Mac. The Lead is offered
   // the Mac once: a teammate's project starts in the team account, the Mac's owner's own projects stay with the owner.
   describe('a Mac and its Harness Team account', () => {

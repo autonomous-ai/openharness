@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../core/local_key_value_store.dart';
+import '../shared/theme/app_theme.dart' as grid;
 import '../state/pane_arrangement.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/pane_resize_handle.dart';
@@ -165,7 +166,7 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
                 SizedBox(
                   key: const ValueKey('super-right-pane'),
                   width: right,
-                  child: widget.right,
+                  child: SuperTabRightPane(child: widget.right!),
                 ),
             ],
           ),
@@ -228,4 +229,40 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
       );
     },
   );
+}
+
+/// A pane on the right of a Swarm chat (a thread, a task, Members), beside it
+/// or over it as a drawer. Along its left edge it lays the design system's
+/// pane shade over the chat, so the two read as separate surfaces, as in
+/// Slack (Huy, 11-03). The pane is drawn after the chat, so the shade lies on
+/// the chat; it takes no pointer, so the chat beneath it still gets clicks.
+class SuperTabRightPane extends StatelessWidget {
+  const SuperTabRightPane({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    return Stack(
+      fit: StackFit.passthrough,
+      clipBehavior: Clip.none,
+      children: [
+        child,
+        Positioned(
+          top: 0,
+          bottom: 0,
+          left: -grid.AppDesktop.paneEdgeShadeWidth,
+          width: grid.AppDesktop.paneEdgeShadeWidth,
+          child: IgnorePointer(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: grid.AppDesktop.paneEdgeShade,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }

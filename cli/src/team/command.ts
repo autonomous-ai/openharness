@@ -19,6 +19,7 @@ import { SIGN_OUT_BUTTON_FLAG, type SignOutAsked } from '../lib/signOut.js'
 import type { AdminVia, RunAdmin } from './admin.js'
 import { teamConfigJson, type TeamConfig } from './config.js'
 import { engineLines, type TeamEngines } from './engines.js'
+import { teamModelSet } from './model.js'
 import { mintTeamConversion, mintTeamHandoff, redeemTeamHandoff, revokeHarnessRefresh, teamSession, TeamSignInError, type Delete, type Get, type Post } from './handoff.js'
 import {
   SENTINEL_NAME, TEAM_PORT, TEAM_REAL_NAME, TEAM_STATUS_FILE,
@@ -68,13 +69,15 @@ function teamHere(platform: NodeJS.Platform): TeamHere | null {
 }
 
 export const TEAM_USAGE = [
-  'Usage: harness team <setup | status | remove | on | off> [--json]',
+  'Usage: harness team <setup | status | model | remove | on | off> [--json]',
   '',
   '  setup     make the Harness Team account on this Mac, Linux or Windows computer for Swarm work: a separate standard user,',
   `            "Harness Team" (${TEAM_USER}), whose own Harness daemon runs teammates' agents so they cannot read your files.`,
   '            The system asks for an administrator password once. It installs the account\'s own Claude Code and Codex,',
   '            which you sign in once in a terminal on its machine. Running it again repairs it (--sign-in-again: a new sign-in)',
   '  status    whether the account exists and runs, its sign-in, privacy check and engines, and everything setup made',
+  '  model     the team account\'s own model API instead of your subscription: `harness team model set <provider> --model <id>`',
+  '            (asks for the key, hidden; --clear undoes it)',
   '  remove    delete the account, its home folder and its daemon; your home stays private. Run it in Terminal: sudo',
   '            asks for your password, and macOS asks once to let Terminal administer your computer, which it needs',
   '  on        for a computer used only for agents (a Mac mini, a Linux or Windows box): sign it in for team work',
@@ -124,6 +127,8 @@ export interface TeamCommandDeps {
   env: NodeJS.ProcessEnv
   interactive: boolean
   ask(question: string): Promise<string>
+  /** Like [ask], but what is typed is not echoed: for an API key. */
+  askSecret?(question: string): Promise<string>
   now(): number
   sleep(ms: number): Promise<void>
 
@@ -195,6 +200,7 @@ export async function teamCommand(argv: string[], deps: TeamCommandDeps): Promis
     switch (verb) {
       case 'setup': return await setup(deps, json, flags.includes('--sign-in-again'))
       case 'status': return await status(deps, json)
+      case 'model': return await teamModelSet(deps, words, flags, json)
       case 'remove': return await remove(deps, json)
       case 'on': return await teamOn(deps, json, flags.includes('--yes'))
       case 'off': return await teamOff(deps, json, flags)

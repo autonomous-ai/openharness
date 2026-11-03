@@ -33,6 +33,7 @@ import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'local_models.dart';
+import 'machine_projects.dart';
 import 'machine_allowance.dart';
 import '../models/swarm_models_target.dart' show swarmSharedWithYouShown;
 import 'machine_details.dart';
@@ -1893,10 +1894,17 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                 resources: dim ? null : value,
                 engines: allowed,
                 accounts: dim ? const [] : accounts,
-                footer: SuperTabMachineLocalModels(
-                  controller: c,
-                  machineId: id,
-                  now: widget.now,
+                footer: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _MachineProjectsSetting(controller: c, machineId: id),
+                    SuperTabMachineLocalModels(
+                      controller: c,
+                      machineId: id,
+                      now: widget.now,
+                    ),
+                  ],
                 ),
               ),
               // One clear action at the right; the rarer ones quiet at the left (Ken, 2026-10-28).
@@ -2778,6 +2786,70 @@ class _Allowance {
 const _noQuotaLeft = 'No quota left until it resets.';
 
 /// The same leading icon/name and trailing status column as projects.
+/// The machine's projects setting (machine_projects.dart) on this Swarm's state: its owner changes it with
+/// `machine.projects` at once, as Pause does. A Mac's Harness Team account follows its Mac, so it has none of its own,
+/// and a Swarm with one project and no choice made has nothing to choose.
+class _MachineProjectsSetting extends StatefulWidget {
+  const _MachineProjectsSetting({
+    required this.controller,
+    required this.machineId,
+  });
+
+  final SuperTabController controller;
+  final String machineId;
+
+  @override
+  State<_MachineProjectsSetting> createState() =>
+      _MachineProjectsSettingState();
+}
+
+class _MachineProjectsSettingState extends State<_MachineProjectsSetting> {
+  bool _busy = false;
+
+  Future<void> _send(List<String>? projectIds) async {
+    setState(() => _busy = true);
+    try {
+      await widget.controller.command({
+        'type': 'machine.projects',
+        'machineId': widget.machineId,
+        'projectIds': projectIds,
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.controller, snapshot = c.snapshot;
+    final pool = snapshot?.machines
+        .where((m) => m['machineId'] == widget.machineId)
+        .firstOrNull;
+    if (snapshot == null || pool == null || pool['hostMachineId'] is String)
+      return const SizedBox.shrink();
+    final kept = pool['projects'] is List
+        ? [
+            for (final id in pool['projects'] as List)
+              if (id is String) id,
+          ]
+        : null;
+    final projects = [
+      for (final p in snapshot.projects) (id: p.id, name: p.name),
+    ];
+    if (kept == null && projects.length < 2) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: grid.AppDesktop.groupGap),
+      child: SuperTabMachineProjects(
+        projects: projects,
+        kept: kept,
+        editable: pool['contributorId'] == c.accountId && c.canWrite,
+        busy: _busy,
+        onChanged: (ids) => unawaited(_send(ids)),
+      ),
+    );
+  }
+}
+
 class _MachineLine extends StatelessWidget {
   const _MachineLine({
     required this.view,

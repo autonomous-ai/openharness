@@ -2153,6 +2153,65 @@ describe('cable session', () => {
     await session.stop()
   })
 
+  // Diego's dial, 2026-11-03: a Kilo agent's 325 models made a 32 KB frame against the 8 KB cap, and the daemon closed the
+  // whole USB link over it. Every tap on the picker did it again.
+  it('answers a catalog too big for one frame within the cap and keeps the link', async () => {
+    const catalog = Array.from({ length: 325 }, (_, i) => `runtime-v1:kilo:openrouter:provider-${String(i).padStart(3, '0')}/a-model-name-long-enough-to-be-about-one-hundred-bytes@high`)
+    const { session, port } = await connect(makeHost({ listModels: async () => catalog }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      port.sent.length = 0
+      port.frames.length = 0
+      port.say({ t: 'models.list', agentId: 'a1', mode: 'model', selected: catalog[299], request: 7 })
+      await vi.waitFor(() => expect(port.types()).toContain('models'))
+      const replies = port.sent.filter((m) => m.t === 'models')
+      expect(replies).toHaveLength(1)
+      const [reply] = replies
+      expect(reply.request).toBe(7)
+      const items = reply.items as Array<{ id: string }>
+      expect(items.length).toBeGreaterThan(1)
+      expect(items.length).toBeLessThanOrEqual(48)
+      expect(items[0]).toEqual({ id: catalog[299] })
+      // The rest in the catalog's order, the selected one not again.
+      expect(items.slice(1).map((m) => m.id)).toEqual(catalog.filter((id) => id !== catalog[299]).slice(0, items.length - 1))
+      for (const frame of port.frames) expect(frame.length).toBeLessThanOrEqual(8192)
+      expect(port.isOpen).toBe(true)
+    } finally { await session.stop() }
+  })
+
+  it('leaves out a selected id the catalog does not list, and an id too long to fit, and sends the rest', async () => {
+    const huge = `runtime-v1:x:${'y'.repeat(9000)}`
+    const { session, port } = await connect(makeHost({ listModels: async () => ['m-1', huge, 'm-2'] }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      port.sent.length = 0
+      port.say({ t: 'models.list', agentId: 'a1', selected: 'gone', request: 8 })
+      await vi.waitFor(() => expect(port.types()).toContain('models'))
+      expect(port.sent.find((m) => m.t === 'models')).toMatchObject({ request: 8, items: [{ id: 'm-1' }, { id: 'm-2' }] })
+      expect(port.isOpen).toBe(true)
+    } finally { await session.stop() }
+  })
+
+  it('drops and logs a frame over the cap, and the link stays up', async () => {
+    const lines: string[] = []
+    const { session, port } = await connect(makeHost({ log: (l) => lines.push(l) }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      // A message this side made too big is its own bug, never the port's: nothing a dial asks may close the link over it.
+      const send = (session as unknown as { send(m: Record<string, unknown>): Promise<boolean> }).send.bind(session)
+      expect(await send({ t: 'oversized', pad: 'x'.repeat(9000) })).toBe(false)
+      expect(port.isOpen).toBe(true)
+      expect(lines.filter((l) => l.includes('oversized'))).toHaveLength(1)
+      expect(lines.some((l) => l.includes('write failed'))).toBe(false)
+      port.sent.length = 0
+      expect(await send({ t: 'small' })).toBe(true)
+      expect(port.types()).toEqual(['small'])
+    } finally { await session.stop() }
+  })
+
   it('answers models.list when the provider throws', async () => {
     const { session, port } = await connect(makeHost({ listModels: async () => { throw new Error('no engine') } }))
     port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
@@ -5320,6 +5379,68 @@ describe('swarm cards', () => {
       // The PM cannot read the reader's Buddy chat: typing what was said there into the PM's terminal would show it.
       const offline = vi.fn(async (): Promise<SaidOnCard> => { throw new Error('offline') })
       expect(await spoken(ROUND, [withBuddy({ local: 'h1' })], offline)).toEqual({ errors: ['Could not reach the Swarm. Try again.'], turns: [] })
+    })
+
+    // Swarm parity part 3 on top of part 1's review fix: a Pro's words follow its face chat only when its voice.begin says they
+    // were spoken on the Lead view (`face`), which shows that chat. Its plain agent room names the same harness and shows none.
+    describe('a Pro speaks to its face chat from the Lead view only', () => {
+      const PRO_BUDDY = { ...BUDDY, board: 'pro' }
+      const proSpoken = async (leads: SwarmLead[], agentId: string, face: boolean, swarmSay: CableHost['swarmSay']) => {
+        const host = cardHost({ cards: [card('st1', leads)] }, { transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay })
+        const { session, port } = await connect(host)
+        try {
+          port.say(PRO_BUDDY); await settle()
+          port.say({ t: 'voice.begin', uploadId: `u-${agentId}`, agentId, ...(face ? { face: true } : {}) })
+          port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+          await vi.waitFor(() => expect(port.sent.some((m) => m.t === 'voice.error' || m.t === 'voice.transcript') || vi.mocked(host.sendTurn).mock.calls.length > 0).toBe(true))
+          await settle()
+          return { errors: ofType(port, 'voice.error').map((m) => m.message), turns: vi.mocked(host.sendTurn).mock.calls }
+        } finally { await session.stop() }
+      }
+
+      it('on the Buddy side, the words go to the Buddy chat, never the Lead conversation', async () => {
+        const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: true }))
+        expect(await proSpoken([withBuddy({ local: 'h1' })], 'h1', true, swarmSay)).toEqual({ errors: [], turns: [] })
+        expect(swarmSay.mock.calls).toEqual([['h1', 'ship it', 'buddy', 'pm1']])
+      })
+
+      it('on the PM side, the words go to the face chat it shows', async () => {
+        const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: true }))
+        const leadFace = { kind: 'lead' as const, id: 'lead-c1', name: 'Lead', working: false }
+        await proSpoken([withBuddy({ local: 'h1', sideChat: leadFace })], 'h1', true, swarmSay)
+        expect(swarmSay.mock.calls).toEqual([['h1', 'ship it', 'buddy', 'lead-c1']])
+      })
+
+      it('to a remote Lead named by its Swarm id, the words go to its face chat', async () => {
+        const remote = 'b'.repeat(24)
+        const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: true }))
+        await proSpoken([withBuddy({ id: remote })], remote, true, swarmSay)
+        expect(swarmSay.mock.calls).toEqual([[remote, 'ship it', 'buddy', 'pm1']])
+      })
+
+      it('a Buddy post that fails is a voice error, never the Lead\'s terminal', async () => {
+        const offline = vi.fn(async (): Promise<SaidOnCard> => { throw new Error('offline') })
+        expect(await proSpoken([withBuddy({ local: 'h1' })], 'h1', true, offline)).toEqual({ errors: ['Could not reach your Buddy. Try again.'], turns: [] })
+      })
+
+      it('without face (the plain agent room), the words stay in the Lead conversation as part 1 ruled', async () => {
+        const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: true }))
+        await proSpoken([withBuddy({ local: 'h1' })], 'h1', false, swarmSay)
+        expect(swarmSay.mock.calls).toEqual([['h1', 'ship it']])
+      })
+
+      it('a round dial ignores face and keeps its own rule', async () => {
+        const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: true }))
+        const host = cardHost({ cards: [card('st1', [withBuddy({ local: 'h1' })])] }, { transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay })
+        const { session, port } = await connect(host)
+        try {
+          port.say(BUDDY); await settle()
+          port.say({ t: 'voice.begin', uploadId: 'u-h1', agentId: 'h1', face: true })
+          port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+          await vi.waitFor(() => expect(swarmSay).toHaveBeenCalled())
+          expect(swarmSay.mock.calls).toEqual([['h1', 'ship it', 'buddy', 'pm1']])
+        } finally { await session.stop() }
+      })
     })
 
     it('a Buddy utterance never falls back after desktop focus changes during its post', async () => {
