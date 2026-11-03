@@ -469,8 +469,8 @@ describe('watching a pull request', () => {
     github.checkRuns.set(`acme/app@${HEAD}`, [{ name: 'build', status: 'completed', conclusion: 'failure', completed_at: '2026-10-24T11:59:00Z' },
       { name: 'lint', status: 'in_progress', conclusion: null, completed_at: null }])
     github.checkSuites.set(`acme/app@${HEAD}`, [{ status: 'in_progress', latest_check_runs_count: 2 }])
-    github.reviews.set('acme/app#12', [{ id: 7, user: { login: 'huy' }, state: 'CHANGES_REQUESTED', body: 'Keep the arrow.', html_url: 'https://github.com/acme/app/pull/12#pullrequestreview-7' }])
-    github.comments.set('acme/app#12', [{ id: 9, user: { login: 'dee' }, body: 'Looks good', html_url: 'https://github.com/acme/app/pull/12#issuecomment-9' }])
+    github.reviews.set('acme/app#12', [{ id: 7, user: { login: 'huy' }, author_association: 'MEMBER', state: 'CHANGES_REQUESTED', body: 'Keep the arrow.', html_url: 'https://github.com/acme/app/pull/12#pullrequestreview-7' }])
+    github.comments.set('acme/app#12', [{ id: 9, user: { login: 'dee' }, author_association: 'NONE', body: 'Looks good', html_url: 'https://github.com/acme/app/pull/12#issuecomment-9' }])
   }
 
   it('reads the pull, its head\'s check runs and suites, its reviews and comments, with a read-only token', async () => {
@@ -485,8 +485,8 @@ describe('watching a pull request', () => {
       checkRuns: [{ name: 'build', status: 'completed', conclusion: 'failure', completedAt: Date.parse('2026-10-24T11:59:00Z') },
         { name: 'lint', status: 'in_progress', conclusion: null, completedAt: null }],
       checkSuites: [{ status: 'in_progress', runs: 2 }],
-      reviews: [{ id: 7, login: 'huy', state: 'CHANGES_REQUESTED', body: 'Keep the arrow.', url: 'https://github.com/acme/app/pull/12#pullrequestreview-7' }],
-      comments: [{ id: 9, login: 'dee', body: 'Looks good', url: 'https://github.com/acme/app/pull/12#issuecomment-9' }] })
+      reviews: [{ id: 7, login: 'huy', association: 'MEMBER', state: 'CHANGES_REQUESTED', body: 'Keep the arrow.', url: 'https://github.com/acme/app/pull/12#pullrequestreview-7' }],
+      comments: [{ id: 9, login: 'dee', association: 'NONE', body: 'Looks good', url: 'https://github.com/acme/app/pull/12#issuecomment-9' }] })
     expect(github.calls.slice(-5).map(c => c.path)).toEqual(['/repos/acme/app/pulls/12', `/repos/acme/app/commits/${HEAD}/check-runs`,
       `/repos/acme/app/commits/${HEAD}/check-suites`, '/repos/acme/app/pulls/12/reviews', '/repos/acme/app/issues/12/comments'])
   })

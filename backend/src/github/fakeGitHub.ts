@@ -29,8 +29,8 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
   const checkRuns = new Map<string, Array<{ name: string; status: string; conclusion: string | null; completed_at: string | null }>>()
   const checkSuites = new Map<string, Array<{ status: string; latest_check_runs_count: number }>>()
   /** A pull request's reviews and conversation comments, by `owner/name#number`, lower case. */
-  const reviews = new Map<string, Array<{ id: number; user: { login: string }; state: string; body: string; html_url: string }>>()
-  const comments = new Map<string, Array<{ id: number; user: { login: string }; body: string; html_url: string }>>()
+  const reviews = new Map<string, Array<{ id: number; user: { login: string }; author_association?: string; state: string; body: string; html_url: string }>>()
+  const comments = new Map<string, Array<{ id: number; user: { login: string }; author_association?: string; body: string; html_url: string }>>()
   /** Workflow runs by `owner/name`, lower case: each run's status and its jobs' statuses and runner labels. */
   const actions = new Map<string, Array<{ id: number; status: string; jobs: Array<{ status: string; labels: string[] }> }>>()
   const calls: FakeCall[] = []
