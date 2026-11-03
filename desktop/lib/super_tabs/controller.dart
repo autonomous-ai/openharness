@@ -211,6 +211,7 @@ class SuperTabController extends ChangeNotifier {
       buddiesGroupOpen = initial['buddiesGroupOpen'] as bool? ?? true;
       modelsGroupOpen = initial['modelsGroupOpen'] as bool? ?? true;
       offlineMachinesOpen = initial['offlineMachinesOpen'] as bool? ?? false;
+      sessionProjectId = initial['sessionProjectId'] as String? ?? '';
       selectedId = initial['selectedId'] as String? ?? 'lead';
       final drafts = initial['drafts'];
       if (drafts is Map) {
@@ -1007,6 +1008,18 @@ class SuperTabController extends ChangeNotifier {
 
   /// Whether the Machines group's "Offline · N" disclosure is open; it starts closed.
   bool offlineMachinesOpen = false;
+
+  /// The project last chosen for a New session in the reader's Buddy chat on
+  /// this device, `''` for All projects (task #2347). The next New session
+  /// starts on it, while the reader can still read it.
+  String sessionProjectId = '';
+
+  void chooseSessionProject(String projectId) {
+    if (sessionProjectId == projectId) return;
+    sessionProjectId = projectId;
+    _saveSoon();
+    _changed();
+  }
 
   void toggleProject(String id) {
     if (!expandedProjects.remove(id)) {
@@ -2618,6 +2631,7 @@ class SuperTabController extends ChangeNotifier {
     'buddiesGroupOpen': buddiesGroupOpen,
     'modelsGroupOpen': modelsGroupOpen,
     'offlineMachinesOpen': offlineMachinesOpen,
+    'sessionProjectId': sessionProjectId,
     'drafts': Map<String, String>.of(_drafts),
     'terminals': Map<String, String>.of(_terminals),
 

@@ -121,9 +121,7 @@ void main() {
     await close(tester, again);
   });
 
-  testWidgets('remembers All projects over an earlier project', (
-    tester,
-  ) async {
+  testWidgets('remembers All projects over an earlier project', (tester) async {
     final server = oneBuddySwarm();
     giveSwarmBuddy(server);
     final first = await show(tester, server);
