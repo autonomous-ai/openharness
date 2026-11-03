@@ -46,7 +46,13 @@ export interface TaskFolder { cwd: string; kind: 'git' | 'none' | 'missing' | 'u
 export interface MemberFrame { title: string | null; project: string | null; cwd: string | null; root: string | null; remote: string | null; branch: string | null; updatedAt: number | null }
 /** What a machine offers an agent. Each field is null when it could not be read; `freeDiskBytes` (the project's disk) and
  * `cpuPercent` are absent where the probe did not read them. */
-export interface MachineLoad { agents: number | null; freeMemoryBytes: number | null; hasFolder: boolean | null; freeDiskBytes?: number | null; cpuPercent?: number | null }
+/** What a new start on a machine can use, as its host admits it: the Swarm's free agent slots there, and free memory and disk
+ *  less what starts still starting hold (routeCommand.ts heldByStarts). */
+export interface MachineRoom { slots: number | null; freeMemoryBytes: number | null; heldMemoryBytes: number; freeDiskBytes: number | null }
+/** `freeMemoryBytes` and `freeDiskBytes` leave heavy starts in, which the machine fit holds itself (machineFit.ts
+ *  placedHeavyWork); `room` is what a start can use. */
+export interface MachineLoad { agents: number | null; freeMemoryBytes: number | null; hasFolder: boolean | null; freeDiskBytes?: number | null; cpuPercent?: number | null
+  room?: MachineRoom }
 export interface Probe {
   kind: 'member' | 'new'; agentId?: string; name?: string; machineId: string; machineName: string
   /** `quality` is the catalog's strength, 1 for a model it does not rate (`unrated`). */
@@ -367,6 +373,14 @@ function span(ms: number): string {
   return `${Math.round(ms / 86_400_000)} days`
 }
 const resetsIn = (resetsAt: number, now: number) => span(Math.max(0, resetsAt - now))
+/** When a weekly window resets, to the hour past two days ("6d13h"): the PM paces its own account by the day since its reset
+ *  (project instructions, 2026-11-03), and "7 days", a whole day either way, left it half a day off. */
+function weeklyResetsIn(resetsAt: number, now: number): string {
+  const ms = Math.max(0, resetsAt - now)
+  if (ms < 48 * 3_600_000) return span(ms)
+  const hours = Math.round(ms / 3_600_000), days = Math.floor(hours / 24)
+  return hours % 24 ? `${days}d${hours % 24}h` : `${days}d`
+}
 function quotaText(q: Quota, now: number): string {
   if (q.metered) return 'quota metered'
   if (!q.known || q.leftPercent === null) return q.why ? `quota unknown (${q.why})` : 'quota unknown'
@@ -377,7 +391,7 @@ function quotaText(q: Quota, now: number): string {
   if (q.resetsAt === null) return `quota ${Math.round(q.leftPercent)}% left`
   return `quota ${Math.round(q.leftPercent)}% left, resets in ${resetsIn(q.resetsAt, now)}`
 }
-const bytes = (n: number) => n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.round(n / 1e6)} MB`
+export const bytes = (n: number) => n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.round(n / 1e6)} MB`
 /** What a member is doing and has done, or one phrase saying it is not known. */
 function memberText(p: Probe, now: number): string[] {
   const f = p.frame
@@ -488,6 +502,16 @@ function withEveryAccount<T extends Pick<Probe, 'machineId' | 'engine' | 'gridMo
   return ranked.filter(p => keep.has(p))
 }
 
+/** What the agent choosing reads of a row's machine: whether a start there would be admitted (River, 2026-11-03: starts
+ *  failed on slots, memory and disk the rows did not show). */
+export function machineBrief(room: MachineRoom): string {
+  const slots = room.slots === null ? [] : [`${room.slots} ${room.slots === 1 ? 'slot' : 'slots'} free`]
+  const memory = room.freeMemoryBytes === null ? 'free memory unknown'
+    : `${bytes(Math.max(0, room.freeMemoryBytes))} memory free${room.heldMemoryBytes ? ` (${bytes(room.heldMemoryBytes)} held by starts)` : ''}`
+  const disk = room.freeDiskBytes === null ? [] : [`${bytes(Math.max(0, room.freeDiskBytes))} disk free`]
+  return [...slots, memory, ...disk].join(' · ')
+}
+
 /** What the agent choosing reads of a row's quota: its fit and its weekly window, the one the project's order compares. */
 export function quotaBrief(p: Pick<Probe, 'quota' | 'gridModel'> & { fit: Pick<Fit, 'status'> }, now: number): string {
   if (p.gridModel) return 'local model, no subscription'
@@ -495,8 +519,9 @@ export function quotaBrief(p: Pick<Probe, 'quota' | 'gridModel'> & { fit: Pick<F
   const week = p.quota.windows?.find(w => w.name === 'weekly')
   const left = week ? week.leftPercent : p.quota.windows?.length ? null : p.quota.leftPercent
   const resetsAt = week ? week.resetsAt : p.quota.resetsAt
-  if (!p.quota.known || left === null) return `${p.fit.status}: weekly unknown`
-  return `${p.fit.status}: weekly ${Math.round(left)}% left${resetsAt === null ? '' : `, resets in ${resetsIn(resetsAt, now)}`}`
+  // Why it is unknown says what would make it known (River, 2026-11-03): a Team account's reading its owner's machine relays.
+  if (!p.quota.known || left === null) return `${p.fit.status}: ${p.quota.why ? cut(p.quota.why, 200) : 'weekly unknown'}`
+  return `${p.fit.status}: weekly ${Math.round(left)}% left${resetsAt === null ? '' : `, resets in ${weeklyResetsIn(resetsAt, now)}`}`
 }
 
 /** One unrated new agent per machine of the named model's engine, on that machine's first row of the engine, which carries

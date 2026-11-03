@@ -211,6 +211,7 @@ class SuperTabController extends ChangeNotifier {
       buddiesGroupOpen = initial['buddiesGroupOpen'] as bool? ?? true;
       modelsGroupOpen = initial['modelsGroupOpen'] as bool? ?? true;
       offlineMachinesOpen = initial['offlineMachinesOpen'] as bool? ?? false;
+      sessionProjectId = initial['sessionProjectId'] as String? ?? '';
       selectedId = initial['selectedId'] as String? ?? 'lead';
       final drafts = initial['drafts'];
       if (drafts is Map) {
@@ -1008,6 +1009,18 @@ class SuperTabController extends ChangeNotifier {
   /// Whether the Machines group's "Offline · N" disclosure is open; it starts closed.
   bool offlineMachinesOpen = false;
 
+  /// The project last chosen for a New session in the reader's Buddy chat on
+  /// this device, `''` for All projects (task #2347). The next New session
+  /// starts on it, while the reader can still read it.
+  String sessionProjectId = '';
+
+  void chooseSessionProject(String projectId) {
+    if (sessionProjectId == projectId) return;
+    sessionProjectId = projectId;
+    _saveSoon();
+    _changed();
+  }
+
   void toggleProject(String id) {
     if (!expandedProjects.remove(id)) {
       expandedProjects.add(id);
@@ -1252,31 +1265,55 @@ class SuperTabController extends ChangeNotifier {
   /// rebuild either.
   final Map<String, DateTime> _githubAsked = {};
 
+  /// The project's GitHub revision each read was asked at ([SuperTabProject.githubRevision]): another one in the
+  /// Swarm read means the access may have changed, so it is read again at once (task #2316).
+  final Map<String, int> _githubRevisionAsked = {};
+
   /// Whether teammates' agents can push to [projectId]'s repository, as last read; null before a read, or from a
   /// server too old to say.
   SuperTabProjectGitHub? githubAccessOf(String projectId) =>
       _github[projectId]?.value;
 
-  /// Reads [projectId]'s GitHub access, at most every 5 minutes; [refresh]: a person checks again (the server asks
-  /// GitHub at once, at most every 15 seconds per repository). An older server has no such read: nothing is shown.
+  /// Reads [projectId]'s GitHub access, at most every 5 minutes unless the project's GitHub revision moved since the
+  /// last read (someone allowed its repository or installed the app: read again at once); [refresh]: a person checks
+  /// again (the server asks GitHub at once, at most every 15 seconds per repository, and records the answer). A moved
+  /// revision asks GitHub again too, since another server may still keep "not installed", but records nothing. An
+  /// older server has no such read: nothing is shown.
   Future<void> readGitHubAccess(
     String projectId, {
     bool refresh = false,
   }) async {
+    final revision =
+        snapshot?.projects
+            .where((p) => p.id == projectId)
+            .firstOrNull
+            ?.githubRevision ??
+        0;
+    final readAt = _githubRevisionAsked[projectId];
+    // Read again because the revision moved: asks GitHub again, but records nothing (`record=0`), so servers whose caches
+    // differ cannot move it back and forth (review of #2713). A person's own check records.
+    final moved = !refresh && readAt != null && readAt != revision;
     final asked = _githubAsked[projectId];
     if (_disposed ||
         accessRevoked ||
         (!refresh &&
+            !moved &&
             asked != null &&
             clock.now().difference(asked) < const Duration(minutes: 5))) {
       return;
     }
+    // A read already out finishes first; the revision it was asked at still differs, so the next call reads again.
     if (!_githubReading.add(projectId)) return;
     _githubAsked[projectId] = clock.now();
+    _githubRevisionAsked[projectId] = revision;
     try {
       final answer = await request(
         'GET',
-        '$_path/projects/${Uri.encodeComponent(projectId)}/github${refresh ? '?refresh=1' : ''}',
+        '$_path/projects/${Uri.encodeComponent(projectId)}/github${refresh
+            ? '?refresh=1'
+            : moved
+            ? '?refresh=1&record=0'
+            : ''}',
       );
       _github[projectId] = (
         value: SuperTabProjectGitHub.fromJson(answer),
@@ -2618,6 +2655,7 @@ class SuperTabController extends ChangeNotifier {
     'buddiesGroupOpen': buddiesGroupOpen,
     'modelsGroupOpen': modelsGroupOpen,
     'offlineMachinesOpen': offlineMachinesOpen,
+    'sessionProjectId': sessionProjectId,
     'drafts': Map<String, String>.of(_drafts),
     'terminals': Map<String, String>.of(_terminals),
 

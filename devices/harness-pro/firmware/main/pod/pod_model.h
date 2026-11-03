@@ -98,6 +98,7 @@ typedef struct {
 typedef enum { POD_UNREAD_FINISHED, POD_UNREAD_FAILED } pod_unread_kind_t;
 typedef struct {
     char agent[ID_MAX], name[CABLE_NAME_MAX], token[POD_TOKEN_MAX], text[POD_UNREAD_TEXT];
+    char tab[ID_MAX], chat_id[ID_MAX];   // a Swarm chat's notice (tab set): agent = the Lead's id, name = its project, tab = the Swarm's id, chat_id = the chat it is about
     bool ask;                            // filed by a question (not a finished turn): it goes when the question closes
     pod_unread_kind_t kind;              // FAILED when the agent's last turn ended in an error
     uint32_t at_ms;
@@ -191,7 +192,7 @@ void pod_model_supertab_ids(pod_model_t *, const char (*ids)[ID_MAX], int n);
 // keeps its recap state and text; the texts of Leads that left are freed. Stamps since_at_ms with now_ms. Ignored when the id is not in the list.
 void pod_model_supertab(pod_model_t *, const pod_swarm_t *s, uint32_t now_ms);
 // A Lead's last message: LOADED with a copy of `text` (cut to SWARM_TEXT_MAX - 1 on a codepoint), or EMPTY when `none`. Unknown Swarm/Lead: dropped.
-void pod_model_supertab_recap(pod_model_t *, const char *tab, const char *lead, const char *text, uint32_t at, bool none);
+void pod_model_supertab_recap(pod_model_t *, const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t at, bool none);
 // The Lead view asks for / lets go of a Lead's last message: loading puts a cold one (NONE) to LOADING (the texts arrive as pod_model_supertab_recap);
 // close sends a LOADING, LOADED or EMPTY one back to NONE and frees its text (only the open Lead gets pushes, so a closed one would go stale).
 void pod_model_supertab_loading(pod_model_t *, const char *tab, const char *lead);
@@ -232,6 +233,7 @@ void pod_model_unread_add(pod_model_t *, const char *agent, const char *name, co
 // The whole list at once (notif.replace): clear, then append in the order given (first = newest). One per agent, at most
 // POD_UNREAD_MAX; an append past that or for an agent already listed is dropped.
 void pod_model_unread_clear(pod_model_t *);
+void pod_model_unread_clear_agents(pod_model_t *);   // as clear, but the Swarm notices stay
 void pod_model_unread_append(pod_model_t *, const char *agent, const char *name, const char *token, const char *text, uint32_t now_ms);
 // Read elsewhere (notif.seen): drop the agent's entry. With a token, only an entry that has that token or none. True if dropped.
 bool pod_model_unread_seen(pod_model_t *, const char *agent, const char *token);
@@ -240,6 +242,11 @@ bool pod_model_unread_read(pod_model_t *, const char *agent);
 const pod_unread_t *pod_model_unread_find(const pod_model_t *, const char *agent);
 // How many notices Pets lists (the Notices screen and Home's Notices card): the asking agents, then the unread entries of agents that are not asking.
 int pod_notice_count(const pod_model_t *);
+// A Swarm chat's notice (supertab.notice): an entry like an agent's, keyed by its Lead (one per Lead, the newest replacing, the 16 cap shared), named by the Lead's
+// project. Nothing is filed for a Swarm or Lead the model does not hold. The read drops only the entry of that tab, Lead AND chat (true when it did), so one that
+// arrives before its notice, or for another chat, leaves the row alone.
+void pod_model_swarm_notice(pod_model_t *, const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t now_ms);
+bool pod_model_swarm_notice_read(pod_model_t *, const char *tab, const char *lead, const char *chat_id);
 // The entry of a question that was just asked (the toast needs one): like pod_model_unread_add, marked `ask`.
 void pod_model_unread_ask(pod_model_t *, const char *agent, const char *name, const char *text, uint32_t now_ms);
 // Take the queued notif.read frames (at most max); returns the count.

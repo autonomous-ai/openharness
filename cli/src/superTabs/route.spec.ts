@@ -1,6 +1,6 @@
 // cli/src/superTabs/route.spec.ts
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { API_BUILDERS, catalogFrom, catalogRow, choose, decide, gridStrength, LOCAL_NONE, OTHER_REPOSITORY, parseAssessment, quotaOf2, recordOf, repoMatch, repositoryKey, strengthOf,
+import { API_BUILDERS, catalogFrom, quotaBrief, catalogRow, choose, decide, gridStrength, LOCAL_NONE, OTHER_REPOSITORY, parseAssessment, quotaOf2, recordOf, repoMatch, repositoryKey, strengthOf,
   type Assessment, type Catalog, type Commitment, type MemberFrame, type Probe, type RoutePlugin, type TaskFolder } from './route.js'
 
 const object = (v: unknown) => v as Record<string, unknown>
@@ -283,6 +283,21 @@ describe('strength, fit and effective cost', () => {
     const r = route(boxes.flatMap(b => [on(CODEX, b, windows(null, [0, 5 * D], `${b}-x`)), on(OPUS, b, windows(null, [99, D], `${b}-c`))]), { difficulty: 'high' })
     expect(r.shown).toHaveLength(28)
     for (const b of boxes) expect(r.shown.filter(s => s.machineName === b).map(s => [s.engine, s.fit.status]).sort()).toEqual([['claude', 'fits'], ['codex', 'short']])
+  })
+  // River, 2026-11-03: a Codex reading "unknown" did not say that its owner's machine must relay it.
+  // The PM paces its own account by the day since its weekly reset (project instructions, 2026-11-03): "resets in 7 days", a
+  // whole day either way, left it half a day off.
+  it('says when a weekly window resets to the hour past two days', () => {
+    const brief = (resetsIn: number) => quotaBrief({ quota: windows(null, [80, resetsIn]), fit: { status: 'fits' } }, NOW)
+    expect(brief(6 * D + 13 * H + 10 * M)).toBe('fits: weekly 80% left, resets in 6d13h')
+    expect(brief(5 * D)).toBe('fits: weekly 80% left, resets in 5d')
+    expect(brief(2 * D + 23 * H + 40 * M)).toBe('fits: weekly 80% left, resets in 3d')
+    expect(brief(30 * H)).toBe('fits: weekly 80% left, resets in 30h')
+  })
+  it('says why an unknown quota is unknown', () => {
+    const why = 'This account runs on its owner\'s subscription; its allowance is read on the owner\'s machine.'
+    expect(quotaBrief({ quota: { known: false, leftPercent: null, resetsAt: null, why }, fit: { status: 'unknown' } }, NOW)).toBe(`unknown: ${why}`)
+    expect(quotaBrief({ quota: { known: false, leftPercent: null, resetsAt: null }, fit: { status: 'unknown' } }, NOW)).toBe('unknown: weekly unknown')
   })
   it('shows at most 64 rows, what the backend keeps of a decision, the best-ranked first', () => {
     const boxes = Array.from({ length: 40 }, (_, i) => `box-${String(i).padStart(2, '0')}`)
