@@ -68,7 +68,9 @@ describe('a Claude Code session renamed with /rename', () => {
   it('on Windows, finds the `>` composer under the titled rule too', () => {
     on('win32')
     for (const capture of renamed) {
-      const windows = capture.replace(/^❯ $/m, '> ')
+      // Claude Code draws a no-break space after its marker; the person's earlier `❯ /rename` row stays in the transcript.
+      const windows = capture.replace(/^❯\u00a0$/m, '>\u00a0')
+      expect(windows).not.toMatch(/^❯\u00a0$/m)
       expect(composerState(windows)).toBe('ready')
       expect(screen.inspect(windows)).toMatchObject({ messageHold: null, teamHold: null })
     }
