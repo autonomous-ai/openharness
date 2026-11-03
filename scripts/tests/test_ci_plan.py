@@ -25,6 +25,21 @@ class SelectionTests(unittest.TestCase):
         self.assertNotIn("backend-integration", others)
         self.assertNotIn("backend", planner.NOT_READ)
 
+    def test_pr_integration_shards_restore_a_mongod_cache_that_main_saves(self):
+        # A cache a PR saves is visible to that PR only; one saved on main is visible to every PR (review of #2804).
+        workflows = Path(__file__).resolve().parents[2] / ".github/workflows"
+        ci = (workflows / "ci.yml").read_text()
+        job = re.search(r"(?m)^  backend-integration:\n((?:(?:    .*)?\n)+)", ci).group(1)
+        self.assertIn("actions/cache/restore@", job)
+        self.assertNotRegex(job, r"actions/cache(/save)?@")
+        key = re.search(r"(?m)^\s+key: (super-tab-mongod-\S+)$", job).group(1)
+        saver = (workflows / "backend-cache.yml").read_text()
+        self.assertRegex(saver, r"(?ms)^on:.*^  push:\n    branches: \[main\]")
+        self.assertIn("actions/cache/save@", saver)
+        self.assertIn(f"key: {key}", saver)
+        self.assertIn("path: /tmp/harness-super-tab-mongodb-binaries", job)
+        self.assertIn("path: /tmp/harness-super-tab-mongodb-binaries", saver)
+
     def test_docs_workflows_scripts_and_unknown_paths_need_only_process_checks(self):
         for path in ["docs/guide.md", "README.md", "docs/images/poster.png", "scripts/ci-plan.py",
                      ".github/workflows/ci.yml", "Makefile", "store/tools/runtimes.sh", "surprise.py"]:
