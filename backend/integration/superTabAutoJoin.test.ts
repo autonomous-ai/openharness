@@ -434,6 +434,63 @@ describe('A Workspace removal is final for auto-join', () => {
   })
 })
 
+// Task #2510 (Diego's Buddy, 11-03): once the purge deleted the removed person's member row, a tokenless domain join link to
+// another domain-shared Swarm of the same Workspace readmitted them in one click, and addMember then cleared the Workspace's
+// decline, so auto-join added them to every other auto-join Swarm too. Someone the Workspace removed comes back only by an
+// invitation (design, Roles).
+describe('A Workspace removal is final for join links', () => {
+  const domainShared = async () => {
+    const tab = await create()
+    await save(tab, { mode: 'domain', domain: current.email.split('@')[1]!, role: 'collaborator' })
+    return tab
+  }
+  /** [person] in the Workspace of a first auto-join Swarm, then removed from it and the removal purged. */
+  const removedAndPurged = async (person: AuthUser) => {
+    const first = await create()
+    await turnOn(first)
+    expect(await listed(person)).toContain(first)
+    const { workspaceId } = await storedState(first)
+    await store.workspaces.remove(current, workspaceId!, person.sub)
+    // What the purge leaves: no member row and no removal row.
+    await db.swarmWorkspaceMember.deleteMany({ where: { workspaceId: workspaceId!, userId: person.sub } })
+    await db.swarmWorkspaceRemoval.deleteMany({ where: { workspaceId: workspaceId!, userId: person.sub } })
+    return workspaceId!
+  }
+
+  it('refuses the removed person a join link and its preview after the purge, keeps the decline, and auto-join adds them nowhere', async () => {
+    const { fired } = await org('twenty', ['fired'])
+    const workspaceId = await removedAndPurged(fired)
+    const linked = await domainShared()
+    await expect(store.join(fired, linked, { operationId: randomUUID() })).rejects.toMatchObject({ code: 'WORKSPACE_ACCESS_REVOKED',
+      message: expect.stringContaining('Ask its owner to invite you.') })
+    await expect(store.previewJoin(fired, linked)).rejects.toMatchObject({ code: 'WORKSPACE_ACCESS_REVOKED' })
+    expect(await personIn(linked, fired)).toBeUndefined()
+    expect((await db.swarmWorkspace.findUniqueOrThrow({ where: { id: workspaceId } })).autoJoinDeclined).toContain(fired.sub)
+    const third = await create()
+    await turnOn(third)
+    later()
+    expect(await listed(fired)).not.toContain(third)
+  })
+
+  it('lets a person the Workspace never removed preview and join a domain-shared Swarm by its link', async () => {
+    const { newcomer } = await org('twentyone', ['newcomer'])
+    const linked = await domainShared()
+    expect(await store.previewJoin(newcomer, linked)).toMatchObject({ alreadyMember: false })
+    expect(await store.join(newcomer, linked, { operationId: randomUUID() })).toMatchObject({ alreadyMember: false })
+    expect(await personIn(linked, newcomer)).toBeDefined()
+  })
+
+  it('lets a removed person invited back to the Workspace join by link again', async () => {
+    const { returning } = await org('twentytwo', ['returning'])
+    const workspaceId = await removedAndPurged(returning)
+    await store.workspaces.invite(current, workspaceId, returning.email, 'member')
+    await store.workspaces.accept(returning, workspaceId)
+    const linked = await domainShared()
+    expect(await store.join(returning, linked, { operationId: randomUUID() })).toMatchObject({ alreadyMember: false })
+    expect(await personIn(linked, returning)).toBeDefined()
+  })
+})
+
 describe('What readers see', () => {
   it('tells every member auto-join is on, marks who came by domain, and never shows the declines or the sharing', async () => {
     const { joiner, leaver } = await org('fifteen', ['joiner', 'leaver'])

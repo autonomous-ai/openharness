@@ -271,6 +271,17 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // A teammate's project runs only on Team machines: the backend says per machine whether it takes one now, and why not
   // (backend superTabs/machines.ts teamWorkRefusal). Its project owner's own machines take its work as before.
   const projectOwner = project?.ownerId ?? state.ownerId
+  // A machine its owner keeps for some projects (backend machines.ts machine.projects, Tony 11-03): a Mac's Harness Team
+  // account follows its Mac. Only public projects are named, as the backend's own sentence does: the route's exclusions reach
+  // this project's readers.
+  const keptFor = (m: Json) => {
+    const mac = typeof m.hostMachineId === 'string' ? list(state.machines).find(x => x.machineId === m.hostMachineId && x.contributorId === m.contributorId) ?? m : m
+    const ids: unknown[] | null = Array.isArray(mac.projects) ? mac.projects : null
+    if (!ids || ids.includes(projectId)) return null
+    const named = list(state.projects).filter(p => ids.includes(p.id) && p.visibility === 'public').map(p => String(p.name))
+    return named.length ? `${String(mac.name)} runs only ${named.length > 1 ? `${named.slice(0, -1).join(', ')} and ${named.at(-1)}` : named[0]}.`
+      : `${String(mac.name)} is kept by its owner for other projects.`
+  }
   for (const original of list(state.machines)) {
     const repository = object(project?.repository)
     const teamWork = object(original.teamWork)
@@ -281,6 +292,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
       ...(original.scope === 'swarm' ? { cwd: repository.machineId === original.machineId
         ? repository.cwd : `${String(original.cwd).replace(/\/+$/, '')}/${projectId}` } : {}),
       ...(original.scope !== 'swarm' && projectId !== 'lead' ? { projectUnavailable: true } : {}),
+      ...(keptFor(original) ? { keptForOthers: keptFor(original) } : {}),
       ...(original.scope === 'swarm' && repository.machineId !== original.machineId && typeof repository.repositoryUrl !== 'string'
         ? { repositoryUnavailable: true } : {}),
       ...relayedReadings(original, list(state.machines)),
@@ -599,7 +611,8 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
     const tools = object(observed.tools)
     /** Work for a project its owner does not run here: a new agent runs under the contribution, a member under its own grant. */
     const teammates = (contributorId: unknown) => typeof pool.teammatesRefused === 'string' && contributorId !== pool.projectOwnerId ? [pool.teammatesRefused] : []
-    const newReasons = [...blocked, ...teammates(pool.contributorId),
+    const kept = typeof pool.keptForOthers === 'string' ? [pool.keptForOthers] : []
+    const newReasons = [...blocked, ...kept, ...teammates(pool.contributorId),
       ...(pool.projectUnavailable === true ? ['Its owner must add this machine to the swarm again to support other projects.'] : []),
       ...(pool.repositoryUnavailable === true ? ['Share a repository for this project before starting agents on this machine.'] : []),
       ...(pool.availableSlots === 0 ? ['This machine has no available agent slots.'] : []),
@@ -620,7 +633,7 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
       const engine = String(object(m.configuration).engine), allowance = quota(engine)
       const running = Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.includes(m.harnessId) : null
       return { ...memberProbe(m, fresh ? [...memberRefusals(running, needs.tools, needs.devices, tools, object(observed.devices), object(observed.toolProbeErrors)),
-        ...teammates(m.contributorId)] : [OFFLINE],
+        ...kept, ...teammates(m.contributorId)] : [OFFLINE],
         allowance, null, fresh && running === null, [...pushNote, ...usedUp(allowance)]), ...(fresh ? { load } : {}) }
     }),
       ...models.map(m => ({ ...newProbe(m, [...newReasons, ...(unready.engines[m.engine] ? [unready.engines[m.engine]!] : [])], quota(m.engine), fresh && quota(m.engine).known,

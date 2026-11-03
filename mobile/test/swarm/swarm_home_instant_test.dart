@@ -136,10 +136,10 @@ void main() {
       expect(
         find.descendant(
           of: key('swarm-project-$tab-$project'),
-          matching: find.text('1 human'),
+          matching: find.textContaining('human'),
         ),
-        findsOneWidget,
-        reason: 'its people; Nova waits on the person, so none is running',
+        findsNothing,
+        reason: 'one line: its #name, not its people',
       );
       expect(
         [for (final need in host.session!.inbox.needs) need.conversationId],
@@ -244,19 +244,19 @@ void main() {
       stopReads(host);
     });
 
-    /// A pull on Home, up to the read it starts.
-    Future<void> pull(WidgetTester tester) async {
-      await tester.fling(
-        key('swarm-project-$tab-$project'),
-        const Offset(0, 400),
-        1000,
-      );
+    /// Refresh, from Sort and filter (a pull on Home until 2026-11-03, which
+    /// opens Search now), up to the read it starts.
+    Future<void> refresh(WidgetTester tester) async {
+      await tester.tap(key('swarm-home-view'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.tap(key('swarm-home-refresh'));
       for (var i = 0; i < 10; i++) {
         await tester.pump(const Duration(milliseconds: 100));
       }
     }
 
-    testWidgets('a pull looks for the computers, then reads the Swarms', (
+    testWidgets('Refresh looks for the computers, then reads the Swarms', (
       tester,
     ) async {
       var away = true;
@@ -276,13 +276,13 @@ void main() {
               },
       );
       final inbox = host.session!.inbox;
-      // The quick reads stopped: only the pull's is counted.
+      // The quick reads stopped: only Refresh's is counted.
       stopReads(host);
       int lists() =>
           fake.paths.where((p) => p == '/api/super-tabs/list').length;
       final before = lists();
 
-      await pull(tester);
+      await refresh(tester);
       expect(computers.rechecks, 1);
       expect(lists(), before, reason: 'not before the look ends');
 
@@ -314,7 +314,7 @@ void main() {
           fake.paths.where((p) => p == '/api/super-tabs/list').length;
       final before = lists();
 
-      await pull(tester);
+      await refresh(tester);
 
       expect(computers.rechecks, 1);
       expect(log.messages, contains('Computers not looked for'));
@@ -324,9 +324,8 @@ void main() {
       stopReads(host);
     });
 
-    testWidgets('with the computers answering, a pull only reads the Swarms', (
-      tester,
-    ) async {
+    testWidgets('with the computers answering, Refresh only reads the '
+        'Swarms', (tester) async {
       final computers = FakeComputers([mac]);
       final (:host, :fake) = await coldStart(
         tester,
@@ -345,7 +344,7 @@ void main() {
           fake.paths.where((p) => p == '/api/super-tabs/list').length;
       final before = lists();
 
-      await pull(tester);
+      await refresh(tester);
 
       expect(computers.rechecks, 0);
       expect(lists(), greaterThan(before));

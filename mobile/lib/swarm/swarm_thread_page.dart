@@ -693,8 +693,8 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
 
   /// The reply box: the @ picker while a name is typed, notes, then the card
   /// ([SwarmComposerCard]) — the files going with the reply, a field that
-  /// grows with what is typed and its X, then +, @ Tag, the mic and a round
-  /// Send (the desktop's thread composer, with the main chat's mic and Tag)
+  /// grows with what is typed and its X, then +, @, the mic and a round
+  /// Send (the desktop's thread composer, with the main chat's mic and @)
   /// — and under the card Reply options, folded until tapped: New session
   /// and Also send, the desktop's two choices, both off to begin with
   /// ([_options]). While a take is under way the toolbar is the voice row
@@ -809,7 +809,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
                               : null,
                         ),
                       if (taggable)
-                        SwarmTagChip(
+                        SwarmTagButton(
                           open: query != null,
                           onTap: () {
                             t.toggleMention();

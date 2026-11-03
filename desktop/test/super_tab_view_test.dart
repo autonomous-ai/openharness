@@ -284,6 +284,9 @@ void main() {
     }
     await tester.tap(find.byKey(const ValueKey('super-group-lead')));
     await tester.pumpAndSettle();
+    // A workgroup with no work is in The rest, which starts folded (#2309).
+    await tester.tap(find.byKey(const ValueKey('super-task-group-lead-rest')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('super-group-offline')));
     await tester.pumpAndSettle();
     expect(controller.selectedId, 'offline');
@@ -372,6 +375,11 @@ void main() {
       await tester.tap(find.byTooltip('Conversations'));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('super-group-lead')));
+      await tester.pumpAndSettle();
+      // A workgroup with no work is in The rest, which starts folded (#2309).
+      await tester.tap(
+        find.byKey(const ValueKey('super-task-group-lead-rest')),
+      );
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('super-group-offline')));
       await tester.pumpAndSettle();

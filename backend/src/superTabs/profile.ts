@@ -10,7 +10,7 @@ export const MAX_STATUS_LENGTH = 80
 export interface PersonStatus { text: string; emoji: (typeof STATUS_EMOJI)[number] | null; until: string | null }
 
 // Control, format (bidi overrides, zero-width) and line/paragraph separators: words that hide their real shape.
-const printable = (value: string) => !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value)
+export const printable = (value: string) => !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value)
 export const statusSchema = z.object({
   text: z.string().trim().min(1).max(MAX_STATUS_LENGTH).refine(printable, 'Use printable words.'),
   emoji: z.enum(STATUS_EMOJI).nullable().optional(),

@@ -114,7 +114,7 @@ class SuperTabActivity extends ChangeNotifier {
           kind: SuperTabNeedKind.mention,
           id: 'mention:${m.id}',
           title:
-              '${people[m.leadId]?.username ?? m.leadName} mentioned you in # ${m.projectName}',
+              '${people[m.leadId]?.shownName ?? m.leadName} mentioned you in # ${m.projectName}',
           conversationId: m.conversationId,
           at: m.createdAt,
           mention: m,

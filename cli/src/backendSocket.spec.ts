@@ -3435,6 +3435,18 @@ describe('agent_retarget clearGrid', () => {
     expect(reply?.payload?.error).toBe('INVALID_GRID')
     expect(seen).toHaveLength(0)
   })
+
+  // A fresh session is a grid's or an API's: the way home reopens the conversation a fresh move left.
+  it('refuses fresh with clearGrid', async () => {
+    const { seen, reply } = await retarget({ requestId: 'r', agentId: 'a1', clearGrid: true, fresh: true })
+    expect(reply?.payload?.error).toBe('INVALID_GRID')
+    expect(seen).toHaveLength(0)
+  })
+
+  it('passes fresh through with a grid', async () => {
+    const { seen } = await retarget({ requestId: 'r', agentId: 'a1', grid: WIRE_GRID, fresh: true })
+    expect(seen).toEqual([expect.objectContaining({ agentId: 'a1', grid: expect.objectContaining({ networkId: 'grid-abc' }), fresh: true })])
+  })
 })
 
 /**
@@ -3686,6 +3698,15 @@ describe('a move onto a grid model asks models where it goes', () => {
     // The account's own grid when the picker names none.
     await d.ask('agent_retarget', { agentId: 'a1', gridModel: 'Own-Model' })
     expect(moveTarget).toHaveBeenLastCalledWith({ gridName: null, model: 'Own-Model' })
+    await d.done()
+  })
+
+  it('a fresh move onto a grid model or an API model says so to the move', async () => {
+    const d = daemon(vi.fn(async () => ({ target: TARGET })), vi.fn(async () => ({ target: API, apiBase: API.baseUrl })))
+    expect(await d.ask('agent_retarget', { agentId: 'a1', gridModel: 'Shared-Model', gridName: 'team-grid-0000aaaa', fresh: true })).toMatchObject({ retargeted: true })
+    expect(d.retargeted).toHaveBeenLastCalledWith({ agentId: 'a1', grid: TARGET, fresh: true })
+    expect(await d.ask('agent_retarget', { agentId: 'a1', apiConnection: 'router', apiModel: 'vendor/model-a', fresh: true })).toMatchObject({ retargeted: true })
+    expect(d.retargeted).toHaveBeenLastCalledWith({ agentId: 'a1', grid: API, fresh: true })
     await d.done()
   })
 

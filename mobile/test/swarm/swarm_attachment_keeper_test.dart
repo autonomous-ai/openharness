@@ -221,7 +221,9 @@ class _ListingDirectory implements Directory {
     for (final entry in entries) {
       listed.add(entry);
       if (recursive && entry is Directory) {
-        listed.addAll(entry.listSync(recursive: true, followLinks: followLinks));
+        listed.addAll(
+          entry.listSync(recursive: true, followLinks: followLinks),
+        );
       }
     }
     return listed;

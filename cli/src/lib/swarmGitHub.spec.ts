@@ -79,6 +79,23 @@ describe('the shared helper and hooks', () => {
     expect(() => swarmGitPrepareEnv('not a token; rm -rf /')).toThrow('not in the form GitHub gives')
   })
 
+  // MACs-Mac-Studio, 2026-11-03: lampOS keeps CAD files in Git LFS, git-lfs was not installed, and the filter set here anyway
+  // made Apple's git fail the checkout ("git-lfs: command not found", "the remote end hung up unexpectedly", exit 128), which
+  // the start reported as "Could not clone the repository". Without git-lfs those files stay pointer files, as in any clone.
+  it('sets the Git LFS filter only when git-lfs is on the clone\'s PATH', () => {
+    const token = `ghs_${'t'.repeat(36)}`
+    const without = swarmGitPrepareEnv(token, { PATH: fresh('no-lfs'), HOME: home })
+    expect(without.GIT_CONFIG_PARAMETERS).not.toContain('filter.lfs')
+    const tools = fresh('lfs-tools')
+    script(join(tools, 'git-lfs'), 'exit 0')
+    const withLfs = swarmGitPrepareEnv(token, { PATH: `${fresh('empty')}:${tools}`, HOME: home })
+    for (const key of ['filter.lfs.process', 'filter.lfs.clean', 'filter.lfs.smudge']) expect(withLfs.GIT_CONFIG_PARAMETERS).toContain(`'${key}'=`)
+    // A file named git-lfs that cannot run is no git-lfs.
+    const broken = fresh('lfs-broken')
+    writeFileSync(join(broken, 'git-lfs'), 'not a program')
+    expect(swarmGitPrepareEnv(token, { PATH: broken, HOME: home }).GIT_CONFIG_PARAMETERS).not.toContain('filter.lfs')
+  })
+
   it('writes the helper for this daemon\'s CLI and one hook for every hook git runs, private to its user, once', () => {
     const dataDir = fresh('data')
     const { helper, hooks } = writeSwarmGitHubTools({ dataDir, command: "'/opt/node' '/opt/harness/cli.js'", port: 18500, machineId: 'machine-1' })

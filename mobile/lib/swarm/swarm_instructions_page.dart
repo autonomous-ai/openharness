@@ -71,12 +71,12 @@ class _SwarmInstructionsPageState extends State<SwarmInstructionsPage> {
       .where((p) => p.id == widget.projectId)
       .firstOrNull;
 
-  /// A member's username from the reader's snapshot, else "a member".
+  /// A member's shown name from the reader's snapshot, else "a member".
   String _personName(String id) =>
       widget.reader.snapshot?.people
           .where((p) => p.id == id)
           .firstOrNull
-          ?.username ??
+          ?.shownName ??
       'a member';
 
   /// Whether the person may delete a note: as Desktop, one who can write in the

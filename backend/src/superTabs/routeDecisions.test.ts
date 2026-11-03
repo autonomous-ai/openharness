@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { closeAssignment, recordAttempts, writeRouteEffects } from './routeDecisions.js'
+import type { RouteRecord } from './routeRecord.js'
+
+/** A record as route.record validates it (routeRecord.ts routeRecordSchema): both lists are always there. */
+const RECORD: RouteRecord = { assessment: { difficulty: 'low', risk: 'low', why: 'Fixture.' }, candidates: [{ id: 'c0', kind: 'new', machineId: 'machine',
+  engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3, title: 'New agent', label: 'New agent' }], excluded: [], floor: 1, notes: false,
+  pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
 
 type Row = Record<string, unknown> & { id: string; tabId: string; conversationId: string; outcome?: string | null }
 
@@ -51,7 +57,7 @@ describe('route decision persistence', () => {
       { id: 'other-group', tabId: 'tab', conversationId: 'other', final: null, assignmentId: null, outcome: null },
     ]
     const tx = memoryTx(rows)
-    await writeRouteEffects(tx, 'tab', [{ op: 'create', id: 'next', conversationId: 'group', record: {} as never }], now)
+    await writeRouteEffects(tx, 'tab', [{ op: 'create', id: 'next', conversationId: 'group', record: RECORD }], now)
     const outcome = (id: string) => rows.find(row => row.id === id)?.outcome ?? null
     expect(outcome('proposal')).toBe('superseded')
     expect(outcome('unset-proposal')).toBe('superseded')

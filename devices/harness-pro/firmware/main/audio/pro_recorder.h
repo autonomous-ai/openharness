@@ -14,7 +14,7 @@ bool pro_rec_init(void);
 
 // Begin one utterance: the capture task opens the mic, the sender sends voice.begin and then the PCM. False when
 // the recorder is unavailable or a previous utterance is still being finalised.
-bool pro_rec_start(const char *agent_id, const char *lang, const char *upload_id);
+bool pro_rec_start(const char *agent_id, bool face, const char *lang, const char *upload_id);
 // Finish normally: stop capturing, drain the ring, send voice.end.
 void pro_rec_stop(void);
 // Discard it. quiet=true: the cable is dead, send nothing (otherwise voice.abort goes out).

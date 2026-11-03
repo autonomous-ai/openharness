@@ -123,6 +123,9 @@ describe('Activity: replies to a person\'s messages', () => {
     expect(list.map(i => [i.kind, i.messageId, i.text, i.actor.kind])).toEqual([['reply', agentReply, 'Worker answers', 'agent'], ['reply', reply, 'Peer answers', 'person']])
     expect(list[1]).toMatchObject({ conversationId: s.web, conversationTitle: 'Web', threadId: root, actor: { id: peer.sub, name: expect.any(String) }, read: false, emoji: null })
     expect(list[0].actor.name).toBe('worker-harness')
+    // A person by the name they set (personNames.ts), else their username.
+    await run(s.tabId, { type: 'member.name', name: 'Peer Person' }, peer)
+    expect((await items(s.tabId)).find(i => i.messageId === reply).actor.name).toBe('Peer Person')
     expect(typeof list[0].messageSequence).toBe('number')
     // Nothing for the person who replied, and nothing for a reply in one's own thread.
     expect(await items(s.tabId, peer)).toEqual([])

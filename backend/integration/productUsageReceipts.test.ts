@@ -217,39 +217,66 @@ it('a failed pass is logged and the next minute\'s pass carries on', async () =>
   expect(await left()).toEqual(KEPT.filter(id => !id.startsWith('old-2026-10-30')).sort())
 })
 
-it('a database user that may not install the rule gets one warning and an hourly check, then the sweep runs once it may (prod 10-29)', async () => {
-  const lines: string[] = []
-  const log = { info: (message: string) => lines.push(message), warn: (message: string) => lines.push(message) }
-  await db.productUsageReceipt.deleteMany({ where: { id: { startsWith: 'old-2026-10-30' } } })
-  let refused = true, installs = 0, clock = now.getTime()
-  // As Prisma reports Mongo's refusal (code 13) of collMod to production's app user.
-  const refusing = new Proxy(db, { get: (target, key) => key === '$runCommandRaw'
+/** A client that refuses collMod as Mongo refuses production's app user (code 13) while [refused] says so, counting the tries. */
+function refusingCollMod(refused: () => boolean) {
+  const tries = { installs: 0 }
+  const client = new Proxy(db, { get: (target, key) => key === '$runCommandRaw'
     ? (command: Record<string, unknown>) => {
       if (!('collMod' in command)) return target.$runCommandRaw(command as never)
-      installs++
-      return refused ? Promise.reject(new Error('Raw query failed. Code: `13`. Message: `not authorized on harness to execute command { collMod: "product_usage_receipts" }`'))
+      tries.installs++
+      return refused() ? Promise.reject(new Error('Raw query failed. Code: `13`. Message: `not authorized on harness to execute command { collMod: "product_usage_receipts" }`'))
         : target.$runCommandRaw(command as never)
     }
     : Reflect.get(target, key) })
-  const stop = sweep.startReceiptSweep(refusing, { everyMs: 20, chunk: 50, chunks: 1, pauseMs: 0, now: () => new Date(clock), log })
+  return { client, tries }
+}
+/** Each line the sweep logs, with its level. */
+const levels = (lines: string[]) => ({ info: (message: string) => lines.push(`info ${message}`), warn: (message: string) => lines.push(`warn ${message}`),
+  error: (message: string) => lines.push(`error ${message}`) })
+const STUCK = 'error [usage-receipts] stuck: the database user may not install the receipt rule (collMod), so nothing is removed. The old receipts ' +
+  'expire by themselves by 2026-12-04; grant collMod to finish sooner. Checking hourly.'
+
+it('a database user that may not install the rule gets an error every hourly check, then the sweep runs once it may (prod 10-29, task #2488)', async () => {
+  const lines: string[] = []
+  await db.productUsageReceipt.deleteMany({ where: { id: { startsWith: 'old-2026-10-30' } } })
+  let refused = true, clock = now.getTime()
+  const { client, tries } = refusingCollMod(() => refused)
+  const stop = sweep.startReceiptSweep(client, { everyMs: 20, chunk: 50, chunks: 1, pauseMs: 0, now: () => new Date(clock), log: levels(lines) })
   try {
-    await vi.waitFor(() => expect(installs).toBe(1), { timeout: 5000 })
-    // Many minutes' passes later, within the hour: no second try, no second warning.
+    await vi.waitFor(() => expect(tries.installs).toBe(1), { timeout: 5000 })
+    // Many minutes' passes later, within the hour: no second try, no second line.
     await new Promise(resolve => setTimeout(resolve, 200))
-    expect(installs).toBe(1)
-    expect(lines).toEqual(['[usage-receipts] waiting: the database user may not install the receipt rule (collMod); nothing is removed, checking hourly'])
+    expect(tries.installs).toBe(1)
+    expect(lines).toEqual([STUCK])
     expect((await left()).length).toBe(109)
     clock += 3_600_000
-    await vi.waitFor(() => expect(installs).toBe(2), { timeout: 5000 })
+    await vi.waitFor(() => expect(tries.installs).toBe(2), { timeout: 5000 })
     await new Promise(resolve => setTimeout(resolve, 200))
-    expect(installs).toBe(2)
-    expect(lines).toHaveLength(1)
+    expect(tries.installs).toBe(2)
+    // Every hour it is stuck says so again: one quiet warning at start was missed for days (#2245).
+    expect(lines).toEqual([STUCK, STUCK])
     // Ken grants collMod: the next hourly check installs the rule and the sweep carries on, without a restart.
     refused = false
     clock += 3_600_000
     await vi.waitFor(() => expect(lines.at(-1)).toMatch(/done/), { timeout: 5000 })
   } finally { stop() }
   expect(await left()).toEqual(KEPT.filter(id => !id.startsWith('old-2026-10-30')).sort())
+})
+
+it('a refused sweep stops by itself once its old receipts have expired, and asks for collMod no more (task #2488)', async () => {
+  const lines: string[] = []
+  // Mongo's expiry has removed every old receipt the sweep would have: those it never touches (within 5 days) are left.
+  await db.productUsageReceipt.deleteMany({ where: { id: { startsWith: 'old-' }, expiresAt: { gt: at('2026-11-02', 5) } } })
+  let clock = now.getTime()
+  const { client, tries } = refusingCollMod(() => true)
+  const stop = sweep.startReceiptSweep(client, { everyMs: 20, chunk: 50, chunks: 1, pauseMs: 0, now: () => new Date(clock), log: levels(lines) })
+  try {
+    await vi.waitFor(() => expect(lines.at(-1)).toMatch(/done/), { timeout: 5000 })
+    clock += 3 * 3_600_000
+    await new Promise(resolve => setTimeout(resolve, 200))
+  } finally { stop() }
+  expect(lines).toEqual(['info [usage-receipts] done: no old receipts left'])
+  expect(tries.installs).toBeLessThanOrEqual(1)
 })
 
 it('counting stays exact: a report inside the window counts once across the sweep, an older one adds nothing', async () => {
