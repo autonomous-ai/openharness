@@ -156,6 +156,41 @@ describe('usernames', () => {
   })
 })
 
+describe('display names', () => {
+  const members = async (tab: string, user = owner) =>
+    (await read(tab, user)).body.data.members as Array<{ key: string; data: { name?: string } }>
+
+  it('reach members through first loads and changes after a reload, and nobody outside the Swarm', async () => {
+    const tab = await swarm()
+    const first = await read(tab, peer)
+    await run(tab, { type: 'member.name', name: '  Minh   Nguyen ' })
+    const changes = await read(tab, peer, `changes?cursor=${first.body.data.cursor}`)
+    expect(changes.body.data.members.find((m: { key: string }) => m.key === owner.sub).data.name).toBe('Minh Nguyen')
+    // A fresh read loads the member's part from the database: the name was stored with it.
+    expect((await members(tab, peer)).find(m => m.key === owner.sub)!.data.name).toBe('Minh Nguyen')
+    expect((await store.read(owner, tab)).state.people.find(p => p.id === owner.sub)!.name).toBe('Minh Nguyen')
+    const stranger = await read(tab, outsider)
+    expect(stranger.status).not.toBe(200)
+    expect(stranger.text).not.toContain('Minh Nguyen')
+  })
+
+  it('gives a name to one of two people choosing it at once', async () => {
+    const tab = await swarm()
+    const results = await Promise.allSettled([run(tab, { type: 'member.name', name: 'Captain' }),
+      run(tab, { type: 'member.name', name: 'captain' }, peer)])
+    expect(results.map(r => r.status).sort()).toEqual(['fulfilled', 'rejected'])
+    expect((results.find(r => r.status === 'rejected') as PromiseRejectedResult).reason).toMatchObject({ code: 'NAME_TAKEN' })
+    expect((await members(tab)).filter(m => m.data.name?.toLowerCase() === 'captain')).toHaveLength(1)
+  })
+
+  it('gives one of a name and a username that read alike, chosen at once', async () => {
+    const tab = await swarm()
+    const results = await Promise.allSettled([run(tab, { type: 'member.name', name: 'Skipper' }),
+      run(tab, { type: 'member.username', username: 'skipper' }, peer)])
+    expect(results.map(r => r.status).sort()).toEqual(['fulfilled', 'rejected'])
+  })
+})
+
 describe('avatar uploads', () => {
   it('stores a png, jpg or webp of at most 1 MB as the image its bytes are', async () => {
     const tab = await swarm()
