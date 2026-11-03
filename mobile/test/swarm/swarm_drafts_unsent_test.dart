@@ -333,6 +333,32 @@ void main() {
       expect((await app()).kept.posts(tab, 'g1', 'root-1'), isEmpty);
     });
 
+    test('a thread reply refused after a restart comes back with its '
+        'mentions, which go with it again', () async {
+      final c = await chat(await app());
+      swarm.routes[commands] = lost;
+      final t = SwarmThread(c, 'root-1');
+      addTearDown(t.dispose);
+      t.draft = 'ask';
+      t.mention('agent-lead');
+      await t.send();
+      expect(t.outgoing.single.state, SwarmPostState.unconfirmed);
+
+      final after = await chat(await app());
+      final again = SwarmThread(after, 'root-1');
+      addTearDown(again.dispose);
+      swarm.routes[commands] = (_) =>
+          throw const SuperTabFailure('INVALID', 'Refused.', statusCode: 400);
+      await again.retry(again.outgoing.single);
+
+      expect(again.outgoing, isEmpty);
+      expect(again.draft, 'ask @River');
+      expect(again.mentions, {'agent-lead': '@River'});
+      swarm.routes[commands] = (_) => {'ok': true};
+      expect(await again.send(), isTrue);
+      expect(swarm.commands.last['recipientIds'], ['agent-lead']);
+    });
+
     testWidgets('its row has Retry and Delete; Sending… has neither', (
       tester,
     ) async {

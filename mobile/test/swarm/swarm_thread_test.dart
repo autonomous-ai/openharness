@@ -630,6 +630,80 @@ void main() {
       expect(r.swarm.commands.single['recipientIds'], ['agent-builder']);
     });
 
+    /// Nova (agent-builder) taken out of g1, and the Swarm read again.
+    Future<void> novaLeaves(FakeSwarm swarm, SwarmReader reader) async {
+      final parts = swarm.routes['/api/super-tabs/$tab/parts']!;
+      swarm.routes['/api/super-tabs/$tab/parts'] = (body) {
+        final read = parts(body) as Map<String, dynamic>;
+        return {
+          ...read,
+          'groups': [
+            for (final g in (read['groups'] as List).cast<Map>())
+              g['key'] == 'g1'
+                  ? part('g1', (g['version'] as int) + 1, {
+                      ...(g['data'] as Map<String, dynamic>),
+                      'agentIds': ['agent-lead'],
+                    })
+                  : g,
+          ],
+        };
+      };
+      // The changes say read it all again.
+      swarm.routes['/api/super-tabs/$tab/changes'] = (_) => {'reload': true};
+      await reader.refresh();
+      await settle();
+    }
+
+    const left =
+        'A mentioned agent is no longer in this conversation. '
+        'Remove its mention or choose another agent.';
+
+    test('a picked agent who has left the chat since is refused in the '
+        "desktop's words, the reply kept in the box (controller.dart "
+        'sendThreadReply)', () async {
+      final r = await tagging();
+      final t = r.thread;
+      t.draft = 'Can you check';
+      t.mention('agent-builder');
+      t.mention('dee');
+      expect(t.draft, 'Can you check @Nova @dee ');
+
+      await novaLeaves(r.swarm, r.chat.reader);
+      expect(r.chat.conversation!.agentIds, ['agent-lead']);
+      expect(await t.send(), isFalse);
+
+      expect(t.error, left);
+      expect(r.swarm.commands, isEmpty, reason: 'nothing sent without Nova');
+      expect(t.draft, 'Can you check @Nova @dee ');
+      expect(t.mentions, {'agent-builder': '@Nova', 'dee': '@dee'});
+    });
+
+    test('the same in the chat\'s own box (controller.dart send)', () async {
+      final r = await tagging();
+      final c = r.chat;
+      c.draft = 'Can you check';
+      c.mention('agent-builder');
+
+      await novaLeaves(r.swarm, c.reader);
+      expect(await c.send(), isFalse);
+
+      expect(c.error, left);
+      expect(r.swarm.commands, isEmpty);
+      expect(c.draft, 'Can you check @Nova ');
+      expect(c.mentions, {'agent-builder': '@Nova'});
+    });
+
+    test('once the mention is taken out, the reply goes', () async {
+      final r = await tagging();
+      final t = r.thread;
+      t.mention('agent-builder');
+      await novaLeaves(r.swarm, r.chat.reader);
+      t.draft = 'never mind';
+
+      expect(await t.send(), isTrue);
+      expect(r.swarm.commands.single['recipientIds'], isEmpty);
+    });
+
     test('access lost while the thread is open takes its names too', () async {
       final r = await tagging();
       r.thread.mention('agent-builder');
