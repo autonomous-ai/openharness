@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "description": "Scheduling hints for backend-integration's shards (vitest.super-tabs.ci.config.ts): per-file durations from a passing CI run. Discovery always determines the complete test set.",
+  "defaultDurationMs": 30000,
+  "durationMs": {}
+}
