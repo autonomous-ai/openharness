@@ -127,7 +127,8 @@ static struct {
     char agent[ID_MAX], lang[CFG_VLANG_MAX], upload[24];
 } REC;
 bool pro_rec_init(void) { return REC.init_ok; }
-bool pro_rec_start(const char *agent, const char *lang, const char *upload) {
+bool pro_rec_start(const char *agent, bool face, const char *lang, const char *upload) {
+    (void)face;
     CHECK(LOCK_DEPTH == 0);
     if (REC.refuse || REC.active) return false;
     REC.starts++;
@@ -468,7 +469,7 @@ void pro_voice_test_step(int step) {
 static void begin_is_atomic_to_the_tick(void) {
     situation();
     STEPS_SEEN = 0; HOOK_ON = true; REC.tick_inside = true;
-    pro_voice_begin("a1");
+    pro_voice_begin("a1", false);
     HOOK_ON = false; REC.tick_inside = false;
     CHECK(STEPS_SEEN == 0x3e);                         // steps 1..5 all interleaved
     CHECK(pro_voice_open() && REC.active && REC.recording && !strcmp(REC.agent, "a1"));
@@ -476,11 +477,11 @@ static void begin_is_atomic_to_the_tick(void) {
     // A start the recorder refuses, ticked the same way, closes cleanly and the next begin is not blocked.
     pro_voice_close(); sender_done();
     REC.aborts = REC.aborts_quiet = 0; REC.refuse = true; STEPS_SEEN = 0; HOOK_ON = true;
-    pro_voice_begin("a1");
+    pro_voice_begin("a1", false);
     HOOK_ON = false;
     CHECK(!pro_voice_open() && !REC.active && REC.starts == 1);
     REC.refuse = false;
-    pro_voice_begin("a1");
+    pro_voice_begin("a1", false);
     CHECK(pro_voice_open() && REC.active && REC.starts == 2);
     // A link drop that lands while the recorder is starting must not leave the microphone streaming.
     pro_voice_close(); sender_done();
@@ -491,7 +492,7 @@ static void link_lost_mid_start_leaves_no_stream(void) {
     REC.tick_inside = false;
     // Drop the link from inside pro_rec_start (the cable_link task against the touch task's begin).
     pro_test_in_start = pro_voice_link_lost;
-    pro_voice_begin("a1");
+    pro_voice_begin("a1", false);
     pro_test_in_start = NULL;
     CHECK(!pro_voice_open());
     CHECK(!REC.recording && REC.aborts >= 1);          // the stream that began mid-drop was aborted afterwards

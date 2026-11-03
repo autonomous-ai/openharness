@@ -30,6 +30,8 @@ typedef struct {
     uint8_t work_page;     // Home's Working card: the page of three pets shown (0-based; reset when the card is not shown)
     uint8_t swarm_page;    // Home's Swarm card: the page of three Lead pets shown (0-based; reset when the card is not shown or the person pages cards)
     pod_view_t talk_prev;  // AGENT or RECAP: the screen TALK was opened from (talk_over goes back to it)
+    bool talk_buddy;       // the voice view shows the Buddy (pinned at TALK's begin, like the daemon's face): its name and engine below
+    char talk_name[49], talk_engine[16];
     bool sending;          // TALK after the stop tap: the voice screen shows SEND until the agent's real turn begins (or POD_SENT_WAIT_MS)
     bool sent_seen;        // the model has marked sent_agent's optimistic Working (pod_model_sent) since the stop tap
     char seen_agent[ID_MAX];   // the open agent as pod_nav_flip_recaps last saw it (empty: none), and whether it was
