@@ -234,6 +234,37 @@ void main() {
       expect(find.text('not started'), findsNothing);
     });
 
+    testWidgets('the Swarm it is in stands under its name, with one Swarm '
+        'too', (tester) async {
+      await pump(tester, backend());
+      await openTab(tester);
+
+      expect(tester.widget<Text>(key('swarm-subtitle')).data, 'Swarm $tab');
+      expect(
+        tester.getTopLeft(key('swarm-subtitle')).dy,
+        greaterThan(tester.getBottomLeft(key('swarm-title')).dy - 1),
+        reason: 'under the title, not beside it',
+      );
+    });
+
+    testWidgets('a Swarm renamed meanwhile shows its new name', (tester) async {
+      final fake = backend();
+      final host = await pump(tester, fake);
+      await openTab(tester);
+      expect(tester.widget<Text>(key('swarm-subtitle')).data, 'Swarm $tab');
+
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': [
+          {'id': tab, 'name': 'autonomous.ai', 'ownerId': me},
+        ],
+        'next': null,
+      };
+      await host.session!.inbox.refresh();
+      await settle(tester);
+
+      expect(tester.widget<Text>(key('swarm-subtitle')).data, 'autonomous.ai');
+    });
+
     testWidgets('a post goes to the one chat, saying the app knows one Buddy, '
         'as the desktop does', (tester) async {
       final fake = backend();
@@ -479,6 +510,16 @@ void main() {
       );
     });
 
+    testWidgets('an old chat names its project under its title, not the '
+        'Swarm', (tester) async {
+      await pump(tester, withOld());
+      await openTab(tester);
+      await openOld(tester);
+
+      expect(tester.widget<Text>(key('swarm-subtitle')).data, 'Mobile');
+      expect(find.text('Swarm $tab'), findsNothing);
+    });
+
     testWidgets('Open Buddy leads back to the one chat', (tester) async {
       await pump(tester, withOld());
       await openTab(tester);
@@ -642,6 +683,32 @@ void main() {
 
       expect(find.text('In the first Swarm'), findsOneWidget);
       expect(host.session!.home.buddySwarmId, tab);
+      semantics.dispose();
+    });
+
+    testWidgets('the Swarm under the title is the one shown, follows a '
+        'switch, and is said with the title', (tester) async {
+      final semantics = tester.ensureSemantics();
+      await pump(tester, two(mineMoved: 10, otherMoved: 20));
+      await openTab(tester);
+      expect(find.text('In the second Swarm'), findsOneWidget);
+      expect(tester.widget<Text>(key('swarm-subtitle')).data, 'Swarm $other');
+      expect(
+        find.bySemanticsLabel(RegExp(', Swarm $other\\. Switch Swarm\$')),
+        findsOneWidget,
+      );
+
+      await tester.tap(key('swarm-buddy-title-switch'));
+      await settle(tester);
+      await tester.tap(find.text('Swarm $tab'));
+      await settle(tester);
+
+      expect(find.text('In the first Swarm'), findsOneWidget);
+      expect(tester.widget<Text>(key('swarm-subtitle')).data, 'Swarm $tab');
+      expect(
+        find.bySemanticsLabel(RegExp('^Wren, Swarm $tab\\. Switch Swarm\$')),
+        findsOneWidget,
+      );
       semantics.dispose();
     });
 
