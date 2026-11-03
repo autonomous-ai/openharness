@@ -14,6 +14,7 @@ import 'model.dart';
 import 'swarm_inbox.dart';
 import 'swarm_needs_page.dart';
 import 'swarm_project_tasks.dart' show swarmProgressAt;
+import 'swarm_rename.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
 import 'swarm_start.dart';
@@ -53,6 +54,8 @@ String swarmHomeTitle(SwarmInbox inbox, List<SwarmListing> shown) =>
 /// Swarm, the one shown ticked and what waits in each other one counted,
 /// and Join or create a Swarm. A Swarm the account loses, or whose read is
 /// taken away, while it is open leaves it, and a tap on it shows nothing.
+/// Holding a Swarm with a menu for the person ([swarmHasMenu]) closes it
+/// for that menu over Home ([showSwarmMenu]).
 Future<void> showSwarmSwitcher(BuildContext context, SwarmSession session) =>
     showModalBottomSheet<void>(
       context: context,
@@ -65,14 +68,25 @@ Future<void> showSwarmSwitcher(BuildContext context, SwarmSession session) =>
           Navigator.of(sheet).pop();
           unawaited(showSwarmJoinOrCreate(context));
         },
+        onHold: (swarmId) {
+          Navigator.of(sheet).pop();
+          unawaited(showSwarmMenu(context, session.inbox, swarmId));
+        },
       ),
     );
 
 class _Switcher extends StatelessWidget {
-  const _Switcher({required this.session, required this.onJoin});
+  const _Switcher({
+    required this.session,
+    required this.onJoin,
+    required this.onHold,
+  });
 
   final SwarmSession session;
   final VoidCallback onJoin;
+
+  /// A Swarm's row held, with its id.
+  final ValueChanged<String> onHold;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -153,6 +167,10 @@ class _Switcher extends StatelessWidget {
                         },
                   chevron: null,
                   onTap: () => show(swarm.id),
+                  // Its menu, for someone with something in it to do.
+                  onLongPress: swarmHasMenu(inbox, swarm.id)
+                      ? () => onHold(swarm.id)
+                      : null,
                 ),
               SwarmRow(
                 key: const ValueKey('swarm-switch-join'),
