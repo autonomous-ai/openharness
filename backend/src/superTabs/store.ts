@@ -65,7 +65,7 @@ import { freeze, readStamps, stampOwed, swarmReadCache, swarmTransaction, type C
 import { countReport, DEADLINE_CAP_MS, localReportMemory, RECORD_TTL_MS, type ReportMemory, type ReportRecord } from './machineReports.js'
 import { DIRECT, readLastChangedAt, readParts, type ReadNamed } from './cachedReads.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
-import { activeMember, addMember, autoJoinDeclinedBy, hasWorkspaceAccess, listWorkspaces, memberId, WORKSPACE_ACCESS_REVOKED, workspaceForNewSwarm, requireWorkspaceAccess, requireWorkspaceRole, SwarmWorkspaces } from './workspaceStore.js'
+import { activeMember, addMember, hasWorkspaceAccess, listWorkspaces, memberId, removedFromWorkspace, WORKSPACE_ACCESS_REVOKED, workspaceForNewSwarm, requireWorkspaceAccess, requireWorkspaceRole, SwarmWorkspaces } from './workspaceStore.js'
 import { WORKSPACE_LABEL, type WorkspaceRole } from './workspaces.js'
 import { STATUS_LABELS,
   activeWork, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
@@ -291,6 +291,11 @@ const addsAgent = (state: SuperTabState, actor: Actor, command: Command): boolea
   if (command.type !== 'message.send') return false
   const group = state.conversations.find(c => c.id === command.conversationId)
   return !group || [actor.agentId, ...command.recipientIds].some(id => !group.agentIds.includes(id))
+}
+
+/** A join by link or its preview, refused to someone the Workspace removed (removedFromWorkspace). */
+function failRemovedFromWorkspace(): never {
+  fail(WORKSPACE_ACCESS_REVOKED, `You were removed from this Swarm's ${WORKSPACE_LABEL}. Ask its owner to invite you.`, 403)
 }
 
 /** Starts on a not-yet-contributed machine that never dispatched, dated by their own operation receipt (starts carry no
@@ -1071,10 +1076,9 @@ export class SuperTabStore {
         state.autoJoinDeclined?.includes(user.sub) || state.people.length >= AUTO_JOIN_CAP) return 'skipped' as const
       const stamp = clock.next(), generation = stableId('auto-join', tabId, user.sub, String(stamp))
       if (state.workspaceId) {
-        // As a link join: a guest of the Workspace, never higher; someone active there keeps their role (addMember).
-        const prior = await tx.swarmWorkspaceMember.findUnique({ where: { id: memberId(state.workspaceId, user.sub) } })
-        // Removed from the Workspace: its row says so until purged, and the Workspace's own decline after that.
-        if (prior?.removedAt || (!prior && await autoJoinDeclinedBy(tx, state.workspaceId, user.sub))) return 'revoked' as const
+        // As a link join: a guest of the Workspace, never higher; someone active there keeps their role (addMember). Someone the
+        // Workspace removed is never added back this way (removedFromWorkspace).
+        if (await removedFromWorkspace(tx, state.workspaceId, user.sub)) return 'revoked' as const
         await addMember(tx, state.workspaceId, { id: user.sub, email }, 'guest', state.ownerId, generation)
       }
       state.people.push({ id: user.sub, email, role: state.sharing!.access.role, generation, joinedVia: 'domain' })
@@ -1192,6 +1196,8 @@ export class SuperTabStore {
       const { state } = await this.load(tx, user, tabId)
       const sharing = authorizeSwarmJoin(state, user.email, token, user.sub)
       const member = state.people.find(p => p.id === user.sub)
+      // What join refuses, its preview refuses alike: it never offers a join that cannot happen.
+      if (!member && state.workspaceId && await removedFromWorkspace(tx, state.workspaceId, user.sub)) failRemovedFromWorkspace()
       return { id: tabId, name: state.name, role: member?.role ?? sharing.access.role, alreadyMember: !!member }
     })
   }
@@ -1218,9 +1224,8 @@ export class SuperTabStore {
       const alreadyMember = !!member
       if (!member && state.workspaceId) {
         // A link or an email domain makes a guest of the Workspace, never higher. Someone the Workspace removed comes back only by
-        // an invitation, never by a general link (design, Roles).
-        const prior = await tx.swarmWorkspaceMember.findUnique({ where: { id: memberId(state.workspaceId, user.sub) } })
-        if (prior?.removedAt) fail(WORKSPACE_ACCESS_REVOKED, `You were removed from this Swarm's ${WORKSPACE_LABEL}. Ask its owner to invite you.`, 403)
+        // an invitation, never by a general link (design, Roles), also once the purge deleted their member row (task #2510).
+        if (await removedFromWorkspace(tx, state.workspaceId, user.sub)) failRemovedFromWorkspace()
         await addMember(tx, state.workspaceId, { id: user.sub, email: user.email }, 'guest', state.ownerId, receiptId)
       }
       if (!member) {
