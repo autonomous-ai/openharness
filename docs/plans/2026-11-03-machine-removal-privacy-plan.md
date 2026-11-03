@@ -132,9 +132,9 @@ Added after security review found the CLI still requested the legacy route.
 **Interfaces:**
 - CLI removal previews request `/removal/v2`, so current CLI users see hidden-item counts and do not receive the update-required refusal intended for released clients.
 
-- [ ] **Step 1: Update the CLI test** to expect the v2 route and a versioned response; confirm it fails against the legacy request.
-- [ ] **Step 2: Commit** the failing CLI test.
-- [ ] **Step 3: Point CLI removal previews at `/removal/v2`, rerun the affected CLI test, and commit the code fix.**
+- [x] **Step 1: Update the CLI test** to expect the v2 route and a versioned response; confirm it fails against the legacy request.
+- [x] **Step 2: Commit** the failing CLI test.
+- [x] **Step 3: Point CLI removal previews at `/removal/v2`, rerun the affected CLI test, and commit the code fix.**
 
 ### Task 7: Run required verification
 
