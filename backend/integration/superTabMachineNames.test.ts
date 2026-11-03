@@ -153,3 +153,42 @@ describe('a rename after joining', () => {
     expect(await nameIn(tab, 'studio-2')).toBe('Mac 3')
   })
 })
+
+// Review of #2717: a machine renamed while offline sends no reading, so a rename in Machines reaches its Swarms by itself
+// (MachineService.rename → store.machineRenamed); the heartbeat stays the backstop.
+describe('a rename in Machines', () => {
+  const renamed = (machineId: string, owner: AuthUser = dee) => store.machineRenamed({ machineId, ownerId: owner.sub, autonomousEnv: 'prod' })
+
+  it('reaches every Swarm the machine is in at once, its Team account with it, with no reading', async () => {
+    const [one, two] = [await swarm(), await swarm()]
+    for (const tab of [one, two]) {
+      await contribute(tab, 'studio-2', 'Macs-Mac-Studio-2')
+      await contribute(tab, 'studio-2-team', 'Macs-Mac-Studio-2 · Team', dee, { ifMissing: true, maxAgents: 1 })
+      await contribute(tab, 'huy-mini', 'Huy Mini', huy)
+    }
+    await rename('studio-2', 'Mac 3')
+    pushes = []
+    await renamed('studio-2')
+    for (const tab of [one, two]) {
+      expect([await nameIn(tab, 'studio-2', huy), await nameIn(tab, 'studio-2-team'), await nameIn(tab, 'huy-mini')]).toEqual(['Mac 3', 'Mac 3', 'Huy Mini'])
+      expect(pushes.find(p => p.tabId === tab)).toMatchObject({ userIds: expect.arrayContaining([dee.sub, huy.sub]), parts: expect.arrayContaining(['main']) })
+    }
+  })
+
+  it('keeps the Swarm\'s name when the name was cleared', async () => {
+    const tab = await swarm()
+    await rename('studio-2', 'Mac 3')
+    await contribute(tab, 'studio-2', 'Macs-Mac-Studio-2')
+    await rename('studio-2', null)
+    await renamed('studio-2')
+    expect(await nameIn(tab, 'studio-2')).toBe('Mac 3')
+  })
+
+  it('changes nothing for anyone but the machine\'s owner', async () => {
+    const tab = await swarm()
+    await contribute(tab, 'studio-2', 'Macs-Mac-Studio-2')
+    await rename('studio-2', 'Mac 3')
+    await renamed('studio-2', huy)
+    expect(await nameIn(tab, 'studio-2')).toBe('Macs-Mac-Studio-2.local')
+  })
+})
