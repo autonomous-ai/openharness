@@ -104,4 +104,10 @@ bool personInProject(
 ({List<SuperTabPerson> active, List<SuperTabPerson> others}) splitProjectPeople(
   List<SuperTabPerson> people,
   Map<String, SuperTabPersonScore> scores,
-) => (active: people, others: const <SuperTabPerson>[]);
+) {
+  bool active(SuperTabPerson person) => (scores[person.id]?.points ?? 0) > 0;
+  return (
+    active: people.where(active).toList(),
+    others: people.where((person) => !active(person)).toList(),
+  );
+}
