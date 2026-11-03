@@ -68,7 +68,7 @@ export interface Agent {
   /** The switch request the last rebind settled, until its result arrives: that result is the one line the chat gets, and
    *  it still tells the machine owner who asked. */
   switchLanded?: { id: string; requestedBy: string }
-  switchRequest?: { id: string; engine: string; profileId: string; model?: string; effort?: string; requestedBy: string; at: string; claimedUntil?: string }
+  switchRequest?: { id: string; engine: string; profileId: string; targetMachineId?: string; model?: string; effort?: string; requestedBy: string; at: string; claimedUntil?: string }
   /** The account it runs in on its machine once a switch moved it; absent for the machine's default account. */
   profileId?: string
   /** Captured from the original Swarm launch, never inferred from a later live session with the same id. */
@@ -166,7 +166,7 @@ export interface AgentStartRequest {
   buddySession?: BuddySession
   /** A project's Product Manager's start (leadStart.ts): written by lead.start alone, never taken from an agent.start. Its
    *  agent becomes the Lead of the project's Lead conversation once it runs. */
-  leadFor?: { projectId: string; personId: string; generation: string }
+  leadFor?: { projectId: string; personId: string; generation: string; switchId?: string }
 }
 export interface AgentStart {
   poolGeneration?: string

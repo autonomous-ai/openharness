@@ -184,7 +184,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('lead.start'), projectId: id, machineId: id.nullable(), engine: swarmEngine,
     model: z.string().trim().min(1).max(200).optional(), effort: z.string().trim().min(1).max(80).optional(),
     branchRef: z.string().max(1024).regex(/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/).optional(), repositoryUrl: repositoryUrl.optional() }).strict(),
-  z.object({ type: z.literal('lead.switch'), projectId: id, engine: swarmEngine, profileId: id,
+  z.object({ type: z.literal('lead.switch'), projectId: id, engine: swarmEngine, profileId: id, machineId: id.optional(),
     model: z.string().trim().min(1).max(200).optional(), effort: z.string().trim().min(1).max(80).optional() }).strict(),
   z.object({ type: z.literal('project.skills'), projectId: id, mode: z.enum(['default', 'orchestration', 'custom']), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('project.roles.create'), projectId: id, roles: roleSet }).strict(),
@@ -1500,14 +1500,28 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (machineOffline(pool, context.now)) fail('MACHINE_OFFLINE', `Wait for a fresh reading from ${pool.name}.`)
       if (!pool.observation!.capabilities?.includes(SWITCH_CAPABILITY)) fail('HOST_OUTDATED', `Update Harness on ${pool.name} to move the ${name}.`, 409)
       if (pm.switchRequest) fail('LEAD_SWITCHING', `The ${name} is already being moved.`, 409)
-      if (!contributedEngines(pool).includes(command.engine)) fail('ENGINE_NOT_OFFERED', `${ENGINE_NAMES[command.engine]} isn’t offered on ${pool.name}.`, 403)
-      // The default account has one id (a literal 'default' is the same account), and the request stores that id.
-      const profileId = command.profileId === 'default' ? defaultProfileId(pool.machineId, command.engine) : command.profileId
-      if (profileId !== defaultProfileId(pool.machineId, command.engine) && !pool.observation!.profiles?.some(p => p.engine === command.engine && p.id === profileId)) {
-        fail('PROFILE_UNKNOWN', `That account isn’t on ${pool.name} any more.`, 409)
+      let destination = pool
+      if (command.machineId && command.machineId !== pool.machineId) {
+        const start = placeLead(state, project, person(state, project.ownerId), command.machineId,
+          { engine: command.engine, ...(command.model ? { model: command.model } : {}), ...(command.effort ? { effort: command.effort } : {}) },
+          stableId(operationId, 'switch-start'), { now: context.now, teamMachines: context.teamMachines, otherWorkspaceMachines: context.otherWorkspaceMachines })
+        destination = state.machines!.find(m => m.machineId === start.request.machineId)!
+        if (!destination.observation?.capabilities?.includes(SWITCH_CAPABILITY)) {
+          state.starts = state.starts!.filter(candidate => candidate.id !== start.id)
+          delete project.lead
+          fail('HOST_OUTDATED', `Update Harness on ${destination.name} to move the ${name}.`, 409)
+        }
+        start.request.leadFor!.switchId = operationId
+      }
+      if (!contributedEngines(destination).includes(command.engine)) fail('ENGINE_NOT_OFFERED', `${ENGINE_NAMES[command.engine]} isn’t offered on ${destination.name}.`, 403)
+      // The default account has one id per destination machine (a literal 'default' is the same account).
+      const profileId = command.profileId === 'default' ? defaultProfileId(destination.machineId, command.engine) : command.profileId
+      if (profileId !== defaultProfileId(destination.machineId, command.engine) && !destination.observation!.profiles?.some(p => p.engine === command.engine && p.id === profileId)) {
+        fail('PROFILE_UNKNOWN', `That account isn’t on ${destination.name} any more.`, 409)
       }
       const { type: _type, projectId: _projectId, ...asked } = command
-      pm.switchRequest = { id: operationId, ...asked, profileId, requestedBy: actor.userId, at: new Date(context.now).toISOString() }
+      pm.switchRequest = { id: operationId, ...asked, profileId, ...(destination.machineId !== pool.machineId ? { targetMachineId: destination.machineId } : {}),
+        requestedBy: actor.userId, at: new Date(context.now).toISOString() }
       break
     }
     case 'project.skills':
