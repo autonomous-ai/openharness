@@ -8,13 +8,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/config.dart';
 
 void main() {
-  test('a port gives the loopback base URL Desktop talks to', () {
-    expect(localCliBaseUrlFor(18999), 'http://127.0.0.1:18999');
-  });
-
   test('without the define, the installed app keeps the daemon on 18473', () {
     expect(localDaemonPort, 18473);
     expect(AppConfig.dev.localCliBaseUrl, 'http://127.0.0.1:18473');
+  });
+
+  test('the base URL Desktop talks to follows the defined port', () {
+    // Under `--dart-define=HARNESS_DAEMON_PORT=18999` this reads 18999; without it, 18473.
+    expect(AppConfig.dev.localCliBaseUrl, 'http://127.0.0.1:$localDaemonPort');
   });
 
   test('the port is written in one place: no other literal 18473 in lib', () {
