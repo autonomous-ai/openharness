@@ -12,13 +12,21 @@ ci = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ci)
 
 
-# A fresh runner's first git status refreshes the whole index, which has taken
-# over 15 seconds on this repository; the limit still fails a hung git.
-GIT_TIMEOUT = 120
+# CI checks out with --filter=blob:none. git status reads the nested .gitignore
+# files outside the sparse patterns from the index, and would fetch each missing
+# blob from GitHub (#2848, #2860 timed out). Nothing here needs a blob's content,
+# so fetching stays off: a missing ignore file can only report more untracked
+# files, never fewer. The timeout still fails a hung git, inside the job's limit.
+GIT_TIMEOUT = 60
+
+
+def git_env():
+    return {**os.environ, "GIT_NO_LAZY_FETCH": "1"}
 
 
 def git(root, *args):
-    return subprocess.check_output(["git", *args], cwd=root, stderr=subprocess.PIPE, timeout=GIT_TIMEOUT).decode().strip()
+    return subprocess.check_output(["git", *args], cwd=root, stderr=subprocess.PIPE, timeout=GIT_TIMEOUT,
+                                   env=git_env()).decode().strip()
 
 
 def verify_checkout(root, scope, subset=False):
@@ -36,7 +44,8 @@ def verify_checkout(root, scope, subset=False):
         raise ValueError("checkout includes source outside the declared CI inputs")
     if not subset and patterns != {"/" + path for path in declared}:
         raise ValueError("checkout does not match the complete declared CI inputs")
-    entries = subprocess.check_output(["git", "ls-files", "-t", "-z"], cwd=root, timeout=GIT_TIMEOUT).decode().split("\0")
+    entries = subprocess.check_output(["git", "ls-files", "-t", "-z"], cwd=root, timeout=GIT_TIMEOUT,
+                                      env=git_env()).decode().split("\0")
     for entry in filter(None, entries):
         flag, path = entry[:1], entry[2:]
         # Catch a populated file outside the sparse patterns, including when Git
