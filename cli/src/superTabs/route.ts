@@ -185,6 +185,10 @@ export const SIZES: Record<Size, { minutes: number; spend: Record<Window, number
 }
 const WINDOWS: Window[] = ['5-hour', 'weekly']
 const MAX_SHOWN = 12
+/** The most rows a decision keeps (backend superTabs/routeRecord.ts), past [MAX_SHOWN] only for every engine on every machine; a
+ *  backend from before them keeps [MAX_SHOWN] (routeCommand.ts routeTask). */
+export const RECORD_MAX = 64
+export const OLD_RECORD_MAX = MAX_SHOWN
 const ENGINE = { claude: 'Claude', codex: 'Codex' } as const
 const ENGINES = Object.keys(ENGINE)
 const cut = (text: string, max: number) => text.length <= max ? text : `${text.slice(0, max - 1)}…`
@@ -474,12 +478,12 @@ function compare(x: Probe & Sized & { rank: Ranked }, y: Probe & Sized & { rank:
  *  between (an account, then whether to reuse an agent on it). */
 export const slotOf = (p: Pick<Probe, 'machineId' | 'engine' | 'gridModel' | 'kind'>) => `${p.machineId}\0${p.gridModel ? 'grid' : p.engine}\0${p.kind}`
 
-/** The rows shown: the best new agent and the best member of every engine on every machine, however many, then the rest by rank up to the limit, all in rank
+/** The rows shown: the best new agent and the best member of every engine on every machine, up to [RECORD_MAX], then the rest by rank up to the limit, all in rank
  *  order. The agent choosing picks between accounts by the project's order; one row a machine, cut at 12, hid a Claude account with
  *  99% left behind its machine's used-up Codex (Ken, 2026-11-03). */
 function withEveryAccount<T extends Pick<Probe, 'machineId' | 'engine' | 'gridModel' | 'kind'>>(ranked: T[]): T[] {
   const keep = new Set<T>(), seen = new Set<string>()
-  for (const p of ranked) if (!seen.has(slotOf(p))) { seen.add(slotOf(p)); keep.add(p) }
+  for (const p of ranked) if (!seen.has(slotOf(p)) && keep.size < RECORD_MAX) { seen.add(slotOf(p)); keep.add(p) }
   for (const p of ranked) if (keep.size < MAX_SHOWN) keep.add(p)
   return ranked.filter(p => keep.has(p))
 }

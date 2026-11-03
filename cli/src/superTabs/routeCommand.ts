@@ -7,7 +7,7 @@ import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { RELAYED_QUOTA, requiredToolReason, startRequirements, USED_UP_WINDOW } from './capacity.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
-import { accountOf, API_BUILDERS, catalogFrom, catalogRow, choose, decide, gridStrength, parseAssessment, quotaBrief, quotaOf2, slotOf, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type HeldModel, type MemberFrame, type Probe, type TaskFolder } from './route.js'
+import { accountOf, API_BUILDERS, catalogFrom, catalogRow, choose, decide, gridStrength, parseAssessment, OLD_RECORD_MAX, quotaBrief, quotaOf2, slotOf, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type HeldModel, type MemberFrame, type Probe, type TaskFolder } from './route.js'
 import { makePlugins, ROUTE_PLUGIN_MAKERS, type PluginMaker } from './routePlugins.js'
 import { CI_HOLD_OPENING, CI_RETRY_MINUTES, MACHINE_FIT_MAKER } from './machineFit.js'
 import { stat } from 'node:fs/promises'
@@ -361,9 +361,13 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     ...ciHeld ? { waiting: true, retryAfterMinutes: CI_RETRY_MINUTES, detail: ciHeld.reason.slice(MACHINE_FIT_MAKER.name.length + 2) } : {} }
   const verdict = decide(choice)
   const operationId = `route-${newId()}`
+  // The rows recorded are the rows offered: the agent choosing assigns by a recorded candidate.
+  let offered = choice.shown
   const record = (shape: RecordShape) => scoped({ action: 'command', operationId,
-    command: { type: 'route.record', conversationId: input.conversationId, decision: recordOf(choice, verdict, assessment, shape) } })
+    command: { type: 'route.record', conversationId: input.conversationId, decision: recordOf({ ...choice, shown: offered }, verdict, assessment, shape) } })
   let recorded = await record('current')
+  // A backend from before every engine on every machine was shown keeps 12 candidates (Ken, 2026-11-03): the best 12 go.
+  if (recorded.error === 'VALIDATION_ERROR' && offered.length > OLD_RECORD_MAX) { offered = offered.slice(0, OLD_RECORD_MAX); recorded = await record('current') }
   // A backend from before kinds, or before phase 1, refuses the new fields as invalid; the decision is still worth keeping in
   // the shape it knows. A task with no kind has nothing to leave out at the first step.
   if (recorded.error === 'VALIDATION_ERROR' && assessment.kind) recorded = await record('unkinded')
@@ -379,7 +383,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     ok: true, ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : { unrecorded: true }),
     ...(instructions ? { instructions } : { instructionsUnreadable: true }),
     pick: publicOf(verdict.pick), via: verdict.via, p: verdict.p, why: verdict.why,
-    alternatives: alternativesTo(verdict.pick, choice.shown).map(publicOf),
+    alternatives: alternativesTo(verdict.pick, offered).map(publicOf),
     leftOut: leftOut(choice.excluded, choice.shown),
     warnings: [...(Array.isArray(effective.warnings) ? effective.warnings : []), ...(value.machinesUnreadable === true ? [MACHINES_UNREADABLE] : []),
       ...(catalog.models.length ? [] : [CATALOG_UNREADABLE]),
