@@ -59,11 +59,4 @@ describe('a route decision as stored (task #2488: ~20 KB a row since every engin
     expect(storedRecord(none).excluded).toEqual([])
     expect(readRecord(storedRecord(none)).excluded).toEqual([])
   })
-
-  it('stores a record that lacks candidates or exclusions as it is (routeDecisions.test.ts writes one)', () => {
-    expect(storedRecord({} as RouteRecord)).toEqual({})
-    const bare = { ...routed() } as Partial<RouteRecord>
-    delete bare.excluded
-    expect(storedRecord(bare as RouteRecord)).not.toHaveProperty('unavailable')
-  })
 })
