@@ -10,9 +10,9 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 
-// Quiet Swarm 2/6 (task #2191; docs/plans/2026-11-02-quiet-swarm-task-line-plan.md): each task with an Engineer is one
-// message in its project chat, edited in place as the task moves, none for its steps, and a private project's line only
-// for that project's readers. Through the store and a fresh loopback replica set, as the people's apps read it.
+// Plain chat (task #2294; docs/plans/2026-11-03-plain-chat-work-plan.md): each task is one ordinary "Let's build" message in
+// its project chat, never edited, with the PM's replies in its thread as it moves, none for its steps, and a private
+// project's only for that project's readers. Through the store and a fresh loopback replica set, as the people's apps read it.
 let replica: MongoMemoryReplSet
 let db: PrismaClient
 let store: SuperTabStore
@@ -75,22 +75,40 @@ describe('a task\'s one message in its project chat', () => {
     const beforeRepeated = (await readThread()).messages.length
     await s.as(E)({ type: 'work.status', conversationId: T, assignmentId, status: 'working', result: 'Halfway.' })
     expect((await readThread()).messages).toHaveLength(beforeRepeated)
-    const operationId = randomUUID()
-    const post = { operationId, command: { type: 'message.send' as const, conversationId: T, text: 'Please check the draft.', replyTo: null, recipientIds: [] } }
-    await store.execute(host, s.tab, post, E)
-    await store.execute(host, s.tab, post, E)
-    const thread = await readThread()
-    expect(thread.messages.filter(m => m.text === 'Please check the draft.')).toHaveLength(1)
-    expect(thread.messages.filter(m => m.id !== root).every(m => m.thread === root && m.replyTo === root)).toBe(true)
-    expect((await s.page('lead')).lines).toEqual(first.lines)
-    const page = await store.messages(owner, s.tab, 'lead', {})
-    expect(page.threads).toEqual(expect.arrayContaining([expect.objectContaining({ id: root, replies: thread.messages.length - 1 })]))
+    // An agent's own post stays in its task's conversation.
+    await s.as(E)({ type: 'message.send', conversationId: T, text: 'Please check the draft.', replyTo: null, recipientIds: [] })
     const pr = 'https://github.com/example/app/pull/7'
+    await s.as(E)({ type: 'work.status', conversationId: T, assignmentId, status: 'review', result: `Ready: ${pr}` })
     await s.as(E)({ type: 'work.status', conversationId: T, assignmentId, status: 'done', result: `Checks passed: ${pr}` })
     await s.as(P)({ type: 'conversation.merged', conversationId: T, pullRequestUrl: pr })
     await s.as(P)({ type: 'conversation.merged', conversationId: T, pullRequestUrl: pr })
-    expect((await readThread()).messages.filter(m => m.text === `Merged ${pr}.`)).toHaveLength(1)
+    const thread = await readThread()
+    expect(thread.messages.map(m => m.text)).toEqual(["Let's build: Offline drafts", 'Keep drafts.', expect.stringMatching(/^On it: \S+ is building it\.$/),
+      'Ready for review: PR #7', 'Merged: PR #7. Ships in the next release.'])
+    expect(thread.messages.filter(m => m.id !== root).every(m => m.thread === root && m.replyTo === root && (m.author as { id: string }).id === P
+      && m.recipientIds.length === 0)).toBe(true)
+    expect(await db.superTabDelivery.count({ where: { tabId: s.tab, messageId: { in: thread.messages.map(m => m.id) } } })).toBe(0)
     expect((await s.page('lead')).lines).toEqual(first.lines)
+    const page = await store.messages(owner, s.tab, 'lead', {})
+    expect(page.threads).toEqual(expect.arrayContaining([expect.objectContaining({ id: root, replies: thread.messages.length - 1 })]))
+  })
+
+  it('keeps a person\'s own chat message as the task\'s root, and refuses any other message', async () => {
+    const s = await swarm()
+    const P = await s.add('Coordinator', 'lead', true)
+    const asked = String((await run(s.tab, { type: 'message.send', conversationId: 'lead', text: 'Can the phone show who answered?', replyTo: null,
+      recipientIds: [] }, peer)).result.messageId)
+    const T = String((await s.as(P)({ type: 'conversation.create', title: 'Phone shows who answered', brief: 'Show who answered.', checks: [],
+      requestMessageId: asked })).result.conversationId)
+    expect((await s.page('lead')).lines).toEqual([])
+    expect((await store.read(owner, s.tab)).state.conversations.find(c => c.id === T)?.requesterId).toBe(peer.sub)
+    const E = await s.add('Engineer', T)
+    await s.as(P)({ type: 'work.assign', conversationId: T, agentId: E })
+    expect((await store.messages(owner, s.tab, 'lead', { thread: asked })).messages.map(m => m.text))
+      .toEqual(['Can the phone show who answered?', expect.stringMatching(/^On it: \S+ is building it\.$/)])
+    const inTask = String((await run(s.tab, { type: 'message.send', conversationId: T, text: 'Also Desktop?', replyTo: null, recipientIds: [] })).result.messageId)
+    await expect(s.as(P)({ type: 'conversation.create', title: 'Another', brief: '', checks: [], requestMessageId: inTask })).rejects.toThrow('own message')
+    await expect(s.as(P)({ type: 'conversation.create', title: 'Another', brief: '', checks: [], requestMessageId: 'missing' })).rejects.toThrow('own message')
   })
 
   it('posts none for a task\'s steps', async () => {

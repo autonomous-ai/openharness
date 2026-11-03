@@ -82,7 +82,7 @@ describe('ordinary task messages and progress replies', () => {
     expect(thread(f.status(id, builder, 'working', 'Halfway.'), root)).toEqual([])
     const posted = f.run({ type: 'message.send', conversationId: id, text: `Please check ${PR}`, replyTo: null, recipientIds: [] }, f.as(builder))
     expect(posted.messages.filter(m => m.conversationId === 'lead')).toEqual([])
-    expect(thread(f.status(id, builder, 'review', 'Ready.'), root)).toEqual(['Ready for review: PR #7'])
+    expect(thread(f.status(id, builder, 'review', 'Ready.'), root)).toEqual(['Ready for review.'])
   })
 
   it('reports each newly merged pull request once, including a second pull request for the same task', () => {
