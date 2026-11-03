@@ -337,7 +337,7 @@ Future<void> confirmRemoveBuddy(
 ) async {
   final remove = await showAppDialog<bool>(
     context: context,
-    builder: (context) => SuperTabDialogScope(
+    builder: (context) => _BuddyDialogScope(
       controller: c,
       projectId: projectId,
       child: AlertDialog(
@@ -382,12 +382,40 @@ Future<void> showRenameBuddy(
   String projectId,
 ) => showAppDialog<void>(
   context: context,
-  builder: (context) => SuperTabDialogScope(
+  builder: (context) => _BuddyDialogScope(
     controller: c,
     projectId: projectId,
     child: _RenameBuddyDialog(controller: c, projectId: projectId),
   ),
 );
+
+/// A Buddy dialog's scope: its project while the project is there, or the
+/// one Buddy's chat while that is there. The one Buddy belongs to no project
+/// (its key is [SuperTabController.kSwarmBuddyKey]), so a scope that wanted a
+/// project showed "This action is no longer available." in place of Rename
+/// Buddy and Remove Buddy (task #2428, 11-03).
+class _BuddyDialogScope extends StatelessWidget {
+  const _BuddyDialogScope({
+    required this.controller,
+    required this.projectId,
+    required this.child,
+  });
+
+  final SuperTabController controller;
+  final String projectId;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final swarm = projectId == SuperTabController.kSwarmBuddyKey;
+    return SuperTabDialogScope(
+      controller: controller,
+      projectId: swarm ? null : projectId,
+      conversationId: swarm ? controller.buddyChat(projectId)?.id : null,
+      child: child,
+    );
+  }
+}
 
 class _RenameBuddyDialog extends StatefulWidget {
   const _RenameBuddyDialog({required this.controller, required this.projectId});

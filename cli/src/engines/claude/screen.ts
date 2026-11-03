@@ -3,7 +3,7 @@ import type { EngineScreen, PaneTakeover, PaneView } from '../facets/screen.js'
 import { inspectPane, paneModal as readModal, stripAnsi } from '../kit/pane.js'
 import { locateQuestionPane } from '../kit/questionPane.js'
 import { assembleScreen } from '../kit/screen.js'
-import { composerState } from './composer.js'
+import { CLAUDE_RULE, composerState } from './composer.js'
 
 export function questionPane(capture: string): PaneView {
   const found = locateQuestionPane(capture)
@@ -20,7 +20,10 @@ export const screen: EngineScreen = {
 function takeover(capture: string): PaneTakeover | null {
   const lines = stripAnsi(capture).replace(/\u00a0/g, ' ').split('\n')
   const bottom = lines.filter(line => line.trim()).slice(-3)
-  const composer = lines.findLastIndex((line, index) => /^\s*❯/.test(line) && index > 0 && /^\s*[─━]{8,}\s*$/.test(lines[index - 1]))
+  // Under a titled rule too (a session renamed with `/rename`, composer.ts): with no composer found, every dialog's words
+  // were looked for anywhere on the screen, the transcript above the prompt included (task #2428).
+  const composer = lines.findLastIndex((line, index) => /^\s*❯/.test(line) && index > 0
+    && (/^\s*[─━]{8,}\s*$/.test(lines[index - 1]) || CLAUDE_RULE.test(lines[index - 1].trim())))
   const shown = (...patterns: RegExp[]) => patterns.every(pattern => lines.findLastIndex(line => pattern.test(line)) > composer)
   if (claudeRewindMenuOpen(capture)) return 'rewind'
   if (bottom.some((line) => CLAUDE_TRANSCRIPT_FOOTER.test(line))) return 'transcript'
