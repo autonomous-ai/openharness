@@ -69,6 +69,9 @@ class SuperTabFixtureConnection extends WsConn {
   /// (`teamSetupStatus`); null answers as a daemon too old to say.
   Map<String, dynamic>? teamSetup;
   bool loseCreate = false, loseJoin = false;
+
+  /// Refuses the next join as the backend would, before anything is written.
+  SuperTabFailure? failJoin;
   bool failNative = false;
   WsRequestFailure? backendFailure;
 
@@ -250,6 +253,10 @@ class SuperTabFixtureConnection extends WsConn {
       if (body?['command'] case final Map command
           when command['type'] == 'agent.add') {
         joins.add(Map<String, dynamic>.from(body!));
+        if (failJoin case final failure?) {
+          failJoin = null;
+          throw failure;
+        }
         // As the backend: a deleted project's conversation is not found.
         if (!(server.state['conversations'] as List).cast<Map>().any(
           (g) => g['id'] == command['conversationId'],
@@ -2684,6 +2691,57 @@ void main() {
       isNot(anyOf(contains('project.rename'), contains('tab.rename'))),
     );
   });
+
+  // Hollis's review of #2803: a PM start decided when the box opened, retried
+  // after another PM joined, must not take the project from that one.
+  test(
+    'a PM start retried after another PM joined leaves that one the PM',
+    () async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Personal');
+      f.connection.failJoin = const SuperTabFailure(
+        'INTERNAL_ERROR',
+        'An internal server error occurred',
+        statusCode: 500,
+      );
+      final box = await f.box(engine: 'claude', task: 'Hi New PM Personal');
+      expect(box.integration!.swarmRole, 'lead');
+      expect(await box.create(), NewHarnessOutcome.failed);
+      // Meanwhile the project got its Product Manager.
+      withCoordinator(f);
+      expect(await box.create(), NewHarnessOutcome.failed);
+      expect(
+        box.error,
+        'Another Product Manager joined this project while this one was '
+        'starting. This one keeps running on Test host: Discard request to '
+        'leave it out of the project.',
+      );
+      expect(f.connection.joins, hasLength(1));
+      final chat = (f.connection.server.state['conversations'] as List)
+          .cast<Map<String, dynamic>>()
+          .firstWhere((c) => c['id'] == 'lead');
+      expect(chat['leadId'], 'pm');
+      expect(box.canDiscardPending, isTrue);
+    },
+  );
+
+  test(
+    'a PM start retried while the project still has none joins as its PM',
+    () async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Personal');
+      f.connection.failJoin = const SuperTabFailure(
+        'INTERNAL_ERROR',
+        'An internal server error occurred',
+        statusCode: 500,
+      );
+      final box = await f.box(engine: 'claude', task: 'Hi New PM Personal');
+      expect(await box.create(), NewHarnessOutcome.failed);
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      expect(f.connection.joins, hasLength(2));
+      expect((f.connection.joins.last['command'] as Map)['lead'], isTrue);
+    },
+  );
 
   test(
     'New Harness in a project chat with a coordinator joins a worker',
