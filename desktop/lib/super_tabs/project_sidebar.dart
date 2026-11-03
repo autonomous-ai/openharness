@@ -245,7 +245,7 @@ class ProjectSidebar extends StatelessWidget {
     final unread = reading == null
         ? controller.unreadShown(group)
         : controller.expandedProjects.contains(project?.id)
-        ? reading.forPeople(group)
+        ? reading.unread.contains(group.id)
         : reading.unread.isNotEmpty;
     // Only what opening this row shows, so opening it clears the number (Dee,
     // Slack's way). Tags in the task conversations it hides make it bold, and
@@ -391,6 +391,9 @@ class ProjectSidebar extends StatelessWidget {
                             group,
                             task: project == null && label == null,
                             (status) => Tooltip(
+                              // Beside the row, level with it, never over
+                              // the rows below (Huy, 11-03, #2427).
+                              positionDelegate: _besideTheRow,
                               message:
                                   label ??
                                   project?.name ??
@@ -422,24 +425,22 @@ class ProjectSidebar extends StatelessWidget {
                                                 style: style,
                                               )
                                             : project == null
-                                            ? Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  SuperTabWorkgroupName(
-                                                    group,
-                                                    style: style,
-                                                  ),
-                                                  // Moving, waiting and on what, or stuck (#957).
-                                                  if (status != null)
-                                                    SuperTabTaskLineView(
-                                                      status,
-                                                      key: ValueKey(
-                                                        'super-task-line-${group.id}',
+                                            // One line, as Slack's (Huy,
+                                            // 11-03, #2427): the state is the
+                                            // mark at its right and the
+                                            // tooltip, and a screen reader
+                                            // still hears it (#957).
+                                            ? Semantics(
+                                                label: status == null
+                                                    ? null
+                                                    : superTabTaskStatusText(
+                                                        status,
                                                       ),
-                                                    ),
-                                                ],
+                                                child: SuperTabWorkgroupName(
+                                                  group,
+                                                  style: style,
+                                                  quietNumber: true,
+                                                ),
                                               )
                                             : Column(
                                                 crossAxisAlignment:
@@ -1141,6 +1142,25 @@ class _NewestConversationsState extends State<_NewestConversations> {
   }
 }
 
+/// A sidebar row's tooltip, to the right of its row and level with it, so it
+/// never covers the rows below (Huy, 11-03, #2427); kept on screen.
+Offset _besideTheRow(TooltipPositionContext context) {
+  const gap = 8.0;
+  final left =
+      context.target.dx +
+      context.targetSize.width / 2 +
+      ProjectSidebar._iconColumn +
+      gap;
+  final top = context.target.dy - context.tooltipSize.height / 2;
+  final overlay = context.overlaySize;
+  double fit(double value, double room) =>
+      value.clamp(gap, room > gap ? room : gap).toDouble();
+  return Offset(
+    fit(left, overlay.width - context.tooltipSize.width - gap),
+    fit(top, overlay.height - context.tooltipSize.height - gap),
+  );
+}
+
 /// What one build of the sidebar reads, each piece once: per row, a Swarm's
 /// thousands of conversations were scanned again on every rebuild (Diego,
 /// 10-29).
@@ -1196,20 +1216,21 @@ class _ProjectReading {
           ].fold(0, (a, b) => a + b),
   };
 
-  /// Whether [g]'s row is bold: a person wrote there, the reader is tagged
-  /// there, or it waits on a person (#2427). Agents' progress alone is not.
-  bool forPeople(SuperTabConversation g) =>
-      sidebar.controller.unreadForPeople(g) ||
-      (sidebar.attention?.mentionsIn(g.id) ?? 0) > 0 ||
-      (sidebar.needsHuman(g) > 0 &&
-          sidebar.controller.notifyOf(g.id) != SuperTabNotify.muted);
-
+  /// A row is bold when a person wrote there, the reader is tagged there, or
+  /// it waits on a person (#2427); agents' progress alone leaves it. Each
+  /// conversation's wait is asked once per build.
   late final _open = () {
     final waiting = <String>{}, unread = <String>{};
+    final controller = sidebar.controller;
     for (final g in conversations) {
       if (g.closed || g.isBuddyChat || g.audience != null) continue;
-      if (sidebar.needsHuman(g) > 0) waiting.add(g.id);
-      if (forPeople(g)) unread.add(g.id);
+      final waits = sidebar.needsHuman(g) > 0;
+      if (waits) waiting.add(g.id);
+      if (controller.unreadForPeople(g) ||
+          (sidebar.attention?.mentionsIn(g.id) ?? 0) > 0 ||
+          (waits && controller.notifyOf(g.id) != SuperTabNotify.muted)) {
+        unread.add(g.id);
+      }
     }
     return (waiting: waiting, unread: unread);
   }();

@@ -161,32 +161,46 @@ void main() {
 
   /// Workgroup 1 at work: an agent on it, its last progress a minute ago.
   void working(ConversationServer server) {
-    final groups = (server.state['conversations'] as List).cast<Map<String, dynamic>>();
+    final groups = (server.state['conversations'] as List)
+        .cast<Map<String, dynamic>>();
     groups.firstWhere((g) => g['id'] == 'g1')['assignment'] = {
       'id': 'a1',
       'agentId': 'lead',
       'status': 'working',
-      'progressAt': DateTime.now().subtract(const Duration(minutes: 1)).millisecondsSinceEpoch,
+      'progressAt': DateTime.now()
+          .subtract(const Duration(minutes: 1))
+          .millisecondsSinceEpoch,
     };
   }
 
-  testWidgets('a task row is one line, its state a mark at the right, still said to a screen reader', (tester) async {
-    final semantics = tester.ensureSemantics();
-    final server = humansSwarm();
-    addNumberedWorkgroups(server, 1);
-    working(server);
-    final controller = await show(tester, server);
-    expect(find.byKey(const ValueKey('super-task-line-g1')), findsNothing);
-    expect(find.byKey(const ValueKey('super-task-mark-g1')), findsOneWidget);
-    // One line: the row is a sidebar row's height, as a project's is.
-    expect(tester.getSize(g1).height, tester.getSize(project).height);
-    expect(tester.getSize(g1).height, lessThanOrEqualTo(SwarmType.sidebarRowHeight(compact: false) + 1));
-    expect(tester.getSemantics(g1).getSemanticsData().label, contains('Working'));
-    semantics.dispose();
-    await close(tester, controller);
-  });
+  testWidgets(
+    'a task row is one line, its state a mark at the right, still said to a screen reader',
+    (tester) async {
+      final semantics = tester.ensureSemantics();
+      final server = humansSwarm();
+      addNumberedWorkgroups(server, 1);
+      working(server);
+      final controller = await show(tester, server);
+      expect(find.byKey(const ValueKey('super-task-line-g1')), findsNothing);
+      expect(find.byKey(const ValueKey('super-task-mark-g1')), findsOneWidget);
+      // One line: the row is a sidebar row's height, as a project's is.
+      expect(tester.getSize(g1).height, tester.getSize(project).height);
+      expect(
+        tester.getSize(g1).height,
+        lessThanOrEqualTo(SwarmType.sidebarRowHeight(compact: false) + 1),
+      );
+      expect(
+        tester.getSemantics(g1).getSemanticsData().label,
+        contains('Working'),
+      );
+      semantics.dispose();
+      await close(tester, controller);
+    },
+  );
 
-  testWidgets('the task number is smaller and fainter than its title', (tester) async {
+  testWidgets('the task number is smaller and fainter than its title', (
+    tester,
+  ) async {
     final server = humansSwarm();
     addNumberedWorkgroups(server, 1);
     final controller = await show(tester, server);
@@ -197,7 +211,9 @@ void main() {
     await close(tester, controller);
   });
 
-  testWidgets('the tooltip opens beside the list, not over the rows below', (tester) async {
+  testWidgets('the tooltip opens beside the list, not over the rows below', (
+    tester,
+  ) async {
     final server = humansSwarm();
     addNumberedWorkgroups(server, 1);
     working(server);
