@@ -1,6 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/app_shell.dart';
+import 'package:harness/auth/auth_session.dart';
+import 'package:harness/auth/cli_login.dart';
+import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/team_account_setup.dart';
@@ -46,6 +52,15 @@ class _Daemon extends RenameConnection {
   }
 }
 
+/// Never the real CLI: nothing here may sign this Mac out.
+class _FakeCli extends CliLogin {
+  @override
+  Future<void> logout() async {}
+
+  @override
+  Future<CliAuthStatus> checkStatus() async => CliAuthStatus(loggedIn: true);
+}
+
 const _wrongPassword =
     'The Harness Team account was not finished: The administrator user name or '
     'password was incorrect. (-60005). Run `harness team setup` again; it repairs what is there.';
@@ -69,12 +84,15 @@ void main() {
 
   final navigator = GlobalKey<NavigatorState>();
   var taps = 0, shortcuts = 0;
+  late FocusNode behind;
 
   /// The app's window as app_shell.dart builds it: the lock above the
   /// Navigator, so it covers every route and dialog too.
   Future<void> window(WidgetTester tester, AppNotifier app) async {
     taps = 0;
     shortcuts = 0;
+    behind = FocusNode(debugLabel: 'behind');
+    addTearDown(behind.dispose);
     await tester.pumpWidget(
       MaterialApp(
         navigatorKey: navigator,
@@ -93,6 +111,7 @@ void main() {
               children: [
                 TextButton(
                   key: const Key('behind-button'),
+                  focusNode: behind,
                   autofocus: true,
                   onPressed: () => taps++,
                   child: const Text('Behind'),
@@ -122,6 +141,27 @@ void main() {
           element == focused ||
           (focused as Element).debugGetDiagnosticChain().contains(element),
     );
+  }
+
+  /// Every label in the semantics tree a screen reader walks.
+  List<String> spoken(WidgetTester tester) {
+    final labels = <String>[];
+    void walk(SemanticsNode node) {
+      if (node.label.isNotEmpty) labels.add(node.label);
+      node.visitChildren((child) {
+        walk(child);
+        return true;
+      });
+    }
+
+    final root =
+        tester.binding.rootPipelineOwner.semanticsOwner?.rootSemanticsNode;
+    if (root != null) walk(root);
+    for (final view in tester.binding.renderViews) {
+      final node = view.owner?.semanticsOwner?.rootSemanticsNode;
+      if (node != null) walk(node);
+    }
+    return labels;
   }
 
   String outcome(WidgetTester tester) => tester
@@ -180,6 +220,27 @@ void main() {
         await tester.pump();
         expect(focusedIn(find.byKey(const Key('team-account-lock'))), isTrue);
       }
+      // Something behind asks for focus by itself (a terminal on output, a
+      // dialog opening): it does not get it, and Enter presses nothing there.
+      behind.requestFocus();
+      await tester.pump();
+      expect(focusedIn(find.byKey(const Key('team-account-lock'))), isTrue);
+      navigator.currentState!.push(
+        DialogRoute<void>(
+          context: navigator.currentContext!,
+          builder: (_) => Dialog(
+            child: TextButton(
+              key: const Key('late-dialog-button'),
+              autofocus: true,
+              onPressed: () => dialogTaps++,
+              child: const Text('Opened while locked'),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(focusedIn(find.byKey(const Key('team-account-lock'))), isTrue);
       await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
       await tester.sendKeyEvent(LogicalKeyboardKey.keyK);
       await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
@@ -190,16 +251,17 @@ void main() {
       expect(dialogTaps, 0);
 
       // A screen reader reads only the lock.
-      expect(find.bySemanticsLabel('Behind'), findsNothing);
-      expect(find.bySemanticsLabel('In a dialog'), findsNothing);
-      expect(find.text('Set up Harness Team on this Mac'), findsOneWidget);
+      final read = spoken(tester);
+      expect(read.join('\n'), contains('Set up Harness Team on this Mac'));
+      expect(read.join('\n'), isNot(contains('Behind')));
+      expect(read.join('\n'), isNot(contains('In a dialog')));
       semantics.dispose();
 
-      // Set up: the app is as it was, the dialog still open over it.
+      // Set up: the app is as it was, its dialogs still open over it.
       await app.teamAccountMade();
       await tester.pump();
       expect(find.byKey(const Key('team-account-lock')), findsNothing);
-      await tester.tap(find.byKey(const Key('dialog-button')));
+      await tester.tap(find.byKey(const Key('late-dialog-button')));
       expect(dialogTaps, 1);
     },
   );
@@ -412,4 +474,48 @@ void main() {
     f.dispose();
     await tester.pump();
   });
+
+  testWidgets(
+    'the app\'s own window is held, its screen still mounted under it',
+    (tester) async {
+      final own = AppNotifier(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+        cliLogin: _FakeCli(),
+        connectionForTest: (_) => daemon,
+      );
+      addTearDown(own.dispose);
+      const machine = Machine(
+        machineId: 'm',
+        authMode: MachineAuthMode.remote,
+        name: 'Test host',
+      );
+      own.machines = [machine];
+      own.machineStates['m'] = MachineState(machine)
+        ..localOnly = true
+        ..nodeOnline = true
+        ..connectionStatus = ConnectionStatus.connected;
+      own.teamAccountHereForTest = true;
+      own.status = AppStatus.authenticated;
+      own.currentUser = const CurrentUserProfile(
+        id: 'owner',
+        email: 'owner@example.com',
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [appStateProvider.overrideWithValue(own)],
+          child: HarnessApp(
+            authenticatedScreen: (_) => const SizedBox(key: Key('screen')),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.byKey(const Key('team-account-lock')), findsNothing);
+      await own.offerTeamAccount('join', tabId: 'tab-1');
+      await tester.pump();
+      expect(find.byKey(const Key('team-account-lock')), findsOneWidget);
+      expect(find.byKey(const Key('screen')), findsOneWidget);
+    },
+  );
 }
