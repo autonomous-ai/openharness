@@ -23,7 +23,7 @@ vi.mock('../lib/buddyGuard.js', async original => {
 import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { attachedFiles as attachedFilesType } from './attachments.js'
-import { backend, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
+import { backend, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmListedFor, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
 import { SWITCH_ADOPT_MS, SWITCH_HOLD_MS } from './leadSwitch.js'
 import { TerminalHost } from './terminal.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
@@ -91,6 +91,27 @@ function setup(messageFields: Record<string, unknown> = {}, claimFields: Record<
     idle: () => { status = 'delivered' }, send: () => { status = 'queued'; claimId = null },
     revoke: (value = true) => { revoked = value }, foreignClaim: () => { claimId = 'another-process' }, from: (id: string) => { from = id } }
 }
+
+// Import an agent (task #2379; security review of #2783): an agent any Swarm still lists on this machine is in a Swarm,
+// its chats archived or its stop asked, though it has no role to restart with.
+describe('whether a Swarm lists a session on this machine', () => {
+  it('names a session any roster row of this machine lists, whatever its chats or stop', async () => {
+    const t = setup()
+    const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }
+    let rows: Record<string, unknown>[] = [{ tabId: 'tab', agent, stopRequested: true }]
+    vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
+      path.includes('/hosts/') ? hostForm(rows) : swarmReply(path, { agents: [{ ...agent, workDecision: 'stop' }],
+        conversations: [{ id: 'task', archived: true, agentIds: ['agent'] }] }) } }))
+    const sources = sourcesOf(t.core)
+    // The restart role says none: its chats are archived and its stop asked.
+    expect(await swarmRoleFor(sources, 'harness')).toBeNull()
+    expect(await swarmListedFor(sources, 'harness')).toBe(true)
+    expect(await swarmListedFor(sources, 'personal')).toBe(false)
+    // Another machine's row of the same session id is not this machine's.
+    rows = [{ tabId: 'tab', agent: { ...agent, machineId: 'machine-2' } }]
+    expect(await swarmListedFor(sources, 'harness')).toBe(false)
+  })
+})
 
 describe('current Swarm role lookup', () => {
   // Project instructions, phase 4 (decision 1): the role's name is the project's document's; the session is a coordinator,

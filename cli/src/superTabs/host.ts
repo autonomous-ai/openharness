@@ -96,6 +96,17 @@ export async function swarmRoleFor(sources: SwarmSources, harnessId: string): Pr
   // agent, and last an agent that was a Reviewer.
   return (['buddy', 'lead', 'dev', 'review'] as const).map(role => grants.find(grant => grant && wireRole(grant) === role)).find(Boolean) ?? null
 }
+/** Whether any Swarm's roster lists [harnessId] on this machine, whatever its chats or stop: Import agent never brings in a
+ *  session a Swarm lists, as its transcript may hold that Swarm's private project (re-review of #2783). Its restart role
+ *  above is none for one whose chats are archived or whose stop was asked, and it is listed still. */
+export async function swarmListedFor(sources: SwarmSources, harnessId: string): Promise<boolean> {
+  const machineId = sources.feed.machineId
+  if (!identifier(machineId) || !identifier(harnessId)) return false
+  return (await sources.feed.refresh()).roster.map(object).some(row => {
+    const agent = object(row.agent)
+    return identifier(row.tabId) && agent.machineId === machineId && agent.harnessId === harnessId
+  })
+}
 /** A Buddy names its owner (backend buddies.ts); its role field stays a builder's for older readers. */
 const isBuddy = (agent: Record<string, unknown>) => !!agent.buddyOf && typeof agent.buddyOf === 'object'
 
