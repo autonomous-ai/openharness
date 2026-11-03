@@ -89,9 +89,11 @@ export function waitingForReview(assignment: Assignment): boolean {
 
 /** A task's Engineer waits on one of its own steps while that step's agent is at work on it (Diego, 2026-11-03, #2323: the
  *  instructions never ask the Engineer to set review while its Review and Test run, so it lost its task 35 minutes in). A
- *  step in Ready has handed its verdict over: then it is the Engineer's turn, else the two would wait on each other. */
+ *  step in Ready has handed its verdict over, and one whose verdict asked for changes waits for the Engineer's new revision
+ *  (review of #2744): then it is the Engineer's turn, else the two would wait on each other. */
 export function waitingOnSteps(state: SuperTabState, group: Conversation): boolean {
-  return !isStep(group) && stepsOf(state, group.id).some(step => !step.archived && activeWork(step) && step.assignment!.status !== 'review')
+  return !isStep(group) && stepsOf(state, group.id).some(step => !step.archived && activeWork(step) && step.assignment!.status !== 'review'
+    && !waitingForRevision(state, step))
 }
 
 /** [task]'s Engineer waited on its steps, as its record says, and none is at work now: its quiet time runs from now, as
