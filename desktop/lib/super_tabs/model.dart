@@ -46,6 +46,7 @@ class SuperTabPerson {
       email = _text(row, 'email'),
       role = _text(row, 'role'),
       generation = row['generation'] as String?,
+      joinedVia = row['joinedVia'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       status = SuperTabPersonStatus.fromJson(row['status']),
       chosenUsername = row['username'] as String?,
@@ -57,6 +58,7 @@ class SuperTabPerson {
       email = person.email,
       role = person.role,
       generation = person.generation,
+      joinedVia = person.joinedVia,
       avatar = person.avatar,
       status = person.status,
       chosenUsername = person.chosenUsername;
@@ -79,6 +81,10 @@ class SuperTabPerson {
   /// This membership: a new one each time the person joins the Swarm. Null
   /// from a backend that does not send it.
   final String? generation;
+
+  /// How they joined: `domain` when they were added automatically for their
+  /// email's domain. Null otherwise and from an older server.
+  final String? joinedVia;
   bool get canWrite => role == 'owner' || role == 'collaborator';
 }
 
@@ -564,6 +570,7 @@ class SuperTabSnapshot {
       threadSessions = row['threadSessions'] == true,
       sessionsFromChat = row['sessionsFromChat'] == true,
       swarmBuddy = row['swarmBuddy'] == true,
+      autoJoin = row['autoJoin'] == true,
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
@@ -679,6 +686,10 @@ class SuperTabSnapshot {
   /// session in a project. False from an older one, whose Buddies are per
   /// project.
   final bool swarmBuddy;
+
+  /// People at the owner's email domain are added automatically (head
+  /// `autoJoin`, every member reads it): someone who leaves is not added back.
+  final bool autoJoin;
   final int mentionsWaiting;
 
   /// Which tags wait, as a digest that moves when they change though the
