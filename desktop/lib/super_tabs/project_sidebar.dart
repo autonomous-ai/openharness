@@ -408,16 +408,26 @@ class ProjectSidebar extends StatelessWidget {
                                       superTabTaskStatusText(status),
                                   ].join('\n'),
                               child: ConstrainedBox(
+                                // A project and its tasks a little taller
+                                // than other rows (Huy, 11-03, #2427).
                                 constraints: BoxConstraints(
-                                  minHeight: SwarmType.sidebarRowHeight(
-                                    compact: compact,
-                                  ),
+                                  minHeight: label == null
+                                      ? SwarmType.projectRowHeight(
+                                          compact: compact,
+                                        )
+                                      : SwarmType.sidebarRowHeight(
+                                          compact: compact,
+                                        ),
                                 ),
                                 child: Padding(
                                   padding: EdgeInsets.symmetric(
-                                    vertical: SwarmType.sidebarRowPadding(
-                                      compact: compact,
-                                    ),
+                                    vertical: label == null
+                                        ? SwarmType.projectRowPadding(
+                                            compact: compact,
+                                          )
+                                        : SwarmType.sidebarRowPadding(
+                                            compact: compact,
+                                          ),
                                   ),
                                   child: Row(
                                     children: [
