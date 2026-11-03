@@ -1,5 +1,5 @@
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
-import { accountMachineName, expireRemovals, followAccountName, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
+import { accountMachineName, expireRemovals, followAccountName, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
 import { readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { createHash } from 'node:crypto'
@@ -48,7 +48,7 @@ import { digestDue, digestMessageId, digestOf, digestRequest, digestSince } from
 import { moveChatMark } from './read/threadMarkSeeds.js'
 import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefusal, restoreSessions } from './closedAgents.js'
 import { sessionRows } from './memberRows.js'
-import { judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
+import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { archivable, archiveLine, archiveWaitsFor, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
@@ -3091,7 +3091,9 @@ export class SuperTabStore {
     // Renamed by its owner since: the full report renames it, and its Team account's pools with it (#2308).
     if (renamedBy(pool, accountMachineName(host.owned))) return null
     const data = structuredClone(part.data), mine = data.contribution!
-    const reading = storedObservation(mine, observation, { team: isTeamSession(user), now, preparable: id => record.preparable.includes(id) })
+    // A reading naming a refused start is never only a reading (machines.ts readingOnly): the full report fails it.
+    const reading = storedObservation(mine, observation, { team: isTeamSession(user), now, preparable: id => record.preparable.includes(id),
+      refusable: () => true })
     if (!readingOnly(mine.observation, reading)) return null
     addLent(mine, now, record.lentCount, record.lentProjects)
     mine.observation = reading
@@ -3179,7 +3181,8 @@ export class SuperTabStore {
       if (!state.machines?.includes(pool)) return saved()
       recordAgentPresence(state, machineId, observation.runningHarnessIds, now)
       const reading = storedObservation(pool, observation, { team: isTeamSession(user), now,
-        preparable: id => !!state.starts?.some(s => s.id === id && preparableStart(s, machineId)) })
+        preparable: id => !!state.starts?.some(s => s.id === id && preparableStart(s, machineId)),
+        refusable: id => !!state.starts?.some(s => s.id === id && refusableStart(s, machineId)) })
       accrueLent(state, pool, now)
       pool.observation = reading
       // The name its owner gave it in Machines, which a rename there changes (#2308).
@@ -3200,7 +3203,9 @@ export class SuperTabStore {
       }
       // Its own agents lose their tasks at once (a stopped session); every 30 seconds it runs the Swarm's time checks too, so
       // they keep running when the Lead's own machine is the one that died.
-      const checked = [...loseTasks(state, now, worker => worker.machineId === machineId), ...sweep ? sweepLiveness(state, now) : []]
+      // The starts the server refused this machine's own reports for fail now, with the refusal, not 3 minutes on (#2441).
+      const checked = [...failRefusedStarts(state, machineId, now), ...loseTasks(state, now, worker => worker.machineId === machineId),
+        ...sweep ? sweepLiveness(state, now) : []]
       // Then the agents it shows closed leave, those with no active work left: the Lead is told of their tasks above (closedAgents.ts).
       const closedOut = removeClosedAgents(state, state.agents.filter(a => closed.includes(a.id)), now).map(a => a.id)
       removedIds.push(...closedOut)
