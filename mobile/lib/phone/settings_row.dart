@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/app_type.dart';
+import 'package:harness_mobile/swarm/swarm_row.dart';
+import 'package:harness_mobile/swarm/swarm_style.dart';
 
 /// The pieces a phone settings list is built from — the grouped inset list every phone OS uses,
 /// rather than the desktop's `SettingRow` (a raised block with a fixed-width control on the right,
@@ -44,6 +48,22 @@ const double _rowGlyph = 18;
 const double _rowGlyphGap = 12;
 const double _nestedPadding = _rowPadding + _rowGlyph + _rowGlyphGap;
 
+/// Draws the settings pieces under it as Swarm's pages draw theirs: a caption in sentence case
+/// ([SwarmCaption]), a card ([SwarmGroup]) of Swarm's rows ([SwarmRow]), each led by its
+/// [SettingsRow.glyph]. Settings opened from Swarm's You stands under it (prototype A, 2026-11-03);
+/// opened from a terminal or Find, it keeps the phone's own look.
+class SettingsSwarmLook extends InheritedWidget {
+  const SettingsSwarmLook({super.key, required super.child});
+
+  /// Whether [context] stands under one. Read without depending on it: a page wears one look for
+  /// as long as it is open.
+  static bool of(BuildContext context) =>
+      context.getInheritedWidgetOfExactType<SettingsSwarmLook>() != null;
+
+  @override
+  bool updateShouldNotify(SettingsSwarmLook oldWidget) => false;
+}
+
 /// A caption over a run of rows.
 class SettingsCaption extends StatelessWidget {
   const SettingsCaption(this.text, {super.key});
@@ -53,6 +73,7 @@ class SettingsCaption extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
+    if (SettingsSwarmLook.of(context)) return SwarmCaption(text);
     return Padding(
       // 22 above, 8 below: the caption belongs to the group under it, so it sits much closer to
       // that group than to the one it follows. Equal gaps either side would leave every caption
@@ -82,6 +103,7 @@ class SettingsGroup extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
+    if (SettingsSwarmLook.of(context)) return SwarmGroup(children: children);
     return Container(
       // Full width, so a card is as wide as the list lets it be rather than as wide as its widest
       // row happens to need. Belt and braces with the `stretch` below: the alignment makes the rows
@@ -126,6 +148,7 @@ class SettingsRow extends StatelessWidget {
     this.detail,
     this.value,
     this.leading,
+    this.glyph,
     this.trailing,
     this.onTap,
     this.destructive = false,
@@ -140,6 +163,10 @@ class SettingsRow extends StatelessWidget {
   final String? value;
 
   final Widget? leading;
+
+  /// What the row leads with under [SettingsSwarmLook], as You's rows lead with theirs; [leading]
+  /// wins over it. The phone's own look draws none.
+  final IconData? glyph;
 
   /// A control that changes the setting without leaving the page — a stepper. Mutually exclusive
   /// with [value] in practice; if both are given, this wins and no chevron is drawn.
@@ -164,6 +191,7 @@ class SettingsRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
+    if (SettingsSwarmLook.of(context)) return _swarmRow(context);
     final titleColor = destructive
         ? AppPalette.dangerFill
         : AppPalette.textPrimary;
@@ -293,6 +321,70 @@ class SettingsRow extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(onTap: onTap, child: row),
+    );
+  }
+
+  /// The row as Swarm draws one ([SwarmRow]): the glyph, the title in the app's face, the
+  /// value in secondary ink before the chevron, as You's "Change ›" is.
+  Widget _swarmRow(BuildContext context) {
+    assert(
+      !destructive && !nested,
+      "Swarm's rows have no destructive or nested form",
+    );
+    final detail = this.detail;
+    final value = this.value;
+    final glyph = this.glyph;
+    return SwarmRow(
+      leading: leading ?? (glyph == null ? null : SwarmRowGlyph(glyph)),
+      title: title,
+      detail: detail == null
+          ? null
+          : Text(
+              detail,
+              maxLines: detailLines,
+              // As the phone's own look: an ellipsis with no line limit still cuts to one line.
+              overflow: detailLines == null
+                  ? TextOverflow.clip
+                  : TextOverflow.ellipsis,
+              style: AppType.caption(
+                color: AppPalette.textSecondary,
+                height: 1.35,
+              ),
+            ),
+      trailing:
+          trailing ??
+          (value == null
+              ? null
+              : ConstrainedBox(
+                  // Half the row at most, so a long value ellipsises rather than crushing the
+                  // title — see the phone's own look above.
+                  constraints: BoxConstraints(
+                    maxWidth: MediaQuery.sizeOf(context).width / 2,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          value,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.end,
+                          style: AppType.label(color: AppPalette.textSecondary),
+                        ),
+                      ),
+                      if (onTap != null) ...[
+                        const SizedBox(width: AppSpace.xs),
+                        Icon(
+                          LucideIcons.chevronRight300,
+                          size: 18,
+                          color: AppPalette.textFaint,
+                        ),
+                      ],
+                    ],
+                  ),
+                )),
+      onTap: onTap,
     );
   }
 }

@@ -34,6 +34,19 @@ describe('delivered turns', () => {
     expect(deliveries.answer('worker', 'deliver', { deliveryId: id, agentId: 'a', text: 'x' })).toEqual({})
   })
 
+  it('remembers a delivery that answers a question until it settles', () => {
+    const { deliveries } = setup()
+    deliveries.turns.deliver('a', 'x', 'p1', { answersQuestion: true, writtenAt: 5 })
+    deliveries.turns.deliver('a', 'x', 'p2')
+    expect(deliveries.answer('orchestrator', 'deliver', { deliveryId: 'p3', agentId: 'a', text: 'x', answersQuestion: true, writtenAt: 7 })).toEqual({})
+    expect(['p1', 'p2', 'p3'].map(deliveries.answersQuestion)).toEqual([{ writtenAt: 5 }, null, { writtenAt: 7 }])
+    expect(deliveries.answer('orchestrator', 'deliver', { deliveryId: 'p4', agentId: 'a', text: 'x', answersQuestion: true, writtenAt: 'soon' })).toEqual({})
+    expect(deliveries.answersQuestion('p4')).toEqual({})
+    deliveries.settled(event('p1', 'delivered'))
+    deliveries.settled(event('p3', 'rejected'))
+    expect(['p1', 'p3'].map(deliveries.answersQuestion)).toEqual([null, null])
+  })
+
   it('cannot grant, cancel or submit another service namespace or unbounded permissions', async () => {
     const { deliveries, deps } = setup()
     const id = 'team:service:other:one'

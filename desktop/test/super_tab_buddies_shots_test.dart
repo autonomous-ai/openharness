@@ -83,7 +83,108 @@ void main() {
     return server;
   }
 
+  /// Ken's one Buddy and models shared in the Swarm (task #2354): one served
+  /// by two machines, an API a member shares.
+  ConversationServer sharedModels({String? gridModel}) {
+    const swarmGrid = 'swarm-0123456789ab';
+    final server = oneBuddySwarm();
+    server.state['people'] = [
+      ...server.state['people'] as List,
+      {'id': 'diego', 'email': 'diego@example.com', 'role': 'collaborator'},
+    ];
+    giveSwarmBuddy(server);
+    if (gridModel != null) {
+      (server.state['agents'] as List).cast<Map>().firstWhere(
+        (a) => a['id'] == 'wren',
+      )['gridModel'] = gridModel;
+    }
+    server.state['localModels'] = {
+      'grid': swarmGrid,
+      'enabled': true,
+      'ready': true,
+    };
+    Map<String, dynamic> machine(
+      String id,
+      String name,
+      String contributor,
+      List<(String, String, String)> served,
+    ) => {
+      'machineId': id,
+      'name': name,
+      'contributorId': contributor,
+      'scope': 'swarm',
+      'engines': <dynamic>[],
+      'maxAgents': 4,
+      'availableSlots': 4,
+      'observation': {
+        'receivedAt': DateTime.now().millisecondsSinceEpoch,
+        'localModels': [
+          for (final (model, name, kind) in served)
+            {'grid': swarmGrid, 'model': model, 'name': name, 'kind': kind},
+        ],
+      },
+    };
+    server.state['machines'] = [
+      (server.state['machines'] as List).first,
+      machine('studio', "Ken's Mac Studio", 'owner', [
+        ('deepseek-4.1-flash', 'DeepSeek 4.1 Flash', 'local'),
+        ('kimi-k3', 'Kimi K3', 'local'),
+      ]),
+      machine('mini', "Tony's Mac mini", 'owner', [
+        ('kimi-k3', 'Kimi K3', 'local'),
+      ]),
+      machine('diego-mac', 'Diego-MacBook', 'diego', [
+        ('openai/gpt-6.1-sol', 'GPT-6.1 Sol', 'api'),
+      ]),
+    ];
+    return server;
+  }
+
   for (final brightness in Brightness.values) {
+    testWidgets('Buddy model picker in ${brightness.name}', (tester) async {
+      if (shots == null) return;
+      final previous = grid.AppTheme.brightness.value;
+      grid.AppTheme.brightness.value = brightness;
+      addTearDown(() => grid.AppTheme.brightness.value = previous);
+      tester.view.devicePixelRatio = 2;
+      tester.view.physicalSize = const Size(2400, 1400);
+      addTearDown(tester.view.reset);
+      for (final (name, gridModel) in [('menu', null), ('shared', 'kimi-k3')]) {
+        final c = sharedModels(gridModel: gridModel)
+            .controller(account: 'peer');
+        await c.refresh();
+        await c.select('swarm-buddy-peer');
+        await tester.pumpWidget(
+          MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: grid.buildAppTheme(brightness: brightness),
+            home: Scaffold(
+              body: SuperTabView(
+                controller: c,
+                onInvite: () {},
+                onAddAgent: (_) {},
+                onOpenTerminal: (_) {},
+                machineName: (_) => 'Team Mac',
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        if (gridModel == null) {
+          await tester.tap(find.byKey(const ValueKey('super-buddy-model')));
+          await tester.pumpAndSettle();
+        }
+        await captureWindow(
+          tester,
+          shots,
+          'buddy-model-$name-${brightness.name}',
+        );
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
+      }
+    }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
     testWidgets('Buddies in ${brightness.name}', (tester) async {
       if (shots == null) return;
       final previous = grid.AppTheme.brightness.value;

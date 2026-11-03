@@ -11,6 +11,7 @@ import '../shared/theme/app_icons.dart';
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../shared/widgets/app_dialog.dart';
+import '../shared/widgets/app_menu.dart';
 import '../shared/widgets/app_select_field.dart';
 import '../state/app_state.dart';
 import '../state/harness_activity.dart';
@@ -26,6 +27,7 @@ import 'controller.dart';
 import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
+import 'import_agent_dialog.dart';
 import 'leaderboard/format.dart';
 import 'leaderboard/member_row.dart';
 import 'leaderboard/model.dart';
@@ -600,6 +602,9 @@ class _SuperTabRosterState extends State<SuperTabRoster>
     final openProject = projectId == null
         ? null
         : state?.projectById(projectId);
+    final adds = c.canWrite && c.selected != null && audience == null;
+    // On this Mac, Add agent also imports one of its agents.
+    final imports = widget.app != null && superTabImportOffered;
     return [
       _heading(openProject == null ? null : scoped != null),
       if (_board.error case final error?)
@@ -637,10 +642,17 @@ class _SuperTabRosterState extends State<SuperTabRoster>
       SuperTabSectionHeading(
         'Agents',
         // A private conversation holds only the project's Lead.
-        onAdd: c.canWrite && c.selected != null && audience == null
-            ? () => widget.onAddAgent(c.selected!)
-            : null,
+        onAdd: adds && !imports ? () => widget.onAddAgent(c.selected!) : null,
         addTooltip: 'Add agent',
+        actions: [
+          if (adds && imports)
+            _AddAgentMenu(
+              onImport: () => unawaited(
+                showImportAgent(context, widget.app!, c, c.selected!),
+              ),
+              onStart: () => widget.onAddAgent(c.selected!),
+            ),
+        ],
       ),
       for (final agent in listed)
         if (!superTabFoldsIdle(states[agent.id]!))
@@ -779,3 +791,52 @@ bool superTabFoldsIdle(SuperTabAgentState state) =>
       HarnessActivity.paused,
       HarnessActivity.offline,
     }.contains(state.mark);
+
+/// The Agents heading's +, on this Mac: Import an agent running here first,
+/// then Start a new agent, today's picker.
+class _AddAgentMenu extends StatefulWidget {
+  const _AddAgentMenu({required this.onImport, required this.onStart});
+  final VoidCallback onImport, onStart;
+
+  @override
+  State<_AddAgentMenu> createState() => _AddAgentMenuState();
+}
+
+class _AddAgentMenuState extends State<_AddAgentMenu> {
+  final _menu = MenuController();
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    return MenuAnchor(
+      controller: _menu,
+      consumeOutsideTap: true,
+      alignmentOffset: const Offset(0, grid.AppControl.menuGap),
+      style: grid.AppMenu.style(minWidth: 240),
+      menuChildren: [
+        for (final (label, icon, run) in [
+          (
+            'Import an agent running on this Mac',
+            AppIcons.download,
+            widget.onImport,
+          ),
+          ('Start a new agent', AppIcons.plus, widget.onStart),
+        ])
+          AppMenuItem(
+            label: label,
+            icon: icon,
+            expandLabel: true,
+            onPressed: () {
+              _menu.close();
+              run();
+            },
+          ),
+      ],
+      builder: (context, menu, _) => AppIconButton(
+        icon: AppIcons.plus,
+        tooltip: 'Add agent',
+        onPressed: () => menu.isOpen ? menu.close() : menu.open(),
+      ),
+    );
+  }
+}

@@ -1889,6 +1889,30 @@ describe('registry across a reboot and pane loss', () => {
     expect(bound?.entry.subscriptionModel).toBe('opus')
   })
 
+  // The conversation a fresh move onto a grid left (core/agents/retarget.ts): the way home reopens it.
+  it('keeps the remembered subscription session across a reload and the binds on the grid', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const s1 = join(dataDir, 'S1.jsonl'), s2 = join(dataDir, 'S2.jsonl')
+    writeFileSync(s1, '{}\n'); writeFileSync(s2, '{}\n')
+    registerProcess(registry, { launcherId: 'agent-1', sessionId: 'S1', transcriptPath: s1, tmuxPane: '%22', cwd: '/tmp/demo' })
+    expect(registry.setSubscriptionSession('agent-1', 'S1')).toBe(true)
+    expect(registry.setSubscriptionSession('nobody', 'S1')).toBe(false)
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+    expect(reloaded.byAgent('agent-1')?.subscriptionSessionId).toBe('S1')
+    // The fresh conversation on the grid reports in: the same agent, the left one still remembered.
+    const fresh = reloaded.register({ sessionId: 'S2', transcriptPath: s2, tmuxPane: '%22', cwd: '/tmp/demo' })
+    expect(fresh?.entry).toMatchObject({ agentId: 'agent-1', sessionId: 'S2', subscriptionSessionId: 'S1' })
+    // Home, the reopened conversation reports in: the same agent bound to it, not a new one.
+    const back = reloaded.register({ sessionId: 'S1', transcriptPath: s1, tmuxPane: '%22', cwd: '/tmp/demo' })
+    expect(back).toMatchObject({ rebound: 'S2', orphaned: null, entry: { agentId: 'agent-1', sessionId: 'S1' } })
+    expect(reloaded.list()).toHaveLength(1)
+    expect(reloaded.resolve('S1')?.agentId).toBe('agent-1')
+    expect(reloaded.setSubscriptionSession('agent-1', null)).toBe(true)
+    expect(reloaded.byAgent('agent-1')?.subscriptionSessionId).toBeUndefined()
+  })
+
   it('fills an old supported session role once and persists it through reload', async () => {
     const { registry } = await loadRegistryModule(); registry.load()
     const pending = registry.openPendingAgent({ engine: 'claude', cwd: dataDir, runtimes: [{ backend: 'tmux', paneId: '%21' }] })!

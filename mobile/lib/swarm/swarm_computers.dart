@@ -4,10 +4,13 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
 import '../core/models.dart';
+import '../phone/agent_index.dart';
+import '../phone/agents_list_page.dart';
 import '../phone/phone_navigation.dart';
 import '../phone/phone_status.dart';
 import '../phone/welcome/your_computer.dart';
 import '../state/app_state.dart';
+import 'swarm_agents.dart';
 import 'swarm_chat_agents.dart';
 import 'swarm_start.dart';
 
@@ -22,7 +25,7 @@ import 'swarm_start.dart';
 ///
 /// It also lists the sessions running on them, for Add agent ([running]).
 class AppSwarmComputers extends ChangeNotifier
-    implements SwarmComputers, SwarmRunningSessions {
+    implements SwarmComputers, SwarmAgentsSource, SwarmRunningSessions {
   AppSwarmComputers(this.notifier) {
     notifier.addListener(_changed);
     _changed();
@@ -113,6 +116,74 @@ class AppSwarmComputers extends ChangeNotifier
     Navigator.of(context)
         .push(phoneRoute((_) => YourComputerPage(notifier: notifier))),
   );
+
+  /// The harnesses on them, told of on their own: a change there is no
+  /// computer coming or going for Swarm's reads.
+  @override
+  late final AppSwarmAgents agents = AppSwarmAgents(notifier);
+
+  @override
+  void dispose() {
+    notifier.removeListener(_changed);
+    agents.dispose();
+    super.dispose();
+  }
+}
+
+/// The app's harnesses for Swarm ([SwarmAgents]), from [agentIndex]: told of
+/// when how many work or wait — Search's dots — or the list itself, changes.
+class AppSwarmAgents extends ChangeNotifier implements SwarmAgents {
+  AppSwarmAgents(this.notifier) {
+    notifier.addListener(_changed);
+    _changed();
+  }
+
+  final AppNotifier notifier;
+  int? _working, _waiting;
+  List<AgentEntry>? _index;
+
+  @override
+  int? get working => _working;
+
+  @override
+  List<SwarmAgentRef> get agents => [
+    for (final entry in visibleAgents(agentIndex(notifier)))
+      if (entry.isOpenable)
+        (
+          machineId: entry.machineId,
+          agentId: entry.agent.id,
+          name: entry.agent.displayName,
+          machine: entry.machineName,
+          engine: entry.agent.engineDisplayName ?? entry.agent.engine,
+          working: entry.isWorking,
+          waiting: entry.isWaiting,
+        ),
+  ];
+
+  void _changed() {
+    final index = notifier.machinesAnswered ? agentIndex(notifier) : null;
+    final working = index?.where((entry) => entry.isWorking).length;
+    final waiting = index?.where((entry) => entry.isWaiting).length;
+    if (working == _working &&
+        waiting == _waiting &&
+        identical(index, _index)) {
+      return;
+    }
+    _working = working;
+    _waiting = waiting;
+    _index = index;
+    notifyListeners();
+  }
+
+  @override
+  void openList(BuildContext context) => unawaited(
+    Navigator.of(context)
+        .push(phoneRoute((_) => AgentsListPage(notifier: notifier))),
+  );
+
+  @override
+  void open(BuildContext context, SwarmAgentRef agent) =>
+      openAgent(context, notifier, agent.machineId, agent.agentId);
 
   @override
   void dispose() {

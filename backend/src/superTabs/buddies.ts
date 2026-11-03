@@ -101,7 +101,7 @@ const BUDDY_RESERVED: ReadonlySet<string> = new Set(['reviewer', 'admin', 'admin
 /** A name as names are compared: NFKC, lowercased. Look-alike letters of other scripts are out of scope (review of #2094). */
 const nameKey = (name: string): string => name.normalize('NFKC').toLowerCase()
 /** Whether [name] is a reserved one, numbered too ("Reviewer 2", "system-3"), as the role check reads "Lead 2". */
-const reserved = (name: string): boolean => BUDDY_RESERVED.has(nameKey(name).replace(/[\s#-]+\d+$/, ''))
+export const reserved = (name: string): boolean => BUDDY_RESERVED.has(nameKey(name).replace(/[\s#-]+\d+$/, ''))
 
 /** A name chosen in a Buddy chat, as the store reads every Buddy chat's, quiet ones included (store.ts buddyNames). */
 export interface ChosenBuddyName { conversationId: string; name: string }
@@ -174,7 +174,7 @@ export const buddyReady = (name: string): string => `${name} is ready. Tell it w
  *  model, a terminal alert, its own stop). Every other command is refused, so it can never assign, start, route, ask
  *  decisions or change anything for its owner (spec constraint: PRIVACY-CRITICAL). */
 const BUDDY_COMMANDS: ReadonlySet<string> = new Set(['message.send', 'message.react', 'buddy.propose', 'agent.configuration', 'agent.alert',
-  'agent.stopLease', 'agent.stopRefused', 'agent.remove'])
+  'agent.stopLease', 'agent.stopRefused', 'agent.remove', 'buddy.modelResult'])
 
 export function requireBuddyCommand(buddy: Agent, command: { type: string; conversationId?: unknown; agentId?: unknown }, groups: readonly Conversation[]): void {
   if (!BUDDY_COMMANDS.has(command.type)) fail('BUDDY_FORBIDDEN', 'A Buddy only talks with its owner and sends the proposals they ask for.', 403)
@@ -202,6 +202,13 @@ export const proposalSentText = (project: string, proposal: { goal: string; scop
   `Your Buddy sent this to the ${project} PM for you.\n\nGoal: ${proposal.goal}\nScope: ${proposal.scope}`
 
 /** Written by the server, never the Buddy: who it is for and on whose behalf, then the three parts the PM needs. */
-export function proposalText(owner: string, proposal: { goal: string; scope: string; priority: string }): string {
-  return `Proposal from ${owner}'s Buddy, on ${owner}'s behalf.\n\nGoal: ${proposal.goal}\nScope: ${proposal.scope}\nPriority: ${proposal.priority}`
+/** A proposal's first reply in its thread, from the Buddy: its author says whose Buddy sent it. */
+export function proposalText(proposal: { goal: string; scope: string; priority: string }): string {
+  return `Goal: ${proposal.goal}\nScope: ${proposal.scope}\nPriority: ${proposal.priority}`
+}
+
+/** A short opening message, with the complete goal kept in its thread. */
+export function proposalTitle(proposal: { title?: string; goal: string }): string {
+  const goal = proposal.goal.replace(/^Requested by [^\r\n]+?\.(?:\s+|$)/i, '').trim() || proposal.goal.trim()
+  return (proposal.title?.trim() || (goal.match(/^[^.!?。！？\r\n]+[.!?。！？]?/)?.[0] || goal).replace(/[.。]$/, '')).slice(0, 80).trim()
 }

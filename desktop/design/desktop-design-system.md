@@ -244,6 +244,8 @@ dots remain solid at their intended size; color is accompanied by status text.
 | Standard / compact control minimum height | 32 / 28 |
 | Standard field minimum height | 36 |
 | Inline icon / search identity mark | 16 / 28 |
+| Chat and thread message avatar (rounded square) / corner | 36 / 8 |
+| Above a new sender in the chat / above its name | 16 / 8 (group / control gap) |
 | Small form / destination chooser width | 460 |
 | Creation composer maximum width | 680 |
 | Search maximum width / height | 1120 / 680 |
