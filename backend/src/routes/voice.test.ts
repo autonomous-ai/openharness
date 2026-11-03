@@ -102,8 +102,8 @@ const MAX: PlanRow = { id: 'plan-max', autonomousEnv: 'prod', isDefault: false, 
 
 const BYTES_PER_SECOND = 16_000 * 2 // 16 kHz, mono, 16-bit: what the phone and the dial record
 
-/** A WAV of [seconds] of silence, its header stating [sampleRate] (16 kHz mono 16-bit unless forged). */
-function wav(seconds: number, sampleRate = 16_000): Buffer {
+/** A WAV of [seconds] of silence, its header stating [sampleRate] and [format] (16 kHz PCM unless forged). */
+function wav(seconds: number, sampleRate = 16_000, format = 1): Buffer {
   const data = Math.round(seconds * BYTES_PER_SECOND)
   const out = Buffer.alloc(44 + data)
   out.write('RIFF', 0, 'ascii')
@@ -111,7 +111,7 @@ function wav(seconds: number, sampleRate = 16_000): Buffer {
   out.write('WAVE', 8, 'ascii')
   out.write('fmt ', 12, 'ascii')
   out.writeUInt32LE(16, 16)
-  out.writeUInt16LE(1, 20) // PCM
+  out.writeUInt16LE(format, 20) // 1 = PCM
   out.writeUInt16LE(1, 22) // mono
   out.writeUInt32LE(sampleRate, 24)
   out.writeUInt32LE((sampleRate * 2) >>> 0, 28)
@@ -122,10 +122,10 @@ function wav(seconds: number, sampleRate = 16_000): Buffer {
   return out
 }
 
-function multipart(file: Buffer): { payload: Buffer; headers: Record<string, string> } {
+function multipart(file: Buffer, contentType = 'audio/wav'): { payload: Buffer; headers: Record<string, string> } {
   const boundary = 'harness-test-boundary'
   const payload = Buffer.concat([
-    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="voice.wav"\r\nContent-Type: audio/wav\r\n\r\n`),
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="voice.wav"\r\nContent-Type: ${contentType}\r\n\r\n`),
     file,
     Buffer.from(`\r\n--${boundary}--\r\n`),
   ])
@@ -141,8 +141,8 @@ async function build(): Promise<FastifyInstance> {
   return app
 }
 
-const send = (app: FastifyInstance, file: Buffer, user = 'user-1') => {
-  const { payload, headers } = multipart(file)
+const send = (app: FastifyInstance, file: Buffer, user = 'user-1', contentType = 'audio/wav') => {
+  const { payload, headers } = multipart(file, contentType)
   return app.inject({
     method: 'POST',
     url: `${VOICE_STT_PATH}?lang=en`,
@@ -254,11 +254,30 @@ describe('POST /api/voice/stt', () => {
       expect((await send(app, wav(20))).statusCode).toBe(429)
     })
 
-    it('charges by the audio, not by a header that claims an absurd sample rate', async () => {
-      // 600 s of 16 kHz audio whose header claims 4 GHz would read as ~0 s; it is charged as 16 kHz.
-      expect((await send(app, wav(590, 0xffff_fff0))).statusCode).toBe(200)
-      expect(usedSeconds('user-1')).toBeGreaterThanOrEqual(590)
-      expect((await send(app, wav(20))).statusCode).toBe(429)
+    it('refuses a header that claims an absurd sample rate, which would read a long clip as no time', async () => {
+      const res = await send(app, wav(590, 0xffff_fff0))
+      expect(res.statusCode).toBe(415)
+      expect(transcribeWavWithDeepgram).not.toHaveBeenCalled()
+      expect(usedSeconds('user-1')).toBe(0)
+    })
+
+    it('refuses compressed audio, whose bytes say nothing of its length, before Deepgram', async () => {
+      // An MP3 or Opus file is many times longer than its bytes at 16 kHz PCM: charging it as PCM lets a
+      // Free account transcribe hours a day. The phone and the dial send 16 kHz PCM WAV only.
+      const mp3 = Buffer.concat([Buffer.from('ID3\x04\x00\x00\x00\x00\x00\x00', 'binary'), Buffer.alloc(64_000, 0xff)])
+      const notWav = await send(app, mp3, 'user-1', 'audio/mpeg')
+      expect(notWav.statusCode).toBe(415)
+      expect(notWav.json().error.code).toBe('UNSUPPORTED_AUDIO')
+      const mp3InWav = await send(app, wav(5, 16_000, 0x55))
+      expect(mp3InWav.statusCode).toBe(415)
+      expect(transcribeWavWithDeepgram).not.toHaveBeenCalled()
+      expect(usedSeconds('user-1')).toBe(0)
+      expect(voiceInflightBytes()).toBe(0)
+    })
+
+    it('sends Deepgram the audio as WAV, whatever type the caller named', async () => {
+      expect((await send(app, wav(2), 'user-1', 'audio/ogg')).statusCode).toBe(200)
+      expect(transcribeWavWithDeepgram).toHaveBeenCalledWith(expect.any(Buffer), 'audio/wav', 'en')
     })
 
     it('gives the seconds back when Deepgram fails', async () => {
