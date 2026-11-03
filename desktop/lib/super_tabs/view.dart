@@ -287,7 +287,12 @@ class _SuperTabViewState extends State<SuperTabView>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _readVisibleTailAfterFrame();
+    if (state == AppLifecycleState.resumed) {
+      _readVisibleTailAfterFrame();
+    } else {
+      // No frame follows: the poll goes on in the background.
+      _syncThreadPane();
+    }
   }
 
   @override
@@ -313,6 +318,7 @@ class _SuperTabViewState extends State<SuperTabView>
     if (oldWidget.controller != c) {
       _board.dispose();
       _board = SuperTabProjectBoard(c);
+      oldWidget.controller.threadPaneHidden();
       oldWidget.controller.removeListener(_changed);
       if (oldWidget.controller.buddyChatOpener == _openBuddyChat) {
         oldWidget.controller.buddyChatOpener = null;
@@ -510,16 +516,28 @@ class _SuperTabViewState extends State<SuperTabView>
     final sequence = c.messages(id).lastOrNull?.sequence ?? 0;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && !_jumpingToEnd) _readToEnd(id, sequence);
-      // A thread restored open counts as read only once its pane is seen.
-      if (mounted &&
-          c.openedThread?.conversationId == c.selectedId &&
-          _viewIsVisible) {
-        c.threadPaneShown();
-      }
     });
+    _syncThreadPane();
     // Widget updates already have a frame in progress. Reuse it so routine
     // polling does not request an otherwise unnecessary frame after each build.
     WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  /// Whether the open thread's pane is on screen: beside its conversation's
+  /// chat, in a view a person can see.
+  bool get _threadPaneVisible =>
+      c.openedThread?.conversationId == c.selectedId && _viewIsVisible;
+
+  /// Tells the controller whether the open thread's pane is on screen, by the
+  /// rule the chat reads by: hidden at once, so a poll landing while it is
+  /// away marks no reply read; shown after the frame that draws it, which
+  /// marks through its newest reply.
+  void _syncThreadPane() {
+    if (c.openedThread == null) return;
+    if (!_threadPaneVisible) return c.threadPaneHidden();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _threadPaneVisible) c.threadPaneShown();
+    });
   }
 
   void _readToEnd(String id, int sequence) {
@@ -780,6 +798,8 @@ class _SuperTabViewState extends State<SuperTabView>
   @override
   void dispose() {
     _noticesLeave(c);
+    // The controller outlives its view, reading another Swarm's replies.
+    c.threadPaneHidden();
     WidgetsBinding.instance.removeObserver(this);
     _board.dispose();
     _facts.dispose();
@@ -4298,10 +4318,13 @@ class _SuperTabViewState extends State<SuperTabView>
   // Every message's files ask this Swarm's controller for fresh links; another
   // Swarm or account is another source, so a late answer is dropped.
   @override
-  Widget build(BuildContext context) => SuperTabFiles(
-    fresh: widget.controller.readFileLink,
-    child: _swarm(context),
-  );
+  Widget build(BuildContext context) {
+    _syncThreadPane();
+    return SuperTabFiles(
+      fresh: widget.controller.readFileLink,
+      child: _swarm(context),
+    );
+  }
 
   Widget _swarm(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
