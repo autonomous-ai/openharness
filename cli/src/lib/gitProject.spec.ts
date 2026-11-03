@@ -544,7 +544,8 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
       // The branch, without its files: what a fetch with no file contents leaves.
       await inClone('fetch', '--quiet', '--no-tags', 'origin', '+refs/heads/main:refs/remotes/origin/main')
       await rm(contacts, { force: true })
-      await expect(offlineStart('super-tab/start-1')).rejects.toThrow()
+      // The start says what is wrong: the branch's files are not here, not Git or folder permissions.
+      await expect(offlineStart('super-tab/start-1')).rejects.toThrow("This branch's files could not be fetched for the start. Check the connection, then retry.")
       expect(await readFile(contacts, 'utf8').catch(() => '')).toBe('')
     })
 
