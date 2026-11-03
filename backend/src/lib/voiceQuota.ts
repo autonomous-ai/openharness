@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client'
 import { machineAlive, prisma } from './prisma.js'
+import { machineBillingAllowsDataPlane } from './billingState.js'
 import { logger } from '../utils/logger.js'
 
 const PENDING_RESERVATION_MS = 20 * 60_000
@@ -84,17 +85,18 @@ const FALLBACK_USER_LIMIT_SECONDS = 10 * 60
 
 /**
  * An account's daily voice seconds: the most generous plan among its live machines (0, unlimited, beats
- * any number), else its environment's default plan. A machine whose checkout never completed grants
- * nothing, or opening a Pro checkout would buy Pro voice. Unlike a device, an account with no plan to
+ * any number), else its environment's default plan. Only a machine whose billing lets it run grants its
+ * plan (the rule every data-plane path applies): a checkout that never completed would buy Pro voice by
+ * opening it, and a lapsed Max subscription would keep unlimited voice. Unlike a device, an account with no plan to
  * read is never unlimited: it is any signed-in account, so it falls back to the Free allowance.
  */
 async function limitForUser(userId: string, autonomousEnv: string, db: DbClient = prisma): Promise<number> {
   const machines = await db.machine.findMany({
     where: { userId, ...machineAlive },
-    select: { planId: true, billingStatus: true, billingActivatedAt: true },
+    select: { planId: true, billingStatus: true, authMode: true },
   })
   const planIds = [...new Set(machines
-    .filter((m) => m.planId && (m.billingStatus !== 'pending' || m.billingActivatedAt))
+    .filter((m) => m.planId && machineBillingAllowsDataPlane(m))
     .map((m) => m.planId as string))]
   // By id, one read each: an account has a machine or a few, and an `in` filter is sent as $expr.
   const plans = await Promise.all(planIds.map((id) =>
