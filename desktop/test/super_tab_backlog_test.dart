@@ -434,9 +434,8 @@ void main() {
         '(#2794)', (tester) async {
       final server = swarm();
       (server.state['people'] as List).cast<Map>().firstWhere(
-            (p) => p['id'] == 'pilot',
-          )['name'] =
-          'Pilot Pham';
+        (p) => p['id'] == 'pilot',
+      )['name'] = 'Pilot Pham';
       await show(tester, server);
       expect(rowText(tester, 'asking'), contains('api · Pilot Pham'));
       expect(rowText(tester, 'asking'), contains('Waiting on Pilot Pham'));
