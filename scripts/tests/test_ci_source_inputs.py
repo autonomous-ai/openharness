@@ -82,6 +82,33 @@ class SourceInputTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "clean"):
             inputs.verify_checkout(self.root, "process")
 
+    def test_every_git_call_waits_long_enough_for_a_fresh_runners_index_refresh(self):
+        # A fresh CI runner's first git status refreshes the whole index and has
+        # taken over 15 seconds on this repository (#2848, #2860).
+        self.sparse(inputs.ci.SOURCE_INPUTS["process"])
+        real, timeouts = subprocess.check_output, []
+        def recording(cmd, *args, **kwargs):
+            if cmd[0] == "git":
+                timeouts.append((cmd[1], kwargs.get("timeout")))
+            return real(cmd, *args, **kwargs)
+        with mock.patch.object(inputs.subprocess, "check_output", side_effect=recording):
+            inputs.verify_checkout(self.root, "process")
+        self.assertIn("status", [name for name, _ in timeouts])
+        for name, timeout in timeouts:
+            self.assertIsNotNone(timeout, name)
+            self.assertGreaterEqual(timeout, 120, name)
+
+    def test_a_hung_git_still_fails_the_check(self):
+        self.sparse(inputs.ci.SOURCE_INPUTS["process"])
+        real = subprocess.check_output
+        def hung_status(cmd, *args, **kwargs):
+            if cmd[:2] == ["git", "status"]:
+                raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+            return real(cmd, *args, **kwargs)
+        with mock.patch.object(inputs.subprocess, "check_output", side_effect=hung_status):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                inputs.verify_checkout(self.root, "process")
+
     def test_capture_binds_git_objects_to_the_real_source_run_and_attempt(self):
         self.sparse(inputs.ci.SOURCE_INPUTS["process"])
         with mock.patch.dict(os.environ, GITHUB_SHA=self.sha, CI_SOURCE_SHA=self.sha,
