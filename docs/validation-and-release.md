@@ -35,7 +35,7 @@ PR CI is deliberately fast. Each changed component runs only its own Linux suite
 | `desktop/` | `desktop-tests` (VM suite, four Linux shards) | 5–7 min |
 | `tui/`, `term/` (the TUI builds on it) | `tui-test` (`cargo test`) | a few minutes |
 | `pty/`, `term/`, `tui/vendor/`, the CLI's ptyhost backend (`cli/src/lib/ptyHost/`, `ptyHostBackend*`, `terminalBackend.contract.ts`) | `pty-checks` (`cargo test` for `term` and `pty`, then the ptyhost terminal contract against the built host) | a few minutes |
-| `backend/` | `backend-desk` (the backend unit suite, `npm test` in `backend/`) | about 1–2 min |
+| `backend/` | `backend-desk` (the backend unit suite, `npm test` in `backend/`) and `backend-integration` (the Super Tab integration suite, `npm run test:super-tabs`, four shards) | unit about 1–2 min; integration MEASURE |
 | `companions/`, `website/`, `os/`, `provider/`, `mobile/`, `daemons/` | that component's one check | 1–4 min |
 | `devices/` | `firmware-checks` | 1–2 min |
 | `devices/harness-pro/` | also `pro-firmware-build` (ESP-IDF v5.5.4 build of `harness_pro.bin`, which must fit `ota_0`) and `pro-golden` (`test/golden.sh --check` with Liberation Sans, on macOS arm64 where the baseline is recorded: float maths in the code-drawn shapes differs on Linux x86-64) | build ~4 min, golden ~1 min |
@@ -136,6 +136,18 @@ runs the same fast jobs as PR CI.
 `desktop-tests` uses the release's pinned Flutter SDK and shared dependency caches.
 Each shard has four test workers and the bounded runner's ten-minute budget. Logs
 and receipts are retained for seven days.
+
+`backend-integration` runs the backend's Super Tab integration suite (`backend/integration/`,
+`vitest.super-tabs.config.ts`) on four Linux runners. It replaces the full local run every
+backend pull request needed before Ready: CI's run is that evidence, so nobody waits on a
+per-Mac lock for it. Each integration file starts its own MongoDB replica set through
+`mongodb-memory-server-core` (the job caches the downloaded `mongod`), so the shards share no
+database; the suite opens no Redis. `vitest.super-tabs.ci.config.ts` spreads files over the
+shards by `integration/ci-durations.json`, longest first onto the least-loaded shard, as the
+CLI does below; new files get the default cost and the discovered file list stays
+authoritative. Each shard uploads its per-file JSON results (`backend-integration-N`) for
+refreshing the hints. Reproduce one shard locally with `npx vitest run --config
+vitest.super-tabs.ci.config.ts --shard=N/4` in `backend/`.
 
 CLI's default Vitest suite runs as four file shards on separate runners, retaining
 its worker cap and isolation. Shard reports and inventories are retained as
