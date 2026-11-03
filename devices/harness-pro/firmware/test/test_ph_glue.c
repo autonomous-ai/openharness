@@ -2083,7 +2083,6 @@ static void lead_talk(void) {
     swarm_home(4);
     pod_swarm_t *sw = (pod_swarm_t *)pod_model_swarm(&U.model, "sw1");
     snprintf(sw->leads[1].local, ID_MAX, "a1");   // Alpha is this Lead's harness
-    snprintf(sw->leads[2].local, ID_MAX, "nobody");   // a harness the roster does not hold: nothing to talk to
     tap_lead(1, 3000);
     CHECK(!strcmp(top()->agent, "a1") && take() == 3);
     render(3500);
@@ -2100,7 +2099,7 @@ static void lead_talk(void) {
     pod_nav_act(&U.nav, &U.model, POD_A_NEXT, 0, 6100);
     CHECK(top()->view == POD_V_TALK && top()->lead == 1);
     pod_ui_talk_over(&U);
-    // a remote Lead, or one whose harness is not on the roster, has no talk control
+    // a remote Lead (no local harness, no swarm.remote) has no talk control; one whose local harness is off the roster does: see local_lead_not_in_roster_talks_with_local
     swipe(600, 400, 200, 410, 7000);
     CHECK(top()->lead == 2 && !top()->agent[0]);
     render(7500);
@@ -2323,7 +2322,7 @@ static void pill_tap_sends_side(void) {
     o = tap_(285, 38, 5000);   // PM
     CHECK(o.fx == POD_FX_NONE && take() == 1 && !strcmp(Q[0].t, "supertab.side") && !strcmp(Q[0].side, "pm"));
 }
-static void pill_tap_never_talks(void) {   // the PM segment: a Buddy press shows the Buddy side, where nothing talks (buddy_screen_never_talks)
+static void pill_tap_never_talks(void) {   // the PM segment, as in part 2 (where a Buddy press shows the Buddy side, which did not talk)
     buddy_lead_open();
     t_(true, 285, 38, 4000);
     CHECK(!U.talk_armed);
@@ -2341,6 +2340,144 @@ static void pill_tap_never_talks(void) {   // the PM segment: a Buddy press show
     take();
     o = tap_(MID_X, MID_Y, 6000);
     CHECK(o.fx == POD_FX_VOICE_BEGIN && !strcmp(o.agent, "a1"));
+}
+// ---- Talk to a remote Lead and to the Buddy (swarm.remote): voice.begin carries the Lead's id, the talk view signs the Buddy ----
+static int talk_bars(void) { int n = 0; for (int i = 0; i < S.count; i++) n += S.runs[i].pro_kind == 4 && S.runs[i].w == 9 && S.runs[i].fg == ht_rgb(0x00FF2F); return n; }
+static bool talk_text(const char *t, unsigned rgb) {
+    for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == 1 && !strcmp(S.runs[i].text, t) && (!rgb || S.runs[i].fg == ht_rgb(rgb))) return true;
+    return false;
+}
+static void remote_lead_talks_with_swarm_remote(void) {
+    swarm_home(4);
+    pod_ui_set_swarm_remote(&U, true);
+    tap_lead(2, 3000);   // l2 has no local harness
+    take();
+    render(3300);
+    CHECK(!top()->agent[0]);
+    pod_out_t o = tap_(MID_X, MID_Y, 4000);
+    CHECK(o.fx == POD_FX_VOICE_BEGIN && !strcmp(o.agent, "l2") && top()->view == POD_V_TALK && pod_ui_talking(&U));
+    render(4500);
+    CHECK(talk_text("Lead", 0));   // no roster agent, but the voice view still draws: the Lead's name, as its who row
+    o = tap_(MID_X, MID_Y, 5000);
+    CHECK(o.fx == POD_FX_VOICE_END && top()->view == POD_V_TALK);
+    // swarm_talk_ends_on_transcript: words for a Swarm face go to its chat, not a terminal turn: the daemon's
+    // transcript ends the voice screen at once (pro_app_voice_result), as on the round, instead of 30 s of "sending"
+    CHECK(pod_ui_talking_to_swarm(&U));
+    pod_ui_talk_over(&U);
+    CHECK(top()->view == POD_V_LEAD && !pod_ui_talking_to_swarm(&U));
+    // the link going down takes the feature with it
+    pod_ui_link(&U, false);
+    CHECK(!U.swarm_remote);
+}
+static void remote_lead_no_talk_without_feature(void) {
+    swarm_home(4);
+    tap_lead(2, 3000);
+    take();
+    render(3300);
+    CHECK(tap_(MID_X, MID_Y, 4000).fx == POD_FX_NONE && top()->view == POD_V_LEAD && !U.talk_armed);
+    pod_ui_set_swarm_remote(&U, true);
+    pod_ui_set_swarm_remote(&U, false);
+    CHECK(tap_(MID_X, MID_Y, 5000).fx == POD_FX_NONE && top()->view == POD_V_LEAD);
+}
+static void buddy_screen_talks_with_lead_id(void) {
+    buddy_lead_open();   // l1: local a1
+    buddy_swarm()->leads[1].chat = POD_CHAT_BUDDY;
+    buddy_swarm()->leads[2].chat = POD_CHAT_BUDDY;
+    render(3500);
+    pod_out_t o = tap_(MID_X, MID_Y, 4000);
+    CHECK(o.fx == POD_FX_VOICE_BEGIN && !strcmp(o.agent, "a1"));   // the same id as the PM side: the daemon picks the Buddy chat from the side it holds
+    CHECK(pod_ui_talking_to_swarm(&U));   // a local Lead's face too: the Buddy's chat, never a1's terminal turn
+    pod_ui_talk_over(&U);
+    buddy_swarm()->leads[1].chat = POD_CHAT_PM;
+    render(4500);
+    o = tap_(MID_X, MID_Y, 5000);
+    CHECK(o.fx == POD_FX_VOICE_BEGIN && !strcmp(o.agent, "a1"));
+    pod_ui_talk_over(&U);
+    // a remote Lead on its Buddy side: its own id
+    pod_ui_set_swarm_remote(&U, true);
+    pod_nav_act(&U.nav, &U.model, POD_A_NEXT, 0, 6000);
+    take();
+    CHECK(top()->lead == 2);
+    render(6500);
+    o = tap_(MID_X, MID_Y, 7000);
+    CHECK(o.fx == POD_FX_VOICE_BEGIN && !strcmp(o.agent, "l2"));
+}
+static void buddy_talk_uses_buddy_engine_pet(void) {
+    buddy_lead_open();   // the Lead is claude (a pet); give the Buddy an engine without one
+    pod_lead_t *l = &buddy_swarm()->leads[1];
+    snprintf(l->engine, sizeof l->engine, "claude");
+    snprintf(l->buddy.engine, sizeof l->buddy.engine, "cursor");
+    l->chat = POD_CHAT_PM;
+    render(3500);
+    CHECK(tap_(MID_X, MID_Y, 4000).fx == POD_FX_VOICE_BEGIN);
+    render(4500);
+    CHECK(talk_bars() == 0);   // the Lead's own pet
+    pod_ui_talk_over(&U);
+    l->chat = POD_CHAT_BUDDY;
+    render(5000);
+    CHECK(tap_(MID_X, MID_Y, 5500).fx == POD_FX_VOICE_BEGIN);
+    render(6500);
+    CHECK(talk_bars() == 7);   // the Buddy's engine has no pet: the round's effect
+    CHECK(pod_view_next_ms(&U.nav, &U.model, 6500) == 80 - 6500 % 80);
+}
+static void buddy_talk_names_buddy(void) {
+    buddy_lead_open();
+    pod_lead_t *l = &buddy_swarm()->leads[1];
+    l->chat = POD_CHAT_BUDDY;
+    render(3500);
+    CHECK(tap_(MID_X, MID_Y, 4000).fx == POD_FX_VOICE_BEGIN);
+    render(4500);
+    CHECK(talk_text("Mira", 0xC49BFF) && !talk_text("Alpha", 0));
+    pod_ui_talk_over(&U);
+    l->chat = POD_CHAT_PM;
+    render(5000);
+    CHECK(tap_(MID_X, MID_Y, 5500).fx == POD_FX_VOICE_BEGIN);
+    render(6500);
+    CHECK(talk_text("Alpha", PH_ROOM_INK) && !talk_text("Mira", 0));   // the PM side: the agent, as today
+}
+static void talk_name_pinned_at_begin(void) {
+    buddy_lead_open();
+    pod_lead_t *l = &buddy_swarm()->leads[1];
+    l->chat = POD_CHAT_BUDDY;
+    render(3500);
+    CHECK(tap_(MID_X, MID_Y, 4000).fx == POD_FX_VOICE_BEGIN);
+    l->chat = POD_CHAT_PM;   // a desktop side flip mid-recording: the daemon posts to the face it pinned at voice.begin
+    render(4500);
+    CHECK(talk_text("Mira", 0xC49BFF) && !talk_text("Alpha", 0) && !talk_text("Lead", 0));
+    pod_ui_talk_over(&U);
+    render(5000);
+    CHECK(tap_(MID_X, MID_Y, 5500).fx == POD_FX_VOICE_BEGIN);   // PM side now: the next talk pins the agent
+    l->chat = POD_CHAT_BUDDY;
+    render(6500);
+    CHECK(talk_text("Alpha", PH_ROOM_INK) && !talk_text("Mira", 0));
+}
+static void local_lead_not_in_roster_talks_with_local(void) {
+    swarm_home(4);
+    snprintf(buddy_swarm()->leads[2].local, ID_MAX, "zz");   // a harness the Pro's agent list does not hold
+    pod_ui_set_swarm_remote(&U, true);
+    tap_lead(2, 3000);
+    take();
+    render(3300);
+    pod_out_t o = tap_(MID_X, MID_Y, 4000);
+    CHECK(o.fx == POD_FX_VOICE_BEGIN && !strcmp(o.agent, "zz"));   // the round's rule: `local` whenever set, so the daemon pins the face
+    render(4500);
+    CHECK(talk_text("Lead", 0));
+    pod_ui_talk_over(&U);
+    pod_ui_set_swarm_remote(&U, false);   // and without swarm.remote it still talks with its local id
+    render(5000);
+    CHECK(tap_(MID_X, MID_Y, 5500).fx == POD_FX_VOICE_BEGIN);
+}
+static void buddy_talk_not_blocked_by_question(void) {
+    buddy_lead_open();   // l1: local a1
+    pod_model_question(&U.model, "a1", "Proceed?");   // the terminal's question: words for a Swarm face go to its chat
+    CHECK(pod_model_eff(&U.model, pod_model_find(&U.model, "a1")) == POD_ASKING);
+    buddy_swarm()->leads[1].chat = POD_CHAT_BUDDY;
+    render(3500);
+    CHECK(tap_(MID_X, MID_Y, 4000).fx == POD_FX_VOICE_BEGIN);
+    pod_ui_talk_over(&U);
+    buddy_swarm()->leads[1].chat = POD_CHAT_PM;
+    render(4500);
+    CHECK(tap_(MID_X, MID_Y, 5000).fx == POD_FX_VOICE_BEGIN);
 }
 static void pill_pressed_until_frame(void) {
     buddy_lead_open();
@@ -2441,29 +2578,23 @@ static void nobuddy_screen_never_talks(void) {
     o = tap_(MID_X, MID_Y, 7000);
     CHECK(o.fx == POD_FX_VOICE_BEGIN && !strcmp(o.agent, "a1"));
 }
-// Review of #2299 (Heron): with a real Buddy on the face, a tap started voice for the Lead's harness, and a Pro's words post in the
-// Lead conversation, the shared chat, while the screen shows the person's private Buddy. Until voice comes to the face chat (part 3),
-// nothing on the Buddy side, or with the Buddy chat as the Lead's face, talks.
-static void buddy_screen_never_talks(void) {
+// Review of #2299 (Heron): part 2 kept the Buddy screen from talking, since a Pro's words posted in the Lead's shared chat. In this part the
+// Lead view's talk is a Swarm talk: voice.begin says face (pro_app) and the daemon posts in the face chat the side holds, the Buddy chat here.
+static void buddy_screen_talks_to_its_chat(void) {
     pod_out_t o;
     buddy_lead_open();
     buddy_swarm()->side = POD_SIDE_BUDDY;   // the Buddy side, with a Buddy: avatar and lilac name
     render(3400);
     take();
-    t_(true, MID_X, MID_Y, 6000);
-    o = t_(false, MID_X, MID_Y, 6050);
-    CHECK(o.fx != POD_FX_VOICE_BEGIN && !U.talk_armed && !pod_ui_talking(&U));
-    buddy_swarm()->side = POD_SIDE_PM;      // the PM side, but the desktop has the Buddy chat open: that chat is the face
-    buddy_swarm()->leads[1].chat = POD_CHAT_BUDDY;
+    o = tap_(MID_X, MID_Y, 6000);
+    CHECK(o.fx == POD_FX_VOICE_BEGIN && !strcmp(o.agent, "a1") && pod_ui_talking_to_swarm(&U));   // a face talk, never the terminal's
+    pod_ui_talk_over(&U);
+    buddy_swarm()->side = POD_SIDE_PM;
+    buddy_swarm()->leads[1].chat = POD_CHAT_BUDDY;   // the desktop has the Buddy chat open: still a face talk
     render(6100);
     take();
     o = tap_(MID_X, MID_Y, 7000);
-    CHECK(o.fx != POD_FX_VOICE_BEGIN && !pod_ui_talking(&U));
-    buddy_swarm()->leads[1].chat = POD_CHAT_PM;   // the PM chat as the face: it talks
-    render(7100);
-    take();
-    o = tap_(MID_X, MID_Y, 8000);
-    CHECK(o.fx == POD_FX_VOICE_BEGIN && !strcmp(o.agent, "a1"));
+    CHECK(o.fx == POD_FX_VOICE_BEGIN && pod_ui_talking_to_swarm(&U));
 }
 // A tapped segment that no frame answers goes back to the Swarm's own side after POD_SUPERTAB_RETRY_MS, and the view wakes to draw it.
 static void pressed_side_expires(void) {
@@ -2510,13 +2641,21 @@ int main(void) {
     side_frame_queued();
     pill_tap_sends_side();
     pill_tap_never_talks();
+    remote_lead_talks_with_swarm_remote();
+    remote_lead_no_talk_without_feature();
+    buddy_screen_talks_with_lead_id();
+    buddy_talk_uses_buddy_engine_pet();
+    buddy_talk_names_buddy();
+    talk_name_pinned_at_begin();
+    local_lead_not_in_roster_talks_with_local();
+    buddy_talk_not_blocked_by_question();
     pill_pressed_until_frame();
     buddy_notice_sets_dot_only();
     opening_buddy_clears_dot();
     relink_clears_buddy_dot();
     side_kept_across_swipe();
     nobuddy_screen_never_talks();
-    buddy_screen_never_talks();
+    buddy_screen_talks_to_its_chat();
     pressed_side_expires();
     pressed_side_cleared_when_send_fails();
     buddy_dot_clears_when_buddy_face_shown();

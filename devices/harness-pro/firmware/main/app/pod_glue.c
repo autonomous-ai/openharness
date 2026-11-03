@@ -76,8 +76,11 @@ static pod_out_t synced(pod_ui_t *u)
     return o;
 }
 
+void pod_ui_set_swarm_remote(pod_ui_t *u, bool on) { u->swarm_remote = on; }
+
 pod_out_t pod_ui_link(pod_ui_t *u, bool up)
 {
+    if (!up) u->swarm_remote = false;   // the next welcome says again
     if (up && !u->model.linked) u->sweep.restart = true;
     if (!up) pod_ui_sweep_abort(u);
     if (!up || !u->model.linked) {   // the daemon forgets the open recap and any focus with its link: nothing queued or open carries over
@@ -287,19 +290,30 @@ static bool asks_here(const pod_model_t *m, const pod_agent_t *a)
     return pod_model_eff(m, a) == POD_ASKING && pod_model_attention(m, a) == POD_ATTN_NONE;
 }
 
+// The id a tap on this frame talks to: a Lead view's `local` harness whenever set (on the roster or not: the daemon pins the face by it, as on the round),
+// else its own Swarm id when the daemon routes it (swarm.remote); an agent's screen its harness (f->agent). Else NULL.
+static const char *talk_id(const pod_ui_t *u, const pod_frame_t *f)
+{
+    if (f->view != POD_V_LEAD) return f->agent[0] ? f->agent : NULL;
+    const pod_lead_t *l = pod_nav_lead(&u->nav, &u->model, NULL);
+    if (!l) return NULL;
+    return l->local[0] ? l->local : u->swarm_remote && f->lead_id[0] ? f->lead_id : NULL;
+}
+
 static const char *talk_target(const pod_ui_t *u)
 {
     const pod_frame_t *f = top(u);
     if (!f || u->ban_touch) return NULL;
     if (u->start_y < POD_BAR_H) return NULL;   // nothing in the top band talks
     if (u->hit_valid && (u->hit.action == POD_A_BACK || u->hit.action == POD_A_INBOX || u->hit.action == POD_A_SIDE)) return NULL;
-    const char *id = f->view == POD_V_AGENT || f->view == POD_V_RECAP || f->view == POD_V_LEAD ? f->agent : NULL;   // a Lead view's agent is its local harness (empty for a remote Lead: no talk)
-    const pod_agent_t *a = id ? pod_model_find(&u->model, id) : NULL;
-    if (f->view == POD_V_LEAD) {   // nothing on the Buddy side talks, nor a Lead whose face is the Buddy chat: a Pro's words post in the Lead's shared chat
-        const pod_swarm_t *sw = NULL;   // until voice comes to the face chat (Swarm parity part 3; review of #2299)
+    const char *id = f->view == POD_V_AGENT || f->view == POD_V_RECAP || f->view == POD_V_LEAD ? talk_id(u, f) : NULL;
+    if (!id) return NULL;
+    if (f->view == POD_V_LEAD) {   // words for a Swarm face go to its chat, not the terminal: a question there blocks nothing. The Buddy side of a Lead that has none says "No Buddy here yet": nothing there talks (the words would reach the Lead's shared chat)
+        const pod_swarm_t *sw = NULL;
         const pod_lead_t *l = pod_nav_lead(&u->nav, &u->model, &sw);
-        if (l && sw && (pod_model_side_shown(&u->model, sw) == POD_SIDE_BUDDY || l->chat == POD_CHAT_BUDDY)) return NULL;
+        return l && sw && pod_model_no_buddy(&u->model, sw, l) ? NULL : id;
     }
+    const pod_agent_t *a = pod_model_find(&u->model, id);
     return a && !asks_here(&u->model, a) ? id : NULL;
 }
 static bool wide(int dx, int dy) { return iabs(dx) * 2 > iabs(dy) * 3; }
@@ -354,17 +368,20 @@ static pod_out_t talk_fire(pod_ui_t *u, uint32_t now_ms)
     pod_out_t none;
     memset(&none, 0, sizeof none);
     const pod_frame_t *t = top(u);
-    if (!t || u->nav.depth != u->talk_depth || t->view != u->talk_view || strcmp(t->agent, u->talk_agent))
+    const char *now_id = t ? talk_id(u, t) : NULL;
+    if (!t || u->nav.depth != u->talk_depth || t->view != u->talk_view || !now_id || strcmp(now_id, u->talk_agent))
         return none;   // the screen or the agent changed under the finger since the DOWN: not this tap's any more
     char id[ID_MAX];
     pod_copy_str(id, sizeof id, u->talk_agent);
-    const pod_agent_t *ag = pod_model_find(&u->model, id);
-    if (!ag || asks_here(&u->model, ag)) return none;
-    if (ag->state == POD_OFFLINE) {
+    const bool lead = t->view == POD_V_LEAD;   // a Swarm face: its words go to its chat, so no machine's question or state gates them
+    const pod_agent_t *ag = lead ? NULL : pod_model_find(&u->model, id);
+    if (!lead && !ag) return none;
+    if (ag && asks_here(&u->model, ag)) return none;
+    if (ag && ag->state == POD_OFFLINE) {
         pod_ui_notice(u, "That machine is offline", now_ms);
         return none;
     }
-    pod_out_t o = pod_nav_act(&u->nav, &u->model, POD_A_TALK, 0, now_ms);
+    pod_out_t o = pod_nav_act(&u->nav, &u->model, POD_A_TALK, lead, now_ms);
     if (o.fx != POD_FX_VOICE_BEGIN) {
         u->dirty = true;
         return none;
@@ -698,6 +715,12 @@ bool pod_ui_talking(const pod_ui_t *u)
 {
     const pod_frame_t *f = top(u);
     return f && f->view == POD_V_TALK;
+}
+
+bool pod_ui_talking_to_swarm(const pod_ui_t *u)
+{
+    const pod_frame_t *f = top(u);
+    return f && f->view == POD_V_TALK && f->swarm[0];
 }
 
 void pod_ui_talk_over(pod_ui_t *u)

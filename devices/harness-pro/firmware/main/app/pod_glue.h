@@ -85,6 +85,7 @@ typedef struct {
     uint32_t down_ms;
     // Tap to talk: armed at a DOWN that may talk, fired by its lift if the finger stayed within POD_TAP_SLOP (pod_ui_touch, on the touch task).
     bool talk_armed, bar, edge;   // bar: the contact began in the top edge (y < POD_BAR_H) of a non-Talk screen: a swipe down opens the Inbox; edge: the contact began in the bottom zone (y >= POD_BOTTOM_Y) of a room or a recap: a swipe up goes Home, and it scrolls nothing
+    bool swarm_remote; // the daemon routes a voice turn named with a Lead's Swarm id (welcome `swarm.remote`): a remote Lead talks. Cleared with the link
     bool hands_free;   // a tap started a recording; the next new tap sends it (cleared by END, ABORT, talk_over)
     uint8_t talk_depth;
     pod_view_t talk_view;            // the screen (nav depth and view) and agent the tap was armed on: it fires only there
@@ -244,9 +245,13 @@ pod_out_t pod_ui_touch_cancel(pod_ui_t *);   // the contact is dropped; an open 
 
 // ---- voice and clock ---------------------------------------------------------------------------------------
 bool pod_ui_talking(const pod_ui_t *);
+// The welcome's `swarm.remote` (pro_app_features): a Lead with no harness here, or its Buddy, is talked to by the Lead's Swarm id. pod_ui_link(false) clears it.
+void pod_ui_set_swarm_remote(pod_ui_t *, bool on);
 // Leave a TALK frame whose recording is already over (refused start, link loss, the 600 s cap): back to the Agent
 // or Recap screen it came from, same stack, no effect to perform.
 void pod_ui_talk_over(pod_ui_t *);
+// TALK opened from a Lead view: the words go to that Swarm chat (the daemon's swarmSay), so no terminal turn follows to end "sending".
+bool pod_ui_talking_to_swarm(const pod_ui_t *);
 // SEND was tapped but the recorder had not started, so nothing is sent: forget the send (no send scene), say
 // "Not sent" for a moment. The frame is already back on the Agent screen.
 void pod_ui_unsend(pod_ui_t *, uint32_t now_ms);

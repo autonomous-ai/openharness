@@ -28,6 +28,7 @@ enum { PH_HOME_BG = 0x151413,
 void ph_working_mark_big(ht_scene_t *, int x, int y, uint32_t now_ms);
 // A title centred on x 360 at y 46 (ph_sb_26, PH_ROOM_INK), control characters as spaces, cut with an ellipsis at 640 px: the room's name, "Notices".
 void ph_title(ht_scene_t *, const char *);
+void ph_title_ink(ht_scene_t *, const char *, unsigned rgb);   // the same in another ink (the Buddy talk's lilac name)
 // Whether the agent has recap text (a non-empty line).
 bool ph_has_recap(const pod_agent_t *);
 // Text on one line, vertically centred on cy (the lowercase band), cut with an ellipsis at w px.

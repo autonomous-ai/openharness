@@ -33,7 +33,9 @@ bool pro_cable_supertab_side(const char *tab, const char *side);
 
 // Voice: begin sends voice.begin and remembers `upload_id` (<= 23 chars) to match the reply; pcm is a CABLE_TYPE_PCM
 // frame (16-bit mono); end finishes the recording (the reply arrives as pro_app_voice_result); abort/cancel discard it.
-bool pro_cable_voice_begin(const char *agent_id, const char *lang, int sample_rate, const char *upload_id);
+// face: spoken on a Lead view, which shows the face chat: the daemon posts the words there (Swarm parity, part 3). Else they go to the
+// Lead conversation or the harness, as before swarmChat (review of #2298).
+bool pro_cable_voice_begin(const char *agent_id, bool face, const char *lang, int sample_rate, const char *upload_id);
 bool pro_cable_voice_pcm(const uint8_t *pcm, size_t len);
 bool pro_cable_voice_end(const char *upload_id);
 bool pro_cable_voice_abort(const char *upload_id, const char *why);   // why may be NULL

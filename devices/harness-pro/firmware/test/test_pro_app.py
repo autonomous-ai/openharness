@@ -111,7 +111,7 @@ static struct {   // what the last contact (or call) made the app send
     bool abort_was_pending;
     char open_id[ID_MAX];
 } R;
-static struct { bool open, pending, waiting, hold_pending, refuse; int lost; char agent[ID_MAX]; } V;
+static struct { bool open, pending, waiting, hold_pending, refuse, face; int lost; char agent[ID_MAX]; } V;
 static struct { int n, offset[64]; uint32_t request[64]; bool ok, supported; } LIB = {.ok = true, .supported = true};
 static struct { int n; ht_scroll_phase_t phase[64]; int dy[64], v[64]; } SC;
 
@@ -138,7 +138,8 @@ bool pro_cable_library_supported(void) { return LIB.supported; }
 cable_link_stats_t cable_link_stats(void) { return (cable_link_stats_t){0}; }
 void pro_cable_counters(uint32_t *bad, uint32_t *unknown) { *bad = 0; *unknown = 0; }
 static bool GATE_IN_BEGIN;   // the race: an offer's gate lands while a voice start is between its gate check and its begin
-void pro_voice_begin(const char *agent) {
+void pro_voice_begin(const char *agent, bool face) {
+    V.face = face;
     CHECK(LOCK_DEPTH == 0);
     if (GATE_IN_BEGIN) (void)pro_app_begin_update_gate();
     R.begins++;
@@ -377,6 +378,23 @@ static const char *LONG_LEAD = "one two three four five six seven eight nine ten
 static int first_text_y(const char *word) {   // the y of the drawn run that starts with word, -1 when none is drawn
     for (int i = 0; i < S.count; i++) if (S.runs[i].text[0] && !strncmp(S.runs[i].text, word, strlen(word))) return S.runs[i].y;
     return -1;
+}
+// A tap on a Lead view talks to its face chat, and says so (Swarm parity part 3 on part 1's rule): without `face` the daemon posts
+// the words in the Lead conversation, so on the Buddy side the person's Buddy words would land in the shared chat.
+static void lead_view_talk_says_face(void) {
+    setup();
+    swarm_feed(3);
+    pod_swarm_t *sw = (pod_swarm_t *)pod_model_swarm(&U.model, "sw1");
+    snprintf(sw->leads[1].local, ID_MAX, "a1");
+    swarm_home_page();
+    tap(POD_A_LEAD, 1);
+    CHECK(top() == POD_V_LEAD);
+    render();
+    bool c;
+    contact(true, 360, 600, &c);
+    contact(false, 360, 600, &c);
+    CHECK(R.begins == 1 && !strcmp(V.agent, "a1") && pod_ui_talking(&U));
+    CHECK(V.face);
 }
 static void lead_view_scrolls_via_app(void) {
     setup();
@@ -1723,6 +1741,14 @@ static void pro_app_test_voice_gate(void) {
     CHECK(!strcmp(pro_app_voice_block_reason("a1"), "Answer its question first."));
     pro_app_question_close("a1");
     CHECK(pro_app_voice_block_reason("a1") == NULL);
+    // buddy_talk_not_blocked_by_question: a talk opened from a Lead view (a Swarm face) goes to its chat, so the terminal's question, pane type and offline machine block nothing
+    pro_app_question("a1", "r1", "Which?", NULL, POD_ATTN_NONE);
+    memset(&U.nav, 0, sizeof U.nav);
+    U.nav.depth = 1; U.nav.stack[0].view = POD_V_TALK; snprintf(U.nav.stack[0].swarm, ID_MAX, "sw1");
+    CHECK(pro_app_voice_block_reason("a1") == NULL && pro_app_voice_block_reason("a2") == NULL && pro_app_voice_block_reason("a4") == NULL);
+    pod_nav_init(&U.nav);
+    CHECK(!strcmp(pro_app_voice_block_reason("a1"), "Answer its question first."));
+    pro_app_question_close("a1");
     // A Super Tab wait is not answered here: talking to the agent is how it is unblocked.
     pro_app_question("a1", "supertab:as1:needs_human", "Which?", "Launch v2", POD_ATTN_DECISION);
     CHECK(pro_app_voice_block_reason("a1") == NULL);
@@ -2565,6 +2591,7 @@ static void console_tap_talks_on_the_touch_path(void) {
     CHECK(R.begins == 0 && !V.open && top() == POD_V_AGENT);
     contact(false, 360, 400, &c);                                // the lift talks, with no pro_app_tick and no render between
     CHECK(R.begins == 1 && V.open && !strcmp(V.agent, "a1") && pod_ui_talking(&U) && LOCK_DEPTH == 0);
+    CHECK(!V.face);   // an agent room shows no chat: its words go to the harness, never a Swarm chat (review of #2298)
     render();                                                    // the Talk frame, whose full-screen hit is topmost
     contact(true, 20, 20, &c);                                  // a new tap anywhere (here over the bar) sends
     contact(false, 20, 20, &c);
@@ -2634,7 +2661,7 @@ int main(int argc, char **argv) {
         {"library_fills_other_tabs", library_fills_other_tabs}, {"sweep_schedule", sweep_schedule},
         {"notice_shows_three_seconds", notice_shows_three_seconds}, {"link_drop_keeps_the_stack", link_drop_keeps_the_stack}, {"orphan_recording_is_discarded", orphan_recording_is_discarded}, {"side_button_discards_hands_free", side_button_discards_hands_free},
         {"send_before_recorder_started", send_before_recorder_started}, {"cap_leaves_talking", cap_leaves_talking},
-        {"lead_view_via_app", lead_view_via_app}, {"lead_view_scrolls_via_app", lead_view_scrolls_via_app}, {"lead_close_owed_on_busy_link", lead_close_owed_on_busy_link}, {"lead_view_relink_and_focus", lead_view_relink_and_focus}, {"tap_resolves_by_id", tap_resolves_by_id}, {"utf8_cuts", utf8_cuts}, {"clock_wrap", clock_wrap}, {"small_cable_stack", small_cable_stack},
+        {"lead_view_via_app", lead_view_via_app}, {"lead_view_scrolls_via_app", lead_view_scrolls_via_app}, {"lead_view_talk_says_face", lead_view_talk_says_face}, {"lead_close_owed_on_busy_link", lead_close_owed_on_busy_link}, {"lead_view_relink_and_focus", lead_view_relink_and_focus}, {"tap_resolves_by_id", tap_resolves_by_id}, {"utf8_cuts", utf8_cuts}, {"clock_wrap", clock_wrap}, {"small_cable_stack", small_cable_stack},
         {"activity_text_is_stable_through_the_real_cadence", activity_text_is_stable_through_the_real_cadence},
         {"follow_from_tabs", follow_from_tabs}, {"follow_from_another_agent", follow_from_another_agent}, {"follow_same_agent_is_a_no_op", follow_same_agent_is_a_no_op},
         {"follow_ignored_while_talking", follow_ignored_while_talking}, {"follow_waits_out_the_users_touch", follow_waits_out_the_users_touch},
