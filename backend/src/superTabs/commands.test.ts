@@ -1473,6 +1473,17 @@ it('says in the project chat when a Product Manager on its person\'s own Mac cou
   expect(commandSchema.safeParse({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'pm', name: 'Lead', configuration: config, lead: true,
     launchRefused: { model: 'claude-opus-5[1m]', effort: 'xhigh' } }).success).toBe(true)
 })
+it('joins a lead and records its first message when its requested launch was refused', () => {
+  const f = fixture(), project = { cwd: '/repo', repositoryUrl: 'https://github.com/example/project' }
+  const joined = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'pm', name: 'Lead', configuration: config,
+    lead: true, project, initialMessage: 'Fix the bug', launchRefused: { model: 'opus', effort: 'xhigh' } }, owner,
+  { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
+  const initial = joined.messages.find(message => message.text === 'Fix the bug')!
+  const refusal = joined.messages.find(message => message.text.includes('could not launch'))!
+  expect(f.state.conversations.find(conversation => conversation.id === 'lead')!.leadId).toBe(joined.result.agentId)
+  expect(initial.id).toBe(joined.result.messageId)
+  expect(refusal.id).not.toBe(initial.id)
+})
 it('accepts POSIX, Windows drive and UNC folders and refuses relative, drive-relative and control-character ones', () => {
   const contribute = (cwd: string) => commandSchema.safeParse({ type: 'machine.contribute', machineId: 'host', name: 'PC', cwd, engines: ['claude'], maxAgents: 1 })
   for (const cwd of ['/repo', 'C:\\Users\\dev\\data', 'c:/Users/dev/data', 'D:\\', '\\\\server\\share\\x']) expect(contribute(cwd).success, cwd).toBe(true)
@@ -1724,6 +1735,17 @@ describe('any agent of the project', () => {
     // A task's members are any agent's to add.
     f.run({ type: 'conversation.agent', conversationId: group, agentId: engineer, present: true, lead: false }, E)
     expect(f.state.conversations.find(c => c.id === group)!.agentIds).toContain(engineer)
+  })
+
+  it('joins a shared agent and records its first message with distinct stable rows', () => {
+    const { f } = project()
+    const joined = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'shared-with-first-message', name: 'Shared',
+      configuration: config, lead: false, initialMessage: 'Fix the bug' }, owner, { contribution: f.contribution })
+    const initial = joined.messages.find(message => message.text === 'Fix the bug')!
+    const notice = joined.messages.find(message => message.text.includes('added "Shared" to the project'))!
+    expect(f.state.agents.map(agent => agent.id)).toContain(joined.result.agentId)
+    expect(initial.id).toBe(joined.result.messageId)
+    expect(notice.id).not.toBe(initial.id)
   })
 
   // Ken, 2026-11-02: a Reviewer was a member of the project chat next to the PM, so Desktop opened two terminals there and the
