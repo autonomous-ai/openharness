@@ -366,6 +366,7 @@ class SuperTabConversation {
             )
           : null,
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
+      lastPersonSequence = (row['lastPersonSequence'] as num?)?.toInt() ?? 0,
       reactionSeq = (row['reactionSeq'] as num?)?.toInt() ?? 0,
       changedAt = row['changedAt'] is num
           ? DateTime.fromMillisecondsSinceEpoch(
@@ -454,6 +455,12 @@ class SuperTabConversation {
   /// leaves it. Null from a backend before threads, or before this
   /// conversation's first message since.
   final int? lastMainSequence;
+
+  /// Its newest main-stream message from a person, not a system row (backend
+  /// parts/commit.ts): what the desktop's sidebar bolds a row by (#2427). The
+  /// phone reads it as the desktop does; its own unread rule is unchanged. 0
+  /// before a person's first message since that backend.
+  final int lastPersonSequence;
 
   /// The newest message that makes it unread, as the desktop's
   /// `SuperTabController.unread` counts it: a reply only in its thread does

@@ -368,6 +368,7 @@ class SuperTabConversation {
           : null,
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
+      lastPersonSequence = (row['lastPersonSequence'] as num?)?.toInt() ?? 0,
       reactionSeq = (row['reactionSeq'] as num?)?.toInt() ?? 0,
       assignment = row['assignment'] == null
           ? null
@@ -442,6 +443,11 @@ class SuperTabConversation {
   /// leaves it. Null from a backend before threads, or before this
   /// conversation's first message since.
   final int? lastMainSequence;
+
+  /// Its newest main-stream message from a person, not a system row (backend
+  /// parts/commit.ts): what makes its sidebar row bold (#2427). 0 before a
+  /// person's first message since that backend.
+  final int lastPersonSequence;
 
   /// Counts reaction changes here (backend reactions.ts), as its messages
   /// pages also say: a move asks for the page shown again. Absent, as before
