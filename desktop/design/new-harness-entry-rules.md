@@ -159,8 +159,11 @@ Git projects enable Branch and Worktree. Worktree defaults to **Yes** until a
 successful Git launch remembers another global choice.
 The checkbox supports pointer and keyboard activation through the form's active
 keymap. Its label and branch icon remain together as the form narrows.
-An empty repository explains that a commit is required for a worktree and asks
-for a choice. Folders without Git keep both rows disabled. Discovery runs on the selected machine
+A repository with no commit yet — or a folder inside one, as `git init` in the
+home folder makes `~/Downloads` — starts in the folder itself, as Claude Code's
+app does: Branch and Worktree are hidden (the row form says "No commits yet"),
+nothing blocks Start, and the remembered Worktree choice is left for the next
+repository (`hasNoCommits`). Folders without Git keep both rows disabled. Discovery runs on the selected machine
 without fetching, switching branches, or creating a worktree. A failed
 discovery offers Retry and blocks starting until the result is known.
 
