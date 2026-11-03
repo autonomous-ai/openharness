@@ -38,6 +38,7 @@ import 'swarm_face.dart';
 import 'swarm_file_picker.dart';
 import 'swarm_outgoing_files.dart';
 import 'swarm_inbox.dart';
+import 'swarm_reader.dart';
 import 'swarm_live_card.dart';
 import 'swarm_message_link.dart';
 import 'swarm_message_receipt.dart';
@@ -57,6 +58,33 @@ import 'swarm_thread_page.dart';
 import 'swarm_unread_line.dart';
 import 'swarm_voice.dart';
 import 'team_glance.dart';
+
+final _conversationReferencePattern = RegExp(r'(?<![\w/])#([1-9][0-9]*)(?!\w)');
+
+/// What a message can link to from the current read of its Swarm. A chat may
+/// still hold an older reader while the inbox has replaced it.
+@visibleForTesting
+Map<int, String> swarmNumberedReferences(SwarmReader? reader, String text) {
+  if (reader == null || reader.accessRevoked) return const {};
+  final numbers = _conversationReferencePattern
+      .allMatches(text)
+      .map((match) => int.tryParse(match[1]!))
+      .whereType<int>()
+      .toSet();
+  return {
+    for (final conversation
+        in reader.snapshot?.conversations ?? const <SuperTabConversation>[])
+      if (conversation.number != null && numbers.contains(conversation.number))
+        conversation.number!: conversation.id,
+  };
+}
+
+/// The same current-reader access check used when a numbered link is tapped.
+@visibleForTesting
+bool swarmCanOpenNumberedConversation(SwarmReader? reader, String id) =>
+    reader != null &&
+    !reader.accessRevoked &&
+    reader.snapshot?.conversation(id) != null;
 
 /// Opens [conversationId] of Swarm [swarmId] over the current page: a
 /// project's own chat as its project ([SwarmOpenedChat]).
@@ -933,6 +961,31 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     };
   }
 
+  void _openNumberedConversation(SwarmConversation c, String id) {
+    final reader = _session?.inbox.reader(c.reader.tabId);
+    if (mounted && swarmCanOpenNumberedConversation(reader, id)) {
+      openSwarmConversation(context, widget.swarmId, id);
+    }
+  }
+
+  ({Map<int, String> references, String key}) _numberedReferences(
+    SwarmConversation c,
+    String text,
+  ) {
+    final numbers = _conversationReferencePattern
+        .allMatches(text)
+        .map((match) => int.tryParse(match[1]!))
+        .whereType<int>()
+        .toSet();
+    final reader = _session?.inbox.reader(c.reader.tabId);
+    final references = swarmNumberedReferences(reader, text);
+    return (
+      references: references,
+      key: [for (final number in numbers) '$number:${references[number] ?? ''}']
+          .join(','),
+    );
+  }
+
   /// One of thread [t]'s messages as the chat draws its own, less what only
   /// the chat has: no quote, no thread line, no Reply (the box is the reply).
   Widget _threadRow(
@@ -960,6 +1013,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       taggedAddresses: _taggedOf(c, m),
       readerId: c.reader.accountId,
       onOpenTask: _taskOpener(c, m),
+      references: _numberedReferences(c, m.text).references,
+      onOpenConversation: (id) => _openNumberedConversation(c, id),
       grouped: grouped,
       lit: lit,
       followed: followed,
@@ -1340,7 +1395,10 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                   children: [
                     Positioned.fill(
                       child: ListenableBuilder(
-                        listenable: Listenable.merge([c, _held]),
+                        // Message links can target any conversation in the
+                        // Swarm, not only this chat. Rebuild when that index
+                        // changes even if this chat's messages did not.
+                        listenable: Listenable.merge([c, session.inbox, _held]),
                         builder: (context, _) =>
                             _messages(context, session, c, view, tty),
                       ),
@@ -1844,10 +1902,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           final card = snapshot == null || group == null
               ? null
               : SwarmCardFacts.of(snapshot, group, m.id);
+          final numbered = _numberedReferences(c, m.text);
+          final references = numbered.references;
           return _row(
             key,
             (
               m,
+              numbered.key,
               // Drop a cached opener when access to its target changes.
               snapshot?.conversation(
                 m.source['taskId'] is String
@@ -1893,6 +1954,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               taggedAddresses: tagged,
               readerId: c.reader.accountId,
               onOpenTask: _taskOpener(c, m),
+              references: references,
+              onOpenConversation: (id) => _openNumberedConversation(c, id),
               grouped: grouped,
               lit: lit,
               followed: followed,
