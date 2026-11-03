@@ -14,6 +14,15 @@ describe('SWARM_TOOLS_SKILL', () => {
   })
   // Project instructions, phase 4: the server refuses only facts and access, routing rules live in the instructions, and
   // agents change the instructions instead of rules or skill sets.
+  // Ken, 2026-11-03: a new project's coordinator sent people to sudo into a Mac's Team account, sign it in to GitHub and save
+  // tokens in files, not knowing how the Swarm runs work on another person's Mac.
+  it('says how accounts, machines and the GitHub App work, and what never to ask a person', () => {
+    const at = SWARM_TOOLS_SKILL.indexOf('## Accounts and machines')
+    expect(at).toBeGreaterThan(0)
+    const section = SWARM_TOOLS_SKILL.slice(at, SWARM_TOOLS_SKILL.indexOf('## Shared machines and secrets'))
+    for (const part of ['Team account', 'nobody types in it', 'none of the owner\'s tools', 'in their own session', 'handoff',
+      '## GitHub', 'GitHub App', 'pull requests', 'cannot comment on or label issues', 'Never ask a person to sudo', 'Never ask for a token']) expect(section).toContain(part)
+  })
   it('describes the commands the server accepts now', () => {
     expect(SWARM_TOOLS_SKILL).not.toMatch(/Refused to some agents|route first|hard rules|rated 3|rule\.set|project\.skills/)
     for (const part of ['post GROUP', '--to AGENT', 'instructions', 'instructions.save']) expect(SWARM_TOOLS_SKILL).toContain(part)
