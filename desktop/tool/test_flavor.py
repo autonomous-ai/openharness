@@ -5,8 +5,11 @@ Desktop and the CLI keep under ~/.harness is its own. The few per-user resources
 the tmux server, Claude Code's Keychain item, Codex's home, the self-updater) are moved by flavor_env, and the copied
 app gets its own bundle id and gives up the harness:// links.
 """
+import base64
+import binascii
 import copy
 import hashlib
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -15,6 +18,12 @@ TEST_ID = 'ai.autonomous.harness.test'
 TEST_NAME = 'Harness Test'
 
 CLAUDE_KEYCHAIN_SERVICE = 'Claude Code-credentials'
+
+SAME_ACCOUNT = "The test copy signed in as this Mac's own account. Sign it in with the test account instead."
+
+
+class SameAccount(Exception):
+    """The test copy is, or may be, signed in as the Mac owner's account."""
 
 
 def flavor_env(base, test_home, shared, port):
@@ -84,3 +93,36 @@ def install_cli(cli_dir, test_home, node):
     if not cli.is_file():
         raise RuntimeError(f'the CLI bundle did not write {cli}')
     return cli
+
+
+def session_account(path):
+    """The account id a CLI session.json (cli/src/lib/authSession.ts) was signed in to, or None.
+
+    `signInAcct` when the session has it; for an older one, the access token's subject, decoded here and never
+    printed or returned. Missing or unreadable is None.
+    """
+    try:
+        session = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(session, dict):
+        return None
+    account = session.get('signInAcct')
+    if isinstance(account, str) and account:
+        return account
+    token = session.get('accessToken')
+    if not isinstance(token, str) or token.count('.') != 2:
+        return None
+    payload = token.split('.')[1]
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(payload + '=' * (-len(payload) % 4)))
+    except (ValueError, binascii.Error):
+        return None
+    subject = claims.get('sub') if isinstance(claims, dict) else None
+    return subject if isinstance(subject, str) and subject else None
+
+
+def check_not_owner(real, test):
+    """Refuses a test sign-in that is the person's own account, or that cannot be told apart from it."""
+    if test is None or test == real:
+        raise SameAccount(SAME_ACCOUNT)
