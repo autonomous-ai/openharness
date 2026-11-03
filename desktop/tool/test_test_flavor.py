@@ -202,6 +202,7 @@ class FakeRunner:
         self.launched = []
         self.terminated = []
         self.alive_pids = set()
+        self.executables = {}
         self.taken_ports = set()
 
     def run(self, argv, env=None, interactive=False, check=True):
@@ -219,7 +220,11 @@ class FakeRunner:
     def launch(self, argv, env):
         self.launched.append(([str(a) for a in argv], env))
         self.alive_pids.add(4242)
+        self.executables[4242] = str(argv[0])
         return 4242
+
+    def executable_of(self, pid):
+        return self.executables.get(pid) if pid in self.alive_pids else None
 
     def alive(self, pid):
         return pid in self.alive_pids
@@ -344,6 +349,16 @@ class CommandsTest(unittest.TestCase):
         self.assertEqual(self.main('stop'), 0)
         self.assertEqual(self.runner.terminated, [])
         self.assertFalse(home.exists())
+        self.assertIsNone(self.state())
+
+    def test_stop_leaves_alone_a_recorded_pid_that_is_now_another_process(self):
+        # Security reviews 1 and 2 of #2796: after a crash or a reboot the pid can belong to anything.
+        self.assertEqual(self.main('start'), 0)
+        home = Path(self.state()['testHome'])
+        self.runner.executables[4242] = '/Applications/Harness.app/Contents/MacOS/Harness'
+        self.assertEqual(self.main('stop'), 0)
+        self.assertEqual(self.runner.terminated, [])
+        self.assertFalse(home.exists(), 'the rest is still cleaned up')
         self.assertIsNone(self.state())
 
     def test_status_warns_when_the_test_copy_is_now_the_owner_s_account(self):
