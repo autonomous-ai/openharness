@@ -880,7 +880,9 @@ class ProjectSidebar extends StatelessWidget {
   /// first; a folded one shows only the open chat's row.
   List<Widget> _workgroups(_ProjectReading reading) {
     final project = reading.project;
-    final groups = _newestFirst(reading).where(_keptByFilter).toList();
+    final groups = _newestFirst(reading)
+        .where((g) => _keptByFilter(g, reading))
+        .toList();
     final grouped = superTabGroupTasks(
       groups,
       readerId: controller.accountId,
@@ -922,17 +924,22 @@ class ProjectSidebar extends StatelessWidget {
 
   /// Whether the unread filter keeps [read]'s project: its chat or an open
   /// workgroup is unread or tags the reader, or the open chat is in it.
+  /// By the rule its rows are bold by (#2427): what is for a person.
   bool _hasUnread(_ProjectReading read) =>
       (!_paneCovered && read.sidebar.selectedProjectId == read.project.id) ||
       read.unread.isNotEmpty ||
       read.mentions > 0 ||
-      (read.lead != null && controller.unreadShown(read.lead!));
+      (read.lead != null && controller.unreadForPeople(read.lead!));
 
-  /// Whether the unread filter keeps [group]'s row.
-  bool _keptByFilter(SuperTabConversation group) =>
+  /// Whether the unread filter keeps [group]'s row: a project's chat or task
+  /// by what makes it bold ([reading]'s, review of #2790), a Buddy chat by
+  /// any new message, as its row is bold.
+  bool _keptByFilter(SuperTabConversation group, [_ProjectReading? reading]) =>
       !controller.unreadOnly ||
       (!_paneCovered && controller.selectedId == group.id) ||
-      controller.unreadShown(group) ||
+      (reading != null
+          ? reading.unread.contains(group.id)
+          : controller.unreadShown(group)) ||
       (attention?.mentionsIn(group.id) ?? 0) > 0;
 
   /// Every project with its workgroups, by name from A to Z. The round dial
@@ -1207,9 +1214,10 @@ class _ProjectReading {
           ].fold(0, (a, b) => a + b),
   };
 
-  /// A row is bold when a person wrote there, the reader is tagged there, or
-  /// it waits on a person (#2427); agents' progress alone leaves it. Each
-  /// conversation's wait is asked once per build.
+  /// A row is bold when a person wrote there or the reader is tagged there
+  /// (#2427): what there is to read. Agents' progress alone leaves it, and a
+  /// wait is its ? mark, not bold (review of #2790). Each conversation's wait
+  /// is asked once per build.
   late final _open = () {
     final waiting = <String>{}, unread = <String>{};
     final controller = sidebar.controller;
@@ -1218,10 +1226,7 @@ class _ProjectReading {
       final waits = sidebar.needsHuman(g) > 0;
       if (waits) waiting.add(g.id);
       if (controller.unreadForPeople(g) ||
-          (sidebar.attention?.mentionsIn(g.id) ?? 0) > 0 ||
-          (waits &&
-              controller.waitsOnReader(g) &&
-              controller.notifyOf(g.id) != SuperTabNotify.muted)) {
+          (sidebar.attention?.mentionsIn(g.id) ?? 0) > 0) {
         unread.add(g.id);
       }
     }
