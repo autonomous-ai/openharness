@@ -818,6 +818,22 @@ describe('SwarmCards notices', () => {
     expect(t.webLead()?.notice).toEqual({ chat: 'pm', chatId: 'pm-web', id: 'x2', text: 'p'.repeat(1499), at: saidAt })
   })
 
+  it('a PM reply inside a thread is a thread notice, named by the thread\'s root', async () => {
+    const t = chatSwarm({ 'pm-web': [said(2, 'a1', { thread: 'r1' })] })
+    await t.cards.tick()
+    await t.move(1, 2)
+    expect(t.webLead()?.notice).toEqual({ chat: 'pm', chatId: 'pm-web', id: 'x2', text: 'm2', at: saidAt, thread: 'r1' })
+  })
+
+  it('a thread reply also sent to the chat, or a thread\'s root, is no thread notice', async () => {
+    for (const over of [{ thread: 'r1', alsoInChat: true }, { thread: 'x2' }]) {
+      const t = chatSwarm({ 'pm-web': [said(2, 'a1', over)] })
+      await t.cards.tick()
+      await t.move(1, 2)
+      expect(t.webLead()?.notice).toEqual({ chat: 'pm', chatId: 'pm-web', id: 'x2', text: 'm2', at: saidAt })
+    }
+  })
+
   it('never notices a group message, the person\'s message or a system row', async () => {
     const t = chatSwarm({
       'lead-web': [said(2, 'me', { author: { kind: 'person', id: 'me' } }), said(3, 'a1', { source: { kind: 'system' } }), said(4, 'b1')],
