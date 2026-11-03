@@ -32,7 +32,7 @@ class SelectionTests(unittest.TestCase):
         job = re.search(r"(?m)^  backend-integration:\n((?:(?:    .*)?\n)+)", ci).group(1)
         self.assertIn("actions/cache/restore@", job)
         self.assertNotRegex(job, r"actions/cache(/save)?@")
-        key = re.search(r"(?m)^\s+key: (super-tab-mongod-\S+)$", job).group(1)
+        key = re.search(r"(?m)^\s+key: (super-tab-mongod-.+)$", job).group(1)
         saver = (workflows / "backend-cache.yml").read_text()
         self.assertRegex(saver, r"(?ms)^on:.*^  push:\n    branches: \[main\]")
         self.assertIn("actions/cache/save@", saver)
