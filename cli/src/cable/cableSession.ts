@@ -2529,9 +2529,19 @@ export class CableSession {
 
   private async send(msg: Message): Promise<boolean> {
     if (!this.link?.isOpen) return false
+    // A message over the frame cap is this side's bug, never a dead port: it is dropped and said, and the link stays up.
+    // Closing over it took the whole dial down on every tap of a long model list (Diego, 2026-11-03).
+    let frame: Uint8Array
     try {
-      const framed = this.seqOn ? { ...msg, seq: this.seq++ } : msg
-      await this.put(this.link, encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(framed), 'utf8')))
+      const framed = this.seqOn ? { ...msg, seq: this.seq } : msg
+      frame = encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(framed), 'utf8'))
+    } catch (err) {
+      this.log(`cable: dropped a ${String(msg.t)} frame (${(err as Error).message})`)
+      return false
+    }
+    if (this.seqOn) this.seq++
+    try {
+      await this.put(this.link, frame)
       return true
     } catch (err) {
       this.log(`cable: write failed (${(err as Error).message})`)
