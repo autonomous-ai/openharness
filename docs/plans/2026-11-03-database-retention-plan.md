@@ -3,7 +3,7 @@
 > Worked by this project's instructions (Engineer role), by the writing-plans and test-driven-development skills: this
 > plan is the pull request's first commit. Then each task is done test first (a commit with the failing test, then the
 > commit that passes it), by one Engineer, with one Review step on the pull request against MongoDB's schema-design and
-> query-optimizer skills. Steps use checkbox (`- [ ]`) syntax.
+> query-optimizer skills. Steps use checkbox (`- [x]`) syntax.
 
 **Goal:** the four collections Ken measured growing with nothing removing them each name what does: operation receipts
 expire after 30 days, a route decision keeps about a third of what it keeps now, the stuck usage-receipt sweep says so
@@ -64,7 +64,8 @@ error each hourly check with when its old receipts expire on their own, and stop
 
 - **Growth — what deletes it:** operations: the TTL index, 30 days after `createdAt` (~14k a day → ~420k rows, ~170 MB
   data at steady state). Route decisions: still the 90-day delete on write (the costs report reads 90 days, `costs/read.ts
-  MAX_DAYS`, so a 30-day prune would cut it), now at ~7 KB a row: ~0.4 GB at 90 days instead of ~1.1 GB. Usage
+  MAX_DAYS`, so a 30-day prune would cut it), now at ~12.9 KB a row instead of ~24.5 KB (the trim applied to the last
+  day's 622 production rows, read-only, 2026-11-03): ~0.7 GB at 90 days instead of ~1.35 GB. Usage
   receipts: their TTL; the 4.05M old ones are gone by 2026-12-04, sweep or not.
 - **Concurrency — lock level:** the TTL monitor deletes as ordinary document deletes (document-level locks). The index
   build takes the collection's exclusive lock only to begin and to finish (Mongo 4.2+ hybrid build), over 120k rows of
@@ -112,9 +113,10 @@ error each hourly check with when its old receipts expire on their own, and stop
 - `backend/src/superTabs/routeRecord.ts` — `storedRecord(record)` and `readRecord(stored)`.
 - `backend/src/superTabs/routeDecisions.ts` — write `storedRecord`, read through `readRecord` in `decisionOf`.
 - `backend/src/lib/productUsageReceiptSweep.ts` — the loud refusal and the self-stop.
-- `backend/AGENTS.md` (new) — the five MongoDB rules.
+- `backend/AGENTS.md` (new) — the five MongoDB rules; `backend/CLAUDE.md` imports it, as `cli/` and `desktop/` do.
 - Tests: `backend/integration/schemaRelease.test.ts`, `backend/integration/workerIndexPlans.test.ts`,
-  `backend/src/superTabs/routeRecord.test.ts`, `backend/integration/superTabRouteDecisions.test.ts`,
+  `backend/src/superTabs/routeRecord.test.ts`, `backend/integration/superTabCosts.test.ts` (it records routes through the
+  store and reads them back; `superTabRouteDecisions.test.ts` writes rows directly),
   `backend/integration/productUsageReceipts.test.ts`.
 
 ## Task 1: operation receipts expire after 30 days
@@ -133,23 +135,23 @@ export async function ensureOperationExpiry(db: PrismaClient): Promise<void>
 // = ensureIndex(db, 'SuperTabOperation', { key: { createdAt: 1 }, name: 'operation_expiry', expireAfterSeconds: OPERATION_EXPIRY_MS / 1000 })
 ```
 
-- [ ] In `schemaRelease.test.ts`, add `['SuperTabOperation', 'operation_expiry', { createdAt: 1 }, 30 * DAY]` to `EXPIRY`,
+- [x] In `schemaRelease.test.ts`, add `['SuperTabOperation', 'operation_expiry', { createdAt: 1 }, 30 * DAY]` to `EXPIRY`,
   and add the test "gives an existing collection its new expiry index when the database user may not run collMod (prod
   10-29)": release with the schema as it was (the declared `operation_expiry` line removed, by `schemaWith`), insert an
   operation, then release the current schema through a client whose `$runCommandRaw` refuses `collMod` with Mongo's code
   13 (as `productUsageReceipts.test.ts` does); expect `operation_expiry` with `expireAfterSeconds` 2,592,000, and
   `indexChanges` to be exactly `['createIndexes SuperTabOperation operation_expiry']` (built once, by the worker).
-- [ ] In `workerIndexPlans.test.ts`, add "the operation expiry reads receipts by their age": seed operations a day and 40
+- [x] In `workerIndexPlans.test.ts`, add "the operation expiry reads receipts by their age": seed operations a day and 40
   days old, `explain` the TTL monitor's shape `find({ createdAt: { $lt: cutoff } })` and expect `IXSCAN { createdAt: 1 }`
   on `operation_expiry`, with docsExamined equal to the old rows.
-- [ ] Run both files; watch them fail (no such index). Commit "test: operation receipts expire after 30 days (red)".
-- [ ] Add `operations.ts`, the schema line with its comment, and `ensureOperationExpiry` first in `releaseSchema`, before
+- [x] Run both files; watch them fail (no such index). Commit "test: operation receipts expire after 30 days (red)".
+- [x] Add `operations.ts`, the schema line with its comment, and `ensureOperationExpiry` first in `releaseSchema`, before
   `ensureSchema`, with a comment saying why. Run both files and `npm test -- src/lib/db`; green. Commit.
 
 ## Task 2: a route decision keeps the pick's label and each exclusion reason once
 
 **Files:** `backend/src/superTabs/routeRecord.ts`, `backend/src/superTabs/routeDecisions.ts`,
-`backend/src/superTabs/routeRecord.test.ts`, `backend/integration/superTabRouteDecisions.test.ts`.
+`backend/src/superTabs/routeRecord.test.ts`, `backend/integration/superTabCosts.test.ts`.
 
 **Interfaces:**
 
@@ -163,16 +165,17 @@ export function storedRecord(record: RouteRecord): StoredRouteRecord
 export function readRecord(stored: StoredRouteRecord | RouteRecord): RouteRecord
 ```
 
-- [ ] `routeRecord.test.ts`: a record with 3 candidates (pick `c1`) and 6 exclusions of 2 reasons: `storedRecord` keeps
+- [x] `routeRecord.test.ts`: a record with 3 candidates (pick `c1`) and 6 exclusions of 2 reasons: `storedRecord` keeps
   `label` on `c1` only, every other candidate field intact; `unavailable` has 2 entries; `readRecord(storedRecord(r))`
-  equals `r` with the non-pick labels removed and the exclusions in grouped order; `readRecord` of an old record returns it
+  equals `r` with the non-pick labels removed and the exclusions in grouped order (the read record is not checked
+  against the input schema, which requires every label: nothing parses a stored record with it); `readRecord` of an old record returns it
   unchanged; a record with no exclusions stores none.
-- [ ] `superTabRouteDecisions.test.ts`: record a route of 31 candidates and 47 exclusions of 5 reasons, sized like
-  production's (labels of ~540 characters, reasons of ~100); the stored row's `$bsonSize` is under 9 KB (it is ~20 KB
-  today), the decision read by `GET /route-decisions/:id` lists all 31 candidates and all 47 exclusions with their titles
+- [x] `superTabCosts.test.ts`: record a route of 13 candidates and 47 exclusions of 5 reasons, sized like
+  production's (labels of ~540 characters, reasons of ~100, titles of ~80); the stored record's `$bsonSize` is under 60%
+  of the record sent, the decision read by `GET /route-decisions/:id` lists all 31 candidates and all 47 exclusions with their titles
   and reasons, and starting the pick still links to it (`final` set, no override).
-- [ ] Run both; watch them fail. Commit the red tests.
-- [ ] Implement `storedRecord` and `readRecord`; write `storedRecord(effect.record)` in `writeRouteEffects`, read
+- [x] Run both; watch them fail. Commit the red tests.
+- [x] Implement `storedRecord` and `readRecord`; write `storedRecord(effect.record)` in `writeRouteEffects`, read
   `readRecord(row.record)` in `decisionOf`. Run both, `npm test -- src/superTabs/routeRecord.test.ts`, and the route and
   costs integration files; green. Commit.
 
@@ -191,24 +194,24 @@ export async function lastOldReceipt(db: PrismaClient, now: Date): Promise<Date 
 //   date  → error '[usage-receipts] stuck: the database user may not install the receipt rule (collMod); nothing is removed. The old receipts expire by themselves by <ISO date>; grant collMod to finish sooner.'
 ```
 
-- [ ] Change the existing refusal test ("a database user that may not install the rule gets one warning…") to expect one
+- [x] Change the existing refusal test ("a database user that may not install the rule gets one warning…") to expect one
   error line per hourly check (two after an hour), naming 2026-… the newest old receipt's expiry, and none between checks;
   add "a refused sweep stops by itself once its old receipts have expired": no old receipt left → one `done` line, no
   further `collMod` tries.
-- [ ] Run the file; watch them fail. Commit the red tests.
-- [ ] Implement. Run the file and `npm test -- src/lib`; green. Commit.
+- [x] Run the file; watch them fail. Commit the red tests.
+- [x] Implement. Run the file and `npm test -- src/lib`; green. Commit.
 
 ## Task 4: backend/AGENTS.md
 
 **Files:** `backend/AGENTS.md` (new), the three model comments in `backend/prisma/schema.prisma`.
 
-- [ ] Write the five rules, short, each with its reason and an example from this task: (1) every collection names what
+- [x] Write the five rules, short, each with its reason and an example from this task: (1) every collection names what
   removes it, in its model comment (a TTL, a sweep, a delete on write, or "kept forever: why"); (2) receipt and log rows get
   a TTL index, made by the schema step before db push (`ensureIndex`, the operations example); (3) one index per query,
   checked with explain in an integration test (`plans.test-support.ts`); (4) a maintenance job that cannot run says so,
   loudly and repeatedly, with what it is waiting on; (5) measure on the read-only production database before and after
   (its environment file only, never printed), and put the numbers in the pull request.
-- [ ] Docs need no test; check that each model of the three names what removes it. Commit.
+- [x] Docs need no test; check that each model of the three names what removes it. Commit.
 
 ## After the tasks
 
