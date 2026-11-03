@@ -216,7 +216,10 @@ action, from the project's menu or from the limit line, whoever owns that machin
 - `lead.switch` adds optional `machineId` and `model` fields. An omitted `machineId` keeps the existing same-machine
   behavior. When supplied, the backend admits the destination only if its contribution is active, its latest observation is
   online, it advertises `leadSwitch`, it offers the requested engine and profile, and the actor may place this project's PM
-  there. The actor is the project owner or the real owner of the source PM's machine. A destination must pass the same
+  there. Only the project's owner moves its PM to another machine (`manageProject`, as `lead.start`); the real owner of the
+  source PM's machine still switches engine or account on that machine only. The destination is placed and recorded as the
+  person who asked (`placeLead` with the actor, the whole command context, Team accounts idle included; both security
+  reviews of #2705). A destination must pass the same
   `requireTeamWork` rules as a project Lead start; Team-account placement, contribution scope, project folder and
   generation are rechecked when the destination host launches. The server never accepts a machine merely because its id
   appears in the request.
