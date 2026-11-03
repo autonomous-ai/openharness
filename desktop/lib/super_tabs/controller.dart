@@ -23,6 +23,7 @@ import 'read_marks.dart';
 import 'reading.dart';
 import 'linked_tasks.dart';
 import 'task_steps.dart';
+import 'task_groups.dart';
 
 /// A messages read started beside a state read, and what it asked for.
 typedef _EarlyRead = ({String query, Future<Map<String, dynamic>> page});
@@ -1054,6 +1055,22 @@ class SuperTabController extends ChangeNotifier {
     if (!closedOpenProjects.remove(projectId)) {
       closedOpenProjects.add(projectId);
     }
+    _changed();
+  }
+
+  /// Each project's task groups folded or unfolded against their default
+  /// (`<project>/<group>`), remembered as Closed is: not saved.
+  final _taskGroupsToggled = <String>{};
+
+  /// Whether [group] of [projectId]'s tasks is folded in the sidebar; only
+  /// The rest starts folded.
+  bool taskGroupFolded(String projectId, SuperTabTaskGroup group) =>
+      group.foldedByDefault !=
+      _taskGroupsToggled.contains('$projectId/${group.name}');
+
+  void toggleTaskGroup(String projectId, SuperTabTaskGroup group) {
+    final key = '$projectId/${group.name}';
+    if (!_taskGroupsToggled.remove(key)) _taskGroupsToggled.add(key);
     _changed();
   }
 
