@@ -14,6 +14,7 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import type { GeneralAccess } from '../src/superTabs/sharing.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
+import { addMember, memberId } from '../src/superTabs/workspaceStore.js'
 
 // Ken's spec docs/specs/2026-11-03-swarm-domain-auto-join.md, "Tests that fail first": people at the owner's own email domain
 // join a Swarm whose owner turned "Add them automatically" on, on their own list read; nobody at a public domain ever does.
@@ -22,11 +23,13 @@ let replica: MongoMemoryReplSet, db: PrismaClient, store: SuperTabStore, app: Fa
 /** The store's clock: tests move it past the 2-minute try window. */
 let clock = Date.now()
 
-const account = (n: number, email: string): AuthUser => ({ sub: `30000000000000000000000${n.toString(16)}`, email, autonomousEnv: 'prod', role: 'user' })
+const account = (n: number, email: string): AuthUser => ({ sub: `3000000000000000000000${n.toString(16).padStart(2, '0')}`, email, autonomousEnv: 'prod', role: 'user' })
 const ken = account(1, 'ken@acme.com'), x = account(2, 'x@acme.com'), gmailOwner = account(3, 'owner@gmail.com'), xGmail = account(4, 'x@gmail.com')
 const relay = account(5, 'y@privaterelay.appleid.com'), partner = account(6, 'p@partner.com'), y = account(7, 'y@acme.com'), z = account(8, 'z@acme.com')
 const w = account(9, 'w@acme.com'), v = account(10, 'v@acme.com'), u = account(11, 'u@acme.com'), t = account(12, 't@acme.com')
-const accounts = [ken, x, gmailOwner, xGmail, relay, partner, y, z, w, v, u, t]
+const boss = account(13, 'boss@beta.io'), b1 = account(14, 'b1@beta.io'), s1 = account(15, 's1@acme.com'), r1 = account(16, 'r1@acme.com')
+const q1 = account(17, 'q1@acme.com'), d1 = account(18, 'd1@acme.com')
+const accounts = [ken, x, gmailOwner, xGmail, relay, partner, y, z, w, v, u, t, boss, b1, s1, r1, q1, d1]
 
 /** A Swarm's whole state as its parts hold it. */
 async function storedState(tab: string): Promise<SuperTabState> {
@@ -54,6 +57,13 @@ const save = async (tab: string, access: GeneralAccess | Record<string, unknown>
 }
 const create = async (owner: AuthUser = ken, name = 'Acme Swarm') => (await store.create(owner, randomUUID(), name)).id
 const later = () => { clock += 121_000 }
+const turnOn = (tab: string, role: 'collaborator' | 'viewer' = 'collaborator', owner: AuthUser = ken) =>
+  save(tab, { mode: 'domain', domain: owner.email.split('@')[1]!, role, autoJoin: true }, owner)
+const personIn = async (tab: string, user: AuthUser) => (await storedState(tab)).people.find(p => p.id === user.sub)
+const workspaceRole = async (tab: string, user: AuthUser) => {
+  const { workspaceId } = await storedState(tab)
+  return (await db.swarmWorkspaceMember.findUnique({ where: { id: memberId(workspaceId!, user.sub) } }))?.role
+}
 const listed = async (user: AuthUser) => (await request('list', undefined, user)).json().data.tabs.map((tab: { id: string }) => tab.id) as string[]
 
 beforeAll(async () => {
@@ -155,5 +165,111 @@ describe('Domain checks on save and join', () => {
     expect((await request(`${tab}/sharing`)).json().data).toMatchObject({ ownDomain: 'acme.com', ownDomainPublic: false, autoJoinFull: false })
     const own = await create(gmailOwner)
     expect((await request(`${own}/sharing`, undefined, gmailOwner)).json().data).toMatchObject({ ownDomain: 'gmail.com', ownDomainPublic: true })
+  })
+})
+
+describe('Joining by domain on the person\'s own list read', () => {
+  it('joins x@acme.com to the acme Swarm with auto-join on, as a Workspace guest, with the role the owner picked', async () => {
+    const on = await create(), linkOnly = await create(), invited = await create()
+    await turnOn(on, 'viewer')
+    await save(linkOnly, { mode: 'domain', domain: 'acme.com', role: 'collaborator' })
+    const tabs = await listed(x)
+    expect(tabs).toContain(on)
+    expect(tabs).not.toContain(linkOnly)
+    expect(tabs).not.toContain(invited)
+    expect(await personIn(on, x)).toMatchObject({ role: 'viewer', joinedVia: 'domain', email: 'x@acme.com' })
+    expect(await workspaceRole(on, x)).toBe('guest')
+    expect(await personIn(linkOnly, x)).toBeUndefined()
+  })
+
+  it('joins nobody at a public domain', async () => {
+    const own = await create(gmailOwner)
+    // Even a share an older release saved at gmail.com with auto-join on lets nobody in.
+    const state = await storedState(own)
+    state.sharing = { revision: 1, generation: 'old', access: { mode: 'domain', domain: 'gmail.com', role: 'collaborator', autoJoin: true } }
+    await saveState(own, state)
+    await db.superTab.update({ where: { id: own }, data: { autoJoinDomain: 'gmail.com' } })
+    expect(await listed(xGmail)).toEqual([])
+    expect(await listed(relay)).toEqual([])
+    expect(await personIn(own, xGmail)).toBeUndefined()
+  })
+
+  it('joins through the Workspaces list too', async () => {
+    const tab = await create()
+    await turnOn(tab)
+    expect((await request('workspaces', undefined, y)).statusCode).toBe(200)
+    expect(await personIn(tab, y)).toMatchObject({ role: 'collaborator', joinedVia: 'domain' })
+  })
+
+  it('keeps the role of someone already a member of the Workspace', async () => {
+    const tab = await create()
+    await turnOn(tab)
+    const { workspaceId } = await storedState(tab)
+    await db.$transaction(tx => addMember(tx, workspaceId!, { id: z.sub, email: z.email }, 'member', ken.sub, randomUUID()))
+    expect(await listed(z)).toContain(tab)
+    expect(await workspaceRole(tab, z)).toBe('member')
+  })
+
+  it('joins ten Swarms per try, and the rest after two minutes', async () => {
+    const tabs: string[] = []
+    for (let i = 0; i < 11; i++) { const tab = await create(boss, `Beta ${i}`); await turnOn(tab, 'collaborator', boss); tabs.push(tab) }
+    expect((await listed(b1)).filter(id => tabs.includes(id))).toHaveLength(10)
+    expect((await listed(b1)).filter(id => tabs.includes(id))).toHaveLength(10)
+    later()
+    expect((await listed(b1)).filter(id => tabs.includes(id)).sort()).toEqual([...tabs].sort())
+  })
+
+  it('never joins from a team session', async () => {
+    const tab = await create()
+    await turnOn(tab)
+    const team = await app.inject({ method: 'GET', url: '/api/super-tabs/list', headers: { authorization: `Bearer team:${t.sub}` } })
+    expect(team.statusCode).toBe(403)
+    expect((await app.inject({ method: 'GET', url: '/api/super-tabs/workspaces', headers: { authorization: `Bearer team:${t.sub}` } })).statusCode).toBe(403)
+    expect(await personIn(tab, t)).toBeUndefined()
+  })
+
+  it('writes no membership after turning auto-join off commits', async () => {
+    for (let i = 0; i < 4; i++) {
+      const tab = await create()
+      await turnOn(tab)
+      const revision = (await store.sharing(ken, tab)).revision
+      const off = { operationId: randomUUID(), revision, access: { mode: 'domain' as const, domain: 'acme.com', role: 'collaborator' as const, autoJoin: false } }
+      await Promise.all([store.saveSharing(ken, tab, off), store.autoJoinSwarm(w, tab).catch(() => 'conflict')])
+      const parts = await db.$transaction(tx => import('../src/superTabs/parts/index.js').then(p => p.loadAll(tx, tab)))
+      const joined = parts.members.find(m => m.key === w.sub && !m.deleted)
+      // Joined only before the turn-off: the turn-off's head write is then the later one.
+      if (joined) expect(joined.changedAt).toBeLessThan(parts.head.changedAt)
+      expect(await store.autoJoinSwarm(v, tab)).toBe('skipped')
+      expect(await personIn(tab, v)).toBeUndefined()
+    }
+  })
+
+  it('stops at 200 people, and tells the owner', async () => {
+    const tab = await create()
+    await turnOn(tab)
+    const state = await storedState(tab)
+    for (let i = state.people.length; i < 200; i++) state.people.push({ id: `filler${i}`, email: `filler${i}@acme.com`, role: 'viewer', generation: `g${i}` })
+    await saveState(tab, state)
+    expect(await listed(u)).not.toContain(tab)
+    expect(await personIn(tab, u)).toBeUndefined()
+    expect((await request(`${tab}/sharing`)).json().data.autoJoinFull).toBe(true)
+  })
+
+  it('joins nobody to a deleted Swarm', async () => {
+    const tab = await create(ken, 'Doomed')
+    await turnOn(tab)
+    await store.execute(ken, tab, { operationId: randomUUID(), command: { type: 'swarm.delete', name: 'Doomed' } })
+    expect((await db.superTab.findUniqueOrThrow({ where: { id: tab } })).autoJoinDomain).toBeNull()
+    expect(await store.autoJoinSwarm(d1, tab)).toBe('skipped')
+    await listed(d1)
+    expect(await personIn(tab, d1)).toBeUndefined()
+  })
+
+  it('makes one membership when two reads of the same person race', async () => {
+    const tab = await create()
+    await turnOn(tab)
+    const outcomes = await Promise.all([store.autoJoinSwarm(s1, tab), store.autoJoinSwarm(s1, tab)])
+    expect(outcomes.sort()).toEqual(['joined', 'skipped'])
+    expect((await storedState(tab)).people.filter(p => p.id === s1.sub)).toHaveLength(1)
   })
 })
