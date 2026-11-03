@@ -32,10 +32,13 @@ import 'swarm_switcher.dart' show PersonalSwarm;
 /// The form an agent reports its project's remote in: `host[:port]/owner/repo`
 /// with no scheme, user or `.git` (the CLI's `canonicalRepository`, and
 /// `canonicalGitRemote` for this computer's own reading). Every real remote
-/// arrives so; a host needs a dot and a letter-only last label, which a folder
-/// path (`/srv/api`, `./api`, `C:\api`) never has.
+/// arrives so, a clone through an SSH host alias too: its host is the alias,
+/// often with no dot (`gh-work/acme/api`, `Host gh-work`, task #2476). A host
+/// is two or more letters, digits, dots, hyphens or underscores, starting and
+/// ending with a letter or digit (the CLI's `safeSshAlias`), so a folder path
+/// (`/srv/api`, `./api`, `C:\api`, `C:/api`) never is one.
 final _canonicalRemote = RegExp(
-  r'^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?::\d+)?/\S+$',
+  r'^[a-z0-9][a-z0-9._-]*[a-z0-9](?::\d+)?/\S+$',
   caseSensitive: false,
 );
 
