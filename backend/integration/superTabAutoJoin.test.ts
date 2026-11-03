@@ -19,7 +19,7 @@ import { addMember, memberId } from '../src/superTabs/workspaceStore.js'
 // Ken's spec docs/specs/2026-11-03-swarm-domain-auto-join.md, "Tests that fail first": people at the owner's own email domain
 // join a Swarm whose owner turned "Add them automatically" on, on their own list read; nobody at a public domain ever does.
 
-let replica: MongoMemoryReplSet, db: PrismaClient, store: SuperTabStore, app: FastifyInstance
+let replica: MongoMemoryReplSet, db: PrismaClient, store: SuperTabStore, app: FastifyInstance, uri: string
 /** The store's clock: tests move it past the 2-minute try window. */
 let clock = Date.now()
 
@@ -83,7 +83,7 @@ const listed = async (user: AuthUser) => (await request('list', undefined, user)
 beforeAll(async () => {
   replica = await MongoMemoryReplSet.create({ binary: { version: '7.0.24', downloadDir: join(tmpdir(), 'harness-super-tab-mongodb-binaries') },
     replSet: { count: 1, ip: '127.0.0.1', storageEngine: 'wiredTiger' } })
-  const uri = replica.getUri(`swarm_auto_join_test_${randomUUID().replaceAll('-', '_')}`)
+  uri = replica.getUri(`swarm_auto_join_test_${randomUUID().replaceAll('-', '_')}`)
   await promisify(execFile)(join(process.cwd(), 'node_modules/.bin/prisma'), ['db', 'push', '--skip-generate'], {
     env: { ...process.env, DATABASE_URL: uri }, timeout: 60000,
   })
@@ -401,5 +401,23 @@ describe('What readers see', () => {
     expect((await store.read(joiner, tab)).state.autoJoinDeclined).toBeUndefined()
     await save(tab, { mode: 'domain', domain: current.email.split('@')[1]!, role: 'collaborator', autoJoin: false })
     expect((await request(`${tab}/parts`, undefined, joiner)).json().data.head.data.autoJoin).toBeUndefined()
+  })
+})
+
+describe('The pre-merge production query', () => {
+  it('lists the Swarms whose saved domain share is at a public domain, and no other', async () => {
+    await org('sixteen', [])
+    const broken = await create(), fine = await create()
+    await save(fine, { mode: 'domain', domain: 'partner.com', role: 'collaborator' })
+    await save(broken, { mode: 'domain', domain: 'partner.com', role: 'collaborator' })
+    const state = await storedState(broken)
+    state.sharing!.access = { mode: 'domain', domain: 'yahoo.com', role: 'collaborator' }
+    await saveState(broken, state)
+    const { stdout } = await promisify(execFile)(join(process.cwd(), 'node_modules/.bin/tsx'), ['scripts/swarm-auto-join/public-domain-shares.ts'],
+      { env: { ...process.env, DATABASE_URL: uri }, timeout: 60000 })
+    const listed = JSON.parse(stdout) as { count: number; swarms: Array<{ id: string; domain: string; deleted: boolean }> }
+    expect(listed.swarms).toContainEqual({ id: broken, domain: 'yahoo.com', deleted: false })
+    expect(listed.swarms.map(swarm => swarm.id)).not.toContain(fine)
+    expect(listed.count).toBe(listed.swarms.length)
   })
 })
