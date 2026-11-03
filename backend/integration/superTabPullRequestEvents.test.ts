@@ -3,13 +3,14 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { watchPullRequests, type PullRequestReader, type PullRequestWatch } from '../src/superTabs/pullRequestEvents.js'
+import { logger } from '../src/utils/logger.js'
 
 // Dee, #1891: GitHub events on an open task's pull request reach the task's Engineer directly, once, without waiting for
 // the PM's sync. A fresh loopback replica set, created here.
@@ -81,7 +82,7 @@ async function swarm() {
   /** The rows this feature wrote in [conversationId], oldest first. */
   const told = async (conversationId = task) => (await db.superTabMessage.findMany({ where: { tabId: tab, conversationId }, orderBy: { sequence: 'asc' } }))
     .filter(m => m.recipientIds.length > 0 && m.text.includes(PR))
-  return { PR, number, pull, store, tab, execute, add, lead, task, worker, assignment, pulls, asked, pass, told, clock: { get now() { return now } } }
+  return { PR, number, pull, store, tab, execute, add, lead, task, worker, assignment, pulls, asked, reader, pass, told, clock: { get now() { return now } } }
 }
 
 describe('pull request events', () => {
@@ -147,5 +148,27 @@ describe('pull request events', () => {
     // Other tests' Swarms are in this database too: this one's pull requests are the ones not asked about.
     expect(f.asked).not.toContain(f.PR)
     expect(f.asked).not.toContain(other)
+  })
+
+  // ENGINEERING.md 4: no loop grows without a bound. A pass reads a capped number of tasks, the most recently active first.
+  it('reads at most its cap of tasks a pass, the most recently active first', async () => {
+    const f = await swarm()
+    f.pulls.set(f.PR, f.pull())
+    await watchPullRequests(db, f.store, f.reader, f.clock.now + MINUTE, 1)
+    expect(f.asked).toEqual([f.PR])
+  })
+
+  // ENGINEERING.md 6 and 8: a pull request GitHub cannot read is not skipped in silence, and each pass that did something
+  // says how much.
+  it('says how many pull requests it could not read', async () => {
+    const f = await swarm()
+    const warn = vi.spyOn(logger, 'warn')
+    try {
+      await f.pass()
+      expect(warn).toHaveBeenCalledWith('[swarm-pr-events] pass', expect.objectContaining({ unreadable: expect.any(Number), posted: 0 }))
+      const line = warn.mock.calls.find(call => call[0] === '[swarm-pr-events] pass')![1] as { unreadable: number; pulls: number; groups: number }
+      expect(line.unreadable).toBeGreaterThanOrEqual(1)
+      expect(line.pulls).toBeGreaterThanOrEqual(line.unreadable)
+    } finally { warn.mockRestore() }
   })
 })
