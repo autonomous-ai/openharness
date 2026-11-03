@@ -156,6 +156,11 @@ const HELD_SCREEN_ROW_CHARS = 400
 const questionOf = (screen: ScreenReading | null): string | undefined =>
   JSON.stringify(screen?.question)
 
+/** Whether a question's free-text row still shows its placeholder. Text typed into it replaces the placeholder, and Escape
+ *  would end the question and lose it. A reading with no free-text row holds too: it cannot tell that row empty. */
+const freeTextEmpty = (screen: ScreenReading | null): boolean =>
+  screen?.question?.kind === 'question' && !!screen.question.typeRow
+
 /** What `SessionInputController` is given: every write takes the device's pane lock first. */
 export function sessionInputDeps(
   deps: InputDeps,
@@ -188,18 +193,20 @@ export function sessionInputDeps(
       const hold = deliveryHold(session, screen, capture, deliveryId)
       // A person's answer closes the question it answers: one Escape, then the pane is read again and held as ever if
       // the question stays. Never a permission prompt, an agent's message, another engine, a question the core does not
-      // know of or one that opened after the message was written.
+      // know of, one that opened after the message was written, or one with an answer typed into its free-text row.
       const answers = deliveryId ? deps.answersQuestion?.(deliveryId) : null
       const pending = deps.pendingQuestion?.(session.sessionId)
       if (screen?.messageHold !== 'question_open' || session.engine !== 'claude' || !deliveryId || !answers || !pending
-        || answers.writtenAt === undefined || answers.writtenAt < pending.openedAt) return hold
+        || answers.writtenAt === undefined || answers.writtenAt < pending.openedAt || !freeTextEmpty(screen)) return hold
       const first = questionOf(screen)
       // Under the pane's lock, which may have waited: the question is read again, and is still the one first read, still
       // pending, unanswered by hand and wanted by its maker.
       const pressed = await deviceInput().legacyWrite(session.agentId, async () => {
         const again = await deps.readScreen(session, await captureTerminal(session.agentId))
-        if (again?.messageHold !== 'question_open' || questionOf(again) !== first || !deps.pendingQuestion?.(session.sessionId)
-          || deps.controlHeld?.(session.agentId) || !deliveries.canWrite(deliveryId)) return terminalActionNotStarted('question_changed')
+        if (again?.messageHold !== 'question_open' || questionOf(again) !== first || !freeTextEmpty(again)
+          || !deps.pendingQuestion?.(session.sessionId) || deps.controlHeld?.(session.agentId) || !deliveries.canWrite(deliveryId)) {
+          return terminalActionNotStarted('question_changed')
+        }
         return keyTerminalAction(session.agentId, 'Escape')
       })
       if (pressed.state !== 'succeeded') return hold
