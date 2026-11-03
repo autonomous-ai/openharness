@@ -305,6 +305,19 @@ describe('core runtime profile authority', () => {
     expect(t.sessions.getState(t.s.agentId).model).toBe('different')
   })
 
+  // A confirmed switch is the session's effort, even one equal to what the settings filled (#1966 delta review).
+  it.each(['effort', 'profile'] as const)('a confirmed %s is no longer the settings\' effort', async confirmed => {
+    const t = setup()
+    t.read.mockImplementationOnce(async (_engine, context) => ({ ...result(context, { kind: 'config' }),
+      state: { ...context.state, effort: 'high', settingsEffort: 'high' } }))
+    await t.sessions.read(t.s, { kind: 'config' })
+    expect(t.sessions.getState(t.s.agentId).settingsEffort).toBe('high')
+    if (confirmed === 'effort') t.sessions.confirmEffort(t.s.sessionId, 'high')
+    else t.sessions.confirmControlProfile(profile(t.s, 'new', 'high'))
+    expect(t.sessions.getState(t.s.agentId).effort).toBe('high')
+    expect(t.sessions.getState(t.s.agentId)).not.toHaveProperty('settingsEffort')
+  })
+
   it('commits prepared live evidence only while its binding and control revision remain current', async () => {
     const t = setup(); await t.seed()
     const commit = await t.sessions.prepare(t.s, [{ model: 'new', effort: 'high', version: '2.1.210' }])

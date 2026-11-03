@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -9,6 +11,10 @@ import '../widgets/engine_identity.dart';
 import '../widgets/finger_target.dart';
 import 'attachment_chips.dart';
 import 'identity.dart';
+import 'machine_status.dart' show superTabAgo;
+import 'message_link.dart';
+import 'message_link_preview.dart';
+import 'message_more_menu.dart';
 import 'message_text.dart';
 import 'model.dart';
 import 'pull_requests.dart';
@@ -21,6 +27,7 @@ class SuperTabMessageRow extends StatefulWidget {
     required this.message,
     required this.author,
     required this.onReturnToComposer,
+    this.card,
     required this.receipts,
     this.agent,
     this.person,
@@ -35,15 +42,58 @@ class SuperTabMessageRow extends StatefulWidget {
     this.references = const {},
     this.onOpenGroup,
     this.mentions = const [],
+    this.mentionAddresses = const {},
     this.readerId = '',
     this.reactorName,
     this.onReact,
+    this.proposalOwner,
+    this.headerStatus,
+    this.dimmed = false,
+    this.thread,
+    this.threadUnread = false,
+    this.onOpenThread,
+    this.threadTrailing,
+    this.threadEnd,
+    this.member,
+    this.link,
+    this.linkTarget,
+    this.onOpenLink,
   });
 
   final SuperTabMessage message;
 
+  /// The live card [message] is (live_card.dart), drawn in place of its pull
+  /// request links; null for a plain message.
+  final Widget? card;
+
+  /// The thread [message] is the root of, once it has a reply.
+  final SuperTabThread? thread;
+  final bool threadUnread;
+
+  /// Opens [message]'s thread: from its reply line, or from an also-sent
+  /// reply's mark.
+  final VoidCallback? onOpenThread;
+
+  /// Ends the thread line: the mark of a thread's own Buddy session.
+  final Widget? threadTrailing;
+
+  /// After [threadTrailing], outside the thread's link: End session.
+  final Widget? threadEnd;
+
+  /// Who a thread's reply author is in the Swarm now, for the faces on its
+  /// reply line; without it each shows the face its recorded name gives.
+  final SuperTabMemberOf? member;
+
+  /// The person a Buddy's proposal speaks for, by name, from the server's tag
+  /// on it ([SuperTabMessage.proposalOwnerId]); null for any other message.
+  final String? proposalOwner;
+
   /// The names of the people [message] tags.
   final List<String> mentions;
+
+  /// Their addresses, by name: a tag by full address is theirs only when it
+  /// is this one.
+  final Map<String, String> mentionAddresses;
   final Map<int, String> references;
   final ValueChanged<String>? onOpenGroup;
   final String author;
@@ -65,12 +115,25 @@ class SuperTabMessageRow extends StatefulWidget {
   final ValueChanged<BuildContext>? onOpenReply;
   final VoidCallback onReturnToComposer;
   final List<Widget> receipts;
+  final Widget? headerStatus;
+
+  /// Its text and files are faint while it sends; its status line is not.
+  final bool dimmed;
 
   /// The reader, whose own reactions are marked; [reactorName] names the
   /// others. Without [onReact] the counts only show.
   final String readerId;
   final SuperTabReactorName? reactorName;
   final ValueChanged<SuperTabReactionEmoji>? onReact;
+
+  /// This message's link, for the More menu's Copy link to message. Without
+  /// it the menu is not offered.
+  final SwarmMessageLink? link;
+
+  /// What a message link in the text points at for the reader, and how to
+  /// open it. Without them a link stays plain text.
+  final SuperTabLinkTarget Function(SwarmMessageLink)? linkTarget;
+  final ValueChanged<SwarmMessageLink>? onOpenLink;
 
   // Routing notes share the message body column, including grouped messages.
   static const horizontalInset = 24.0;
@@ -97,6 +160,9 @@ class SuperTabMessageRow extends StatefulWidget {
 
   static bool groupsWith(SuperTabMessage current, SuperTabMessage? previous) {
     if (previous == null ||
+        // A message that started a session stands on its own, with its line.
+        current.sessionRoot ||
+        previous.sessionRoot ||
         current.replyTo != null ||
         previous.replyTo != null ||
         current.text.length > 280 ||
@@ -149,6 +215,17 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     );
   }
 
+  Future<void> _copyLink(SwarmMessageLink link) async {
+    await Clipboard.setData(ClipboardData(text: link.url));
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(
+        content: Text('Link copied'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
   String get _identityDetails {
     final agent = widget.agent;
     if (agent == null) {
@@ -191,6 +268,11 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     grid.AppTheme.watch(context);
     final message = widget.message;
     final active = _hovered || _focused;
+    // A message that tags the reader stands out, as Slack marks one that
+    // names you: an accent bar on its edge over a wash of the accent.
+    final taggedYou =
+        widget.readerId.isNotEmpty &&
+        message.mentions.contains(widget.readerId);
     final authorStyle = DesktopChrome.text(medium: true)
         .copyWith(fontWeight: FontWeight.w600);
     // A phone's author is a finger tall, 44 over its 20 px line. The gap
@@ -236,8 +318,17 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
             container: true,
             label: widget.grouped ? widget.author : null,
             child: DecoratedBox(
+              key: taggedYou
+                  ? ValueKey('super-tagged-you-${message.id}')
+                  : null,
               decoration: BoxDecoration(
-                color: active ? grid.AppSurface.hoverFill : Colors.transparent,
+                color: taggedYou
+                    ? (active
+                          ? grid.AppSurface.accentWashHover
+                          : grid.AppSurface.accentWash)
+                    : active
+                    ? grid.AppSurface.hoverFill
+                    : Colors.transparent,
                 border: Border.all(
                   color: _focus.hasPrimaryFocus
                       ? DesktopChrome.focusRing
@@ -303,7 +394,11 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                             size: 14,
                                           ),
                                         ),
-                                      if (message.createdAt case final time?)
+                                      if (widget.headerStatus
+                                          case final status?)
+                                        status
+                                      else if (message.createdAt
+                                          case final time?)
                                         Tooltip(
                                           message: MaterialLocalizations.of(
                                             context,
@@ -320,7 +415,28 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                 ),
                                 const SizedBox(height: 4),
                               ],
-                              if (message.replyTo != null)
+                              if (message.threadReply &&
+                                  widget.onOpenThread != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(
+                                    bottom: grid.AppDesktop.menuInset,
+                                  ),
+                                  child: SuperTabLink(
+                                    key: ValueKey(
+                                      'super-thread-also-${message.id}',
+                                    ),
+                                    label: 'Replied in thread, open thread',
+                                    onTap: widget.onOpenThread!,
+                                    child: Text(
+                                      'Replied in thread',
+                                      style: DesktopChrome.metadata(),
+                                    ),
+                                  ),
+                                ),
+                              // A thread reply sits under its root, so it
+                              // quotes nothing; an older reply keeps its quote.
+                              if (message.replyTo != null &&
+                                  !message.threadReply)
                                 Padding(
                                   padding: const EdgeInsets.only(bottom: 8),
                                   child: SuperTabReplyPreview(
@@ -338,6 +454,30 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                         : () => widget.onOpenReply!(context),
                                   ),
                                 ),
+                              if (widget.proposalOwner case final owner?)
+                                Padding(
+                                  padding: const EdgeInsets.only(
+                                    bottom: grid.AppDesktop.menuInset,
+                                  ),
+                                  child: Container(
+                                    key: const ValueKey('super-proposal-label'),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: grid.AppDesktop.controlGap,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      border: Border.all(
+                                        color: DesktopChrome.rim,
+                                      ),
+                                      borderRadius: BorderRadius.circular(
+                                        DesktopChrome.rowRadius,
+                                      ),
+                                    ),
+                                    child: Text(
+                                      "Proposal · on $owner's behalf",
+                                      style: DesktopChrome.metadata(),
+                                    ),
+                                  ),
+                                ),
                               if (message.terminalNote case final note?)
                                 Padding(
                                   padding: const EdgeInsets.only(bottom: 6),
@@ -347,33 +487,66 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   ),
                                 ),
                               if (message.text.isNotEmpty)
-                                ConstrainedBox(
-                                  constraints: const BoxConstraints(
-                                    maxWidth: 960,
-                                  ),
-                                  child: SuperTabMessageText(
-                                    message.text,
-                                    references: widget.references,
-                                    onOpenGroup: widget.onOpenGroup,
-                                    mentions: widget.mentions,
+                                Opacity(
+                                  opacity: widget.dimmed ? 0.6 : 1,
+                                  child: ConstrainedBox(
+                                    constraints: const BoxConstraints(
+                                      maxWidth: 960,
+                                    ),
+                                    child: SuperTabMessageText(
+                                      message.text,
+                                      references: widget.references,
+                                      onOpenGroup: widget.onOpenGroup,
+                                      mentions: widget.mentions,
+                                      addresses: widget.mentionAddresses,
+                                      taggedYou: taggedYou,
+                                    ),
                                   ),
                                 ),
                               if (message.attachments.isNotEmpty)
-                                Padding(
-                                  padding: EdgeInsets.only(
-                                    top: message.text.isEmpty ? 0 : 8,
-                                  ),
-                                  child: SuperTabAttachmentChips(
-                                    message.attachments,
+                                Opacity(
+                                  opacity: widget.dimmed ? 0.6 : 1,
+                                  child: Padding(
+                                    padding: EdgeInsets.only(
+                                      top: message.text.isEmpty ? 0 : 8,
+                                    ),
+                                    child: SuperTabAttachments(
+                                      message.attachments,
+                                      conversationId: message.conversationId,
+                                      messageId: message.id,
+                                    ),
                                   ),
                                 ),
-                              SuperTabPullRequestLinks(message.text),
+                              widget.card ??
+                                  SuperTabPullRequestLinks(message.text),
+                              if (widget.linkTarget case final resolve?)
+                                if (widget.onOpenLink case final open?)
+                                  SuperTabMessageLinkPreviews(
+                                    message.text,
+                                    resolve: resolve,
+                                    onOpen: open,
+                                  ),
                               SuperTabReactionBar(
                                 message: message,
                                 readerId: widget.readerId,
                                 nameOf: widget.reactorName ?? (_, id) => id,
                                 onReact: widget.onReact,
                               ),
+                              if ((widget.thread, widget.onOpenThread) case (
+                                final thread?,
+                                final open?,
+                              ))
+                                SuperTabThreadLine(
+                                  key: ValueKey(
+                                    'super-thread-line-${message.id}',
+                                  ),
+                                  thread: thread,
+                                  unread: widget.threadUnread,
+                                  onOpen: open,
+                                  member: widget.member,
+                                  trailing: widget.threadTrailing,
+                                  end: widget.threadEnd,
+                                ),
                               ...widget.receipts,
                             ],
                           ),
@@ -418,11 +591,39 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                 onPressed: _copy,
                               ),
                             ),
+                            if (widget.link case final link?)
+                              fingerTarget(
+                                enabled: phone,
+                                SuperTabMessageMoreMenu(
+                                  key: ValueKey(
+                                    'super-message-more-${message.id}',
+                                  ),
+                                  actions: [
+                                    (
+                                      label: 'Copy link to message',
+                                      icon: AppIcons.link2,
+                                      onPressed: () =>
+                                          unawaited(_copyLink(link)),
+                                    ),
+                                  ],
+                                ),
+                              ),
                           ],
                         ),
                       ),
                     ),
                   ),
+                  if (taggedYou)
+                    Positioned(
+                      left: 0,
+                      top: 0,
+                      bottom: 0,
+                      child: ColoredBox(
+                        key: ValueKey('super-tagged-bar-${message.id}'),
+                        color: grid.AppPalette.accentOnSurface,
+                        child: const SizedBox(width: 3),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -498,6 +699,313 @@ class SuperTabMessageHighlight extends StatelessWidget {
       duration: const Duration(milliseconds: 400),
       color: on ? DesktopChrome.selection : Colors.transparent,
       child: child,
+    );
+  }
+}
+
+/// A quiet link in a message: a hand cursor, reached by Tab and pressed with
+/// Enter or Space, and a button with [label] to assistive technology. Focus
+/// draws the shared rim, reserved at rest so it never moves the words.
+class SuperTabLink extends StatefulWidget {
+  const SuperTabLink({
+    super.key,
+    required this.onTap,
+    required this.label,
+    required this.child,
+  });
+
+  /// Null disables it, for pointer, keyboard and screen readers alike.
+  final VoidCallback? onTap;
+  final String label;
+  final Widget child;
+
+  @override
+  State<SuperTabLink> createState() => _SuperTabLinkState();
+}
+
+class _SuperTabLinkState extends State<SuperTabLink> {
+  var _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final radius = BorderRadius.circular(DesktopChrome.controlRadius);
+    final enabled = widget.onTap != null;
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      label: widget.label,
+      child: InkWell(
+        onTap: widget.onTap,
+        canRequestFocus: enabled,
+        onFocusChange: (focused) => setState(() => _focused = focused),
+        mouseCursor: enabled ? SystemMouseCursors.click : MouseCursor.defer,
+        borderRadius: radius,
+        hoverColor: Colors.transparent,
+        focusColor: Colors.transparent,
+        highlightColor: Colors.transparent,
+        splashFactory: NoSplash.splashFactory,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: radius,
+            border: Border.all(
+              color: _focused ? DesktopChrome.focusRing : Colors.transparent,
+              width: grid.AppDesktop.focusWidth,
+            ),
+          ),
+          child: ExcludeSemantics(child: widget.child),
+        ),
+      ),
+    );
+  }
+}
+
+/// Who a message author is in the Swarm as last read, by kind and id: the
+/// person, or the agent, whose face their own messages wear. Both are null
+/// for someone no longer in it.
+typedef SuperTabMemberOf =
+    ({SuperTabPerson? person, SuperTabAgent? agent}) Function(
+      String kind,
+      String id,
+    );
+
+/// The line under a thread's root: who replied, how many replies, and when
+/// the last came. Bold while the thread has a reply the reader has not seen.
+/// Like Slack's, it is one padded bar as wide as its words: hover or keyboard
+/// focus fills and frames it, reads View thread and shows a chevron, and a
+/// click anywhere on it opens the thread (Huy, 2026-11-03, #2315).
+class SuperTabThreadLine extends StatelessWidget {
+  const SuperTabThreadLine({
+    super.key,
+    required this.thread,
+    required this.unread,
+    required this.onOpen,
+    this.member,
+    this.trailing,
+    this.end,
+  });
+
+  final SuperTabThread thread;
+
+  /// Drawn after the line's link, outside it: a thread session's mark.
+  final Widget? trailing;
+
+  /// Drawn last, outside the line's link: End session.
+  final Widget? end;
+  final bool unread;
+  final VoidCallback onOpen;
+
+  /// Dresses each reply author as their own messages are: a person's
+  /// picture and status, an agent's avatar.
+  final SuperTabMemberOf? member;
+
+  /// Reply authors' faces: at most this many, newest first.
+  static const _faces = 5;
+
+  Widget _face(Map<String, dynamic> author) {
+    const size = 24.0;
+    final kind = author['kind'] as String? ?? '';
+    final id = author['id'] as String? ?? '';
+    switch ((kind, member?.call(kind, id))) {
+      case ('agent', (agent: final agent?, person: _)):
+        return SuperTabAvatar.agent(agent, size: size, engineBadge: false);
+      case ('person', (person: final person?, agent: _)):
+        return SuperTabAvatar.person(person, size: size);
+    }
+    // Someone no longer in the Swarm keeps the face their recorded name gives.
+    return SuperTabAvatar(
+      identity: '$kind:$id',
+      name: kind == 'agent'
+          ? (author['displayName'] ?? author['name'] ?? 'Agent') as String
+          : superTabPersonName(author['name'] as String? ?? ''),
+      size: size,
+      pattern: kind == 'agent',
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    // A session's thread with no reply yet: its mark is the line, and opens it.
+    if (thread.replies == 0 && trailing != null) {
+      final open = SuperTabLink(
+        label: 'Open thread',
+        onTap: onOpen,
+        child: trailing!,
+      );
+      return Padding(
+        padding: const EdgeInsets.only(top: grid.AppDesktop.menuInset),
+        child: end == null ? open : _wrapped([open, _dot, end!]),
+      );
+    }
+    final count = thread.replies == 1 ? '1 reply' : '${thread.replies} replies';
+    final last = thread.lastAt;
+    final lastReply = last == null
+        ? null
+        : 'Last reply ${superTabAgo(DateTime.now().difference(last))}';
+    final when = DesktopChrome.metadata();
+    // Wide enough for either words, so hover moves nothing.
+    final slot = _widest(context, [?lastReply, 'View thread'], when);
+    final link = _SuperTabThreadBar(
+      key: ValueKey('super-thread-bar-${thread.id}'),
+      label: unread ? '$count, unread' : count,
+      onTap: onOpen,
+      builder: (active) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final author in thread.authors.take(_faces)) ...[
+            _face(author),
+            const SizedBox(width: grid.AppDesktop.menuInset),
+          ],
+          Flexible(
+            child: Text(
+              count,
+              key: ValueKey('super-thread-count-${thread.id}'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: DesktopChrome.control(color: DesktopChrome.accent)
+                  .copyWith(
+                    fontWeight: unread ? FontWeight.w700 : FontWeight.w500,
+                  ),
+            ),
+          ),
+          const SizedBox(width: grid.AppDesktop.controlGap),
+          Flexible(
+            child: SizedBox(
+              width: slot,
+              child: Text(
+                active ? 'View thread' : lastReply ?? '',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: when,
+              ),
+            ),
+          ),
+          const SizedBox(width: grid.AppDesktop.controlGap),
+          Opacity(
+            opacity: active ? 1 : 0,
+            child: Icon(
+              AppIcons.chevronRight,
+              key: ValueKey('super-thread-chevron-${thread.id}'),
+              size: AppIcons.inlineSize,
+              color: DesktopChrome.muted,
+            ),
+          ),
+        ],
+      ),
+    );
+    return Padding(
+      padding: const EdgeInsets.only(top: grid.AppDesktop.menuInset),
+      child: trailing == null
+          ? link
+          : _wrapped([
+              link,
+              trailing!,
+              if (end != null) ...[_dot, end!],
+            ]),
+    );
+  }
+
+  Widget get _dot =>
+      ExcludeSemantics(child: Text(' · ', style: DesktopChrome.metadata()));
+
+  /// On one line while it fits, and on two in a narrow chat.
+  Widget _wrapped(List<Widget> children) =>
+      Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: children);
+
+  /// The width of the widest of [texts] in [style], as this context lays out.
+  static double _widest(
+    BuildContext context,
+    List<String> texts,
+    TextStyle style,
+  ) {
+    var widest = 0.0;
+    for (final text in texts) {
+      final painter = TextPainter(
+        text: TextSpan(text: text, style: style),
+        textDirection: Directionality.of(context),
+        textScaler: MediaQuery.textScalerOf(context),
+        maxLines: 1,
+      )..layout();
+      if (painter.width > widest) widest = painter.width;
+      painter.dispose();
+    }
+    return widest.ceilToDouble();
+  }
+}
+
+/// The reply bar: one target, a hand cursor anywhere on it, reached by Tab and
+/// pressed with Enter or Space. Hover fills it and draws the rim; focus fills
+/// it and draws the blue boundary. Both rims are reserved at rest, so neither
+/// moves the words. [builder] is told whether it is hovered or focused.
+class _SuperTabThreadBar extends StatefulWidget {
+  const _SuperTabThreadBar({
+    super.key,
+    required this.label,
+    required this.onTap,
+    required this.builder,
+  });
+
+  final String label;
+  final VoidCallback onTap;
+  final Widget Function(bool active) builder;
+
+  /// No wider than this, however wide the chat.
+  static const maxWidth = 480.0;
+
+  @override
+  State<_SuperTabThreadBar> createState() => _SuperTabThreadBarState();
+}
+
+class _SuperTabThreadBarState extends State<_SuperTabThreadBar> {
+  var _hovered = false;
+  var _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final radius = BorderRadius.circular(grid.AppCard.insetRadius);
+    final active = _hovered || _focused;
+    return Semantics(
+      button: true,
+      label: widget.label,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(
+          maxWidth: _SuperTabThreadBar.maxWidth,
+          minHeight: 32,
+        ),
+        child: InkWell(
+          onTap: widget.onTap,
+          onHover: (hovered) => setState(() => _hovered = hovered),
+          onFocusChange: (focused) => setState(() => _focused = focused),
+          mouseCursor: SystemMouseCursors.click,
+          borderRadius: radius,
+          hoverColor: Colors.transparent,
+          focusColor: Colors.transparent,
+          highlightColor: grid.AppSurface.hoverFill,
+          splashFactory: NoSplash.splashFactory,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: active ? grid.AppSurface.hoverFill : Colors.transparent,
+              borderRadius: radius,
+              border: Border.all(
+                color: _focused
+                    ? DesktopChrome.focusRing
+                    : _hovered
+                    ? DesktopChrome.rim
+                    : Colors.transparent,
+                width: grid.AppDesktop.focusWidth,
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: grid.AppDesktop.menuInset,
+              ),
+              child: ExcludeSemantics(child: widget.builder(active)),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

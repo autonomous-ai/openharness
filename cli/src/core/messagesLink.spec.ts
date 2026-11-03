@@ -236,12 +236,16 @@ describe('Agent Messages in its own process, as the core keeps it', () => {
     expect(notify.mock.calls).toEqual([[{ type: 'service_event', payload: { kind: 'settings' } }]])
   })
 
-  it('tells the process the desk changed, and no other notice', () => {
+  it('tells the process the desk or the machine list changed, and no other notice', () => {
     const { link: l, notify } = link()
     l.notice({ type: 'desk_changed', revision: 7 })
     l.notice({ type: 'machines_changed', reason: 'renamed' })
     l.notice({ type: 'connectors_changed', revision: 1 })
-    expect(notify.mock.calls).toEqual([[{ type: 'service_event', payload: { kind: 'notice', notice: { type: 'desk_changed', revision: 7 } } }]])
+    l.notice({ type: 'zoo_changed', revision: 2 })
+    expect(notify.mock.calls).toEqual([
+      [{ type: 'service_event', payload: { kind: 'notice', notice: { type: 'desk_changed', revision: 7 } } }],
+      [{ type: 'service_event', payload: { kind: 'notice', notice: { type: 'machines_changed', reason: 'renamed' } } }],
+    ])
   })
 })
 

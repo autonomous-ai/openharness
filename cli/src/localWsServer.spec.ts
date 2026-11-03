@@ -1,3 +1,4 @@
+import type { Socket } from 'node:net'
 import http from 'node:http'
 import net, { type AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -220,6 +221,30 @@ describe('local CLI WebSocket', () => {
       expect(await connected).toMatchObject({ type: 'connected', payload: { machineId } })
       ws.close()
     }
+  })
+
+  // Audit H1: another account may have heard it while it held this port during a restart.
+  it('refuses a TCP upgrade with the right credential from another account', async () => {
+    const credential = 'c'.repeat(43)
+    const url = await start(new FakeBackend(), { localCredential: credential, peerAccount: async () => false })
+    const ws = new WebSocket(url, { headers: { 'x-harness-local': credential } })
+    expect(await new Promise<number>((resolve) => ws.once('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0)))).toBe(401)
+  })
+
+  it('survives a client that resets while the lookup of who it is runs', async () => {
+    const credential = 'c'.repeat(43)
+    let release: (mine: boolean) => void = () => {}
+    let held: Socket | undefined
+    const url = await start(new FakeBackend(), { localCredential: credential, peerAccount: (socket) => { held = socket; return new Promise((resolve) => { release = resolve }) } })
+    const ws = new WebSocket(url, { headers: { 'x-harness-local': credential } })
+    ws.on('error', () => {})
+    for (let n = 0; n < 200 && !held; n++) await new Promise(resolve => setTimeout(resolve, 5))
+    expect(held!.listenerCount('error')).toBeGreaterThan(0)
+    held!.emit('error', new Error('read ECONNRESET'))
+    held!.destroy()
+    release(true)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(ws.readyState).not.toBe(WebSocket.OPEN)
   })
 
   it('takes an upgrade over the daemon\'s socket with no credential, the TCP port still wanting one', async () => {
@@ -783,6 +808,33 @@ describe('local CLI WebSocket', () => {
       // Only a literal true marks it: anything else is an ordinary announce.
       { active: 's1', tiles: [], swarms: [{ id: 's1', name: 'Swarm', agentIds: [], panes: 0, superTabId: 'st_1' }] },
     ])
+    ws.close()
+  })
+
+  it('app_swarms keeps a Swarm tab\'s conversationId, and drops one that is not an id', async () => {
+    const backend = new FakeBackend()
+    const seen: unknown[] = []
+    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
+    local = attachLocalWsServer(server, { machineId, backend, onAppSwarms: (swarms) => seen.push(swarms) })
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
+    const ws = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`)
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    await connected
+    ws.send(JSON.stringify({ type: 'app_swarms', payload: { active: 's1', swarms: [
+      { id: 's1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st_1', projectId: 'p-1', conversationId: 'pm-1' },
+      { id: 's2', name: 'Bad', agentIds: [], panes: 1, superTabId: 'st_1', conversationId: 'no spaces' },
+      { id: 's3', name: 'Long', agentIds: [], panes: 1, superTabId: 'st_1', conversationId: 'c'.repeat(48) },
+      { id: 's4', name: 'Number', agentIds: [], panes: 1, superTabId: 'st_1', conversationId: 7 },
+    ] } }))
+    await vi.waitFor(() => expect(seen).toHaveLength(1))
+    expect(seen[0]).toEqual({ active: 's1', tiles: [], swarms: [
+      { id: 's1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st_1', projectId: 'p-1', conversationId: 'pm-1' },
+      { id: 's2', name: 'Bad', agentIds: [], panes: 1, superTabId: 'st_1' },
+      { id: 's3', name: 'Long', agentIds: [], panes: 1, superTabId: 'st_1' },
+      { id: 's4', name: 'Number', agentIds: [], panes: 1, superTabId: 'st_1' },
+    ] })
     ws.close()
   })
 

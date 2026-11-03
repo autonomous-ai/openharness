@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { GuestRunner } from '../lib/guestAccounts.js'
-import { adminRunner } from './admin.js'
+import { adminPromptShows, adminRunner } from './admin.js'
 
 const cleanup: string[] = []
 afterEach(() => { for (const dir of cleanup.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -78,6 +78,168 @@ describe('adminRunner', () => {
       message: 'could not delete the account harnessteam: macOS did not allow it (eDSPermissionError). Nothing was removed' })
     expect(await fixture({ code: 3, stderr: '' }).run(() => ({ script: '' }), 'p', 'sudo'))
       .toEqual({ ok: false, code: 'FAILED', message: 'The script stopped (exit 3).', status: 3 })
+  })
+
+  describe('on Linux', () => {
+    function linux(answer: { code: number | null; stdout?: string; stderr?: string }, graphical: boolean) {
+      const parent = mkdtempSync(join(tmpdir(), 'team-admin-'))
+      cleanup.push(parent)
+      const stage = join(parent, 'stage')
+      const seen: { script?: string } = {}
+      const runner = vi.fn<GuestRunner>(async (_command, args) => {
+        seen.script = readFileSync(args.at(-1)!, 'utf8')
+        return { code: answer.code, stdout: answer.stdout ?? '', stderr: answer.stderr ?? '' }
+      })
+      const run = adminRunner({ runner, platform: 'linux', graphical, makeStage: () => { mkdirSync(stage); return stage } })
+      return { run, runner, stage, seen }
+    }
+
+    it('runs the staged script with pkexec in a desktop session, and removes the stage', async () => {
+      const f = linux({ code: 0, stdout: 'harness: done\n' }, true)
+      expect(await f.run((dir) => ({ script: `#!/bin/sh\necho ${dir}\n` }), 'p')).toEqual({ ok: true, stdout: 'harness: done\n' })
+      const [command, args] = f.runner.mock.calls[0]!
+      expect(command).toBe('pkexec')
+      expect(args).toEqual(['/bin/sh', join(f.stage, 'run.sh')])
+      expect(f.seen.script).toBe(`#!/bin/sh\necho ${f.stage}\n`)
+      expect(existsSync(f.stage)).toBe(false)
+    })
+
+    it('reads pkexec\'s 126 and 127 as a cancelled prompt, and keeps the script\'s own reason and status', async () => {
+      // pkexec's own words (polkit's pkexec.c): 126 for a dismissed dialog, 127 for a refusal.
+      for (const [code, stderr] of [[126, ''], [126, 'Error executing command as another user: Request dismissed\n'],
+        [127, 'Error executing command as another user: Not authorized\n\nThis incident has been reported.\n']] as const) {
+        expect(await linux({ code, stderr }, true).run(() => ({ script: '' }), 'p'), stderr)
+          .toEqual({ ok: false, code: 'CANCELLED', message: 'The administrator prompt was cancelled.' })
+      }
+      // 127 is also no polkit agent to ask with, and a command the script could not find: a failure, never a "no" the
+      // person gave, which Desktop's offer would remember for good.
+      expect(await linux({ code: 127, stderr: 'Error executing command as another user: No authentication agent found.\n' }, true)
+        .run(() => ({ script: '' }), 'p'))
+        .toEqual({ ok: false, code: 'FAILED', status: 127, message: 'Error executing command as another user: No authentication agent found.' })
+      // As pkexec 124 answered in the gridtest VM (Ubuntu 24.04, 2026-10-28), run with no agent and no terminal.
+      expect(await linux({ code: 127, stderr: 'Error creating textual authentication agent: Error opening current controlling terminal for the process (`/dev/tty\'): No such device or address\n' }, true)
+        .run(() => ({ script: '' }), 'p')).toMatchObject({ ok: false, code: 'FAILED', status: 127 })
+      expect(await linux({ code: 127, stderr: '/root/run.sh: 12: setfacl: not found\n' }, true).run(() => ({ script: '' }), 'p'))
+        .toMatchObject({ ok: false, code: 'FAILED', status: 127 })
+      expect(await linux({ code: 3, stderr: 'harness: no tmux every account can run: install it (apt install tmux / dnf install tmux)\n' }, true)
+        .run(() => ({ script: '' }), 'p'))
+        .toEqual({ ok: false, code: 'FAILED', status: 3, message: 'no tmux every account can run: install it (apt install tmux / dnf install tmux)' })
+    })
+
+    it('without a desktop session, answers that it needs a terminal and runs nothing', async () => {
+      const f = linux({ code: 0 }, false)
+      expect(await f.run(() => ({ script: '' }), 'p'))
+        .toEqual({ ok: false, code: 'NO_PROMPT', message: 'No administrator prompt here: run harness team setup in a terminal.' })
+      expect(f.runner).not.toHaveBeenCalled()
+      expect(existsSync(f.stage)).toBe(false)
+    })
+
+    it('can show the prompt only with pkexec and a display', () => {
+      const pkexec = (path: string) => path === '/usr/bin/pkexec'
+      expect(adminPromptShows({ DISPLAY: ':0' }, pkexec)).toBe(true)
+      expect(adminPromptShows({ WAYLAND_DISPLAY: 'wayland-0' }, pkexec)).toBe(true)
+      // The owner's daemon under systemd --user, as it usually runs: no display in its environment.
+      expect(adminPromptShows({}, pkexec)).toBe(false)
+      expect(adminPromptShows({ DISPLAY: ':0' }, () => false)).toBe(false)
+    })
+
+    it('runs it with sudo in the terminal when asked, desktop session or not', async () => {
+      const f = linux({ code: 0, stdout: 'ok\n' }, false)
+      expect(await f.run(() => ({ script: '' }), 'Harness wants it.', 'sudo')).toEqual({ ok: true, stdout: 'ok\n' })
+      expect(f.runner.mock.calls[0]![0]).toBe('sudo')
+      expect(f.runner.mock.calls[0]![1]).toEqual(['-k', '-p', 'Harness wants it.\nPassword for %u: ', '/bin/sh', join(f.stage, 'run.sh')])
+    })
+  })
+
+  describe('on Windows', () => {
+    const OWNER_SID = 'S-1-5-21-1111111111-2222222222-3333333333-1001'
+    function windows(answer: { code: number | null; stdout?: string; stderr?: string }, icacls = 0, encoding: BufferEncoding = 'utf8',
+      whoami = `"desktop\\owner-placeholder","${OWNER_SID}"\r\n`) {
+      const parent = mkdtempSync(join(tmpdir(), 'team-admin-'))
+      cleanup.push(parent)
+      const stage = join(parent, 'stage')
+      const seen: { script?: string; wrapper?: string } = {}
+      // Never powershell, icacls or whoami: the fake reads what was staged, as the elevated script would, and writes what it said.
+      const runner = vi.fn<GuestRunner>(async (command) => {
+        if (command === 'whoami') return { code: whoami ? 0 : 1, stdout: whoami, stderr: '' }
+        if (command === 'icacls') return { code: icacls, stdout: '', stderr: icacls ? 'Access is denied.' : '' }
+        seen.script = readFileSync(join(stage, 'run.ps1'), 'utf8')
+        seen.wrapper = readFileSync(join(stage, 'elevated.ps1'), 'utf8')
+        if (answer.stdout !== undefined) writeFileSync(join(stage, 'stdout.txt'), answer.stdout)
+        if (answer.stderr !== undefined) writeFileSync(join(stage, 'stderr.txt'), answer.stderr, encoding)
+        return { code: answer.code, stdout: '', stderr: '' }
+      })
+      const run = adminRunner({ runner, platform: 'win32', makeStage: () => { mkdirSync(stage); return stage } })
+      return { run, runner, stage, seen }
+    }
+    const decoded = (args: readonly string[]) => Buffer.from(args[args.indexOf('-EncodedCommand') + 1]!, 'base64').toString('utf16le')
+    const callOf = (f: { runner: { mock: { calls: Parameters<GuestRunner>[] } } }, name: string) => f.runner.mock.calls.find(([command]) => command === name)!
+
+    it('makes the staging folder the owner\'s alone, by SID, before anything is written in it', async () => {
+      const f = windows({ code: 0, stdout: '' })
+      await f.run(() => ({ script: 'exit 0' }), 'p')
+      expect(f.runner.mock.calls.map(([command]) => command)).toEqual(['whoami', 'icacls', 'powershell.exe'])
+      expect(callOf(f, 'whoami')[1]).toEqual(['/user', '/fo', 'csv', '/nh'])
+      // The owner, SYSTEM and Administrators, each by SID: a name could resolve to a same-named domain or local account,
+      // and SYSTEM's and Administrators' change with the language of Windows. Nothing inherited.
+      expect(callOf(f, 'icacls')[1]).toEqual([f.stage, '/inheritance:r', '/grant:r', `*${OWNER_SID}:(OI)(CI)F`, '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F'])
+    })
+
+    it('runs nothing when it cannot tell the owner\'s SID', async () => {
+      const f = windows({ code: 0 }, 0, 'utf8', '')
+      expect(await f.run(() => ({ script: '' }), 'p')).toEqual({ ok: false, code: 'FAILED', message: 'Could not read this account\'s SID (whoami /user).' })
+      expect(f.runner.mock.calls.map(([command]) => command)).toEqual(['whoami'])
+      expect(existsSync(f.stage)).toBe(false)
+    })
+
+    it('keeps what the script wrote to its own stdout and stderr: run.ps1 runs as a child whose output goes to the files', async () => {
+      const f = windows({ code: 0, stdout: '' })
+      await f.run(() => ({ script: 'exit 0' }), 'p')
+      // `& run.ps1 1> out 2> err` in the same process keeps PowerShell's streams only, and the scripts write through
+      // [Console]: every failure read "The script stopped (exit N)" and removal's team computer line never came back.
+      expect(f.seen.wrapper).not.toContain('1> $out')
+      expect(f.seen.wrapper).toContain("$ps = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'")
+      expect(f.seen.wrapper).toContain("-ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', \"`\"$run`\"\")")
+      expect(f.seen.wrapper).toContain('-NoNewWindow -PassThru -RedirectStandardOutput $out -RedirectStandardError $err')
+      expect(f.seen.wrapper).toContain('exit $p.ExitCode')
+    })
+
+    it('runs run.ps1 elevated through User Account Control, and hands back what it said', async () => {
+      const f = windows({ code: 0, stdout: 'harness: team computer abc\r\n' })
+      expect(await f.run((dir) => ({ script: `Write-Output '${dir}'`, files: { 'team.json': '{}' } }), 'p'))
+        .toEqual({ ok: true, stdout: 'harness: team computer abc\r\n' })
+      const [command, args] = callOf(f, 'powershell.exe')
+      expect(command).toBe('powershell.exe')
+      expect(args.slice(0, 3)).toEqual(['-NoProfile', '-NonInteractive', '-EncodedCommand'])
+      const outer = decoded(args)
+      expect(outer).toContain('Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru')
+      expect(outer).toContain(`'-NoProfile -ExecutionPolicy Bypass -File "${join(f.stage, 'elevated.ps1')}"'`)
+      // With a byte order mark, which Windows PowerShell 5.1 needs to read anything but ASCII as UTF-8.
+      expect(f.seen.script).toBe(`﻿Write-Output '${f.stage}'`)
+      expect(f.seen.wrapper).toContain("Join-Path $PSScriptRoot 'run.ps1'")
+      expect(existsSync(f.stage)).toBe(false)
+    })
+
+    it('reads 1223 as a cancelled prompt, and keeps the script\'s own reason and status', async () => {
+      expect(await windows({ code: 1223 }).run(() => ({ script: '' }), 'p'))
+        .toEqual({ ok: false, code: 'CANCELLED', message: 'The administrator prompt was cancelled.' })
+      expect(await windows({ code: 4, stderr: 'harness: an account named harnessteam already exists\r\n' }).run(() => ({ script: '' }), 'p'))
+        .toEqual({ ok: false, code: 'FAILED', status: 4, message: 'an account named harnessteam already exists' })
+      expect(await windows({ code: 2 }).run(() => ({ script: '' }), 'p'))
+        .toEqual({ ok: false, code: 'FAILED', status: 2, message: 'The script stopped (exit 2).' })
+      // As Windows PowerShell 5.1 writes a redirection it was not told the encoding of: UTF-16 with its byte order mark.
+      const utf16 = `﻿${'harness: could not make the account\r\n'}`
+      expect(await windows({ code: 5, stderr: Buffer.from(utf16, 'utf16le').toString('latin1') }, 0, 'latin1').run(() => ({ script: '' }), 'p'))
+        .toEqual({ ok: false, code: 'FAILED', status: 5, message: 'could not make the account' })
+    })
+
+    it('runs nothing when the staging folder cannot be made private', async () => {
+      const f = windows({ code: 0 }, 5)
+      expect(await f.run(() => ({ script: '' }), 'p')).toEqual({ ok: false, code: 'FAILED',
+        message: 'Could not make the staging folder private: Access is denied.' })
+      expect(f.runner.mock.calls.map(([command]) => command)).toEqual(['whoami', 'icacls'])
+      expect(existsSync(f.stage)).toBe(false)
+    })
   })
 
   it('removes the stage when building the script throws', async () => {

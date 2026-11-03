@@ -73,6 +73,7 @@ export function startSharing(core: CoreApi, ports: CorePorts, options: SharingOp
   const owner = new HarnessShareOwner({
     derivedGrants: superTabs.known,
     allowsGrant: superTabs.allows,
+    pausedGrant: superTabs.paused,
     machineId: () => core.daemon.machineId(),
     key: {
       publicKey: async () => b64d(await core.account.observerKey.publicKey()),

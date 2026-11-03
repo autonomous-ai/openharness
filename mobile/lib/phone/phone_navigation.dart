@@ -13,13 +13,28 @@ import 'phone_shell_scope.dart';
 
 /// Every phone page slides in the iOS way, and goes back with the edge swipe — unless
 /// [swipeToGoBack] is off, which is how a page that wants the horizontal axis for itself keeps it.
-Route<void> phoneRoute(WidgetBuilder builder, {bool swipeToGoBack = true}) =>
-    swipeToGoBack
-    ? CupertinoPageRoute<void>(builder: builder)
-    : _NoSwipeBackRoute<void>(builder: builder);
+///
+/// [listensForItself] is a promise that the page reads nothing from the app in `build` without
+/// listening to it: the shell then stops rebuilding the whole stack on every tick of the app while
+/// it is up ([phoneRouteListensForItself]). Left off, the page is rebuilt from above as it always
+/// was.
+Route<void> phoneRoute(
+  WidgetBuilder builder, {
+  bool swipeToGoBack = true,
+  bool listensForItself = false,
+}) => _PhoneRoute<void>(
+  builder: builder,
+  swipeToGoBack: swipeToGoBack,
+  listensForItself: listensForItself,
+);
 
-/// A phone page that slides and animates exactly like every other one, but cannot be dragged away
-/// from the left edge.
+/// [route] was pushed with `listensForItself` ([phoneRoute]): nothing on it needs the stack
+/// rebuilt from above.
+bool phoneRouteListensForItself(Route<Object?> route) =>
+    route is _PhoneRoute && route.listensForItself;
+
+/// A phone page. With [swipeToGoBack] off it slides and animates exactly like every other one, but
+/// cannot be dragged away from the left edge.
 ///
 /// ⚠️ **It turns off the GESTURE only, and that distinction is the whole point.** `popGestureEnabled`
 /// is read by `_CupertinoBackGestureDetector` and by nothing else, so every other way out still
@@ -35,11 +50,18 @@ Route<void> phoneRoute(WidgetBuilder builder, {bool swipeToGoBack = true}) =>
 ///
 /// A machine keeps the gesture: there is no pager under it competing for the axis, and it is a plain
 /// pushed page like any other.
-class _NoSwipeBackRoute<T> extends CupertinoPageRoute<T> {
-  _NoSwipeBackRoute({required super.builder});
+class _PhoneRoute<T> extends CupertinoPageRoute<T> {
+  _PhoneRoute({
+    required super.builder,
+    required this.swipeToGoBack,
+    required this.listensForItself,
+  });
+
+  final bool swipeToGoBack;
+  final bool listensForItself;
 
   @override
-  bool get popGestureEnabled => false;
+  bool get popGestureEnabled => swipeToGoBack && super.popGestureEnabled;
 }
 
 /// Where a tap on a machine goes. A machine this device holds no link to opens on ITS password
@@ -93,7 +115,7 @@ void openAgent(
       agentId: agentId,
       neighbours: swipeNeighbours,
     ),
-    // The horizontal axis belongs to the pager here — see [_NoSwipeBackRoute]. The way out is the
+    // The horizontal axis belongs to the pager here — see [_PhoneRoute]. The way out is the
     // header's back band, and on Android the back button as well.
     swipeToGoBack: false,
   );

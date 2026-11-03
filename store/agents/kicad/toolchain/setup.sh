@@ -10,12 +10,16 @@ cd "$(dirname "$0")/.."
 . toolchain/kicad.sh
 harness_node 22.12 || exit 1
 harness_venv .venv 3.12 3.10 || exit 1
+# uv on PATH for the package's CadQuery step (scripts/toolchain/install-cadquery.sh), which takes uv or
+# a python3.12 the machine has; a new Mac has neither, and without it the Case phase never runs.
+harness_uv || exit 1
 harness_kicad || exit 1
 toolchain/fetch-upstream.sh
 [ -x upstream/harness/kicad/toolchain/setup.sh ] || { echo "miss upstream/harness/kicad/toolchain/setup.sh"; exit 1; }
 # The package's setup also vendors the RP2040 firmware toolchain (Arm GNU + pico-sdk + picotool,
 # ~1.1 GB) and cmake + ninja as PyPI wheels — on this wrapper's venv Python, so a blank Mac needs
-# neither (the Firmware phase is done only when the binary is built).
+# neither (the Firmware phase is done only when the binary is built) — and CadQuery 2.7 for the
+# Case phase (~870 MB, under upstream/toolchain/case; $KICAD_CASE_PYTHON runs on it).
 HARNESS_DSH_DIR="$PWD/upstream/harness/kicad" CIRCUIT_PYTHON="$PWD/toolchain/python" \
   PICO_TOOLS_PYTHON="$PWD/.venv/bin/python" \
   KICADPY_CLI="$KICAD_CLI" KICADPY_PYTHON="$KICAD_PYTHON" CIRCUIT_KICAD_CLI="$KICAD_CLI" \

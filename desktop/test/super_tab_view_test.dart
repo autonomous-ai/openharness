@@ -1,15 +1,82 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/super_tabs/roster.dart';
 import 'package:harness/shared/widgets/app_icon_button.dart';
 
 import 'support/super_tab_fixture.dart';
+import 'support/super_tab_members.dart';
 
 void main() {
+  testWidgets('rapid pending rows have independent identity and dimmed text', (
+    tester,
+  ) async {
+    final s = ConversationServer();
+    final post = Completer<void>();
+    final c = SuperTabController(
+      tabId: 'tab',
+      accountId: 'owner',
+      save: s.save,
+      pollInterval: Duration.zero,
+      request: (method, path, {body}) async {
+        if (method == 'POST') await post.future;
+        return s.request(method, path, body: body);
+      },
+    );
+    await c.refresh();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SuperTabView(
+            controller: c,
+            onInvite: () {},
+            onAddAgent: (_) {},
+            onOpenTerminal: (_) {},
+            machineName: (_) => 'Test Mac',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final composer = find.byKey(const ValueKey('super-message-composer'));
+    for (final text in ['First quick send', 'Second quick send']) {
+      await tester.enterText(composer, text);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+    }
+    expect(tester.takeException(), isNull);
+    expect(find.byType(SuperTabMessageRow), findsNWidgets(2));
+    final firstId = c.outgoing(c.selectedId).first.operationId!;
+    final stableRow = find.byKey(ValueKey('super-row-$firstId'));
+    expect(stableRow, findsOneWidget);
+    final before = tester.element(stableRow);
+    final beforeHeight = tester.getSize(stableRow).height;
+    final dimmed = find.ancestor(
+      of: find.text('First quick send'),
+      matching: find.byWidgetPredicate((w) => w is Opacity && w.opacity < 1),
+    );
+    expect(dimmed, findsOneWidget);
+    post.complete();
+    await tester.pumpAndSettle();
+    expect(find.byType(SuperTabMessageRow), findsNWidgets(2));
+    expect(identical(before, tester.element(stableRow)), isTrue);
+    expect(
+      tester.getSize(stableRow).height,
+      beforeHeight,
+      reason: 'Replacing Sending with confirmation must not resize the row.',
+    );
+    expect(dimmed, findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+    c.dispose();
+  });
   testWidgets(
     'native observations keep their agent author and show source and truncation clearly',
     (tester) async {
@@ -87,6 +154,10 @@ void main() {
       Future<void> openList() async {
         await tester.tap(find.byTooltip('Project options'));
         await tester.pumpAndSettle();
+        await tester.tap(
+          find.widgetWithText(MenuItemButton, 'Project settings…'),
+        );
+        await tester.pumpAndSettle();
         await tester.tap(find.text('Archived conversations'));
         await tester.pumpAndSettle();
       }
@@ -143,6 +214,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
     await tester.tap(find.byTooltip('Project options'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(MenuItemButton, 'Project settings…'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Archived conversations'));
     await tester.pumpAndSettle();
@@ -209,7 +282,7 @@ void main() {
       await tester.tap(find.byTooltip('Conversations'));
       await tester.pumpAndSettle();
     }
-    await tester.tap(find.byKey(const ValueKey('super-project-toggle-lead')));
+    await tester.tap(find.byKey(const ValueKey('super-group-lead')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('super-group-offline')));
     await tester.pumpAndSettle();
@@ -243,7 +316,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('Members and machines'));
+      await tester.tap(find.byTooltip('Members'));
       await tester.pumpAndSettle();
       final roster = find.byType(SuperTabRoster);
       expect(tester.getSize(roster).width, 360 * 0.7);
@@ -298,7 +371,7 @@ void main() {
       expect(server.posts, isEmpty);
       await tester.tap(find.byTooltip('Conversations'));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-project-toggle-lead')));
+      await tester.tap(find.byKey(const ValueKey('super-group-lead')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('super-group-offline')));
       await tester.pumpAndSettle();
@@ -335,6 +408,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await openSuperTabMembers(tester);
     expect(find.text('Pilot'), findsOneWidget);
     expect(find.text('# Pilot'), findsOneWidget);
     expect(find.text('CHATS'), findsNothing);
@@ -451,8 +525,21 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('Humans'), findsOneWidget);
+      await openSuperTabMembers(tester);
+      expect(find.text('People'), findsOneWidget);
       final member = find.byKey(const ValueKey('super-member-agent-0'));
+      // Below twenty people, the agents holding no task fold under Idle (N).
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('super-members-idle')),
+        150,
+        scrollable: find
+            .descendant(
+              of: find.byType(SuperTabRoster),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+      await unfoldSuperTabIdle(tester);
       await tester.scrollUntilVisible(
         member,
         150,
@@ -468,8 +555,9 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(member);
       await tester.pumpAndSettle();
-      expect(find.byType(AlertDialog), findsOneWidget);
-      await tester.tap(find.widgetWithText(FilledButton, 'Open terminal'));
+      // The agent's card (Quiet Swarm).
+      expect(find.byKey(const ValueKey('super-agent-card')), findsOneWidget);
+      await tester.tap(find.text('Open terminal'));
       await tester.pumpAndSettle();
       expect(target?.id, 'agent-0');
       expect(find.byType(Dialog), findsNothing);
@@ -509,7 +597,8 @@ void main() {
       expect(find.text('Native terminal fixture'), findsOneWidget);
       expect(find.text('Review this result.'), findsNothing);
       expect(find.byKey(const ValueKey('super-group-lead')), findsOneWidget);
-      expect(find.byType(SuperTabRoster), findsOneWidget);
+      // The right column stays closed at rest beside the terminals too.
+      expect(find.byType(SuperTabRoster), findsNothing);
       expect(
         tester
             .widget<AppIconButton>(
@@ -524,14 +613,7 @@ void main() {
             .selected,
         isFalse,
       );
-      expect(
-        tester
-            .widget<AppIconButton>(
-              find.byKey(const ValueKey('super-pull-requests')),
-            )
-            .selected,
-        isFalse,
-      );
+      expect(find.byKey(const ValueKey('super-pull-requests')), findsNothing);
       expect(find.byTooltip('Conversation options'), findsNothing);
       await tester.binding.setSurfaceSize(const Size(800, 700));
       await tester.pumpAndSettle();

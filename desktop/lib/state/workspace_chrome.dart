@@ -50,13 +50,13 @@ class WorkspaceFooter {
 }
 
 /// What a host composition adds to the shared workspace. Desktop passes none;
-/// the web build (`lib/web/`) puts its mouse-first menu before the tabs, a bar
-/// over the picker, and names a machine for New Harness. [leadingWidth] is reserved before the tabs
-/// are measured.
+/// the web build (`lib/web/`) makes `+` a mouse-first menu, adds the account's
+/// avatar, a bar over the picker, and names a machine for
+/// New Harness.
 class WorkspaceChrome {
   const WorkspaceChrome({
-    required this.leadingWidth,
-    required this.leading,
+    this.newTabControl,
+    this.showsAccount = false,
     this.newHarnessMachine,
     this.pickerShowsBack = false,
     this.showsKeyHints = true,
@@ -78,10 +78,7 @@ class WorkspaceChrome {
 
   /// What a workspace with no host chrome (Desktop) reads: every switch at
   /// today's behavior.
-  static final _none = WorkspaceChrome(
-    leadingWidth: (_) => 0,
-    leading: (_, _) => const SizedBox.shrink(),
-  );
+  static const _none = WorkspaceChrome();
 
   /// The chrome the enclosing workspace was given, or the defaults when it
   /// was given none. For widgets the workspace builds, its overlays included;
@@ -94,9 +91,14 @@ class WorkspaceChrome {
   /// picker.
   final Widget Function(BuildContext context)? firstMachine;
 
-  final double Function(BuildContext context) leadingWidth;
-  final Widget Function(BuildContext context, WorkspaceCommands commands)
-  leading;
+  /// Replaces the wide bar's `+`, which otherwise opens a new tab. A compact
+  /// host's [compactTabs] draws its own.
+  final Widget Function(BuildContext context, WorkspaceCommands commands)?
+  newTabControl;
+
+  /// True puts the account's avatar on a viewer build's bar, as a local build
+  /// always has it.
+  final bool showsAccount;
 
   /// Where New Harness starts when no machine is this computer — a browser
   /// runs none. Null (or no answer) keeps sending the person to Machines.

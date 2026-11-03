@@ -8,12 +8,15 @@ import { harnessExecute, localCredentialHeaders } from '../lib/harness.mjs';
 import { daemonWake } from '../lib/wake.mjs';
 import { fakeBridge } from './fakes.mjs';
 
+// A folder too long for a socket has one under the home folder: only a home too long as well is left on the port.
+process.env.HOME = `/${'h'.repeat(120)}`;
+
 const CREDENTIAL = `test-local-credential-${'a'.repeat(21)}`; // the CLI's shape: 43 base64url characters
 const machine = { id:'rig', name:'GPU rig', transport:'harness', machineId:'machine-123' };
 
-/** A data folder as the CLI leaves it: 0700, holding a 0600 `hook-credential` (or none). */
+/** A data folder as the CLI leaves it, too long to hold a socket: the one case on TCP, with the credential: 0700, holding a 0600 `hook-credential` (or none). */
 function dataDir({ credential = CREDENTIAL, mode = 0o600, folderMode = 0o700 } = {}) {
-  const dir = join(mkdtempSync(join(tmpdir(), 'grid-credential-')), 'data');
+  const dir = join(mkdtempSync(join(tmpdir(), 'grid-credential-')), 'data-'.padEnd(120, 'x'));
   mkdirSync(dir, { mode:0o700 });
   if (credential !== null) { writeFileSync(join(dir, 'hook-credential'), `${credential}\n`, { mode:0o600 }); chmodSync(join(dir, 'hook-credential'), mode); }
   chmodSync(dir, folderMode);
@@ -34,14 +37,14 @@ test('the local credential is read the way the CLI reads it, and only then', () 
   assert.deepEqual(localCredentialHeaders({ ADAPTER_DATA_DIR:dataDir({ credential:'too-short' }) }), {});
 });
 
-// Windows reports every file as 0o666 and every folder as 0o777, so the POSIX mode checks would refuse the
-// credential the daemon wrote and the daemon, which wants it on TCP there, would answer 401 (cli hookAuth.ts).
-test('on Windows the credential is read whatever mode the folder and file report', (t) => {
+// On Windows the credential never goes to the port, whose holder may be another account's: the Team account's daemon
+// starts at boot, before the owner's (audit W1). The package reaches the daemon over its proven pipe instead (localDaemon.mjs).
+test('on Windows no credential is read: it never goes to the port', (t) => {
   const platform = Object.getOwnPropertyDescriptor(process, 'platform');
   Object.defineProperty(process, 'platform', { value:'win32' });
   t.after(() => Object.defineProperty(process, 'platform', platform));
-  assert.deepEqual(localCredentialHeaders({ ADAPTER_DATA_DIR:dataDir({ mode:0o666, folderMode:0o777 }) }), { 'X-Harness-Local':CREDENTIAL });
-  assert.deepEqual(localCredentialHeaders({ ADAPTER_DATA_DIR:dataDir({ credential:'too-short', mode:0o666 }) }), {}, 'the value is still checked');
+  assert.deepEqual(localCredentialHeaders({ ADAPTER_DATA_DIR:dataDir({ mode:0o666, folderMode:0o777 }) }), {});
+  assert.deepEqual(localCredentialHeaders({ ADAPTER_DATA_DIR:dataDir() }), {}, 'nor a credential the POSIX checks would pass');
 });
 
 test('a fleet command shows the bridge the local credential', async t => {

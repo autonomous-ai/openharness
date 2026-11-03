@@ -6,6 +6,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import type { SuperTabState } from '../model.js'
 import * as parts from '../parts/index.js'
+import { swarmTransaction } from '../cache.js'
 import { fingerprint, fingerprintDifference, lastActivity } from './fingerprint.js'
 import { restorePullRequestUrls } from './links.js'
 import { normalize } from './normalize.js'
@@ -37,7 +38,7 @@ export async function migrateSwarm(db: PrismaClient, tabId: string, { now = Date
   const started = Date.now()
   const empty = { tabId, bytes: 0, groups: 0, dormant: 0, parts: 0, messages: 0 }
   try {
-    return await db.$transaction(tx => migrateIn(tx, tabId, now(), started), MIGRATION_TRANSACTION)
+    return await swarmTransaction(db, tx => migrateIn(tx, tabId, now(), started), MIGRATION_TRANSACTION)
   } catch (error) {
     return { ...empty, ok: false, error: error instanceof Error ? error.message : String(error), ms: Date.now() - started }
   }

@@ -93,6 +93,24 @@ describe('runtime worker contract', () => {
     expect(legacyReply.answer.control.target).toEqual(legacyTarget)
     expect(runtimeAnswer(legacyReply.answer, legacy, { kind: 'records', records: [data] })).toBe(true)
     expect((await t.send({ operation: { kind: 'config' } })).answer.state.effort).toBe('high')
+    // The settings fill an effort the session has not shown; one it has (a reply's, a pane's) stays (#1966 review).
+    const shown = context()
+    shown.state.effort = 'medium'
+    expect((await t.send({ context: shown, operation: { kind: 'config' } })).answer.state.effort).toBe('medium')
+    t.adapter.configuredEffort.mockResolvedValueOnce('auto')
+    expect((await t.send({ context: shown, operation: { kind: 'config' } })).answer.state.effort).toBe('medium')
+    // An effort the settings filled follows them when they change: the marker crosses to the worker and back.
+    const filled = (await t.send({ operation: { kind: 'config' } })).answer.state
+    t.adapter.configuredEffort.mockResolvedValueOnce('medium')
+    expect((await t.send({ context: { ...context(), state: filled }, operation: { kind: 'config' } })).answer.state.effort).toBe('medium')
+    // A reply or the screen showing the settings' own effort makes it the session's: a later change leaves it (#1966 delta review).
+    const highReply = t.adapter.decode({ type: 'assistant', effort: 'high', message: { model: 'claude-opus-5-5' } })!
+    for (const operation of [{ kind: 'records', records: [highReply] }, { kind: 'pane', text: 'Opus 5.5 with high effort' }]) {
+      const shownHigh = (await t.send({ context: { ...context(), state: filled }, operation })).answer.state
+      expect(shownHigh.settingsEffort).toBeUndefined()
+      t.adapter.configuredEffort.mockResolvedValueOnce('medium')
+      expect((await t.send({ context: { ...context(), state: shownHigh }, operation: { kind: 'config' } })).answer.state.effort).toBe('high')
+    }
     expect((await t.send({ operation: { kind: 'pane', text: 'Opus 5 with high effort' } })).answer.state.model).toBe('claude-opus-5')
     expect((await t.send({ operation: { kind: 'models' } })).answer.models).toEqual([])
     expect((await t.send({ operation: { kind: 'catalog' } })).answer.catalog).toEqual([])

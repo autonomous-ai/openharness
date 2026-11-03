@@ -1,4 +1,5 @@
 import { subscribeDeskChanged, subscribeDeviceKeysChanged, subscribeZooChanged } from './bus.js'
+import { relaySwarmChanges } from './swarmClientPushes.js'
 
 /**
  * The account documents a WEB socket hears about — the desk and the zoo — forwarded to the clients
@@ -11,6 +12,9 @@ import { subscribeDeskChanged, subscribeDeviceKeysChanged, subscribeZooChanged }
  *    never re-fetches the zoo and the other way round.
  *  - `device_keys_changed` — the account's device key log grew (lib/deviceKeyLog.ts): the app re-reads
  *    from its own head and trusts the machines the log adds.
+ *  - `swarm_changed` — a Swarm the account is in changed (lib/swarmClientPushes.ts): the app
+ *    reads it again instead of every 15 s. A phone hears it once per
+ *    machine socket; the app reads once per burst.
  *
  * ⚠️ A phone holds one of these sockets PER MACHINE, so it hears each change once per machine. The
  * revision is what makes that harmless: an app already at that revision fetches nothing.
@@ -26,6 +30,7 @@ export async function relayWebDocumentPushes(userId: string, send: (frame: unkno
     unsubs.push(await subscribeDeskChanged(userId, (msg) => { send({ type: 'desk_changed', payload: { revision: msg.revision } }) }))
     if (opts.zoo) unsubs.push(await subscribeZooChanged(userId, (msg) => { send({ type: 'zoo_changed', payload: { revision: msg.revision } }) }))
     unsubs.push(await subscribeDeviceKeysChanged(userId, (msg) => { send({ type: 'device_keys_changed', payload: { seq: msg.seq, hash: msg.hash } }) }))
+    unsubs.push(await relaySwarmChanges(userId, send))
   } catch (err) {
     stop()
     throw err

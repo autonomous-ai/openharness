@@ -8,15 +8,17 @@ const getDevicePresence = vi.hoisted(() => vi.fn())
 const count = vi.hoisted(() => vi.fn())
 const create = vi.hoisted(() => vi.fn())
 const consumeNewIdQuota = vi.hoisted(() => vi.fn())
+const findUnique = vi.hoisted(() => vi.fn())
+const publishDeviceStatus = vi.hoisted(() => vi.fn())
 
 vi.mock('../lib/prisma.js', () => ({
   prisma: {
-    deviceBinding: { findMany, findFirst, count, create, update, updateMany },
+    deviceBinding: { findMany, findFirst, findUnique, count, create, update, updateMany },
     machine: { findMany: vi.fn() },
   },
   machineAlive: {},
 }))
-vi.mock('../lib/bus.js', () => ({ getDevicePresence, consumeNewIdQuota }))
+vi.mock('../lib/bus.js', () => ({ getDevicePresence, consumeNewIdQuota, publishDeviceStatus }))
 
 import { Prisma } from '@prisma/client'
 import { deviceService } from './DeviceService.js'
@@ -42,6 +44,8 @@ const device = (over: Record<string, unknown> = {}): Record<string, unknown> => 
 
 beforeEach(() => {
   vi.clearAllMocks()
+  findUnique.mockResolvedValue(null)
+  publishDeviceStatus.mockResolvedValue(1)
   updateMany.mockResolvedValue({ count: 1 })
   getDevicePresence.mockResolvedValue(false)
 })
@@ -223,7 +227,32 @@ describe('resolveOrCreateForComputer', () => {
 
   it('a lost create race converges on the winner\'s row', async () => {
     create.mockRejectedValue(new Prisma.PrismaClientKnownRequestError('dup', { code: 'P2002', clientVersion: 'x' }))
+    findUnique.mockResolvedValueOnce(null).mockResolvedValue({ userId: 'u1' })
     await resolve()
     expect(update).toHaveBeenCalledTimes(2) // the missed touch, then the converging one
+  })
+
+  // Review of #2159: the previous owner's open web sockets keep their own copy of the account's devices (lib/webWs.ts).
+  it('a computer another account held moves to this one, and its previous owner is told it is gone', async () => {
+    findUnique.mockResolvedValue({ userId: 'u0' })
+    const row = await resolve()
+    expect(row).toMatchObject({ userId: 'u1' })
+    expect(update).toHaveBeenLastCalledWith(expect.objectContaining({ data: expect.objectContaining({ userId: 'u1' }) }))
+    expect(publishDeviceStatus).toHaveBeenCalledWith('u0', { deviceId: row.deviceId, online: false, removed: true })
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('a reconnect of the owner\'s own computer tells nobody', async () => {
+    update.mockReset()
+    update.mockResolvedValue(device())
+    await resolve()
+    expect(publishDeviceStatus).not.toHaveBeenCalled()
+  })
+
+  it('the reconnect write matches only the owner\'s own row', async () => {
+    update.mockReset()
+    update.mockResolvedValue(device())
+    await resolve()
+    expect(update.mock.calls[0]![0].where).toMatchObject({ userId: 'u1' })
   })
 })

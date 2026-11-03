@@ -38,15 +38,22 @@ function knob(name: string, fallback: number, min: number, max: number): number 
   return n
 }
 
-interface Row { pid: number; ppid: number; rssBytes: number; command: string }
+interface Row { pid: number; ppid: number; rssBytes: number; cpuSeconds: number; command: string }
 
-/** Every process on the machine, as `ps` sees it: pid, parent, resident memory and command line. */
+/** `ps`'s cumulative CPU time, `[[dd-]hh:]mm:ss[.ss]`, in seconds. */
+function cpuSeconds(time: string): number {
+  const [days, clock] = time.includes('-') ? time.split('-') : ['0', time]
+  return Number(days) * 86_400 + clock.split(':').reverse().reduce((sum, part, i) => sum + Number(part) * 60 ** i, 0)
+}
+
+/** Every process on the machine, as `ps` sees it: pid, parent, resident memory, CPU time so far and command line. */
 const table = () => new Promise<Row[]>((done, fail) => {
-  execFile('ps', ['-axo', 'pid=,ppid=,rss=,command='], { timeout: 5_000, maxBuffer: 16 * MIB }, (error, stdout) => {
+  execFile('ps', ['-axo', 'pid=,ppid=,rss=,time=,command='], { timeout: 5_000, maxBuffer: 16 * MIB }, (error, stdout) => {
     if (error) { fail(error); return }
     done(String(stdout).split('\n').flatMap((line) => {
-      const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/.exec(line)
-      return match ? [{ pid: Number(match[1]), ppid: Number(match[2]), rssBytes: Number(match[3]) * 1024, command: match[4].trim() }] : []
+      const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/.exec(line)
+      return match ? [{ pid: Number(match[1]), ppid: Number(match[2]), rssBytes: Number(match[3]) * 1024, cpuSeconds: cpuSeconds(match[4]),
+        command: match[5].trim() }] : []
     }))
   })
 })
@@ -85,6 +92,21 @@ const SCENARIOS: Record<Scenario, string> = {
   defaults: 'never turned: every switch at its default (off)',
 }
 const chosen = (process.env.FOOTPRINT_SCENARIOS ?? 'on,off,defaults').split(',').map((name) => name.trim()).filter((name): name is Scenario => name in SCENARIOS)
+/** CPU % of one core over the window: each pid's CPU time from its first sample to its last, summed, over the window's
+ *  length. A pid seen once (born or gone in the window) adds nothing; null with no time to divide by. */
+function cpuOver(samples: Array<Array<{ pid: number; cpuSeconds: number }>>, spanSeconds: number): number | null {
+  const first = new Map<number, number>(), last = new Map<number, number>()
+  for (const sample of samples) for (const p of sample) { if (!first.has(p.pid)) first.set(p.pid, p.cpuSeconds); last.set(p.pid, p.cpuSeconds) }
+  const spent = [...last].reduce((sum, [pid, seconds]) => sum + seconds - first.get(pid)!, 0)
+  return spanSeconds > 0 ? 100 * spent / spanSeconds : null
+}
+
+/** The median and the slowest of a few timed reads. */
+function latency(times: number[]): { count: number; p50Ms: number | null; maxMs: number | null } {
+  const sorted = [...times].sort((a, b) => a - b)
+  return { count: sorted.length, p50Ms: sorted.length ? sorted[Math.floor((sorted.length - 1) / 2)]! : null, maxMs: sorted.at(-1) ?? null }
+}
+
 /** Every scenario measured in this run, written whole to FOOTPRINT_REPORT after each. */
 const reports: Record<string, unknown> = {}
 
@@ -139,19 +161,35 @@ describe.runIf(process.env.FOOTPRINT === '1')('the daemon\'s memory at idle', ()
       await sleep(warmup * 1_000)
 
       const master = d.pid!
-      const samples: Array<{ at: number; processes: Array<{ name: string; pid: number; rssBytes: number }> }> = []
-      const reads = backend.seen.filter((line) => line.split('?')[0] === 'GET /api/agent-messages').length
+      const samples: Array<{ at: number; processes: Array<{ name: string; pid: number; rssBytes: number; cpuSeconds: number }> }> = []
+      const backendReads = (path: string) => backend.seen.filter((line) => line.split('?')[0] === `GET ${path}`).length
+      const reads = backendReads('/api/agent-messages'), experimentReads = backendReads('/api/experimental-settings')
+      // Every FOOTPRINT_PROBE_SECONDS, a window's read of each through this daemon, as Desktop makes it: its latency.
+      const probeEvery = knob('FOOTPRINT_PROBE_SECONDS', 30, 5, 600) * 1_000
+      const probes: Record<string, number[]> = { '/api/agent-messages': [], '/api/experimental-settings': [] }
+      let probedAt = 0
       const started = Date.now()
       while (Date.now() - started < seconds * 1_000) {
         const at = Date.now()
         const logged = new Map([...harnessdProcesses(d)].map(([name, pid]) => [pid, name] as const))
-        samples.push({ at, processes: tree(await table(), master).map((row) => ({ name: nameOf(row, logged), pid: row.pid, rssBytes: row.rssBytes })) })
+        samples.push({ at, processes: tree(await table(), master).map((row) => ({ name: nameOf(row, logged), pid: row.pid, rssBytes: row.rssBytes,
+          cpuSeconds: row.cpuSeconds })) })
+        if (at - probedAt >= probeEvery) {
+          probedAt = at
+          for (const path of Object.keys(probes)) {
+            const sent = performance.now()
+            const answer = await fetch(`http://127.0.0.1:${d.port}${path}`, { headers: d.localHeaders({ 'x-adapter-local': '1' }) })
+            await answer.arrayBuffer()
+            if (answer.ok) probes[path]!.push(performance.now() - sent)
+          }
+        }
         await sleep(Math.max(0, 1_000 - (Date.now() - at)))
       }
       expect(d.coresStarted(), 'the core never restarted while it was measured').toBe(1)
 
       const ours = (name: string) => name.startsWith('harnessd')
       const names = [...new Set(samples.flatMap((sample) => sample.processes.map((p) => p.name)))]
+      const span = samples.length > 1 ? (samples.at(-1)!.at - samples[0]!.at) / 1_000 : 0
       const byName = names.map((name) => {
         const seen = samples.flatMap((sample) => sample.processes.filter((p) => p.name === name))
         const sums = samples.map((sample) => sample.processes.filter((p) => p.name === name).reduce((sum, p) => sum + p.rssBytes, 0)).filter((sum) => sum > 0)
@@ -159,20 +197,26 @@ describe.runIf(process.env.FOOTPRINT === '1')('the daemon\'s memory at idle', ()
           name, pids: [...new Set(seen.map((p) => p.pid))], samples: sums.length,
           rssMeanMiB: sums.length ? sums.reduce((a, b) => a + b, 0) / sums.length / MIB : 0,
           rssMaxMiB: sums.length ? Math.max(...sums) / MIB : 0,
+          cpuPercent: cpuOver(samples.map((sample) => sample.processes.filter((p) => p.name === name)), span),
         }
       }).sort((a, b) => b.rssMeanMiB - a.rssMeanMiB)
       const totals = samples.map((sample) => sample.processes.filter((p) => ours(p.name)).reduce((sum, p) => sum + p.rssBytes, 0))
+      const probed = Object.values(probes).reduce((sum, times) => sum + times.length, 0) / Object.keys(probes).length
       const report = {
         schema: 1, scenario, measuredAt: new Date(started).toISOString(),
         source: { commit: git('rev-parse', 'HEAD'), dirty: Boolean(git('status', '--porcelain')),
           bundleSha256: createHash('sha256').update(readFileSync(bundle)).digest('hex') },
         machine: { platform: platform(), release: release(), node: process.version, logicalCpus: cpus().length, cpu: cpus()[0]?.model, ramBytes: totalmem() },
         workload: { signedIn: true, agents: agents.map((agent) => agent.engine), tab: 'one tab, both agents', agentMessages: SCENARIOS[scenario], warmupSeconds: warmup, seconds, sampleEveryMs: 1_000 },
-        // How often Agent Messages read the account's tabs while it was measured: every 15 s while it runs.
-        tabReadsInWindow: backend.seen.filter((line) => line.split('?')[0] === 'GET /api/agent-messages').length - reads,
+        // How often the daemon read the account's tabs and experiments while it was measured, on its own: the probes'
+        // reads below are left out.
+        tabReadsInWindow: backendReads('/api/agent-messages') - reads - probed,
+        experimentReadsInWindow: backendReads('/api/experimental-settings') - experimentReads - probed,
+        readLatencyMs: Object.fromEntries(Object.entries(probes).map(([path, times]) => [path, latency(times)])),
         processes: byName.filter((p) => ours(p.name)),
         others: byName.filter((p) => !ours(p.name)),
-        total: { rssMeanMiB: totals.reduce((a, b) => a + b, 0) / totals.length / MIB, rssMaxMiB: Math.max(...totals) / MIB, samples: totals.length },
+        total: { rssMeanMiB: totals.reduce((a, b) => a + b, 0) / totals.length / MIB, rssMaxMiB: Math.max(...totals) / MIB, samples: totals.length,
+          cpuPercent: cpuOver(samples.map((sample) => sample.processes.filter((p) => ours(p.name))), span) },
       }
       expect(report.processes.map((p) => p.name)).toEqual(expect.arrayContaining(['harnessd', 'harnessd-core']))
       reports[scenario] = report
@@ -182,14 +226,17 @@ describe.runIf(process.env.FOOTPRINT === '1')('the daemon\'s memory at idle', ()
         writeFileSync(file, JSON.stringify(reports, null, 2) + '\n')
       }
       const width = Math.max(...report.processes.map((p) => p.name.length), 'total'.length) + 2
-      const line = (name: string, mean: number, max: number, pids: string) => `${name.padEnd(width)}${mean.toFixed(1).padStart(10)}${max.toFixed(1).padStart(10)}  ${pids}`
+      const line = (name: string, mean: number, max: number, cpu: number | null, pids: string) =>
+        `${name.padEnd(width)}${mean.toFixed(1).padStart(10)}${max.toFixed(1).padStart(10)}${(cpu === null ? '-' : cpu.toFixed(2)).padStart(8)}  ${pids}`
+      const timed = (path: string) => { const l = report.readLatencyMs[path]!; return `${path} p50 ${l.p50Ms?.toFixed(1) ?? '-'} ms, max ${l.maxMs?.toFixed(1) ?? '-'} ms (${l.count})` }
       // Straight to stdout: the run's reporter keeps a passing test's console to itself.
       process.stdout.write([
         `FOOTPRINT ${scenario} · ${report.source.commit.slice(0, 10)}${report.source.dirty ? ' (dirty)' : ''} · ${SCENARIOS[scenario]}`,
-        `${seconds} s idle after ${warmup} s · RSS MiB, mean and max · the tabs read ${report.tabReadsInWindow} times in the window`,
-        `${'process'.padEnd(width)}${'mean'.padStart(10)}${'max'.padStart(10)}  pid`,
-        ...report.processes.map((p) => line(p.name, p.rssMeanMiB, p.rssMaxMiB, p.pids.join(','))),
-        line('total', report.total.rssMeanMiB, report.total.rssMaxMiB, ''),
+        `${seconds} s idle after ${warmup} s · RSS MiB, mean and max · CPU % of one core · on its own the daemon read the tabs ${report.tabReadsInWindow} times and the experiments ${report.experimentReadsInWindow} times`,
+        `reads through the daemon: ${timed('/api/agent-messages')}; ${timed('/api/experimental-settings')}`,
+        `${'process'.padEnd(width)}${'mean'.padStart(10)}${'max'.padStart(10)}${'cpu %'.padStart(8)}  pid`,
+        ...report.processes.map((p) => line(p.name, p.rssMeanMiB, p.rssMaxMiB, p.cpuPercent, p.pids.join(','))),
+        line('total', report.total.rssMeanMiB, report.total.rssMaxMiB, report.total.cpuPercent, ''),
         ...(report.others.length ? [`not the daemon's own, left out: ${report.others.map((p) => `${p.name} (${p.samples} samples)`).join(', ')}`] : []),
       ].join('\n') + '\n\n')
     } finally {

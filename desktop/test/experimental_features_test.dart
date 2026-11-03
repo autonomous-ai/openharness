@@ -243,6 +243,39 @@ void main() {
     expect(server.writes, isEmpty);
   });
 
+  testWidgets(
+    'with no push the account is read every five minutes, and a failed read again after 30 s',
+    (tester) async {
+      // Every write is pushed (`desk_changed`), so the 30 s poll was a read
+      // from every open app that almost always found nothing new.
+      final server = AccountSettings('a');
+      final store = ExperimentalFeaturesStore();
+      store.bind('a', transport: server);
+      await tester.pump();
+      final first = server.reads;
+      await tester.pump(const Duration(seconds: 30));
+      expect(server.reads, first);
+      await tester.pump(const Duration(minutes: 4, seconds: 29));
+      expect(server.reads, first);
+      await tester.pump(const Duration(seconds: 31));
+      expect(server.reads, first + 1);
+      // A read the push asked for holds the safety net off again.
+      await tester.pump(const Duration(minutes: 4));
+      await store.refresh();
+      await tester.pump(const Duration(minutes: 1));
+      expect(server.reads, first + 2);
+      server.readOverride = () => Future.error(StateError('offline'));
+      await store.refresh();
+      expect(server.reads, first + 3);
+      expect(store.error, isNotNull);
+      server.readOverride = null;
+      await tester.pump(const Duration(seconds: 30));
+      expect(server.reads, first + 4);
+      expect(store.error, isNull);
+      store.dispose();
+    },
+  );
+
   testWidgets('missed push notifications reconcile through the account poll', (
     tester,
   ) async {
@@ -252,15 +285,15 @@ void main() {
     await tester.pump();
     server.features[share.id] = true;
     server.revision++;
-    await tester.pump(const Duration(seconds: 30));
+    await tester.pump(ExperimentalFeaturesStore.safetyNet);
     expect(store.enabled(share), isTrue);
     store.dispose();
     final reads = server.reads;
-    await tester.pump(const Duration(seconds: 30));
+    await tester.pump(ExperimentalFeaturesStore.safetyNet);
     expect(server.reads, reads);
   });
 
-  testWidgets('the 30 s poll notifies only when what it shows changes', (
+  testWidgets('the safety-net read notifies only when what it shows changes', (
     tester,
   ) async {
     // Every read used to notify, rebuilding each pane header and the
@@ -272,31 +305,31 @@ void main() {
     var notified = 0;
     store.addListener(() => notified++);
     for (var i = 0; i < 3; i++) {
-      await tester.pump(const Duration(seconds: 30));
+      await tester.pump(ExperimentalFeaturesStore.safetyNet);
     }
     // A newer revision that changes no choice is nothing new either.
     server.revision++;
-    await tester.pump(const Duration(seconds: 30));
+    await tester.pump(ExperimentalFeaturesStore.safetyNet);
     expect(server.reads, 5);
     expect(notified, 0);
     server.features[share.id] = true;
     server.revision++;
-    await tester.pump(const Duration(seconds: 30));
+    await tester.pump(ExperimentalFeaturesStore.safetyNet);
     expect((notified, store.enabled(share)), (1, true));
     // An older backend that no longer names one: unavailable is news.
     server.features.remove(ExperimentalFeature.agentMessages.id);
-    await tester.pump(const Duration(seconds: 30));
+    await tester.pump(ExperimentalFeaturesStore.safetyNet);
     expect(notified, 2);
     expect(store.isAvailable(ExperimentalFeature.agentMessages), isFalse);
     server.readOverride = () => Future.error(StateError('offline'));
-    await tester.pump(const Duration(seconds: 30));
+    await tester.pump(ExperimentalFeaturesStore.safetyNet);
     expect(notified, 3);
     expect(store.error, isNotNull);
     // The same failure again shows nothing new.
-    await tester.pump(const Duration(seconds: 30));
+    await tester.pump(ExperimentalFeaturesStore.safetyNet);
     expect(notified, 3);
     server.readOverride = null;
-    await tester.pump(const Duration(seconds: 30));
+    await tester.pump(ExperimentalFeaturesStore.safetyNet);
     expect(notified, 4);
     expect(store.error, isNull);
     // The poll's timer must not outlive the test (fake async checks it).

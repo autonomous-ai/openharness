@@ -497,6 +497,33 @@ matrix job; running by hand, fetch one yourself from the
 and none is needed: the trust boundary is the same sha256-verified manifest entry `DesktopUpdater`
 already checks on every platform.
 
+The Linux viewer uses the host's WebKitGTK 4.1 runtime (`libwebkit2gtk-4.1-0`). The AppImage
+contains Harness and its Flutter bundle, but does not bundle WebKitGTK. The Linux plugin is loaded
+optionally: if the host runtime or plugin is unavailable, Harness still launches and viewer panes
+show the URL placeholder (recordings offer browser playback). Install the runtime package and
+restart Harness to enable embedded viewing. Linux release builds also need
+`libwebkit2gtk-4.1-dev` on the build host.
+
+`webview_all_linux` is deliberately pinned to `1.2.1`: its published manifest uses
+`webview_flutter_platform_interface`, while `1.3.0` switched to the separate
+`webview_platform_interface` package. A caret constraint would allow that incompatible
+interface change. The lockfile records the source archive hash; upgrading the plugin
+requires reviewing its native code and rerunning Linux integration tests. The pin
+neither freezes the distribution's WebKitGTK security updates nor establishes that
+the plugin has been security-audited or endorsed by Flutter. It is MIT-licensed;
+retain its attribution in Flutter's bundled notices.
+
+The official [`webview_flutter`](https://pub.dev/packages/webview_flutter/versions/4.14.1)
+currently lists Android, iOS and macOS implementations, with no endorsed Linux
+implementation. [`webview_flutter_linux`](https://pub.dev/packages/webview_flutter_linux)
+is an experimental, non-endorsed WPE WebKit implementation requiring WPE WebKit 2.52+,
+so it is not a drop-in endorsed replacement for this GTK integration.
+
+GTK views are detached while registered Flutter transient overlays are open,
+including pane menus, the agent picker and resize help. All native viewers are
+hidden for that interval because a popup may cross pane boundaries; their controllers
+retain the loaded pages. Dismissal restores them without navigation or reload.
+
 **Packaged as a single-file AppImage**, not a tarball. The script stages an AppDir
 (`usr/bin/` = the Flutter `bundle/` verbatim, plus a hand-written `harness.desktop` and the
 `harness.png` icon CMake already installs at the bundle root) and hands it to `appimagetool` with
@@ -567,8 +594,12 @@ its own runner and `upload-windows` publishes from ubuntu. Three files go to `ha
   no app: it reads the manifest when it runs, picks this PC's zip as `install.ps1 -App` does, checks it and runs its
   `Harness.exe --install` (`installer/`, docs/superpowers/specs/2026-10-19-windows-installer-design.md).
 
-Nothing is code-signed yet. Windows shows SmartScreen once, on the installer a browser downloaded; Smart App Control
-blocks the build where it is on. A failed Windows build stops the release, as a failed macOS or Linux build does.
+`sign-windows` Authenticode-signs every `.exe` and `.dll` in both zips and `harness-install.exe` through Azure Artifact
+Signing, as **AUTONOMOUS INC.**, once the repository variable `WINDOWS_SIGNING` is `required`
+([docs/windows-code-signing.md](../docs/windows-code-signing.md)). Until then it is skipped and the files ship
+unsigned: Windows shows SmartScreen once, on the installer a browser downloaded, and Smart App Control blocks the build
+where it is on. Once signing is required, a failed signature stops the release and a candidate prepared unsigned is
+not reused. A failed Windows build stops the release, as a failed macOS or Linux build does.
 
 If Microsoft Defender flags `harness-install.exe` or the app, submit the file as a software developer at
 https://www.microsoft.com/wdsi/filesubmission with the release version. Do not change the build to dodge a detection.

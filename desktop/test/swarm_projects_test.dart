@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_icons.dart';
+import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/super_tabs/section_heading.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/project_visibility.dart';
 
 import 'support/super_tab_fixture.dart';
+import 'support/super_tab_members.dart';
 
 ConversationServer projectsServer() {
   final server = ConversationServer();
@@ -69,19 +72,28 @@ void main() {
     );
     expect(find.text('Leads'), findsNothing);
     expect(find.text('Projects'), findsOneWidget);
-    expect(find.text('Humans'), findsOneWidget);
-    expect(find.text('Agents'), findsOneWidget);
+    // The right column opens only from Members (Quiet Swarm).
+    expect(find.text('People'), findsNothing);
+    await openSuperTabMembers(tester);
+    expect(find.text('People'), findsOneWidget);
+    // The roster's heading; the leaderboard's Agents pill is the other one.
+    expect(
+      find.descendant(
+        of: find.byType(SuperTabSectionHeading),
+        matching: find.text('Agents'),
+      ),
+      findsOneWidget,
+    );
     final create = find.byTooltip('New project');
     final project = find.byKey(const ValueKey('super-group-lead'));
     expect(
       tester.getBottomLeft(create).dy,
       lessThan(tester.getTopLeft(project).dy),
     );
-    await tester.tap(find.byKey(const ValueKey('super-group-lead')));
-    await tester.pumpAndSettle();
     expect(c.selectedId, 'lead');
     expect(find.text('12  Offline editing'), findsNothing);
-    await tester.tap(find.byKey(const ValueKey('super-project-toggle-lead')));
+    // Already open: a click on it shows its workgroups.
+    await tester.tap(find.byKey(const ValueKey('super-group-lead')));
     await tester.pumpAndSettle();
     expect(find.text('12  Offline editing'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('super-group-offline')));
@@ -112,6 +124,9 @@ void main() {
         matching: find.text('Lamp OS'),
       );
       // Enter on the project opens its chat; → shows its workgroups.
+      await c.select('offline');
+      c.expandedProjects.remove('lead');
+      await tester.pumpAndSettle();
       Focus.of(tester.element(projectName)).requestFocus();
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -130,9 +145,7 @@ void main() {
       expect(workgroupBounds.left, projectBounds.left);
       expect(
         workgroupBounds.right,
-        tester
-            .getRect(find.byKey(const ValueKey('super-project-toggle-lead')))
-            .right,
+        tester.getRect(find.byKey(const ValueKey('super-group-lead'))).right,
       );
       // Workgroups share the project name column in the compact sidebar.
       expect(
@@ -176,75 +189,78 @@ void main() {
       conversationId: 'design-lead',
     );
     await mount(tester, c);
-    await tester.tap(find.byTooltip('Pull requests'));
+    await tester.tap(find.byTooltip('Project options'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(MenuItemButton, 'Pull requests'));
     await tester.pumpAndSettle();
     expect(find.text('example/lamp #12'), findsOneWidget);
     expect(find.text('example/design #8'), findsNothing);
     expect(find.text('This project'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('super-group-design-lead')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Pull requests'));
+    await tester.tap(find.byTooltip('Project options'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(MenuItemButton, 'Pull requests'));
     await tester.pumpAndSettle();
     expect(find.text('example/design #8'), findsOneWidget);
     expect(find.text('example/lamp #12'), findsNothing);
     await unmount(tester, c);
   });
 
-  testWidgets('a collapsed project keeps its workgroup attention visible', (
-    tester,
-  ) async {
-    final server = projectsServer(), c = server.controller();
-    server.state['agents'] = [
-      {
-        'id': 'worker',
-        'name': 'Builder',
-        'machineId': 'm',
-        'harnessId': 'native',
-        'contributorId': 'owner',
-        'configuration': {'engine': 'codex'},
-      },
-    ];
-    final group = (server.state['conversations'] as List)[1] as Map;
-    group['agentIds'] = ['worker'];
-    group['assignment'] = {'status': 'needs_human', 'agentId': 'worker'};
-    await mount(tester, c);
-    expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
-    expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('super-group-lead')),
-        matching: find.byTooltip('Needs a human'),
-      ),
-      findsOneWidget,
-    );
-    await unmount(tester, c);
-  });
+  // Quiet Swarm polish: a project's row says only what opening it shows, and Activity holds what needs you.
+  testWidgets(
+    'a collapsed project\'s waiting workgroup is held by Activity, not by a mark on its row',
+    (tester) async {
+      final server = projectsServer(), c = server.controller();
+      server.state['agents'] = [
+        {
+          'id': 'worker',
+          'name': 'Builder',
+          'machineId': 'm',
+          'harnessId': 'native',
+          'contributorId': 'owner',
+          'configuration': {'engine': 'codex'},
+        },
+      ];
+      final group = (server.state['conversations'] as List)[1] as Map;
+      group['agentIds'] = ['worker'];
+      group['assignment'] = {'status': 'needs_human', 'agentId': 'worker'};
+      await mount(tester, c);
+      expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('super-group-lead')),
+          matching: find.byTooltip('Needs a human'),
+        ),
+        findsNothing,
+      );
+      expect(
+        SuperTabActivity.of(c).needsYou.map((need) => need.conversationId),
+        contains('offline'),
+      );
+      await unmount(tester, c);
+    },
+  );
 
-  testWidgets('compact project menu changes cadence for only that project', (
-    tester,
-  ) async {
-    final server = projectsServer(), c = server.controller();
-    await mount(tester, c);
-    await tester.tap(find.byTooltip('Project options'));
-    await tester.pumpAndSettle();
-    expect(find.byIcon(AppIcons.ellipsisVertical), findsOneWidget);
-    await tester.tap(find.text('Update cadence'));
-    await tester.pumpAndSettle();
-    expect(find.text('Every 5 minutes'), findsOneWidget);
-    await tester.tap(find.byType(DropdownButton<int>));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Every 15 minutes').last);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Save'));
-    await tester.pumpAndSettle();
-    expect(server.posts.single['command'], {
-      'type': 'project.cadence',
-      'projectId': 'lead',
-      'minutes': 15,
-    });
-    expect(c.snapshot!.projectFor('lead')!.updateMinutes, 15);
-    expect(c.snapshot!.projectFor('design-lead')!.updateMinutes, 5);
-    await unmount(tester, c);
-  });
+  testWidgets(
+    'the project menu has no update cadence: progress lives in the status card',
+    (tester) async {
+      final server = projectsServer(), c = server.controller();
+      await mount(tester, c);
+      await tester.tap(find.byTooltip('Project options'));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.widgetWithText(MenuItemButton, 'Project settings…'),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Project details'), findsOneWidget);
+      expect(find.text('Update cadence'), findsNothing);
+      expect(find.textContaining('Every 5 minutes'), findsNothing);
+      expect(find.textContaining('task reports'), findsNothing);
+      expect(server.posts, isEmpty);
+      await unmount(tester, c);
+    },
+  );
 
   testWidgets(
     'public means swarm members and private is an explicit project choice',

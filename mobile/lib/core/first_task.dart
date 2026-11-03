@@ -12,7 +12,7 @@ const firstTaskIdeas = [
 /// `FIRST_PROMPT_ARGS` (cli/src/lib/engineLaunch.ts). A machine refuses a first message for any
 /// other engine (`PROMPT_UNSUPPORTED`). test/first_task_test.dart holds the two lists to the same
 /// answer: one missing here is an engine whose first task New drops without a word.
-const kFirstTaskEngines = {'claude', 'codex', 'opencode', 'hermes'};
+const kFirstTaskEngines = {'claude', 'codex', 'opencode', 'omp', 'hermes'};
 
 /// Whether a harness on [engine] can start on a first task.
 bool takesFirstTask(String engine) => kFirstTaskEngines.contains(engine);

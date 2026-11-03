@@ -8,7 +8,7 @@
  * a process on this computer. The rest of the relay's rules are held where they always were, through the
  * socket and its gateway together (backendSocket.spec.ts).
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BackendSocket } from '../backendSocket.js'
 import type { Asker } from '../core/api.js'
 import * as C from '../lib/e2ee/core.js'
@@ -18,6 +18,7 @@ import { bindMessageRequest } from '../testing/socketCore.js'
 import { dispatchDown, gatewayOf, relaySocket, upstreamOf } from '../testing/relaySocket.js'
 import type { DeviceLogTrustOutcome } from '../lib/e2ee/deviceLogSyncer.js'
 import { unknownHelloReader } from './start.js'
+import { UI_GATED_EVENTS, UI_QUIET_MS, UI_SNAPSHOT_MAX_MS } from './gateway.js'
 import { env } from '../config/env.js'
 
 /** The machine the sessions are bound to: every hello and welcome is signed over it. */
@@ -187,6 +188,213 @@ describe('sealing, guarded', () => {
     socket.send({ type: 'turn_ended', agentId: 'a2', payload: {} })
     expect(upstreamOf(socket).queue.map((item) => (item.msg as { frame: Frame }).frame.agentId)).toEqual(['a2'])
     await socket.unregisterLocalClient('local:window')
+    await socket.stop()
+  })
+})
+
+// Change 5 of docs/plans/2026-10-31-live-events-relay-design.md: events only the terminal app reads go to the relay only
+// while a terminal app of the account is open, once the backend has said whether one is.
+describe('events only a terminal app reads', () => {
+  const events = ['tool_end', 'subagent_finished', 'done', 'context_compact', 'tool_start', 'text_delta', 'thinking_delta', 'thinking_title', 'turn_ended']
+  const others = ['tool_start', 'text_delta', 'thinking_delta', 'thinking_title', 'turn_ended']
+  const setup = () => {
+    const socket = relaySocket(MACHINE), gateway = gatewayOf(socket)
+    const queue = upstreamOf(socket).queue
+    const relayed = () => {
+      queue.length = 0
+      for (const type of events) gateway.broadcast({ type, agentId: 'a1', payload: {} })
+      return queue.map(item => (item.msg as { frame: { type: string } }).frame.type)
+    }
+    return { socket, gateway, relayed }
+  }
+  afterEach(() => vi.useRealTimers())
+
+  it('relays them only while a terminal app is open, once the backend has said, and again everything after the link drops', async () => {
+    vi.useFakeTimers()
+    const { socket, gateway, relayed } = setup()
+    expect(relayed()).toEqual(events)
+    await dispatchDown(socket, { type: '__tui_open', payload: { forMs: 0 } }, '')
+    expect(relayed()).toEqual(others)
+    await dispatchDown(socket, { type: '__tui_open', payload: { forMs: 180_000 } }, '')
+    expect(relayed()).toEqual(events)
+    await vi.advanceTimersByTimeAsync(180_001)
+    expect(relayed()).toEqual(others)
+    ;(gateway as unknown as { linkGone(): void }).linkGone()
+    expect(relayed()).toEqual(events)
+  })
+
+  it('ignores the word from a window on this computer, reads a bad span as 0 and caps a long one at 180 s', async () => {
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { socket, relayed } = setup()
+    socket.registerLocalClient('local:tool', { sendFrame: () => true, sendBinary: () => true })
+    await dispatchDown(socket, { type: '__tui_open', payload: { forMs: 0 } }, 'local:tool', 'local')
+    expect(relayed()).toEqual(events)
+    for (const forMs of [-5, 'x', Number.NaN]) {
+      await dispatchDown(socket, { type: '__tui_open', payload: { forMs } }, '')
+      expect(relayed(), String(forMs)).toEqual(others)
+    }
+    await dispatchDown(socket, { type: '__tui_open', payload: { forMs: 10 * 86_400_000 } }, '')
+    await vi.advanceTimersByTimeAsync(180_001)
+    expect(relayed()).toEqual(others)
+    warn.mockRestore()
+    await socket.unregisterLocalClient('local:tool')
+  })
+
+  it('always sends a guest its sealed copy, held or not', async () => {
+    const { socket, gateway } = setup()
+    const e2ee = (gateway as unknown as { e2ee: { guestSessions(g: string): string[]; wrapFor(c: string, f: unknown): unknown } }).e2ee
+    vi.spyOn(e2ee, 'guestSessions').mockReturnValue(['guest-conn'])
+    vi.spyOn(e2ee, 'wrapFor').mockReturnValue({ type: 'tool_end', payload: { __e2e: 'sealed' } })
+    await dispatchDown(socket, { type: '__tui_open', payload: { forMs: 0 } }, '')
+    const queue = upstreamOf(socket).queue
+    queue.length = 0
+    gateway.broadcast({ type: 'tool_end', agentId: 'a1', payload: {} }, 'guest@example.com')
+    expect(queue.map(item => (item.msg as { targetConnId?: string }).targetConnId)).toEqual(['guest-conn'])
+  })
+})
+
+// Part 4 of docs/superpowers/specs/2026-11-02-swarm-cache-delta-design.md: a machine's live events go to the relay only
+// while an app could see them, once the backend has said it may hold them (`uiGate`) and counts no app (`ui: 0`).
+describe('ui gate', () => {
+  const live = ['text_delta', 'tool_start', 'tool_end', 'user_message', 'thinking_delta', 'thinking_title', 'turn_heartbeat',
+    'agent_activity', 'turn_ended', 'turn_summary', 'subagent_finished', 'done', 'context_compact']
+  const setup = () => {
+    const socket = relaySocket(MACHINE), gateway = gatewayOf(socket)
+    const queue = upstreamOf(socket).queue
+    /** What the relay is sent for every machine-wide copy of [types], each broadcast once. */
+    const relayed = (types: string[] = live) => {
+      queue.length = 0
+      for (const type of types) gateway.broadcast({ type, agentId: 'a1', payload: {} })
+      return queue.filter(item => !(item.msg as { targetConnId?: string }).targetConnId).map(item => (item.msg as { frame: { type: string } }).frame.type)
+    }
+    const noUi = (commander = 0) => dispatchDown(socket, { type: '__clients', payload: { ui: 0, commander, commanderActive: commander, uiGate: true } }, '')
+    return { socket, gateway, queue, relayed, noUi }
+  }
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('holds exactly the live events, for 60 s of quiet', () => {
+    expect([...UI_GATED_EVENTS].sort()).toEqual([...live].sort())
+    expect(UI_QUIET_MS).toBe(60_000)
+  })
+
+  it('a live event is not relayed while the backend says no UI and none spoke for 60 s', async () => {
+    const { socket, relayed, noUi } = setup()
+    await noUi()
+    expect(relayed()).toEqual([])
+    expect(relayed(['agent_renamed', 'swarm_changed'])).toEqual(['agent_renamed', 'swarm_changed'])
+    await socket.stop()
+  })
+
+  it('a "no UI" the backend has not repeated for UI_SNAPSHOT_MAX_MS is not trusted', async () => {
+    const { socket, relayed, noUi } = setup()
+    await noUi()
+    expect(relayed()).toEqual([])
+    // The backend repeats `__clients` every 15 s (nodeRole PRESENCE_REFRESH_MS); one that stopped may be wrong.
+    vi.advanceTimersByTime(UI_SNAPSHOT_MAX_MS)
+    expect(relayed()).toEqual(live)
+    await noUi()
+    expect(relayed()).toEqual([])
+    await socket.stop()
+  })
+
+  it('relayed with ui > 0', async () => {
+    const { socket, relayed, noUi } = setup()
+    await noUi()
+    await dispatchDown(socket, { type: '__clients', payload: { ui: 1, commander: 0, uiGate: true } }, '')
+    expect(relayed()).toEqual(live)
+    await noUi()
+    expect(relayed()).toEqual([])
+    await socket.stop()
+  })
+
+  it('relayed again at once when a remote web frame arrives (its e2e hello)', async () => {
+    const { socket, relayed, noUi } = setup()
+    await noUi()
+    // Its hello comes before it can open anything, so it misses nothing it could read.
+    const phone = await pairedClient(socket, 'phone-1')
+    expect(relayed()).toEqual(live)
+    await vi.advanceTimersByTimeAsync(UI_QUIET_MS - 1)
+    expect(relayed()).toEqual(live)
+    await dispatchDown(socket, phone.seal('agents_list', { requestId: 'r' }), 'phone-1')
+    await vi.advanceTimersByTimeAsync(UI_QUIET_MS - 1)
+    expect(relayed()).toEqual(live)
+    // The backend says it again, as it does every 15 s: its word is not stale.
+    await noUi()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(relayed()).toEqual([])
+    await socket.stop()
+  })
+
+  it('a device\'s frame, the backend\'s and a viewer\'s do not count as an app viewing', async () => {
+    const { socket, relayed, noUi } = setup()
+    const dial = await pairedClient(socket, 'dial-1', { role: 'device' })
+    // The backend counts the dial as a commander, never as an app (ui).
+    await noUi(1)
+    await vi.advanceTimersByTimeAsync(UI_QUIET_MS)
+    expect(relayed()).toEqual([])
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await dispatchDown(socket, dial.seal('agents_list', { requestId: 'd' }), 'dial-1')
+    await dispatchDown(socket, { type: '__clients_dirty', payload: {} }, '')
+    // The hub addresses this one to the connection that left: it is the backend speaking, not that app.
+    await dispatchDown(socket, { type: '__client_disconnected', payload: {} }, 'phone-8')
+    await dispatchDown(socket, { type: 'observer_ping', payload: {} }, 'phone-9')
+    expect(relayed()).toEqual([])
+    await socket.stop()
+  })
+
+  it('relayed before any __clients, and after the link drops', async () => {
+    const { socket, gateway, relayed, noUi } = setup()
+    expect(relayed()).toEqual(live)
+    await noUi()
+    expect(relayed()).toEqual([])
+    ;(gateway as unknown as { linkGone(): void }).linkGone()
+    expect(relayed()).toEqual(live)
+    await socket.stop()
+  })
+
+  it('relayed when __clients has no uiGate (older backend or switch off)', async () => {
+    const { socket, relayed } = setup()
+    await dispatchDown(socket, { type: '__clients', payload: { ui: 0, commander: 0, commanderActive: 0 } }, '')
+    expect(relayed()).toEqual(live)
+    await dispatchDown(socket, { type: '__clients', payload: { ui: 0, uiGate: 'true' } }, '')
+    expect(relayed()).toEqual(live)
+    await socket.stop()
+  })
+
+  it('turn_started, agent_synced and agent_deleted are never held', async () => {
+    // The backend reads these itself: daily turn counts and the short-turn guard, and the machine's agents.
+    const { socket, relayed, noUi } = setup()
+    await noUi()
+    expect(relayed(['turn_started', 'agent_synced', 'agent_deleted'])).toEqual(['turn_started', 'agent_synced', 'agent_deleted'])
+    await socket.stop()
+  })
+
+  it('guest copies, device, user and targeted frames are never held', async () => {
+    const { socket, gateway, queue, noUi } = setup()
+    const phone = await pairedClient(socket, 'phone-1')
+    const e2ee = (gateway as unknown as { e2ee: { guestSessions(g: string): string[]; wrapFor(c: string, f: unknown): unknown } }).e2ee
+    vi.spyOn(e2ee, 'guestSessions').mockReturnValue(['guest-conn'])
+    vi.spyOn(e2ee, 'wrapFor').mockReturnValue({ type: 'text_delta', payload: { __e2e: 'sealed' } })
+    await noUi()
+    await vi.advanceTimersByTimeAsync(UI_QUIET_MS)
+    queue.length = 0
+    const sent = () => queue.splice(0).map(item => item.msg as { targetConnId?: string; commanderEligible?: boolean; userEligible?: boolean; frame: Frame })
+
+    gateway.broadcast({ type: 'text_delta', agentId: 'a1', payload: {} }, 'guest@example.com')
+    expect(sent().map(msg => msg.targetConnId)).toEqual(['guest-conn'])
+    gateway.commander({ type: 'text_delta', agentId: 'a1', payload: {} })
+    expect(sent().map(msg => msg.commanderEligible)).toEqual([true])
+    gateway.user({ type: 'text_delta', payload: {} })
+    expect(sent().map(msg => msg.userEligible)).toEqual([true])
+    // A reply to one client, and the backend's own (connId ''), which goes out machine-wide.
+    gateway.reply('phone-1', 'agents_list', 'r-1', { agents: [] })
+    const targeted = sent()
+    expect(targeted.map(msg => msg.targetConnId)).toEqual(['phone-1'])
+    expect(phone.open(targeted[0].frame)).toEqual({ requestId: 'r-1', agents: [] })
+    gateway.reply('', 'machine_info', 'r-2', { name: 'm' })
+    expect(sent().map(msg => [msg.targetConnId, msg.frame.type])).toEqual([[undefined, 'machine_info_result']])
     await socket.stop()
   })
 })

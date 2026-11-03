@@ -53,7 +53,7 @@ test('the page is served with a token in it and a CSP that forbids inline script
   assert.match(response.headers.get('content-security-policy'), /script-src 'self'/)
   assert.equal(html.includes('__HPS_TOKEN__'), false)
   assert.match(html, new RegExp(`content="${viewer.token}"`))
-  for (const path of ['/app.js', '/app.css', '/scale.js']) {
+  for (const path of ['/app.js', '/app.css', '/scale.js', '/live.js']) {
     assert.equal((await fetch(`${base}${path}`)).status, 200, path)
   }
   assert.equal((await fetch(`${base}/../viewer.mjs`)).status, 404)
@@ -283,4 +283,92 @@ test('the fleet is read on a tick only while a pane is connected; remote machine
   // Refresh is the person asking: it reads now and asks the remote machines too.
   await fetch(`${base}/api/refresh`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-hps-token': viewer.token }, body: '{}' })
   assert.equal(calls.at(-1), 0, 'a refresh forces the remote read')
+})
+
+test('the machine connections are let go once nobody is looking, and opened again by the next pane', async (t) => {
+  let reads = 0, released = 0
+  const { viewer, base } = await serve(undefined, {
+    intervalMs: 40,
+    collect: async () => { reads += 1; return { rows: [], machines: [], problems: [], observedAt: Date.now() } },
+    releaseBridges: () => { released += 1 },
+  })
+  t.after(() => viewer.close())
+  const sleep = (ms) => new Promise((done) => setTimeout(done, ms))
+  await sleep(60)
+  assert.equal(released, 1, 'the start-up read keeps nothing open for a pane that never came')
+
+  const response = await fetch(`${base}/events`)
+  const reader = response.body.getReader()
+  await reader.read()
+  await sleep(150)
+  assert.equal(released, 1, 'a watched pane keeps its connections between ticks')
+  assert.ok(reads >= 3)
+
+  await reader.cancel()
+  await sleep(100)
+  assert.equal(released, 2, 'the last pane leaving lets them go, once')
+  await sleep(100)
+  assert.equal(released, 2)
+})
+
+test('a write still under way keeps the connections it is using', async (t) => {
+  let released = 0, finish
+  const { viewer, base } = await serve(undefined, {
+    releaseBridges: () => { released += 1 },
+    verbs: { stop: () => new Promise((done) => { finish = done }) },
+  })
+  t.after(() => viewer.close())
+  const sleep = (ms) => new Promise((done) => setTimeout(done, ms))
+  const before = released
+  const snapshot = await (await fetch(`${base}/api/snapshot`)).json()
+  const target = snapshot.rows[0]
+  const acting = post(base, viewer.token, '/api/act', { verb: 'stop', ids: [target.id], manual: true, expected: [target] })
+  // A pane comes and goes while the stop is still waiting for its machine.
+  const response = await fetch(`${base}/events`)
+  const reader = response.body.getReader()
+  await reader.read()
+  await reader.cancel()
+  await sleep(60)
+  assert.equal(released, before, 'a stop waiting on its machine is not cut off')
+  finish({ ok: true, id: target.id, name: target.name, action: 'stop', detail: 'engine stopped' })
+  await acting
+  await sleep(60)
+  assert.equal(released, before + 1, 'and once it is done, nothing is left open')
+})
+
+test('a cleanup preview with no page watching lets its connections go when it ends', async (t) => {
+  let released = 0
+  const { viewer, base } = await serve(undefined, {
+    releaseBridges: () => { released += 1 },
+    cleanup: { preview: async () => ({ rows: [], kept: 0, problems: [], reviewId: 'r1' }), close: async () => ({}) },
+  })
+  t.after(() => viewer.close())
+  const before = released
+  const preview = await post(base, viewer.token, '/api/cleanup/preview', {})
+  assert.equal(preview.reviewId, 'r1')
+  assert.equal(released, before + 1, 'the preview opened a connection to every machine; none is left open after it')
+})
+
+test('the last page leaving during a cleanup preview does not cut the preview off', async (t) => {
+  let released = 0, finish
+  const { viewer, base } = await serve(undefined, {
+    releaseBridges: () => { released += 1 },
+    cleanup: { preview: () => new Promise((done) => { finish = done }), close: async () => ({}) },
+  })
+  t.after(() => viewer.close())
+  const sleep = (ms) => new Promise((done) => setTimeout(done, ms))
+  const response = await fetch(`${base}/events`)
+  const reader = response.body.getReader()
+  await reader.read()
+  await sleep(30)
+  const before = released
+  const previewing = post(base, viewer.token, '/api/cleanup/preview', {})
+  await sleep(30)
+  await reader.cancel()
+  await sleep(60)
+  assert.equal(released, before, 'a preview still reading its machines keeps their connections')
+  finish({ rows: [], kept: 0, problems: [], reviewId: 'r2' })
+  await previewing
+  await sleep(30)
+  assert.equal(released, before + 1, 'and lets them go once it has its answer')
 })

@@ -21,6 +21,7 @@ import { sendSuccess, sendError } from '../utils/response.js'
 import { logger } from '../utils/logger.js'
 import { analyticsOverview, buildConsentView } from '../lib/analyticsQuery.js'
 import { deleteLegacyProductUsage, setProductUsageChoice } from '../lib/productUsage.js'
+import { createRateLimiter } from '../lib/rateLimit.js'
 import {
   ANALYTICS_SCHEMA_VERSION,
   CONSENT_STATES,
@@ -39,22 +40,13 @@ const REPORT_BODY_LIMIT = 512 * 1024
 const RATE_LIMIT_WINDOW_MS = 60_000
 const RATE_LIMIT_MAX = 30
 
-const rateBuckets = new Map<string, { count: number; resetAt: number }>()
+const rateLimiter = createRateLimiter('analytics-report', RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX)
 
-export function rateLimitAllows(machineId: string, now = Date.now()): boolean {
-  const bucket = rateBuckets.get(machineId)
-  if (!bucket || now >= bucket.resetAt) {
-    rateBuckets.set(machineId, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS })
-    return true
-  }
-  if (bucket.count >= RATE_LIMIT_MAX) return false
-  bucket.count++
-  return true
-}
+export const rateLimitAllows = (machineId: string, now = Date.now()): Promise<boolean> => rateLimiter.allows(machineId, now)
 
-/** Test seam: the limiter is process-local by design (one more report is not worth a Redis hop). */
+/** Test seam: forgets this process' counts (lib/rateLimit.ts). */
 export function resetRateLimits(): void {
-  rateBuckets.clear()
+  rateLimiter.reset()
 }
 
 const engineEnum = z.enum(ENGINES)
@@ -125,7 +117,7 @@ async function machineAuth(req: FastifyRequest, reply: FastifyReply): Promise<vo
     sendError(reply, 'Unknown machine', 'NO_MACHINE', 404)
     return
   }
-  if (!rateLimitAllows(machineId)) {
+  if (!(await rateLimitAllows(machineId))) {
     sendError(reply, 'Too many analytics reports', 'RATE_LIMITED', 429)
     return
   }

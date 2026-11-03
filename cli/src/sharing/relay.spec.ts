@@ -16,25 +16,32 @@ vi.mock('ws', async () => {
 })
 vi.mock('../lib/wsLiveness.js', () => ({ BACKEND_IDLE_DEADLINE_MS: 75_000, watchSocketLiveness: (_ws: unknown, opts: unknown) => { state.liveness = opts; return { stop: state.stop } } }))
 import { HarnessShareRelay, SharingEndedError } from './relay.js'
+import { VERSION } from '../version.js'
 import { SHARE_REQUEST_TYPES, SHARE_RESULT_TYPES } from './protocol.js'
 describe('recipient relay', () => {
   const identity = newIdentity()
   const share = { id: 'share', agentId: 'agent', name: 'Demo', engine: null,
     ownerPublicKey: b64e(identity.pub), expiresAt: new Date(Date.now() + 100000).toISOString() }
   let relay: HarnessShareRelay
+  let account: string
+  let tokens: ReturnType<typeof vi.fn<() => Promise<string>>>
   let discover: ReturnType<typeof vi.fn<() => Promise<any[]>>>
   let sink: { sendFrame: ReturnType<typeof vi.fn>; sendBinary: ReturnType<typeof vi.fn> }, closed: ReturnType<typeof vi.fn<(code: number, reason: string) => void>>
   beforeEach(() => {
     vi.useFakeTimers(); state.sockets = []; state.stop.mockReset()
     sink = { sendFrame: vi.fn(() => true), sendBinary: vi.fn(() => true) }; closed = vi.fn()
     discover = vi.fn(async () => [{ machineId: 'machine', shares: [share] }])
-    relay = new HarnessShareRelay({ accessToken: async () => 'signed-in-token' } as AuthSessionManager,
-      'ws://localhost:1234/', 'prod', discover)
+    account = 'first'
+    tokens = vi.fn(async () => 'signed-in-token')
+    relay = new HarnessShareRelay({ accessToken: tokens } as unknown as AuthSessionManager,
+      'ws://localhost:1234/', 'prod', discover, () => account)
   })
   afterEach(() => { relay.close(); vi.useRealTimers() })
   async function begin() {
+    const count = state.sockets.length
     const pending = relay.acquire('machine', 'share', sink as never, closed)
-    await Promise.resolve(); await Promise.resolve()
+    // Its socket opens once the share is found: wait for that, however many steps it takes.
+    for (let i = 0; i < 100 && state.sockets.length === count; i++) await Promise.resolve()
     const ws = state.sockets.at(-1)
     ws.emit('open')
     return { pending, ws }
@@ -50,7 +57,9 @@ describe('recipient relay', () => {
   }
   it('uses the account token and exact grant, authenticates the owner, and decrypts terminal/viewer output', async () => {
     const { session, ws, owner } = await ready()
-    expect(ws.args).toEqual(['ws://localhost:1234/api/observer-ws?share=share&autonomousEnv=prod', ['signed-in-token'], expect.any(Object)])
+    // It says it is a daemon's relay, and which CLI (WebSocket roadmap Phase 0).
+    expect(ws.args).toEqual([`ws://localhost:1234/api/observer-ws?share=share&autonomousEnv=prod&client=relay&v=${encodeURIComponent(VERSION)}`,
+      ['signed-in-token'], expect.any(Object)])
     expect(sink.sendFrame).toHaveBeenCalledWith({ type: 'connected', payload: { machineId: 'machine', e2ee: false, readOnly: true } })
     await session.send({ type: 'terminal_open', payload: { agentId: 'agent' } })
     const packet = JSON.parse(ws.send.mock.calls.at(-1)[0])
@@ -156,4 +165,266 @@ describe('recipient relay', () => {
     log.mockRestore()
   })
 
+  // Every window opened on a shared harness asked the backend for the account's whole list of shares first
+  // (WebSocket roadmap Phase 1 item 5). The list is kept now; the backend still checks the share on every connect.
+  describe('the list of shares', () => {
+    it('is read once for windows opened within a minute', async () => {
+      (await ready()).session.detach()
+      await vi.advanceTimersByTimeAsync(59_000);
+      (await ready()).session.detach()
+      expect(discover).toHaveBeenCalledOnce()
+    })
+
+    it('is read again after a minute', async () => {
+      (await ready()).session.detach()
+      await vi.advanceTimersByTimeAsync(60_000);
+      (await ready()).session.detach()
+      expect(discover).toHaveBeenCalledTimes(2)
+    })
+
+    it('is read again for a share it does not hold, so a new invitation opens at once', async () => {
+      (await ready()).session.detach()
+      const invited = { ...share, id: 'invited' }
+      discover.mockResolvedValue([{ machineId: 'machine', shares: [share, invited] }])
+      const pending = relay.acquire('machine', 'invited', sink as never, closed)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(discover).toHaveBeenCalledTimes(2)
+      expect(state.sockets.at(-1).args[0]).toContain('share=invited')
+      pending.catch(() => {})
+    })
+
+    it('is read again for a share it holds that has expired', async () => {
+      (await ready()).session.detach()
+      await vi.setSystemTime(new Date(share.expiresAt).getTime() + 1)
+      discover.mockResolvedValue([])
+      await expect(relay.acquire('machine', 'share', sink as never, closed)).rejects.toBeInstanceOf(SharingEndedError)
+      expect(discover).toHaveBeenCalledTimes(2)
+    })
+
+    // The backend lists the shares it still honours; this computer's clock may run ahead of it.
+    it('opens a share the backend has just listed, whatever this computer\'s clock says of its expiry', async () => {
+      await vi.setSystemTime(new Date(share.expiresAt).getTime() + 1)
+      const { pending } = await begin()
+      pending.catch(() => {})
+      expect(state.sockets).toHaveLength(1)
+    })
+
+    it('is read once for windows that open together', async () => {
+      const first = relay.acquire('machine', 'share', sink as never, closed)
+      const second = relay.acquire('machine', 'share', sink as never, closed)
+      first.catch(() => {}); second.catch(() => {})
+      await vi.advanceTimersByTimeAsync(0)
+      expect(discover).toHaveBeenCalledOnce()
+      expect(state.sockets).toHaveLength(2)
+    })
+
+    it.each([
+      ['the owner ended the sharing', (ws: any) => frame(ws, 'observer_closed')],
+      ['the socket closed before the owner answered', (ws: any) => ws.emit('close', 4403, Buffer.from('Sharing ended or invitation expired'))],
+      ['the owner could not be verified', (ws: any) => frame(ws, 'observer_welcome', { ephemeral: 'forged', signature: 'forged' })],
+    ])('is read again after a window failed to open: %s', async (_why, fail) => {
+      const { pending, ws } = await begin()
+      const failed = expect(pending).rejects.toThrow()
+      frame(ws, 'observer_connected')
+      fail(ws)
+      await failed;
+      (await ready()).session.detach()
+      expect(discover).toHaveBeenCalledTimes(2)
+    })
+
+    it.each([
+      ['told the sharing ended', (ws: any) => frame(ws, 'observer_closed')],
+      ['closed as no longer shared', (ws: any) => ws.emit('close', 4403, Buffer.from('Access removed'))],
+    ])('is read again after an open window was %s', async (_how, end) => {
+      const { ws } = await ready()
+      end(ws);
+      (await ready()).session.detach()
+      expect(discover).toHaveBeenCalledTimes(2)
+    })
+
+    it('is kept when an open window lost its owner for a while', async () => {
+      const { ws } = await ready()
+      ws.emit('close', 1006, Buffer.alloc(0));
+      (await ready()).session.detach()
+      expect(discover).toHaveBeenCalledOnce()
+    })
+
+    it('is not kept when reading it failed', async () => {
+      discover.mockRejectedValueOnce(new Error('Shared harnesses are temporarily unavailable.'))
+      await expect(relay.acquire('machine', 'share', sink as never, closed)).rejects.toThrow('temporarily unavailable');
+      (await ready()).session.detach()
+      expect(discover).toHaveBeenCalledTimes(2)
+    })
+
+    it('answers nothing once another account signs in', async () => {
+      (await ready()).session.detach()
+      account = 'second';
+      (await ready()).session.detach()
+      expect(discover).toHaveBeenCalledTimes(2)
+    })
+
+    it('read for one account is not kept when another signed in meanwhile', async () => {
+      let answer: ((machines: any[]) => void) | null = null
+      discover.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+      const pending = relay.acquire('machine', 'share', sink as never, closed)
+      pending.catch(() => {})
+      await vi.advanceTimersByTimeAsync(0)
+      account = 'second'
+      answer!([{ machineId: 'machine', shares: [share] }])
+      await vi.advanceTimersByTimeAsync(0);
+      (await ready()).session.detach()
+      expect(discover).toHaveBeenCalledTimes(2)
+    })
+
+    // Review of #2107, finding 1: the list read for one sign-in opened a window with the next sign-in's token.
+    it('a window whose list was read for another sign-in opens nothing with the new one', async () => {
+      let answer: ((machines: any[]) => void) | null = null
+      discover.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+        .mockImplementationOnce(async () => [])
+      const pending = relay.acquire('machine', 'share', sink as never, closed)
+      await vi.advanceTimersByTimeAsync(0)
+      account = 'second'
+      answer!([{ machineId: 'machine', shares: [share] }])
+      await expect(pending).rejects.toBeInstanceOf(SharingEndedError)
+      expect(discover).toHaveBeenCalledTimes(2)
+      expect(state.sockets).toHaveLength(0)
+    })
+
+    it('a window whose sign-in changed while it fetched its token opens nothing with the new one', async () => {
+      let tokenAnswer: ((token: string) => void) | null = null
+      const tokens = vi.fn<() => Promise<string>>(async () => `token-${account}`)
+      const fenced = new HarnessShareRelay({ accessToken: tokens } as unknown as AuthSessionManager, 'ws://localhost:1234/', 'prod', discover, () => account)
+      try {
+        tokens.mockImplementationOnce(() => new Promise(resolve => { tokenAnswer = resolve }))
+        const pending = fenced.acquire('machine', 'share', sink as never, closed)
+        await vi.advanceTimersByTimeAsync(0)
+        expect(tokens).toHaveBeenCalledOnce()
+        discover.mockResolvedValue([])
+        account = 'second'
+        tokenAnswer!('token-first')
+        await expect(pending).rejects.toBeInstanceOf(SharingEndedError)
+        expect(state.sockets).toHaveLength(0)
+      } finally { fenced.close() }
+    })
+
+    // Finding 2: a refresh that failed left the list it was replacing in use.
+    it('is not used after a refresh of it failed', async () => {
+      (await ready()).session.detach()
+      discover.mockRejectedValueOnce(new Error('Shared harnesses are temporarily unavailable.'))
+      await expect(relay.acquire('machine', 'missing', sink as never, closed)).rejects.toThrow('temporarily unavailable');
+      (await ready()).session.detach()
+      expect(discover).toHaveBeenCalledTimes(3)
+    })
+
+    // Re-check of #2107: a window that took its share from the kept list and was waiting for its token still opened
+    // after another window's refresh failed.
+    it('a window waiting for its token looks again after another window\'s refresh failed', async () => {
+      (await ready()).session.detach()
+      let tokenAnswer: ((token: string) => void) | null = null
+      tokens.mockImplementationOnce(() => new Promise(resolve => { tokenAnswer = resolve }))
+      const before = state.sockets.length
+      const waiting = relay.acquire('machine', 'share', sink as never, closed)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(tokenAnswer).not.toBeNull()
+      discover.mockRejectedValueOnce(new Error('Shared harnesses are temporarily unavailable.'))
+        .mockResolvedValueOnce([])
+      await expect(relay.acquire('machine', 'missing', sink as never, closed)).rejects.toThrow('temporarily unavailable')
+      tokenAnswer!('signed-in-token')
+      await expect(waiting).rejects.toBeInstanceOf(SharingEndedError)
+      expect(discover).toHaveBeenCalledTimes(3)
+      expect(state.sockets).toHaveLength(before)
+    })
+
+    it('a refresh that fails for a sign-in no longer current leaves the current list alone', async () => {
+      let fail: ((error: Error) => void) | null = null
+      discover.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject }))
+      relay.acquire('machine', 'missing', sink as never, closed).catch(() => {})
+      await vi.advanceTimersByTimeAsync(0)
+      account = 'second';
+      (await ready()).session.detach()
+      fail!(new Error('Shared harnesses are temporarily unavailable.'))
+      await vi.advanceTimersByTimeAsync(0);
+      (await ready()).session.detach()
+      expect(discover).toHaveBeenCalledTimes(2)
+    })
+
+    // Finding 3: a refresh begun before a revocation brought the revoked list back, and later windows joined it.
+    it('a refresh begun before a revocation does not bring the list back', async () => {
+      const { ws } = await ready()
+      let answer: ((machines: any[]) => void) | null = null
+      discover.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+      const missing = relay.acquire('machine', 'missing', sink as never, closed)
+      missing.catch(() => {})
+      await vi.advanceTimersByTimeAsync(0)
+      ws.emit('close', 4403, Buffer.from('Sharing ended'))
+      answer!([{ machineId: 'machine', shares: [share] }])
+      await vi.advanceTimersByTimeAsync(0);
+      (await ready()).session.detach()
+      expect(discover).toHaveBeenCalledTimes(3)
+    })
+
+    it('a window opened after a revocation does not join a refresh begun before it', async () => {
+      const { ws } = await ready()
+      discover.mockImplementationOnce(() => new Promise(() => {}))
+      relay.acquire('machine', 'missing', sink as never, closed).catch(() => {})
+      await vi.advanceTimersByTimeAsync(0)
+      ws.emit('close', 4403, Buffer.from('Sharing ended'));
+      (await ready()).session.detach()
+      expect(discover).toHaveBeenCalledTimes(3)
+    })
+
+    it('a window whose list was revoked while it was read reads it again', async () => {
+      const { ws } = await ready()
+      let answer: ((machines: any[]) => void) | null = null
+      await vi.advanceTimersByTimeAsync(60_000)
+      discover.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+        .mockImplementationOnce(async () => [])
+      const pending = relay.acquire('machine', 'share', sink as never, closed)
+      await vi.advanceTimersByTimeAsync(0)
+      const before = state.sockets.length
+      ws.emit('close', 4403, Buffer.from('Sharing ended'))
+      answer!([{ machineId: 'machine', shares: [share] }])
+      await expect(pending).rejects.toBeInstanceOf(SharingEndedError)
+      expect(discover).toHaveBeenCalledTimes(3)
+      expect(state.sockets).toHaveLength(before)
+    })
+
+    it('a window whose sign-in keeps changing while it looks gives up after three lookups and opens nothing', async () => {
+      discover.mockImplementation(async () => { account = `${account}+`; return [{ machineId: 'machine', shares: [share] }] })
+      await expect(relay.acquire('machine', 'share', sink as never, closed)).rejects.toThrow('temporarily unavailable')
+      expect(discover).toHaveBeenCalledTimes(3)
+      expect(state.sockets).toHaveLength(0)
+    })
+
+    it('being read for one account does not end the read of another when it finishes', async () => {
+      let first: ((machines: any[]) => void) | null = null
+      let second: ((machines: any[]) => void) | null = null
+      discover.mockImplementationOnce(() => new Promise(resolve => { first = resolve }))
+        .mockImplementationOnce(() => new Promise(resolve => { second = resolve }))
+      relay.acquire('machine', 'share', sink as never, closed).catch(() => {})
+      await vi.advanceTimersByTimeAsync(0)
+      account = 'second'
+      relay.acquire('machine', 'share', sink as never, closed).catch(() => {})
+      await vi.advanceTimersByTimeAsync(0)
+      first!([])
+      await vi.advanceTimersByTimeAsync(0)
+      relay.acquire('machine', 'share', sink as never, closed).catch(() => {})
+      await vi.advanceTimersByTimeAsync(0)
+      expect(discover).toHaveBeenCalledTimes(2)
+      second!([{ machineId: 'machine', shares: [share] }])
+      await vi.advanceTimersByTimeAsync(0)
+      // All three open on the second sign-in's list: the first looked its share up again once the sign-in changed.
+      expect(discover).toHaveBeenCalledTimes(2)
+      expect(state.sockets).toHaveLength(3)
+    })
+
+    it('being read for one account is not shared with a window of another', async () => {
+      discover.mockImplementationOnce(() => new Promise(() => {}))
+      relay.acquire('machine', 'share', sink as never, closed).catch(() => {})
+      await vi.advanceTimersByTimeAsync(0)
+      account = 'second';
+      (await ready()).session.detach()
+      expect(discover).toHaveBeenCalledTimes(2)
+    })
+  })
 })

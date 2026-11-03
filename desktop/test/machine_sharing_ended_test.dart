@@ -39,7 +39,7 @@ class _Discovery extends LocalCliDiscovery {
 }
 
 class _Connection extends WsConn {
-  _Connection(String machineId)
+  _Connection(String machineId, {this.onWake})
     : super(
         wsBaseUrl: 'ws://fixture.invalid',
         autonomousEnv: 'test',
@@ -49,6 +49,9 @@ class _Connection extends WsConn {
         onEvent: (_) {},
         onStatus: (_) {},
       );
+  final void Function(String machineId)? onWake;
+  @override
+  void wake(String reason) => onWake?.call(machineId);
   @override
   Future<void> waitUntilReady({required Duration timeout}) async {}
   @override
@@ -61,13 +64,13 @@ class _Connection extends WsConn {
 
 /// Signed in, with this computer's daemon and its machine connections faked.
 class _App extends AppNotifier {
-  _App(_Api api)
+  _App(_Api api, {void Function(String machineId)? onWake})
     : super(
         config: AppConfig.dev,
         authSession: AuthSession(),
         configStore: null,
         localCliDiscovery: _Discovery(),
-        connectionForTest: _Connection.new,
+        connectionForTest: (id) => _Connection(id, onWake: onWake),
       ) {
     this.api = api;
   }
@@ -186,6 +189,86 @@ void main() {
       'Could not connect to Studio. Try again in a moment.',
     );
     expect(app.lastErrorRetryable, isTrue);
+  });
+
+  // Prod, 2026-10-28: a laptop removed from the account in September was still selected every few
+  // seconds. Refused as not on the account, an own machine is read again from the account's list.
+  for (final (how, refuse) in <(String, Future<void> Function(AppNotifier))>[
+    (
+      'the backend’s refusal',
+      (app) => app.handleEventForTest('gone', {
+        'type': 'machine_select_error',
+        'payload': {'machineId': 'gone', 'error': 'NOT_YOUR_MACHINE'},
+      }),
+    ),
+    (
+      'the daemon relay’s close',
+      (app) async => app.localFailureForTest('gone', 1011, 'NOT_YOUR_MACHINE'),
+    ),
+  ]) {
+    test('an own machine refused by $how leaves the list', () async {
+      const gone = Machine(
+        machineId: 'gone',
+        authMode: MachineAuthMode.remote,
+        name: 'M1 Laptop',
+      );
+      const kept = Machine(
+        machineId: 'kept',
+        authMode: MachineAuthMode.remote,
+        name: 'Studio',
+      );
+      final api = _Api()..listed = const [kept];
+      app = _App(api)..status = AppStatus.authenticated;
+      app.machines = [gone, kept];
+      for (final machine in app.machines) {
+        app.machineStates[machine.machineId] = MachineState(machine)
+          ..nodeOnline = true
+          ..connectionStatus = ConnectionStatus.connected;
+      }
+      await refuse(app);
+      for (var i = 0; i < 20; i++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      final listed = app.machines.map((m) => m.machineId);
+      expect(listed, contains('kept'));
+      expect(listed, isNot(contains('gone')));
+      expect(app.stateOf('gone'), isNull);
+      expect(app.lastErrorRetryable, isFalse);
+    });
+  }
+
+  // A relayed machine that was off waits parked (WsConn.isParked) until it is reported back: the
+  // machine list's refresh saying it is online is that word.
+  test('a machine the list reports online wakes its parked connection', () async {
+    const studio = Machine(
+      machineId: 'studio',
+      authMode: MachineAuthMode.remote,
+      name: 'Studio',
+      status: 'online',
+    );
+    final api = _Api()..listed = const [studio];
+    final woken = <String>[];
+    app = _App(api, onWake: woken.add)..status = AppStatus.authenticated;
+    await app.refreshMachines();
+    expect(woken, contains('studio'));
+  });
+
+  // The list's word alone, for a row that already reads online: no node-status change runs, so only the list's own
+  // wake can reach the parked connection (review of #2027).
+  test('a row already online that the list reports online still wakes its parked connection', () async {
+    const studio = Machine(
+      machineId: 'studio',
+      authMode: MachineAuthMode.remote,
+      name: 'Studio',
+      status: 'online',
+    );
+    final api = _Api()..listed = const [studio];
+    final woken = <String>[];
+    app = _App(api, onWake: woken.add)..status = AppStatus.authenticated;
+    app.machines = [studio];
+    app.machineStates['studio'] = MachineState(studio)..nodeOnline = true;
+    await app.refreshMachines();
+    expect(woken, contains('studio'));
   });
 
   test('every refusal code reads as a sentence', () {

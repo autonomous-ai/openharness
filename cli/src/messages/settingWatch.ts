@@ -18,7 +18,7 @@
  * next start. Where a watch cannot be had for another reason (no inotify watches left), or fails later, it falls back
  * to looking at the file's time every `POLL_MS`: degraded, still no backend and no pump.
  */
-import { unwatchFile, watch, watchFile } from 'node:fs'
+import { statSync, watch } from 'node:fs'
 
 /** How often the fallback looks at the file, where it cannot be watched. */
 export const POLL_MS = 2_000
@@ -35,9 +35,28 @@ export interface SettingWatchDeps {
 }
 
 const watchPath = (path: string, listener: () => void): Watching => watch(path, { persistent: false }, listener)
+/** The file as one look sees it: replaced (a rename), resized or written; null when it is not there or cannot be
+ *  looked at (a failed look in a timer would end the process; the next look that succeeds says it may have changed). */
+const look = (path: string): string | null => {
+  try {
+    const stats = statSync(path, { bigint: true, throwIfNoEntry: false })
+    return stats ? `${stats.ino}:${stats.size}:${stats.mtimeNs}:${stats.ctimeNs}` : null
+  } catch {
+    return null
+  }
+}
+/** Its first look is taken now, not later off the main thread as `fs.watchFile` takes it: a write made before that
+ *  later look was where it started, and never heard (found by its own test, every time on a busy machine). */
 const pollPath = (path: string, listener: () => void): (() => void) => {
-  watchFile(path, { persistent: false, interval: POLL_MS }, listener)
-  return () => unwatchFile(path, listener)
+  let seen = look(path)
+  const timer = setInterval(() => {
+    const now = look(path)
+    if (now === seen) return
+    seen = now
+    listener()
+  }, POLL_MS)
+  timer.unref()
+  return () => clearInterval(timer)
 }
 
 /** Call [changed] whenever the file at [path] may have changed, until the returned function is called. */

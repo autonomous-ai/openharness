@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createSuperTab } from '../model.js'
-import { capReleased, departedAgents, hostMarker, visibilityChanged } from './commit.js'
+import { capReleased, departedAgents, hostMarker, hostsToTell, membersToTell, plainHost, sameData, visibilityChanged } from './commit.js'
+import type { PartWrite } from './write.js'
 
 describe('writing a Swarm\'s parts', () => {
   it('keeps the newest 200 released harnesses of each machine and drops the oldest', () => {
@@ -51,6 +52,9 @@ describe('what a write tells host reads (review round 1)', () => {
     }
     expect(hostMarker('machine', machine({}, reading(1)), lent(15_000, reading(2)), none, 9)).toEqual({})
     expect(hostMarker('machine', lent(15_000), lent(30_000), none, 9)).toEqual({})
+    // The daily rows move with every reading too.
+    const days = (busyMs: number) => { const part = machine(); return { ...part, contribution: { ...part.contribution, lentDays: [{ day: 0, busyMs }] } } }
+    expect(hostMarker('machine', days(1), days(2), none, 9)).toEqual({})
   })
 
   it('moves it for a change to the machine\'s settings or ledger, and when the part is added or removed', () => {
@@ -73,6 +77,99 @@ describe('what a write tells host reads (review round 1)', () => {
   })
 })
 
+describe('which machines\' hosts a commit tells (WS roadmap Phase 2a)', () => {
+  // Mac A lends a pool and runs agent a1; the team account B follows Mac A; Mac C runs agent c1 only.
+  const swarm = () => {
+    const state = createSuperTab('tab', 'Pilot', { id: 'owner', email: 'owner@example.com' }, 'prod')
+    state.machines = [{ machineId: 'A' }, { machineId: 'B', hostMachineId: 'A' }] as never
+    state.agents = [{ id: 'a1', machineId: 'A' }, { id: 'c1', machineId: 'C' }] as never
+    return state
+  }
+  const update = (kind: PartWrite['kind'], key: string, data: unknown, host?: object): PartWrite => ({ op: 'update', kind, key, seen: 1, data, ...(host ? { host } : {}) })
+  const tell = (writes: PartWrite[]) => hostsToTell(writes, swarm(), swarm()).sort()
+
+  it('tells every host of the Swarm when its head or members change', () => {
+    expect(tell([update('head', 'head', {})])).toEqual(['A', 'B', 'C'])
+    expect(tell([update('member', 'owner', {})])).toEqual(['A', 'B', 'C'])
+  })
+
+  it('tells only the machine an agent or a start is on', () => {
+    expect(tell([update('agent', 'c1', { machineId: 'C' })])).toEqual(['C'])
+    expect(tell([update('start', 's', { request: { machineId: 'A' } })])).toEqual(['A'])
+  })
+
+  it('tells the machines a group\'s marker names, and none for a group write without one', () => {
+    expect(tell([update('group', 'g', {}, { hostMachineIds: ['C'] })])).toEqual(['C'])
+    expect(tell([update('group', 'g', {})])).toEqual([])
+  })
+
+  it('tells a machine whose settings changed, the Mac it follows and the team accounts that follow it, never for its reading alone', () => {
+    expect(tell([update('machine', 'A', { machineId: 'A', contribution: {} }, { hostChangedAt: new Date(9) })])).toEqual(['A', 'B'])
+    expect(tell([update('machine', 'B', { machineId: 'B', contribution: { hostMachineId: 'A' } }, { hostChangedAt: new Date(9) })])).toEqual(['A', 'B'])
+    expect(tell([update('machine', 'A', { machineId: 'A', contribution: {} })])).toEqual([])
+  })
+
+  it('tells nobody for touches or progress', () => {
+    expect(tell([{ op: 'touch', kind: 'head', key: 'head', seen: 1 }, update('progress', 'p', {})])).toEqual([])
+  })
+
+  it('tells a machine the commit removed from the Swarm', () => {
+    const after = swarm()
+    after.agents = after.agents.filter(a => a.machineId !== 'C')
+    expect(hostsToTell([update('head', 'head', {})], swarm(), after).sort()).toEqual(['A', 'B', 'C'])
+  })
+})
+
+// Review of #2113: the host read (read/host.ts) and the push (hostsToTell) share one rule, so they cannot drift apart.
+describe('which host a part concerns from its data alone', () => {
+  it('is every host for the head and the Swarm\'s people, an agent\'s or a start\'s machine, and none for other kinds', () => {
+    expect(plainHost('head', {})).toBe('all')
+    expect(plainHost('member', {})).toBe('all')
+    expect(plainHost('agent', { machineId: 'A' })).toBe('A')
+    expect(plainHost('start', { request: { machineId: 'B' } })).toBe('B')
+    expect(plainHost('agent', null)).toBeNull()
+    expect(plainHost('start', { request: {} })).toBeNull()
+    expect(plainHost('group', { agentIds: [] })).toBeNull()
+    expect(plainHost('machine', { machineId: 'A' })).toBeNull()
+  })
+})
+
+describe('which people a commit tells (WS roadmap Phase 2a, client reads)', () => {
+  const swarm = (...people: string[]) => {
+    const state = createSuperTab('tab', 'Pilot', { id: 'owner', email: 'owner@example.com' }, 'prod')
+    for (const id of people) state.people.push({ ...state.people[0]!, id, email: `${id}@example.com`, role: 'collaborator' })
+    return state
+  }
+  const update = (kind: PartWrite['kind'], key: string, data: unknown, host?: object): PartWrite => ({ op: 'update', kind, key, seen: 1, data, ...(host ? { host } : {}) })
+
+  it('tells every person in the Swarm, before or after, that its main parts changed', () => {
+    const told = membersToTell([update('group', 'g', {})], swarm('kim'), swarm('kim', 'lee'))
+    expect(told.userIds.sort()).toEqual(['kim', 'lee', 'owner'])
+    expect(told.parts).toEqual(['main'])
+  })
+
+  it('tells a person the commit removed, so their app reads and finds it gone', () => {
+    expect(membersToTell([update('member', 'kim', {})], swarm('kim'), swarm()).userIds.sort()).toEqual(['kim', 'owner'])
+  })
+
+  it('says a machine\'s reading alone changed only the machine parts, and both when a setting changed too', () => {
+    expect(membersToTell([update('machine', 'A', {})], swarm(), swarm()).parts).toEqual(['machine'])
+    expect(membersToTell([update('machine', 'A', {}), update('machine', 'B', {}, { hostChangedAt: new Date(9) })], swarm(), swarm()).parts)
+      .toEqual(['main', 'machine'])
+  })
+
+  // The Lead's rule (2026-10-29): someone who can see a Swarm without being in it keeps today's timers.
+  it('tells nobody who is not a person in the Swarm, an invited email included', () => {
+    const invited = swarm('kim')
+    invited.invitations.push({ email: 'stranger@example.com' } as never)
+    expect(membersToTell([update('head', 'head', {})], invited, invited).userIds.sort()).toEqual(['kim', 'owner'])
+  })
+
+  it('tells nobody for a commit that only touches', () => {
+    expect(membersToTell([{ op: 'touch', kind: 'head', key: 'head', seen: 1 }], swarm('kim'), swarm('kim'))).toEqual({ userIds: [], parts: [] })
+  })
+})
+
 describe('agents a group write lets go (review round 2)', () => {
   const group = (agentIds: string[], worker?: string) => ({ id: 'g', title: 'G', leadId: null, agentIds, archived: false, brief: '', checks: [],
     lastMessageSequence: 0, assignment: worker ? { id: 'w', agentId: worker, status: 'working', configuration: {}, result: null,
@@ -84,5 +181,52 @@ describe('agents a group write lets go (review round 2)', () => {
     expect(departedAgents(group(['lead', 'worker'], 'worker'), group(['lead', 'worker']))).toEqual([])
     expect(departedAgents(group(['lead']), group(['lead', 'new']))).toEqual([])
     expect(departedAgents(undefined, group(['lead']))).toEqual([])
+  })
+})
+
+describe('whether a part\'s data changed', () => {
+  /** What a stored record says, as JSON with sorted keys: the comparison commits made before (the oracle). */
+  const sorted = (value: unknown) => JSON.stringify(value, (_key, item: unknown) => item && typeof item === 'object' && !Array.isArray(item)
+    ? Object.fromEntries(Object.entries(item as Record<string, unknown>).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : item)
+
+  it('ignores the order keys were built in, and fields left undefined', () => {
+    expect(sameData({ a: 1, b: { c: [1, 2], d: 'x' } }, { b: { d: 'x', c: [1, 2] }, a: 1 })).toBe(true)
+    expect(sameData({ a: 1, gone: undefined }, { a: 1 })).toBe(true)
+    expect(sameData({ when: new Date(5) }, { when: new Date(5).toISOString() })).toBe(true)
+  })
+
+  it('sees a changed value, a null where nothing was, a reordered list, and a longer one', () => {
+    expect(sameData({ a: { b: 1 } }, { a: { b: 2 } })).toBe(false)
+    expect(sameData({ a: null }, {})).toBe(false)
+    expect(sameData({ list: [1, 2] }, { list: [2, 1] })).toBe(false)
+    expect(sameData({ list: [1] }, { list: [1, undefined] })).toBe(false)
+    expect(sameData({ n: 1 }, { n: '1' })).toBe(false)
+    expect(sameData([], {})).toBe(false)
+  })
+
+  it('agrees with comparing sorted JSON on many random records', () => {
+    let seed = 1726
+    const next = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31
+    const leaf = () => [null, undefined, 0, 1, 'a', 'b', true, false, Number.NaN][Math.floor(next() * 9)]
+    const make = (depth: number): unknown => {
+      const r = next()
+      if (depth > 3 || r < 0.4) return leaf()
+      if (r < 0.7) return Array.from({ length: Math.floor(next() * 3) }, () => make(depth + 1))
+      return Object.fromEntries(Array.from({ length: Math.floor(next() * 4) }, () => [['x', 'y', 'z', 'w'][Math.floor(next() * 4)]!, make(depth + 1)]))
+    }
+    const mutate = (value: unknown): unknown => {
+      if (next() < 0.3) return make(2)
+      if (Array.isArray(value)) return value.map(mutate)
+      if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).reverse().map(([k, v]) => [k, mutate(v)]))
+      return value
+    }
+    let differ = 0
+    for (let i = 0; i < 5_000; i++) {
+      const a = make(0), b = next() < 0.5 ? structuredClone(a) : mutate(a)
+      const expected = sorted(a) === sorted(b)
+      if (!expected) differ++
+      expect(sameData(a, b), `${sorted(a)} vs ${sorted(b)}`).toBe(expected)
+    }
+    expect(differ).toBeGreaterThan(500)
   })
 })

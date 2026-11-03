@@ -21,6 +21,7 @@
     ],
     "env": {
       "KICAD_HARNESS_PYTHON": "${dsh}/upstream/harness/kicad/toolchain/python",
+      "KICAD_CASE_PYTHON": "${dsh}/upstream/harness/kicad/toolchain/case-python",
       "CIRCUIT_PYTHON": "${dsh}/toolchain/python",
       "KICAD_HARNESS_ROOT": "${dsh}/upstream",
       "KICAD_HARNESS_BLOCKS": "${dsh}/upstream/packages/golden-blocks/blocks",
@@ -41,7 +42,7 @@
     },
     "args": [
       "-m",
-      "gpt-6-astra",
+      "gpt-6.1-sol",
       "-c",
       "model_reasoning_effort=high",
       "-c",

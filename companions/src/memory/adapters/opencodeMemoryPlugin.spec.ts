@@ -10,7 +10,7 @@ function fixture() {
     return new Response(JSON.stringify({ observe: true, challenge: 'one-use-grant' }), { status: 200 })
   })
   const health = vi.fn(async () => ({ data: { version: '1.18.34' } }))
-  const { hook, submitted } = new Function('client', 'hookToken', `${opencodeMemoryPluginSource(12345)}; return { hook: memoryParams, submitted: memoryMessage }`)({ _client: { get: health } }, () => 'synthetic-hook-token')
+  const { hook, submitted } = new Function('client', 'hookToken', `${opencodeMemoryPluginSource(12345, null)}; return { hook: memoryParams, submitted: memoryMessage }`)({ _client: { get: health } }, () => 'synthetic-hook-token')
   const input = { sessionID: 'native', agent: 'build', message: { id: 'user-one', sessionID: 'native', role: 'user', agent: 'build', model: { providerID: 'selected', modelID: 'alias', variant: 'high' } },
     provider: { id: 'selected', name: 'Selected', key: 'native-api-account', options: { baseURL: 'https://selected.invalid/v1' } },
     model: { providerID: 'selected', id: 'alias', name: 'Alias', api: { id: 'provider-native-id', npm: '@ai-sdk/openai-compatible', url: 'https://catalog.invalid/v1' },

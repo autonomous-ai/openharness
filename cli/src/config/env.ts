@@ -250,6 +250,11 @@ const fields = {
   SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: (raw: string | undefined) => url((address) => !address.username && !address.password && !address.search
     && (address.protocol === 'https:' || (address.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(address.hostname))))(raw)
     ?? 'https://cdn.harness.autonomous.ai',
+  // Where the backend's short-lived signed links to Super Tab chat files point: Cloud Storage's own host (backend
+  // superTabs/fileLinks.ts). The host downloads from here or from the public base above (an older backend), nowhere else.
+  SUPER_TAB_FILES_BASE: (raw: string | undefined) => url((address) => !address.username && !address.password && !address.search
+    && (address.protocol === 'https:' || (address.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(address.hostname))))(raw)
+    ?? 'https://storage.googleapis.com',
   // This computer's stable id, minted once and never regenerated (see computerIdFile above). Pin it
   // explicitly on a box with no durable home — a container or CI job that gets a fresh ~/.harness on
   // every boot would otherwise look like a NEW computer each time and collect a machine per start.

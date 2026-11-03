@@ -195,6 +195,20 @@ describe('owner link and comment authority', () => {
     expect((await connect()).cipher).toBeNull()
     expect(grants.all().every(g => g.revoked)).toBe(true)
   })
+  it('closes every viewer of a link within a second of its session turning confidential, invited or public', async () => {
+    // What the Swarm's roster marks (superTabs/observers.ts allows): a Lead, or an agent in a private chat, refuses every share.
+    let confidential = false
+    deps.allowsGrant = grant => !(confidential && grant.agentId === 'a')
+    await manage('link', { visibility: 'public' })
+    await manage('invite', { emails: ['alice@example.com'], days: 7 })
+    const guest = await connect(), alice = await connect({ email: 'alice@example.com', authorId: 'alice' })
+    expect(guest.cipher).not.toBeNull()
+    expect(alice.cipher).not.toBeNull()
+    confidential = true
+    await vi.advanceTimersByTimeAsync(1000)
+    for (const viewer of [guest, alice]) expect(frames.find(f => f.id === viewer.id && f.type === 'observer_closed')).toMatchObject({ payload: { reason: 'Sharing ended or invitation expired', retry: false } })
+    expect((await connect()).cipher).toBeNull()
+  })
   it('retries offline publication, fails closed on permanent errors, and scopes sync to this machine', async () => {
     vi.mocked(deps.publish).mockRejectedValueOnce(new Error('offline'))
     expect(await manage('link', { visibility: 'public' })).toMatchObject({ link: { pending: true } })

@@ -38,7 +38,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       ScrollPosition position() => tester
-          .widget<ListView>(
+          .widget<ScrollView>(
             find.byKey(const PageStorageKey('super-messages-tab-lead')),
           )
           .controller!
@@ -115,7 +115,7 @@ void main() {
       c.select('offline');
       await tester.pumpAndSettle();
       ScrollPosition position() => tester
-          .widget<ListView>(
+          .widget<ScrollView>(
             find.byKey(const PageStorageKey('super-messages-tab-offline')),
           )
           .controller!

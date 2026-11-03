@@ -253,6 +253,9 @@ abstract final class AppPalette {
   static Color get dangerFill =>
       AppTheme.pick(const Color(0xFFB3261E), const Color(0xFFC92E26));
 
+  /// Text and marks on [dangerFill], such as a sidebar's red count.
+  static const Color onDangerFill = Colors.white;
+
   /// The accent as a *mark on a surface* — a selected row's icon, an accent
   /// rail — rather than a fill behind white text.
   ///
@@ -1454,6 +1457,12 @@ abstract final class AppDesktop {
   static const double panelPadding = 24;
   static const double groupGap = 16;
   static const double controlGap = 8;
+
+  /// Between one sidebar row and the next (design system: Geometry).
+  static const double listRowGap = 2;
+
+  /// A count badge's text from its capsule's ends, as in Notifications' count.
+  static const double badgeInset = 5;
   static const double menuInset = 6;
   static const double iconSize = 16;
   static const double identitySize = 28;

@@ -114,6 +114,10 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       const answer = await ask?.('agentUsage', { target: usageTarget(target) }).catch(() => null)
       return validUsageTarget(answer?.target) && usageTargetKey(answer.target) === usageTargetKey(target) && validUsage(answer?.value) ? usageSnapshot(answer.value) : null
     },
+    usageFresh: async agentId => {
+      const answer = await ask?.('agentUsageFresh', { agentId }).catch(() => null)
+      return answer && 'value' in answer && validUsage(answer.value) ? usageSnapshot(answer.value) : null
+    },
     conversations: CONVERSATIONS_OFF,
     // Terminals are launched by the core alone (the shell service, #893): a service in its own process
     // is refused, never handed a way to start a process outside the core.
@@ -261,6 +265,7 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
         // A Lead's read of a member's terminal and its typing (superTabs/inCore/terminal.ts), answered by the core.
         screen: (agentId, scrollback) => terminalAnswer(ask('super_tab_screen', { agentId, scrollback })) as Promise<SuperTabScreen>,
         input: (agentId, text, keys) => terminalAnswer(ask('super_tab_input', { agentId, text, keys })),
+        inputIfScreen: (agentId, keys, screen) => terminalAnswer(ask('super_tab_input_if_screen', { agentId, keys, screen })),
       } satisfies SuperTabsCore,
     } : {}),
   }

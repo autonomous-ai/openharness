@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/team_account_setup.dart';
 
@@ -57,7 +58,7 @@ void main() {
   AppNotifier make(_Daemon daemon) {
     final app = createApp(connectionForTest: (_) => daemon, connected: true);
     app.machineStates['m']!.localOnly = true;
-    app.macOSForTest = true;
+    app.teamAccountHereForTest = true;
     app.daemonIdentityForTest = () async => running;
     app.teamOfferRetryForTest = const Duration(milliseconds: 1);
     return app;
@@ -94,7 +95,7 @@ void main() {
       {'action': 'teamSetupDecline'},
     ]);
     expect(app.canSetUpTeamAccount, isTrue);
-    app.macOSForTest = false;
+    app.teamAccountHereForTest = false;
     expect(app.canSetUpTeamAccount, isFalse);
     expect(await app.setUpTeamAccount(), 'unsupported');
   });
@@ -105,16 +106,48 @@ void main() {
   });
 
   test(
-    'asks nothing off a Mac, or when the only machine here is another one',
+    'asks nothing where the account cannot be made, or when the only machine here is another one',
     () async {
-      app.macOSForTest = false;
+      app.teamAccountHereForTest = false;
       await app.offerTeamAccount('join');
-      app.macOSForTest = true;
+      app.teamAccountHereForTest = true;
       app.machineStates['m']!.localOnly = false;
       await app.offerTeamAccount('join');
       expect(daemon.asked, isEmpty);
     },
   );
+
+  // Linux and Windows make the same account a Mac does (plans of 2026-10-28;
+  // Windows' daemon sets it up behind User Account Control). A phone, a tablet
+  // and a browser never do.
+  test('the account is offered on a Mac, Linux and Windows, nowhere else', () {
+    for (final os in ['macos', 'linux', 'windows']) {
+      expect(AppNotifier.teamAccountOn(os), isTrue, reason: os);
+    }
+    for (final os in ['web', 'ios', 'android', 'fuchsia']) {
+      expect(AppNotifier.teamAccountOn(os), isFalse, reason: os);
+    }
+  });
+
+  test('never for a machine shared with this account, at a join or at start', () async {
+    final state = app.machineStates['m']!;
+    state.machine = Machine(
+      machineId: 'm',
+      authMode: MachineAuthMode.remote,
+      name: 'Dee\'s computer',
+      machineShare: const MachineShare(
+        ownerName: 'Dee',
+        ownerEmail: 'dee@acme.io',
+        via: 'email',
+        added: true,
+      ),
+    );
+    expect(app.canSetUpTeamAccount, isFalse);
+    await app.offerTeamAccount('join');
+    app.onMachineConnectedForTest('m');
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(daemon.asked, isEmpty);
+  });
 
   test('a daemon that refuses or cannot say is left alone', () async {
     daemon.answer = {'error': 'UNKNOWN_ACTION'};
@@ -249,12 +282,21 @@ void main() {
     expect(own.asked, hasLength(1));
   });
 
-  Future<void> open(WidgetTester tester, {bool asked = false}) async {
+  Future<void> open(
+    WidgetTester tester, {
+    bool asked = false,
+    String operatingSystem = 'macos',
+  }) async {
     await tester.pumpWidget(
       MaterialApp(
         home: Builder(
           builder: (context) => TextButton(
-            onPressed: () => showTeamAccountSetup(context, app, asked: asked),
+            onPressed: () => showTeamAccountSetup(
+              context,
+              app,
+              asked: asked,
+              operatingSystem: operatingSystem,
+            ),
             child: const Text('open'),
           ),
         ),
@@ -263,6 +305,148 @@ void main() {
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
   }
+
+  /// The dialog's title and its three paragraphs, as shown.
+  List<String> shown(WidgetTester tester) => [
+    for (final text in tester.widgetList<Text>(
+      find.descendant(
+        of: find.byKey(const Key('team-account-setup')),
+        matching: find.byType(Text),
+      ),
+    ))
+      if (!const {'Not now', 'Cancel', 'Continue'}.contains(text.data))
+        text.data!,
+  ];
+
+  /// What the dialog says once Continue was pressed, the daemon answering
+  /// [answer].
+  Future<String> outcome(
+    WidgetTester tester,
+    String operatingSystem,
+    Map<String, dynamic> answer,
+  ) async {
+    daemon.answer = answer;
+    await open(tester, operatingSystem: operatingSystem);
+    await tester.tap(find.byKey(const Key('team-account-setup-continue')));
+    await tester.pumpAndSettle();
+    final said = tester
+        .widget<Text>(find.byKey(const Key('team-account-setup-outcome')))
+        .data!;
+    await tester.tap(find.byKey(const Key('team-account-setup-done')));
+    await tester.pumpAndSettle();
+    return said;
+  }
+
+  const paragraph3 =
+      'Your home folder becomes private to you. Your own agents work as before. '
+      'To remove the account later, run harness team remove.';
+  const computerParagraph1 =
+      'Teammates\' agents in your Swarms run on this computer in a separate '
+      'account, Harness Team. They cannot read your files or use your GitHub login. '
+      'They use this computer\'s Claude Code and Codex subscriptions, so nobody signs in again.';
+
+  testWidgets('on a Mac the dialog says what it always said', (tester) async {
+    await open(tester);
+    expect(shown(tester), [
+      'Set up Harness Team on this Mac',
+      'Teammates\' agents in your Swarms run on this Mac in a separate macOS '
+          'account, Harness Team. They cannot read your files or use your GitHub login. '
+          'They use this Mac\'s Claude Code and Codex subscriptions, so nobody signs in again.',
+      'macOS asks for your password once, in a window titled “osascript”. '
+          'That is the macOS tool Harness uses to ask.',
+      paragraph3,
+    ]);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(
+      await outcome(tester, 'macos', {'ok': true, 'state': 'started'}),
+      'macOS is asking for your password in a window titled “osascript”. '
+      'Setup then takes a minute or two. This Mac\'s row updates when it is ready.',
+    );
+    expect(
+      await outcome(tester, 'macos', {'ok': true, 'state': 'exists'}),
+      'Harness Team is already set up on this Mac.',
+    );
+    expect(
+      await outcome(tester, 'macos', {'error': 'INVALID_REQUEST'}),
+      'This Mac\'s Harness is too old to set it up from here. Update Harness, '
+      'or run harness team setup in Terminal.',
+    );
+    expect(
+      await outcome(tester, 'macos', {'ok': true, 'state': 'unsupported'}),
+      'Harness Team cannot be set up on this Mac right now.',
+    );
+  });
+
+  testWidgets('on Linux the dialog says this computer, and the system asks for the password', (
+    tester,
+  ) async {
+    await open(tester, operatingSystem: 'linux');
+    expect(shown(tester), [
+      'Set up Harness Team on this computer',
+      computerParagraph1,
+      'Your system asks for your password once.',
+      paragraph3,
+    ]);
+    expect(find.text('Continue'), findsOneWidget);
+    expect(find.text('Cancel'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(
+      await outcome(tester, 'linux', {'ok': true, 'state': 'started'}),
+      'Your system is asking for your password. Setup then takes a minute or two. '
+      'This computer\'s row updates when it is ready.',
+    );
+    // No desktop session to ask in (the owner's daemon under systemd --user, or SSH): the daemon answers `no-prompt` up
+    // front (cli/src/team/autoSetup.ts) and nothing runs, so the terminal is the way.
+    expect(
+      await outcome(tester, 'linux', {'ok': true, 'state': 'no-prompt'}),
+      'Run harness team setup in a terminal on this computer.',
+    );
+    expect(
+      await outcome(tester, 'linux', {'ok': true, 'state': 'exists'}),
+      'Harness Team is already set up on this computer.',
+    );
+    expect(
+      await outcome(tester, 'linux', {'error': 'INVALID_REQUEST'}),
+      'This computer\'s Harness is too old to set it up from here. Update Harness, '
+      'or run harness team setup in a terminal.',
+    );
+    expect(
+      await outcome(tester, 'linux', {'ok': true, 'state': 'unsupported'}),
+      'Harness Team cannot be set up on this computer right now.',
+    );
+  });
+
+  testWidgets('on Windows the dialog says this computer, and User Account Control asks', (
+    tester,
+  ) async {
+    await open(tester, operatingSystem: 'windows', asked: true);
+    expect(shown(tester), [
+      'Set up Harness Team on this computer',
+      computerParagraph1,
+      'Windows asks for permission once (User Account Control).',
+      paragraph3,
+    ]);
+    expect(find.text('Not now'), findsOneWidget);
+    await tester.tap(find.text('Not now'));
+    await tester.pumpAndSettle();
+    daemon.asked.clear();
+    expect(
+      await outcome(tester, 'windows', {'ok': true, 'state': 'started'}),
+      'Windows is asking for permission. Setup then takes a minute or two. '
+      'This computer\'s row updates when it is ready.',
+    );
+    expect(
+      await outcome(tester, 'windows', {'ok': true, 'state': 'exists'}),
+      'Harness Team is already set up on this computer.',
+    );
+    // A refusal says the daemon's own sentence, as on a Mac.
+    expect(
+      await outcome(tester, 'windows', {'error': 'NO_PROMPT', 'detail': 'The daemon\'s sentence.'}),
+      'The daemon\'s sentence.',
+    );
+  });
 
   testWidgets(
     'explains the account and the "osascript" prompt before macOS asks',

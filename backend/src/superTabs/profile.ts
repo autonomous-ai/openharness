@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { agent, fail, person, type Actor, type SuperTabState } from './model.js'
-import { agentProjectId, ledProject } from './projects.js'
+import { agentProjectId, projectAgent } from './projects.js'
 
 /** The emoji a status may wear. Desktop offers each with its words (focus, coffee, lunch, out, away, sick). */
 export const STATUS_EMOJI = ['🎯', '☕', '🍽️', '🌴', '🚶', '🤒'] as const
@@ -30,8 +30,8 @@ export function setStatus(state: SuperTabState, actor: Actor, status: z.infer<ty
 /** Pictures a person may pick instead of uploading one; Desktop draws each. */
 export const AVATAR_PRESETS = ['fox', 'owl', 'cat', 'panda', 'octopus', 'cactus', 'rocket', 'sun'] as const
 /** What a member or agent shows: an uploaded picture or a preset. Absent: the default, initials for a person, a pattern from
- *  the name for an agent (Desktop). An upload keeps its object's key in the private avatar bucket; readers never get the key,
- *  only a short-lived signed link with each read (avatarLinks.ts). */
+ *  the name for an agent (Desktop). An upload keeps its object's key on the server; readers never get the key, only a link with
+ *  each read (avatarLinks.ts), signed for an hour wherever the picture is kept. */
 export type Avatar = { kind: 'upload'; key: string } | { kind: 'preset'; key: (typeof AVATAR_PRESETS)[number] }
 /** An avatar as readers get it: an upload says only that there is one. */
 export type AvatarView = { kind: 'upload' } | Extract<Avatar, { kind: 'preset' }>
@@ -62,12 +62,12 @@ export function setMemberAvatar(state: SuperTabState, actor: Actor, choice: Avat
   member.avatar = chosen(choice, upload)
 }
 
-/** `agent.avatar`: the person who contributed the agent, or the Lead of its project, sets or clears its avatar. */
+/** `agent.avatar`: the person who contributed the agent, or any agent of its project (project instructions, phase 4), sets or
+ *  clears its avatar. */
 export function setAgentAvatar(state: SuperTabState, actor: Actor, agentId: string, choice: AvatarChoice, upload: AvatarUpload | undefined): void {
   const target = agent(state, agentId)
-  const allowed = actor.kind === 'person' ? actor.userId === target.contributorId
-    : ledProject(state, actor.agentId)?.id === agentProjectId(state, target)
-  if (!allowed) fail('FORBIDDEN', 'Only the agent\'s contributor or its project\'s Lead can change its avatar.', 403)
+  const allowed = actor.kind === 'person' ? actor.userId === target.contributorId : projectAgent(state, actor, agentProjectId(state, target))
+  if (!allowed) fail('FORBIDDEN', 'Only the agent\'s contributor or an agent of its project can change its avatar.', 403)
   if (!choice) return void delete target.avatar
   target.avatar = chosen(choice, upload)
 }

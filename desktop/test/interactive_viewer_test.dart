@@ -14,6 +14,42 @@ Map<String, dynamic> picture() => {
 };
 
 void main() {
+  testWidgets(
+    'a paused surface pulls no frames and lets the machine close its renderer; resuming pulls at once',
+    (tester) async {
+      final requests = <Map<String, dynamic>>[];
+      final session = InteractiveViewerSession((payload) async {
+        requests.add(payload);
+        return payload['op'] == 'close' ? {'closed': true} : picture();
+      });
+      session.configure(const Size(800, 600), false);
+      await tester.pump(const Duration(seconds: 1));
+      final pulled = requests.where((r) => r['op'] == 'frame').length;
+      expect(pulled, greaterThan(3), reason: 'a shown surface keeps pulling');
+
+      session.paused = true;
+      await tester.pump(const Duration(milliseconds: 1));
+      expect(requests.last['op'], 'close');
+      final atPause = requests.length;
+      // Input and a resize while out of sight ask nothing either.
+      session.input({'type': 'text', 'text': 'x'});
+      session.configure(const Size(900, 600), false);
+      await tester.pump(const Duration(minutes: 1));
+      expect(requests, hasLength(atPause));
+      expect(session.image, isNotNull, reason: 'the last picture stays');
+
+      session.paused = false;
+      await tester.pump(const Duration(milliseconds: 1));
+      expect(requests[atPause]['op'], 'frame');
+      expect(requests[atPause]['events'], isEmpty);
+      await tester.pump(const Duration(seconds: 1));
+      expect(
+        requests.skip(atPause).where((r) => r['op'] == 'frame').length,
+        greaterThan(3),
+      );
+      session.dispose();
+    },
+  );
   testWidgets('host navigation is delivered once and ignored after disposal', (
     tester,
   ) async {

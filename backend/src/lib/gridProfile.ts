@@ -3,6 +3,7 @@ import { logger } from '../utils/logger.js'
 import { storedAutonomousEnvironment } from './autonomousEnvironment.js'
 import { LiveProfileError, readLiveProfile, recordLiveProfile, type LiveProfile } from './googleSubject.js'
 import type { AuthUser } from './ssoAuth.js'
+import { createRateLimiter } from './rateLimit.js'
 
 /**
  * What `GET /api/grid/profile` answers: who holds this Harness sign-in token, for the Grid control
@@ -39,25 +40,12 @@ export type GridProfileAnswer =
  * user's token validation shares. A computer sign-in reads nothing upstream and is not counted.
  */
 export const GRID_PROFILE_LIVE_READS_PER_MINUTE = 10
-const LIVE_READ_WINDOW_MS = 60_000
-const LIVE_READ_ENTRIES_MAX = 10_000
-const liveReads = new Map<string, number[]>()
-
-/** Count one live read for this account; false when it is over the limit. */
-function admitLiveRead(userId: string, now = Date.now()): boolean {
-  const recent = (liveReads.get(userId) ?? []).filter((at) => now - at < LIVE_READ_WINDOW_MS)
-  if (recent.length >= GRID_PROFILE_LIVE_READS_PER_MINUTE) return false
-  if (!liveReads.has(userId) && liveReads.size >= LIVE_READ_ENTRIES_MAX) {
-    const oldest = liveReads.keys().next().value
-    if (oldest !== undefined) liveReads.delete(oldest)
-  }
-  liveReads.set(userId, [...recent, now])
-  return true
-}
+/** Live reads per account, counted by every pod together (lib/rateLimit.ts). */
+const liveReads = createRateLimiter('grid-profile', 60_000, GRID_PROFILE_LIVE_READS_PER_MINUTE)
 
 /** Forget the per-account live read counts. Tests only. */
 export function resetGridProfileLimits(): void {
-  liveReads.clear()
+  liveReads.reset()
 }
 
 /** Only these fields, and never a social's `token`, whatever the source held. */
@@ -95,7 +83,7 @@ export async function answerGridProfile(caller: AuthUser, token: string): Promis
   if (!user) return UNAUTHORIZED
   if (storedAutonomousEnvironment(user.autonomousEnv) !== 'prod') return STAGING_PLANE
 
-  if (!admitLiveRead(user.id)) {
+  if (!(await liveReads.allows(user.id))) {
     return refuse(429, 'TOO_MANY_REQUESTS', 'Too many Grid profile reads for this account; try again in a minute')
   }
 

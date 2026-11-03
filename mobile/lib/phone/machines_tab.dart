@@ -317,7 +317,10 @@ class _Body extends StatelessWidget {
             ? 'nothing running'
             : '$count harness${count == 1 ? '' : 'es'}',
       ),
-      PhoneMachineStatus.connecting => (tty.faint, 'one moment…'),
+      PhoneMachineStatus.connecting => (
+        tty.faint,
+        state.awaitingKey ? 'setting up its secure link…' : 'one moment…',
+      ),
       PhoneMachineStatus.needsPassword => (
         tty.yellow,
         'tap to unlock: scan its code',
@@ -335,7 +338,7 @@ class _Body extends StatelessWidget {
       (word, color) = ('trying…', tty.faint);
     } else if (notifier.isNewMachine(machineId) &&
         status == PhoneMachineStatus.ready) {
-      // Just set up from this phone (Set up a device): which one it is, among the rest. Not green:
+      // Just set up from this phone (Set up Intern 3): which one it is, among the rest. Not green:
       // beside the green Start it read as a second button. Gone once Start is pressed: its spinner
       // says enough.
       (word, color) = (
@@ -536,16 +539,19 @@ class _ConnectBarState extends State<_ConnectBar> {
                     label: 'Add computer',
                     onPressed: widget.onSetUp,
                   ),
-                  // A Harness with no screen, or one locked as it starts: Settings' Set up a device,
+                  // A Harness with no screen, or one locked as it starts: Settings' Set up Intern 3,
                   // here too, where the computers are.
                   const SizedBox(height: 4),
                   Center(
                     child: TtyTextButton(
                       key: const ValueKey('machines-set-up-device'),
-                      label: 'Set up a device',
+                      label: 'Set up Intern 3',
                       onPressed: () => Navigator.of(context).push(
                         phoneRoute(
-                          (_) => AddDevicePage(notifier: widget.notifier),
+                          (_) => AddDevicePage(
+                            notifier: widget.notifier,
+                            overComputers: true,
+                          ),
                         ),
                       ),
                     ),

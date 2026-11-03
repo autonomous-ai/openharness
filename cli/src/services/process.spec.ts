@@ -230,13 +230,24 @@ describe('a service in its own process', () => {
     // A guest's session, whose guest it is: never anything a payload says.
     socket().say({ type: 'session_search', payload: { requestId: 'r9', guest: 'lee@acme.io' }, asker: { local: false, owner: false, guest: 'kim@acme.io' } })
     socket().say({ type: 'session_search', payload: { requestId: 'r10', guest: 'lee@acme.io' }, asker: { local: false, owner: false, guest: 7 } })
-    await vi.waitFor(() => expect(asked).toHaveLength(10))
+    // Another of the owner's machines, as the core said it: never one a payload names, and none when malformed.
+    const remote = { local: false, owner: true }
+    socket().say({ type: 'session_search', payload: { requestId: 'r11', machine: { machineId: 'm_payload', label: 'Theirs' } }, asker: { ...remote, machine: { machineId: 'm_desk', label: 'Desk' } } })
+    socket().say({ type: 'session_search', payload: { requestId: 'r12' }, asker: { ...remote, machine: { machineId: 'm_desk', label: null } } })
+    socket().say({ type: 'session_search', payload: { requestId: 'r13' }, asker: { ...remote, machine: { machineId: '', label: 'Desk' } } })
+    socket().say({ type: 'session_search', payload: { requestId: 'r14' }, asker: { ...remote, machine: { machineId: 7, label: 'Desk' } } })
+    socket().say({ type: 'session_search', payload: { requestId: 'r15' }, asker: { ...remote, machine: { machineId: 'm_desk', label: 7 } } })
+    socket().say({ type: 'session_search', payload: { requestId: 'r16' }, asker: { ...remote, machine: { machineId: 'm_desk' } } })
+    socket().say({ type: 'session_search', payload: { requestId: 'r17', machine: { machineId: 'm_payload', label: null } }, asker: { ...remote, machine: null } })
+    await vi.waitFor(() => expect(asked).toHaveLength(17))
     expect(asked).toEqual([
       { local: true, owner: true }, { local: false, owner: false }, { local: false, owner: false },
       { local: true, owner: true, connection: 'local:1', requestId: 'cmd-1' }, { local: true, owner: true },
       { local: false, owner: true, accountOwner: false }, { local: false, owner: true, accountOwner: true },
       { local: false, owner: true },
       { local: false, owner: false, guest: 'kim@acme.io' }, { local: false, owner: false },
+      { ...remote, machine: { machineId: 'm_desk', label: 'Desk' } }, { ...remote, machine: { machineId: 'm_desk', label: null } },
+      remote, remote, remote, remote, remote,
     ])
   })
 

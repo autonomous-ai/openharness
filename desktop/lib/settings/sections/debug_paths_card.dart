@@ -2,6 +2,7 @@ import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/harness_cli_runner.dart';
+import '../../logging/dial_log_tail.dart';
 import '../../logging/log_file.dart';
 import '../../shared/theme/app_theme.dart';
 import '../../shared/widgets/app_icon_button.dart';
@@ -105,10 +106,13 @@ class _DebugPathsCardState extends State<DebugPathsCard> {
                         '(${environment.harnessSource.name})',
                   ),
                   _PathRow(label: 'logs', value: environment.logsDirectory),
-                  // The daemon's file, not this app's — see logging/dial_log_tail.dart.
+                  // The daemon's files, one folder per device, not this app's —
+                  // see logging/dial_log_tail.dart.
                   _PathRow(
                     label: 'dial',
-                    value: '${environment.logsDirectory}/dial-YYYYMMDD.log',
+                    value:
+                        '${environment.logsDirectory}/'
+                        '$kDialDeviceFolderPrefix<device>/dial-YYYYMMDD.log',
                   ),
                 ],
               );

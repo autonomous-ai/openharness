@@ -34,4 +34,12 @@ describe('what a service in its own process may ask the core of the agents', () 
     core.usage = async () => ({ totalTokens: 4, updatedAt: '2026-10-01T00:00:00Z' })
     expect(await answerAgentQuery(core, 'agentUsage', { target })).toMatchObject({ value: { totalTokens: 4 } })
   })
+
+  it('reads a live agent’s usage fresh from its transcript for a Swarm agent finishing its work, and nothing for another', async () => {
+    const core = fakeCore({ agents: { all: () => [...live, ...stopped], live: () => live } })
+    expect(await answerAgentQuery(core, 'agentUsageFresh', { agentId: 'a1' })).toEqual({ value: null })
+    core.usageFresh = async agentId => agentId === 'a1' ? { totalTokens: 9, updatedAt: '2026-10-29T00:00:00Z' } : null
+    expect(await answerAgentQuery(core, 'agentUsageFresh', { agentId: 'a1' })).toEqual({ value: { totalTokens: 9, updatedAt: '2026-10-29T00:00:00Z' } })
+    for (const agentId of ['a3', 'missing', 7]) expect(await answerAgentQuery(core, 'agentUsageFresh', { agentId })).toEqual({ error: 'STALE_USAGE_TARGET' })
+  })
 })

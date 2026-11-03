@@ -36,7 +36,13 @@ export interface ClosingDeps {
   /** The agents stopped and kept: a close of one already closed is answered closed. */
   stoppedAgents?: Pick<StoppedAgentStore, 'get' | 'resumeReservedAt'>
   /** Whether the agent may be a Lead, which is never closed, as core/main.ts hands it in; absent, none is. */
-  leadProtected?: (agentId: string) => boolean
+  leadProtected?: (agentId: string, changeId?: string) => boolean
+  /** Whether another switch of a Lead's engine is running, as core/main.ts hands it in; absent, none is. */
+  leadSwitching?: (agentId: string, changeId: string) => boolean
+  /** A Lead's switch's close ended, as core/main.ts hands it in; absent, nothing is told. */
+  leadSwitchEnded?: (agentId: string, changeId: string, stopped: boolean) => void
+  /** Whether the agent may be a Swarm Buddy, which a close never stops, as core/main.ts hands it in; absent, none is. */
+  buddyProtected?: (agentId: string) => boolean
 }
 
 /** How long a close waits for an engine worker that restarted under its read, before reading once more. */
@@ -44,7 +50,7 @@ export const CLOSE_READ_RECONNECT_MS = 10_000
 
 export function createAgentClosing({
   readScreen, registry, cleanupTabs, watcher, captureTerminal, sessionTurnState, openQuestions, terminals, sessionCheckpoints,
-  stopAgent, announceSession, engineReady, stoppedAgents, nativeRecoveryReady = () => true, leadProtected,
+  stopAgent, announceSession, engineReady, stoppedAgents, nativeRecoveryReady = () => true, leadProtected, leadSwitching, leadSwitchEnded, buddyProtected,
 }: ClosingDeps) {
   const ready = (s: RegisteredSession): boolean =>
     !s.identityHold && !s.admissionHold && !s.interpretationHold && nativeRecoveryReady(s)
@@ -101,6 +107,9 @@ export function createAgentClosing({
     stop: stopAgent,
     changed: announceSession,
     leadProtected,
+    leadSwitching,
+    leadSwitchEnded,
+    buddyProtected,
     // Not live, not being resumed, and kept as stopped with the conversation the close names: it was closed. A record
     // that cannot be read says nothing, and the close is answered as changed, as before.
     closedAlready: request => {
@@ -158,7 +167,9 @@ export function createCloseRequests({ cleanupPreview, closeAgentService }: {
     }
     // Saving/exit may take seconds; terminal input and unrelated agents keep flowing.
     void service.request({ agentId, sessionId, createdAt, mode: mode as CloseMode,
-      ...(payload.onlyIfHidden === true ? { onlyIfHidden: true } : {}) })
+      ...(payload.onlyIfHidden === true ? { onlyIfHidden: true } : {}),
+      // Change agent names its switch, which a Swarm Product Manager's close guard checks (lib/closeAgentService.ts).
+      ...(typeof payload.changeId === 'string' && /^[0-9a-f]{32}$/.test(payload.changeId) ? { changeId: payload.changeId } : {}) })
       .then(result => reply(result), () => reply({ error: 'CLOSE_FAILED' }))
   }
   return { preview, close }

@@ -1,9 +1,11 @@
 // Files in a Swarm conversation: the composer takes pasted, dropped and picked
 // files and uploads them before the message, and a message shows its files as
-// chips that load nothing until clicked.
+// chips that load nothing until clicked (pictures, shown in place, are in
+// super_tab_message_media_test.dart).
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' show min;
 
 import 'package:dio/dio.dart' show CancelToken;
 import 'package:file_selector_platform_interface/file_selector_platform_interface.dart';
@@ -40,6 +42,35 @@ class _Picked extends XFile {
 
   @override
   Future<Uint8List> readAsBytes() async => bytes;
+
+  @override
+  Future<int> length() async => bytes.length;
+}
+
+/// A file of [size] bytes that is never read whole: reading it fails the test.
+class _Sized extends XFile {
+  _Sized(this.size, {this.fileName = 'cad.step'}) : super('/picked/$fileName');
+
+  final int size;
+  final String fileName;
+
+  @override
+  String get name => fileName;
+
+  @override
+  Future<int> length() async => size;
+
+  @override
+  Future<Uint8List> readAsBytes() =>
+      throw StateError('$fileName was read whole');
+
+  @override
+  Stream<Uint8List> openRead([int? start, int? end]) async* {
+    const chunk = 64 * 1024;
+    for (var at = start ?? 0; at < (end ?? size); at += chunk) {
+      yield Uint8List(min(chunk, (end ?? size) - at));
+    }
+  }
 }
 
 class _Picker extends FileSelectorPlatform {
@@ -233,21 +264,107 @@ void main() {
       await close(tester, controller);
     });
 
-    test('a file over 10 MB, or an eleventh file, is refused', () {
+    testWidgets('a picked file over 10 MB stays on disk, and goes up from '
+        'there', (tester) async {
+      const size = 12 * 1024 * 1024;
+      final original = FileSelectorPlatform.instance;
+      FileSelectorPlatform.instance = _Picker([_Sized(size)]);
+      addTearDown(() => FileSelectorPlatform.instance = original);
+      final server = ConversationServer();
+      final sent = <(bool, int)>[];
+      final controller = server.controller(
+        upload:
+            ({
+              required tabId,
+              required conversationId,
+              required name,
+              required mime,
+              required file,
+              required cancel,
+              required onProgress,
+            }) async {
+              var read = 0;
+              await for (final chunk in file.openRead(await file.length())) {
+                read += chunk.length;
+              }
+              sent.add((file.onDisk, read));
+              // The fixture keeps a stand-in: the file itself is not held.
+              return server.upload(
+                tabId: tabId,
+                conversationId: conversationId,
+                name: name,
+                mime: mime,
+                file: HarnessAttachment(name, Uint8List(1)),
+                cancel: cancel,
+                onProgress: onProgress,
+              );
+            },
+      );
+      await controller.refresh();
+      await mount(tester, controller);
+
+      await tester.tap(find.byKey(const ValueKey('new-harness-attach')));
+      await tester.pumpAndSettle();
+      expect(names(controller), ['cad.step']);
+      expect(controller.attachments('lead').files.single.onDisk, isTrue);
+      expect(controller.attachments('lead').files.single.size, size);
+
+      await tester.tap(send);
+      await tester.pumpAndSettle();
+
+      expect(sent, [(true, size)]);
+      final command = server.posts.single['command'] as Map;
+      expect(command['attachmentIds'], ['attachment-1']);
+      await close(tester, controller);
+    });
+
+    testWidgets('a picked file over 256 MB is refused without being read', (
+      tester,
+    ) async {
+      final original = FileSelectorPlatform.instance;
+      FileSelectorPlatform.instance = _Picker([
+        _Sized(kSuperTabAttachmentMaxBytes + 1, fileName: 'huge.step'),
+      ]);
+      addTearDown(() => FileSelectorPlatform.instance = original);
+      final (_, controller) = await open(tester);
+
+      await tester.tap(find.byKey(const ValueKey('new-harness-attach')));
+      await tester.pumpAndSettle();
+
+      expect(names(controller), isEmpty);
+      expect(find.text('huge.step is over 256 MB.'), findsOneWidget);
+      await close(tester, controller);
+    });
+
+    test('a file over 256 MB, or an eleventh file, is refused', () {
       final controller = ConversationServer().controller();
       addTearDown(controller.dispose);
       final files = controller.attachments('lead');
 
+      // Weighed, never read: the file is only its size.
       expect(
         files.add([
-          HarnessAttachment(
+          HarnessAttachment.onDisk(
             'big.bin',
-            Uint8List(kSuperTabAttachmentMaxBytes + 1),
+            _Sized(256 * 1024 * 1024 + 1),
+            256 * 1024 * 1024 + 1,
           ),
         ]),
-        'big.bin is over 10 MB.',
+        'big.bin is over 256 MB.',
       );
       expect(files.isEmpty, isTrue);
+      // 256 MB itself fits.
+      expect(
+        files.add([
+          HarnessAttachment.onDisk(
+            'cad.step',
+            _Sized(256 * 1024 * 1024),
+            256 * 1024 * 1024,
+          ),
+        ]),
+        isNull,
+      );
+      files.clear();
 
       String? problem;
       for (var i = 0; i <= kSuperTabAttachmentMaxFiles; i++) {
@@ -288,8 +405,13 @@ void main() {
       expect(command['text'], 'See these');
       expect(command['attachmentIds'], ['attachment-1', 'attachment-2']);
       expect(controller.attachments('lead').isEmpty, isTrue);
+      // The picture shows in place, the text file as a chip.
       expect(
-        find.byKey(const ValueKey('super-attachment:attachment-1')),
+        find.byKey(const ValueKey('super-attachment-inline:attachment-1')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('super-attachment:attachment-2')),
         findsOneWidget,
       );
       await close(tester, controller);
@@ -306,6 +428,27 @@ void main() {
       final command = server.posts.single['command'] as Map;
       expect(command['text'], '');
       expect(command['attachmentIds'], hasLength(1));
+      await close(tester, controller);
+    });
+
+    testWidgets('a failed upload says so under its own conversation only', (
+      tester,
+    ) async {
+      final (server, controller) = await open(tester);
+      server.failUpload = 'two.png';
+      controller.attachments('lead').add([HarnessAttachment('two.png', _png)]);
+      await tester.pump();
+      await tester.tap(send);
+      await tester.pumpAndSettle();
+      expect(find.text('The file is too large.'), findsOneWidget);
+
+      await controller.select('offline');
+      await tester.pumpAndSettle();
+      expect(find.text('The file is too large.'), findsNothing);
+
+      await controller.select('lead');
+      await tester.pumpAndSettle();
+      expect(find.text('The file is too large.'), findsOneWidget);
       await close(tester, controller);
     });
 
@@ -326,7 +469,7 @@ void main() {
       expect(server.posts, isEmpty);
       expect(controller.draft('lead'), 'Look');
       expect(names(controller), ['one.png', 'two.png']);
-      expect(controller.operationError, 'The file is too large.');
+      expect(controller.composerError('lead'), 'The file is too large.');
       expect(find.text('The file is too large.'), findsOneWidget);
       expect(controller.uploading, isFalse);
 
@@ -351,7 +494,7 @@ void main() {
               required conversationId,
               required name,
               required mime,
-              required bytes,
+              required file,
               required cancel,
               required onProgress,
             }) async {
@@ -362,7 +505,7 @@ void main() {
                 conversationId: conversationId,
                 name: name,
                 mime: mime,
-                bytes: bytes,
+                file: file,
                 cancel: cancel,
                 onProgress: onProgress,
               );
@@ -406,7 +549,7 @@ void main() {
                 required conversationId,
                 required name,
                 required mime,
-                required bytes,
+                required file,
                 required cancel,
                 required onProgress,
               }) {
@@ -427,7 +570,7 @@ void main() {
         expect(token?.isCancelled, isTrue);
         expect(controller.uploading, isFalse);
         expect(
-          controller.operationError,
+          controller.composerError('lead'),
           'The upload stopped moving. Try again.',
         );
         expect(names(controller), ['a.png']);
@@ -452,7 +595,7 @@ void main() {
               required conversationId,
               required name,
               required mime,
-              required bytes,
+              required file,
               required cancel,
               required onProgress,
             }) {
@@ -477,7 +620,7 @@ void main() {
 
       expect(token?.isCancelled, isTrue);
       expect(controller.uploading, isFalse);
-      expect(controller.operationError, isNull);
+      expect(controller.composerError('lead'), isNull);
       expect(names(controller), ['b.png']);
       expect(server.posts, isEmpty);
       await close(tester, controller);
@@ -602,18 +745,13 @@ void main() {
   });
 
   group('messages', () {
-    testWidgets('show chips and load nothing until a click', (tester) async {
+    testWidgets('a file shows as a chip and loads nothing until a click', (
+      tester,
+    ) async {
       final server = ConversationServer()
         ..append(
           'Here',
           attachments: [
-            {
-              'id': 'a1',
-              'name': 'shot.png',
-              'mime': 'image/png',
-              'size': 2048,
-              'url': 'https://cdn.harness.autonomous.ai/a1/shot.png',
-            },
             {
               'id': 'a2',
               'name': 'report.pdf',
@@ -634,21 +772,9 @@ void main() {
       };
       addTearDown(() => browserOpener = original);
 
-      expect(find.text('shot.png'), findsOneWidget);
-      expect(find.text('2 KB'), findsOneWidget);
       expect(find.text('report.pdf'), findsOneWidget);
       expect(find.text('3.0 MB'), findsOneWidget);
-      expect(find.byType(Image), findsNothing);
-
-      await tester.tap(find.byKey(const ValueKey('super-attachment:a1')));
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(const ValueKey('super-attachment-image:a1')),
-        findsOneWidget,
-      );
       expect(opened, isEmpty);
-      await tester.tap(find.text('Close'));
-      await tester.pumpAndSettle();
 
       await tester.tap(find.byKey(const ValueKey('super-attachment:a2')));
       await tester.pumpAndSettle();
@@ -901,24 +1027,6 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('No preview'), findsOneWidget);
       expect(find.byType(FinderCodeEditor), findsNothing);
-      await tester.tap(find.text('Close'));
-      await tester.pumpAndSettle();
-      await close(tester, controller);
-    });
-
-    testWidgets('the picture viewer offers Download', (tester) async {
-      final (controller, _, _) = await showFiles(tester, [
-        row('a1', 'shot.png', 'image/png', 2048),
-      ]);
-
-      await tester.tap(find.byKey(const ValueKey('super-attachment:a1')));
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(const ValueKey('super-attachment-image:a1')),
-        findsOneWidget,
-      );
-      expect(find.text('Download'), findsOneWidget);
-      expect(find.text('Open in browser'), findsOneWidget);
       await tester.tap(find.text('Close'));
       await tester.pumpAndSettle();
       await close(tester, controller);

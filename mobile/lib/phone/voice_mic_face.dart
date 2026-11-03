@@ -446,6 +446,9 @@ class _DotsState extends State<_Dots> with SingleTickerProviderStateMixin {
 /// Five bars that move with the voice while the mic listens: short at silence, tall when loud,
 /// each on its own phase so they never move as one block. They idle gently when there is no
 /// level to follow, so the mic never looks frozen while it is recording.
+///
+/// ⚠️ Under Reduce Motion they hold their shape but still rise and fall with the voice: built
+/// on the level's changes too, not only the wave's ticks, which stop there (Lead, 10-29).
 class _LiveBars extends StatefulWidget {
   const _LiveBars({
     required this.color,
@@ -471,6 +474,9 @@ class _LiveBarsState extends State<_LiveBars>
   /// The level, eased toward what the microphone reports, so the bars glide.
   double _shown = 0;
 
+  /// What rebuilds the bars: the wave's ticks, and the level's changes.
+  late Listenable _ticks = _ticksOf(widget.level);
+
   static const _weights = [0.55, 0.85, 1.0, 0.8, 0.5];
   static const double _bar = 4;
   static const double _gap = 4;
@@ -486,6 +492,7 @@ class _LiveBarsState extends State<_LiveBars>
   @override
   void didUpdateWidget(_LiveBars old) {
     super.didUpdateWidget(old);
+    if (widget.level != old.level) _ticks = _ticksOf(widget.level);
     if (widget.animate && !_wave.isAnimating) unawaited(_wave.repeat());
     if (!widget.animate) _wave.stop();
   }
@@ -496,13 +503,16 @@ class _LiveBarsState extends State<_LiveBars>
     super.dispose();
   }
 
+  Listenable _ticksOf(ValueListenable<double>? level) =>
+      level == null ? _wave : Listenable.merge([_wave, level]);
+
   @override
   Widget build(BuildContext context) => RepaintBoundary(
     child: AnimatedBuilder(
-      animation: _wave,
+      animation: _ticks,
       builder: (context, _) {
         final target = (widget.level?.value ?? 0.15).clamp(0.0, 1.0);
-        _shown += (target - _shown) * 0.35;
+        _shown = widget.animate ? _shown + (target - _shown) * 0.35 : target;
         return Row(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.center,

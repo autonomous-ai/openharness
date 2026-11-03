@@ -266,7 +266,7 @@ void main() {
   });
 
   test('handed over to exactly the engines that take a first message', () {
-    for (final engine in ['claude', 'codex', 'opencode', 'hermes']) {
+    for (final engine in ['claude', 'codex', 'opencode', 'omp', 'hermes']) {
       expect(supportsAgentHandoff(engine), isTrue, reason: engine);
     }
     for (final engine in ['cursor', 'pi', 'amp', 'terminal']) {

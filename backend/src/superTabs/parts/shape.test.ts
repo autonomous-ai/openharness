@@ -48,6 +48,17 @@ describe('splitting a Swarm into parts', () => {
     expect([parts.head, ...parts.members, ...parts.groups].every(p => p.version === 500 && p.changedAt === 1000)).toBe(true)
   })
 
+  // Task #2131: what a removal restores from. A new list here that shape does not copy vanishes on load.
+  it('keeps a removal\'s record on its machine, there and back, and writes no empty list for one with none', () => {
+    const record = { machineId: 'mac', harnessId: 'h-gone', agent: { id: 'gone', name: 'Gone' } as never, groupIds: ['g1'], leadOf: [], removedAt: 5 }
+    const state = { ...legacy(), removedSessions: [record] }
+    const parts = split(state, { tabId: 'tab1', version: 500, now: 1000 })
+    expect(parts.machines.find(p => p.key === 'mac')!.data!.removedSessions).toEqual([{ harnessId: 'h-gone', agent: record.agent, groupIds: ['g1'], leadOf: [], removedAt: 5 }])
+    expect(parts.machines.find(p => p.key === 'other')!.data).not.toHaveProperty('removedSessions')
+    expect(reassemble(parts).removedSessions).toEqual([record])
+    expect(reassemble(split(legacy(), { tabId: 'tab1', version: 500, now: 1000 }))).not.toHaveProperty('removedSessions')
+  })
+
   it('keeps a slot ledger for every machine the Swarm references, contributed or not', () => {
     const machines = split(legacy(), { tabId: 'tab1', version: 500, now: 1000 }).machines
     expect(machines.map(p => p.key)).toEqual(['mac', 'other', 'third', 'removed'])
@@ -56,6 +67,13 @@ describe('splitting a Swarm into parts', () => {
       reservations: [{ harnessId: 'h-a2', generation: 'op3', renewed: true }], released: ['old'], closingSessions: [], cleanups: [] })
     expect(machines[2]!.data!.closingSessions).toEqual([{ agentId: 'gone', harnessId: 'h-gone', machineOwnerId: 'u1' }])
     expect(machines[3]!.data!.cleanups).toEqual([{ removalId: 'r1', machineOwnerId: 'u1' }])
+  })
+
+  it('keeps a removed confidential session\'s hold on its Team account through a save and a load (review of #2142)', () => {
+    // Dropped here, the account was free for another project's work on the next read, before its data was deleted.
+    const held = { agentId: 'pm', machineId: 'team-mac', harnessId: 'h-pm', machineOwnerId: 'u2', heldFor: 'p1', since: 900, noticed: true as const }
+    const state = { ...legacy(), closingSessions: [held, { agentId: 'gone', machineId: 'third', harnessId: 'h-gone', machineOwnerId: 'u1' }] }
+    expect(reassemble(split(state, { tabId: 'tab1', version: 500, now: 1000 })).closingSessions).toEqual(state.closingSessions)
   })
 
   it('keeps the progress out of the head and turns it into a watermark: every group carries its report sequence', () => {
@@ -108,5 +126,28 @@ describe('reassembling a Swarm from its parts', () => {
     progress.summarized = { g2: 501 }
     expect(toLegacyState(state).projects![0]!.progress).toEqual({ dirtyRevision: 503, summarizedRevision: 90, requestedRevision: 80,
       since: 111, requestedAt: 222, requestMessageId: 'm1' })
+  })
+})
+
+describe('reassembling for a read', () => {
+  const deepFreeze = (value: unknown): void => {
+    if (value && typeof value === 'object') { Object.values(value).forEach(deepFreeze); Object.freeze(value) }
+  }
+
+  it('gives the same state as a command\'s reassembly, sharing the parts\' records instead of copying them', () => {
+    const parts = split(legacy(), { tabId: 'tab1', version: 1, now: 123 })
+    deepFreeze(parts)
+    const shared = reassemble(parts, { share: true })
+    expect(shared).toEqual(reassemble(parts))
+    expect(shared.people[0]).toBe(parts.members[0]!.data)
+    expect(shared.conversations[1]).toBe(parts.groups[1]!.data)
+    expect(shared.machines![0]).toBe(parts.machines[0]!.data!.contribution)
+  })
+
+  it('still copies for a command, which changes what it reassembled', () => {
+    const parts = split(legacy(), { tabId: 'tab1', version: 1, now: 123 })
+    const state = reassemble(parts)
+    state.people[0]!.role = 'viewer'
+    expect(parts.members[0]!.data!.role).toBe('owner')
   })
 })

@@ -53,6 +53,14 @@ NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
   DATABASE_URL=mongodb://127.0.0.1:1/bench-never-used npx tsx integration/bench/oldStateReads.ts
 ```
 
+To see what one machine's report (`observeMachine`, every 15 s per machine) costs alone, its median time and what MongoDB
+sent the backend for it, with and without the time checks, run the report diagnostic. It takes the same options:
+
+```bash
+NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
+  DATABASE_URL=mongodb://127.0.0.1:1/bench-never-used npx tsx integration/bench/observeReads.ts
+```
+
 The bench's own tests (helpers, plus a short run of the whole scenario), and its typecheck:
 
 ```bash

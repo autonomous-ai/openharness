@@ -39,6 +39,29 @@ describe('a Swarm project\'s GitHub access', () => {
     expect(asked).toBe('acme/app')
   })
 
+  // autonomous-ai/autonomous-harness, renamed autonomous-ai/openharness: GitHub answers the old name by redirect, so the
+  // project showed a name the repository no longer has (2026-10-28).
+  it('shows a renamed repository by its name now, and keeps approvals with the project\'s address', async () => {
+    const { github, app, advance } = setup()
+    github.installed.set('acme/old', 77)
+    github.owners.set('acme', 77)
+    github.renamed.set('acme/old', 'acme/new')
+    let asked = ''
+    const read = () => projectGitHubAccess(app, 'https://github.com/acme/old', { approved: async (repository) => { asked = repository; return true }, canApprove: true })
+    expect(await read()).toEqual({ state: 'covered', repository: 'acme/new' })
+    expect(asked).toBe('acme/old')
+    const lookups = () => github.calls.filter(c => c.path === '/repos/acme/old').length
+    expect(lookups()).toBe(1)
+    // Kept ten minutes, a repository that was not renamed too.
+    await read()
+    expect(lookups()).toBe(1)
+    advance(10 * 60_000 + 1)
+    github.renamed.delete('acme/old')
+    github.installed.set('acme/old', 77)
+    expect(await read()).toEqual({ state: 'covered', repository: 'acme/old' })
+    expect(lookups()).toBe(2)
+  })
+
   it('reads GitHub not answering as unknown, never as covered, and says when the app\'s credentials are wrong', async () => {
     const { github, app } = setup()
     github.control.down = true

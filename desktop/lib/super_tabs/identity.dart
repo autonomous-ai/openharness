@@ -30,7 +30,7 @@ class SuperTabAvatar extends StatelessWidget {
     this.size = 30,
     this.now,
   }) : identity = 'person:${person.id}',
-       name = superTabPersonName(person.email),
+       name = person.username,
        picture = person.avatar,
        engine = null,
        status = person.status,
@@ -51,6 +51,9 @@ class SuperTabAvatar extends StatelessWidget {
        status = null,
        pattern = true,
        now = null;
+
+  /// The avatar of a roster row, agent or person, so their names start at one inset.
+  static const rowSize = 24.0;
 
   final String identity, name;
   final double size;

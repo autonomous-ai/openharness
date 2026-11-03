@@ -134,7 +134,7 @@ class _QueryInput extends StatelessWidget {
         //
         // `border` alone is the wrong half of the fix: it is the fallback, and
         // the app's `inputDecorationTheme` fills the named states in —
-        // `focusedBorder` is a 1.5px accent outline at [AppControl.radius] (8).
+        // `focusedBorder` is a 1.5px accent outline at [AppControl.radius] (10).
         // This box is [AppCard.radius] (12), so focusing drew a second, tighter
         // blue rectangle INSIDE the rim. Naming each state is what keeps the
         // theme from reaching past `border`.

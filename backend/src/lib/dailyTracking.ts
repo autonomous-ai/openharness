@@ -1,11 +1,13 @@
 /** Relay signals contribute daily fleet totals and, while sharing is on, a person's 10-day activity
  * mark (lib/productUsage.ts markActivity). Operational live presence stays in Redis.
- * No machine, agent or device history is written here. Older row types remain readable
- * during their bounded expiry window; their historical metrics must not be mixed with these totals.
+ * No machine, agent or device history is written here: the one machine fact kept is the overwritten
+ * `machines.lastSeenAt`. Older row types remain readable during their bounded expiry window; their
+ * historical metrics must not be mixed with these totals.
  */
 import { utcDayKey } from '../types/analytics.js'
 import { releaseBucket } from '../types/productHealthContract.js'
 import { markActivity, recordRelayUsage, type RelayUsageMetric } from './productUsage.js'
+import { prisma } from './prisma.js'
 
 export interface PresenceTouchOpts { isNewConnection: boolean; countryCode?: string }
 
@@ -20,8 +22,14 @@ export async function recordRemoteUsage(userId: string, _machineId: string, now:
 export async function touchDeviceOnlineDay(userId: string, _deviceId: string, now: Date, opts: PresenceTouchOpts): Promise<void> {
   if (opts.isNewConnection) await recordRelayUsage(userId, now, 'relay_device_connections')
 }
-export async function touchMachineOnlineDay(userId: string, _machineId: string, now: Date, opts: PresenceTouchOpts): Promise<void> {
-  if (opts.isNewConnection) await recordRelayUsage(userId, now, 'relay_machine_connections')
+/** Stamps the machine's own `lastSeenAt` on every call — the caller floors heartbeats — and counts a connect.
+ *  Both writes start together, so a failed total never costs the stamp; either failure rejects, so the
+ *  caller's floor does not advance and its next heartbeat retries. */
+export async function touchMachineOnlineDay(userId: string, machineId: string, now: Date, opts: PresenceTouchOpts): Promise<void> {
+  await Promise.all([
+    prisma.machine.update({ where: { machineId }, data: { lastSeenAt: now } }),
+    opts.isNewConnection ? recordRelayUsage(userId, now, 'relay_machine_connections') : undefined,
+  ])
 }
 export async function recordTurnStarted(userId: string, _machineId: string, _agentId: string, now: Date): Promise<void> {
   void markActivity(userId, now, { worked: true }).catch(() => {})

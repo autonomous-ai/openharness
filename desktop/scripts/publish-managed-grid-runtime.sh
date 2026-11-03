@@ -65,6 +65,9 @@ GCS_BUCKET="${GCS_BUCKET:-s3-autonomous-upgrade-3}"
 PUBLIC_BASE="${GCS_PUBLIC_BASE_URL:-https://storage.googleapis.com/${GCS_BUCKET}}"
 METADATA_PATH="${METADATA_PATH:-harness/runtime/grid/metadata.json}"
 PLATFORMS="${GRID_PLATFORMS:-darwin-arm64 darwin-x64 linux-x64 linux-arm64}"
+# Windows has no archive: its entry is the version alone, which the daemon there installs with grid's own
+# install.ps1 (cli/src/lib/gridWindowsPin.ts). GRID_WINDOWS_PLATFORMS="" publishes none.
+WINDOWS_PLATFORMS="${GRID_WINDOWS_PLATFORMS-win32-x64}"
 WORK_DIR="$(mktemp -d)"
 SRC="$WORK_DIR/metadata.json"
 DST="$WORK_DIR/metadata.next.json"
@@ -103,8 +106,9 @@ if ! gcs_cp "gs://${GCS_BUCKET}/${METADATA_PATH}" "$SRC" 2>/dev/null; then
   printf '{}' > "$SRC"
 fi
 
+GRID_PIN_VERSION="$VERSION" GRID_WINDOWS_PLATFORMS="$WINDOWS_PLATFORMS" \
 python3 - "$SRC" "$DST" "${PUBLIC_BASE%/}" "${ENTRIES[@]}" <<'PY'
-import json, sys
+import json, os, sys
 src, dst, public_base, *entries = sys.argv[1:]
 try:
     with open(src) as f:
@@ -126,6 +130,8 @@ for entry in entries:
         "size": int(size),
         "archiveRoot": root,
     }
+for platform in os.environ["GRID_WINDOWS_PLATFORMS"].split():
+    grid[platform] = {"version": os.environ["GRID_PIN_VERSION"]}
 with open(dst, "w") as f:
     json.dump(document, f, indent=2)
     f.write("\n")
@@ -134,5 +140,5 @@ PY
 gcs_cp "$DST" "gs://${GCS_BUCKET}/${METADATA_PATH}" \
        'no-cache, no-store, must-revalidate' 'application/json'
 
-echo ">> published managed grid ${VERSION} for: ${PLATFORMS}"
+echo ">> published managed grid ${VERSION} for: ${PLATFORMS}${WINDOWS_PLATFORMS:+ (version only: ${WINDOWS_PLATFORMS})}"
 echo ">> manifest: ${PUBLIC_BASE%/}/${METADATA_PATH}"

@@ -26,7 +26,7 @@ let bindings: [[String: Any]] = [
   ["keys": ["cmd+n"], "command": "agent.new", "hint": "⌘N", "repeatable": false, "menuAction": "newAgent"],
   ["keys": ["cmd+p"], "command": "harnesses.list", "hint": "⌘P", "repeatable": false, "menuAction": "sessions"],
 ]
-let map = HarnessNativeKeymap(["version": 1, "contexts": ["workspace": bindings, "terminal": [], "picker": [], "project": []]])!
+let map = HarnessNativeKeymap(["version": 1, "contexts": ["workspace": bindings, "terminal": [], "picker": [], "project": [], "swarmChat": []]])!
 
 let swarm: [[String: Any]] = [
   ["swarmTabId": "pilot", "kind": "decision", "id": "d1", "title": "Wren asks you",

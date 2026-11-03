@@ -6,12 +6,16 @@ import 'package:url_launcher/url_launcher.dart';
 import '../core/models.dart';
 import '../core/permission_modes.dart';
 import '../core/relative_time.dart';
+import '../core/runtime_model_name.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
 import '../state/harness_activity.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
+import 'agent_line.dart';
+import 'agent_mark.dart';
 import 'controller.dart';
+import 'detail_dialog.dart';
 import 'identity.dart';
 import 'model.dart';
 import 'profile_sheet.dart';
@@ -43,6 +47,8 @@ class SuperTabAgentInfo {
                (g) =>
                    !g.closed &&
                    g.assignment?['agentId'] == agent.id &&
+                   // Never a task the viewer may not read (review of #2281).
+                   superTabGroupReadable(controller, g) &&
                    !const {
                      'done',
                      'stopped',
@@ -68,9 +74,14 @@ class SuperTabAgentInfo {
   final Agent? native;
   final SuperTabConversation? taskGroup;
 
+  /// The model as people know it ("Opus 5.5"): the native agent's reading is already one; the configuration holds the
+  /// engine's own word ("opus", "claude-opus-5-5").
   String? get model =>
       _known(native?.modelName) ??
-      _known(agent.configuration['model'] as String?);
+      switch (_known(agent.configuration['model'] as String?)) {
+        final String id => modelDisplayName(id),
+        null => null,
+      };
   String? get engine =>
       _known(agent.engine) == null ? null : engineIdentity(agent.engine).label;
 
@@ -95,7 +106,7 @@ class SuperTabAgentInfo {
     final person = controller.snapshot?.people
         .where((p) => p.id == personId)
         .firstOrNull;
-    return _known(person == null ? null : superTabPersonName(person.email));
+    return _known(person?.username);
   }
 
   String? get questionOwner {
@@ -110,10 +121,10 @@ class SuperTabAgentInfo {
   String? get permission {
     final mode = _known(native?.permissionMode);
     if (mode == null) return null;
-    return permissionModesOf(agent.engine)
-            .where((choice) => choice.id == mode)
-            .firstOrNull
-            ?.label ??
+    return [
+          ...permissionModesOf(agent.engine),
+          ...?kLaunchOnlyPermissionModes[agent.engine],
+        ].where((choice) => choice.id == mode).firstOrNull?.label ??
         'Unrecognized setting';
   }
 
@@ -136,11 +147,21 @@ class SuperTabAgentInfo {
       return 'Waiting for a person to answer';
     }
     if (activity == HarnessActivity.needsInput) return 'Needs input';
+    // Closed on its machine and kept by someone: the same word as its line and its group (agent_line.dart), also in the
+    // roster's hover, which adds the status when it differs from the line's.
+    if (agent.keptClosed && workStatus != 'lost') return 'Kept (closed)';
     if (taskGroup case final group?) {
       return switch (workStatus) {
         'planned' => 'Assigned to "${group.title}"',
         'blocked' => 'Stuck on "${group.title}"',
-        'review' => 'Waiting for review on "${group.title}"',
+        'review' => 'Waiting on others for "${group.title}"',
+        // Handed over with its status still working, as the Swarm reads it.
+        'working'
+            when SuperTabAgentWork(
+              group,
+              readsHandoff: superTabReadsHandoff(controller, group),
+            ).handedOver =>
+          'Waiting on others for "${group.title}"',
         'reconciling' => 'Checking "${group.title}"',
         // Its machine died, it stalled or hit a limit, and the Lead hands it on (backend liveness.ts).
         'lost' => 'Lost "${group.title}"',
@@ -160,7 +181,15 @@ class SuperTabAgentInfo {
     };
   }
 
-  String get tooltip => [
+  String get tooltip =>
+      // Closed on its machine and kept by someone: it reads as its line does (agent_line.dart), the mockup Huy approved.
+      agent.keptClosed &&
+          activity != HarnessActivity.offline &&
+          taskGroup?.assignment?['status'] != 'lost'
+      ? superTabAgentGlance(this).line
+      : _tooltip;
+
+  String get _tooltip => [
     if (engine case final value?) [value, ?model].join(' '),
     ?machine,
     if (status case final value?)
@@ -242,10 +271,25 @@ Future<void> showSuperTabAgentDetails(
   return showAppDialog<void>(
     context: context,
     builder: (context) => ListenableBuilder(
-      listenable: Listenable.merge([controller, ?app]),
+      listenable: Listenable.merge([
+        controller,
+        controller.machinesChanged,
+        ?app,
+      ]),
       builder: (context, _) {
         final current = controller.snapshot?.agent(agent.id) ?? agent;
-        final info = SuperTabAgentInfo(controller, app, current);
+        // The same words the Agents list's hover says: the Swarm's state first.
+        final info = SuperTabAgentInfo(
+          controller,
+          app,
+          current,
+          activity: superTabAgentState(
+            controller,
+            app,
+            current,
+            now: superTabServerNow(controller, DateTime.now()),
+          ).words,
+        );
         final group = info.taskGroup;
         final pr = info.latestGroupPr;
         final name = controller.snapshot?.agentName(agent.id) ?? agent.name;
@@ -271,12 +315,8 @@ Future<void> showSuperTabAgentDetails(
                   children: [
                     _fact(
                       'Role',
-                      controller.snapshot?.activeRoleForAgent(current)?.name ??
-                          (controller.snapshot?.isLead(agent.id) == true
-                              ? 'Product Manager'
-                              : current.isReviewer
-                              ? 'Reviewer'
-                              : 'Engineer'),
+                      controller.snapshot?.roleOf(current.id)?.name ??
+                          'Engineer',
                     ),
                     if (info.engine case final value?) _fact('Engine', value),
                     if (current.name != name) _fact('Agent name', current.name),
@@ -339,6 +379,118 @@ Future<void> showSuperTabAgentDetails(
     ),
   );
 }
+
+/// An agent's card (Quiet Swarm, screen 5): its name and role badge, the
+/// task it holds, then its model, effort and machine, with Open terminal and
+/// Details… for everything else. Each line says only what is known.
+Future<void> showSuperTabAgentCard(
+  BuildContext context,
+  SuperTabController controller,
+  AppNotifier? app,
+  SuperTabAgent agent, {
+  required ValueChanged<SuperTabAgent> onOpenAgent,
+  required ValueChanged<String> onOpenTask,
+}) => showAppDialog<void>(
+  context: context,
+  builder: (dialog) => ListenableBuilder(
+    listenable: Listenable.merge([
+      controller,
+      controller.machinesChanged,
+      ?app,
+    ]),
+    builder: (dialog, _) {
+      final current = controller.snapshot?.agent(agent.id) ?? agent;
+      final info = SuperTabAgentInfo(
+        controller,
+        app,
+        current,
+        activity: superTabAgentState(
+          controller,
+          app,
+          current,
+          now: superTabServerNow(controller, DateTime.now()),
+        ).words,
+      );
+      final glance = superTabAgentGlance(info);
+      final name = controller.snapshot?.agentName(agent.id) ?? agent.name;
+      final role = controller.snapshot?.roleOf(current.id);
+      final group = info.taskGroup;
+      final runs = [?glance.modelEffort, ?glance.machine].join(' · ');
+      return SuperTabDetailDialog(
+        key: const ValueKey('super-agent-card'),
+        title: name,
+        leading: SuperTabAvatar.agent(current, name: name, size: 32),
+        headerActions: [
+          Tooltip(
+            message: role?.name ?? 'Engineer',
+            child: Text(role?.badge ?? 'Dev', style: DesktopChrome.metadata()),
+          ),
+        ],
+        body: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (group != null)
+              Tooltip(
+                message: 'Open the task',
+                child: InkWell(
+                  key: const ValueKey('super-card-task'),
+                  onTap: () {
+                    Navigator.pop(dialog);
+                    onOpenTask(group.id);
+                  },
+                  child: Text(
+                    group.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: DesktopChrome.control(),
+                  ),
+                ),
+              ),
+            if (runs.isNotEmpty)
+              Padding(
+                key: const ValueKey('super-card-run'),
+                padding: const EdgeInsets.only(top: DesktopChrome.controlGap),
+                child: Text(
+                  runs,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: DesktopChrome.metadata(),
+                ),
+              ),
+          ],
+        ),
+        leadingActions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(dialog);
+              onOpenAgent(current);
+            },
+            child: const Text('Open terminal'),
+          ),
+        ],
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(dialog);
+              if (!context.mounted) return;
+              unawaited(
+                showSuperTabAgentDetails(
+                  context,
+                  controller,
+                  app,
+                  current,
+                  onOpenAgent,
+                ),
+              );
+            },
+            child: const Text('Details…'),
+          ),
+        ],
+      );
+    },
+  ),
+);
 
 Widget _fact(String label, String value) => Padding(
   padding: const EdgeInsets.only(bottom: 10),

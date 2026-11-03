@@ -211,7 +211,7 @@ async function agentSend(res: ServerResponse, deps: Deps, params: Record<string,
     (chunk) => { stderr += chunk },
   )
 
-  const { killed } = await handle.done
+  const { killed, inputError } = await handle.done
   deps.running.delete(turnId)
 
   // Exactly one terminal frame on EVERY stream. A process that dies without emitting
@@ -220,6 +220,8 @@ async function agentSend(res: ServerResponse, deps: Deps, params: Record<string,
   let terminal: ProviderEvent = { kind: 'turn_completed' }
   if (killed) {
     terminal = { kind: 'turn_cancelled' }
+  } else if (inputError) {
+    terminal = { kind: 'turn_failed', error: { code: 'internal', message: inputError } }
   } else if (failed) {
     terminal = { kind: 'turn_failed', error: { code: 'internal', message: failDetail ?? 'claude reported an error' } }
   } else if (!sawResult) {
@@ -471,8 +473,11 @@ function readBody(req: IncomingMessage): Promise<string> {
 
 export function start(config = loadConfig(), port = config.port): Promise<{ url: string; close: () => Promise<void> }> {
   const { server } = createProviderServer(config)
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    // An occupied port must reject startup rather than escape as an uncaught server error.
+    server.once('error', reject)
     server.listen(port, '127.0.0.1', () => {
+      server.off('error', reject)
       const addr = server.address()
       const url = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : port}`
       resolve({ url, close: () => new Promise<void>((r) => server.close(() => r())) })

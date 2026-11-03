@@ -1,22 +1,26 @@
+import { isBuddy, isBuddyChat } from './buddies.js'
 import type { PrismaClient } from '@prisma/client'
-import { activeWork, actorKey, agent, author, conversation, fail, isLeads, stableId, type Actor, type Agent, type Author, type Conversation, type MessageDraft,
+import { ensureIndex } from '../lib/db/indexes.js'
+import { activeWork, actorKey, agent, author, conversation, fail, isLeads, stableId, SuperTabError, type Actor, type Agent, type Author, type Conversation, type MessageDraft,
   type SuperTabState } from './model.js'
-import { downSince } from './machines.js'
-import { agentProjectId, isConfidential, ownSession, projectOf, readAgent } from './projects.js'
+import { downSince, productManagerOn } from './machines.js'
+import { agentProjectId, isConfidential, ledProject, onTeamAccount, ownSession, projectAgent, projectOf, readAgent, teamSessionAccess } from './projects.js'
 import { redactCredentials } from './credentials.js'
 
-/** The Lead reads and types in an agent's terminal through the host of the agent's machine (spec/2026-10-23-lead-sees-agent-terminal.md).
+/** Any agent of an agent's project, or a person with write access, reads and types in its terminal through the host of its
+ * machine (spec/2026-10-23-lead-sees-agent-terminal.md; project instructions, phase 4).
  * The request and its answer live in SuperTabTerminalRequest, never in the tab state or group history, because a screen can show secrets. */
 export const TERMINAL_KEYS = ['Enter', 'Esc', 'Tab', 'Up', 'Down', 'Left', 'Right', 'Ctrl-C', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'] as const
 /** The host has this long to pick a request up, then this long to answer it; after either, the request fails with a plain reason. */
 export const TERMINAL_PICKUP_MS = 10_000
 export const TERMINAL_ANSWER_MS = 30_000
+/** A sender's wait reads its request again this often even unwoken, in case the notice of its answer was lost. */
+export const TERMINAL_RECHECK_MS = 5_000
 /** An unread answer, which can hold a screen's secrets, is gone after this long: refused on read, and removed by a TTL index. */
 export const TERMINAL_EXPIRY_MS = 120_000
 /** Run by the singleton worker at startup, like the product-usage expiry indexes. */
 export async function ensureTerminalExpiry(db: PrismaClient): Promise<void> {
-  await db.$runCommandRaw({ createIndexes: 'SuperTabTerminalRequest', indexes: [{ key: { createdAt: 1 }, name: 'terminal_request_expiry',
-    expireAfterSeconds: TERMINAL_EXPIRY_MS / 1000 }] })
+  await ensureIndex(db, 'SuperTabTerminalRequest', { key: { createdAt: 1 }, name: 'terminal_request_expiry', expireAfterSeconds: TERMINAL_EXPIRY_MS / 1000 })
 }
 /** A limited agent without a shown reset time is skipped by routing for this long. */
 export const LIMIT_FALLBACK_MS = 3_600_000
@@ -29,11 +33,36 @@ export type TerminalEffect =
 /** A stored request as the store reads it for an answer. */
 export interface TerminalRequest { id: string; agentId: string; harnessId: string; kind: TerminalKind; status: 'pending' | 'claimed' | 'done' }
 
-/** Only the Lead of the agent's project, or a person with write access who can see the agent, reads or types in its terminal. */
-/** `elsewhere`: the agent's session is confidential in another Swarm (confidential.ts). */
-export function mayDrive(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false): void {
+/** Any agent of the agent's project (project instructions, phase 4), or a person with write access who can see the agent, reads
+ *  or types in its terminal; a private one stays its own machine owner's. `elsewhere`: the agent's session is confidential in
+ *  another Swarm (confidential.ts). */
+export function mayDrive(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false, kind: TerminalKind = 'input'): void {
   // For both kinds of requester: no person or agent reads a confidential session but its own (final review, Critical 1).
   const closed = () => {
+    // A Team account holding a Product Manager: every agent there is one macOS user, which reads people's chats with it,
+    // so no person types in any of them (security review 2 of #2089). Nor does any agent read or type in them, but the
+    // session itself and the Product Manager there, which already runs as that user (review of phase 4, task 1). They
+    // talk to them in their groups' chats.
+    if (onTeamAccount(state, target) && productManagerOn(state, target.machineId)) {
+      if (actor.kind === 'person' && kind === 'input') {
+        fail('TERMINAL_PRIVATE', `${target.displayName ?? target.name} runs in a Harness Team account that holds a Product Manager, so nobody types in it through the Swarm. Talk to it in its group's chat.`, 403)
+      }
+      const self = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId) : undefined
+      const sameUser = !!self && (ownSession(actor, target) || (self.machineId === target.machineId && !!ledProject(state, self.id)))
+      if (actor.kind === 'agent' && !sameUser) {
+        fail('TERMINAL_PRIVATE', `${target.displayName ?? target.name} runs in a Harness Team account that holds a Product Manager, so no other agent reads or types in it through the Swarm. Talk to it in its group's chat.`, 403)
+      }
+    }
+    // In a Harness Team account: its project's owner reads its screen, and nobody types in it (projects.ts teamSessionAccess).
+    const team = teamSessionAccess(state, actor, target, elsewhere)
+    if (team === 'watch' && kind === 'screen') return
+    if (team) {
+      fail('TERMINAL_PRIVATE', `This ${ledProject(state, target.id) ? 'Product Manager' : 'agent'} runs in a Harness Team account: nobody types in it through the Swarm, and only its project's owner reads its screen. Talk to it in its project's chat.`, 403)
+    }
+    // Members may watch a Lead, but only its machine's owner drives it, whether or not its session counts as private (Ken, 2026-10-28).
+    if (ledProject(state, target.id) && !ownSession(actor, target)) {
+      fail('TERMINAL_PRIVATE', 'Only the person whose machine runs this agent can read or type in a Product Manager’s terminal.', 403)
+    }
     if (isConfidential(state, target, elsewhere) && !ownSession(actor, target)) {
       fail('TERMINAL_PRIVATE', 'Only the person whose machine runs this agent can read or type in its terminal: it holds people’s private chats with the Product Manager.', 403)
     }
@@ -44,14 +73,30 @@ export function mayDrive(state: SuperTabState, actor: Actor, target: Agent, else
     return closed()
   }
   closed()
-  if (conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId).leadId !== actor.agentId) {
-    fail('LEAD_REQUIRED', 'Only the Lead of this agent’s project, or a person with write access, can read or type in its terminal.', 403)
+  if (!projectAgent(state, actor, agentProjectId(state, target))) {
+    fail('FORBIDDEN', 'Only an agent of this agent’s project, or a person with write access, can read or type in its terminal.', 403)
+  }
+  // An agent never drives further than the person whose machine runs it, whose own sign-in speaks for it: a teammate hosting
+  // an agent of a private project they cannot read would otherwise type, through it, into the project's agents on other
+  // people's logins (security review S1). Agents on one login drive each other as before, and the project's coordinator keeps
+  // driving its project's agents wherever it runs (it unblocks an agent stuck on a prompt). Every path checks here: the
+  // request, the host's pickup (store.ts terminalRefusal) and the answer's read (store.ts terminalResult).
+  if (actor.machineOwnerId === target.machineOwnerId) return
+  if (ledProject(state, actor.agentId)?.id === agentProjectId(state, target)) return
+  try {
+    mayDrive(state, { kind: 'person', userId: actor.machineOwnerId, email: '' }, target, elsewhere, kind)
+  } catch (error) {
+    if (!(error instanceof SuperTabError)) throw error
+    fail('FORBIDDEN', 'An agent reads or types in another agent’s terminal only where the person whose machine runs it could.', 403)
   }
 }
 
 /** The group a terminal row belongs in: the agent's active work, else its newest open project group as a member (never the
  *  Swarm-wide Leads conversation), else its project's Lead chat. */
 export function currentGroup(state: SuperTabState, target: Agent): Conversation {
+  // A Buddy's rows are its person's alone, in its own chat: it has no PM, and a Swarm-wide one no project (Dee, 10-31).
+  const own = isBuddy(target) ? state.conversations.find(c => isBuddyChat(c) && c.agentIds.includes(target.id)) : undefined
+  if (own) return own
   return state.conversations.find(c => activeWork(c) && c.assignment!.agentId === target.id)
     ?? state.conversations.findLast(c => !c.archived && !isLeads(c) && !c.audience && c.agentIds.includes(target.id) && c.leadId !== target.id)
     ?? conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId)
@@ -59,10 +104,17 @@ export function currentGroup(state: SuperTabState, target: Agent): Conversation 
 
 const nameOf = (target: Agent) => target.displayName ?? target.name
 
+/** Where a thread session's rows go: its own thread, marked as its session's and with its project, so its main Buddy never
+ *  reads them and they hide once its person loses that project (buddySessions.ts; security review 2 of #2435). */
+const inSessionThread = (target: Agent): Partial<MessageDraft> => target.buddySession
+  ? { replyTo: target.buddySession.thread, thread: target.buddySession.thread, buddySession: true,
+    ...(target.buddySession.projectId ? { buddyProject: target.buddySession.projectId } : {}) }
+  : {}
+
 export function terminalRequest(state: SuperTabState, actor: Actor, sender: Author, id: string, now: number,
   command: { type: 'agent.screen' | 'agent.input'; agentId: string; scrollback?: number; text?: string; keys?: string[] }, elsewhere = false) {
   const target = agent(state, command.agentId)
-  mayDrive(state, actor, target, elsewhere)
+  mayDrive(state, actor, target, elsewhere, command.type === 'agent.screen' ? 'screen' : 'input')
   if (downSince(state, target, now)) fail('HOST_OFFLINE', `${nameOf(target)}’s terminal is not running or its machine is offline.`)
   const { type: _type, agentId: _agentId, ...detail } = command
   const effect: TerminalEffect = { op: 'request', id, kind: command.type === 'agent.screen' ? 'screen' : 'input', agentId: target.id,
@@ -74,7 +126,8 @@ export function terminalRequest(state: SuperTabState, actor: Actor, sender: Auth
   const shown = [text, ...command.keys ?? []].filter(Boolean).join(' + ')
   const who = sender.displayName ?? (sender.kind === 'person' ? sender.name.split('@')[0]! : sender.name)
   const message: MessageDraft = { id, conversationId: currentGroup(state, target).id, author: sender, replyTo: null, recipients: [],
-    text: `${who} typed ${shown} in ${nameOf(target)}'s terminal`, source: { kind: 'terminal-input', agentId: target.id, requestId: id } }
+    text: `${who} typed ${shown} in ${nameOf(target)}'s terminal`, source: { kind: 'terminal-input', agentId: target.id, requestId: id },
+    ...inSessionThread(target) }
   return { effect, message, removed: typed.removed }
 }
 
@@ -92,6 +145,15 @@ export function terminalResult(state: SuperTabState, actor: Actor, request: Term
     error: command.ok ? null : command.error! }
 }
 
+/** An agent that reports its work is not stopped at a usage limit: its mark goes, as when its notice does (task #2321). Its
+ *  host may still be ending the episode; that end then changes nothing. */
+export function workedAgain(state: SuperTabState, agentId: string): void {
+  const target = state.agents.find(a => a.id === agentId)
+  if (!target?.limitedUntil && !target?.alerting?.includes('limit')) return
+  target.limitedUntil = null
+  target.alerting = target.alerting?.filter(a => a !== 'limit')
+}
+
 /** One row per episode: a repeated observation adds nothing, and `active: false` ends the episode. No screen text goes in the row.
  * It is delivered to the agent's project Lead, in the agent's group when the Lead is there, else by a second row in the Lead's chat. */
 export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author, id: string, now: number,
@@ -101,6 +163,8 @@ export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author
   const alerting = target.alerting ?? []
   if (!command.active) {
     target.alerting = alerting.filter(a => a !== command.alert)
+    // The notice is gone: so is the mark, whatever time it named (task #2321: River stayed "limited" after its notice went).
+    if (command.alert === 'limit') target.limitedUntil = null
     return []
   }
   if (alerting.includes(command.alert)) return []
@@ -111,16 +175,25 @@ export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author
   if (command.alert === 'limit') {
     const reset = command.resetAt && Date.parse(command.resetAt) > now ? Date.parse(command.resetAt) : now + LIMIT_FALLBACK_MS
     target.limitedUntil = source.limitedUntil = new Date(reset).toISOString()
-    text = `${nameOf(target)} hit a usage limit. Routing skips it until ${target.limitedUntil.slice(11, 16)} UTC.`
+    // The PM's line has no time: Desktop shows `limitedUntil` in the reader's local time, next to the line.
+    if (ledProject(state, target.id)) {
+      text = `${nameOf(target)} hit a usage limit.`
+      source.lead = true
+    } else text = `${nameOf(target)} hit a usage limit. Routing skips it until ${target.limitedUntil.slice(11, 16)} UTC.`
   }
   // Its engine has been retrying its model for 10 minutes (2026-10-24: a Builder on a small local model retried for an
   // hour while its Lead waited on it).
-  if (command.alert === 'model') text = `${nameOf(target)} can't get answers from its model: its requests keep failing. Stop it, or give the work to another model.`
+  if (command.alert === 'model') text = `${nameOf(target)} can't get answers from its model: its requests keep failing.`
+  // A Buddy's alert is its owner's alone, in their chat: the PM neither reads that chat nor runs the Buddy (buddies.ts).
+  const chat = isBuddy(target) ? state.conversations.find(c => isBuddyChat(c) && c.agentIds.includes(target.id)) : undefined
+  if (chat) return [{ id, conversationId: chat.id, author: sender, replyTo: null, recipients: [], text, source, ...inSessionThread(target) }]
   return toLead(state, target, { id, conversationId: group.id, author: sender, replyTo: null, recipients: [], text, source })
 }
 
 /** The project Lead of an agent, unless the agent is that Lead. */
 export function leadOf(state: SuperTabState, target: Agent): Agent | undefined {
+  // A Buddy answers to its person alone, never to a PM; a Swarm-wide one has no project (Dee, 10-31).
+  if (target.buddyOf) return undefined
   const lead = conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId).leadId
   return lead && lead !== target.id ? state.agents.find(a => a.id === lead) : undefined
 }

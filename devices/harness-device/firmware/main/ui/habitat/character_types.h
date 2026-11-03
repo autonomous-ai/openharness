@@ -38,6 +38,9 @@ typedef struct {
      * because they have one text seat; a skin with two reads it here instead.
      */
     const char *tab, *engine, *activity;
+    // Focus only: a Swarm face's chat under its project (Chat with PM's "PM", a group's name), on the inner arc. NULL or
+    // "" for the Lead chat and every other face, which then draw exactly as before.
+    const char *chat;
     uint32_t elapsed;
     ht_character_mood_t mood;
     ht_character_pose_t pose;

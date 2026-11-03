@@ -6,7 +6,7 @@
  * order is the contract: the developer override, then the managed runtime's pointer, then PATH —
  * with the pointer trusted only when it names something runnable INSIDE the runtime dir.
  */
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -145,6 +145,37 @@ describe('gridExec', () => {
 
     expect(result).toMatchObject({ code: 'GRID_CLI_MISSING', exitCode: 1 })
     expect(result.message).toContain('grid')
+  })
+
+  it('waits while an install holds grid calls back (gridCalls.ts)', async () => {
+    process.env.HARNESS_GRID_BIN = fakeGrid(join(root, 'elsewhere'))
+    const { gridExec } = await load()
+    const { withGridCallsPaused } = await import('./gridCalls.js')
+    let finish: () => void = () => {}
+    const install = withGridCallsPaused(() => new Promise<void>((resolve) => { finish = resolve }))
+    let answered = false
+    const call = gridExec(['--version']).then((result) => { answered = true; return result })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(answered).toBe(false)
+    finish()
+    await install
+    expect((await call).code).toBe('OK')
+  })
+
+  it('an install waits for a grid call already running', async () => {
+    mkdirSync(join(root, 'slow'))
+    const slow = join(root, 'slow', 'grid')
+    const exited = join(root, 'slow', 'exited')
+    writeFileSync(slow, `#!/bin/sh\n/bin/sleep 0.3\n: > "${exited}"\nexit 0\n`, { mode: 0o755 })
+    process.env.HARNESS_GRID_BIN = slow
+    const { gridExec } = await load()
+    const { withGridCallsPaused } = await import('./gridCalls.js')
+    const call = gridExec(['--version'])
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    let childGoneWhenInstallRan = false
+    await withGridCallsPaused(async () => { childGoneWhenInstallRan = existsSync(exited) })
+    await call
+    expect(childGoneWhenInstallRan).toBe(true)
   })
 })
 

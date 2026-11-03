@@ -1,0 +1,30 @@
+{
+  "about": "Which words in a chat message are tags. One table for the backend (src/superTabs/mentions.ts), Desktop (desktop/lib/super_tabs/message_text.dart) and the phone (mobile/lib/swarm/swarm_message_row.dart); the three copies must stay byte-identical (scripts/tests/test_tag_fixture_copies.py). Each case lists its tags in order, lowercased, as written after the @ without closing punctuation. names are every name the cases use, so a word that is not a tag is not one only because of where it stands.",
+  "names": ["dee", "ken", "tony", "diego", "dee.ken", "b", "github"],
+  "cases": [
+    { "text": "@diego can you free some memory on your Pro-10? Reviews are waiting on it.", "tags": ["diego"] },
+    { "text": "Thanks @Dee", "tags": ["dee"] },
+    { "text": "Ask @dee.", "tags": ["dee"] },
+    { "text": "@dee, @ken and @tony: please look", "tags": ["dee", "ken", "tony"] },
+    { "text": "(@dee) said so", "tags": ["dee"] },
+    { "text": "It is @dee's turn", "tags": ["dee"] },
+    { "text": "Ask @dee.ken today", "tags": ["dee.ken"] },
+    { "text": "Ask @dee@autonomous.ai today", "tags": ["dee@autonomous.ai"] },
+    { "text": "Ask @Dee@Autonomous.AI.", "tags": ["dee@autonomous.ai"] },
+    { "text": "> @dee quoted", "tags": ["dee"] },
+    { "text": "- @dee in a list", "tags": ["dee"] },
+    { "text": "Mail a@b.com or dee@autonomous.ai", "tags": [] },
+    { "text": "git clone git@github.com:autonomous-ai/openharness.git", "tags": [] },
+    { "text": "@@dee and x@dee", "tags": [] },
+    { "text": "an @ alone, and @ dee", "tags": [] },
+    { "text": "run `@dee` here, then @ken", "tags": ["ken"] },
+    { "text": "run ``a `@dee` b`` here", "tags": [] },
+    { "text": "```\n@dee\n```\nthen @ken", "tags": ["ken"] },
+    { "text": "~~~sh\necho @dee\n~~~\nthen @ken", "tags": ["ken"] },
+    { "text": "```\n@dee never closed", "tags": [] },
+    { "text": "Run this:\n\n    @dee indented\n\nthen @ken", "tags": ["ken"] },
+    { "text": "See https://github.com/@dee/repo and www.example.com/@ken", "tags": [] },
+    { "text": "See example.com/@dee", "tags": [] },
+    { "text": "[profile](https://example.com/@dee) by @ken", "tags": ["ken"] }
+  ]
+}

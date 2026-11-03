@@ -10,14 +10,19 @@ import '../core/test_run.dart';
 import 'daemon_pipe_record.dart';
 import 'trusted_pipe.dart';
 import 'windows_pipe.dart';
+import 'package:cryptography/dart.dart';
 
 /// The daemon's Unix socket, beside its loopback port (CLI `lib/localSocket.ts`).
 ///
 /// The loopback port takes requests from any process on this computer, any
 /// user's; the socket file is 0600 in a 0700 directory, so only this user's
-/// processes can open it. The app prefers it for both REST and the local
-/// WebSocket and falls back to the port — for a daemon that predates the
-/// socket, one that could not open it, or a moment when it is missing.
+/// processes can open it. The app uses it for both REST and the local
+/// WebSocket, and never falls back to the port while a socket can exist: any
+/// account can bind that port once it is free, after a reboot until this user
+/// logs in or during a restart, and would hear the credential and the request
+/// (audit H1, docs/security/2026-11-02-team-account-boundary.md). With the
+/// socket missing, the daemon is down. The port remains only where neither the
+/// data folder nor the home folder is short enough to hold a socket.
 ///
 /// There is one socket per control port, `daemon-<port>.sock`, named for the
 /// port the app would otherwise dial: the socket and the fallback always lead
@@ -32,7 +37,7 @@ const _maxSocketPathBytes = 96;
 /// Where the socket of the daemon on [port] would be —
 /// `$ADAPTER_DATA_DIR/daemon-<port>.sock`, by default
 /// `~/.harness/cli/data/daemon-<port>.sock` — or null where there is none
-/// (Windows, or a path too long to be a socket).
+/// (Windows, or a home too long as well).
 String? defaultDaemonSocketPath(
   int port, {
   Map<String, String>? environment,
@@ -45,7 +50,16 @@ String? defaultDaemonSocketPath(
   );
   if (dataDir == null) return null;
   final path = '$dataDir/${daemonSocketName(port)}';
-  return utf8.encode(path).length <= _maxSocketPathBytes ? path : null;
+  if (utf8.encode(path).length <= _maxSocketPathBytes) return path;
+  // Too long to hold a socket: the daemon's is under the home folder, named by
+  // the folder's hash (CLI `lib/localSocket.ts` `socketPathIn`).
+  // No HOME: the empty path has no socket, so this reads as the daemon being
+  // down, never as a place with no socket at all, which would allow the port.
+  final home = (environment ?? Platform.environment)['HOME'] ?? '';
+  final hash = const DartSha256().hashSync(utf8.encode(dataDir)).bytes;
+  final hex = hash.take(8).map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  final short = '$home/.harness/s/$hex/${daemonSocketName(port)}';
+  return utf8.encode(short).length <= _maxSocketPathBytes ? short : null;
 }
 
 /// The header a call to the daemon's loopback PORT carries its local
@@ -55,8 +69,8 @@ const daemonCredentialHeader = 'X-Harness-Local';
 /// The daemon's local credential: its `hook-credential` file, 0600 and this
 /// user's, in [defaultDaemonDataDir]. The loopback port takes any OS user's
 /// process — another account's harness running as its own user on this
-/// computer included — so every call over the port shows it; the socket needs
-/// none. Null where it cannot be read.
+/// computer included — so a call over the port shows it, in the one case with
+/// no socket; the socket needs none. Null where it cannot be read.
 String? readDaemonCredential({Map<String, String>? environment}) {
   final dataDir = defaultDaemonDataDir(environment: environment);
   if (dataDir == null) return null;
@@ -155,12 +169,20 @@ class LocalDaemonTransport {
   /// one (tests).
   final String? Function()? credential;
 
-  /// The credential for non-Windows loopback TCP. Windows never sends it to a
-  /// port, since a stale record can name a port another process now owns.
+  /// Whether this app may ask the daemon's loopback port at all: not where a
+  /// socket can exist, since whoever holds the port is not known to be the
+  /// daemon.
+  bool get portAllowed => candidate == null;
+
+  /// The credential for loopback TCP where no socket can exist. Windows never
+  /// sends it to a port, since a stale record can name a port another process
+  /// now owns.
   Map<String, String> tcpHeaders() {
     // A stale Windows daemon record can name a port another process now owns.
     // Never show the credential to a TCP listener when a private pipe is used.
-    if (Platform.isWindows || trustedPipe != null) return const {};
+    if (Platform.isWindows || trustedPipe != null || !portAllowed) {
+      return const {};
+    }
     final value = credential?.call();
     return value == null ? const {} : {daemonCredentialHeader: value};
   }
@@ -197,7 +219,7 @@ bool isConnectionFailure(Object error) {
 }
 
 /// Sends Windows daemon REST over its authenticated pipe. Elsewhere it uses
-/// the Unix socket when available and falls back to the loopback port.
+/// the Unix socket, and the loopback port only where no socket can exist.
 class LocalDaemonHttpAdapter implements HttpClientAdapter {
   LocalDaemonHttpAdapter(this.transport, {required this.daemonBase});
 
@@ -238,6 +260,12 @@ class LocalDaemonHttpAdapter implements HttpClientAdapter {
     }
     // Over the port, the daemon wants its local credential.
     Future<ResponseBody> overPort() {
+      if (toDaemon && !transport.portAllowed) {
+        throw DioException.connectionError(
+          requestOptions: options,
+          reason: 'The local daemon socket is not available',
+        );
+      }
       if (toDaemon) options.headers.addAll(transport.tcpHeaders());
       return _tcp.fetch(
         toDaemon ? _onTcpPort(options) : options,
@@ -251,8 +279,8 @@ class LocalDaemonHttpAdapter implements HttpClientAdapter {
       return await _unixFor(path).fetch(options, requestStream, cancelFuture);
     } catch (error) {
       if (!isConnectionFailure(error)) rethrow;
-      // Nothing was sent: the socket could not be opened. The port can still
-      // serve this request, and discovery will find the socket again later.
+      // Nothing was sent: the socket could not be opened. Discovery will find
+      // the socket again later; this request fails as a daemon that is down.
       transport.useTcp();
       return overPort();
     }

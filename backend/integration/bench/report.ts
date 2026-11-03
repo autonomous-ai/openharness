@@ -1,5 +1,6 @@
 import type { BenchConfig } from './config.js'
 import type { Row, WriterRow } from './metrics.js'
+import type { Kpis, LoadKpis } from './kpi.js'
 import type { IsolatedPoll } from './probe.js'
 
 export interface Size { bytes: number; documents: number }
@@ -18,6 +19,10 @@ export interface BenchReport {
   load: { plannedMs: number; actualMs: number; skipped: Record<string, number>; ops: Row[]; writerKinds: Row[]; writers: WriterRow[]; readers: Row[] }
   state: { afterSetup: Size; afterLoad: Size }
   isolatedPolls: IsolatedPoll[]
+  /** The Stability Roadmap's numbers (kpi.ts); absent from reports made before they were measured. */
+  kpis?: { load: LoadKpis; isolated: Kpis['isolated'] | null }
+  /** The read cache it ran with (stamps.ts); absent from reports made before there was one. */
+  cache?: string
 }
 
 const ms = (value: number | null) => value === null ? '–' : value.toFixed(1)
@@ -41,7 +46,7 @@ export function renderMarkdown(report: BenchReport): string {
     ['Machine', `${report.machine.cpu}, ${report.machine.cpus} cores, ${report.machine.memoryGb} GB, ${report.machine.platform} ${report.machine.release} ${report.machine.arch}`],
     ['Runtime', `Node ${report.machine.node}, MongoDB ${report.machine.mongo} (local single-node replica set)`],
     ['Lane', config.lane === 'cross-group' ? 'cross-group (one writer per group: no Lead messages, no delivery passes)' : 'mixed'],
-    ['Seed', String(config.seed)], ['Plan', `sha256 ${report.planDigest.slice(0, 16)}`],
+    ['Read cache', report.cache ?? 'none (before the cache)'], ['Seed', String(config.seed)], ['Plan', `sha256 ${report.planDigest.slice(0, 16)}`],
     ['Swarm', `${config.groups} groups (${setup.doneGroups} done, ${setup.activeGroups} active), ${setup.workers} workers and a Lead, ${config.machines} machines`],
     ['Readers', `${config.desktopReaders} Desktop every ${config.every.desktopPollMs} ms, ${config.hostReaders} hosts every ${config.every.hostTickMs} ms`],
     ['Cadence', Object.entries(config.every).map(([k, v]) => `${k} ${v}`).join(', ')],
@@ -64,7 +69,19 @@ export function renderMarkdown(report: BenchReport): string {
       return [row.key, String(row.count), ms(row.p50Ms), ms(row.p95Ms), row.bytes ? kb(row.bytes.mean) : '–', row.bytes ? kb(row.bytes.p95) : '–',
         alone ? kb(alone.responseBytes) : '–', alone ? kb(alone.databaseBytesOut) : '–']
     })), '',
+    ...(report.kpis ? kpiSection(report.kpis) : []),
     '## State', '', table(['When', 'Documents', 'KB'], [
       ['After setup', String(state.afterSetup.documents), kb(state.afterSetup.bytes)], ['After the load', String(state.afterLoad.documents), kb(state.afterLoad.bytes)]]), '',
   ].join('\n')
+}
+
+function kpiSection(kpis: NonNullable<BenchReport['kpis']>): string[] {
+  const { load, isolated } = kpis
+  const rows = [['Mongo operations per second, during the load', load.mongoOpsPerSecond.toFixed(1)],
+    ['Backend CPU during the load (% of one core)', load.cpuPercent.toFixed(1)], ['Transaction retries per minute, during the load', load.retriesPerMinute.toFixed(2)],
+    ...isolated ? [['CPU per write, alone (ms)', isolated.cpuMsPerWrite.toFixed(2)], ['Mongo operations per write, alone', isolated.mongoOpsPerWrite.toFixed(1)],
+      ['Up-to-date Desktop poll, alone: p50 / p95 ms', `${ms(isolated.pollP50Ms)} / ${ms(isolated.pollP95Ms)}`],
+      ['Mongo operations per Desktop poll, alone', isolated.mongoOpsPerPoll.toFixed(1)]] : []]
+  return ['## Stability KPIs', '', `Load figures cover the whole load; the isolated ones run ${isolated?.writes ?? 0} writes (a worker's post) and ${isolated?.polls ?? 0} up-to-date Desktop polls one at a time after it.`, '',
+    table(['', ''], rows), '']
 }

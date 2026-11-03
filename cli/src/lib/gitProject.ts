@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'node:child_process'
 import { cp, lstat, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, dirname, isAbsolute, join, normalize } from 'node:path'
+import { basename, dirname, isAbsolute, join, normalize, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { placeholderBranch, plausibleBranchName, worktreeFolderName } from './agentNames.js'
 import { redactSecretsInText } from './logBundle.js'
@@ -32,7 +32,7 @@ async function git(path: string, args: string[], timeout = 4000, base: NodeJS.Pr
     env: gitEnv(base),
   })).stdout.replace(/\r?\n$/, '')
 }
-function gitEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function gitEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...base, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', GIT_OPTIONAL_LOCKS: '0' }
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_NAMESPACE', 'GIT_PREFIX']) delete (env as NodeJS.ProcessEnv)[key]
   return env
@@ -56,6 +56,17 @@ function parseWorktrees(output: string): Worktree[] {
     }]
   })
 }
+/** Whether `path` is a worktree Harness made in `root`'s worktrees folder: a linked worktree there whose branch carries
+ *  Harness's `branch.<name>.harness` mark. A person's own checkout or worktree, anywhere, is not. */
+export async function harnessMadeWorktree(path: string, root: string): Promise<boolean> {
+  try {
+    const [here, home] = await Promise.all([realpath(path), realpath(join(root, 'worktrees'))])
+    if (dirname(here) === here || !here.startsWith(`${home}${sep}`) || !(await lstat(join(here, '.git'))).isFile()) return false
+    const branch = (await git(here, ['branch', '--show-current'])).trim()
+    return !!branch && (await git(here, ['config', '--get', `branch.${branch}.${HARNESS_BRANCH_KEY}`])).trim() !== ''
+  } catch { return false }
+}
+
 /** `branch.<name>.harness` in the repository's config marks a branch Harness made: `placeholder` while
  *  its name waits for the session's, `created` once it has one or was named at Start. */
 export const HARNESS_BRANCH_KEY = 'harness'
@@ -192,7 +203,7 @@ export async function readGitProject(requested: string, options: { refresh?: boo
 }
 
 /** `refs/remotes/origin/fix/typo` → origin, fix/typo, and a refspec updating exactly that ref. */
-function remoteBranch(ref: string | undefined): { remote: string; branch: string; refspec: string } | null {
+export function remoteBranch(ref: string | undefined): { remote: string; branch: string; refspec: string } | null {
   const match = /^refs\/remotes\/([A-Za-z0-9._][A-Za-z0-9._-]*)\/([A-Za-z0-9._]\S*)$/.exec(ref ?? '')
   if (!match || match[2] === 'HEAD') return null
   return { remote: match[1]!, branch: match[2]!, refspec: `+refs/heads/${match[2]}:refs/remotes/${match[1]}/${match[2]}` }
@@ -200,7 +211,7 @@ function remoteBranch(ref: string | undefined): { remote: string; branch: string
 
 /** The remote's default branch as the ref a clone keeps it in: `origin/HEAD`, else `origin/main` or
  *  `origin/master`, as `readGitProject` offers it. Null when the repository has no such ref. */
-async function originDefaultRef(path: string): Promise<string | null> {
+export async function originDefaultRef(path: string): Promise<string | null> {
   const head = await git(path, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']).catch(() => null)
   for (const ref of [head, 'refs/remotes/origin/main', 'refs/remotes/origin/master']) {
     if (ref && await git(path, ['show-ref', '--verify', '--quiet', '--', ref]).then(() => true, () => false)) return ref

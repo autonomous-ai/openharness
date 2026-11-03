@@ -18,6 +18,7 @@ import { WebSocket } from 'ws'
 import type { GatewayEvents, TabRelay } from '../core/api.js'
 import { SHARED_TAB_FRAME_MAX } from '../lib/e2ee/tabSession.js'
 import { BACKEND_IDLE_DEADLINE_MS, watchSocketLiveness, type LivenessWatch } from '../lib/wsLiveness.js'
+import { declaredClientQuery } from '../lib/declaredClient.js'
 
 /** The relay closes a socket that sends a frame bigger than this (agentMessagesWs.ts `MAX_FRAME`): refused here first. */
 export const TAB_RELAY_MAX_FRAME = SHARED_TAB_FRAME_MAX
@@ -141,7 +142,7 @@ export class TabRelaySockets implements TabRelay {
     if (entry.closed) return
     const { base, environment } = this.deps
     const url = `${base.replace(/\/$/, '')}/api/agent-messages-ws?share=${encodeURIComponent(sharedTabId)}`
-      + `&machine=${encodeURIComponent(this.deps.machineId())}&autonomousEnv=${encodeURIComponent(environment)}`
+      + `&machine=${encodeURIComponent(this.deps.machineId())}&autonomousEnv=${encodeURIComponent(environment)}&${declaredClientQuery('relay')}`
     let ws: WebSocket
     try {
       ws = new WebSocket(url, [token], { handshakeTimeout: HANDSHAKE_TIMEOUT_MS, maxPayload: MAX_PAYLOAD })

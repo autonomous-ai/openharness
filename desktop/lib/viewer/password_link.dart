@@ -10,6 +10,7 @@ import '../e2ee/envelope.dart';
 import '../e2ee/keys.dart';
 import '../e2ee/password_pake.dart';
 import '../e2ee/primitives.dart';
+import '../ws/ws_conn.dart' show declaredAppVersion;
 
 /// How far a password link has got — the stages `harness link connect --json` reports, spelled the
 /// same (see [wireName]) so the link form shows one progress for either build.
@@ -70,8 +71,13 @@ Future<PasswordLinkResult> linkWithPassword({
   Duration timeout = const Duration(seconds: 30),
 }) async {
   onProgress?.call(PasswordLinkStage.connecting);
+  // It says what it is and which build (`?client=`, `?v=`; backend lib/wsAttribution.ts, Phase 0).
   final uri = Uri.parse('$wsBaseUrl/api/web-ws').replace(
-    queryParameters: {'autonomousEnv': autonomousEnv},
+    queryParameters: {
+      'autonomousEnv': autonomousEnv,
+      'client': 'link',
+      'v': ?declaredAppVersion,
+    },
   );
   final channel = socket(uri, [accessToken]);
   final run = _PasswordLinkRun(machineId, password, identity, channel, onProgress);

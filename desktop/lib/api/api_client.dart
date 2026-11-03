@@ -136,6 +136,15 @@ class ApiClient {
     return value != null && value > 1 ? value : 1;
   }
 
+  /// An answer's Retry-After in delta-seconds (the backend's busy answers and
+  /// the local CLI passing them on); null when absent or unreadable.
+  static Duration? retryAfter(Headers headers) {
+    final values = headers['retry-after'];
+    final value = values == null || values.isEmpty ? null : values.first.trim();
+    if (value == null || !RegExp(r'^\d{1,9}$').hasMatch(value)) return null;
+    return Duration(seconds: int.parse(value));
+  }
+
   // -- auth (proxied by the local CLI — no credential on this leg) --
   /// [onVocabulary] hears [usageVocabulary] from every answer, a refusal
   /// included; a request that got no answer says nothing.
@@ -164,11 +173,12 @@ class ApiClient {
           body is Map && body['error'] is Map
               ? (body['error'] as Map)['code']
               : null,
+          retryAfter: retryAfter(response.headers),
         );
       }
       return Map<String, dynamic>.from(body['data'] as Map);
     } on DioException catch (error) {
-      throw ProductReportFailure(switch (error.type) {
+      final measure = switch (error.type) {
         DioExceptionType.connectionTimeout ||
         DioExceptionType.sendTimeout ||
         DioExceptionType.receiveTimeout =>
@@ -176,7 +186,12 @@ class ApiClient {
         DioExceptionType.connectionError =>
           ProductHealthMeasure.reportFailureUnreachable,
         _ => ProductHealthMeasure.reportFailureOther,
-      });
+      };
+      // No answer in time, or none at all: waited out like a busy one.
+      throw ProductReportFailure(
+        measure,
+        backOff: measure != ProductHealthMeasure.reportFailureOther,
+      );
     }
   }
 
@@ -262,6 +277,39 @@ class ApiClient {
     ),
   );
 
+  /// Posts [body] as JSON to [path] and answers whatever came back, a refusal
+  /// too: the steps either side of a file sent straight to storage. Like
+  /// [postForm], through the local daemon on a computer and to the backend
+  /// with this browser's token.
+  Future<Response<dynamic>> postJson(
+    String path,
+    Map<String, dynamic> body, {
+    CancelToken? cancelToken,
+  }) => _dio.post<dynamic>(
+    path,
+    data: body,
+    cancelToken: cancelToken,
+    options: Options(
+      // Finishing checks the stored file before it answers.
+      receiveTimeout: const Duration(minutes: 2),
+      headers: auth == null ? {'x-adapter-local': '1'} : null,
+    ),
+  );
+
+  /// One Swarm call ([method] on [path], `/api/super-tabs…`) straight to the
+  /// backend with this browser's sign-in, answered whole: the web's Swarm
+  /// transport (super_tabs/backend_transport.dart) reads the envelope, as a
+  /// machine's relay reads it for a computer.
+  Future<Response<dynamic>> superTabCall(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+  }) => _dio.request<dynamic>(
+    path,
+    data: body,
+    options: Options(method: method),
+  );
+
   Future<Map<String, dynamic>?> me() async {
     final res = await _dio.get('/api/auth/me');
     return unwrapApiResponse(res) as Map<String, dynamic>?;
@@ -316,7 +364,10 @@ class ApiClient {
       '/api/agent-messages/tabs/${Uri.encodeComponent(tabId)}',
       data: {
         'enabled': ?enabled,
-        if (leader != null) 'leader': leader.toJson() else if (clearLeader) 'leader': null,
+        if (leader != null)
+          'leader': leader.toJson()
+        else if (clearLeader)
+          'leader': null,
       },
       options: Options(headers: {'x-adapter-local': '1'}),
     );

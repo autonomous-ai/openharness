@@ -206,6 +206,14 @@ interface ActiveStream {
 export interface TerminalStreamManagerDeps {
   /** An independent observer manager never acquires the owner control lease. */
   readOnly?: boolean
+  /** A connection held to watching now, whatever it asks (core/api.ts RemoteAppPolicy `watchOnly`): the Mac owner's apps on a
+   *  Harness Team daemon running a Swarm Product Manager (#895). Asked at each open and each frame, binary input included,
+   *  so a stream opened before the hold began is held too. */
+  watchOnly?: (connId: string) => boolean
+  /** Whether [agentId]'s terminal is closed to [connId] now (core/api.ts RemoteAppPolicy): a session that turned confidential
+   *  on a Harness Team daemon. Asked before anything more is sent on a stream, at each frame its client sends, and at open,
+   *  so a stream opened before the mark closes (security review 2 of #2089). */
+  closedTo?: (connId: string, agentId: string) => boolean
   terminals: TerminalBackendCoordinator
   resolveAgent: (agentId: string) => RegisteredSession | undefined
   sendTarget: (connId: string, type: string, payload: FramePayload) => boolean
@@ -330,7 +338,17 @@ export class TerminalStreamManager {
     return state?.connId === connId && state.watching
   }
 
+  /** Closes [state] when its session is closed to its client now (`closedTo`), and says whether it did. */
+  private closedNow(state: ActiveStream): boolean {
+    if (state.closing) return true
+    if (!this.deps.closedTo?.(state.connId, state.agentId)) return false
+    void this.closeStream(state, 'session became confidential', true, 'SWARM_CONFIDENTIAL')
+    return true
+  }
+
   async handleFrame(connId: string, type: string, payload: FramePayload): Promise<boolean> {
+    const named = typeof payload.streamId === 'string' ? this.streams.get(payload.streamId) : undefined
+    if (named && named.connId === connId && this.closedNow(named)) return true
     if (this.deps.readOnly && !TerminalStreamManager.WATCH_SAFE_TYPES.includes(type)) {
       this.sendError(connId, 'VIEW_ONLY', { requestId: payload.requestId })
       return true
@@ -339,7 +357,7 @@ export class TerminalStreamManager {
     // controller, so anything that reaches tmux — input, resize, paste, scroll, an upload — has to
     // be stopped, and stopping them one by one is how the next write path added gets forgotten.
     // Same allow-list a read-only deployment uses, for the same reason.
-    if (!TerminalStreamManager.WATCH_SAFE_TYPES.includes(type) && this.isWatching(connId, payload)) {
+    if (!TerminalStreamManager.WATCH_SAFE_TYPES.includes(type) && (this.isWatching(connId, payload) || this.deps.watchOnly?.(connId) === true)) {
       this.sendError(connId, 'VIEW_ONLY', {
         requestId: payload.requestId,
         streamId: typeof payload.streamId === 'string' ? payload.streamId : undefined,
@@ -399,11 +417,11 @@ export class TerminalStreamManager {
     // Every binary kind below writes to the terminal, so a watcher's are dropped outright — see the
     // gate in `handleFrame`. Silent, like the other drops here: the client already knows it is
     // read-only (`terminal_ready`) and withholds input itself; this is the backstop.
-    if (this.isWatching(connId, { streamId: frame.streamId })) return
+    if (this.isWatching(connId, { streamId: frame.streamId }) || this.deps.watchOnly?.(connId) === true) return
     if (frame.kind !== TerminalBinaryKind.input && frame.kind !== TerminalBinaryKind.paste
       && frame.kind !== TerminalBinaryKind.imagePaste && frame.kind !== TerminalBinaryKind.pasteFile) return
     const state = this.streams.get(frame.streamId)
-    if (!state || state.connId !== connId || state.closing) return
+    if (!state || state.connId !== connId || this.closedNow(state)) return
     if (frame.kind === TerminalBinaryKind.imagePaste || frame.kind === TerminalBinaryKind.pasteFile) {
       await this.receiveUploadChunk(state, frame.kind, frame.seq, frame.bytes)
       return
@@ -492,6 +510,10 @@ export class TerminalStreamManager {
       this.sendError(connId, 'TERMINAL_OPEN_INVALID', { requestId })
       return
     }
+    if (this.deps.closedTo?.(connId, agentId)) {
+      this.sendError(connId, 'SWARM_CONFIDENTIAL', { requestId })
+      return
+    }
     if (!this.deps.streamingAvailable) {
       this.sendError(connId, 'TERMINAL_RUNTIME_UNAVAILABLE', { requestId })
       return
@@ -550,7 +572,7 @@ export class TerminalStreamManager {
       // A watch-only stream is not anyone holding it: a window reconnecting politely beside one is
       // answered as it would be alone, not made to watch a terminal nobody drives.
       const holders = incumbents.filter((state) => !state.watchOnly)
-      const watching = !this.deps.readOnly && (watchOnly || (!takeover && holders.length > 0))
+      const watching = !this.deps.readOnly && (watchOnly || this.deps.watchOnly?.(connId) === true || (!takeover && holders.length > 0))
       // Who a watcher is watching, named on its banner — "MacBook Pro is using this terminal" — as
       // `takenBy` names the winner on the incumbent's. Read now, before any stream below moves.
       const heldBy = watching ? this.holderOf(holders, reservedPlacement) : undefined
@@ -1321,7 +1343,7 @@ export class TerminalStreamManager {
 
   private flushOutput(state: ActiveStream): void {
     if (state.flushTimer) { clearTimeout(state.flushTimer); state.flushTimer = null }
-    if (state.closing || state.snapshotting || state.outputBytes === 0) return
+    if (state.closing || state.snapshotting || state.outputBytes === 0 || this.closedNow(state)) return
     state.lastFlushAt = this.now()
     const all = Buffer.concat(state.output, state.outputBytes)
     state.output = []
@@ -1490,6 +1512,7 @@ export class TerminalStreamManager {
       await this.closeStream(state, 'terminal snapshot exceeds safe envelope size', false)
       return
     }
+    if (this.closedNow(state)) return
     const bytes = Buffer.from(snapshot.value.bytes)
     state.pending = []
     state.pendingBytes = 0
@@ -1540,7 +1563,7 @@ export class TerminalStreamManager {
   }
 
   private sendSync(state: ActiveStream, now: number): void {
-    if (state.closing || state.snapshotting || state.resyncing || state.outputPaused) return
+    if (state.closing || state.snapshotting || state.resyncing || state.outputPaused || this.closedNow(state)) return
     this.flushOutput(state)
     if (state.closing || state.outputPaused) return
     const seq = state.nextSeq++

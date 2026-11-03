@@ -2,9 +2,20 @@ import type { EngineLaunch } from '../facets/launch.js'
 
 const permissionModes = {
   auto: ['--approve-for-me'],
+  // A Buddy's (superTabs/start.ts): it reads in the sandbox, and an approval to go outside it goes to the person at its
+  // terminal, never to Codex's own reviewer, whatever their config.toml says. Their rules files still apply: a command an
+  // `allow` rule names runs outside the sandbox unasked, which is why the backend refuses Codex Buddies for now (security
+  // review 1 of #2087). Ahead of readOnly, whose flags it contains: a process's argv is read back as the first mode it
+  // matches (lib/processTable.ts), so a relaunched Buddy keeps this mode. A Codex without its flag is never relaunched
+  // without it (lib/engineLaunch.ts KEPT_PERMISSION_MODES).
+  readOnlyAsk: ['--ask-for-approval', 'on-request', '--sandbox', 'read-only', '-c', 'approvals_reviewer="user"'],
   readOnly: ['--sandbox', 'read-only'],
   ask: [],
   full: ['--dangerously-bypass-approvals-and-sandbox'],
+  // Code a Harness Team agent wrote, in a Team account (backend superTabs/teamWritten.ts, audit H2). Codex has no flag for it: a
+  // worktree takes its main repository's trust, and `-c projects...` does not turn it off (0.165.0, tried). The start gives
+  // this mode an engine home of its own, which trusts no project (superTabs/start.ts).
+  teamWritten: ['--dangerously-bypass-approvals-and-sandbox'],
 }
 
 /**
@@ -53,6 +64,15 @@ export const launch: EngineLaunch = {
    * every launch, and OpenCode's is a file this daemon writes, so only Codex declares this.
    */
   ownProvider: { home: 'CODEX_HOME', file: 'config.toml', key: 'model_provider', fallback: 'openai', args: ['-c', 'model_provider="{value}"'] },
+  /**
+   * From codex-cli 0.166.0 that argv no longer outranks the stored row: `thread/resume` checks the thread's saved
+   * provider against the one it is given and refuses a difference (app-server config_manager.rs `load_for_resume`,
+   * ModelProviderMismatch: "This chat uses openai, but your current provider is grid"), and the restart fell back to a
+   * new conversation without its history. No app-server method changes a thread's provider (`thread/metadata/update`
+   * and `thread/settings/update` carry none); `thread/fork` builds its config as a new thread's, so a move between a
+   * grid and the own login continues the conversation in a fork, history included, on every version.
+   */
+  providerBoundConversations: true,
   /**
    * Codex keeps its folder trust in `<CODEX_HOME>/config.toml` as a `[projects."<path>"]` table with
    * `trust_level = "trusted"`, read from the agent's own profile or a CODEX_HOME the person moved, exact
@@ -119,6 +139,15 @@ export const launch: EngineLaunch = {
     // sends none, and costs the whole `withinMs`.
     resizeRepaint: { clears: '\u001b[3J', ends: '\u001b[?2026l', withinMs: 250 },
   },
+  /**
+   * Codex asks "Update available" on a start with a newer release out, with Update now (`npm install -g`) the highlighted
+   * row, and no one is at a Swarm agent's terminal to answer (Studio Codex, 2026-10-29: tasks held behind it). The
+   * startup check is `check_for_update_on_startup` in config.toml's top level (0.165.0's ConfigToml), and `-c` outranks
+   * the person's file, as `screen.args` does. Only for sessions the Swarm starts: a person's Codex keeps asking, and
+   * updating Codex stays their choice. Codex that still shows the prompt is answered with Skip by the host
+   * (superTabs/terminal.ts).
+   */
+  swarmArgs: ['-c', 'check_for_update_on_startup=false'],
   /**
    * Codex 0.162.1 has no setting for its attribution's text: its own line ("Generated with [Codex](…)") is an
    * instruction in its developer message (`<git_attribution>`), on or off by workspace. `developer_instructions` is

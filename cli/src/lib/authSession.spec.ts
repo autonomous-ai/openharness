@@ -13,6 +13,7 @@ const {
   AuthSessionManager,
   clearAuthSession,
   ensureSignInEpoch,
+  teamSignInEpoch,
   hasAuthSession,
   markSignedOut,
   newSignInEpoch,
@@ -54,9 +55,46 @@ describe('sign-in epoch', () => {
     }))))
     const manager = new AuthSessionManager('https://api.example.test')
     await manager.accessToken()
-    manager.updateMachineId('machine-2')
+    await manager.updateMachineId('machine-2', epoch)
     expect(readAuthSession()).toMatchObject({ accessToken: 'refreshed-access', machineId: 'machine-2', signInEpoch: epoch, signInAcct: 'acct-1' })
     expect(newSignInEpoch()).not.toBe(epoch)
+  })
+
+  describe('a machine id found under one sign-in', () => {
+    const manager = () => new AuthSessionManager('https://api.example.test')
+
+    it('is written into that sign-in, refreshed or not', async () => {
+      writeAuthSession({ ...baseSession(), signInEpoch: 'first@1' })
+      await manager().updateMachineId('machine-2', 'first@1')
+      expect(readAuthSession()).toMatchObject({ machineId: 'machine-2', signInEpoch: 'first@1' })
+    })
+
+    it('is dropped by a new sign-in', async () => {
+      writeAuthSession({ ...baseSession(), machineId: 'machine-new', signInEpoch: 'next@2' })
+      await manager().updateMachineId('machine-old', 'first@1')
+      expect(readAuthSession()).toMatchObject({ machineId: 'machine-new', signInEpoch: 'next@2' })
+    })
+
+    it('is dropped by a new sign-in when the lookup started with no epoch', async () => {
+      writeAuthSession({ ...baseSession(), machineId: 'machine-new', signInEpoch: 'next@2' })
+      await manager().updateMachineId('machine-old', undefined)
+      expect(readAuthSession()).toMatchObject({ machineId: 'machine-new' })
+    })
+
+    it('is dropped by a Team sign-in when the lookup started with no epoch, though its epoch reads as adopted', async () => {
+      writeAuthSession({ ...baseSession(), machineId: 'machine-new', signInEpoch: teamSignInEpoch() })
+      await manager().updateMachineId('machine-old', undefined)
+      expect(readAuthSession()).toMatchObject({ machineId: 'machine-new' })
+      expect(signInOf(readAuthSession()!.signInEpoch)?.adopted).toBe(true)
+    })
+
+    it('is kept when the session from before epochs was only given one meanwhile', async () => {
+      const { signInEpoch: _none, ...old } = { ...baseSession(), signInEpoch: undefined }
+      writeAuthSession(old)
+      await ensureSignInEpoch()
+      await manager().updateMachineId('machine-2', undefined)
+      expect(readAuthSession()).toMatchObject({ machineId: 'machine-2' })
+    })
   })
 
   it('gives a session from before epochs an adopted one, once, keeping its tokens', async () => {
@@ -127,13 +165,15 @@ describe('AuthSessionManager', () => {
 
     writeAuthSession({ ...baseSession(), clientId: 'harness-desktop' })
     await manager.accessToken()
-    expect(sent(0)).toEqual({ refreshToken: 'refresh-1', autonomousEnv: 'prod', clientId: 'harness-desktop' })
+    // An SSO sign-in's renewal also asks to become a Harness session (backend lib/ssoSession.ts).
+    const harnessSession = { kind: 'computer', label: expect.any(String) }
+    expect(sent(0)).toEqual({ refreshToken: 'refresh-1', autonomousEnv: 'prod', clientId: 'harness-desktop', harnessSession })
     // The client outlives the refresh: the next one names it too.
     expect(readAuthSession()).toMatchObject({ accessToken: 'new-access', clientId: 'harness-desktop' })
 
     writeAuthSession(baseSession())
     await manager.accessToken()
-    expect(sent(1)).toEqual({ refreshToken: 'refresh-1', autonomousEnv: 'prod' })
+    expect(sent(1)).toEqual({ refreshToken: 'refresh-1', autonomousEnv: 'prod', harnessSession })
   })
 
   it('reads back only a client that is ours', async () => {
@@ -145,7 +185,7 @@ describe('AuthSessionManager', () => {
   it('keeps a team sign-in\'s kind, and reads no other', async () => {
     writeAuthSession({ ...baseSession(), kind: 'team' })
     expect(readAuthSession()?.kind).toBe('team')
-    new AuthSessionManager('http://backend.invalid').updateMachineId('machine-2')
+    new AuthSessionManager('http://backend.invalid').updateMachineId('machine-2', undefined)
     expect(readAuthSession()).toMatchObject({ kind: 'team', machineId: 'machine-2' })
     await writeFile(AUTH_SESSION_FILE, JSON.stringify({ ...baseSession(), kind: 'admin' }))
     expect(readAuthSession()).not.toHaveProperty('kind')
@@ -201,6 +241,17 @@ describe('AuthSessionManager', () => {
     expect(err).toMatchObject({ name: AuthSessionError.name, code: 'UNAVAILABLE' })
     expect(err.message).toMatch(/harness login/)          // the way out, which the upstream never names
     expect(err.message).toMatch(/Authentication service unavailable/)  // the upstream's own words, kept
+  })
+
+  it('a renewal answered "sign in again" says so and keeps the session, unmarked', async () => {
+    writeAuthSession({ ...baseSession(), accessToken: 'hna_old', refreshToken: 'hnr_1' })
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      success: false, error: { code: 'SIGN_IN_AGAIN', message: 'Sign in again: not confirmed for 7 days' },
+    }), { status: 403 })))
+    const manager = new AuthSessionManager('https://api.example.test')
+    await expect(manager.accessToken()).rejects.toMatchObject({ code: 'SIGN_IN_AGAIN', message: expect.stringMatching(/harness login/) })
+    expect(readAuthSession()).toMatchObject({ refreshToken: 'hnr_1' })
+    expect(readSignedOut()).toBeNull()
   })
 
   it('keeps the session when the refresh service is merely unavailable', async () => {

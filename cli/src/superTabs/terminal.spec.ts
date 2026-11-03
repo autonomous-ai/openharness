@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import type { CoreApi, SuperTabScreen } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
+import { CODEX_MODEL_MIGRATION, CODEX_SIGN_IN, CODEX_TRUST_PROMPT, CODEX_UPDATE_PROMPT } from '../lib/__fixtures__/takeoverScreens.js'
 import { capScreen, limitOf, modelFailing, TerminalHost, typedKeys } from './terminal.js'
 
 const row = (agentId = 'a1', harnessId = 'h1', over: Record<string, unknown> = {}) => ({ tabId: 'tab', agent: { id: agentId, harnessId, machineId: 'm1' }, ...over })
@@ -21,10 +22,11 @@ function setup(options: { live?: string[]; screen?: (harnessId: string) => Super
     account: { backend },
     agents: { byAgent: vi.fn((id: string) => (options.live ?? ['h1']).includes(id) ? { agentId: id } as never : undefined) },
     superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(),
-      screen: vi.fn(async (harnessId: string) => screen(harnessId)), input: vi.fn(async () => ({ ok: true as const })) },
+      screen: vi.fn(async (harnessId: string) => screen(harnessId)), input: vi.fn(async () => ({ ok: true as const })), inputIfScreen: vi.fn(async () => ({ ok: true as const })) },
   })
   const host = new TerminalHost(core, 'm1', { now: () => clock, log: vi.fn() })
   return { core, backend, sent, host,
+    now: () => clock,
     wait: (ms: number) => { clock += ms },
     request: (...rows: unknown[]) => { pending = rows },
     showing: (next: (harnessId: string) => SuperTabScreen) => { screen = next },
@@ -130,6 +132,59 @@ describe('a host serving its Lead\'s terminal requests', () => {
     t.wait(1_000)
     await t.host.tick([row()])
     expect(t.polls()).toBe(2)
+  })
+})
+
+// Spec 2026-11-02-poll-cost Part 4.2: every host of a Swarm agent asked every 3 s, almost always for nothing (prod 2026-11-02:
+// 305 a minute, each a transaction). A server that pushes deliveries also says when a terminal request waits for this
+// machine (`__terminal_waiting`); the backend still gives up on a pickup after 10 s, so the fallback stays under it.
+describe('terminal requests the server pushes', () => {
+  it('with the push lease, polls every 8 s and picks up at once on __terminal_waiting', async () => {
+    let pushing = true
+    const t = setup(), host = new TerminalHost(t.core, 'm1', { now: t.now, log: vi.fn(), pushes: () => pushing })
+    await host.tick([row()])
+    expect(t.polls()).toBe(1)
+    for (let second = 1; second < 8; second++) { t.wait(1_000); await host.tick([row()]) }
+    expect(t.polls()).toBe(1)
+    t.wait(1_000); await host.tick([row()])
+    expect(t.polls()).toBe(2)
+    // Told a request waits: answered now, before the backend's 10 s are out.
+    t.request(screenRequest())
+    t.wait(1_000)
+    await host.waiting()
+    expect(t.polls()).toBe(3)
+    expect(t.sent.map(s => s.body.command.type)).toEqual(['agent.screenResult'])
+    // The next fallback poll counts from that pickup.
+    for (let second = 1; second < 8; second++) { t.wait(1_000); await host.tick([row()]) }
+    expect(t.polls()).toBe(3)
+    t.wait(1_000); await host.tick([row()])
+    expect(t.polls()).toBe(4)
+    // The lease lapses: every 3 s again.
+    pushing = false
+    t.wait(3_000); await host.tick([row()])
+    expect(t.polls()).toBe(5)
+  })
+
+  it('without it, polls every 3 s', async () => {
+    const t = setup(), host = new TerminalHost(t.core, 'm1', { now: t.now, log: vi.fn(), pushes: () => false })
+    for (let second = 0; second < 9; second++) { await host.tick([row()]); t.wait(1_000) }
+    expect(t.polls()).toBe(3)
+  })
+
+  it('picks up nothing on a push before the host has read its roster, or with no Swarm agent here', async () => {
+    const t = setup(), host = new TerminalHost(t.core, 'm1', { now: t.now, log: vi.fn(), pushes: () => true })
+    await host.waiting()
+    await host.tick([])
+    await host.waiting()
+    expect(t.polls()).toBe(0)
+  })
+
+  it('picks up once more after a push that came during a pickup', async () => {
+    const t = setup(), host = new TerminalHost(t.core, 'm1', { now: t.now, log: vi.fn(), pushes: () => true })
+    const first = host.tick([row()])
+    const pushed = host.waiting()
+    await first; await pushed
+    await vi.waitFor(() => expect(t.polls()).toBe(2))
   })
 })
 
@@ -246,6 +301,87 @@ describe('the stuck and usage-limit alerts', () => {
   })
 })
 
+describe('dismissing Codex\'s update screen for a Swarm agent', () => {
+  const update = (): SuperTabScreen => ({ ok: true, text: CODEX_UPDATE_PROMPT, hold: 'update_prompt_open' })
+  const idle = (): SuperTabScreen => ({ ok: true, text: '> ', hold: null })
+  const dismissed = (t: ReturnType<typeof setup>) => vi.mocked(t.core.superTabs!.inputIfScreen).mock.calls
+
+  it('sends Esc through the core\'s if-screen door with the screen it read, types nothing itself, and raises no alert', async () => {
+    const t = setup({ screen: update })
+    await t.host.tick([row()])
+    expect(dismissed(t)).toEqual([['h1', ['Escape'], CODEX_UPDATE_PROMPT]])
+    expect(t.core.superTabs!.input).not.toHaveBeenCalled()
+    t.showing(idle)
+    for (let i = 0; i < 14; i++) { t.wait(15_000); await t.host.tick([row()]) }
+    expect(dismissed(t)).toHaveLength(1)
+    expect(t.alerts()).toEqual([])
+  })
+
+  it('answers only the agent whose screen shows it, and only a Swarm agent of this machine', async () => {
+    const t = setup({ screen: harnessId => harnessId === 'h2' ? update() : idle(), live: ['h1', 'h2', 'h3'] })
+    await t.host.tick([row('a1', 'h1'), row('a2', 'h2'), { tabId: 'tab', agent: { id: 'a3', harnessId: 'h3', machineId: 'other' } }])
+    expect(dismissed(t)).toEqual([['h2', ['Escape'], CODEX_UPDATE_PROMPT]])
+  })
+
+  it.each([['trust', CODEX_TRUST_PROMPT, 'trust_open'], ['model', CODEX_MODEL_MIGRATION, 'model_prompt_open'],
+    ['sign-in', CODEX_SIGN_IN, 'sign_in_open'], ['permission', 'Allow? 1. Yes', 'permission_open']] as const)('asks for nothing on the %s screen', async (_name, text, hold) => {
+    const t = setup({ screen: () => ({ ok: true, text, hold }) })
+    await t.host.tick([row()])
+    expect(dismissed(t)).toEqual([])
+  })
+
+  it('asks for nothing when the update screen is misread (a Skip row as 0), and alerts as before after 3 minutes', async () => {
+    const t = setup({ screen: () => ({ ok: true, text: CODEX_UPDATE_PROMPT.replace('  2. Skip\n', '  0. Skip\n'), hold: 'update_prompt_open' }) })
+    await t.host.tick([row()])
+    t.wait(180_000); await t.host.tick([row()])
+    expect(dismissed(t)).toEqual([])
+    expect(t.alerts()).toEqual([{ type: 'agent.alert', agentId: 'a1', alert: 'prompt', active: true }])
+  })
+
+  it('tries three times at most when the screen stays, then leaves it to the 3-minute alert', async () => {
+    const t = setup({ screen: update })
+    for (let i = 0; i < 12; i++) { await t.host.tick([row()]); t.wait(15_000) }
+    await t.host.tick([row()])
+    expect(dismissed(t)).toHaveLength(3)
+    expect(t.alerts()).toEqual([{ type: 'agent.alert', agentId: 'a1', alert: 'prompt', active: true }])
+  })
+
+  it('starts the tries again for a new update screen once the old one is gone', async () => {
+    const t = setup({ screen: update })
+    await t.host.tick([row()])
+    t.showing(idle); t.wait(15_000); await t.host.tick([row()])
+    t.showing(update); t.wait(15_000); await t.host.tick([row()])
+    expect(dismissed(t)).toHaveLength(2)
+  })
+
+  it('goes on watching when the core refuses, because the screen had changed or the terminal did not take the key', async () => {
+    const t = setup({ screen: update })
+    vi.mocked(t.core.superTabs!.inputIfScreen).mockResolvedValueOnce({ ok: false, error: 'The screen changed before the key was sent; nothing was typed.' })
+    vi.mocked(t.core.superTabs!.inputIfScreen).mockRejectedValueOnce(new Error('core gone'))
+    await t.host.tick([row()])
+    t.wait(15_000); await t.host.tick([row()])
+    t.wait(15_000); await t.host.tick([row()])
+    expect(dismissed(t)).toHaveLength(3)
+  })
+})
+
+// Nova, the Lead of the Swarm autonomous-harness (2026-10-29): Claude Code's drafted bug report covered its prompt, and every
+// message to it came back undelivered until someone pressed a key in its terminal.
+describe('dismissing Claude Code\'s feedback popups for a Swarm agent', () => {
+  const DRAFT = '│ ✻ Bug report drafted: Lead switched Codex model │\n│ 1 to review · 2 to send · 0 to dismiss │\n────\n❯ '
+  const TURN_OFF = 'Turn off Claude-drafted feedback? 0 to turn off · Esc to keep\n────\n❯ '
+  const dismissed = (t: ReturnType<typeof setup>) => vi.mocked(t.core.superTabs!.inputIfScreen).mock.calls
+
+  it('dismisses the draft with 0, then keeps the setting with Esc, through the if-screen door, and raises no alert', async () => {
+    const t = setup({ screen: () => ({ ok: true, text: DRAFT, hold: 'prompt_hidden' }) })
+    await t.host.tick([row()])
+    t.showing(() => ({ ok: true, text: TURN_OFF, hold: 'prompt_hidden' })); t.wait(15_000); await t.host.tick([row()])
+    expect(dismissed(t)).toEqual([['h1', ['0'], DRAFT], ['h1', ['Escape'], TURN_OFF]])
+    expect(t.core.superTabs!.input).not.toHaveBeenCalled()
+    expect(t.alerts()).toEqual([])
+  })
+})
+
 describe('progress for the machine report', () => {
   const showing = (text: string) => (): SuperTabScreen => ({ ok: true, text, hold: null })
 
@@ -311,10 +447,37 @@ describe('reading a usage limit off a screen', () => {
     ['claude-weekly-limit', { resetAt: new Date(2026, 9, 30, 9, 0).toISOString() }],
     ['claude-opus-limit', { resetAt: new Date(2026, 9, 30, 9, 0).toISOString() }],
     ['claude-fable-limit', {}],
+    // Mid-turn, its notice is a row of its own after a tool's output (review of #2712, Important 1).
+    ['claude-limit-after-tool', { resetAt: new Date(2026, 9, 23, 15, 0).toISOString() }],
     ['codex-usage-limit', { resetAt: new Date(2026, 9, 27, 15, 5).toISOString() }],
     ['codex-model-limit', { resetAt: new Date(2026, 9, 23, 16, 5).toISOString() }],
   ])('reads the %s screen', (name, limit) => {
     expect(limitOf(fixture(name), now)).toEqual(limit)
+  })
+  // Task #2321 (Ken, 11-03): River was listed limited while it worked, as it had just printed another agent's screen,
+  // which showed Codex's limit line. Only the engine's own notice marks an agent limited, never text it prints.
+  it.each([
+    ['claude-printed-codex-limit', 'a screen Claude Code printed, the limit line further down its tool output'],
+    ['claude-printed-limit-first-line', 'the limit line first in its tool output, right above the prompt'],
+  ])('reads no limit off %s: %s', name => {
+    expect(limitOf(fixture(name), now)).toBeNull()
+  })
+  it('reads no limit off a log a tool printed, quoted or indented, near the prompt', () => {
+    expect(limitOf('⏺ Read(logs/codex.log)\n  ⎿  Read 3 lines\n     5-hour limit reached ∙ resets 3pm\n\n❯ ', now)).toBeNull()
+    expect(limitOf('• Ran cat codex.log\n  └ ■ You\'ve hit your usage limit. Try again at 4:05 PM.\n\n› ', now)).toBeNull()
+    // A Claude Code screen printed in a tool's output, its header scrolled off: its "⎿" rows sit deeper than the engine's own.
+    expect(limitOf('       └  Test Files  1 passed (1)\n     ⎿  You\'ve hit your session limit · resets 3pm\n\n❯ ', now)).toBeNull()
+    expect(limitOf('⏺ Update(notes.md)\n  ⎿  Added 1 line\n       1 + You\'ve hit your session limit · resets 3pm\n\n❯ ', now)).toBeNull()
+  })
+  it('still reads Claude Code\'s limit dialog', () => {
+    expect(limitOf([
+      '╭──────────────────────────────────────────────────────────╮',
+      '│ You\'ve hit your limit · resets 3pm (Asia/Saigon)         │',
+      '│                                                          │',
+      '│ ❯ 1. Stop and wait for limit to reset                    │',
+      '│   2. Upgrade your plan                                   │',
+      '╰──────────────────────────────────────────────────────────╯',
+    ].join('\n'), now)).toEqual({ resetAt: new Date(2026, 9, 23, 15, 0).toISOString() })
   })
   it('knows a limit without a reset time, and ignores the words in an agent\'s own prose or far above the prompt', () => {
     expect(limitOf('⎿  API Error: Usage limit reached\n> ', now)).toEqual({})
@@ -323,6 +486,8 @@ describe('reading a usage limit off a screen', () => {
     expect(limitOf('> ', now)).toBeNull()
     // A full context is not a usage limit; a workspace out of credits is one.
     expect(limitOf('  ⎿  Context limit reached · /compact or /clear to continue\n> ', now)).toBeNull()
+    // A notice under Claude Code's reply whose start has scrolled off the screen is still its own.
+    expect(limitOf('  ⎿  You\'ve hit your session limit · resets 3pm\n\n❯ ', now)).toEqual({ resetAt: new Date(2026, 9, 23, 15, 0).toISOString() })
     expect(limitOf('■ You\'ve reached your workspace credit limit\n› ', now)).toEqual({})
   })
 })
@@ -335,5 +500,17 @@ describe('reading a model that keeps failing off a screen', () => {
     }
     expect(modelFailing('I will handle the case where the API response is slow.\n> ')).toBe(false)
     expect(modelFailing(`Waiting for API response\n${'line\n'.repeat(30)}> `)).toBe(false)
+  })
+
+  it('knows a relay that is gone: Claude Code\'s connection lines and Codex\'s reconnect', () => {
+    // Claude Code 2.1 names the connection's failure in place of "Connection error." (Pro-10's Team agent, 2026-11-03).
+    for (const line of ['⎿  API Error: Unable to connect to API (ECONNREFUSED)', '  ⎿  Unable to connect to API (ECONNREFUSED) · Retrying in 4s · attempt 3/10',
+      '⎿  API Error: No internet route — check your connection or VPN (ENETUNREACH)']) {
+      expect(modelFailing(`work\n${line}\n> `)).toBe(true)
+    }
+    // Pro-9's Team Codex agents, four hours after the update.
+    expect(modelFailing('• Reconnecting... waiting for network (4h 21m 27s • esc to interrupt)\n  └ Connection failed: error sending request\n› Ask Codex to do anything')).toBe(true)
+    expect(modelFailing('work\n  └ Connection failed: error sending request\n› ')).toBe(true)
+    expect(modelFailing(`I will make the client say "Unable to connect to API" when the relay is down.\n${'line\n'.repeat(30)}> `)).toBe(false)
   })
 })

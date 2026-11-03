@@ -44,6 +44,26 @@ describe('restartAgent', () => {
     expect(d.calls).toEqual(['holdOpen', 'terminate', 'prepareResume', 'buildArgv', 'respawn', 'waitForProcess'])
   })
 
+  it('resumes the prepared fork of a moved conversation, once its writer has stopped', async () => {
+    const seen: unknown[] = []
+    const d = deps({ buildArgv: (opts) => { seen.push(opts); return ['codex'] } })
+    const prepareFork = vi.fn(async () => { seen.push(d.calls.includes('terminate')); return 'prepared' })
+    const outcome = await restartAgent({ engine: 'codex', sessionId: 's1', continueInFork: true }, false, { ...d, prepareFork })
+    expect(outcome.ok).toBe(true)
+    expect(seen).toEqual([true, { bypassPermission: false, resumeSessionId: 'prepared' }])
+  })
+
+  it('continues the moved conversation in a plain fork when preparing it fails', async () => {
+    const seen: unknown[] = []
+    const logs: string[] = []
+    const d = deps({ buildArgv: (opts) => { seen.push(opts); return ['codex'] } })
+    const outcome = await restartAgent({ engine: 'codex', sessionId: 's1', continueInFork: true }, false,
+      { ...d, log: (message) => logs.push(message), prepareFork: async () => { throw new Error('grid is down') } })
+    expect(outcome.ok).toBe(true)
+    expect(seen.at(-1)).toEqual({ bypassPermission: false, forkSessionId: 's1' })
+    expect(logs.join()).toContain('grid is down')
+  })
+
   it('never prepares history while the old writer may still be alive', async () => {
     const prepareResume = vi.fn()
     const d = deps({ terminate: async () => 'failed', prepareResume })
@@ -162,6 +182,37 @@ describe('restartAgent', () => {
     expect(argvCalls).toEqual([{ bypassPermission: true, resumeSessionId: 'sess-42' }])
     // It reopened the conversation: nothing was left behind.
     expect(d.calls).not.toContain('keepAbandoned')
+  })
+
+  it('continues in a fork of the conversation when asked to, with its history prepared, and leaves nothing behind', async () => {
+    const argvCalls: Array<{ bypassPermission: boolean; resumeSessionId?: string; forkSessionId?: string }> = []
+    const d = deps({ buildArgv: (opts) => { argvCalls.push(opts); return ['codex'] }, prepareResume: () => {} })
+    const outcome = await restartAgent({ engine: 'codex', sessionId: 'sess-42', continueInFork: true }, false, d)
+    expect(argvCalls).toEqual([{ bypassPermission: false, forkSessionId: 'sess-42' }])
+    expect(outcome).toEqual({ ok: true, processIdentity: IDENTITY, resumed: true })
+    expect(d.calls).toContain('prepareResume')
+    // The fork carries the whole conversation: no stopped harness is kept for the one it came from.
+    expect(d.calls).not.toContain('keepAbandoned')
+  })
+
+  it('asks whether the fork it would launch is refused, before anything is stopped', async () => {
+    const asked: Array<{ bypassPermission: boolean; resumeSessionId?: string; forkSessionId?: string }> = []
+    const d = { ...deps(), launchRefusal: (opts: { bypassPermission: boolean; resumeSessionId?: string; forkSessionId?: string }) => { asked.push(opts); return null } }
+    await restartAgent({ engine: 'codex', sessionId: 'sess-42', continueInFork: true }, false, d)
+    expect(asked).toEqual([{ bypassPermission: false, forkSessionId: 'sess-42' }])
+  })
+
+  it('falls back to a fresh relaunch when the fork never comes up, keeping the conversation it could not continue', async () => {
+    let attempt = 0
+    const argvCalls: Array<{ bypassPermission: boolean; resumeSessionId?: string; forkSessionId?: string }> = []
+    const d = deps({
+      buildArgv: (opts) => { argvCalls.push(opts); return ['codex'] },
+      waitForProcess: async () => { attempt += 1; return attempt === 1 ? null : IDENTITY },
+    })
+    const outcome = await restartAgent({ engine: 'codex', sessionId: 'sess-42', continueInFork: true }, false, d)
+    expect(argvCalls).toEqual([{ bypassPermission: false, forkSessionId: 'sess-42' }, { bypassPermission: false }])
+    expect(outcome).toEqual({ ok: true, processIdentity: IDENTITY, resumed: false })
+    expect(d.calls.at(-1)).toBe('keepAbandoned')
   })
 
   it('launches fresh (no resumeSessionId) when the session has none', async () => {

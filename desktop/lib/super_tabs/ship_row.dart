@@ -98,7 +98,7 @@ class _SuperTabShipRowState extends State<SuperTabShipRow> {
                 _Credit('Requested by', [
                   (
                     SuperTabAvatar.person(requester, size: 20),
-                    superTabPersonName(requester.email),
+                    requester.username,
                   ),
                 ]),
               agents('Built by', _ids('builderIds')),

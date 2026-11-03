@@ -1,6 +1,8 @@
 import { env } from '../config/env.js'
 import { AppError } from '../errors/index.js'
 import { autonomousEnvironmentConfig, type AutonomousEnvironment } from './autonomousEnvironment.js'
+import { createCircuitBreaker, CircuitOpenError, type CircuitBreaker } from './circuitBreaker.js'
+import { logger } from '../utils/logger.js'
 
 type JsonObject = Record<string, unknown>
 
@@ -122,10 +124,48 @@ export function parseSubscription(subscription: JsonObject): CampaignSubscriptio
   }
 }
 
+// Per account plane: a billing service that keeps failing is answered for at once, not after its timeout on every call.
+const UNAVAILABLE_CODES = new Set(['BILLING_SERVICE_UNAVAILABLE', 'BILLING_UPSTREAM_ERROR'])
+const breakers = new Map<AutonomousEnvironment, CircuitBreaker>()
+
+function bffBreaker(autonomousEnv: AutonomousEnvironment): CircuitBreaker {
+  let breaker = breakers.get(autonomousEnv)
+  if (!breaker) {
+    breaker = createCircuitBreaker({
+      name: `autonomous-bff:${autonomousEnv}`,
+      isFailure: (err) => !(err instanceof AppError) || UNAVAILABLE_CODES.has(err.code ?? ''),
+      onStateChange: (state) => {
+        if (state === 'open') logger.warn('[bff] billing service unreachable; failing fast', { autonomousEnv })
+        else logger.info('[bff] billing service circuit', { autonomousEnv, state })
+      },
+    })
+    breakers.set(autonomousEnv, breaker)
+  }
+  return breaker
+}
+
+/** Test seam. */
+export function resetBffBreakers(): void {
+  breakers.clear()
+}
+
 async function request(
   autonomousEnv: AutonomousEnvironment,
   path: string,
   opts: { token?: string; method?: string; body?: unknown; origin?: string } = {},
+): Promise<unknown> {
+  try {
+    return await bffBreaker(autonomousEnv).run(() => send(autonomousEnv, path, opts))
+  } catch (err) {
+    if (err instanceof CircuitOpenError) throw new AppError('Autonomous billing service unavailable', 503, 'BILLING_SERVICE_UNAVAILABLE')
+    throw err
+  }
+}
+
+async function send(
+  autonomousEnv: AutonomousEnvironment,
+  path: string,
+  opts: { token?: string; method?: string; body?: unknown; origin?: string },
 ): Promise<unknown> {
   let response: Response
   try {

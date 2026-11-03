@@ -24,6 +24,7 @@ export function storeEntry(path, manifest, facts) {
   if (manifest.engine !== undefined) entry.engines = manifest.kind === 'viewer' || manifest.engine === 'terminal'
     ? [] : [manifest.engine, ...processEngines.filter(engine => engine !== manifest.engine)]
   if (typeof manifest.viewer?.use === 'string') entry.viewerUse = manifest.viewer.use
+  if (manifest.toolchain?.setup || manifest.toolchain?.doctor) entry.runsScripts = true
   entry.tier = manifest.viewer ? 2 : manifest.verdict ? 1 : 0
   entry.verified = true
   return entry

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/project_folder.dart';
 import 'package:harness/core/repository_clone.dart';
+import 'package:harness/core/ssh_hosts.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
@@ -150,4 +151,38 @@ void main() {
       });
     },
   );
+
+  test('a clone through an alias says which, for the person', () async {
+    final root = await Directory.systemTemp.createTemp(
+      'harness-alias-project-test-',
+    );
+    addTearDown(() => root.delete(recursive: true));
+    final source = p.join(root.path, 'source.git');
+    expect((await Process.run('git', ['init', '--bare', source])).exitCode, 0);
+    final via = <String>[];
+    await ProjectFolderRequest.remote(
+      GitHubRepository.parse('git@gh-work:owner/repo.git')!,
+    ).prepareLocal(
+      projectHome: p.join(root.path, 'projects'),
+      onClonedVia: via.add,
+      createClone: () => RepositoryClone(
+        sshHosts: _GitHubAlias(),
+        startProcess: (args, environment) => Process.start('git', [
+          'clone',
+          '--',
+          source,
+          args.last,
+        ], environment: environment),
+      ),
+    );
+    expect(via, ['gh-work']);
+  });
+}
+
+class _GitHubAlias implements SshHosts {
+  @override
+  Future<String?> resolveHost(String alias) async => 'github.com';
+
+  @override
+  Future<List<String>> githubAliases() async => const [];
 }

@@ -1,10 +1,10 @@
 import type { Command, CommandContext } from '../commands.js'
 import type { Actor, CommandEffects, SuperTabState } from '../model.js'
-import { agentRole } from '../model.js'
 import type { ContributedMachine } from '../machines.js'
 import { agentProjectId, canReadProject, groupProject, projectsOf } from '../projects.js'
 import type { Touch } from './commit.js'
 import { waitsNow } from '../leaderboard/record.js'
+import { buddiesHearing } from '../buddyNews.js'
 
 /**
  * The parts a command relies on without writing them (design section 1.2, column T). A part the command also writes is
@@ -18,7 +18,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
   const agent = (key: string | undefined) => { if (key && before.agents.some(a => a.id === key)) touches.push({ kind: 'agent', key }) }
   const member = (key: string | undefined) => { if (key && before.people.some(p => p.id === key)) touches.push({ kind: 'member', key }) }
   const head = () => touches.push({ kind: 'head', key: 'head' })
-  const progress = (projectId: string | undefined) => { if (projectId && before.projects) touches.push({ kind: 'progress', key: projectId }) }
   const machine = (key: string) => touches.push({ kind: 'machine', key })
   const projectOfGroup = (id: string) => { const g = before.conversations.find(c => c.id === id); return g && !g.kind ? groupProject(before, g) : undefined }
   const leadGroupOf = (projectId: string | undefined) => projectsOf(before).find(p => p.id === projectId)?.leadConversationId
@@ -47,18 +46,55 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
   if ('roleId' in command && command.roleId) head()
   if (command.type === 'agent.start' && command.request.roleId) head()
 
+  // News for a Buddy relies on its person still reading there (buddyNews.ts): their part guards it, as a person.tell's does.
+  for (const buddy of buddiesHearing(effects.state, effects.messages)) { agent(buddy.id); member(buddy.buddyOf!.personId) }
+
   switch (command.type) {
+    // Every person's write relies on the Swarm not being deleted (deletion.ts): the delete moves each person's part, so one
+    // landing at the same moment retries against it and is refused (security review 2 of #2457).
+    case 'swarm.delete':
+      for (const person of before.people) member(person.id)
+      break
     case 'tab.rename': case 'tab.project': case 'tab.pause':
       if (actor.kind === 'agent') group('lead')
       break
     case 'machine.contribute':
       if (!before.machines?.some(m => m.machineId === command.machineId)) head()
       break
+    case 'buddy.create':
+      // It may record a Buddy-only machine, or count on one that a concurrent removal of its last Buddy ends.
+      slots(command.machineId)
+      // Its name is claimed against every other name in the Swarm, as buddy.rename's is (below).
+      head()
+      break
     case 'agent.avatar':
       leadCheck(agentProject(command.agentId))
       break
-    case 'project.report': case 'project.repository': case 'project.skills':
+    case 'member.username':
+      // Unique in the Swarm: a concurrent choice of the same name writes another person's part, and a join writes the head.
+      for (const person of before.people) member(person.id)
+      head()
+      break
+    // A Buddy's name is claimed against every other name in the Swarm, some of them in chats a command does not load: the
+    // head guards the claim, as agent.start and agent.add touch it, so of two claims at once one retries and is refused
+    // (review of #2094).
+    case 'buddy.rename':
+      head()
+      break
+    case 'project.report': case 'project.repository':
+    // The coordinator's own writes check it leads the project, which a concurrent Lead change ends (review of phase 2).
+    case 'instructions.save': case 'note.add': case 'note.remove': case 'project.coordinatorName':
       leadCheck(command.projectId)
+      break
+    // An older CLI's rule is a save to its project's instructions, the coordinator's like instructions.save (commands.ts).
+    case 'rule.set':
+      leadCheck(command.projectId ?? (actor.kind === 'agent' ? agentProject(actor.agentId) : undefined))
+      break
+    case 'person.tell':
+      // The line reads that its person still reads the agent's project: their own part guards it, as a revoke touches the
+      // people it removes (project.sharing below) and member.remove writes it (security review 2 of #2090).
+      member(command.personId)
+      leadCheck(actor.kind === 'agent' ? agentProject(actor.agentId) : undefined)
       break
     case 'project.sharing':
       // Rule (b): everyone who loses the project sees the change through their own part (design section 1.2).
@@ -84,10 +120,23 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       member(command.personId ?? undefined)
       break
     case 'message.send': {
+      // Every start a post makes, a thread session's or the one Buddy's in an older project chat (commands.ts
+      // startOldChatBuddy), counts its machine's slots, as buddy.create's does, and meets a concurrent removal of the Buddy it
+      // runs beside: a Remove racing it can never leave it running (security review 2 of #2435).
+      const start = effects.state.starts?.find(s => !before.starts?.some(b => b.id === s.id))
+      if (start) {
+        slots(start.request.machineId)
+        head()
+        const person = start.request.buddyOf?.personId
+        for (const main of before.agents.filter(a => person && a.buddyOf?.personId === person && !a.buddySession)) agent(main.id)
+      }
       // An answer to waiting work is credited to the person it waits on (leaderboard/record.ts): a concurrent change to who
       // that is meets the answer here.
       const waiting = before.conversations.find(c => c.id === command.conversationId)
       if (waiting && waitsNow(waiting)) member(waiting.requesterId)
+      // An agent named from outside the group joins it (commands.ts joinsProject), so D3's reason for leaving recipients
+      // alone does not hold for it yet: its removal meets the post here. A member already there stays untouched.
+      for (const id of command.recipientIds) if (waiting && !waiting.agentIds.includes(id)) agent(id)
       break
     }
     case 'agent.add': {
@@ -101,15 +150,14 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       group(command.request.conversationId)
       slots(command.request.machineId)
       member(effects.state.starts?.find(s => !before.starts?.some(b => b.id === s.id))?.contributorId)
-      progress(projectOfGroup(command.request.conversationId)?.id)
       break
     case 'agent.startDispatch': case 'agent.started': {
       const start = before.starts?.find(s => s.id === command.startId)
       if (!start) break
       group(start.request.conversationId)
       member(start.contributorId)
-      if (command.type === 'agent.startDispatch') { slots(start.request.machineId); head(); progress(projectOfGroup(start.request.conversationId)?.id) }
-      else head()
+      if (command.type === 'agent.startDispatch') slots(start.request.machineId)
+      head()
       break
     }
     case 'agent.release':
@@ -129,30 +177,18 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       break
     case 'work.assign': {
       head()
-      progress(projectOfGroup(command.conversationId)?.id)
       const target = before.agents.find(a => a.id === command.agentId)
-      const reviewers = before.conversations.find(c => c.id === command.conversationId)?.agentIds
-        .filter(id => before.agents.some(a => a.id === id && agentRole(a) === 'reviewer')) ?? []
-      for (const id of reviewers) agent(id)
       const unsettled = before.starts?.find(s => s.poolGeneration && !s.poolSettled && target && s.request.machineId === target.machineId && s.harnessId === target.harnessId)
       if (unsettled) touches.push({ kind: 'start', key: unsettled.id })
       break
     }
+    // Finished work no longer meets the next start, assignment or route on the project's progress part: that fenced the worker
+    // decisions the Lead had to make first (design ruling R5), which no command reads now (project instructions, phase 4).
     case 'work.cancel':
       leadCheck(projectOfGroup(command.conversationId)?.id)
-      progress(projectOfGroup(command.conversationId)?.id)
-      break
-    case 'work.status':
-      // Finished work puts its worker's decision before the Lead (finishWorker): the Lead's next start, assignment or
-      // route touches the same part, so it cannot pass over that decision on a stale read (design ruling R5).
-      if (command.status === 'done' || command.status === 'stopped') progress(projectOfGroup(command.conversationId)?.id)
-      break
-    case 'work.define':
-      if (before.conversations.find(c => c.id === command.conversationId)?.assignment) progress(projectOfGroup(command.conversationId)?.id)
       break
     case 'route.record': {
       head()
-      progress(projectOfGroup(command.conversationId)?.id)
       const pick = command.decision.candidates.find(c => c.id === command.decision.pick)
       if (pick?.kind === 'member') agent(pick.agentId)
       break
@@ -166,13 +202,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'route.modelResult':
       group(context.routeDecision?.conversationId)
       break
-    case 'conversation.audience': {
-      // Rule (b): everyone the change removes sees it through their own part (design section 1.2).
-      const kept = new Set(effects.state.conversations.find(c => c.id === command.conversationId)?.audience?.people.map(p => p.id))
-      for (const person of before.conversations.find(c => c.id === command.conversationId)?.audience?.people ?? []) if (!kept.has(person.id)) member(person.id)
-      group(leadGroupOf(projectOfGroup(command.conversationId)?.id))
-      break
-    }
     case 'agent.screen': case 'agent.input':
       leadCheck(agentProject(command.agentId))
       break

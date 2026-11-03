@@ -139,6 +139,12 @@ describe('discovery', () => {
       expect(mode, 'this fixture must name a mode').not.toBeNull()
     })
 
+    it('tells a Codex Buddy\'s read-only asking mode from plain read only, so a relaunch keeps it asking', () => {
+      expect(permissionModeFromArgv('codex', 'codex --ask-for-approval on-request --sandbox read-only -c approvals_reviewer="user" -c tui.fullscreen_transcript=false'))
+        .toBe('readOnlyAsk')
+      expect(permissionModeFromArgv('codex', 'codex --sandbox read-only')).toBe('readOnly')
+    })
+
     it('adopts the engine someone typed into a terminal, and announces it', async () => {
       const log = vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = setup()

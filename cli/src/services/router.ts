@@ -98,7 +98,8 @@ export function startRouter(core: CoreApi, router: Router = defaultRouter(core))
         router.log?.(`${verdict.kind === 'session' ? 'session' : verdict.kind === 'new' ? `new (${verdict.why})` : `nothing decided (${verdict.why})`} — ${verdict.trace}`)
         if (verdict.kind === 'unavailable') return { error: 'JEV_UNAVAILABLE', detail: verdict.why }
         return verdict.kind === 'session'
-          ? { decided: 'session', id: verdict.id, via: 'jev' }
+          // `p` and `trace` for a caller that shows or logs why (`harness route`): names and odds only, never the words.
+          ? { decided: 'session', id: verdict.id, via: 'jev', p: verdict.p, trace: verdict.trace }
           : { decided: 'new', via: verdict.via, reason: verdict.why, ...(verdict.project ? { project: verdict.project } : {}), ...(verdict.agent ? { agent: verdict.agent } : {}) }
       } finally { pending.delete(request) }
     },

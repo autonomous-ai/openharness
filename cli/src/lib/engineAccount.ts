@@ -16,6 +16,7 @@
  * every launch (`~/.claude.json`, which Harness's own folder trust writes too) would not say which
  * engine the person works in.
  */
+import { isCodexRelayAuth } from './subscriptionRelay.js'
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { readdir, readFile, stat } from 'node:fs/promises'
@@ -107,6 +108,8 @@ export async function engineAccount(engine: AgentEngine, deps: EngineAccountDeps
     const lastUsedAt = deps.lastUsed === false ? null : await newestDay(join(dir, 'sessions'))
     if (env.OPENAI_API_KEY) return { signedIn: true, lastUsedAt }
     const auth = await readJson(join(dir, 'auth.json'))
+    // The owner relay's sign-in (lib/subscriptionRelay.ts codexRelayAuth) is the relay's, not this account's own.
+    if (isCodexRelayAuth(auth)) return { signedIn: false, lastUsedAt }
     const tokens = auth?.tokens as Record<string, unknown> | null | undefined
     if (auth && (auth.OPENAI_API_KEY || (tokens && (tokens.access_token || tokens.refresh_token)))) {
       return { signedIn: true, lastUsedAt }

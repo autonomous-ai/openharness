@@ -1,10 +1,13 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { realpathSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { handoffIntentHash, type PreparedHandoff } from '../lib/handoffAuthority.js'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
+import { profileId } from '../lib/claudeProfiles.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { recordReplacement, replacementObservations } from './replacements.js'
+import { defaultCodexHome } from '../lib/codexProfiles.js'
+import { RebindSender, recordReplacement, replacementObservations } from './replacements.js'
+import { SuperTabHostError } from './wire.js'
 
 const roots: string[] = []
 afterEach(() => { for (const dir of roots.splice(0)) rmSync(dir, { force: true, recursive: true }) })
@@ -30,6 +33,23 @@ it('durably reports Change agent, and a new host can recover the exact replaceme
     type: 'agent.rebind', agentId: 'member', machineId: 'machine', projectId: 'project', previousHarnessId: 'old', harnessId: 'new',
     configuration: { engine: 'claude', model: 'sonnet', effort: 'high', contextWindow: null, engineVersion: null } } } })
   expect(await replacementObservations(f.core, 'machine', [f.row])).toEqual(observations)
+})
+
+it.each([
+  ['the default Claude account', {}, profileId('machine', 'claude', 'default')],
+  ['a Claude profile folder', { claudeHome: tmpdir() }, profileId('machine', 'claude', realpathSync(tmpdir()))],
+  ['a Codex profile folder', { engine: 'codex', codexHome: tmpdir() }, profileId('machine', 'codex', realpathSync(tmpdir()))],
+  ['a profile folder that is gone', { claudeHome: '/gone/.claude-x' }, profileId('machine', 'claude', '/gone/.claude-x')],
+  ['the default Codex account', { engine: 'codex' }, profileId('machine', 'codex', 'default')],
+  ['the default Codex home a native launch records', { engine: 'codex', codexHome: defaultCodexHome() }, profileId('machine', 'codex', 'default')],
+])('names the account of the replacement in agent.rebind: %s', async (_name, extra, expected) => {
+  const f = fixture()
+  Object.assign(f.next, extra)
+  f.old.engine = 'claude'
+  const payload = { ...f.payload, targetEngine: f.next.engine }
+  await recordReplacement(f.core, payload)
+  const [observation] = await replacementObservations(f.core, 'machine', [f.row])
+  expect((observation.body.command as { profileId: string }).profileId).toBe(expected)
 })
 
 it.each(['source-live', 'different-folder', 'different-engine', 'different-receipt', 'not-live', 'foreign-machine', 'stopping'])('holds a replacement with %s', async kind => {
@@ -87,4 +107,40 @@ it('does no history scan for a member whose current terminal is live', async () 
   vi.mocked(f.core.agents.byAgent).mockReturnValue(f.old as never)
   expect(await replacementObservations(f.core, 'machine', [f.row])).toEqual([])
   expect(f.core.agents.creationStatus).not.toHaveBeenCalled()
+})
+
+// An older backend's agent.rebind is strict and knows no profileId: it still gets the rebind (a CLI ahead of its backend).
+const observation = { path: '/api/super-tabs/tab/commands', body: { operationId: 'op', asAgentId: 'member', command: { type: 'agent.rebind', agentId: 'member', profileId: 'abcdef0123456789', harnessId: 'new' } } }
+it('sends the rebind again without profileId when the backend refuses the field, and remembers it for ten minutes', async () => {
+  let now = 1000
+  const sent: Array<Record<string, unknown>> = []
+  const strict = vi.fn(async (_path: string, body: unknown) => {
+    const command = (body as { command: Record<string, unknown> }).command
+    sent.push(command)
+    if ('profileId' in command) throw new SuperTabHostError('VALIDATION_ERROR', 'command.profileId: Unrecognized key', 400)
+  })
+  const sender = new RebindSender(strict, () => now)
+  await sender.post(observation)
+  expect(sent.map(c => 'profileId' in c)).toEqual([true, false])
+  await sender.post(observation)
+  expect(sent.map(c => 'profileId' in c)).toEqual([true, false, false])
+  now += 10 * 60_000 + 1
+  await sender.post(observation)
+  expect(sent.map(c => 'profileId' in c)).toEqual([true, false, false, true, false])
+})
+
+it('a new backend gets profileId, and any other failure is thrown, not remembered as a refusal', async () => {
+  const send = vi.fn(async () => {})
+  await new RebindSender(send, () => 0).post(observation)
+  expect(send).toHaveBeenCalledOnce()
+  expect((send.mock.calls[0] as unknown as [string, { command: Record<string, unknown> }])[1].command).toHaveProperty('profileId')
+  const down = vi.fn(async () => { throw new SuperTabHostError('BACKEND_UNAVAILABLE', 'down') })
+  await expect(new RebindSender(down, () => 0).post(observation)).rejects.toThrow('down')
+  expect(down).toHaveBeenCalledOnce()
+  // A 400 the stripped form gets too is the command's own fault, not the field's: nothing is remembered.
+  const bad = vi.fn(async () => { throw new SuperTabHostError('VALIDATION_ERROR', 'bad', 400) })
+  const sender = new RebindSender(bad, () => 0)
+  await expect(sender.post(observation)).rejects.toThrow('bad')
+  await expect(sender.post(observation)).rejects.toThrow('bad')
+  expect(bad).toHaveBeenCalledTimes(4)
 })

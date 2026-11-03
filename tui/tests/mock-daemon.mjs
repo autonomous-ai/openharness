@@ -54,6 +54,14 @@ if (process.env.MOCK_PROJECT_SEARCH === '1') {
       `autonomous-harness-2026-${String(i).padStart(3, '0')}`, 'main'))
   }
 }
+if (process.env.MOCK_OLD_HARNESSES === '1') {
+  // A month-old history in a folder of its own, for the harness list's `▸ N older`.
+  for (let i = 0; i < 25; i++) {
+    const older = new Date(Date.parse(now) - (30 + i) * 86_400_000).toISOString()
+    agents[LOCAL].push(project({ ...agent(`old-${i}`, `Old session ${i}`, i % 2 ? 'opencode' : 'codex', 'stopped'), createdAt: older, updatedAt: older },
+      'old-repo', 'main'))
+  }
+}
 if (process.env.MOCK_SHARED_LAYOUT === '1') {
   for (let i = 1; i <= 9; i++) agents[LOCAL].push(agent(`shared-layout-${i}`, `Shared pane ${i}`, 'terminal'))
 }
@@ -241,6 +249,8 @@ const server = http.createServer((req, res) => {
     return
   }
   if (req.url === '/api/status') return json(res, { machineId: LOCAL, signedIn: true, version: 'mock', webUrl: process.env.MOCK_WEB_URL || 'https://harness.example' })
+  // Whose account it is: the side bar's account button names the email's user (`dev.tester`).
+  if (req.url === '/api/auth/me') return json(res, { user: { email: 'dev.tester@example.test' } })
   if (req.url === '/api/machines') return json(res, { machines: [
     { machineId: LOCAL, name: process.env.MOCK_PROJECT_SEARCH === '1' ? 'M2' : DEMO ? 'studio' : 'mock-local', status: 'running' },
     { machineId: REMOTE, name: process.env.MOCK_PROJECT_SEARCH === '1' ? 'office' : DEMO ? 'gpu-box' : 'mock-remote', status: 'running' },

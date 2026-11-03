@@ -182,7 +182,7 @@ describe('authenticated user resolution', () => {
       externalId: 'stag-sub-1',
       email: 'owner@example.com',
       autonomousEnv: 'stag',
-    }))
+    }), { existing })
     expect(findByExternal).not.toHaveBeenCalled()
   })
 
@@ -197,7 +197,7 @@ describe('authenticated user resolution', () => {
     expect(upsertFromSso).toHaveBeenCalledWith(expect.objectContaining({
       email: 'new@example.com',
       signUpAttribution: { source: 'app', rid: 'r-123' },
-    }))
+    }), { existing: null })
   })
 
   it('claims a prod provisional row by User.externalId', async () => {

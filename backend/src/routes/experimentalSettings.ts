@@ -12,7 +12,7 @@ export async function experimentalSettingsRoutes(app: FastifyInstance, opts: { d
   const available = (user: { sub: string; email?: string | null } | undefined) => ({
     focus_bar_creature: daemonsFor(opts.daemons ?? DAEMONS_DARK, user), share_button: true, devices_tab: true,
     agents_start_agents: true, agent_pull_request_line: true, agent_messages: true, agent_messages_hide_summary: true,
-    agents_tell_agents: true,
+    agents_tell_agents: true, programs_reply: true,
   })
   app.get('/api/experimental-settings', async (req, reply) => {
     sendSuccess(reply, { accountId: req.user!.sub, ...await readExperimentalSettings(req.user!.sub), available: available(req.user) })

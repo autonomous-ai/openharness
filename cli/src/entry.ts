@@ -13,6 +13,7 @@
  *
  * Nothing heavy may be imported statically here: it would be evaluated by every process.
  */
+import './lib/connectWait.js'
 import { fileURLToPath } from 'node:url'
 
 const [, , command, name] = process.argv

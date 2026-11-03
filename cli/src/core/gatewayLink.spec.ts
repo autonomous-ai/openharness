@@ -479,6 +479,9 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(await lane.open('m2', { type: 'agents_list_result' })).toEqual({ frame: { type: 'agents_list_result', payload: {} } })
     answer = { unreadable: true }
     expect(await lane.open('m2', { type: 'agents_list_result' })).toEqual({ unreadable: true })
+    // A new epoch is the far daemon restarted, not a frame that does not open: the lane renews for it.
+    answer = { unknownEpoch: true, unreadable: true }
+    expect(await lane.open('m2', { type: 'commander_question' })).toEqual({ unknownEpoch: true })
     lane.drop('m2')
     expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.lane, { op: 'drop', machineId: 'm2' }, LANE_WAIT_MS)
     // The gateway not there (or failed): no session is started, nothing is sealed or opened.
@@ -808,6 +811,14 @@ describe('account HTTP owned by the gateway', () => {
     expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.backend, { method: 'GET', path: '/api/auth/me' }, 25_000)
     await link.ops.backend('PATCH', '/api/machines/m1', { name: 'Laptop' })
     expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.backend, { method: 'PATCH', path: '/api/machines/m1', body: { name: 'Laptop' } }, 25_000)
+    // A busy answer's Retry-After crosses to the core, so the daemon can pass it on to the Desktop's reports.
+    const busy = { success: false, error: { code: 'USAGE_WRITE_CONFLICT' } }
+    call.mockResolvedValueOnce({ status: 429, body: busy, retryAfterMs: 90_000 })
+    expect(await link.ops.backend('POST', '/api/product-usage/report', {})).toEqual({ status: 429, body: busy, retryAfterMs: 90_000 })
+    for (const junk of [-1, Number.NaN, 'PRIVATE', null]) {
+      call.mockResolvedValueOnce({ status: 429, body: busy, retryAfterMs: junk })
+      expect(await link.ops.backend('POST', '/api/product-usage/report', {})).toEqual({ status: 429, body: busy })
+    }
     call.mockResolvedValueOnce({ name: 'private-grid' })
     expect(await link.ops.mintGridName()).toBe('private-grid')
     call.mockResolvedValueOnce({})

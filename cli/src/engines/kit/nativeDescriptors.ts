@@ -92,8 +92,11 @@ async function linuxDescriptors(pid: number, budget: NativeEvidenceBudget): Prom
 
 export async function readDescriptorEvidence(pid: number, budget: NativeEvidenceBudget): Promise<DescriptorEvidence> {
   if (!Number.isSafeInteger(pid) || pid <= 0) return nativeUnavailable('the native descriptor owner is invalid')
+  // `-w`: lsof warns on stderr about any file system it cannot stat, its own process's files complete regardless, and
+  // the probe reads stderr as failure. A Harness Team account cannot stat its owner's OrbStack NFS mount under their home,
+  // so no Codex session there was ever confirmed and each start failed at 3 minutes (Mac Auto, 2026-10-29).
   const read = () => process.platform === 'linux' ? linuxDescriptors(pid, budget)
-    : nativeProbe('lsof', ['-n', '-P', '-p', String(pid), '-F0pftDin'], budget, 1024 * 1024)
+    : nativeProbe('lsof', ['-n', '-P', '-w', '-p', String(pid), '-F0pftDin'], budget, 1024 * 1024)
       .then(output => parseDescriptors(output, pid, budget))
   const descriptors = await read(), before = signature(descriptors)
   return { descriptors, verify: async () => {

@@ -1,13 +1,20 @@
 import 'harness_attachments.dart';
+import 'lead_placement.dart';
 
-class HarnessLaunchRole {
-  const HarnessLaunchRole({
-    required this.id,
-    required this.name,
-    required this.kind,
+/// A new project's Product Manager the Swarm starts rather than this
+/// Desktop, on [machineId].
+class LeadSwarmStart {
+  const LeadSwarmStart({
+    required this.machineId,
+    required this.engine,
+    required this.repositoryUrl,
+    required this.title,
+    required this.task,
+    this.files = const [],
   });
-  final String id, name, kind;
-  String get swarmRole => kind == 'reviewer' ? 'review' : 'dev';
+  final String? repositoryUrl, title;
+  final String machineId, engine, task;
+  final List<HarnessAttachment> files;
 }
 
 /// An optional destination around the existing New Harness launch. Preparing
@@ -31,21 +38,22 @@ class HarnessLaunchIntegration {
     this.forcedPermissionMode,
     this.swarmRole,
     this.swarmSkillMode,
-    this.roles,
-    this.roleId,
+    this.roleSuggestions,
+    this.roleName,
+    this.startInSwarm,
   });
   final String creationId, actionLabel;
   String? swarmRole;
   String? swarmSkillMode;
-  final List<HarnessLaunchRole>? roles;
-  String? roleId;
 
-  void chooseRole(String id) {
-    final selected = roles?.where((role) => role.id == id).firstOrNull;
-    if (selected == null) return;
-    roleId = selected.id;
-    swarmRole = selected.swarmRole;
-  }
+  /// An agent joining a project that has instructions names its role in free
+  /// text; these are the document's role headings, offered as suggestions.
+  /// Null hides the field: the coordinator's own start, a new project, or a
+  /// Swarm from before instructions. Empty (the read failed) keeps it free.
+  final List<String>? roleSuggestions;
+
+  /// The role typed; empty or null sends none and the server names the agent.
+  String? roleName;
 
   // Restores the person's original request from a destination launch journal.
   final String? initialTask;
@@ -55,7 +63,24 @@ class HarnessLaunchIntegration {
   final String? forcedPermissionMode;
   String? projectVisibility;
   bool projectVisibilityLocked;
-  final Future<String> Function(String machineId, String task) prepare;
+
+  /// A new project in a Swarm: the Swarm's machines its Product Manager may
+  /// start on, best first. The form then shows only the task, repo and
+  /// visibility, with the machine on a "Product Manager:" line. Null keeps
+  /// the ordinary machine, agent and folder controls.
+  List<LeadMachine>? leadMachines;
+
+  /// With [leadMachines]: creates the project and has the Swarm start its
+  /// Product Manager, when this Desktop does not start it itself.
+  final Future<void> Function(LeadSwarmStart start)? startInSwarm;
+
+  /// With [leadMachines]: the Swarm's model list for its engine and model.
+  LeadModelList? leadModels;
+
+  /// Before anything is created: the prompt for [task], which a destination
+  /// may refuse for [machineId] and [engine], the engine about to start.
+  final Future<String> Function(String machineId, String task, String engine)
+  prepare;
   final Future<void> Function(String machineId, String harnessId) complete;
   final Future<void> Function(String machineId, String creationId) beforeSubmit;
   Future<void> Function()? resume;
@@ -64,6 +89,10 @@ class HarnessLaunchIntegration {
   final bool Function()? needsAttachmentReview;
   final Future<void> Function(bool resend)? resolveAttachments;
   bool pending = false;
+
+  /// The model and effort the launch asked for that its machine refused, so
+  /// the agent runs its engine's own model: its join says so in the chat.
+  ({String model, String effort})? launchModelRefused;
   bool completed = false;
   String? preparedPrompt;
   // What a request was sent with. The journal keeps them, and a [pending]

@@ -40,9 +40,14 @@ async function tellRecipient(shareId: string): Promise<void> {
     const share = await prisma.harnessShare.findUnique({ where: { id: shareId } })
     if (!share) return
     const recipient = await prisma.user.findUnique({ where: { email: share.recipientEmail }, select: { id: true } })
-    if (!recipient) return
-    await publishDeviceMachineListChanged(recipient.id, { reason: 'harness_shares' })
-    logger.info('harness share: told the recipient it changed', { shareId, recipientId: recipient.id })
+    if (recipient) {
+      await publishDeviceMachineListChanged(recipient.id, { reason: 'harness_shares' })
+      logger.info('harness share: told the recipient it changed', { shareId, recipientId: recipient.id })
+    }
+    // A private link admits the recipient only through this invitation (harnessLinks.ts recipientLink): its viewers check again.
+    const links = await prisma.harnessLink.findMany({ where: { ownerId: share.ownerId, machineId: share.machineId, agentId: share.agentId,
+      autonomousEnv: share.autonomousEnv, revokedAt: null, visibility: { not: 'public' } }, select: { id: true } })
+    for (const link of links) await publishShareChanged(link.id)
   } catch { /* best effort */ }
 }
 
@@ -66,10 +71,8 @@ export async function harnessShareRoutes(app: FastifyInstance): Promise<void> {
       recipientEmail: req.user!.email.trim().toLowerCase(), autonomousEnv: req.user!.autonomousEnv,
       revokedAt: null, expiresAt: { gt: new Date() },
     }, orderBy: { createdAt: 'asc' }, take: 1000 })
-    const visible: typeof shares = []
-    for (const share of shares) {
-      if (await new SuperTabStore(prisma).mayOpenShare(req.user!, share)) visible.push(share)
-    }
+    // All at once: share by share, each loaded its whole Swarm again (prod 2026-10-28, p95 13.4 s).
+    const visible = await new SuperTabStore(prisma).openableShares(req.user!, shares)
     const machines = await prisma.machine.findMany({ where: {
       machineId: { in: [...new Set(visible.map(s => s.machineId))] },
       autonomousEnv: req.user!.autonomousEnv, ...machineAlive,

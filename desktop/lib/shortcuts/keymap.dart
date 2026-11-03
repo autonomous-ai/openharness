@@ -3,6 +3,9 @@ import 'dart:convert';
 enum KeymapContext {
   workspace,
   terminal,
+
+  /// Swarm chat navigation; a focused terminal keeps its own scope.
+  swarmChat,
   picker,
 
   /// Project-menu bindings layer over picker bindings (for example, o opens

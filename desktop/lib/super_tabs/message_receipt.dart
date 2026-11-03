@@ -1,19 +1,26 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 
 import '../core/models.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/app_state.dart';
-import '../state/harness_activity.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'machine_status.dart';
 import 'model.dart';
 
-/// The approved receipt line, scoped by the chat to its newest own message.
-/// No new transport is inferred: missing native activity simply reads Delivered.
+/// How long a queued delivery's claims fail before its sender is told, and how
+/// long a queued message waits with no claim fields before the same (prod 10-30,
+/// v1.3.71: claims failed for two hours and nothing showed).
+const superTabClaimFailingNotice = Duration(seconds: 60);
+const superTabQueuedNotice = Duration(minutes: 2);
+
+/// The line under the chat's newest own message, shown only while it sends,
+/// when it was not sent, or when its delivery needs a hand; a message that
+/// arrived carries none, as in Slack.
 class SuperTabMessageReceipt extends StatefulWidget {
   const SuperTabMessageReceipt({
     super.key,
@@ -23,7 +30,7 @@ class SuperTabMessageReceipt extends StatefulWidget {
     required this.onAddLead,
     required this.machineName,
     this.app,
-    this.now = DateTime.now,
+    this.now,
   });
   final SuperTabMessage message;
   final SuperTabController controller;
@@ -31,7 +38,9 @@ class SuperTabMessageReceipt extends StatefulWidget {
   final void Function(SuperTabDelivery delivery, String resolution) onResolve;
   final VoidCallback onAddLead;
   final String Function(String machineId) machineName;
-  final DateTime Function() now;
+
+  /// Defaults to the package clock, which tests move (a const default cannot).
+  final DateTime Function()? now;
 
   @override
   State<SuperTabMessageReceipt> createState() => _SuperTabMessageReceiptState();
@@ -74,7 +83,7 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
     if (mounted) setState(() {});
   }
 
-  void _clock(bool needed) {
+  void _clock(bool needed, [Duration? until]) {
     _timer?.cancel();
     final lifecycle = WidgetsBinding.instance.lifecycleState;
     if (!needed ||
@@ -82,7 +91,9 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
         (lifecycle != null && lifecycle != AppLifecycleState.resumed)) {
       return;
     }
-    _timer = Timer(const Duration(milliseconds: 500), _changed);
+    // A notice threshold is one wake-up at its time, not a tick every 500 ms.
+    final wait = until ?? const Duration(milliseconds: 500);
+    _timer = Timer(wait.isNegative ? Duration.zero : wait, _changed);
   }
 
   @override
@@ -93,16 +104,6 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
     super.dispose();
   }
 
-  String _clockText(Duration value) {
-    final seconds = value.inSeconds.clamp(0, 1 << 31);
-    return '${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')}';
-  }
-
-  String _replyDuration(Duration value) {
-    final seconds = value.inSeconds.clamp(0, 1 << 31);
-    return seconds < 60 ? '${seconds}s' : '${seconds ~/ 60}m ${seconds % 60}s';
-  }
-
   @override
   Widget build(BuildContext context) {
     final message = widget.message, c = widget.controller;
@@ -111,7 +112,7 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
     final name =
         c.snapshot?.agentName(delivery?.agentId ?? '', fallback: 'Lead') ??
         'Lead';
-    final now = widget.now();
+    final now = widget.now?.call() ?? clock.now();
     final machine = c.snapshot?.machines
         .where((m) => m['machineId'] == agent?.machineId)
         .firstOrNull;
@@ -135,28 +136,48 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
                             : now.difference(readingAt),
                       ) ==
                       SuperTabMachineStatus.offline);
-    final working =
-        delivery?.delivered == true &&
-        agent != null &&
-        widget.app != null &&
-        harnessActivity(widget.app!, agent.machineId, agent.harnessId) ==
-            HarnessActivity.working;
     final fresh =
         delivery?.pending == true &&
         message.createdAt != null &&
         now.difference(message.createdAt!) < const Duration(seconds: 3);
-    var color = DesktopChrome.muted;
-    var icon = AppIcons.check;
-    String title = 'Sent';
-    String? detail, note, elapsed;
+    // A queued delivery to a running agent on an online, readable Swarm that is
+    // not getting in: its claims fail, or no claim fields came (an older backend)
+    // and it just sits. Either reason shows the line, so it never drops out
+    // when the other one starts.
+    final queued =
+        delivery?.status == 'queued' &&
+        agent != null &&
+        agent.downSince == null &&
+        !offline &&
+        !c.backendUnreachable;
+    final failingSince = delivery?.claimFailingSince;
+    final failingAt = failingSince?.add(superTabClaimFailingNotice);
+    final queuedAt = message.createdAt?.add(superTabQueuedNotice);
+    final stuck =
+        queued &&
+        ((failingAt != null && !failingAt.isAfter(now)) ||
+            (queuedAt != null && !queuedAt.isAfter(now)));
+    // Until a threshold is crossed the receipt must tick by itself: no snapshot
+    // arrives to rebuild it. The earlier of the two is the next to cross.
+    final upcoming = [
+      failingAt,
+      queuedAt,
+    ].whereType<DateTime>().where((t) => t.isAfter(now));
+    final nextAt = queued && !stuck && upcoming.isNotEmpty
+        ? upcoming.reduce((a, b) => a.isBefore(b) ? a : b)
+        : null;
+    final error = Theme.of(context).colorScheme.error;
+    var color = error;
+    var icon = AppIcons.triangleAlert;
+    // Like Slack, a message that went where it was sent carries no line: only
+    // sending, not sending and what needs a hand show (Dee, 10-29).
+    String? title, note;
     bool sending = false;
     final actions = <(String, VoidCallback?)>[];
     final canResolve = c.canWrite && !c.saving && delivery?.id != null;
 
     if (delivery?.status == 'uncertain') {
       title = "Couldn't confirm delivery";
-      icon = AppIcons.triangleAlert;
-      color = Theme.of(context).colorScheme.error;
       note =
           "$name's computer may have typed this into the terminal without confirming. Check the terminal before sending again, or it could run twice.";
       for (final (label, resolution) in [
@@ -171,116 +192,138 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
               : null,
         ));
       }
-    } else if (delivery?.status == 'answered') {
-      title = 'Replied';
-      icon = AppIcons.checkCheck;
-      final answer = delivery?.answeredAt ?? delivery?.updatedAt;
-      final start = delivery?.deliveredAt ?? message.createdAt;
-      if (answer != null && start != null) {
-        title += ' · ${_replyDuration(answer.difference(start))}';
-      }
-    } else if (delivery?.delivered == true) {
-      icon = AppIcons.checkCheck;
-      final at = (delivery!.deliveredAt ?? delivery.updatedAt)?.toLocal();
-      title = at == null
-          ? 'Delivered'
-          : 'Delivered ${at.hour.toString().padLeft(2, '0')}:${at.minute.toString().padLeft(2, '0')}';
-      if (working) {
-        color = DesktopChrome.accent;
-        detail = '$name is working';
-        if (delivery.deliveredAt != null) {
-          elapsed = _clockText(now.difference(delivery.deliveredAt!));
-        }
-      }
     } else if (delivery == null &&
         c.selected?.leadId == null &&
-        // Every person reads the Product Managers' conversation; a post there
-        // stands even before any Product Manager receives it.
-        c.selected?.id != c.snapshot?.leadsConversationId) {
+        // A Buddy chat has no Lead: its Buddy takes the message.
+        c.selected?.isBuddyChat != true) {
       title = 'Not sent · this chat has no Lead';
-      icon = AppIcons.triangleAlert;
-      color = Theme.of(context).colorScheme.error;
       actions.add(('Add a Lead', c.canWrite ? widget.onAddLead : null));
     } else if (delivery?.status == 'cancelled') {
       title = 'Not sent';
-      icon = AppIcons.triangleAlert;
-      color = Theme.of(context).colorScheme.error;
     } else if (delivery?.pending == true && offline) {
       color = grid.AppPalette.warn;
-      detail = "$name's computer is offline";
+      icon = AppIcons.cloudOff;
+      title = "$name's computer is offline";
       final host =
           machine?['name'] as String? ?? widget.machineName(agent!.machineId);
       note = readingAt == null
           ? "$host is offline. Your message goes in when it's back online."
           : "$host was last seen ${superTabAgo(now.difference(readingAt))}. Your message goes in when it's back online.";
+    } else if (stuck) {
+      // Queued to an online computer with no line read as delivered (prod 10-30).
+      // Nothing to do for the sender: Send again would queue behind the same failure.
+      color = grid.AppPalette.warn;
+      icon = AppIcons.clock;
+      title = 'Not delivered yet';
+      final host =
+          machine?['name'] as String? ?? widget.machineName(agent.machineId);
+      note = failingSince != null
+          ? "$host is online but couldn't take this message yet. Harness keeps trying, and it goes in as soon as it can."
+          : "$host is online but hasn't picked this message up yet. Harness keeps trying, and it goes in as soon as it can.";
     } else if (fresh) {
+      color = DesktopChrome.muted;
       title = 'Sending…';
       sending = true;
     }
-    _clock(fresh || working || (delivery?.pending == true && offline));
-    final style = DesktopChrome.metadata(color: color).copyWith(
-      fontSize: 12,
-      fontFeatures: const [FontFeature.tabularFigures()],
-    );
-    final motion = !MediaQuery.disableAnimationsOf(context);
+    final ticking = fresh || (delivery?.pending == true && offline);
+    _clock(ticking || nextAt != null, ticking ? null : nextAt?.difference(now));
+    if (title == null) return const SizedBox.shrink();
+    final style = superTabReceiptStyle(color);
     final parts = <Widget>[
-      if (sending && motion)
-        SizedBox(
-          width: 12,
-          height: 12,
-          child: CircularProgressIndicator(strokeWidth: 1.5, color: color),
-        )
+      if (sending)
+        _sendingMark(context, color)
       else
-        Icon(sending ? AppIcons.loaderCircle : icon, size: 14, color: color),
+        Icon(icon, size: 14, color: color),
       Text(title, style: style),
-      if (detail != null) ...[
-        Text('·', style: style),
-        Text(detail, style: style),
-      ],
-      if (working) ...[
-        ExcludeSemantics(
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (var i = 0; i < 3; i++)
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 1.5),
-                  child: Opacity(
-                    opacity:
-                        !motion || (now.millisecondsSinceEpoch ~/ 500) % 3 == i
-                        ? 1
-                        : .25,
-                    child: Container(
-                      width: 4,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: color,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-        if (elapsed != null) Text(elapsed, style: style),
-      ],
       for (final (label, action) in actions) ...[
         Text('·', style: style),
-        TextButton(
-          onPressed: action,
-          style: TextButton.styleFrom(
-            foregroundColor: DesktopChrome.accent,
-            padding: const EdgeInsets.symmetric(horizontal: 2),
-            minimumSize: const Size(0, 32),
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            textStyle: style,
-          ),
-          child: Text(label),
-        ),
+        _receiptAction(label, action, style),
       ],
     ];
-    return Padding(
+    return _receiptLine(
+      parts,
+      below: [
+        if (note != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: .09),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                child: Text(
+                  note,
+                  style: DesktopChrome.metadata().copyWith(
+                    fontSize: 12,
+                    height: 1.45,
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// Sending's mark: a small spinner, or a still loader when motion is off.
+Widget _sendingMark(BuildContext context, Color color) =>
+    MediaQuery.disableAnimationsOf(context)
+    ? Icon(AppIcons.loaderCircle, size: 14, color: color)
+    : SizedBox(
+        width: 12,
+        height: 12,
+        child: CircularProgressIndicator(strokeWidth: 1.5, color: color),
+      );
+
+/// A receipt line's text: small metadata in [color], with figures that keep
+/// their width as a clock counts.
+TextStyle superTabReceiptStyle(Color color) => DesktopChrome.metadata(
+  color: color,
+).copyWith(fontSize: 12, fontFeatures: const [FontFeature.tabularFigures()]);
+
+/// An action on a receipt line, read as a link in the line's text; a
+/// destructive one passes the error [color].
+Widget _receiptAction(
+  String label,
+  VoidCallback? onPressed,
+  TextStyle style, {
+  Color? color,
+}) => TextButton(
+  onPressed: onPressed,
+  // Quiet, as inline controls are: no fill or rim at rest, the shared hover
+  // wash, and the focus ring for the keyboard. Every receipt action (Retry,
+  // Delete, Add a Lead, Open terminal, Send again, It arrived) is drawn here.
+  style:
+      TextButton.styleFrom(
+        foregroundColor: color ?? DesktopChrome.accent,
+        backgroundColor: Colors.transparent,
+        // Given a foreground, styleFrom tints hover with it; quiet controls
+        // share the neutral wash the theme's buttons and rows use.
+        overlayColor: grid.AppSurface.hoverFill,
+        padding: const EdgeInsets.symmetric(horizontal: 2),
+        minimumSize: const Size(0, 32),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        textStyle: style,
+      ).copyWith(
+        side: WidgetStateProperty.resolveWith(
+          (states) => BorderSide(
+            width: grid.AppDesktop.focusWidth,
+            color: states.contains(WidgetState.focused)
+                ? DesktopChrome.focusRing
+                : Colors.transparent,
+          ),
+        ),
+      ),
+  child: Text(label),
+);
+
+/// The line under a message: [parts] in a row that wraps, announced as it
+/// changes, with [below] under it.
+Widget _receiptLine(List<Widget> parts, {List<Widget> below = const []}) =>
+    Padding(
       padding: const EdgeInsets.only(top: 6),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -294,31 +337,62 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
               children: parts,
             ),
           ),
-          if (note != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: .09),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 6,
-                  ),
-                  child: Text(
-                    note,
-                    style: DesktopChrome.metadata().copyWith(
-                      fontSize: 12,
-                      height: 1.45,
-                    ),
-                  ),
-                ),
-              ),
-            ),
+          ...below,
         ],
       ),
     );
+
+/// The line under a message the transcript does not hold yet: Sending…, or
+/// Not sent with what can be done about it (design: Ken, 10-28).
+class SuperTabOutgoingReceipt extends StatelessWidget {
+  const SuperTabOutgoingReceipt({
+    super.key,
+    required this.message,
+    required this.onDelete,
+    this.onRetry,
+    this.inline = false,
+  });
+  final SuperTabOutgoing message;
+  final bool inline;
+
+  Widget _line(List<Widget> parts) => inline
+      ? Semantics(
+          liveRegion: true,
+          child: Wrap(
+            spacing: grid.AppDesktop.controlGap,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: parts,
+          ),
+        )
+      : _receiptLine(parts);
+
+  /// Null while it cannot be done now, as during another send.
+  final VoidCallback? onRetry;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    if (message.state == SuperTabOutgoingState.sending) {
+      final style = superTabReceiptStyle(DesktopChrome.muted);
+      return _line([
+        if (!inline) _sendingMark(context, DesktopChrome.muted),
+        Text('Sending…', style: style),
+      ]);
+    }
+    final color = Theme.of(context).colorScheme.error;
+    final style = superTabReceiptStyle(color);
+    final refused = message.state == SuperTabOutgoingState.refused;
+    return _line([
+      Icon(AppIcons.triangleAlert, size: 14, color: color),
+      Text('Not sent', style: style),
+      if (refused && message.error != null) ...[
+        Text('·', style: style),
+        Text(message.error!, style: style),
+      ],
+      Text('·', style: style),
+      _receiptAction('Retry', onRetry, style),
+      Text('·', style: style),
+      _receiptAction('Delete', onDelete, style, color: color),
+    ]);
   }
 }

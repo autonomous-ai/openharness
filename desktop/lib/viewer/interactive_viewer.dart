@@ -30,7 +30,10 @@ class InteractiveViewerSession extends ChangeNotifier {
   bool Function()? focusInput;
   final _events = <Map<String, dynamic>>[];
   Timer? _timer;
-  bool _disposed = false, _busy = false, _reload = false;
+  bool _disposed = false, _busy = false, _reload = false, _paused = false;
+
+  /// Bumped by every pause, so a frame asked for before one is never taken as an answer after it.
+  int _pauses = 0;
   int _width = 0, _height = 0;
   bool _dark = true;
 
@@ -39,11 +42,33 @@ class InteractiveViewerSession extends ChangeNotifier {
     _width = size.width.round().clamp(160, 1920);
     _height = size.height.round().clamp(120, 1200);
     _dark = dark;
-    if (!_busy && _timer == null) _schedule(Duration.zero);
+    if (!_busy && _timer == null && !_paused) _schedule(Duration.zero);
+  }
+
+  /// Out of sight: pull nothing, and have the machine close its renderer now rather than after its
+  /// 30-second idle timeout. The rendered page runs for as long as its renderer does, and a Harness
+  /// Monitor page keeps its viewer reading every machine on the account while it runs (2026-10-28).
+  /// Back in sight, the next frame starts a fresh renderer; the last picture stays meanwhile.
+  bool get paused => _paused;
+  set paused(bool value) {
+    if (_disposed || value == _paused) return;
+    _paused = value;
+    if (value) {
+      _pauses++;
+      _timer?.cancel();
+      _timer = null;
+      _events.clear();
+      unawaited(
+        request({'surfaceId': id, 'op': 'close'})
+            .catchError((_) => <String, dynamic>{}),
+      );
+    } else if (!_busy) {
+      _schedule(Duration.zero);
+    }
   }
 
   void input(Map<String, dynamic> event) {
-    if (_disposed || error != null || image == null) return;
+    if (_disposed || _paused || error != null || image == null) return;
     // Mouse motion can be coalesced, but never across a press/release or key event.
     if (event['event'] == 'mouseMoved' &&
         _events.isNotEmpty &&
@@ -68,7 +93,7 @@ class InteractiveViewerSession extends ChangeNotifier {
     _events.clear();
     _reload = true;
     notifyListeners();
-    if (!_busy) _schedule(Duration.zero);
+    if (!_busy && !_paused) _schedule(Duration.zero);
   }
 
   void _schedule(Duration delay) {
@@ -80,8 +105,9 @@ class InteractiveViewerSession extends ChangeNotifier {
   }
 
   Future<void> _frame() async {
-    if (_disposed || _busy || _width == 0 || error != null) return;
+    if (_disposed || _paused || _busy || _width == 0 || error != null) return;
     _busy = true;
+    final pauses = _pauses;
     final events = List<Map<String, dynamic>>.of(_events);
     _events.clear();
     final reload = _reload;
@@ -96,7 +122,8 @@ class InteractiveViewerSession extends ChangeNotifier {
         'reload': reload,
         'events': events,
       });
-      if (_disposed) return;
+      // Paused while it was asked: the machine closed that renderer, and its answer is no news.
+      if (_disposed || pauses != _pauses) return;
       if (reply['error'] != null) {
         error =
             reply['detail'] as String? ??
@@ -115,12 +142,12 @@ class InteractiveViewerSession extends ChangeNotifier {
         }
       }
     } on WsRequestTimeout {
-      if (!_disposed) {
+      if (!_disposed && pauses == _pauses) {
         error =
             'Update Harness on this machine to use its viewer in the browser.';
       }
     } on WsRequestFailure catch (failure) {
-      if (!_disposed) {
+      if (!_disposed && pauses == _pauses) {
         error = failure.code == 'UNSUPPORTED'
             ? 'Update Harness on this machine to use its viewer in the browser.'
             : (failure.detail?.trim().isNotEmpty == true
@@ -128,14 +155,14 @@ class InteractiveViewerSession extends ChangeNotifier {
                   : 'The viewer disconnected. Reconnect and try again.');
       }
     } catch (_) {
-      if (!_disposed) {
+      if (!_disposed && pauses == _pauses) {
         error = 'The viewer disconnected. Reconnect and try again.';
       }
     } finally {
       _busy = false;
       if (!_disposed) {
         notifyListeners();
-        if (error == null) {
+        if (error == null && !_paused) {
           _schedule(
             _events.isEmpty && !_reload
                 ? const Duration(milliseconds: 160)

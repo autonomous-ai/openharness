@@ -88,10 +88,10 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('a Lead driving a worker\
     expect(scrolled.code, scrolled.out).toBe(0)
     expect(scrolled.out).toContain('Do you want to proceed?')
 
-    // Only the Lead of the worker's project may: the worker cannot read the Lead's terminal.
+    // A Product Manager's terminal is its owner's: the worker cannot read the Lead's.
     const refused = await superTab(W, tab, worker, ['screen', lead])
     expect(refused.code).toBe(1)
-    expect(JSON.parse(refused.out)).toMatchObject({ error: 'LEAD_REQUIRED' })
+    expect(JSON.parse(refused.out)).toMatchObject({ error: 'TERMINAL_PRIVATE' })
 
     // After 3 minutes on the prompt, one alert, and no more while it still waits.
     const alerts = async () => (await rows()).filter(m => m.source?.kind === 'terminal-alert')

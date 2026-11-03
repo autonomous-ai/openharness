@@ -1,0 +1,8 @@
+⏺ Bash(harness super-tab --tab t1 screen nico)
+  ⎿  ■ You've hit your usage limit. Try again at 4:08 PM.
+     › Ask Codex to do anything
+
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)

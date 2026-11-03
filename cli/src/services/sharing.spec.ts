@@ -34,11 +34,13 @@ describe('who a Super Tab lets watch a harness here', () => {
     expect(on.allows(grant('member', 'super:tab'))).toBe(true)
     expect(on.allows(grant('lead'))).toBe(false)
     expect(on.allows(grant('ordinary'))).toBe(true)
+    expect(on.paused(grant('member', 'super:tab'))).toBe(false)
     const off = shareObservers(core())
     expect(off.known()).toBeNull()
     expect(off.allows(grant('member', 'super:tab'))).toBe(false)
     expect(off.allows(grant('lead'))).toBe(false)
     expect(off.allows(grant('ordinary'))).toBe(true)
+    expect(off.paused(grant('member', 'super:tab'))).toBe(false)
   })
 })
 

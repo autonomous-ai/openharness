@@ -288,11 +288,11 @@ class _UnlockComputerPageState extends State<UnlockComputerPage> {
         _show(
           _Step.starting,
           // Unlocked and still not online: signed out (a sign-out keeps it on the account's list,
-          // offline), or off its Wi-Fi. Either way its hotspot is back for Set up a device.
+          // offline), or off its Wi-Fi. Either way its hotspot is back for Set up Intern 3.
           error:
               '$_name is unlocked but has not come online'
               '${_newWifi == null ? '' : ' on "$_newWifi"'}. If it was signed out, or its Wi-Fi is '
-              'wrong, it is waiting on "${widget.hotspotName}" to be set up: use Set up a device.',
+              'wrong, it is waiting on "${widget.hotspotName}" to be set up: use Set up Intern 3.',
         );
       }
     });
@@ -528,7 +528,7 @@ class _UnlockComputerPageState extends State<UnlockComputerPage> {
           if (_error.isNotEmpty) ...[
             TtyPrimaryButton(
               key: const Key('unlock-set-up'),
-              label: 'Set up a device',
+              label: 'Set up Intern 3',
               onPressed: () => Navigator.of(context).pushReplacement(
                 phoneRoute((_) => AddDevicePage(notifier: _app)),
               ),

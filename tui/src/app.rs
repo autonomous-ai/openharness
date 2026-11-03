@@ -108,6 +108,9 @@ pub fn scroll_settle_in(scrolled_at: Option<Instant>, now: Instant) -> Option<Du
 /// A frame that wrote more cells than this, one by one, is a burst worth one settle rewrite.
 pub const SETTLE_CELLS: usize = 400;
 
+/// The card on a pane of a machine this computer's daemon has no link to (NO_PEER_LINK).
+pub const NOT_LINKED: &str = "This machine is not linked here";
+
 /// When the next settle repaint was last owed: now when the overlay drawn last frame is gone or no
 /// longer covers where it was (it closed, shrank or moved: cells under its old edge may be kept
 /// wrongly), or the frame wrote over SETTLE_CELLS cells; otherwise what was owed already.
@@ -1407,6 +1410,29 @@ impl App {
         for machine in self.fleet.machines.iter_mut() { if !machine.online() && machine.reach == Reach::Unknown { machine.reach = Reach::Offline } }
     }
 
+    /// "Not linked" is what this computer's daemon answered then (NO_PEER_LINK, from its own pins), and a daemon
+    /// back from a restart or a sign-in may answer otherwise: signed out for a minute (a phone's Sign out, then
+    /// signed in again, 2026-10-28), it said so of every machine, and hn never dialled them again. A Mac in the
+    /// same trust group sat "Connecting…" and asked for its remote password until hn restarted. So each machine
+    /// read not linked is dialled once more when the daemon connects, its "not linked" card a connecting pane
+    /// again: one still unlinked answers at once, with no backend round trip, and the card comes back.
+    pub fn redial_unlinked(&mut self) {
+        let ids: Vec<String> = self.fleet.machines.iter()
+            .filter(|m| !m.local && m.reach == Reach::NeedsLink && !self.fleet.shares.contains_key(&m.id))
+            .map(|m| m.id.clone()).collect();
+        for id in ids {
+            if let Some(machine) = self.fleet.machine_mut(&id) { machine.reach = Reach::Unknown }
+            let name = self.fleet.machine_name(&id);
+            for pane in self.panes.values_mut().filter(|p| p.machine_id == id) {
+                if matches!(&pane.phase, Phase::Card { title, .. } if title == NOT_LINKED) {
+                    pane.phase = Phase::Connecting(format!("Connecting to {name}…"));
+                    pane.dirty = true;
+                }
+            }
+            if self.fleet.machine(&id).is_some_and(Machine::online) { self.connect(&id) }
+        }
+    }
+
     /// Dial [machine_id] when nothing is dialling it: no link, no retry pending (its backoff decides when), and this
     /// computer's daemon, which every link goes through, is up. For a dial asked on demand (composition `wake`),
     /// which a waiting command asks again every 100 ms.
@@ -1530,7 +1556,11 @@ impl App {
                 // seen.json again when its list comes back.
                 self.seen_rostered.remove(&machine_id);
                 if let Some(machine) = self.fleet.machine_mut(&machine_id) { machine.reach = Reach::Ready }
-                if machine_id == self.fleet.local_id && !crate::local::is_local(&machine_id) { self.daemon_down = false; crate::dial::reconnected(self) }
+                if machine_id == self.fleet.local_id && !crate::local::is_local(&machine_id) {
+                    self.daemon_down = false;
+                    crate::dial::reconnected(self);
+                    self.redial_unlinked();
+                }
                 self.relist(&machine_id);
                 self.push_theme();
                 // Its plans now, not at the next five-minute read: on a machine shared with this account
@@ -1611,7 +1641,7 @@ impl App {
                     pane.open_token += 1;
                     if !matches!(pane.phase, Phase::Card { .. }) {
                         pane.phase = if needs_link {
-                            Phase::Card { title: "This machine is not linked here".into(), detail: format!("Link it once with its remote password (machines, then C-l), or run:\nharness link connect {machine_id}"), keys: vec![("enter".into(), "retry".into()), (self.keymap.hint("choose-tree -m").unwrap_or_default(), "machines".into())] }
+                            Phase::Card { title: NOT_LINKED.into(), detail: format!("Link it once with its remote password (machines, then C-l), or run:\nharness link connect {machine_id}"), keys: vec![("enter".into(), "retry".into()), (self.keymap.hint("choose-tree -m").unwrap_or_default(), "machines".into())] }
                         } else {
                             Phase::Connecting(format!("Reconnecting to {}…", self.fleet.machine_name(&machine_id)))
                         };
@@ -7439,7 +7469,35 @@ mod recovery_tests {
         app.on_machine("test-peer".into(), 1, MachineEvent::Failed(RpcError::new("NO_PEER_LINK", "")));
         assert_eq!(app.fleet.machines[0].reach, Reach::NeedsLink);
         assert!(app.links["test-peer"].retry_at.is_none());
-        assert!(matches!(&app.panes[&1].phase, Phase::Card { title, .. } if title == "This machine is not linked here"));
+        assert!(matches!(&app.panes[&1].phase, Phase::Card { title, .. } if title == NOT_LINKED));
+    }
+
+    /// Signed out for a minute (a phone's Sign out) and in again: this computer's daemon answered "not linked"
+    /// for a Mac in the same trust group meanwhile. Back, the daemon is asked again; the Mac's tab connects
+    /// instead of asking for its remote password (MSI, 2026-10-28).
+    #[tokio::test]
+    async fn a_machine_read_not_linked_is_dialled_again_when_this_computers_daemon_is_back() {
+        let mut app = fixture();
+        app.fleet.local_id = "this-computer".into();
+        app.fleet.machines.push(Machine { shared: false, id: "this-computer".into(), name: "me".into(), local: true, status: "running".into(), reach: Reach::Ready });
+        app.on_machine("test-peer".into(), 1, MachineEvent::Failed(RpcError::new("NO_PEER_LINK", "")));
+        assert_eq!(app.fleet.machine("test-peer").unwrap().reach, Reach::NeedsLink);
+        assert!(app.links["test-peer"].link.is_none());
+
+        app.connect("this-computer");
+        let generation = app.links["this-computer"].generation;
+        app.on_machine("this-computer".into(), generation, MachineEvent::Connected);
+        assert_ne!(app.fleet.machine("test-peer").unwrap().reach, Reach::NeedsLink);
+        assert!(app.links["test-peer"].link.is_some(), "dialled again");
+        assert!(matches!(&app.panes[&1].phase, Phase::Connecting(_)), "{:?}", app.panes[&1].phase);
+
+        // Still not linked: its card comes back, and it is not dialled again by itself.
+        let generation = app.links["test-peer"].generation;
+        app.on_machine("test-peer".into(), generation, MachineEvent::Failed(RpcError::new("NO_PEER_LINK", "")));
+        assert_eq!(app.fleet.machine("test-peer").unwrap().reach, Reach::NeedsLink);
+        assert!(app.links["test-peer"].retry_at.is_none());
+        assert!(matches!(&app.panes[&1].phase, Phase::Card { title, .. } if title == NOT_LINKED));
+        for link in app.links.values() { if let Some(link) = &link.link { link.close() } }
     }
 
     // A machine shared with this account showed the guest's own plans for up to five minutes after it

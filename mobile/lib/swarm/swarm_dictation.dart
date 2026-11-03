@@ -1,0 +1,329 @@
+import 'dart:async';
+import 'dart:math' as math;
+
+import 'package:flutter/services.dart';
+
+/// What the person said about the phone's speech recognizer and its
+/// microphone, asked the first time a chat's mic is tapped.
+enum SwarmDictationAccess {
+  /// Both allowed: words show as they are said.
+  allowed,
+
+  /// Speech recognition refused or restricted: the chat records and has the
+  /// backend transcribe instead, as before.
+  denied,
+
+  /// The microphone refused: nothing can be heard either way.
+  noMic,
+}
+
+/// How a take with the phone's own recognizer ended ([SwarmDictation.start]'s
+/// `onEnd`).
+enum SwarmDictationEnd {
+  /// Stopped, with its last words delivered.
+  done,
+
+  /// Stopped, and nothing was said in its last session.
+  noSpeech,
+
+  /// The recognizer failed, or cannot go on: what it delivered so far stays,
+  /// the rest is lost.
+  failed,
+}
+
+/// The phone's own speech recognizer, the one the keyboard's dictation uses
+/// (Tony, 10-28): its words come back while the person is still talking.
+/// iOS only ([SwarmChannelDictation]); elsewhere a chat records and the
+/// backend transcribes.
+///
+/// One take at a time: [start] ends any earlier one without a word.
+abstract interface class SwarmDictation {
+  /// Asks for speech recognition and the microphone the first time; after
+  /// that, what the person answered.
+  Future<SwarmDictationAccess> access();
+
+  /// Listens in [locale] (`vi-VN`) until [stop] or [cancel] (Tony, 10-29:
+  /// "until I tap"). False when the phone has no recognizer for it now.
+  /// [onWords] hears every word so far each time — revised as the recognizer
+  /// changes its mind — [onLevel] how loud the voice is over the room (0…1),
+  /// and [onEnd] once: after [stop], or when listening cannot go on.
+  Future<bool> start(
+    String locale, {
+    required void Function(String words) onWords,
+    required void Function(double level) onLevel,
+    required void Function(SwarmDictationEnd end) onEnd,
+  });
+
+  /// Stops listening: the last words, then [start]'s `onEnd`.
+  Future<void> stop();
+
+  /// Stops listening and drops anything still to come: no more words, and no
+  /// `onEnd`.
+  Future<void> cancel();
+}
+
+/// The recognizer's locale for a code from `voiceLanguages`: Vietnamese for
+/// one it does not know.
+String swarmDictationLocale(String language) => switch (language) {
+  'en' => 'en-US',
+  'es' => 'es-ES',
+  'fr' => 'fr-FR',
+  'ja' => 'ja-JP',
+  'it' => 'it-IT',
+  _ => 'vi-VN',
+};
+
+/// [SwarmDictation] over `harness/dictation` (iOS: `DictationChannel` in
+/// `AppDelegate.swift`, `SFSpeechRecognizer`).
+///
+/// Each take has a number of its own, sent with every call and said back with
+/// every event, so words from a take already ended land nowhere.
+///
+/// ⚠️ **Its guesses replace each other ([_stitched]), never add up.** The
+/// recognizer says its latest best guess at the words not yet finished, and
+/// rewrites it as it goes ("1", "Một 2", "123"); only a guess it says is
+/// finished, or one its next words begin after in the take's audio — on the
+/// phone it can start over after a pause, without a word — is kept, once, in
+/// front of what it says next. Never a guess by how the words look: Tony's
+/// 'một hai ba bốn năm' came out as 'Một 2 12345' that way (10-29).
+///
+/// ⚠️ **A take outlasts the recognizer's sessions ([_resume]).** iOS ends a
+/// session by itself — after a pause, a long silence, its own minute — and
+/// the native side says so (`paused`) with the microphone still on: what it
+/// said is kept, and a new session starts at once.
+class SwarmChannelDictation implements SwarmDictation {
+  SwarmChannelDictation({MethodChannel? channel, DateTime Function()? clock})
+    : _channel = channel ?? const MethodChannel('harness/dictation'),
+      _clock = clock ?? DateTime.now {
+    _channel.setMethodCallHandler(_heard);
+  }
+
+  final MethodChannel _channel;
+  final DateTime Function() _clock;
+  int _take = 0;
+  ({
+    void Function(String) words,
+    void Function(double) level,
+    void Function(SwarmDictationEnd) end,
+  })?
+  _to;
+
+  /// What the recognizer has finished saying in this take, and its guess at
+  /// what comes after: where that ends in the take's audio, and whether it
+  /// said that guess was finished.
+  String _done = '', _guess = '';
+  double _guessTo = 0;
+  bool _guessFinished = false;
+
+  /// How far a guess may begin before the last one ended and still be new
+  /// words: the recognizer's own times overlap a little at a word's edge.
+  static const _overlap = 0.05;
+
+  /// [stop] was asked: a session ending now is the take's last.
+  bool _stopping = false;
+
+  /// When sessions ended since the recognizer last said a word. [_quick] of
+  /// them within [_quickWithin] is a recognizer that cannot hear now —
+  /// offline, or broken — rather than one waiting through a silence.
+  final List<DateTime> _pauses = [];
+  static const _quick = 3;
+  static const _quickWithin = Duration(seconds: 2);
+
+  /// The microphone's last [_roomWindow] levels, in dB, a tenth of a second
+  /// each: the quietest of them is the room, and the wave shows how far the
+  /// voice is above it ([_level]) — whatever the microphone's own gain, which
+  /// the recognizer's audio session leaves low.
+  final List<double> _recent = [];
+  static const _roomWindow = 30;
+
+  /// The quietest a room is taken to be: below it, near-digital silence.
+  static const _silence = -75.0;
+
+  /// A voice [_overRoom] dB over the room starts the wave, and [_overRoom] +
+  /// [_range] fills it.
+  static const _overRoom = 3.0, _range = 25.0;
+
+  @override
+  Future<SwarmDictationAccess> access() async {
+    try {
+      return switch (await _channel.invokeMethod<String>('access')) {
+        'allowed' => SwarmDictationAccess.allowed,
+        'noMic' => SwarmDictationAccess.noMic,
+        _ => SwarmDictationAccess.denied,
+      };
+    } on PlatformException {
+      return SwarmDictationAccess.denied;
+    } on MissingPluginException {
+      return SwarmDictationAccess.denied;
+    }
+  }
+
+  @override
+  Future<bool> start(
+    String locale, {
+    required void Function(String words) onWords,
+    required void Function(double level) onLevel,
+    required void Function(SwarmDictationEnd end) onEnd,
+  }) async {
+    final take = ++_take;
+    _to = (words: onWords, level: onLevel, end: onEnd);
+    _done = _guess = '';
+    _guessTo = 0;
+    _guessFinished = false;
+    _stopping = false;
+    _pauses.clear();
+    _recent.clear();
+    try {
+      final started = await _channel.invokeMethod<bool>('start', {
+        'take': take,
+        'locale': locale,
+      });
+      if (started != true && take == _take) _to = null;
+      return started == true;
+    } on PlatformException {
+      if (take == _take) _to = null;
+      return false;
+    }
+  }
+
+  @override
+  Future<void> stop() async {
+    _stopping = true;
+    try {
+      await _channel.invokeMethod<void>('stop', {'take': _take});
+    } on PlatformException {
+      _ended(_take, SwarmDictationEnd.failed);
+    }
+  }
+
+  @override
+  Future<void> cancel() async {
+    final take = _take++;
+    _to = null;
+    try {
+      await _channel.invokeMethod<void>('cancel', {'take': take});
+    } on PlatformException {
+      // Nothing more is wanted from it either way.
+    }
+  }
+
+  Future<void> _heard(MethodCall call) async {
+    final arguments = call.arguments;
+    if (arguments is! Map || arguments['take'] != _take) return;
+    final to = _to;
+    if (to == null) return;
+    switch (call.method) {
+      case 'words':
+        if (arguments['text'] case final String text) {
+          _pauses.clear();
+          to.words(
+            _stitched(
+              text,
+              finished: arguments['final'] == true,
+              from: _seconds(arguments['from']),
+              to: _seconds(arguments['to']),
+            ),
+          );
+        }
+      case 'level':
+        if (arguments['rms'] case final num rms) {
+          to.level(_level(rms.toDouble()));
+        }
+      case 'paused':
+        await _resume(_take);
+      case 'end':
+        _ended(_take, switch (arguments['end']) {
+          'done' => SwarmDictationEnd.done,
+          'noSpeech' => SwarmDictationEnd.noSpeech,
+          _ => SwarmDictationEnd.failed,
+        });
+    }
+  }
+
+  /// The recognizer ended its session by itself: its words are kept, and the
+  /// take listens on in a new one — unless it is stopping, or sessions keep
+  /// ending at once with nothing heard, or the phone will not start another.
+  Future<void> _resume(int take) async {
+    if (_stopping) return;
+    _done = _joined(_done, _guess);
+    _guess = '';
+    _guessTo = 0;
+    _guessFinished = false;
+    final now = _clock();
+    _pauses
+      ..removeWhere((at) => now.difference(at) > _quickWithin)
+      ..add(now);
+    if (_pauses.length >= _quick) return _giveUp(take);
+    var resumed = false;
+    try {
+      resumed =
+          await _channel.invokeMethod<bool>('resume', {'take': take}) == true;
+    } on PlatformException {
+      resumed = false;
+    }
+    if (!resumed && take == _take && !_stopping) _giveUp(take);
+  }
+
+  /// Listening cannot go on: the take ends as failed, its words kept.
+  void _giveUp(int take) {
+    _ended(take, SwarmDictationEnd.failed);
+    unawaited(cancel());
+  }
+
+  /// How far [rms] (0…1 of full scale) is above the room, for the wave.
+  double _level(double rms) {
+    if (rms <= 0) return 0;
+    final db = 20 * math.log(rms) / math.ln10;
+    _recent.add(db);
+    if (_recent.length > _roomWindow) _recent.removeAt(0);
+    final room = math.max(_recent.reduce(math.min), _silence);
+    return ((db - room - _overRoom) / _range).clamp(0.0, 1.0);
+  }
+
+  /// Every word of the take so far: what is [_done], then [guess], the
+  /// recognizer's latest — which replaces the last, unless that one is done.
+  ///
+  /// The last guess is done when this one begins after it ended in the take's
+  /// audio ([from], [to]: seconds, 0 where the recognizer gives none). Without
+  /// both times, when the recognizer said it was [finished] and this one is not the
+  /// same words again with more after them, as a recognizer that keeps the
+  /// whole take in each guess says it.
+  String _stitched(
+    String guess, {
+    required bool finished,
+    required double from,
+    required double to,
+  }) {
+    final timed = from > 0 && _guessTo > 0;
+    final after = timed && from >= _guessTo - _overlap;
+    final again = _plain(guess).join(' ').startsWith(_plain(_guess).join(' '));
+    if (_guess.isNotEmpty && (after || (!timed && _guessFinished && !again))) {
+      _done = _joined(_done, _guess);
+    }
+    _guess = guess;
+    _guessTo = to;
+    _guessFinished = finished;
+    return _joined(_done, guess);
+  }
+
+  static double _seconds(Object? value) =>
+      value is num && value.isFinite ? value.toDouble() : 0;
+
+  /// [text]'s words without case or punctuation, to be compared.
+  static List<String> _plain(String text) => text
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^\p{L}\p{N}\s]', unicode: true), '')
+      .split(RegExp(r'\s+'))
+      .where((word) => word.isNotEmpty)
+      .toList();
+
+  static String _joined(String kept, String text) =>
+      kept.isEmpty || text.isEmpty ? '$kept$text' : '$kept $text';
+
+  void _ended(int take, SwarmDictationEnd end) {
+    if (take != _take) return;
+    final to = _to;
+    _to = null;
+    to?.end(end);
+  }
+}

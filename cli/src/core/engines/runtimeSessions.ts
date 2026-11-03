@@ -248,7 +248,9 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
       const view = byId(id)
       if (!view?.sessionId || !RUNTIME_EFFORTS.has(effort)) return
       // Confirmation comes from core's checked control driver, never an arbitrary transcript field.
-      view.state = { ...view.state, effort, observedAt: Date.now() }
+      // A confirmed effort is the session's, never the settings' (#1966 delta review).
+      const { settingsEffort: _, ...state } = view.state
+      view.state = { ...state, effort, observedAt: Date.now() }
       const selection = parseRuntimeProfile(view.selected)
       const s = deps.resolve(view.agentId)!
       if (selection) view.selected = encodeRuntimeProfile({ sessionId: s.agentId, engine: s.engine, model: selection.model, effort })
@@ -258,7 +260,8 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
     confirmControlProfile(target: RuntimeProfile): void {
       const view = byId(target.sessionId)
       if (!view) return
-      view.state = { ...view.state, model: target.model, effort: target.effort, observedAt: Date.now() }
+      const { settingsEffort: _, ...state } = view.state
+      view.state = { ...state, model: target.model, effort: target.effort, observedAt: Date.now() }
       view.selected = encodeRuntimeProfile({ ...target, sessionId: view.agentId })
       if (view.control?.target.id === target.id) { view.control.modelConfirmed = true; view.control.effortConfirmed = true }
       view.revision++; wake(view.sessionId)

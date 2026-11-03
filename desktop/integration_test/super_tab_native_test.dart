@@ -22,6 +22,7 @@ import 'package:harness/ws/local_cli_discovery.dart';
 import '../test/super_tab_launch_test.dart'
     show SuperTabFixtureConnection, tabId;
 import '../test/support/super_tab_devices_fixture.dart';
+import '../test/support/super_tab_members.dart';
 import '../test/super_tab_route_test.dart' show routeRow, decision;
 import '../test/support/super_tab_fixture.dart'
     show projectFixture, conversationFixture;
@@ -481,6 +482,11 @@ void main() {
       await shot('project-cadence');
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
+      // The right column opens only from Members (Quiet Swarm).
+      await tester.tap(find.byKey(const ValueKey('super-members-button')));
+      await tester.pump(const Duration(milliseconds: 250));
+      await unfoldSuperTabIdle(tester, settle: false);
+      await tester.pump(const Duration(milliseconds: 250));
       await tester.tap(
         find.byKey(ValueKey('super-member-${c.snapshot!.agents.single.id}')),
       );
@@ -628,6 +634,11 @@ void main() {
         'terminal': {'available': false},
       };
       f.app.machineStates['m']!.agents = [Agent.fromJson(f.connection.native!)];
+      // The right column opens only from Members (Quiet Swarm).
+      await tester.tap(find.byKey(const ValueKey('super-members-button')));
+      await tester.pump(const Duration(milliseconds: 250));
+      await unfoldSuperTabIdle(tester, settle: false);
+      await tester.pump(const Duration(milliseconds: 250));
       await tester.tap(
         find.byKey(ValueKey('super-member-${c.snapshot!.agents.single.id}')),
       );
@@ -714,6 +725,10 @@ void main() {
       expect(find.text('#1 Offline editing'), findsWidgets);
       expect(tester.takeException(), isNull);
       await shot('group-terminals');
+      await tester.tap(find.byKey(const ValueKey('super-members-button')));
+      await tester.pump(const Duration(milliseconds: 250));
+      await unfoldSuperTabIdle(tester, settle: false);
+      await tester.pump(const Duration(milliseconds: 250));
       await tester.tap(find.byKey(const ValueKey('super-member-lead-agent')));
       await tester.pump(const Duration(milliseconds: 250));
       await tester.tap(find.text('Open terminal'));

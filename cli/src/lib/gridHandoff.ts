@@ -24,6 +24,7 @@
 import { spawn } from 'node:child_process'
 import { binaryOnPath } from './binaryOnPath.js'
 import { gridEnvelopes } from './gridEnvelope.js'
+import { gridCallStarted } from './gridCalls.js'
 import { gridBinaryPath, gridChildEnv, gridCommand } from './gridExec.js'
 
 /** The flag on `grid login` that means "read the token off stdin" (autonomous-grid's `cli/parser.py`).
@@ -130,6 +131,8 @@ export async function handOffToGrid(
   }
   const timeoutMs = opts.timeoutMs ?? HANDOFF_TIMEOUT_MS
   const args = ['login', GRID_HANDOFF_FLAG, ...(opts.json ? ['--json'] : [])]
+  // Not while grid's installer replaces the install, and counted so an install waits for this (gridCalls.ts).
+  const ended = await gridCallStarted()
   return await new Promise<GridHandoffResult>((resolve) => {
     const command = gridCommand(binary, args)
     const child = spawn(command.file, command.args, {
@@ -152,6 +155,7 @@ export async function handOffToGrid(
       if (settled) return
       settled = true
       if (timer) clearTimeout(timer)
+      ended()
       resolve(result)
     }
 

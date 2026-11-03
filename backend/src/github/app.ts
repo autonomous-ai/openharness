@@ -7,6 +7,7 @@
  * crypto signs the app's JWT. Nothing here logs a token or the private key.
  */
 import { createPrivateKey, hkdfSync, sign, type KeyObject } from 'node:crypto'
+import { readPushOrigin, type GitHubRead, type PushOrigin } from './pushOrigin.js'
 import { githubRepository, type GitHubRepository } from './repository.js'
 
 /** What a Swarm agent's token may do, and nothing more: push to and read the repository, open and update pull requests,
@@ -16,7 +17,15 @@ export const TOKEN_PERMISSIONS = { contents: 'write', pull_requests: 'write', ch
 export const PREPARE_PERMISSIONS = { contents: 'read', metadata: 'read' } as const
 /** What the Swarm's tidying reads before it archives a finished group: whether its pull requests are merged or closed. */
 export const PULL_READ_PERMISSIONS = { pull_requests: 'read', metadata: 'read' } as const
+/** What the route's read of running CI jobs may do: read workflow runs and their jobs, nothing more. */
+export const ACTIONS_READ_PERMISSIONS = { actions: 'read', metadata: 'read' } as const
+/** What reading who pushed a pull request's commits may do (pushOrigin.ts): read the pull request and the repository's activity log. */
+export const PUSH_ORIGIN_PERMISSIONS = { contents: 'read', pull_requests: 'read', metadata: 'read' } as const
+const PUSH_ORIGINS_KEPT = 1000
+const PUSH_UNKNOWN_MS = 60_000
 export type TokenPermissions = Readonly<Record<string, 'read' | 'write'>>
+/** Jobs running and waiting on a repository's GitHub Actions, in all and on macOS runners: counts only. */
+export interface CiLoad { running: number; queued: number; macosRunning: number; macosQueued: number }
 
 /** A refusal with the code clients act on; `details` adds fields beside it, such as the install link. */
 export class GitHubAppError extends Error {
@@ -45,6 +54,11 @@ export function readPrivateKey(value: string): KeyObject {
 
 /** Both empty: the feature is off. One without the other, or a value that cannot be right, stops the backend at startup
  *  rather than failing the first agent that asks. */
+/** The name a Harness GitHub App's commits carry, whatever the app is called on GitHub (cli/src/lib/swarmGitHub.ts accepts it). */
+export const COMMIT_IDENTITY: CommitIdentity = { name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' }
+/** The line a commit, or the merge helper's squash message, names Harness by (attribution.ts; scripts/merge-validated-pr.py). */
+export const HARNESS_CO_AUTHOR = `Co-authored-by: ${COMMIT_IDENTITY.name} <${COMMIT_IDENTITY.email}>`
+
 export function githubAppConfig(env: { GITHUB_APP_ID: string; GITHUB_APP_PRIVATE_KEY: string; GITHUB_APP_SLUG: string }): GitHubAppConfig | null {
   const appId = env.GITHUB_APP_ID.trim(), key = env.GITHUB_APP_PRIVATE_KEY.trim(), slug = env.GITHUB_APP_SLUG.trim()
   if (!appId && !key) return null
@@ -74,6 +88,25 @@ const NOT_INSTALLED_TTL_MS = 60_000
 const REFRESH_MS = 15_000
 const BRANCH_TTL_MS = 10 * 60_000
 const REQUEST_TIMEOUT_MS = 10_000
+/** How long a CI load is kept: routes come minutes apart, and a job takes minutes. */
+export const CI_LOAD_TTL_MS = 30_000
+/** The most GitHub calls one CI load makes: the token, the two run lists, the jobs of at most [CI_MAX_RUNS] runs, and the
+ *  revoke (Lead, 10-31: a read's calls are counted and capped). The installation lookup is kept ten minutes apart. */
+export const CI_MAX_CALLS = 10
+/** The most runs whose jobs are read in one CI load; a run beyond it counts as one waiting job, on no particular runner. */
+export const CI_MAX_RUNS = CI_MAX_CALLS - 4
+/** The most CI loads one server process reads for one repository in an hour: past it, the last load is answered while it is
+ *  at most [CI_STALE_MS] old, and after that none, which the route says as "not checked". The count, like the 30 s cache, is
+ *  per server process, and production runs 2 to 8 pods (security review 2 of #2428): the worst case is 8 × 3 = 24 reads and,
+ *  with [CI_MAX_CALLS], 240 calls an hour per repository, about 5% of an installation's 5,000. */
+export const CI_READS_PER_HOUR = 3
+/** The most server processes production runs (its autoscaler's maximum), for the worst case above. */
+export const SERVER_PROCESSES_MAX = 8
+export const CI_STALE_MS = 5 * 60_000
+const CI_WAITING = new Set(['queued', 'waiting', 'requested', 'pending'])
+
+/** A git author and committer. */
+export interface CommitIdentity { name: string; email: string }
 
 export interface GitHubAppOptions {
   fetch?: typeof fetch
@@ -87,10 +120,18 @@ export class GitHubApp {
   private readonly now: () => number
   private readonly apiUrl: string
   private signed: { jwt: string; until: number } | null = null
+  /** The app's name, as GitHub answers it (botLogin). */
+  private slug: string | null = null
   private readonly installations = new Map<string, { id: number | null; until: number }>()
   private readonly branches = new Map<string, { value: DefaultBranch; until: number }>()
   /** A repository's name now, by the name asked for (lower case): null when it was not renamed. */
   private readonly renames = new Map<string, { repository: GitHubRepository | null; until: number }>()
+  private readonly shownNames = new Map<string, { name: string; until: number }>()
+  /** Each repository's CI load while fresh, or being read ([ciLoad]), by its name in lower case; per server process. */
+  private readonly ciLoads = new Map<string, { value: Promise<CiLoad | null>; until: number }>()
+  private readonly pushOrigins = new Map<string, { origin: PushOrigin; until: number }>()
+  /** Each repository's CI reads in the last hour, and its last load read, for [CI_READS_PER_HOUR]. */
+  private readonly ciReads = new Map<string, { at: number[]; last: { load: CiLoad | null; at: number } | null }>()
   /** When each repository's "not installed" was last forgotten on request ([forget]). */
   private readonly forgotten = new Map<string, number>()
 
@@ -103,6 +144,28 @@ export class GitHubApp {
   /** Where an owner installs the app, when its URL name is configured. */
   installUrl(): string | null {
     return this.config.slug ? `https://github.com/apps/${this.config.slug}/installations/new` : null
+  }
+
+  /**
+   * Who the app's commits are by, as Claude's are by its own line (Dee, task #2136). A Harness Team account has no git identity
+   * of its own, so its commits would read "Harness Team <harnessteam@<host>.local>" (PR #1934). No GitHub account owns this
+   * address, so GitHub links these commits to nobody: telling a Team agent's commits apart rests on who pushed (pushOrigin.ts).
+   */
+  commitIdentity(): CommitIdentity { return COMMIT_IDENTITY }
+
+  /** The app's bot account's login, which GitHub's activity log names as the actor of every push with the app's token: GitHub's
+   *  own answer, remembered. Never a configured name, as a wrong one asks the log for a bot that never pushed, and its empty
+   *  answer reads as clean. Null while GitHub cannot say, which reads as unknown. Never read from a commit. */
+  async botLogin(): Promise<string | null> {
+    if (this.slug) return `${this.slug}[bot]`
+    try {
+      const app = await this.call('GET', '/app', `Bearer ${this.jwt()}`)
+      const named = (app.body as { slug?: unknown }).slug
+      if (app.status === 200 && typeof named === 'string' && /^[a-z0-9-]{1,100}$/.test(named)) this.slug = named
+    } catch (error) {
+      if (!(error instanceof GitHubAppError)) throw error
+    }
+    return this.slug ? `${this.slug}[bot]` : null
   }
 
   /** The app's own JWT (RS256, ten minutes at most): issued a minute back against clock drift, valid nine minutes, and
@@ -118,13 +181,13 @@ export class GitHubApp {
     return jwt
   }
 
-  private async call(method: string, path: string, auth: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown> | unknown[] }> {
+  private async call(method: string, path: string, auth: string | null, body?: unknown): Promise<{ link?: string | null; status: number; body: Record<string, unknown> | unknown[] }> {
     let response: Response
     try {
       response = await this.fetch(`${this.apiUrl}${path}`, {
         method, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'harness-backend',
-          Authorization: auth, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+          ...(auth ? { Authorization: auth } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) },
         ...(body ? { body: JSON.stringify(body) } : {}),
       })
     } catch {
@@ -133,7 +196,8 @@ export class GitHubApp {
     const text = await response.text().catch(() => '')
     let parsed: unknown = {}
     try { parsed = text ? JSON.parse(text) : {} } catch { parsed = {} }
-    return { status: response.status, body: parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {} }
+    return { status: response.status, body: parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {},
+      link: response.headers.get('link') }
   }
 
   private misconfigured(): GitHubAppError {
@@ -178,6 +242,21 @@ export class GitHubApp {
     if (!current) return null
     const renamed = await this.installation(current)
     return renamed === null ? null : { installation: renamed, repository: current }
+  }
+
+  /**
+   * [repository]'s name as GitHub shows it now, for people to read: a project keeps the address it was given, and GitHub
+   * answers an old name by redirect, so a renamed repository was shown by the name it no longer has (autonomous-harness
+   * for autonomous-ai/openharness, 2026-10-28). Its own name when GitHub cannot say. Kept ten minutes either way, so a
+   * status read costs at most one lookup per repository in that time.
+   */
+  async currentFullName(repository: GitHubRepository): Promise<string> {
+    const key = repository.fullName.toLowerCase()
+    const known = this.shownNames.get(key)
+    if (known && known.until > this.now()) return known.name
+    const name = (await this.currentName(repository))?.fullName ?? repository.fullName
+    this.shownNames.set(key, { name, until: this.now() + INSTALLATION_TTL_MS })
+    return name
   }
 
   /** [repository]'s name now when it was renamed, else null: read with a read-only token of its owner's installation of
@@ -260,6 +339,123 @@ export class GitHubApp {
     const answer = await this.call('DELETE', '/installation/token', `Bearer ${token}`)
     if (answer.status === 204 || answer.status === 401) return
     throw new GitHubAppError('GITHUB_UNAVAILABLE', `GitHub did not revoke the token (HTTP ${answer.status}).`, 502)
+  }
+
+  /** The jobs running and waiting on [repository]'s GitHub Actions (Scholes's goals, piece 5: work that starts heavy CI waits
+   *  for the account's limit), or null when the app is not installed there. Read with a token that can only read workflow
+   *  runs, revoked as soon as the counts are in; the token, run names and branches never leave this method. Kept
+   *  [CI_LOAD_TTL_MS], and routes asking at once share one read; a failed read is not kept. Throws [GitHubAppError] when
+   *  GitHub cannot say. */
+  async ciLoad(repository: GitHubRepository): Promise<CiLoad | null> {
+    const key = repository.fullName.toLowerCase(), now = this.now()
+    const known = this.ciLoads.get(key)
+    if (known && known.until > now) return known.value
+    // Kept per repository a Swarm routes for; the expired ones go once there are many.
+    if (this.ciLoads.size >= 200) for (const [k, v] of this.ciLoads) if (v.until <= now) this.ciLoads.delete(k)
+    if (this.ciReads.size >= 200) for (const [k, v] of this.ciReads) if (!v.at.some(t => now - t < 3_600_000)) this.ciReads.delete(k)
+    const reads = this.ciReads.get(key) ?? { at: [], last: null }
+    reads.at = reads.at.filter(t => now - t < 3_600_000)
+    this.ciReads.set(key, reads)
+    if (reads.at.length >= CI_READS_PER_HOUR) {
+      if (reads.last && now - reads.last.at <= CI_STALE_MS) return reads.last.load
+      throw new GitHubAppError('GITHUB_CI_BUDGET', `This hour's CI reads for ${repository.fullName} are spent.`, 429)
+    }
+    reads.at.push(now)
+    const value = this.readCiLoad(repository)
+    this.ciLoads.set(key, { value, until: now + CI_LOAD_TTL_MS })
+    // A failed read leaves the cache only if it is still this read's: one that fails late never drops a newer read's entry.
+    value.then(load => { reads.last = { load, at: now } }, () => { if (this.ciLoads.get(key)?.value === value) this.ciLoads.delete(key) })
+    return value
+  }
+
+  /**
+   * Who pushed the pull request [number]'s commits (pushOrigin.ts), remembered by its head alone. A failure never reads as clean.
+   */
+  async pushOrigin(repository: GitHubRepository, number: number): Promise<PushOrigin> {
+    try {
+      const resolved = await this.resolve(repository)
+      if (!resolved) return 'unknown'
+      const { token } = await this.createToken(resolved.installation, resolved.repository, PUSH_ORIGIN_PERMISSIONS)
+      const auth = `Bearer ${token}`, name = `${resolved.repository.owner}/${resolved.repository.name}`
+      const call: GitHubRead = async path => {
+        const answer = await this.call('GET', path, auth)
+        const next = /<https:\/\/[^/>]+(\/[^>]+)>;\s*rel="next"/.exec(answer.link ?? '')?.[1]
+        return { status: answer.status, body: answer.body, ...(next ? { next } : {}) }
+      }
+      const pullPath = `/repos/${name}/pulls/${number}`
+      const pull = await call(pullPath)
+      const sha = (pull.body as { head?: { sha?: unknown } }).head?.sha
+      const key = typeof sha === 'string' ? `${name.toLowerCase()}@${sha}` : null
+      const known = key ? this.pushOrigins.get(key) : undefined
+      if (known && known.until > this.now()) return known.origin
+      // The same read of the pull request decides the head and the answer, so a push in between cannot file it under another commit.
+      const read: GitHubRead = path => path === pullPath ? Promise.resolve(pull) : call(path)
+      const origin = await readPushOrigin(read, name, number, await this.botLogin())
+      if (key) {
+        if (this.pushOrigins.size >= PUSH_ORIGINS_KEPT) this.pushOrigins.delete(this.pushOrigins.keys().next().value!)
+        // An answer for a head holds for good. An `unknown` is asked again a minute later, so retries cost no more than that.
+        this.pushOrigins.set(key, { origin, until: origin === 'unknown' ? this.now() + PUSH_UNKNOWN_MS : Infinity })
+      }
+      return origin
+    } catch {
+      return 'unknown'
+    }
+  }
+
+  /** Who pushed [branch]: the default branch is clean, as it passed review; any other reads its one open pull request, and with none is unknown. */
+  async branchOrigin(repository: GitHubRepository, branch: string): Promise<PushOrigin> {
+    try {
+      const resolved = await this.resolve(repository)
+      if (!resolved) return 'unknown'
+      const { token } = await this.createToken(resolved.installation, resolved.repository, PUSH_ORIGIN_PERMISSIONS)
+      const auth = `Bearer ${token}`, { owner, name } = resolved.repository
+      const about = await this.call('GET', `/repos/${owner}/${name}`, auth)
+      if (about.status === 200 && (about.body as { default_branch?: unknown }).default_branch === branch) return 'clean'
+      const listed = await this.call('GET', `/repos/${owner}/${name}/pulls?state=open&head=${encodeURIComponent(`${owner}:${branch}`)}&per_page=2`, auth)
+      const number = Array.isArray(listed.body) && listed.body.length === 1 ? (listed.body[0] as { number?: unknown }).number : null
+      return listed.status === 200 && typeof number === 'number' ? await this.pushOrigin(repository, number) : 'unknown'
+    } catch {
+      return 'unknown'
+    }
+  }
+
+  private async readCiLoad(repository: GitHubRepository): Promise<CiLoad | null> {
+    const resolved = await this.resolve(repository)
+    if (!resolved) return null
+    const { token } = await this.createToken(resolved.installation, resolved.repository, ACTIONS_READ_PERMISSIONS)
+    const auth = `Bearer ${token}`, runs = `/repos/${resolved.repository.owner}/${resolved.repository.name}/actions/runs`
+    const read = (path: string) => this.call('GET', path, auth)
+    const unavailable = () => new GitHubAppError('GITHUB_UNAVAILABLE', `GitHub did not say what runs on ${resolved.repository.fullName}.`, 502)
+    const listOf = (body: unknown, field: string) => {
+      const items = (body as Record<string, unknown>)[field]
+      return Array.isArray(items) ? items.filter((i): i is Record<string, unknown> => !!i && typeof i === 'object') : []
+    }
+    try {
+      const pages = await Promise.all(['in_progress', 'queued'].map(async status => {
+        const answer = await read(`${runs}?status=${status}&per_page=${CI_MAX_RUNS}`)
+        if (answer.status !== 200) throw unavailable()
+        const listed = listOf(answer.body, 'workflow_runs'), total = (answer.body as Record<string, unknown>).total_count
+        return { ids: listed.map(r => r.id).filter((id): id is number => Number.isSafeInteger(id)),
+          more: Math.max(0, (Number.isSafeInteger(total) ? total as number : 0) - listed.length) }
+      }))
+      const ids = [...new Set(pages.flatMap(p => p.ids))]
+      const counted = ids.slice(0, CI_MAX_RUNS)
+      const load: CiLoad = { running: 0, queued: ids.length - counted.length + pages.reduce((n, p) => n + p.more, 0), macosRunning: 0, macosQueued: 0 }
+      for (const jobs of await Promise.all(counted.map(async id => {
+        const answer = await read(`${runs}/${id}/jobs?filter=latest&per_page=100`)
+        if (answer.status !== 200) throw unavailable()
+        return listOf(answer.body, 'jobs')
+      }))) {
+        for (const job of jobs) {
+          const mac = Array.isArray(job.labels) && job.labels.some(l => typeof l === 'string' && /macos/i.test(l))
+          if (job.status === 'in_progress') { load.running++; if (mac) load.macosRunning++ }
+          else if (CI_WAITING.has(String(job.status))) { load.queued++; if (mac) load.macosQueued++ }
+        }
+      }
+      return load
+    } finally {
+      await this.revoke(token).catch(() => { console.warn(`[github] a CI read's token for ${resolved.repository.fullName} was not revoked; it expires within the hour`) })
+    }
   }
 
   /** Whether pull request [number] is open, merged or closed (GET /repos/{owner}/{repo}/pulls/{number}); null when GitHub

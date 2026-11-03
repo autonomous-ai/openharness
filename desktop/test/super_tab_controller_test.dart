@@ -91,6 +91,42 @@ void main() {
       restored.dispose();
     },
   );
+  // Ken, 2026-11-02: a Reviewer stored in the project chat next to the PM
+  // opened a second terminal there. The project chat shows its coordinator's
+  // terminal alone, whoever else an older Swarm still holds there; a task
+  // shows every member's.
+  test('opens only the coordinator\'s pane on the project chat, even with older members', () async {
+    final server = ConversationServer();
+    server.state['agents'] = [
+      for (final id in ['a', 'b'])
+        {
+          'id': id,
+          'name': id,
+          'machineId': 'm',
+          'harnessId': 'native-$id',
+          'contributorId': 'owner',
+          'configuration': {'engine': 'codex'},
+        },
+    ];
+    final chats = server.state['conversations'] as List;
+    chats[0]['agentIds'] = ['b', 'a'];
+    chats[0]['leadId'] = 'a';
+    chats[1]['agentIds'] = ['a', 'b'];
+    final c = server.controller();
+    await c.refresh();
+    expect(c.snapshot!.paneAgentIds('lead'), ['a']);
+    c.selectGroupTerminals('lead');
+    expect(c.terminalAgents('lead').map((a) => a.id), ['a']);
+    c.selectGroupTerminals('offline');
+    expect(c.snapshot!.paneAgentIds('offline'), ['a', 'b']);
+    expect(c.terminalAgents('offline').map((a) => a.id), ['a', 'b']);
+    // No coordinator there: no pane at all.
+    chats[0]['leadId'] = null;
+    await c.refresh();
+    expect(c.snapshot!.paneAgentIds('lead'), isEmpty);
+    expect(c.terminalAgents('lead'), isEmpty);
+    c.dispose();
+  });
   test('terminal selections survive reopening and cannot cross accounts or group membership', () async {
     final server = ConversationServer();
     server.state['agents'] = [
@@ -267,7 +303,12 @@ void main() {
       expect(await first.send(), isNull);
       expect(server.messages, hasLength(1));
       expect(first.hasPendingAction, isTrue);
-      expect(first.draft('lead'), 'Build the agreed plan.');
+      // The message waits in the chat for Retry; the draft is free.
+      expect(first.draft('lead'), isEmpty);
+      expect(
+        first.outgoing('lead').single.state,
+        SuperTabOutgoingState.unconfirmed,
+      );
       await first.flush();
       first.dispose();
       final reopened = server.controller(initial: server.saved);
@@ -324,30 +365,37 @@ void main() {
     server.reject = true;
     await controller.retry();
     expect(controller.hasPendingAction, isFalse);
-    expect(controller.draft('lead'), 'Hold this draft');
+    expect(
+      controller.outgoing('lead').single.state,
+      SuperTabOutgoingState.refused,
+    );
     server.reject = false;
-    await controller.send();
-    expect(server.messages, hasLength(1));
+    await controller.retryOutgoing(controller.outgoing('lead').single);
+    expect(server.messages.single['text'], 'Hold this draft');
+    expect(controller.outgoing('lead'), isEmpty);
   });
 
-  test(
-    'reconnecting after more than a page of messages fills the gap in order',
-    () async {
-      final server = ConversationServer()..append('First');
-      final controller = await open(server);
-      for (var i = 0; i < 250; i++) {
-        server.append('Message $i');
-      }
-      for (var i = 0; i < 3; i++) {
-        await controller.refresh();
-      }
-      expect(controller.messages('lead'), hasLength(251));
-      expect(
-        controller.messages('lead').map((m) => m.sequence),
-        List.generate(251, (i) => i + 1),
-      );
-    },
-  );
+  test('reconnecting after more than a page of messages shows the latest, '
+      'then fills the gap in order', () async {
+    final server = ConversationServer()..append('First');
+    final controller = await open(server);
+    for (var i = 0; i < 250; i++) {
+      server.append('Message $i');
+    }
+    await controller.refresh();
+    expect(
+      controller.messages('lead').map((m) => m.sequence),
+      List.generate(100, (i) => i + 152),
+    );
+    while (controller.hasOlder('lead')) {
+      await controller.loadMessages('lead', older: true);
+    }
+    expect(controller.messages('lead'), hasLength(251));
+    expect(
+      controller.messages('lead').map((m) => m.sequence),
+      List.generate(251, (i) => i + 1),
+    );
+  });
 
   test('drafts and pending sends cannot cross accounts', () async {
     final server = ConversationServer()..loseReply = true;

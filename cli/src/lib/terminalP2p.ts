@@ -3,6 +3,7 @@ import { BlockList, isIP } from 'node:net'
 import type { RTCPeerConnection, RTCDataChannel, RTCIceCandidateInit } from 'werift'
 import { env } from '../config/env.js'
 import { pickTurnUrl, selectStunUrls, type StunSelector } from './stunSelect.js'
+import { armTurnTls } from './turnTlsGuard.js'
 
 export const TERMINAL_P2P_PROTOCOL_VERSION = 1
 export const TERMINAL_P2P_CHANNEL = 'terminal-v1'
@@ -369,7 +370,11 @@ export class TerminalP2pInitiator {
     // strand it: nothing holds a reference any more, so its UDP sockets would never be closed.
     if (this.finished) return
     this.step('stun-raced')
-    const pc = new RTCPeerConnection(peerConfig(stunUrls, turnChoice(this.deps.policy.turn, udpReachable), this.deps.relayOnly))
+    const turn = turnChoice(this.deps.policy.turn, udpReachable)
+    // Before gather dials. A TLS reset on this socket used to reject an unhandled promise
+    // and exit the gateway (armTurnTls).
+    armTurnTls(turn)
+    const pc = new RTCPeerConnection(peerConfig(stunUrls, turn, this.deps.relayOnly))
     const channel = pc.createDataChannel(TERMINAL_P2P_CHANNEL, { ordered: true })
     this.pc = pc
     this.channel = channel
@@ -752,6 +757,8 @@ export class TerminalP2pResponderPool {
     const { RTCPeerConnection } = await import('werift')
     if (!stillCurrent()) return null
     const turn = turnChoice(readTurn(payload.turn), selection.udpReachable)
+    // Same guard as the offerer: this is the side that dials turns:443 when UDP did not answer.
+    armTurnTls(turn)
     const pc = new RTCPeerConnection(peerConfig(selection.urls, turn))
     const entry: ResponderEntry = {
       sessionId: payload.sessionId,

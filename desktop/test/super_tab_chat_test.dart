@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/message_text.dart';
@@ -11,6 +12,7 @@ import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
+import 'support/super_tab_members.dart';
 
 void main() {
   test('work that waits on a person reads as people say it', () {
@@ -132,6 +134,61 @@ void main() {
     }
   });
 
+  testWidgets('a chat behind the terminals runs no timers until it returns', (
+    tester,
+  ) async {
+    final server = ConversationServer()..append('Hello');
+    final c = server.controller();
+    addTearDown(c.dispose);
+    await c.refresh();
+    bool chatTicks() => TickerMode.valuesOf(
+      tester.element(find.text('Hello', skipOffstage: false)),
+    ).enabled;
+    await showReadView(tester, c);
+    expect(chatTicks(), isTrue);
+    await showReadView(tester, c, terminals: true);
+    expect(chatTicks(), isFalse);
+    await showReadView(tester, c);
+    expect(chatTicks(), isTrue);
+    await closeReadView(tester, c);
+  });
+
+  // Task #2219: All new messages goes quiet only while the open chat is read on screen.
+  testWidgets(
+    'an open chat set to All is told behind the terminals, not on screen',
+    (tester) async {
+      final server = ConversationServer()..append('Hello');
+      final c = server.controller();
+      addTearDown(c.dispose);
+      await c.refresh();
+      final told = <int>[];
+      void fromTeammate(String text) {
+        server.append(text);
+        server.messages.last['author'] = {
+          'kind': 'agent',
+          'id': 'lead-agent',
+          'name': 'Lead',
+        };
+      }
+
+      SuperTabChatNotices.of(c).onMessage = (_, s) => told.add(s);
+      await c.setNotify(c.selectedId, SuperTabNotify.all);
+      await showReadView(tester, c);
+      fromTeammate('While reading it');
+      await tester.runAsync(c.refresh);
+      await tester.runAsync(pumpEventQueue);
+      await tester.pump();
+      expect(told, isEmpty);
+      await showReadView(tester, c, terminals: true);
+      fromTeammate('Behind the terminals');
+      await tester.runAsync(c.refresh);
+      await tester.runAsync(pumpEventQueue);
+      await tester.pump();
+      expect(told, hasLength(1));
+      await closeReadView(tester, c);
+    },
+  );
+
   testWidgets('returning from terminals reads the already loaded transcript', (
     tester,
   ) async {
@@ -177,7 +234,9 @@ void main() {
     (tester) async {
       final server = ConversationServer()..append('First update');
       final c = await show(tester, server);
-      await tester.tap(find.byKey(const ValueKey('super-pull-requests')));
+      await tester.tap(find.byTooltip('Project options'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(MenuItemButton, 'Pull requests'));
       await tester.pumpAndSettle();
       server.append('The review is ready.');
       await c.refresh();
@@ -214,7 +273,9 @@ void main() {
   ) async {
     final server = ConversationServer()..append('Visible update');
     final c = await show(tester, server);
-    await tester.tap(find.byKey(const ValueKey('super-pull-requests')));
+    await tester.tap(find.byTooltip('Project options'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(MenuItemButton, 'Pull requests'));
     await tester.pumpAndSettle();
     server.append('Not yet fetched');
     c.snapshot = SuperTabSnapshot.fromJson(server.state);
@@ -269,7 +330,7 @@ void main() {
     await closeReadView(tester, c);
   });
 
-  for (final drawer in ['Conversations', 'Members and machines']) {
+  for (final drawer in ['Conversations', 'Members']) {
     testWidgets('$drawer keeps covered messages unread until revealed', (
       tester,
     ) async {
@@ -315,22 +376,30 @@ void main() {
       ..append('The lead update')
       ..append('An unread workgroup update', conversationId: 'offline');
     final c = await show(tester, server);
-    Finder projectDot() => find.descendant(
-      of: find.byKey(const ValueKey('super-group-lead')),
-      matching: find.byWidgetPredicate(
-        (widget) =>
-            widget is Semantics && widget.properties.label == 'Unread messages',
-      ),
-    );
+    // Unread is the project's name in bold, with no dot (Dee, 2026-10-29).
+    final name = c.snapshot!.projects.single.name;
+    FontWeight? projectWeight() => tester
+        .widget<RichText>(
+          find.descendant(
+            of: find.byKey(const ValueKey('super-group-lead')),
+            matching: find.byWidgetPredicate(
+              (widget) =>
+                  widget is RichText && widget.text.toPlainText() == name,
+            ),
+          ),
+        )
+        .text
+        .style
+        ?.fontWeight;
     expect(c.unread(c.selected!), isFalse);
-    expect(projectDot(), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('super-project-toggle-lead')));
+    expect(projectWeight(), grid.AppFont.semibold);
+    await tester.tap(find.byKey(const ValueKey('super-group-lead')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('super-group-offline')));
     await tester.pumpAndSettle();
     expect(find.text('An unread workgroup update'), findsOneWidget);
     expect(c.unread(c.selected!), isFalse);
-    expect(projectDot(), findsNothing);
+    expect(projectWeight(), isNot(grid.AppFont.semibold));
     await closeReadView(tester, c);
   });
 
@@ -385,8 +454,7 @@ void main() {
         find.descendant(of: reply, matching: find.text('Atlas')),
         findsOneWidget,
       );
-      await tester.tap(find.byTooltip('Members and machines'));
-      await tester.pumpAndSettle();
+      await openSuperTabMembers(tester);
       expect(find.text('hi'), findsNothing);
       expect(find.text('Atlas'), findsWidgets);
       expect(
@@ -576,7 +644,7 @@ void main() {
       }
       final c = await show(tester, server);
       ScrollController scroll() => tester
-          .widget<ListView>(
+          .widget<ScrollView>(
             find.byKey(const PageStorageKey('super-messages-tab-lead')),
           )
           .controller!;
@@ -590,7 +658,9 @@ void main() {
       expect(scroll().offset, reading);
       expect(find.text('2 new messages'), findsOneWidget);
       expect(c.unread(c.selected!), isTrue);
-      await tester.tap(find.byKey(const ValueKey('super-pull-requests')));
+      await tester.tap(find.byTooltip('Project options'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(MenuItemButton, 'Pull requests'));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('super-chat')));
       await tester.pumpAndSettle();
@@ -608,6 +678,52 @@ void main() {
       expect(scroll().position.extentAfter, lessThan(40));
       expect(c.unread(c.selected!), isFalse);
       expect(find.text('The restart check passed too.'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await closeReadView(tester, c);
+    },
+  );
+
+  testWidgets(
+    'more than a page arriving while scrolled up keeps the place, and the '
+    'jump reads the newest',
+    (tester) async {
+      final server = ConversationServer()..messagePage = 20;
+      for (var i = 1; i <= 40; i++) {
+        server.append(
+          'Agent update $i: checking the offline queue and reconnect behavior.',
+        );
+      }
+      final c = await show(tester, server);
+      ScrollController scroll() => tester
+          .widget<ScrollView>(
+            find.byKey(const PageStorageKey('super-messages-tab-lead')),
+          )
+          .controller!;
+      scroll().jumpTo(0);
+      await tester.pumpAndSettle();
+      final reading = scroll().offset;
+      for (var i = 41; i <= 90; i++) {
+        server.append('Agent update $i: still checking.');
+      }
+      await c.refresh();
+      await tester.pumpAndSettle();
+      expect(scroll().offset, reading);
+      expect(
+        find.text(
+          'Agent update 21: checking the offline queue and reconnect behavior.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('20+ new messages'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('super-new-messages')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Agent update 90: still checking.'), findsOneWidget);
+      expect(find.byKey(const ValueKey('super-new-messages')), findsNothing);
+      expect(scroll().position.extentAfter, lessThan(40));
+      expect(c.hasNewer('lead'), isFalse);
+      expect(c.unread(c.selected!), isFalse);
       expect(tester.takeException(), isNull);
       await closeReadView(tester, c);
     },

@@ -9,6 +9,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
 import '../core/open_in_browser.dart';
+import '../core/linux_webview_runtime.dart';
 import '../core/runtime_platform.dart';
 import '../core/models.dart' show AgentVerdict;
 import '../core/test_run.dart';
@@ -27,6 +28,7 @@ import 'engine_identity.dart';
 import 'harness_activity_mark.dart';
 import '../terminal/terminal_text.dart';
 import 'verdict_marks.dart';
+import 'native_webview_host.dart';
 
 /// A domain harness's viewer, in a tile beside its agent's terminal.
 ///
@@ -38,8 +40,8 @@ import 'verdict_marks.dart';
 ///
 /// The webview is a native view (WKWebView through `webview_flutter`), and a
 /// native view cannot exist where no platform implementation is registered:
-/// under `flutter test`, and on Linux today. There the body is the URL in
-/// words, so every layout around it still builds and the tests can prove the
+/// under `flutter test`, and on Linux without WebKitGTK. There the body shows
+/// the URL in words, so every layout around it still builds and the tests can prove the
 /// tile is placed, sized and closed correctly without instantiating it.
 class WebPanePanel extends StatefulWidget {
   const WebPanePanel({
@@ -86,7 +88,10 @@ class WebPanePanel extends StatefulWidget {
   /// Whether this build can put a real webview on screen. One place, so the
   /// panel and its tests agree on when the placeholder is the right answer.
   static bool get webviewAvailable =>
-      webviewAvailableForTest ?? (!kUnderTest && RuntimePlatform.isMacOS);
+      webviewAvailableForTest ??
+      (!kUnderTest &&
+          (RuntimePlatform.isMacOS ||
+              (RuntimePlatform.isLinux && LinuxWebViewRuntime.available)));
 
   /// A test that installs a fake `WebViewPlatform` mounts the real webview path.
   @visibleForTesting
@@ -142,11 +147,42 @@ class _WebPanePanelState extends State<WebPanePanel> {
   /// The appearance last stamped on the page, so a rebuild that changed nothing runs no script.
   Brightness? _stampedBrightness;
 
+  /// Whether the person can see this pane: its tab in front, no other pane zoomed over it, and the
+  /// window not minimised or hidden.
+  bool get _shown => widget.visible && widget.notifier.inSight.value;
+
+  /// What the Monitor's page was last told, so a rebuild that changed nothing runs no script.
+  bool? _stampedShown;
+
   @override
   void initState() {
     super.initState();
+    widget.notifier.inSight.addListener(_shownChanged);
     _mountRemote();
     if (WebPanePanel.webviewAvailable) unawaited(_mountController());
+  }
+
+  /// Harness Monitor's page reads every machine on the account for as long as it is connected, and a
+  /// tile in a tab behind another stays mounted with its page loaded. Out of sight, its page is told
+  /// to disconnect and its rendered surface stops pulling frames; back in sight, both resume and the
+  /// page catches up once (2026-10-28). Other viewers are left exactly as they were.
+  void _shownChanged() {
+    _stampShown();
+    _remote?.paused = _isMonitor && !_shown;
+  }
+
+  void _stampShown() {
+    final controller = _controller;
+    if (!_isMonitor || controller == null || _loadedUrl == null) return;
+    final shown = _shown;
+    if (shown == _stampedShown) return;
+    _stampedShown = shown;
+    controller
+        .runJavaScript(
+          "document.documentElement.dataset.hostVisible='$shown';"
+          "document.dispatchEvent(new Event('harness-host-visibility'))",
+        )
+        .catchError((_) {});
   }
 
   void _mountRemote() {
@@ -170,12 +206,14 @@ class _WebPanePanelState extends State<WebPanePanel> {
       _remote!.addListener(_remoteLoaded);
     }
     pane.focusViewerInput = _focusRemote;
+    _remote!.paused = _isMonitor && !_shown;
   }
 
   bool _focusRemote() => _remote?.focusInput?.call() ?? false;
 
   @override
   void dispose() {
+    widget.notifier.inSight.removeListener(_shownChanged);
     _finishLoad?.call(ProductOutcome.cancelled);
     _viewerLoad.dispose();
     if (widget.pane.focusViewerInput == _focusRemote) {
@@ -207,6 +245,8 @@ class _WebPanePanelState extends State<WebPanePanel> {
                 // A fresh document has no stamp; give it the app's appearance before it is looked at.
                 _stampedBrightness = null;
                 _stampTheme();
+                _stampedShown = null;
+                _stampShown();
               },
               onWebResourceError: (error) {
                 // Only the page itself: a harness's viewer pulls fonts, models
@@ -344,7 +384,12 @@ class _WebPanePanelState extends State<WebPanePanel> {
   @override
   void didUpdateWidget(WebPanePanel oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.notifier != widget.notifier) {
+      oldWidget.notifier.inSight.removeListener(_shownChanged);
+      widget.notifier.inSight.addListener(_shownChanged);
+    }
     _mountRemote();
+    _shownChanged();
     // The daemon named a different page — the newest artifact, a viewer
     // restarted on another port. Navigate in place; the tile stays.
     if (widget.pane.url != _loadedUrl) _load();
@@ -361,7 +406,12 @@ class _WebPanePanelState extends State<WebPanePanel> {
         children: [
           _header(context),
           Divider(height: 1, color: AppColors.border),
-          Expanded(child: _body(context)),
+          Expanded(
+            child: NativeWebViewHost(
+              visible: widget.visible,
+              child: _body(context),
+            ),
+          ),
         ],
       ),
     );

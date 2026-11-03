@@ -107,9 +107,10 @@ export function createMessagesLink(deps: MessagesLinkDeps) {
           return { error: 'UNKNOWN_QUERY' }
       }
     },
-    /** The backend announced a change to the account: the desk's is the one Agent Messages reads its tabs again for. */
+    /** The backend announced a change to the account: the desk's and the machine list's are the ones Agent Messages reads
+     *  its tabs again for, which name the account's machines (messages/directory.ts). Its timer reads only every 5 minutes. */
     notice(notice: BackendNotice): void {
-      if (notice.type === 'desk_changed') deps.notify({ type: 'service_event', payload: { kind: 'notice', notice } })
+      if (notice.type === 'desk_changed' || notice.type === 'machines_changed') deps.notify({ type: 'service_event', payload: { kind: 'notice', notice } })
     },
     /** What a shared tab's relay said: told, never waited on. A process that is down misses it, and its relay
      *  sockets with it, which it opens again as it starts. In the core's process (`HARNESSD_SERVICES=none`) there is
