@@ -2,8 +2,13 @@ import type { ComposerState } from '../facets/screen.js'
 import { screenLines, typedToken } from '../kit/composer.js'
 import { claudeWindowsComposer } from '../kit/pane.js'
 
-/** A row of Claude Code's rule: all `─`, or `─` at both ends with text set in it. */
-const CLAUDE_RULE = /^─{3,}$|^─{3,}.*─{3,}$/
+/**
+ * A row of Claude Code's rule: all `─`, or `─` at both ends with text set in it. After `/rename`, Claude Code sets the
+ * session's name in the prompt box's top rule with a single `─` after it (`───…─── my-renamed-buddy ─`, 2.1.317): read as
+ * no rule, the box was never found, and every Swarm message to that Buddy was held as `prompt_hidden` while typing by hand
+ * still worked (task #2428, 2026-11-03). So three at the start, and one at the end.
+ */
+export const CLAUDE_RULE = /^─{3,}(?:.*─)?$/
 
 export function composerState(capture: string): ComposerState {
   const { lines } = screenLines(capture)

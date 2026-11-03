@@ -11,9 +11,17 @@ import '../support/super_tab_fixture.dart';
 import 'swarm_benchmark.dart' show distribution;
 
 void main() {
-  for (final (projects, perProject) in [(5, 50), (20, 200)]) {
+  // `mixed`: open tasks in every state the sidebar groups by (#2309): a
+  // quarter working, a quarter waiting on a person, a quarter in review, a
+  // quarter with no work, four in five unread.
+  for (final (projects, perProject, mixed) in [
+    (5, 50, false),
+    (20, 200, false),
+    (5, 50, true),
+    (20, 200, true),
+  ]) {
     testWidgets(
-      'Swarm sidebar rebuild with $projects projects x $perProject conversations',
+      'Swarm sidebar rebuild with $projects projects x $perProject conversations${mixed ? ', mixed states' : ''}',
       (tester) async {
         final server = ConversationServer();
         final ids = ['lead', for (var p = 1; p < projects; p++) 'p$p'];
@@ -48,6 +56,25 @@ void main() {
               'projectId': id,
               'number': n,
               'archived': n % 4 == 0,
+              if (mixed) ...{
+                'archived': false,
+                'lastMessageSequence': n % 5 == 0 ? 0 : n,
+                if (n % 4 != 3)
+                  'assignment': {
+                    'agentId': 'a1',
+                    'status': n % 4 == 2 ? 'review' : 'working',
+                    'progressAt': 1,
+                  },
+                if (n % 4 == 1)
+                  'liveness': {
+                    'state': 'waiting',
+                    'why': 'person',
+                    'personId': 'other',
+                    'since': 1,
+                  },
+                if (n % 4 == 2)
+                  'liveness': {'state': 'waiting', 'why': 'review', 'since': 1},
+              },
             });
           }
         }
@@ -73,7 +100,6 @@ void main() {
                   return ProjectSidebar(
                     controller: controller,
                     onSelect: controller.select,
-                    onAddAgent: (_) {},
                     needsHuman: (_) => 0,
                   );
                 },
@@ -100,6 +126,7 @@ void main() {
             'benchmark': 'super_tab_sidebar_rebuild',
             'projects': projects,
             'conversationsPerProject': perProject,
+            'mixed': mixed,
             ...distribution(times),
           }),
         );
