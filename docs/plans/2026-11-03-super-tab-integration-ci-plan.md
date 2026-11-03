@@ -82,3 +82,5 @@ Files: `docs/validation-and-release.md`.
 
 - [ ] PR CI table: `backend/` runs `backend-desk` and `backend-integration` (four shards); how to reproduce a shard
       locally; the local full-suite rule is now covered by CI.
+
+<!-- throwaway for #2804: a docs-only change -->
