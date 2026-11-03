@@ -270,12 +270,19 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
   }
 
   /// A grouped message's time, shown at its left while it is hovered or
-  /// focused, as Slack does: on its first line, right-aligned under the
-  /// avatars above, free to reach into the row's inset.
+  /// focused, as Slack does: its hour and minute on its first line,
+  /// right-aligned under the avatars above, so any time fits the gutter; the
+  /// full time and date are on its tooltip and in the row's label.
   Widget? _groupedTime(BuildContext context, bool active) {
-    final time = widget.message.createdAt;
+    final time = widget.message.createdAt?.toLocal();
     if (!active || time == null) return null;
     final line = SwarmType.body(context);
+    final l10n = MaterialLocalizations.of(context);
+    final local = TimeOfDay.fromDateTime(time);
+    final hour = l10n.formatHour(
+      local,
+      alwaysUse24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context),
+    );
     return ExcludeSemantics(
       child: SizedBox(
         height: line.fontSize! * line.height!,
@@ -284,16 +291,27 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
               SuperTabMessageRow.horizontalInset +
               SuperTabMessageRow.avatarSize,
           alignment: Alignment.centerRight,
-          child: Text(
-            TimeOfDay.fromDateTime(time.toLocal()).format(context),
-            key: ValueKey('super-row-time-${widget.message.id}'),
-            maxLines: 1,
-            style: SwarmType.time(context),
+          child: Tooltip(
+            message: '${l10n.formatFullDate(time)}, ${local.format(context)}',
+            child: Text(
+              '$hour:${l10n.formatMinute(local)}',
+              key: ValueKey('super-row-time-${widget.message.id}'),
+              softWrap: false,
+              style: SwarmType.time(context),
+            ),
           ),
         ),
       ),
     );
   }
+
+  /// What assistive technology reads for a grouped message in place of its
+  /// header: its sender and time, as a header reads them.
+  String get _groupedLabel => switch (widget.message.createdAt) {
+    final time? =>
+      '${widget.author}, ${TimeOfDay.fromDateTime(time.toLocal()).format(context)}',
+    null => widget.author,
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -347,7 +365,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
           },
           child: Semantics(
             container: true,
-            label: widget.grouped ? widget.author : null,
+            label: widget.grouped ? _groupedLabel : null,
             child: DecoratedBox(
               key: taggedYou
                   ? ValueKey('super-tagged-you-${message.id}')
