@@ -21,10 +21,10 @@ const idle = () => ({ inTurn: false })
 const work = (id: string, status: string) => conv(`w-${id}`, null, { projectId: id, assignment: { status } })
 
 describe('leadsOf', () => {
-  it('picks one Lead per project through its lead conversation, in project order', () => {
+  it('picks one Lead per project through its lead conversation, in the app\'s project order', () => {
     const { count, leads } = leadsOf(swarm(), 'm1', idle)
     expect(count).toBe(2)
-    expect(leads.map(l => [l.id, l.projectId, l.project, l.engine, l.local, l.state])).toEqual([['a1', 'web', 'web', 'claude', 'h-a1', 'done'], ['a2', 'mobile', 'mobile', 'claude', 'h-a2', 'done']])
+    expect(leads.map(l => [l.id, l.projectId, l.project, l.engine, l.local, l.state])).toEqual([['a2', 'mobile', 'mobile', 'claude', 'h-a2', 'done'], ['a1', 'web', 'web', 'claude', 'h-a1', 'done']])
   })
 
   it('reads an old tab without projects as the one `lead` project, and skips a project with no Lead agent', () => {
@@ -91,25 +91,42 @@ describe('leadsOf', () => {
     expect(leadsOf(swarm(), 'm1', () => null).leads.map(l => l.local)).toEqual(['', ''])
   })
 
-  it('orders ask, stuck, work, done with ties in project order, and caps at 12 Leads', () => {
-    const projects = Array.from({ length: 13 }, (_, i) => ({ id: `p${i}`, name: `P${i}`, leadConversationId: `lead-p${i}` }))
+  it('orders ask, stuck, work, done with ties in the app\'s project order, and caps at 12 Leads', () => {
+    const projects = Array.from({ length: 13 }, (_, i) => ({ id: `p${i}`, name: `P${String(i).padStart(2, '0')}`, leadConversationId: `lead-p${i}` }))
     const many = swarm({ projects, agents: projects.map((_, i) => agent(`a${i}`)),
       conversations: [...projects.map((p, i) => conv(p.leadConversationId, `a${i}`, { projectId: p.id })), work('p5', 'blocked'), work('p9', 'needs_human'), work('p2', 'working'), work('p7', 'needs_human')] })
     const { count, leads } = leadsOf(many, 'm1', idle)
     expect(count).toBe(13)
     expect(leads).toHaveLength(12)
-    expect(leads.slice(0, 5).map(l => [l.project, l.state])).toEqual([['P7', 'ask'], ['P9', 'ask'], ['P5', 'stuck'], ['P2', 'work'], ['P0', 'done']])
+    expect(leads.slice(0, 5).map(l => [l.project, l.state])).toEqual([['P07', 'ask'], ['P09', 'ask'], ['P05', 'stuck'], ['P02', 'work'], ['P00', 'done']])
   })
 
-  it('gives each Lead its project\'s index as `order`, whatever place urgency gives it', () => {
+  // Diego's dial, 2026-11-03: a swipe went by creation order while the app lists projects A to Z (project_sidebar.dart).
+  it('orders Leads as the app lists projects: by name A to Z, whatever the case', () => {
+    const named = swarm({
+      projects: [{ id: 'z', name: 'Zeta', leadConversationId: 'lead-z' }, { id: 'a', name: 'alpha', leadConversationId: 'lead-a' }, { id: 'm', name: 'Mid', leadConversationId: 'lead-m' }],
+      agents: [agent('a1'), agent('a2'), agent('a3')],
+      conversations: [conv('lead-z', 'a1', { projectId: 'z' }), conv('lead-a', 'a2', { projectId: 'a' }), conv('lead-m', 'a3', { projectId: 'm' })],
+    })
+    expect(leadsOf(named, 'm1', idle).leads.map(l => [l.project, l.order])).toEqual([['alpha', 0], ['Mid', 1], ['Zeta', 2]])
+  })
+
+  it('keeps server order between projects whose names differ only in case', () => {
+    const twins = swarm({ projects: [{ id: 'web', name: 'web', leadConversationId: 'lead-web' }, { id: 'mobile', name: 'Web', leadConversationId: 'lead-mobile' }] })
+    expect(leadsOf(twins, 'm1', idle).leads.map(l => [l.projectId, l.order])).toEqual([['web', 0], ['mobile', 1]])
+    const flipped = swarm({ projects: [{ id: 'mobile', name: 'Web', leadConversationId: 'lead-mobile' }, { id: 'web', name: 'web', leadConversationId: 'lead-web' }] })
+    expect(leadsOf(flipped, 'm1', idle).leads.map(l => [l.projectId, l.order])).toEqual([['mobile', 0], ['web', 1]])
+  })
+
+  it('gives each Lead its project\'s place in the app\'s A to Z list as `order`, whatever place urgency gives it', () => {
     const three = swarm({
       projects: [...swarm().projects, { id: 'api', name: 'api', leadConversationId: 'lead-api' }],
       agents: [agent('a1'), agent('a2'), agent('a3')],
       conversations: [...swarm().conversations, conv('lead-api', 'a3', { projectId: 'api' }), work('mobile', 'needs_human'), work('api', 'working')],
     })
-    expect(leadsOf(three, 'm1', idle).leads.map(l => [l.project, l.state, l.order])).toEqual([['mobile', 'ask', 1], ['api', 'work', 2], ['web', 'done', 0]])
-    // The 12 most urgent of 13 keep their own index: the one left out leaves a gap.
-    const projects = Array.from({ length: 13 }, (_, i) => ({ id: `p${i}`, name: `P${i}`, leadConversationId: `lead-p${i}` }))
+    expect(leadsOf(three, 'm1', idle).leads.map(l => [l.project, l.state, l.order])).toEqual([['mobile', 'ask', 1], ['api', 'work', 0], ['web', 'done', 2]])
+    // The 12 most urgent of 13 keep their own place: the one left out leaves a gap.
+    const projects = Array.from({ length: 13 }, (_, i) => ({ id: `p${i}`, name: `P${String(i).padStart(2, '0')}`, leadConversationId: `lead-p${i}` }))
     const many = swarm({ projects, agents: projects.map((_, i) => agent(`a${i}`)),
       conversations: [...projects.map((p, i) => conv(p.leadConversationId, `a${i}`, { projectId: p.id })), ...projects.slice(1).map(p => work(p.id, 'working'))] })
     expect(leadsOf(many, 'm1', idle).leads.map(l => l.order)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
