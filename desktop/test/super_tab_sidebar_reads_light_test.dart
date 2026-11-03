@@ -4,7 +4,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:flutter/gestures.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/swarm_type.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 
@@ -154,6 +156,65 @@ void main() {
     expect(style.fontWeight, isNot(grid.AppFont.semibold));
     expect(style.fontWeight, isNot(grid.AppFont.medium));
     expect(style.color, DesktopChrome.foreground);
+    await close(tester, controller);
+  });
+
+  /// Workgroup 1 at work: an agent on it, its last progress a minute ago.
+  void working(ConversationServer server) {
+    final groups = (server.state['conversations'] as List).cast<Map<String, dynamic>>();
+    groups.firstWhere((g) => g['id'] == 'g1')['assignment'] = {
+      'id': 'a1',
+      'agentId': 'lead',
+      'status': 'working',
+      'progressAt': DateTime.now().subtract(const Duration(minutes: 1)).millisecondsSinceEpoch,
+    };
+  }
+
+  testWidgets('a task row is one line, its state a mark at the right, still said to a screen reader', (tester) async {
+    final semantics = tester.ensureSemantics();
+    final server = humansSwarm();
+    addNumberedWorkgroups(server, 1);
+    working(server);
+    final controller = await show(tester, server);
+    expect(find.byKey(const ValueKey('super-task-line-g1')), findsNothing);
+    expect(find.byKey(const ValueKey('super-task-mark-g1')), findsOneWidget);
+    // One line: the row is a sidebar row's height, as a project's is.
+    expect(tester.getSize(g1).height, tester.getSize(project).height);
+    expect(tester.getSize(g1).height, lessThanOrEqualTo(SwarmType.sidebarRowHeight(compact: false) + 1));
+    expect(tester.getSemantics(g1).getSemanticsData().label, contains('Working'));
+    semantics.dispose();
+    await close(tester, controller);
+  });
+
+  testWidgets('the task number is smaller and fainter than its title', (tester) async {
+    final server = humansSwarm();
+    addNumberedWorkgroups(server, 1);
+    final controller = await show(tester, server);
+    final title = titleStyle(tester, g1, 'Workgroup 1');
+    final number = titleStyle(tester, g1, '1  ');
+    expect(number.fontSize, lessThan(title.fontSize!));
+    expect(number.color, grid.AppPalette.textFaint);
+    await close(tester, controller);
+  });
+
+  testWidgets('the tooltip opens beside the list, not over the rows below', (tester) async {
+    final server = humansSwarm();
+    addNumberedWorkgroups(server, 1);
+    working(server);
+    final controller = await show(tester, server);
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(g1));
+    await tester.pumpAndSettle(const Duration(seconds: 2));
+    final tip = find.textContaining('Workgroup 1\n');
+    expect(tip, findsOneWidget);
+    final row = tester.getRect(g1), box = tester.getRect(tip);
+    expect(box.left, greaterThanOrEqualTo(row.right));
+    // Level with its row, not hanging below it.
+    expect(box.center.dy, closeTo(row.center.dy, row.height));
+    await mouse.moveTo(Offset.zero);
+    await tester.pumpAndSettle(const Duration(seconds: 2));
     await close(tester, controller);
   });
 }
