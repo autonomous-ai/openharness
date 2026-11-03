@@ -737,6 +737,19 @@ describe('moving a running Product Manager to another machine', () => {
     expect(s.agent().switchRequest).toMatchObject({ targetMachineId: 'mate-team', requestedBy: 'owner' })
   })
 
+  // Security review 2 of #2705 at 00d97f9a0: the Mac whose Team account already runs the PM is placed back in that account, so
+  // it is a switch where it runs, and no candidate start is left to time out with a false failure line.
+  it('switches in place, leaving no candidate, when the Mac named places it back in the Team account it runs in', () => {
+    const s = moving('mate-mac')
+    expect(s.agent().machineId).toBe('mate-team')
+    s.move('mate-mac')
+    expect(s.candidates()).toEqual([])
+    expect((s.f.state.starts ?? []).filter(start => !start.harnessId && !start.error)).toEqual([])
+    expect(s.agent().switchRequest).toMatchObject({ engine: 'claude', requestedBy: 'owner' })
+    expect(s.agent().switchRequest).not.toHaveProperty('targetMachineId')
+    expect(s.f.project().lead).toMatchObject({ status: 'started', machineId: 'mate-team' })
+  })
+
   it('refuses the PM machine\'s owner who does not own the project, on any other machine, and records nothing', () => {
     // Its Team account cannot take it, so it runs on the Mac itself, as its owner.
     const s = moving('mate-mac', f => { f.machine('mate-team').observation = { ...reading('team', FAILED), capabilities: ['leadStart', 'leadSwitch'] } })
