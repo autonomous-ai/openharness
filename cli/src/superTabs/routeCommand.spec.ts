@@ -1454,8 +1454,8 @@ describe('routing contributed capacity', () => {
     expect(answer).toMatchObject({ ok: true, pick: { machineId: 'm1', engine: 'codex' } })
     expect((answer.alternatives as Array<{ machineId: string; engine: string }>).map(x => [x.machineId, x.engine])).toEqual([['m1', 'claude'], ['m2', 'claude'], ['m3', 'claude']])
     // Each row says its account's weekly quota, which the project's order picks by (Ken, 2026-11-03).
-    expect((answer.pick as { quota: string }).quota).toBe('fits: weekly 80% left, resets in 5 days')
-    expect((answer.alternatives as Array<{ quota: string }>).map(x => x.quota)).toEqual(['fits: weekly 80% left, resets in 5 days', 'metered', 'metered'])
+    expect((answer.pick as { quota: string }).quota).toBe('fits: weekly 80% left, resets in 5d')
+    expect((answer.alternatives as Array<{ quota: string }>).map(x => x.quota)).toEqual(['fits: weekly 80% left, resets in 5d', 'metered', 'metered'])
   })
   // The coordinator picks by the project's order among accounts, so every account is an alternative, once: a Claude account with
   // 99% left on a machine whose Codex was used up never reached it (Ken, 2026-11-03).
