@@ -98,7 +98,7 @@ jobs:
           .github/workflows/ci.yml .github/workflows/cli-e2e.yml .github/workflows/ci-health.yml
           .github/workflows/website-checks.yml .github/workflows/experience-checks.yml
           .github/workflows/authoring-browser-checks.yml .github/workflows/home-assistant-checks.yml
-          .github/workflows/desktop-logging-checks.yml .github/workflows/windows.yml
+          .github/workflows/desktop-logging-checks.yml .github/workflows/windows.yml .github/workflows/backend-cache.yml
       - id: select
         env:
           CI_SCOPE: ${{ inputs.scope || 'full' }}
@@ -431,7 +431,8 @@ jobs:
           cache-dependency-path: backend/package-lock.json
       - run: npm ci --no-audit --no-fund
       # The tests download mongod 7.0.24 into $TMPDIR/harness-super-tab-mongodb-binaries (integration/plans.test-support.ts).
-      - uses: actions/cache@v4
+      # Restore only: backend-cache.yml saves it from main, where every PR can read it; a PR's own save would be its alone.
+      - uses: actions/cache/restore@v4
         with:
           path: /tmp/harness-super-tab-mongodb-binaries
           key: super-tab-mongod-7.0.24-${{ runner.os }}-${{ runner.arch }}
