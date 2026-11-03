@@ -54,6 +54,7 @@ import 'message_receipt.dart';
 import 'notifications.dart';
 import 'buddies.dart';
 import 'decisions.dart';
+import 'day_pill.dart';
 import 'decisions_view.dart';
 import 'route_row.dart';
 import 'terminal_row.dart';
@@ -3571,52 +3572,55 @@ class _SuperTabViewState extends State<SuperTabView>
           : null;
       final previous = index > 0 ? entries[index - 1].message : null;
       final time = message.createdAt;
-      return Column(
+      return SuperTabDayMark(
         key: ValueKey(_rowKey(c.messageIdentity(message.id))),
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (time != null &&
-              !DateUtils.isSameDay(
-                time.toLocal(),
-                previous?.createdAt?.toLocal(),
-              ))
-            _date(time),
-          if (message.id == _unread.lineAt(c.selectedId))
-            SuperTabNewMessagesLine(key: _unread.key),
-          // The message itself is kept in place: its
-          // date moves above earlier ones as they come.
-          _BuiltRow(
-            id: message.id,
-            rows: _built,
-            child: KeyedSubtree(
-              key: message.id == _target ? _targetKey : null,
-              child: SuperTabMessageHighlight(
-                on: message.id == _lit,
-                child: pendingById.containsKey(message.id)
-                    ? _outgoingRow(
-                        pendingById[message.id]!,
-                        byId,
-                        grouped: grouped.contains(message.id),
-                      )
-                    : entry.interruptions > 0
-                    ? SuperTabRecordingNotice(
-                        key: ValueKey('super-message-${message.id}'),
-                        author: _shownAuthor(c, message),
-                        count: entry.interruptions,
-                        onOpenTerminal: agent == null
-                            ? null
-                            : () => _openAgent(agent),
-                      )
-                    : _message(
-                        message,
-                        grouped.contains(message.id),
-                        byId,
-                        showReceipt: message.id == latestOwn?.id,
-                      ),
+        time: time,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (time != null &&
+                !DateUtils.isSameDay(
+                  time.toLocal(),
+                  previous?.createdAt?.toLocal(),
+                ))
+              _date(time),
+            if (message.id == _unread.lineAt(c.selectedId))
+              SuperTabNewMessagesLine(key: _unread.key),
+            // The message itself is kept in place: its
+            // date moves above earlier ones as they come.
+            _BuiltRow(
+              id: message.id,
+              rows: _built,
+              child: KeyedSubtree(
+                key: message.id == _target ? _targetKey : null,
+                child: SuperTabMessageHighlight(
+                  on: message.id == _lit,
+                  child: pendingById.containsKey(message.id)
+                      ? _outgoingRow(
+                          pendingById[message.id]!,
+                          byId,
+                          grouped: grouped.contains(message.id),
+                        )
+                      : entry.interruptions > 0
+                      ? SuperTabRecordingNotice(
+                          key: ValueKey('super-message-${message.id}'),
+                          author: _shownAuthor(c, message),
+                          count: entry.interruptions,
+                          onOpenTerminal: agent == null
+                              ? null
+                              : () => _openAgent(agent),
+                        )
+                      : _message(
+                          message,
+                          grouped.contains(message.id),
+                          byId,
+                          showReceipt: message.id == latestOwn?.id,
+                        ),
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       );
     }
 
@@ -3744,98 +3748,103 @@ class _SuperTabViewState extends State<SuperTabView>
                     Expanded(
                       child: Stack(
                         children: [
-                          NotificationListener<ScrollNotification>(
-                            onNotification: (event) {
-                              if (event.depth != 0) return false;
-                              if (event is ScrollStartNotification &&
-                                  event.dragDetails != null) {
-                                _scrollRequest++;
-                                _jumpingToEnd = false;
-                              }
-                              if (_jumpingToEnd) return false;
-                              final id = c.selectedId;
-                              final atEnd = event.metrics.extentAfter < 40;
-                              _follow(id, atEnd);
-                              // Once the scroll ends, so keeping the place never
-                              // cuts a drag short.
-                              if (event is ScrollEndNotification) {
-                                _readEarlierNearTop(id, event.metrics);
-                              }
-                              if (atEnd) {
-                                // A row still sending has no place in the transcript.
-                                final sequence =
-                                    ownMessages.lastOrNull?.sequence ?? 0;
-                                WidgetsBinding.instance.addPostFrameCallback((
-                                  _,
-                                ) {
-                                  if (mounted && c.selectedId == id) {
-                                    _readToEnd(id, sequence);
-                                  }
-                                });
-                              }
-                              return false;
-                            },
-                            child: SelectionArea(
-                              child: CustomScrollView(
-                                controller: _scroll[c.selectedId],
-                                key: PageStorageKey(
-                                  'super-messages-${c.tabId}-${c.selectedId}',
-                                ),
-                                // Pages read in grow upward from the rows first
-                                // shown, new messages downward: no row on screen
-                                // moves for either.
-                                center: _newerRows,
-                                slivers: [
-                                  // Its spinner runs only near the view.
-                                  SliverLayoutBuilder(
-                                    builder: (context, constraints) =>
-                                        SliverToBoxAdapter(
-                                          child: Padding(
-                                            padding: EdgeInsets.only(
-                                              top: grid.AppDesktop.controlGap,
-                                            ),
-                                            child: _earlierRow(
-                                              near:
-                                                  constraints
-                                                      .remainingCacheExtent >
-                                                  0,
+                          SuperTabStickyDay(
+                            pillKey: const ValueKey('super-day-pill'),
+                            hidden: finding != null,
+                            child: NotificationListener<ScrollNotification>(
+                              onNotification: (event) {
+                                if (event.depth != 0) return false;
+                                if (event is ScrollStartNotification &&
+                                    event.dragDetails != null) {
+                                  _scrollRequest++;
+                                  _jumpingToEnd = false;
+                                }
+                                if (_jumpingToEnd) return false;
+                                final id = c.selectedId;
+                                final atEnd = event.metrics.extentAfter < 40;
+                                _follow(id, atEnd);
+                                // Once the scroll ends, so keeping the place never
+                                // cuts a drag short.
+                                if (event is ScrollEndNotification) {
+                                  _readEarlierNearTop(id, event.metrics);
+                                }
+                                if (atEnd) {
+                                  // A row still sending has no place in the transcript.
+                                  final sequence =
+                                      ownMessages.lastOrNull?.sequence ?? 0;
+                                  WidgetsBinding.instance.addPostFrameCallback((
+                                    _,
+                                  ) {
+                                    if (mounted && c.selectedId == id) {
+                                      _readToEnd(id, sequence);
+                                    }
+                                  });
+                                }
+                                return false;
+                              },
+                              child: SelectionArea(
+                                child: CustomScrollView(
+                                  controller: _scroll[c.selectedId],
+                                  key: PageStorageKey(
+                                    'super-messages-${c.tabId}-${c.selectedId}',
+                                  ),
+                                  // Pages read in grow upward from the rows first
+                                  // shown, new messages downward: no row on screen
+                                  // moves for either.
+                                  center: _newerRows,
+                                  slivers: [
+                                    // Its spinner runs only near the view.
+                                    SliverLayoutBuilder(
+                                      builder: (context, constraints) =>
+                                          SliverToBoxAdapter(
+                                            child: Padding(
+                                              padding: EdgeInsets.only(
+                                                top: grid.AppDesktop.controlGap,
+                                              ),
+                                              child: _earlierRow(
+                                                near:
+                                                    constraints
+                                                        .remainingCacheExtent >
+                                                    0,
+                                              ),
                                             ),
                                           ),
-                                        ),
-                                  ),
-                                  LaidOutSliverList(
-                                    delegate: SliverChildBuilderDelegate(
-                                      (context, index) =>
-                                          row(split - 1 - index),
-                                      childCount: split,
-                                      findChildIndexCallback: (key) =>
-                                          switch (rowOf(key)) {
-                                            final i? when i < split =>
-                                              split - 1 - i,
-                                            _ => null,
-                                          },
                                     ),
-                                  ),
-                                  SliverPadding(
-                                    key: _newerRows,
-                                    padding: EdgeInsets.only(
-                                      bottom: grid.AppDesktop.controlGap,
-                                    ),
-                                    sliver: LaidOutSliverList(
+                                    LaidOutSliverList(
                                       delegate: SliverChildBuilderDelegate(
-                                        // Messages on their way end the list.
-                                        (context, index) => row(split + index),
-                                        childCount: entries.length - split,
+                                        (context, index) =>
+                                            row(split - 1 - index),
+                                        childCount: split,
                                         findChildIndexCallback: (key) =>
                                             switch (rowOf(key)) {
-                                              final i? when i >= split =>
-                                                i - split,
+                                              final i? when i < split =>
+                                                split - 1 - i,
                                               _ => null,
                                             },
                                       ),
                                     ),
-                                  ),
-                                ],
+                                    SliverPadding(
+                                      key: _newerRows,
+                                      padding: EdgeInsets.only(
+                                        bottom: grid.AppDesktop.controlGap,
+                                      ),
+                                      sliver: LaidOutSliverList(
+                                        delegate: SliverChildBuilderDelegate(
+                                          // Messages on their way end the list.
+                                          (context, index) =>
+                                              row(split + index),
+                                          childCount: entries.length - split,
+                                          findChildIndexCallback: (key) =>
+                                              switch (rowOf(key)) {
+                                                final i? when i >= split =>
+                                                  i - split,
+                                                _ => null,
+                                              },
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
