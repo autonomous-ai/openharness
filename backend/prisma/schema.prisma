@@ -1358,6 +1358,7 @@ model SuperTabUploadAllowance {
   at DateTime
 }
 
+/// One command's receipt, so a repeat of the same request gets the same answer. Removed 30 days after createdAt by a TTL index.
 model SuperTabOperation {
   id           String   @id @map("_id")
   tabId        String
@@ -1370,6 +1371,9 @@ model SuperTabOperation {
   createdAt    DateTime @default(now())
 
   @@index([tabId])
+  /// A receipt goes 30 days after createdAt (superTabs/operations.ts ensureOperationExpiry). Declared so db push keeps the index; the
+  /// schema step makes it, with its expiry, before the push.
+  @@index([createdAt], map: "operation_expiry")
 }
 
 // A conversation-scoped provenance receipt. It grants no terminal access.
