@@ -66,9 +66,19 @@ export interface SwarmProject {
   instructionsHash?: string
   /** Moves on each note the coordinator keeps or a member removes (instructions.ts), so an open panel knows to read them. */
   notesRevision?: number
+  /** Moves when its repository's GitHub access may have changed: someone allowed it, GitHub sent someone back after
+   *  installing the app, or a check that asked GitHub again found a different answer (store.ts githubChanged, githubSeen).
+   *  Members' apps read the access again when it moves rather than keeping it 5 minutes (task #2316, Dee 2026-11-03). */
+  githubRevision?: number
+  /** What the last check that asked GitHub again found (github/projectAccess.ts), so only a different answer moves it. */
+  githubSeen?: GitHubSeen
   /** What its coordinator is called; reads give "Product Manager" when absent (instructions.ts coordinatorNameOf). */
   coordinatorName?: string
 }
+
+/** The GitHub access states a check records (github/projectAccess.ts): the others are no answer from GitHub. */
+export const GITHUB_SEEN = ['not-installed', 'not-approved', 'covered'] as const
+export type GitHubSeen = typeof GITHUB_SEEN[number]
 
 /** A project's status card: its text, when (ISO time) and by which agent it was written. */
 export interface ProjectStatus { text: string; at: string; by: string }
@@ -109,6 +119,10 @@ export function groupProject(state: SuperTabState, group: Conversation): SwarmPr
   if (isSwarmBuddyChat(group)) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
   return projectOf(state, group.projectId ?? 'lead')
 }
+
+/** The repository address of the project [group] belongs to (null when it has none or the group has no project); never throws. */
+export const groupRepositoryUrl = (state: SuperTabState, group: Conversation): string | null =>
+  projectsOf(state).find(p => p.id === (group.projectId ?? 'lead'))?.repository?.repositoryUrl ?? null
 
 /** The project a start works in: a project session's own, none for a Swarm-wide Buddy's (Dee, 10-31), else its conversation's. */
 export function startProject(state: SuperTabState, request: Pick<AgentStartRequest, 'conversationId' | 'buddySession'>): SwarmProject | undefined {

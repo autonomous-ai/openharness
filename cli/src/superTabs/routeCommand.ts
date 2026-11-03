@@ -5,11 +5,12 @@
 import { randomUUID } from 'node:crypto'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { RELAYED_QUOTA, requiredToolReason, startRequirements, USED_UP_WINDOW } from './capacity.js'
+import { START_DEADLINE_MS, START_WINDOW_MS } from './reservations.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
-import { accountOf, API_BUILDERS, catalogFrom, catalogRow, choose, decide, gridStrength, parseAssessment, quotaOf2, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type HeldModel, type MemberFrame, type Probe, type TaskFolder } from './route.js'
+import { accountOf, API_BUILDERS, bytes, machineBrief, catalogFrom, catalogRow, choose, decide, gridStrength, parseAssessment, OLD_RECORD_MAX, quotaBrief, quotaOf2, slotOf, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type HeldModel, type MemberFrame, type Probe, type TaskFolder } from './route.js'
 import { makePlugins, ROUTE_PLUGIN_MAKERS, type PluginMaker } from './routePlugins.js'
-import { CI_HOLD_OPENING, CI_RETRY_MINUTES, MACHINE_FIT_MAKER } from './machineFit.js'
+import { CI_HOLD_OPENING, CI_RETRY_MINUTES, heavyOfStart, MACHINE_FIT_MAKER } from './machineFit.js'
 import { stat } from 'node:fs/promises'
 import { describeScmProject } from '../scm/scmProjects.js'
 
@@ -70,6 +71,26 @@ const READY: Unready = { all: [], engines: {}, push: null }
  *  counting once they say nothing about the machine as it is: its daemon now runs another CLI version than the newer one
  *  was dispatched to ([pool] `clientVersion`, the backend's record of its last connection), or the newer one is
  *  [STALL_RETRY_MS] old. A start from before either was recorded counts as before. */
+/** What starts still starting on [machineId] hold of its memory and disk, as its host's reservations do (reservations.ts): one
+ *  being created until a start's deadline, a launched one for its start window, a failed one nothing. 2026-11-03: 9 of 25 failed
+ *  starts in 10 hours were refused for memory or disk set aside this way, which the route did not count. */
+export function heldByStarts(starts: Json[], machineId: string, now = Date.now()) {
+  const held = { memoryBytes: 0, diskBytes: 0, heavyMemoryBytes: 0, heavyDiskBytes: 0 }
+  for (const start of starts) {
+    const request = object(start.request)
+    if (request.machineId !== machineId || start.error) continue
+    // The host reserves when it is handed the start, which may be long after it was asked for (review).
+    const launched = typeof start.harnessId === 'string'
+    const times = [start.requestedAt, start.dispatchedAt].filter(finite)
+    if (!times.length || now - Math.max(...times) >= (launched ? START_WINDOW_MS : START_DEADLINE_MS)) continue
+    const wanted = object(request.requirements)
+    const memory = finite(wanted.memoryBytes) ? wanted.memoryBytes : 0, disk = finite(wanted.diskBytes) ? wanted.diskBytes : 0
+    held.memoryBytes += memory; held.diskBytes += disk
+    if (heavyOfStart(start)) { held.heavyMemoryBytes += memory; held.heavyDiskBytes += disk }
+  }
+  return held
+}
+
 export function stalled(starts: Json[], machineId: string, pool: Json = {}, now = Date.now()): boolean {
   const last = starts.filter(s => object(s.request).machineId === machineId && !MODEL_NOT_OFFERED.test(String(s.error ?? ''))).slice(-2)
   if (last.length !== 2 || !last.every(s => !s.harnessId && (!!s.error || s.dispatched !== true))) return false
@@ -242,7 +263,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // (production, 2026-10-21). A member may run on a machine only its collaborator can open; the route tries that machine
   // too, but a member there is unknown, never offline.
   const swarmMachines = new Set([where.machineId, ...list(state.machines).map(m => String(m.machineId)), ...agents.map(a => String(a.machineId))])
-  const machines = new Map<string, { name: string; status: string; account: boolean; pool?: Json; folded?: boolean; unready?: Unready; stalled?: boolean }>()
+  const machines = new Map<string, { name: string; status: string; account: boolean; pool?: Json; folded?: boolean; unready?: Unready; stalled?: boolean; held?: ReturnType<typeof heldByStarts> }>()
   for (const m of list(value.machines)) if (swarmMachines.has(String(m.machineId))) machines.set(String(m.machineId), { name: String(m.name), status: String(m.status ?? 'unknown'), account: true })
   // The routing agent's own machine is the account's even when the list could not be read.
   if (!machines.has(where.machineId)) machines.set(where.machineId, { name: where.machineId, status: 'unknown', account: true })
@@ -250,6 +271,17 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // A teammate's project runs only on Team machines: the backend says per machine whether it takes one now, and why not
   // (backend superTabs/machines.ts teamWorkRefusal). Its project owner's own machines take its work as before.
   const projectOwner = project?.ownerId ?? state.ownerId
+  // A machine its owner keeps for some projects (backend machines.ts machine.projects, Tony 11-03): a Mac's Harness Team
+  // account follows its Mac. Only public projects are named, as the backend's own sentence does: the route's exclusions reach
+  // this project's readers.
+  const keptFor = (m: Json) => {
+    const mac = typeof m.hostMachineId === 'string' ? list(state.machines).find(x => x.machineId === m.hostMachineId && x.contributorId === m.contributorId) ?? m : m
+    const ids: unknown[] | null = Array.isArray(mac.projects) ? mac.projects : null
+    if (!ids || ids.includes(projectId)) return null
+    const named = list(state.projects).filter(p => ids.includes(p.id) && p.visibility === 'public').map(p => String(p.name))
+    return named.length ? `${String(mac.name)} runs only ${named.length > 1 ? `${named.slice(0, -1).join(', ')} and ${named.at(-1)}` : named[0]}.`
+      : `${String(mac.name)} is kept by its owner for other projects.`
+  }
   for (const original of list(state.machines)) {
     const repository = object(project?.repository)
     const teamWork = object(original.teamWork)
@@ -260,6 +292,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
       ...(original.scope === 'swarm' ? { cwd: repository.machineId === original.machineId
         ? repository.cwd : `${String(original.cwd).replace(/\/+$/, '')}/${projectId}` } : {}),
       ...(original.scope !== 'swarm' && projectId !== 'lead' ? { projectUnavailable: true } : {}),
+      ...(keptFor(original) ? { keptForOthers: keptFor(original) } : {}),
       ...(original.scope === 'swarm' && repository.machineId !== original.machineId && typeof repository.repositoryUrl !== 'string'
         ? { repositoryUnavailable: true } : {}),
       ...relayedReadings(original, list(state.machines)),
@@ -269,6 +302,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   }
   for (const [machineId, machine] of machines) {
     machine.stalled = stalled(list(state.starts), machineId, list(state.machines).find(m => m.machineId === machineId))
+    machine.held = heldByStarts(list(state.starts), machineId)
   }
   // One machine (docs/plans/2026-10-24-swarm-team-account.md): a Mac's Harness Team account is that Mac, under its name. A
   // teammate's project starts only in the team account and the Mac's owner's own projects only with the owner, so only one
@@ -348,7 +382,8 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     .map(d => ({ account: d.account, spend: object(d.spend), size: d.size, createdAt: Date.parse(String(d.createdAt)) }) as Commitment)
   // A model a host now offline served is left out with that reason, and a person naming it gets no stand-in (route.ts choose).
   const offline = offlineModels(state)
-  const choice = choose(probes, catalog, assessment, Date.now(), working, heldLocalModels(state), offline, made.plugins)
+  const now = Date.now()
+  const choice = choose(probes, catalog, assessment, now, working, heldLocalModels(state), offline, made.plugins)
   const skipped = [...made.warnings, ...(choice.warnings ?? [])]
   choice.excluded.push(...offline, ...(catalog.models.length ? [] : [{ title: 'New agents', reason: CATALOG_UNREADABLE }]))
   // The task stays in the agent's queue rather than going where it cannot be done.
@@ -360,9 +395,13 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     ...ciHeld ? { waiting: true, retryAfterMinutes: CI_RETRY_MINUTES, detail: ciHeld.reason.slice(MACHINE_FIT_MAKER.name.length + 2) } : {} }
   const verdict = decide(choice)
   const operationId = `route-${newId()}`
+  // The rows recorded are the rows offered: the agent choosing assigns by a recorded candidate.
+  let offered = choice.shown
   const record = (shape: RecordShape) => scoped({ action: 'command', operationId,
-    command: { type: 'route.record', conversationId: input.conversationId, decision: recordOf(choice, verdict, assessment, shape) } })
+    command: { type: 'route.record', conversationId: input.conversationId, decision: recordOf({ ...choice, shown: offered }, verdict, assessment, shape) } })
   let recorded = await record('current')
+  // A backend from before every engine on every machine was shown keeps 12 candidates (Ken, 2026-11-03): the best 12 go.
+  if (recorded.error === 'VALIDATION_ERROR' && offered.length > OLD_RECORD_MAX) { offered = offered.slice(0, OLD_RECORD_MAX); recorded = await record('current') }
   // A backend from before kinds, or before phase 1, refuses the new fields as invalid; the decision is still worth keeping in
   // the shape it knows. A task with no kind has nothing to leave out at the first step.
   if (recorded.error === 'VALIDATION_ERROR' && assessment.kind) recorded = await record('unkinded')
@@ -371,14 +410,16 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const routeDecisionId = recorded.ok === true ? object(object(recorded.value).result).routeDecisionId : undefined
   const decision = typeof routeDecisionId === 'string' ? `,"routeDecisionId":"${routeDecisionId}"` : ''
   // What the agent choosing reads of a candidate: where it runs, and what the route knows of it beside the ranking.
+  // A new agent's row says what its machine has for a start; a member needs no new start, and a paused machine, which offers
+  // no new agent, shows no reading (review of #2426).
   const publicOf = (s: typeof verdict.pick) => ({ id: s.id, kind: s.kind, ...(s.agentId ? { agentId: s.agentId } : {}), machineId: s.machineId,
     engine: s.engine, model: s.model, effort: s.effort, title: s.title, ...(s.gridModel ? { gridModel: s.gridModel, gridName: s.gridName } : {}),
-    ...(s.unrated ? { unrated: true } : {}), ...(s.notes.length ? { notes: s.notes } : {}) })
+    ...(s.unrated ? { unrated: true } : {}), quota: quotaBrief(s, now), ...(s.kind === 'new' && s.load?.room ? { machine: machineBrief(s.load.room) } : {}), ...(s.notes.length ? { notes: s.notes } : {}) })
   return {
     ok: true, ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : { unrecorded: true }),
     ...(instructions ? { instructions } : { instructionsUnreadable: true }),
     pick: publicOf(verdict.pick), via: verdict.via, p: verdict.p, why: verdict.why,
-    alternatives: alternativesTo(verdict.pick, choice.shown).map(publicOf),
+    alternatives: alternativesTo(verdict.pick, offered).map(publicOf),
     leftOut: leftOut(choice.excluded, choice.shown),
     warnings: [...(Array.isArray(effective.warnings) ? effective.warnings : []), ...(value.machinesUnreadable === true ? [MACHINES_UNREADABLE] : []),
       ...(catalog.models.length ? [] : [CATALOG_UNREADABLE]),
@@ -414,9 +455,12 @@ export function leftOut(excluded: Excluded[], shown: Array<{ machineName: string
 const MAX_LEFT_OUT = 20, MAX_REASONS = 4
 
 /** The next two rows, and the best row of every other machine, so the agent choosing can take another machine. */
-function alternativesTo<T extends { id: string; machineId: string }>(pick: T, shown: T[]): T[] {
-  const seen = new Set([pick.machineId])
-  return shown.filter(s => s.id !== pick.id).filter((s, i) => { const best = !seen.has(s.machineId); seen.add(s.machineId); return i < 2 || best })
+/** The best new agent and the best member of every engine on every machine, in rank order, the pick's own left out: the project's
+ *  order picks between accounts, then whether to reuse an agent there, so each is in front of the agent choosing once (Ken,
+ *  2026-11-03). */
+function alternativesTo<T extends { id: string } & Parameters<typeof slotOf>[0]>(pick: T, shown: T[]): T[] {
+  const seen = new Set([slotOf(pick)])
+  return shown.filter(s => { const best = !seen.has(slotOf(s)); seen.add(slotOf(s)); return best })
 }
 
 /** A reading this old says nothing is served (backend `MACHINE_FRESH_MS`). */
@@ -522,7 +566,7 @@ function loadOf(resources: Json, agents: number | null, cwd: string | undefined)
     cpuPercent: finite(resources.cpuPercent) ? resources.cpuPercent : null }
 }
 
-async function probeMachine(machineId: string, { name: machineName, status, account, pool, folded, unready = READY, stalled: stuck = false }: { name: string; status: string; account: boolean; pool?: Json; folded?: boolean; unready?: Unready; stalled?: boolean },
+async function probeMachine(machineId: string, { name: machineName, status, account, pool, folded, unready = READY, stalled: stuck = false, held = heldByStarts([], machineId) }: { name: string; status: string; account: boolean; pool?: Json; folded?: boolean; unready?: Unready; stalled?: boolean; held?: ReturnType<typeof heldByStarts> },
   members: Json[], allModels: CatalogModel[], catalog: Catalog, a: Assessment, where: Where, open: typeof openDaemon): Promise<Probe[]> {
   const listedEngines = Array.isArray(pool?.engines) ? pool.engines.filter((engine): engine is string => typeof engine === 'string') : []
   const legacy = listedEngines.some(engine => !ENGINES.includes(engine))
@@ -558,30 +602,38 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
       if (typeof relayed.from === 'string') return { ...read(object(relayed.quota), { account: String(relayed.account) }), from: relayed.from }
       return read(q, { why: text(object(observed.quotaReasons)[engine]) })
     }
+    // What a new start can use, as its host admits it (reservations.ts): measured, less what starts still starting hold.
+    const measuredMemory = finite(resources.memoryTotalBytes) && finite(resources.memoryUsedBytes) ? resources.memoryTotalBytes - resources.memoryUsedBytes : null
+    const measuredDisk = finite(resources.projectDiskFreeBytes) ? resources.projectDiskFreeBytes : null
+    const freeMemory = measuredMemory === null ? null : measuredMemory - held.memoryBytes, freeDisk = measuredDisk === null ? null : measuredDisk - held.diskBytes
+    const setAside = (n: number) => n > 0 ? `, with ${bytes(n)} set aside for agents still starting` : ''
     const blocked = [...(!fresh ? [OFFLINE] : []), ...(pool.paused ? ['New work is paused on this machine.'] : [])]
     const tools = object(observed.tools)
     /** Work for a project its owner does not run here: a new agent runs under the contribution, a member under its own grant. */
     const teammates = (contributorId: unknown) => typeof pool.teammatesRefused === 'string' && contributorId !== pool.projectOwnerId ? [pool.teammatesRefused] : []
-    const newReasons = [...blocked, ...teammates(pool.contributorId),
+    const kept = typeof pool.keptForOthers === 'string' ? [pool.keptForOthers] : []
+    const newReasons = [...blocked, ...kept, ...teammates(pool.contributorId),
       ...(pool.projectUnavailable === true ? ['Its owner must add this machine to the swarm again to support other projects.'] : []),
       ...(pool.repositoryUnavailable === true ? ['Share a repository for this project before starting agents on this machine.'] : []),
       ...(pool.availableSlots === 0 ? ['This machine has no available agent slots.'] : []),
-      ...(!finite(resources.projectDiskFreeBytes) || resources.projectDiskFreeBytes < needs.diskBytes ? ['The project has insufficient measured free disk.'] : []),
-      ...(!finite(resources.memoryTotalBytes) || !finite(resources.memoryUsedBytes) || resources.memoryTotalBytes - resources.memoryUsedBytes < needs.memoryBytes ? ['Insufficient measured free memory.'] : []),
+      ...(freeDisk === null || freeDisk < needs.diskBytes ? [`The project has insufficient measured free disk${setAside(held.diskBytes)}.`] : []),
+      ...(freeMemory === null || freeMemory < needs.memoryBytes ? [`Insufficient measured free memory${setAside(held.memoryBytes)}.`] : []),
       ...needs.tools.map(t => requiredToolReason(t, tools[t], object(observed.toolProbeErrors)[t])).filter((reason): reason is string => reason !== null),
       ...(needs.devices.length ? ['Required devices have not been reported.'] : []),
       ...unready.all]
     const pushNote = unready.push ? [unready.push] : []
     // What the machine has, for new agents and members alike: heavy work runs on the machine whoever does it (machineFit.ts).
     const load: Probe['load'] = { agents: Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.length : null,
-      freeMemoryBytes: finite(resources.memoryTotalBytes) && finite(resources.memoryUsedBytes) ? resources.memoryTotalBytes - resources.memoryUsedBytes : null,
-      hasFolder: finite(resources.projectDiskFreeBytes), freeDiskBytes: finite(resources.projectDiskFreeBytes) ? resources.projectDiskFreeBytes : null,
-      cpuPercent: finite(resources.cpuPercent) ? resources.cpuPercent : null }
+      // Heavy starts stay in: the machine fit holds heavy work placed there itself (machineFit.ts placedHeavyWork, review).
+      freeMemoryBytes: measuredMemory === null ? null : measuredMemory - (held.memoryBytes - held.heavyMemoryBytes), hasFolder: finite(resources.projectDiskFreeBytes),
+      freeDiskBytes: measuredDisk === null ? null : measuredDisk - (held.diskBytes - held.heavyDiskBytes),
+      cpuPercent: finite(resources.cpuPercent) ? resources.cpuPercent : null,
+      room: { slots: finite(pool.availableSlots) ? pool.availableSlots : null, freeMemoryBytes: freeMemory, heldMemoryBytes: held.memoryBytes, freeDiskBytes: freeDisk } }
     return [...members.map(m => {
       const engine = String(object(m.configuration).engine), allowance = quota(engine)
       const running = Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.includes(m.harnessId) : null
       return { ...memberProbe(m, fresh ? [...memberRefusals(running, needs.tools, needs.devices, tools, object(observed.devices), object(observed.toolProbeErrors)),
-        ...teammates(m.contributorId)] : [OFFLINE],
+        ...kept, ...teammates(m.contributorId)] : [OFFLINE],
         allowance, null, fresh && running === null, [...pushNote, ...usedUp(allowance)]), ...(fresh ? { load } : {}) }
     }),
       ...models.map(m => ({ ...newProbe(m, [...newReasons, ...(unready.engines[m.engine] ? [unready.engines[m.engine]!] : [])], quota(m.engine), fresh && quota(m.engine).known,

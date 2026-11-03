@@ -52,6 +52,76 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     reader.addListener(_swarmChanged);
     reader.reads.addListener(_swarmChanged);
     files.addListener(_filesChanged);
+    _composer.addListener(_keepDraft);
+    _takeKept();
+  }
+
+  /// What a person wrote and has not got through, from before this chat was
+  /// opened: its draft, and its posts as Not sent. A read that holds one drops
+  /// it ([SwarmOutbox.settle]).
+  void _takeKept() {
+    final kept = reader.kept;
+    if (kept == null || _disposed) return;
+    if (!kept.loaded) {
+      kept.addListener(_takeKeptOnce);
+      return;
+    }
+    if (_draft.isEmpty) {
+      if (kept.draft(reader.tabId, id, null) case final draft?) {
+        _draft = _keptDraft = draft.text;
+        _mentions.addAll(draft.mentions);
+      }
+    }
+    if (_outbox.isEmpty) {
+      final posts = [
+        for (final row in kept.posts(reader.tabId, id, null))
+          ?SwarmPost.fromKept(row, _heldOf),
+      ];
+      if (posts.isNotEmpty) _outbox.restore(posts);
+    }
+    _composer.changed();
+  }
+
+  void _takeKeptOnce() {
+    reader.kept?.removeListener(_takeKeptOnce);
+    _takeKept();
+  }
+
+  /// What a kept post puts back in the box if it is refused: only its words.
+  static Object? _heldOf(String text) => (
+    draft: text,
+    mentions: const <String, String>{},
+    replyTo: null as SuperTabMessage?,
+    newSession: false,
+    sessionProjectId: null as String?,
+  );
+
+  String _keptDraft = '';
+
+  void _keepDraft() {
+    if (_disposed || _refused || _draft == _keptDraft) return;
+    _keptDraft = _draft;
+    reader.kept?.setDraft(reader.tabId, id, null, _draft, _mentions);
+  }
+
+  void _keepPosts() {
+    if (_disposed) return;
+    reader.kept?.setPosts(reader.tabId, id, null, [
+      for (final post in _outbox.posts)
+        if (post.state != SwarmPostState.confirmed) post.kept,
+    ]);
+  }
+
+  /// Takes [post], Not sent, away for good: Delete. It may still have arrived,
+  /// and then it shows when the chat is next read.
+  void deletePost(SwarmPost post) {
+    if (_disposed || post.state != SwarmPostState.unconfirmed) return;
+    _uploads.forget(post.files);
+    _outbox.remove(post);
+    if (error != null && error == _postError && _outbox.unconfirmed == null) {
+      error = null;
+      _tell();
+    }
   }
 
   final SwarmReader reader;
@@ -126,8 +196,13 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   /// `threadDraft`): a thread closed and opened again finds it.
   final _threadDrafts = <String, String>{};
 
-  String threadDraft(String root) => _threadDrafts[root] ?? '';
+  String threadDraft(String root) =>
+      _threadDrafts[root] ??
+      reader.kept?.draft(reader.tabId, id, root)?.text ??
+      '';
   void setThreadDraft(String root, String text) {
+    if (_refused) return;
+    reader.kept?.setDraft(reader.tabId, id, root, text);
     if (text.isEmpty) {
       _threadDrafts.remove(root);
     } else {
@@ -238,6 +313,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     path: '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/commands',
     timeout: sendTimeout,
     onChanged: () {
+      _keepPosts();
       if (!_disposed) _tell();
     },
     onTaken: (post) {
@@ -619,8 +695,9 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
         error != null;
     _refused = true;
     _forget();
-    _draft = '';
+    _draft = _keptDraft = '';
     _threadDrafts.clear();
+    reader.kept?.dropChat(reader.tabId, id);
     // A thread's files go too; its own screen hears it and gives up theirs.
     for (final box in _threadFiles.values) {
       box.clear();
@@ -780,7 +857,10 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
         );
       }
       // A post read back shows as its message, once, whatever its answer.
-      changed |= _outbox.settle(messages);
+      if (_outbox.settle(messages)) {
+        changed = true;
+        _keepPosts();
+      }
       if (older || !_read || latest) {
         final before = SuperTabPage.read(answer['next']);
         changed |=
@@ -860,6 +940,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     );
     _draft = '';
     _mentions.clear();
+    _keepDraft();
     _replyingTo = null;
     _newSession = false;
     _sessionProjectId = null;
@@ -1223,11 +1304,15 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   bool _receiptCurrent = false;
   Future<void>? _readingReceipt;
 
-  /// The person's newest message here, written by them and not by an agent or
-  /// a terminal: the only one that can carry a delivery line.
+  /// The person's newest message here, written by them and not by an agent, a
+  /// terminal or the server in their name: the only one that can carry a
+  /// delivery line (Desktop's `isOwn`).
   SuperTabMessage? get latestOwn {
     for (final m in messages.reversed) {
-      if (!m.fromAgent && !m.fromTerminal && m.authorId == reader.accountId) {
+      if (!m.fromAgent &&
+          !m.fromTerminal &&
+          !m.postedForAuthor &&
+          m.authorId == reader.accountId) {
         return m;
       }
     }
@@ -1398,6 +1483,8 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
 
   @override
   void dispose() {
+    _keepDraft();
+    reader.kept?.removeListener(_takeKeptOnce);
     _disposed = true;
     _uploads.close();
     _outbox.close();

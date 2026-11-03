@@ -49,7 +49,7 @@ export interface Placed { memoryBytes: number; diskBytes: number; agents: number
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 /** The heavy work a start declared in its own field (backend superTabs/model.ts AgentStartRequest.heavy), or none. Never read
  *  from the memory it asked: an ordinary Builder's start may ask as much as a heavy one (review of #2426). */
-function heavyOfStart(start: Json): Need | null {
+export function heavyOfStart(start: Json): Need | null {
   const heavy = object(start.request).heavy
   return Array.isArray(heavy) ? heavyNeed({ heavy: heavy.filter((k): k is HeavyWork => typeof k === 'string' && Object.hasOwn(HEAVY_NEEDS, k)) }) : null
 }

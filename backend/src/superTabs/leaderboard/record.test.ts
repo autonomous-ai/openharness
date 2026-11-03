@@ -166,7 +166,7 @@ describe('when the Lead records a merge', () => {
     const effects = f.run(merged(id), lead)
     expect(f.group(id).ledger?.shippedAt).toBe(NOW)
     expect(f.group(id).pullRequestUrls).toEqual([PR])
-    expect(effects.messages.map(m => [m.conversationId, m.text])).toEqual([[id, `Merged ${PR}`]])
+    expect(effects.messages.filter(m => m.conversationId === id).map(m => [m.conversationId, m.text])).toEqual([[id, `Merged ${PR}`]])
     expect(shippedFor(f, 'owner')).toMatchObject({ points: 3, shipped: { count: 1 } })
   })
 
@@ -262,7 +262,7 @@ describe('when the Lead records a merge', () => {
       expect(f.group(id).ledger?.fixedAfterMergeAt).toBe(NOW + 3 * DAY_MS)
       expect(f.group(fix).ledger).toMatchObject({ shippedAt: NOW + 3 * DAY_MS, fixOf: id })
       expect(f.group(fix).pullRequestUrls).toEqual([FIX])
-      expect(effects.messages.map(m => m.text)).toEqual([`Merged ${FIX}, a fix of ${PR}`])
+      expect(effects.messages.filter(m => m.conversationId === fix).map(m => m.text)).toEqual([`Merged ${FIX}, a fix of ${PR}`])
       // The line is the fix's card (cards.ts: a main-chat line's links become cards, the original's too).
       expect(f.group(fix).cards?.pullRequests?.[0]).toMatchObject({ url: FIX, messageId: effects.messages[0]!.id, mergedAt: NOW + 3 * DAY_MS })
       // Recorded again, or by a second fix later: the first fix stays the one counted.
@@ -1062,6 +1062,46 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     }
     expect(f.group(id).ledger!.runs![0]!.at).toBe(10_001)
     expect(f.group(id).ledger!.firstAssignedAt).toBe(10_000)
+  })
+})
+
+// Diego, 2026-11-03 (#2311): a Tester and a Reviewer judge the same checks in parallel. Each one's first verdict is its own
+// review, and a checker passing what another failed is no re-review of a failure.
+describe('several checkers on one check', () => {
+  const checkers = () => {
+    const f = fixture()
+    const id = f.create(owner, { checks: [{ description: 'Signs in offline', independent: true }] })
+    const { assignmentId } = f.assign(id)
+    const tester = f.add('tester', id), reviewer = f.add('reviewer', id)
+    f.state.agents.find(a => a.id === tester)!.configuration = { ...config, engine: 'codex', model: 'gpt-6.1-sol' }
+    const check = (agentId: string, passed: boolean) => f.run({ type: 'work.check', conversationId: id, assignmentId,
+      checkId: f.group(id).checks[0]!.id, passed, evidence: 'rev abc' }, f.asAgent(agentId))
+    return { f, id, tester, reviewer, check, run: () => f.group(id).ledger!.runs![0]! }
+  }
+
+  it('credits a Reviewer\'s verdict after a Tester\'s on the same check as its own review', () => {
+    const { f, id, tester, reviewer, check } = checkers()
+    check(tester, false)
+    check(reviewer, true)
+    check(reviewer, true)
+    expect(f.group(id).ledger!.reviews!.map(r => [r.model, r.count])).toEqual([['gpt-6.1-sol', 1], ['opus', 1]])
+  })
+
+  it('adds no rework round when another checker passes a check one failed', () => {
+    const { tester, reviewer, check, run } = checkers()
+    check(tester, false)
+    check(reviewer, true)
+    expect(run().reworkRounds).toBe(0)
+    check(tester, true)
+    expect(run().reworkRounds).toBe(1)
+  })
+
+  it('fails the first review when a second checker\'s first verdict fails', () => {
+    const { tester, reviewer, check, run } = checkers()
+    check(reviewer, true)
+    expect(run().firstReview).toBe(true)
+    check(tester, false)
+    expect(run().firstReview).toBe(false)
   })
 })
 

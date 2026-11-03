@@ -12,6 +12,7 @@ import '../widgets/new_harness_paste.dart';
 import 'composer_files.dart';
 import 'composer_newline.dart';
 import 'controller.dart';
+import 'swarm_type.dart';
 
 /// A thread's reply box, one everywhere a reply is written (the thread pane,
 /// the Threads view): files dropped, pasted or attached, Enter sends and
@@ -62,6 +63,15 @@ class SuperTabReplyBox extends StatelessWidget {
 
   /// The field's hint: what an empty box says it is for.
   final String hint;
+
+  /// The Tab order inside an [OrderedTraversalPolicy] group around the box:
+  /// the field (and its files) first, then the options, wherever the owner
+  /// places them ([optionsOrder], such as the pane's Also send on its own line
+  /// under the box), then attach and send. Outside such a group it has no
+  /// effect, and the reading order applies.
+  static const fieldOrder = NumericFocusOrder(1),
+      optionsOrder = 2.0,
+      sendOrder = NumericFocusOrder(3);
 
   @override
   Widget build(BuildContext context) => NewHarnessDropZone(
@@ -126,12 +136,15 @@ class SuperTabReplyBox extends StatelessWidget {
                   maxLength: kComposerMaxLength,
                   inputFormatters: inputFormatters,
                   keyboardType: TextInputType.multiline,
-                  style: DesktopChrome.text(),
+                  style: SwarmType.composer(context),
                   decoration: InputDecoration(
                     isCollapsed: true,
                     constraints: const BoxConstraints(),
                     hintText: hint,
-                    hintStyle: DesktopChrome.text(color: DesktopChrome.muted),
+                    hintStyle: SwarmType.composer(
+                      context,
+                      color: DesktopChrome.muted,
+                    ),
                     contentPadding: EdgeInsets.zero,
                     border: InputBorder.none,
                     enabledBorder: InputBorder.none,
@@ -157,23 +170,29 @@ class SuperTabReplyBox extends StatelessWidget {
             Row(
               children: [
                 Expanded(child: options ?? const SizedBox.shrink()),
-                NewHarnessAttachButton(
-                  attachments: files,
-                  enabled: writable && !busy,
+                FocusTraversalOrder(
+                  order: sendOrder,
+                  child: NewHarnessAttachButton(
+                    attachments: files,
+                    enabled: writable && !busy,
+                  ),
                 ),
-                ListenableBuilder(
-                  listenable: Listenable.merge([files, text]),
-                  builder: (context, _) => AppIconButton(
-                    key: sendKey,
-                    icon: AppIcons.arrowUp,
-                    tooltip: 'Send reply',
-                    color: DesktopChrome.accent,
-                    onPressed:
-                        writable &&
-                            !busy &&
-                            (text.text.trim().isNotEmpty || !files.isEmpty)
-                        ? onSend
-                        : null,
+                FocusTraversalOrder(
+                  order: sendOrder,
+                  child: ListenableBuilder(
+                    listenable: Listenable.merge([files, text]),
+                    builder: (context, _) => AppIconButton(
+                      key: sendKey,
+                      icon: AppIcons.arrowUp,
+                      tooltip: 'Send reply',
+                      color: DesktopChrome.accent,
+                      onPressed:
+                          writable &&
+                              !busy &&
+                              (text.text.trim().isNotEmpty || !files.isEmpty)
+                          ? onSend
+                          : null,
+                    ),
                   ),
                 ),
               ],

@@ -68,6 +68,8 @@ export async function addMember(tx: Transaction, workspaceId: string, person: { 
   checked.get(tx)?.delete(id)
   const prior = await tx.swarmWorkspaceMember.findUnique({ where: { id } })
   if (prior && !prior.removedAt) return prior
+  // Added back: by an invitation, a link or an open Swarm, never by auto-join, which refuses anyone declined here first.
+  await clearAutoJoinDecline(tx, workspaceId, person.id)
   if (await tx.swarmWorkspaceRemoval.count({ where: { workspaceId, userId: person.id, finishedAt: null } })) {
     fail('REMOVAL_PENDING', `An earlier removal from this ${WORKSPACE_LABEL} is still taking them out of its Swarms. Try again in a few minutes.`, 409)
   }
@@ -75,6 +77,19 @@ export async function addMember(tx: Transaction, workspaceId: string, person: { 
   return prior
     ? tx.swarmWorkspaceMember.update({ where: { id }, data: { ...data, version: { increment: 1 } } })
     : tx.swarmWorkspaceMember.create({ data: { id, workspaceId, userId: person.id, ...data } })
+}
+
+/** Whether this Workspace removed `userId`: auto-join never adds them to its Swarms. Unlike the member row, never purged. */
+export async function autoJoinDeclinedBy(tx: Transaction, workspaceId: string, userId: string): Promise<boolean> {
+  const workspace = await tx.swarmWorkspace.findUnique({ where: { id: workspaceId }, select: { autoJoinDeclined: true } })
+  return !!workspace?.autoJoinDeclined.includes(userId)
+}
+
+async function clearAutoJoinDecline(tx: Transaction, workspaceId: string, userId: string): Promise<void> {
+  const workspace = await tx.swarmWorkspace.findUnique({ where: { id: workspaceId }, select: { autoJoinDeclined: true } })
+  if (workspace?.autoJoinDeclined.includes(userId)) {
+    await tx.swarmWorkspace.update({ where: { id: workspaceId }, data: { autoJoinDeclined: workspace.autoJoinDeclined.filter(id => id !== userId) } })
+  }
 }
 
 /** The Workspace a Swarm is created in: the one named, where the person may create Swarms, or else their own, made now. */
@@ -286,6 +301,9 @@ export class SwarmWorkspaces {
       const now = new Date(this.deps.now())
       await tx.swarmWorkspaceMember.update({ where: { id: target.id }, data: { removedAt: now, removedBy: user.sub,
         purgeAt: new Date(now.getTime() + WORKSPACE_PURGE_MS), version: { increment: 1 } } })
+      // Swarm auto-join never adds them back, even after this row is purged (spec 2026-11-03; security review 2 of #2714).
+      const declined = (await tx.swarmWorkspace.findUnique({ where: { id: workspaceId }, select: { autoJoinDeclined: true } }))?.autoJoinDeclined ?? []
+      if (!declined.includes(userId)) await tx.swarmWorkspace.update({ where: { id: workspaceId }, data: { autoJoinDeclined: [...declined, userId].sort() } })
       // The removal stays open until the person has left every Swarm of the Workspace, whatever happens to their row after.
       return tx.swarmWorkspaceRemoval.create({ data: { id: `${target.id}:${target.generation}`, workspaceId, userId, email: target.email,
         generation: target.generation, autonomousEnv: workspace.autonomousEnv, removedAt: now, removedBy: user.sub, finishedAt: null, purgeAt: null } })

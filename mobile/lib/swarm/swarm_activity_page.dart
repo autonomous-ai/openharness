@@ -1,21 +1,23 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/fzf.dart' show fzfAge;
 import 'package:harness_mobile/phone/out_of_sight.dart';
 import 'package:harness_mobile/phone/phone_navigation.dart';
+import 'package:harness_mobile/phone/tty.dart';
+import 'package:harness_mobile/phone/tty_controls.dart' show TtySize;
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 
-import 'identity.dart';
 import 'model.dart';
 import 'swarm_activity.dart';
 import 'swarm_activity_feed.dart';
 import 'swarm_asks.dart' show SwarmAsks;
-import 'swarm_home_rows.dart' show swarmNeedAsk;
+import 'swarm_home_rows.dart' show SwarmInvitationRow, swarmNeedAsk;
 import 'swarm_inbox.dart';
 import 'swarm_need_rows.dart';
 import 'swarm_project_page.dart' show swarmChatRoute;
@@ -24,6 +26,40 @@ import 'swarm_reader.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
+import 'swarm_you_page.dart' show SwarmYouButton;
+
+/// Activity asked, from elsewhere in the tabs, to show [filter]: a tile on
+/// Home asking for what needs the person, say ([showSwarmTab]). [n] tells one
+/// ask from the next, so the same filter asked twice is shown twice.
+typedef SwarmActivityAsk = ({SwarmActivityFilter filter, int n});
+
+/// What Activity under the tabs was last asked to show ([SwarmActivityAsk]):
+/// the tab's Activity listens, from the first time it builds, so an ask made
+/// as it opens is shown too. None over a pushed Activity.
+class SwarmActivityAsks extends InheritedWidget {
+  const SwarmActivityAsks({
+    super.key,
+    required this.asks,
+    required super.child,
+  });
+
+  final ValueListenable<SwarmActivityAsk?> asks;
+
+  /// The asks [context] is under, or null under none.
+  static ValueListenable<SwarmActivityAsk?>? maybeOf(BuildContext context) =>
+      context.getInheritedWidgetOfExactType<SwarmActivityAsks>()?.asks;
+
+  @override
+  bool updateShouldNotify(SwarmActivityAsks oldWidget) =>
+      !identical(asks, oldWidget.asks);
+}
+
+/// The count on the Activity tab: what waits on the person in their Swarms,
+/// and the invitations to a Swarm waiting on their answer, which Activity
+/// lists under All and Needs you (Tony, 2026-11-03): they left the top of
+/// Home, and the tab is how the person learns one came.
+int swarmActivityTabBadge(SwarmSession session) =>
+    session.activity.badge + session.inbox.invitations.length;
 
 /// Opens Activity over [context]'s page: [focus] — a row's key — open in
 /// full under its filter; only Swarm [swarmId]'s rows when Home shows that
@@ -82,13 +118,18 @@ class SwarmActivityPage extends StatelessWidget {
 }
 
 /// Activity, in place of Needs you (Tony's prototype C3): its title in the
-/// terminal's face, the filters — Needs you · @ · Replies · Reactions (Threads
-/// from a server before Activity) — each with its count, then the open
-/// filter's rows: where and who over what, and Approve (which asks first) or
-/// Reply at the row's end. A need the person handled stays, dimmed, under the
-/// others; a reply or reaction is bold while unread. The rows shown are read
-/// on every device once Activity is left ([SwarmActivity.showing]). The
-/// Activity tab's screen, and [SwarmActivityPage]'s.
+/// terminal's face, the filters — All · Needs you · Mentions · Replies ·
+/// Reactions (Threads from a server before Activity) — each with its count,
+/// then the open filter's rows. All, the tab's first (Slack's one feed, Tony,
+/// 2026-11-03), has what needs the person first, then the rest newest first.
+/// On the tab, the invitations to a Swarm head All and Needs you, counted in
+/// both and on the tab's badge ([swarmActivityTabBadge]): they wait on the
+/// person's answer. Each row: where and who over what, and Approve (which
+/// asks first) or Reply at the row's end. A need the person handled stays,
+/// dimmed, under the others; a reply or reaction is bold while unread. The
+/// rows shown are read on every device once Activity is left
+/// ([SwarmActivity.showing]). The Activity tab's screen, and
+/// [SwarmActivityPage]'s.
 ///
 /// Only while it is in sight ([OutOfSight]) does it read the project chats
 /// ([SwarmActivity.watch]) and keep the Swarm's notices quiet.
@@ -121,24 +162,69 @@ class SwarmActivityView extends StatefulWidget {
 class _SwarmActivityViewState extends State<SwarmActivityView> {
   SwarmSession? _session;
   bool _seen = false;
-  late SwarmActivityFilter _filter = _filterOf(widget.focus);
+
+  /// The open filter; null for All, the tab's first. A page pushed for what
+  /// needs the person (`openSwarmNeeds`) opens on Needs you, as before.
+  late SwarmActivityFilter? _filter = _filterOf(
+    widget.focus,
+    all: widget.leading == null && widget.projectId == null,
+  );
   late String? _open = widget.focus;
+
+  /// What the tabs asked this Activity to show, listened to on the tab.
+  ValueListenable<SwarmActivityAsk?>? _asks;
+
+  /// The last ask shown, by its [SwarmActivityAsk.n].
+  int? _asked;
 
   /// The focused row, brought into view once it is drawn.
   final _focusKey = GlobalKey();
   bool _focusShown = false;
 
-  static SwarmActivityFilter _filterOf(String? key) => switch (key) {
+  /// The filter a row's [key] is under; with none, All when [all] allows it,
+  /// else Needs you (a project's status card, or a page asked for what needs
+  /// the person, opens on what waits).
+  static SwarmActivityFilter? _filterOf(
+    String? key, {
+    required bool all,
+  }) => switch (key) {
     final key? when key.startsWith('mention:') => SwarmActivityFilter.mentions,
     final key? when key.startsWith('thread:') => SwarmActivityFilter.threads,
     final key? when key.startsWith('reaction:') =>
       SwarmActivityFilter.reactions,
+    null when all => null,
     _ => SwarmActivityFilter.needsYou,
   };
+
+  /// Shows what the tabs asked for last, once.
+  void _showAsked() {
+    final ask = _asks?.value;
+    if (ask == null || ask.n == _asked) return;
+    _asked = ask.n;
+    if (!mounted) return;
+    setState(() {
+      _filter = ask.filter;
+      _open = null;
+    });
+  }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    // The tab's Activity only: a pushed one has its own filter.
+    final asks = widget.leading == null
+        ? SwarmActivityAsks.maybeOf(context)
+        : null;
+    if (!identical(asks, _asks)) {
+      _asks?.removeListener(_showAsked);
+      _asks = asks?..addListener(_showAsked);
+      final ask = asks?.value;
+      if (ask != null && ask.n != _asked) {
+        _asked = ask.n;
+        _filter = ask.filter;
+        _open = null;
+      }
+    }
     final session = SwarmScope.of(context);
     final seen = session != null && !OutOfSight.of(context);
     if (identical(session, _session) && seen == _seen) return;
@@ -165,6 +251,7 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
 
   @override
   void dispose() {
+    _asks?.removeListener(_showAsked);
     _see(false);
     super.dispose();
   }
@@ -201,7 +288,7 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
                 ),
               )
             else
-              const SwarmTabHeader('Activity'),
+              const SwarmTabHeader('Activity', trailing: SwarmYouButton()),
             if (session != null)
               Expanded(
                 child: ListenWhileInSight(
@@ -215,19 +302,24 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
     );
   }
 
-  /// [filter]'s rows, of [widget.swarmId] alone when it names one, and of
-  /// [widget.projectId] alone when it names one.
+  /// [filter]'s rows (All's for null: [swarmActivityAll]), of
+  /// [widget.swarmId] alone when it names one, and of [widget.projectId]
+  /// alone when it names one.
   List<SwarmActivityItem> _items(
     SwarmSession session,
-    SwarmActivityFilter filter,
+    SwarmActivityFilter? filter,
   ) {
     final projectId = widget.projectId;
     final reader = projectId == null || widget.swarmId == null
         ? null
         : session.inbox.reader(widget.swarmId!);
     final snapshot = _project(session) == null ? null : reader?.snapshot;
+    final activity = session.activity;
     return [
-      for (final item in session.activity.items(filter))
+      for (final item
+          in filter == null
+              ? swarmActivityAll(activity)
+              : activity.items(filter))
         if ((widget.swarmId == null || item.swarmId == widget.swarmId) &&
             (projectId == null ||
                 snapshot != null &&
@@ -250,7 +342,7 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
   }
 
   Widget _body(BuildContext context, SwarmSession session) {
-    final activity = session.activity;
+    final activity = session.activity, inbox = session.inbox;
     final items = _items(session, _filter);
     // What is open here is what goes read once Activity is left.
     activity.showing(items);
@@ -267,13 +359,20 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
           ),
           child: Row(
             children: [
-              for (final (i, filter) in SwarmActivityFilter.values.indexed) ...[
+              for (final (i, filter) in [
+                null,
+                ...SwarmActivityFilter.values,
+              ].indexed) ...[
                 if (i > 0) const SizedBox(width: AppSpace.s),
                 SwarmActivityFilterPill(
-                  key: ValueKey('swarm-activity-filter-${filter.name}'),
+                  key: ValueKey(
+                    'swarm-activity-filter-${filter?.name ?? 'all'}',
+                  ),
                   filter: filter,
-                  label: activity.label(filter),
-                  count: _items(session, filter).where(activity.waiting).length,
+                  label: filter == null ? null : activity.label(filter),
+                  count:
+                      _items(session, filter).where(activity.waiting).length +
+                      (_invitesIn(filter) ? inbox.invitations.length : 0),
                   selected: filter == _filter,
                   onTap: () => setState(() => _filter = filter),
                 ),
@@ -303,12 +402,45 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
   ) {
     final activity = session.activity, inbox = session.inbox;
     final fromChats =
+        _filter == null ||
         _filter == SwarmActivityFilter.threads ||
         _filter == SwarmActivityFilter.reactions;
     final note = AppType.caption(color: AppPalette.textSecondary, height: 1.35);
     final missing = _focusMissing(session, items);
     if (missing == null) _showFocus();
+    // The account's invitations, on the tab's All and Needs you: what a
+    // Swarm asks of the person before they are in it (Slack's Activity has
+    // them too).
+    final invited = _invitesIn(_filter)
+        ? inbox.invitations
+        : const <SwarmInvitation>[];
     return [
+      if (invited.isNotEmpty) ...[
+        SwarmGroup(
+          key: const ValueKey('swarm-activity-invitations'),
+          children: [
+            for (final invitation in invited)
+              SwarmInvitationRow(
+                key: ValueKey('swarm-invitation-${invitation.inviteId}'),
+                invitation: invitation,
+                joining: inbox.joining.contains(invitation.inviteId),
+                onJoin: () => unawaited(inbox.join(invitation)),
+                onLater: () => inbox.notNow(invitation),
+              ),
+          ],
+        ),
+        if (inbox.joinError case final error?)
+          Padding(
+            key: const ValueKey('swarm-invitation-error'),
+            padding: const EdgeInsets.only(top: AppSpace.s),
+            child: Text(
+              error,
+              style: Tty.of(context)
+                  .style(color: Tty.of(context).red, size: TtySize.meta),
+            ),
+          ),
+        const SizedBox(height: AppSpace.m),
+      ],
       if (missing case (:final asks?))
         _Note(
           key: const ValueKey('swarm-activity-focus-failed'),
@@ -357,6 +489,8 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
       else if (items.isEmpty &&
           (!inbox.loaded || fromChats && activity.reading))
         SwarmSkeletonRows(id: 'swarm-activity-loading', round: true)
+      else if (items.isEmpty && invited.isNotEmpty)
+        const SizedBox.shrink()
       else if (items.isEmpty)
         Padding(
           padding: const EdgeInsets.symmetric(
@@ -372,6 +506,12 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
       else
         SwarmGroup(
           children: [for (final item in items) _row(context, session, item)],
+        ),
+      if (_filter == SwarmActivityFilter.needsYou)
+        _AnsweredDecisions(
+          session: session,
+          swarmId: widget.swarmId,
+          projectId: widget.projectId,
         ),
     ];
   }
@@ -418,15 +558,25 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
     });
   }
 
-  static String _nothing(SwarmActivityFilter filter, {required bool replies}) =>
-      switch (filter) {
-        SwarmActivityFilter.needsYou => 'Nothing needs you.',
-        SwarmActivityFilter.mentions => 'No one tagged you.',
-        SwarmActivityFilter.threads when replies =>
-          'No replies to your messages yet.',
-        SwarmActivityFilter.threads => 'No threads with you yet.',
-        SwarmActivityFilter.reactions => 'No reactions to you yet.',
-      };
+  /// Whether [filter] lists the account's invitations: All and Needs you, on
+  /// the tab alone — not on a page pushed for one Swarm or one project.
+  bool _invitesIn(SwarmActivityFilter? filter) =>
+      (filter == null || filter == SwarmActivityFilter.needsYou) &&
+      widget.swarmId == null &&
+      widget.leading == null;
+
+  static String _nothing(
+    SwarmActivityFilter? filter, {
+    required bool replies,
+  }) => switch (filter) {
+    null => "You're all caught up.",
+    SwarmActivityFilter.needsYou => 'Nothing needs you.',
+    SwarmActivityFilter.mentions => 'No one tagged you.',
+    SwarmActivityFilter.threads when replies =>
+      'No replies to your messages yet.',
+    SwarmActivityFilter.threads => 'No threads with you yet.',
+    SwarmActivityFilter.reactions => 'No reactions to you yet.',
+  };
 
   Widget _row(
     BuildContext context,
@@ -637,6 +787,144 @@ class _ClosesWhenGoneState extends State<_ClosesWhenGone> {
 }
 
 /// A line over the rows, with what can be done about it.
+/// The last few decisions answered, as the desktop's Notifications pane lists
+/// them under the open ones: each with the option chosen, or that the
+/// coordinator decided, called what its project calls it, and never as the
+/// person's own. Read when this shows, and again after an answer.
+class _AnsweredDecisions extends StatefulWidget {
+  const _AnsweredDecisions({
+    required this.session,
+    required this.swarmId,
+    required this.projectId,
+  });
+
+  final SwarmSession session;
+  final String? swarmId, projectId;
+
+  /// How many stay in view, as on the desktop.
+  static const shown = 5;
+
+  @override
+  State<_AnsweredDecisions> createState() => _AnsweredDecisionsState();
+}
+
+class _AnsweredDecisionsState extends State<_AnsweredDecisions> {
+  /// What was asked for, by Swarm and its read: a Swarm read again from
+  /// nothing is read again, and each only once otherwise.
+  final _asked = <String>{};
+
+  Iterable<(String, SwarmAsks)> get _asks sync* {
+    for (final swarm in widget.session.inbox.swarms) {
+      if (widget.swarmId != null && swarm.id != widget.swarmId) continue;
+      if (widget.session.inbox.asks(swarm.id) case final asks?) {
+        yield (swarm.id, asks);
+      }
+    }
+  }
+
+  void _read(String swarmId, SwarmAsks asks) => unawaited(
+    asks.readAnswered().then((_) {
+      widget.session.home.forgetDecisionsAside(swarmId, [
+        for (final decision in asks.answered) decision.id,
+      ]);
+    }),
+  );
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: widget.session.inbox,
+    builder: (context, _) {
+      final all = _asks.toList();
+      for (final (swarmId, asks) in all) {
+        if (_asked.add('$swarmId/${asks.reader.generation}')) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _read(swarmId, asks);
+          });
+        }
+      }
+      return ListenableBuilder(
+        listenable: Listenable.merge([for (final (_, asks) in all) asks]),
+        builder: (context, _) => _list(context, all),
+      );
+    },
+  );
+
+  Widget _list(BuildContext context, List<(String, SwarmAsks)> all) {
+    final projectId = widget.projectId;
+    final rows = [
+      for (final (_, asks) in all)
+        for (final decision in asks.answered)
+          if (projectId == null || decision.projectId == projectId)
+            (decision, asks),
+    ];
+    final epoch = DateTime.fromMillisecondsSinceEpoch(0);
+    rows.sort(
+      (a, b) => (b.$1.createdAt ?? epoch).compareTo(a.$1.createdAt ?? epoch),
+    );
+    final failed = all.where((e) => e.$2.answeredError != null).firstOrNull;
+    final caption = AppType.caption(
+      color: AppPalette.textSecondary,
+      height: 1.35,
+    );
+    return Column(
+      key: rows.isEmpty ? null : const ValueKey('swarm-answered'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (failed != null)
+          Padding(
+            padding: const EdgeInsets.only(top: AppSpace.s),
+            child: _Note(
+              text: failed.$2.answeredError!,
+              action: SwarmButton(
+                key: const ValueKey('swarm-answered-retry'),
+                label: 'Try again',
+                style: SwarmButtonStyle.link,
+                onPressed: () => _read(failed.$1, failed.$2),
+              ),
+            ),
+          ),
+        if (rows.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpace.xs,
+              AppSpace.l,
+              AppSpace.xs,
+              AppSpace.s,
+            ),
+            child: Text('Answered', style: caption),
+          ),
+          SwarmGroup(
+            children: [
+              for (final (decision, asks) in rows.take(
+                _AnsweredDecisions.shown,
+              ))
+                Padding(
+                  key: ValueKey('swarm-answered-${decision.id}'),
+                  padding: const EdgeInsets.all(AppSpace.m),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        decision.question,
+                        style: AppType.body(color: AppPalette.textPrimary),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${decision.delegated ? '${asks.reader.snapshot?.coordinatorNameOf(decision.projectId) ?? kDefaultCoordinatorName} decided' : 'You chose'}: '
+                        '${swarmOption(decision.options, decision.choice ?? -1)}',
+                        style: caption,
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+}
+
 class _Note extends StatelessWidget {
   const _Note({super.key, required this.text, required this.action});
 
@@ -675,9 +963,10 @@ class SwarmActivityFilterPill extends StatelessWidget {
     this.label,
   });
 
-  final SwarmActivityFilter filter;
+  /// The filter it opens; null for All.
+  final SwarmActivityFilter? filter;
 
-  /// What it is called, when not [SwarmActivityFilter.label].
+  /// What it is called, when not [SwarmActivityFilter.label] (or All).
   final String? label;
   final int count;
   final bool selected;
@@ -687,12 +976,11 @@ class SwarmActivityFilterPill extends StatelessWidget {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final ink = selected ? AppPalette.windowBg : AppPalette.textPrimary;
-    final name = label ?? filter.label;
-    final heard = filter == SwarmActivityFilter.mentions ? 'Mentions' : name;
+    final name = label ?? filter?.label ?? 'All';
     return Semantics(
       button: true,
       selected: selected,
-      label: '$heard, $count',
+      label: '$name, $count',
       excludeSemantics: true,
       child: Material(
         color: selected
@@ -884,9 +1172,10 @@ class SwarmActivityRow extends StatelessWidget {
     if (item case SwarmActivityNeed(need: final SwarmDecisionNeed need)
         when handled == null) {
       final asks = session.inbox.asks(need.swarmId);
-      if (session.held(need) != null ||
+      if (session.holding(need) ||
           (asks?.answering.contains(need.decision.id) ?? false) ||
           asks?.unconfirmed(need.decision) != null ||
+          (asks?.unconfirmedDelegate(need.decision) ?? false) ||
           session.dropped(need)) {
         return SwarmDecisionAnswer(session: session, need: need);
       }
@@ -943,7 +1232,7 @@ class SwarmActivityRow extends StatelessWidget {
 /// Who an Activity row is from, by an id its avatar is coloured by and a
 /// name, read in the row's own Swarm ([reader]) and never another's: the
 /// asker, the tagging Lead, the worker, a thread's last writer, or who
-/// reacted. A person is named by their email's name, never the email.
+/// reacted. A person is named by their username, never the email.
 ({String id, String name}) swarmActivityWho(
   SwarmActivityItem item,
   SwarmReader? reader,
@@ -954,10 +1243,8 @@ class SwarmActivityRow extends StatelessWidget {
     if (kind == 'agent') {
       return snapshot?.agentName(id, fallback: fallback) ?? fallback;
     }
-    final email = snapshot?.people.where((p) => p.id == id).firstOrNull?.email;
-    return email == null || email.isEmpty
-        ? 'Someone'
-        : superTabPersonName(email);
+    final person = snapshot?.people.where((p) => p.id == id).firstOrNull;
+    return person == null || person.email.isEmpty ? 'Someone' : person.username;
   }
 
   return switch (item) {

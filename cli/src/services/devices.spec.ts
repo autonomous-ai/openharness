@@ -637,9 +637,9 @@ describe('what the windows say, reaching the dial', () => {
     it('tells the cards the window\'s open Swarm conversation, again only when it changes', () => {
       const superTabRequest = vi.fn(async () => ({ ok: true }))
       const { port, reconnected } = withRequest(superTabRequest)
-      const open = (active: string, conversationId?: string) => ({ active, tiles: [], swarms: [
+      const open = (active: string, conversationId?: string, threadRoot?: string) => ({ active, tiles: [], swarms: [
         { id: 'plain', name: 'plain', agentIds: [], panes: 0 },
-        { id: 'tab-st1', name: 'st1', agentIds: [], panes: 0, superTabId: 'st1', projectId: 'p1', ...(conversationId ? { conversationId } : {}) }] })
+        { id: 'tab-st1', name: 'st1', agentIds: [], panes: 0, superTabId: 'st1', projectId: 'p1', ...(conversationId ? { conversationId } : {}), ...(threadRoot ? { threadRoot } : {}) }] })
       port.swarms(open('tab-st1', 'pm1'))
       seen.host.swarmCardsWanted!(true)
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['st1'], focus: { tabId: 'st1', conversationId: 'pm1' } })
@@ -659,6 +659,12 @@ describe('what the windows say, reaching the dial', () => {
       superTabRequest.mockClear()
       reconnected.forEach((run) => run())
       expect(superTabRequest.mock.calls).toEqual([[{ action: 'cardsWanted', on: true, include: ['st1'], focus: { tabId: 'st1', conversationId: 'g1' } }]])
+      // A thread opened beside it is news, and so is its closing.
+      port.swarms(open('tab-st1', 'g1', 'm1'))
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['st1'], focus: { tabId: 'st1', conversationId: 'g1', threadRoot: 'm1' } })
+      port.swarms(open('tab-st1', 'g1'))
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['st1'], focus: { tabId: 'st1', conversationId: 'g1' } })
+      superTabRequest.mockClear()
       // Nobody wants cards: a focus change says nothing.
       seen.host.swarmCardsWanted!(false)
       superTabRequest.mockClear()
@@ -692,6 +698,12 @@ describe('what the windows say, reaching the dial', () => {
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardOpen', session: 'c1', tabId: 'st1', leadId: null })
     })
 
+    // A refusal turned into null said nowhere why the dial's face stayed on the resting pet (Diego, 2026-11-03).
+    it('fails a refused recap with the service\'s code, so the dial\'s log says why', async () => {
+      withRequest(vi.fn(async () => ({ error: 'SERVICE_UNAVAILABLE' })))
+      await expect(seen.host.swarmCardRecap!('st1', 'lead1', true)).rejects.toThrow('SERVICE_UNAVAILABLE')
+    })
+
     it('asks for a swarmBuddy dial\'s face with the buddy flag, says so on its recap, and sends its side as cardSide', async () => {
       const answers: Array<Record<string, unknown>> = [
         { ok: true, text: 'from the Buddy', at: 3, none: false, chatId: 'b1', buddy: true },
@@ -714,6 +726,40 @@ describe('what the windows say, reaching the dial', () => {
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardSide', tabId: 'st1', side: 'buddy' })
     })
 
+    it('carries a thread on the recap, on a post that started one, and leaves a thread through the service', async () => {
+      const answers: Array<Record<string, unknown>> = [
+        { ok: true, text: 'on it', at: 3, none: false, chatId: 'lead-c1', thread: 'm9' },
+        { ok: true, text: 'on it', at: 3, none: false, chatId: 'lead-c1', thread: 'bad id' },
+        { ok: true, said: true, thread: { tabId: 'st1', conversationId: 'lead-c1', root: 'm9' } },
+        { ok: true, said: true, thread: { tabId: 'st1', conversationId: 7, root: 'm9' } },
+        { ok: true, conversationId: 'lead-c1' }, { ok: true }, { error: 'OWNER_REQUIRED' },
+      ]
+      const superTabRequest = vi.fn(async (_payload: Record<string, unknown>) => answers.shift()!)
+      const { core } = withRequest(superTabRequest)
+      expect(await seen.host.swarmCardRecap!('st1', 'lead1', true)).toEqual({ tabId: 'st1', leadId: 'lead1', text: 'on it', at: 3, none: false, chatId: 'lead-c1', thread: 'm9' })
+      expect(await seen.host.swarmCardRecap!('st1', 'lead1', true)).not.toHaveProperty('thread')
+      expect(await seen.host.swarmSay!('h1', 'build it', true)).toEqual({ said: true, thread: { tabId: 'st1', conversationId: 'lead-c1', root: 'm9' } })
+      expect(await seen.host.swarmSay!('h1', 'build it', true)).toEqual({ said: true })
+      answers.unshift({ ok: true, said: true })
+      await seen.host.swarmSay!('h1', 'build it', true, undefined, false, { threaded: true, thread: null })
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardSay', harnessId: 'h1', text: 'build it', chat: true, threaded: true, thread: null })
+      answers.unshift({ ok: true, said: true })
+      await seen.host.swarmSay!('h1', 'build it', true, 'lead-c1', true, { thread: 'm9' })
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardSay', harnessId: 'h1', text: 'build it', chat: true, chatId: 'lead-c1', reviewed: true, thread: 'm9' })
+      expect(await seen.host.swarmThreadLeave!('st1', 'lead1', 'buddy')).toEqual({ tabId: 'st1', conversationId: 'lead-c1' })
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardThreadLeave', tabId: 'st1', leadId: 'lead1', chat: 'buddy' })
+      expect(await seen.host.swarmThreadLeave!('st1', 'lead1')).toBeNull()
+      expect(await seen.host.swarmThreadLeave!('st1', 'lead1')).toBeNull()
+      // The window is told to open a thread beside a conversation, or to close the open one: no project, so an older window ignores it.
+      seen.host.superTabThread!('st1', 'lead-c1', 'm9')
+      expect(vi.mocked(core.clients.sendLocal)).toHaveBeenLastCalledWith({ type: 'dial_super_tab', payload: { superTabId: 'st1', conversationId: 'lead-c1', threadRoot: 'm9', threadOnly: true } })
+      seen.host.superTabThread!('st1', 'lead-c1', null)
+      expect(vi.mocked(core.clients.sendLocal)).toHaveBeenLastCalledWith({ type: 'dial_super_tab', payload: { superTabId: 'st1', conversationId: 'lead-c1', threadRoot: null, threadOnly: true } })
+      // An ordinary pick is untouched.
+      seen.host.superTabSelected!('st1', 'proj1', 'buddy')
+      expect(vi.mocked(core.clients.sendLocal)).toHaveBeenLastCalledWith({ type: 'dial_super_tab', payload: { superTabId: 'st1', projectId: 'proj1', chat: 'buddy' } })
+    })
+
     it('reads a recap through the service, cut to 1,500 bytes on a character; anything unusable is null', async () => {
       const answers: Array<Record<string, unknown> | 'throw'> = [
         { ok: true, tabId: 'st1', leadId: 'lead1', text: 'é'.repeat(1000), at: 1792560000, none: false },
@@ -728,7 +774,10 @@ describe('what the windows say, reaching the dial', () => {
       expect(got).toMatchObject({ tabId: 'st1', leadId: 'lead1', at: 1792560000, none: false })
       expect(got!.text).toBe('é'.repeat(750))
       expect(await seen.host.swarmCardRecap!('st1', 'lead2')).toEqual({ tabId: 'st1', leadId: 'lead2', text: 'none', at: 0, none: true })
-      for (let i = 0; i < 6; i++) expect(await seen.host.swarmCardRecap!('st1', 'lead1')).toBeNull()
+      // A refusal fails with its code; anything else unusable is null.
+      await expect(seen.host.swarmCardRecap!('st1', 'lead1')).rejects.toThrow('NOT_FOUND')
+      for (let i = 0; i < 4; i++) expect(await seen.host.swarmCardRecap!('st1', 'lead1')).toBeNull()
+      await expect(seen.host.swarmCardRecap!('st1', 'lead1')).rejects.toThrow('SERVICE_UNAVAILABLE')
     })
 
     it('posts words for a Lead through the service; anything but said: true sends the turn instead', async () => {
@@ -757,7 +806,7 @@ describe('what the windows say, reaching the dial', () => {
 
     it('answers no recap when the core has no service to ask', async () => {
       start()
-      expect(await seen.host.swarmCardRecap!('st1', 'lead1')).toBeNull()
+      await expect(seen.host.swarmCardRecap!('st1', 'lead1')).rejects.toThrow('SERVICE_UNAVAILABLE')
       seen.host.swarmCardOpen!('c1', 'st1', 'lead1')   // nothing to tell, and nothing thrown
     })
 

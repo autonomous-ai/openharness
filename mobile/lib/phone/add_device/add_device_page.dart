@@ -253,11 +253,39 @@ class _AddDevicePageState extends State<AddDevicePage> {
   /// How long the device gets to join the Wi-Fi, sign in and show up in the account.
   static const _comeOnline = Duration(seconds: 75);
 
+  /// How long Android looks for the device's hotspot before it answers `unavailable`
+  /// (MainActivity.kt `requestNetwork`).
+  static const _hotspotSearch = Duration(seconds: 120);
+
+  /// The wait on screen now, for its bar and the time left under it: when it ends and how long it
+  /// is. Null when nothing is being waited out. Each wait ends in an answer, so nobody waits for
+  /// ever (owner, 2026-11-03: a computer that joined the Wi-Fi but did not sign in left the phone on
+  /// a spinner for minutes, then said it was not chosen).
+  DateTime? _waitUntil;
+  Duration _waitFor = Duration.zero;
+  Timer? _tick;
+
+  void _countdown(Duration span) {
+    _waitFor = span;
+    _waitUntil = DateTime.now().add(span);
+    _tick?.cancel();
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  void _stopCountdown() {
+    _tick?.cancel();
+    _tick = null;
+    _waitUntil = null;
+  }
+
   AppNotifier get _app => widget.notifier;
 
   @override
   void dispose() {
     _poll?.cancel();
+    _tick?.cancel();
     _backWatch?.cancel();
     unawaited(_hotspot.leave());
     _ssid.dispose();
@@ -269,6 +297,8 @@ class _AddDevicePageState extends State<AddDevicePage> {
 
   void _show(_Step step, {String error = ''}) {
     if (!mounted) return;
+    // A wait belongs to the page it was started on; any other page, or an answer, ends it.
+    if (step != _step || error.isNotEmpty) _stopCountdown();
     setState(() {
       _step = step;
       _error = error;
@@ -354,6 +384,8 @@ class _AddDevicePageState extends State<AddDevicePage> {
     // one came back "This ticket was already used or has expired".
     if (_ticketSent && !await _freshTicket()) return;
     if (SetupHotspot.joinsByItself) {
+      // Back for a device that did not come online: as long as Android looks for its hotspot.
+      if (_retrying) _countdown(_hotspotSearch);
       // The same device again once it has started: only its own name in Android's list.
       final joined = await _hotspot.join(
         // Back after a locked setup that did not come online: the same device, on setup.py's
@@ -368,9 +400,16 @@ class _AddDevicePageState extends State<AddDevicePage> {
         });
       }
       if (joined.state == 'unavailable') {
+        final ssid = _ssid.text.trim();
         _show(
           _Step.join,
-          error: 'Intern 3 was not chosen. Check it is plugged in and nearby: its Wi-Fi is named "Harness-…".',
+          // After every wait: the device neither came online nor came back. Said as an end, with
+          // what to do, not as a hotspot the person failed to pick.
+          error: _retrying
+              ? 'Intern 3 did not come online${ssid.isEmpty ? '' : ' on "$ssid"'}, and its Wi-Fi '
+                    '"Harness-…" did not come back. It may be on the Wi-Fi without being signed in: '
+                    'check its screen, then tap Try again.'
+              : 'Intern 3 was not chosen. Check it is plugged in and nearby: its Wi-Fi is named "Harness-…".',
         );
         return;
       }
@@ -397,6 +436,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
       _poll?.cancel();
       _device = info;
       _retrying = false;
+      _stopCountdown();
       if (info['locked'] == true) {
         _secret.clear();
         final protocol = (info['protocol'] as num?)?.toInt() ?? 1;
@@ -752,9 +792,9 @@ class _AddDevicePageState extends State<AddDevicePage> {
   void _wait(String ssid) {
     _show(_Step.waiting);
     // A locked one starts first: its disk opens, then the system, then the Wi-Fi and the sign-in.
-    final deadline = DateTime.now().add(
-      _lockedSetup ? _comeOnline * 2 : _comeOnline,
-    );
+    final span = _lockedSetup ? _comeOnline * 2 : _comeOnline;
+    final deadline = DateTime.now().add(span);
+    _countdown(span);
     _poll?.cancel();
     _poll = Timer.periodic(const Duration(seconds: 3), (_) async {
       if (!mounted || _step != _Step.waiting) return;
@@ -886,11 +926,16 @@ class _AddDevicePageState extends State<AddDevicePage> {
             say(
               'Open Settings ▸ Wi-Fi on this phone and choose "Harness-…". Then come back here.',
             ),
-          if (_retrying) ...[
+          if (_retrying && _error.isEmpty) ...[
             const SizedBox(height: 12),
             say(
-              'Intern 3 is still trying the Wi-Fi. Its hotspot comes back within a minute.',
+              'Intern 3 did not come online yet. Looking for its Wi-Fi "Harness-…" again: if a '
+              'try failed, it says why there.',
             ),
+            if (_waitUntil != null) ...[
+              const SizedBox(height: 12),
+              _WaitBar(until: _waitUntil!, span: _waitFor),
+            ],
           ],
           if (_unlocked) ...[
             const SizedBox(height: 12),
@@ -1148,7 +1193,10 @@ class _AddDevicePageState extends State<AddDevicePage> {
               onPressed: () => unawaited(_join()),
             )
           else ...[
-            const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+            if (_waitUntil != null)
+              _WaitBar(until: _waitUntil!, span: _waitFor)
+            else
+              const Center(child: CircularProgressIndicator(strokeWidth: 2)),
             const SizedBox(height: 20),
             // Not waiting out the whole wait: back to the device now. Once it has given up on the
             // Wi-Fi (in under a minute) its hotspot is back, and its Wi-Fi list comes up with why.
@@ -1189,4 +1237,32 @@ class _AddDevicePageState extends State<AddDevicePage> {
       : signal >= 40
       ? 'Good signal'
       : 'Weak signal';
+}
+
+/// A wait that ends: a bar filling up to [until]. No time under it (owner, 2026-11-03): the bar
+/// alone says it is going and that it ends.
+class _WaitBar extends StatelessWidget {
+  const _WaitBar({required this.until, required this.span});
+
+  final DateTime until;
+  final Duration span;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    final left = until.difference(DateTime.now());
+    final done = span.inMilliseconds == 0
+        ? 1.0
+        : (1 - left.inMilliseconds / span.inMilliseconds).clamp(0.0, 1.0);
+    return ClipRRect(
+      key: const Key('add-device-wait-bar'),
+      borderRadius: BorderRadius.circular(3),
+      child: LinearProgressIndicator(
+        value: done,
+        minHeight: 6,
+        color: tty.green,
+        backgroundColor: tty.green.withValues(alpha: 0.18),
+      ),
+    );
+  }
 }

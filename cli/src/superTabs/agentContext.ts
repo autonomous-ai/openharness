@@ -155,14 +155,26 @@ export function mineText(state: Json, groupChangedAt: ReadonlyMap<string, number
     ...line.step ? [] : [...stepsLine(state, line.id), ...linkedTo(state, groups.get(line.id)!).map(linked => `  linked: ${otherLine(linked)}`)]].join('\n')).join('\n')
 }
 
+/** Who an actor key (`agent:ID` or `person:ID`) names: an agent by its name, a person by their email. */
+function checkerName(state: Json, by: string): string {
+  const [kind, id] = by.split(':', 2)
+  return (kind === 'agent' ? agentName(state, id) : text(list(state.people).find(p => p.id === id)?.email)) ?? id ?? by
+}
+
+/** A check with each checker's latest verdict (backend checkVerdicts.ts, #2311): failed while any of them failed, each
+ *  failure with its evidence first; a check from an older backend has only its last verdict. */
 function checkLine(state: Json, check: Json): string {
   const description = String(check.description ?? '')
-  const by = text(check.passedBy)
-  if (by) {
-    const [kind, id] = by.split(':', 2)
-    const name = kind === 'agent' ? agentName(state, id) : text(list(state.people).find(p => p.id === id)?.email) ?? id
-    return `✓ ${description} — by ${name}`
+  const verdicts = list(check.verdicts).filter(v => typeof v.by === 'string')
+  if (verdicts.length) {
+    const failed = verdicts.filter(v => v.passed !== true), passed = verdicts.filter(v => v.passed === true)
+    const by = passed.map(v => checkerName(state, String(v.by))).join(', ')
+    if (!failed.length) return `✓ ${description} — by ${by}`
+    const failures = failed.map(v => `failed by ${checkerName(state, String(v.by))}: ${firstLine(text(v.evidence) ?? '', RESULT_MAX)}`)
+    return `✗ ${description} — ${[...failures, ...passed.length ? [`passed by ${by}`] : []].join('; ')}`
   }
+  const by = text(check.passedBy)
+  if (by) return `✓ ${description} — by ${checkerName(state, by)}`
   const evidence = text(check.evidence)
   return evidence ? `✗ ${description} — ${firstLine(evidence, RESULT_MAX)}` : `· ${description}`
 }
@@ -179,7 +191,8 @@ function attemptLine(state: Json, attempt: Json, current: boolean): string {
 export function unknownAgents(group: Json, state: Json, attempts: Json[] | null): string[] {
   const listed = new Set(list(state.agents).map(a => a.id))
   const ids = [object(group.assignment).agentId, ...(attempts ?? []).map(a => a.agentId),
-    ...list(group.checks).map(c => typeof c.passedBy === 'string' && c.passedBy.startsWith('agent:') ? c.passedBy.slice(6) : null)]
+    ...list(group.checks).flatMap(c => [c.passedBy, ...list(c.verdicts).map(v => v.by)])
+      .map(by => typeof by === 'string' && by.startsWith('agent:') ? by.slice(6) : null)]
   return [...new Set(ids.filter((id): id is string => typeof id === 'string' && !listed.has(id)))]
 }
 
