@@ -4,7 +4,7 @@
 // against the ids we actually offered, that the caller's clock wins over this endpoint's, and that an
 // agent with no questions on record is described honestly in the prompt rather than being given
 // somebody else's text.
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Fastify, { type FastifyInstance, type InjectOptions } from 'fastify'
 
 const authenticateAccessToken = vi.hoisted(() => vi.fn())
@@ -22,12 +22,14 @@ import {
   resolveBudgetMs,
   resetRouteRateLimits,
   AGENT_ROUTE_PATH,
+  type AgentRouteOptions,
   type RouteBody,
 } from './agentRoute.js'
 import { errorHandler } from '../middlewares/errorHandler.js'
 import { registerAuthMiddleware, shouldSkipAuth } from '../middlewares/authMiddleware.js'
 import { SsoAuthError } from '../lib/ssoAuth.js'
 import { env } from '../config/env.js'
+import { logger } from '../utils/logger.js'
 
 const body = (over: Partial<RouteBody> = {}): RouteBody => ({
   task: 'so sanh iphone vs samsung',
@@ -39,21 +41,21 @@ const body = (over: Partial<RouteBody> = {}): RouteBody => ({
 })
 
 /** The app as the server builds it: the global SSO gate in front, then the route. */
-async function build(): Promise<FastifyInstance> {
+async function build(options?: AgentRouteOptions): Promise<FastifyInstance> {
   const app = Fastify()
   app.setErrorHandler(errorHandler)
   registerAuthMiddleware(app, authenticateAccessToken)
-  await app.register(agentRouteRoutes)
+  await app.register(agentRouteRoutes, options ?? {})
   await app.ready()
   return app
 }
 
-function post(app: FastifyInstance, payload: unknown, opts: { noAuth?: boolean } = {}) {
+function post(app: FastifyInstance, payload: unknown, opts: { noAuth?: boolean; user?: string } = {}) {
   const options: InjectOptions = {
     method: 'POST',
     url: AGENT_ROUTE_PATH,
     payload: payload as InjectOptions['payload'],
-    headers: opts.noAuth ? {} : { authorization: 'Bearer sso-token' },
+    headers: opts.noAuth ? {} : { authorization: `Bearer ${opts.user ?? 'sso-token'}` },
   }
   return app.inject(options)
 }
@@ -154,6 +156,126 @@ describe('POST /api/route/agents', () => {
     expect((await post(app, { task: 'hi', agents: many })).statusCode).toBe(400)
   })
 })
+
+// What one account may spend on Harness's model through this route. Before these bounds, each question
+// was unbounded (only the 1 MiB default body limit held), and an account could relay ~1 MB a call, 60
+// calls a minute, every day, out of the budget that also pays for ⌘B routing and Hub translation.
+describe('POST /api/route/agents: what one account may spend', () => {
+  const ranked = JSON.stringify({ ranking: [{ agentId: 'a1', score: 0.9, reason: 'phones' }, { agentId: 'a2', score: 0.1, reason: 'no' }] })
+  /** Each bearer token signs in as the account it names: `Bearer u7` is user u7. */
+  const asUser = () => authenticateAccessToken.mockImplementation(async (token: string) =>
+    ({ sub: token, email: `${token}@b.c`, role: 'user', autonomousEnv: 'prod' }))
+
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    resetRouteRateLimits()
+    authenticateAccessToken.mockReset()
+    asUser()
+    env.CURSOR_LLM_BASE_URL = 'https://llm.example/v1'
+    env.CURSOR_LLM_API_KEY = 'llm-key'
+  })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('refuses a question over 4,000 characters and never calls the model', async () => {
+    const fetchMock = llmSays(ranked)
+    vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock)
+    const app = await build()
+    const res = await post(app, body({
+      agents: [
+        { id: 'a1', name: 'Phones', prompts: ['x'.repeat(4_001)] },
+        { id: 'a2', name: 'Frontend', prompts: [] },
+      ],
+    }), { user: 'u1' })
+    expect(res.statusCode).toBe(400)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('still takes a question of exactly 4,000 characters', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(llmSays(ranked))
+    const app = await build()
+    const res = await post(app, body({
+      agents: [
+        { id: 'a1', name: 'Phones', prompts: ['x'.repeat(4_000)] },
+        { id: 'a2', name: 'Frontend', prompts: [] },
+      ],
+    }), { user: 'u1' })
+    expect(res.statusCode).toBe(200)
+  })
+
+  it('refuses a body over the route limit with 413 before it is parsed', async () => {
+    // Every field inside its own bound, so only the body limit can refuse it: 15 agents with three
+    // 4,000-character questions in a three-byte script is ~540 KB of JSON.
+    const fetchMock = llmSays(ranked)
+    vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock)
+    const app = await build()
+    const agents = Array.from({ length: 15 }, (_, i) => ({ id: `a${i}`, name: 'n', prompts: Array(3).fill('ệ'.repeat(4_000)) }))
+    const payload = JSON.stringify({ task: 'route this', agents })
+    expect(Buffer.byteLength(payload)).toBeGreaterThan(300 * 1024)
+    const res = await app.inject({
+      method: 'POST', url: AGENT_ROUTE_PATH, payload,
+      headers: { authorization: 'Bearer u1', 'content-type': 'application/json' },
+    })
+    expect(res.statusCode).toBe(413)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses an account past its daily count with 429, in plain words, and counts each account on its own', async () => {
+    const fetchMock = llmSays(ranked)
+    vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock)
+    const app = await build({ perAccountPerDay: 3 })
+    for (let i = 0; i < 3; i++) expect((await post(app, body(), { user: 'u1' })).statusCode).toBe(200)
+    const refused = await post(app, body(), { user: 'u1' })
+    expect(refused.statusCode).toBe(429)
+    expect(refused.json().error.message).toMatch(/today/i)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect((await post(app, body(), { user: 'u2' })).statusCode).toBe(200)
+  })
+
+  it('gives an account its daily count back the next UTC day', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-03T23:59:00Z'))
+    vi.spyOn(globalThis, 'fetch').mockImplementation(llmSays(ranked))
+    const app = await build({ perAccountPerDay: 1 })
+    expect((await post(app, body(), { user: 'u1' })).statusCode).toBe(200)
+    expect((await post(app, body(), { user: 'u1' })).statusCode).toBe(429)
+    vi.setSystemTime(new Date('2026-11-04T00:01:00Z'))
+    expect((await post(app, body(), { user: 'u1' })).statusCode).toBe(200)
+  })
+
+  it('holds the all-accounts daily ceiling, and an account refused on its own count does not spend it', async () => {
+    const fetchMock = llmSays(ranked)
+    vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock)
+    const app = await build({ perAccountPerDay: 2, dailyCeiling: 4 })
+    expect((await post(app, body(), { user: 'u1' })).statusCode).toBe(200)
+    expect((await post(app, body(), { user: 'u1' })).statusCode).toBe(200)
+    expect((await post(app, body(), { user: 'u1' })).statusCode).toBe(429) // its own count, not the ceiling's
+    expect((await post(app, body(), { user: 'u2' })).statusCode).toBe(200)
+    expect((await post(app, body(), { user: 'u3' })).statusCode).toBe(200)
+    const over = await post(app, body(), { user: 'u4' })
+    expect(over.statusCode).toBe(503)
+    expect(over.json().error.message).toMatch(/today/i)
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+  })
+
+  it('does not count the single-agent answer, which spends no call', async () => {
+    const app = await build({ perAccountPerDay: 1 })
+    vi.spyOn(globalThis, 'fetch').mockImplementation(llmSays(ranked))
+    const one = body({ agents: [{ id: 'a1', name: 'Phones', prompts: [] }] })
+    for (let i = 0; i < 3; i++) expect((await post(app, one, { user: 'u1' })).statusCode).toBe(200)
+    expect((await post(app, body(), { user: 'u1' })).statusCode).toBe(200)
+  })
+
+  it('logs the length of the prompt it sent, not only the task', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(llmSays(ranked))
+    const info = vi.spyOn(logger, 'info')
+    const app = await build()
+    const sent = body({ agents: [{ id: 'a1', name: 'Phones', prompts: ['p'.repeat(3_000)] }, { id: 'a2', name: 'Frontend', prompts: [] }] })
+    expect((await post(app, sent, { user: 'u1' })).statusCode).toBe(200)
+    const line = info.mock.calls.find(([message]) => message === 'agent-route')
+    expect(line?.[1]).toMatchObject({ promptChars: buildRankPrompt(sent).length })
+  })
+})
+
 
 describe('resolveBudgetMs', () => {
   // The caller owns the clock: the CLI gives a spoken task 12s, and an endpoint that waits longer
