@@ -1345,6 +1345,20 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(await store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_idle' })).toEqual({ held: false })
   })
 
+  // Task #2427 (Huy, 11-03): the sidebar bolds a task only for a person's message, so each read conversation carries its newest
+  // main message from a person, and an agent's message leaves it.
+  it('reads each conversation\'s newest main message from a person, which an agent\'s message leaves', async () => {
+    const { tab, lead } = await fixture()
+    await run(tab, message('A person writes.'))
+    const chat = async () => (await store.read(owner, tab)).state.conversations.find(c => c.id === 'lead')!
+    const written = await chat()
+    expect(written.lastPersonSequence).toBe(written.lastMainSequence)
+    await run(tab, message('An agent answers.'), host, lead)
+    const answered = await chat()
+    expect(answered.lastMainSequence).toBeGreaterThan(written.lastMainSequence!)
+    expect(answered.lastPersonSequence).toBe(written.lastMainSequence)
+  })
+
   it('files replies under their thread root, summarises each thread for its page, and reads one thread', async () => {
     const { tab, lead } = await fixture()
     await invite(tab)
