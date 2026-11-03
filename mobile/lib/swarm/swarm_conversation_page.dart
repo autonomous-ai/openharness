@@ -2251,7 +2251,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (query != null && snapshot != null && !talking)
-            _MentionPicker(
+            SwarmMentionPicker(
               people: c.mentionablePeople,
               agents: c.mentionable,
               snapshot: snapshot,
@@ -2425,7 +2425,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                                 : () => unawaited(_pickFiles(c)),
                           ),
                         if (taggable)
-                          _TagButton(
+                          SwarmTagButton(
                             open: query != null,
                             onTap: () {
                               c.toggleMention();
@@ -3348,9 +3348,11 @@ class _Ask extends StatelessWidget {
 /// them: the chat's people whose username or shown name holds what follows
 /// it (each by the name they show by, `@username` beside one who set a name;
 /// a pick still puts in `@username`), then its agents whose name starts with
-/// it, each with its role and what it is doing.
-class _MentionPicker extends StatelessWidget {
-  const _MentionPicker({
+/// it, each with its role and what it is doing. The chat's and a thread's
+/// reply box alike.
+class SwarmMentionPicker extends StatelessWidget {
+  const SwarmMentionPicker({
+    super.key,
     required this.people,
     required this.agents,
     required this.snapshot,
@@ -3859,12 +3861,13 @@ class SwarmAttachButton extends StatelessWidget {
   );
 }
 
-/// The chat composer's @ ([SwarmConversation.toggleMention]): ends the draft
-/// in an @, which opens the picker, or closes it again while no name is
-/// typed. The sign alone on a round face, as + is (Tony, 11-03: the word Tag
-/// said nothing more); in the accent while the picker is open.
-class _TagButton extends StatelessWidget {
-  const _TagButton({required this.open, required this.onTap});
+/// The composer's @ ([SwarmMentioning.toggleMention]), the chat's and a
+/// thread's: ends the draft in an @, which opens the picker, or closes it
+/// again while no name is typed. The sign alone on a round face, as + is
+/// (Tony, 11-03: the word Tag said nothing more); in the accent while the
+/// picker is open.
+class SwarmTagButton extends StatelessWidget {
+  const SwarmTagButton({super.key, required this.open, required this.onTap});
 
   final bool open;
   final VoidCallback onTap;
