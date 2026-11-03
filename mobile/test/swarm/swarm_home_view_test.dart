@@ -8,6 +8,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_home_list.dart';
 import 'package:harness_mobile/swarm/swarm_home_prefs.dart';
@@ -642,16 +643,25 @@ void main() {
       );
       final store = MemoryKeyValueStore()
         ..values['swarm_home.$me'] = jsonEncode({'filter': 'mentions'});
-      final host = await pump(tester, fake, store: store);
+      // While you were away keeps what needs the person a skeleton while the
+      // read is retried, so the screen never settles until it answers.
+      final host = await pump(tester, fake, store: store, settle: false);
+      await tester.pump(const Duration(milliseconds: 100));
       expect(find.text('Mentions could not be read.'), findsOneWidget);
       expect(find.text('No mentions.'), findsNothing);
       expect(key('swarm-filter-show-all'), findsOneWidget);
+      Finder needs(Finder matching) =>
+          find.descendant(of: key('swarm-away-needs'), matching: matching);
+      expect(needs(find.byType(SkeletonText)), findsOneWidget);
+      expect(needs(find.text('0')), findsNothing);
 
       fail = false;
       await host.session!.inbox.asks(tab)!.load();
       await tester.pumpAndSettle();
       expect(project_(web), findsOneWidget);
       expect(find.text('Mentions could not be read.'), findsNothing);
+      expect(needs(find.byType(SkeletonText)), findsNothing);
+      expect(needs(find.text('1')), findsOneWidget);
     });
 
     /// [fake] with a second Swarm, whose mentions [read] answers.
