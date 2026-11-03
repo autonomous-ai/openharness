@@ -8,6 +8,7 @@ import 'model.dart';
 import 'swarm_asks.dart';
 import 'swarm_buddy.dart';
 import 'swarm_home_cache.dart';
+import 'swarm_kept.dart';
 import 'swarm_home_keeper.dart';
 import 'swarm_read_marks.dart';
 import 'swarm_reader.dart';
@@ -98,12 +99,18 @@ class SwarmInbox extends ChangeNotifier {
     SwarmHomeCache? homeCache,
     Duration homeWait = const Duration(seconds: 30),
     this.readMarks,
-  }) : _now = now ?? DateTime.now,
+    SwarmKeptStore? keptStore,
+  }) : kept = SwarmKept(accountId: accountId, store: keptStore),
+       _now = now ?? DateTime.now,
        _home = homeCache == null
            ? null
            : SwarmHomeKeeper(homeCache, accountId, wait: homeWait) {
+    kept.addListener(_dropUnlisted);
     if (_home != null) unawaited(_restore());
   }
+
+  /// The account's drafts and unsent posts ([SwarmKept]).
+  final SwarmKept kept;
 
   /// Keeps the last Home ([SwarmHomeCache]), so a cold start draws it at once.
   final SwarmHomeKeeper? _home;
@@ -402,6 +409,8 @@ class SwarmInbox extends ChangeNotifier {
       }
       if (_disposed) return;
       if (!listEquals(listed, swarms)) swarms = listed;
+      _listedIds = {for (final swarm in listed) swarm.id};
+      _dropUnlisted();
       // What was read of them stays while they cannot be read again.
       if (invited != null && !listEquals(invited, invitations)) {
         invitations = invited;
@@ -557,6 +566,11 @@ class SwarmInbox extends ChangeNotifier {
     reader.reads.addListener(() => _readerRead(id, reader));
     reader.readMarks = SwarmReadMarks(reader, store: readMarks)
       ..addListener(_relay);
+    reader.kept = kept;
+    void watch() => _checkKept(id, reader);
+    _keptWatches[id] = watch;
+    reader.addListener(watch);
+    kept.addListener(watch);
     _asks[id] = SwarmAsks(reader)
       ..onArrived = ((ask) => onArrived?.call(switch (ask) {
         final SuperTabDecision decision => SwarmDecisionNeed(id, decision),
@@ -570,11 +584,61 @@ class SwarmInbox extends ChangeNotifier {
   /// A Swarm off the list ([lost]), or the inbox closing: what a screen
   /// still holds of it is taken back ([SwarmReader.revoke]) before it is
   /// dropped.
+  /// The Swarms the last list that answered named; null before one has.
+  Set<String>? _listedIds;
+
+  /// A Swarm the account no longer has goes from what is kept, also one lost
+  /// while the app was closed, which has no reader to say so. Once what was
+  /// kept is back, and only from a list that answered.
+  void _dropUnlisted() {
+    final listed = _listedIds;
+    if (_disposed || listed == null || !kept.loaded) return;
+    for (final id in kept.tabs) {
+      if (!listed.contains(id)) kept.dropSwarm(id);
+    }
+  }
+
+  /// How [_checkKept] follows each Swarm, by its id.
+  final _keptWatches = <String, VoidCallback>{};
+
+  /// Chats kept but not in a Swarm's read, already asked for this session.
+  final _keptAsked = <(String, String)>{};
+
+  /// What is kept of Swarm [id] goes when the person has lost it, and of one of
+  /// its chats when that is lost, opened or not: a closed chat is in no full
+  /// read, so one missing from it is asked for by id, once a session.
+  void _checkKept(String id, SwarmReader reader) {
+    if (_disposed || !kept.loaded) return;
+    if (reader.accessRevoked) {
+      kept.dropSwarm(id);
+      return;
+    }
+    final snapshot = reader.snapshot;
+    if (snapshot == null || reader.heldLoad == 0) return;
+    for (final chat in kept.chats(id)) {
+      if (snapshot.conversation(chat) != null) continue;
+      if (!_keptAsked.add((id, chat))) continue;
+      unawaited(() async {
+        try {
+          if (!await reader.loadConversation(chat) && !_disposed) {
+            kept.dropChat(id, chat);
+          }
+        } catch (_) {
+          // Not known either way: it stays, and is asked for again next session.
+        }
+      }());
+    }
+  }
+
   void _drop(String id, {bool lost = true}) {
+    final watch = _keptWatches.remove(id);
+    if (watch != null) kept.removeListener(watch);
+    if (lost) kept.dropSwarm(id);
     final threads = _threads.remove(id);
     _asks.remove(id)?.dispose();
     final reader = _readers.remove(id)?..removeListener(_relay);
     if (reader != null) {
+      if (watch != null) reader.removeListener(watch);
       final marks = reader.readMarks;
       // Lost, it is revoked first, so its read marks leave the phone too;
       // the inbox closing keeps them, written now, for the next one.
@@ -691,6 +755,9 @@ class SwarmInbox extends ChangeNotifier {
     for (final id in _readers.keys.toList()) {
       _drop(id, lost: false);
     }
+    kept
+      ..removeListener(_dropUnlisted)
+      ..dispose();
     super.dispose();
   }
 }

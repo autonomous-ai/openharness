@@ -8,6 +8,7 @@ import 'package:harness_mobile/auth/sign_in_provider.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/swarm/swarm_home_cache.dart';
+import 'package:harness_mobile/swarm/swarm_kept.dart';
 
 import '../exit_app.dart';
 import '../tty.dart';
@@ -70,6 +71,7 @@ class PhoneWelcome extends StatefulWidget {
     this.signIn,
     this.scanCamera,
     this.swarmHome,
+    this.swarmKept,
   });
 
   final AppNotifier notifier;
@@ -84,6 +86,7 @@ class PhoneWelcome extends StatefulWidget {
 
   /// The Swarm Home kept on this phone ([SwarmHomeCache.device] when null).
   final SwarmHomeCache? swarmHome;
+  final SwarmKeptStore? swarmKept;
 
   @override
   State<PhoneWelcome> createState() => _PhoneWelcomeState();
@@ -124,6 +127,8 @@ class _PhoneWelcomeState extends State<PhoneWelcome> {
     // Signed out, so the last Swarm Home goes: a session that ended while the app was not running
     // never had a signed-in shell to clear it ([SwarmHost]).
     unawaited((widget.swarmHome ?? SwarmHomeCache.device()).clear());
+    // So do the drafts and unsent posts, whoever signs in next.
+    unawaited((widget.swarmKept ?? SealedSwarmKeptStore.device()).clear());
   }
 
   @override
