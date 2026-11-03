@@ -4925,16 +4925,49 @@ describe('swarm cards', () => {
       } finally { await session.stop() }
     })
 
-    it('a round\'s swarmBuddy supertab frame is unchanged by the Pro budget', async () => {
+    // Task #2525: the firmware's guard (cable_json_guard.h) drops any JSON frame over 512 tokens whole, a round dial's too,
+    // so every dial gets the budget a Pro's frame had.
+    it('a round\'s swarmBuddy supertab frame keeps the same budget, and 11 Leads without a thread go unchanged', async () => {
+      for (const [count, cut] of [[12, true], [11, false]] as const) {
+        const log = vi.fn()
+        const { session, port } = await connect(cardHost({ cards: [card('st1', Array.from({ length: count }, (_, i) => big(i + 1)))] }, { log }))
+        try {
+          port.say(BUDDY)
+          await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+          const frame = ofType(port, 'supertab')[0], leads = frame.leads as Array<Record<string, unknown>>
+          expect(tokens(frame)).toBeLessThanOrEqual(480)
+          expect(leads).toHaveLength(count)
+          expect(leads.every((l) => 'buddy' in l)).toBe(!cut)
+          expect(leads.every((l) => String(l.project).length === 48 && String(l.chatName).length === 48)).toBe(true)
+          if (cut) expect(log).toHaveBeenCalledWith(expect.stringMatching(/supertab st1 too large — \d+ Buddy block\(s\) dropped/))
+          else expect(log).not.toHaveBeenCalledWith(expect.stringContaining('too large'))
+        } finally { await session.stop() }
+      }
+    })
+
+    // Task #2525: the Swarm chat is every project's Buddy face, so the cards gave its thread to every Lead; with 12 the frame
+    // came to 513 tokens and the dial dropped every one (frozen card, no recap, no way out of the thread).
+    it('a swarmThread dial\'s frame of 12 Leads in the Swarm chat\'s thread fits 512 tokens, and the open Lead keeps its thread', async () => {
+      const swarmChat = { ...buddyChat, id: 'sb', thread: { root: 'm9', title: 'help me', replies: 2 } }
+      const cards = [card('st1', Array.from({ length: 12 }, (_, i) => big(i + 1)).map((l) => ({ ...l, sideChat: { ...swarmChat, name: String(l.sideChat!.name) } })))]
       const log = vi.fn()
-      const { session, port } = await connect(cardHost({ cards: twelve() }, { log }))
+      const { session, port } = await connect(cardHost({ cards }, { log }))
       try {
-        port.say(BUDDY)
+        port.say({ ...BUDDY, swarmThread: 'v1' })
         await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
-        const leads = ofType(port, 'supertab')[0].leads as Array<Record<string, unknown>>
-        expect(leads).toHaveLength(12)
+        // No Lead open yet: no thread is kept.
+        expect(tokens(ofType(port, 'supertab')[0])).toBeLessThanOrEqual(512)
+        port.say({ t: 'supertab.open', tab: 'st1', lead: 'lead5' })
+        await settle()
+        await session.syncSwarmCards()
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(2))
+        for (const f of ofType(port, 'supertab')) expect(tokens(f)).toBeLessThanOrEqual(512)
+        const leads = ofType(port, 'supertab').at(-1)!.leads as Array<Record<string, unknown>>
+        expect(leads.find((l) => l.id === 'lead5')).toMatchObject({ chatId: 'sb', thread: 'm9', threadTitle: 'help me', threadReplies: 2 })
+        expect(leads.filter((l) => 'thread' in l || 'threadTitle' in l || 'threadReplies' in l).map((l) => l.id)).toEqual(['lead5'])
+        // Threads go before any Buddy: every Lead keeps its Buddy.
         expect(leads.every((l) => 'buddy' in l)).toBe(true)
-        expect(log).not.toHaveBeenCalledWith(expect.stringContaining('Buddy block'))
+        expect(log).toHaveBeenCalledWith(expect.stringMatching(/supertab st1 too large — \d+ thread\(s\) dropped/))
       } finally { await session.stop() }
     })
 
