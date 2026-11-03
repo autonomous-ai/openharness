@@ -86,8 +86,8 @@ Never for a permission prompt (`permission_open`), never for a message from an a
 
 ### A hidden thread pane marks nothing read (Desktop, #15)
 
-The open thread's read mark moves only while its pane is on screen, by the same rule as the chat (`_viewIsVisible`). A
-reply that comes while it is hidden is marked when the pane shows again.
+The open thread's read mark moves only while its pane is on screen, so reading cannot clear a tag nobody saw. This landed
+on main separately (#2711, `threadPaneHidden`), which this work relies on.
 
 ## Design
 

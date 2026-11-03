@@ -87,6 +87,8 @@
 
 ### Task 4: A hidden thread pane marks nothing read (Desktop, #15)
 
+> Dropped: main fixed this in #2711 (`threadPaneHidden`) while this branch was open.
+
 **Files:**
 - Modify: `desktop/lib/super_tabs/controller.dart:862-877, 1436-1445` (`threadPaneVisible`, `_seeThread`)
 - Modify: `desktop/lib/super_tabs/view.dart:266-277, 777` (set and clear the callback)
