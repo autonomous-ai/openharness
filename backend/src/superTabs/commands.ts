@@ -1392,8 +1392,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     if (group.leadId && group.leadId !== next && group.id === groupProject(state, group).leadConversationId) protectLead(state, group.leadId)
   }
 
-  // An agent posting or reporting its work is working: a usage-limit mark on it is stale (terminal.ts workedAgain).
-  if (actor.kind === 'agent' && (command.type === 'message.send' || command.type === 'work.status')) workedAgain(state, actor.agentId)
+  // An agent reporting its work is working: a usage-limit mark on it is stale (terminal.ts workedAgain). Not a post: its host
+  // posts as the agent too (a skill refresh, a stop it could not make), which says nothing of the agent's engine (review of #2712).
+  if (actor.kind === 'agent' && command.type === 'work.status') workedAgain(state, actor.agentId)
   switch (command.type) {
     case 'agent.screen':
     case 'agent.input': {

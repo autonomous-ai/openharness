@@ -145,8 +145,8 @@ export function terminalResult(state: SuperTabState, actor: Actor, request: Term
     error: command.ok ? null : command.error! }
 }
 
-/** An agent that posts or reports its work is not stopped at a usage limit: its mark goes, as when its notice does
- *  (task #2321). Its host may still be ending the episode; that end then changes nothing. */
+/** An agent that reports its work is not stopped at a usage limit: its mark goes, as when its notice does (task #2321). Its
+ *  host may still be ending the episode; that end then changes nothing. */
 export function workedAgain(state: SuperTabState, agentId: string): void {
   const target = state.agents.find(a => a.id === agentId)
   if (!target?.limitedUntil && !target?.alerting?.includes('limit')) return

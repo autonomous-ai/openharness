@@ -96,15 +96,17 @@ const TOOL_CALL = /^⏺\s+[\w.-]+\(/
 
 /** Whether line [at] of [lines] is where an engine draws its own notice, not text the agent printed (Ken, 11-03: River
  *  was listed limited while working, as it had just printed another agent's screen showing Codex's limit line). An engine
- *  draws its notice at the margin: Claude Code's status line and the border of its limit dialog, Codex's "■" line; or, in
- *  Claude Code, as the "⎿" line under its own reply ("⏺ All green." then "⎿  You've hit your session limit"). What a tool
- *  printed is under the tool's call ("⏺ Bash(…)" then "⎿  …"), indented below that, or under Codex's "• Ran" as "└". */
+ *  draws its notice at the margin: Claude Code's status line and the border of its limit dialog, Codex's "■" line. Or, in
+ *  Claude Code, as a row of its own at its two-space "  ⎿  ": under its reply ("⏺ All green." then the notice), or after
+ *  a blank line, as it comes mid-turn after a tool's output (review of #2712). A tool's output starts right under its call
+ *  ("⏺ Bash(…)", no blank line between), and the rest is indented deeper, as is any screen a tool printed. */
 function ownNotice(lines: string[], at: number): boolean {
   const line = lines[at]!
   if (/^\S/.test(line)) return true
-  if (!/^\s*⎿\s/.test(line)) return false
+  if (!/^ {2}⎿\s/.test(line)) return false
   for (let above = at - 1; above >= 0; above--) {
     const before = lines[above]!
+    if (!before.trim()) return true
     if (/^\S/.test(before)) return !TOOL_CALL.test(before)
   }
   return true
