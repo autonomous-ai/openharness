@@ -1532,8 +1532,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const home = conversation(state, project.leadConversationId)
       const pm = state.agents.find(a => a.id === home.leadId && home.agentIds.includes(a.id))
       const pool = state.machines?.find(m => m.machineId === pm?.machineId)
-      // The project's owner, or the owner of the machine the PM runs on (not whoever contributed it: a lent machine's borrower).
-      if (pm?.machineOwnerId === actor.userId && actor.userId !== project.ownerId) author(state, actor, true)
+      // On its machine: the project's owner, or the owner of the machine the PM runs on (not whoever contributed it: a lent
+      // machine's borrower). To another machine: only the project's owner, as a new PM start (security reviews of #2705).
+      const moving = command.machineId !== undefined && command.machineId !== pm?.machineId
+      if (!moving && pm?.machineOwnerId === actor.userId && actor.userId !== project.ownerId) author(state, actor, true)
       else manageProject(state, actor, project.id)
       const name = coordinatorNameOf(project)
       if (!pm || !pool) fail('NO_LEAD', `This project has no running ${name}.`)
@@ -1543,17 +1545,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       let destination = pool
       if (command.machineId && command.machineId !== pool.machineId) {
         const previousPlacement = project.lead
-        const start = placeLead(state, project, person(state, project.ownerId), command.machineId,
+        const start = placeLead(state, project, person(state, actor.userId), command.machineId,
           { engine: command.engine, ...(command.model ? { model: command.model } : {}), ...(command.effort ? { effort: command.effort } : {}) },
-          stableId(operationId, 'switch-start'), { now: context.now, teamMachines: context.teamMachines, otherWorkspaceMachines: context.otherWorkspaceMachines })
+          stableId(operationId, 'switch-start'), context)
         if (previousPlacement) project.lead = previousPlacement
         else delete project.lead
         destination = state.machines!.find(m => m.machineId === start.request.machineId)!
-        if (!destination.observation?.capabilities?.includes(SWITCH_CAPABILITY)) {
-          state.starts = state.starts!.filter(candidate => candidate.id !== start.id)
-          delete project.lead
-          fail('HOST_OUTDATED', `Update Harness on ${destination.name} to move the ${name}.`, 409)
-        }
+        // A refused command keeps none of its writes, the start above included.
+        if (!destination.observation?.capabilities?.includes(SWITCH_CAPABILITY)) fail('HOST_OUTDATED', `Update Harness on ${destination.name} to move the ${name}.`, 409)
         start.request.leadFor!.switchId = operationId
       }
       if (!contributedEngines(destination).includes(command.engine)) fail('ENGINE_NOT_OFFERED', `${ENGINE_NAMES[command.engine]} isn’t offered on ${destination.name}.`, 403)
