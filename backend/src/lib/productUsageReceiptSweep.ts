@@ -60,15 +60,27 @@ export async function ensureReceiptRule(db: PrismaClient): Promise<void> {
   }
 }
 
-async function anyReceipt(db: PrismaClient, filter: Record<string, unknown>): Promise<boolean> {
-  const answer = await db.$runCommandRaw({ find: COLLECTION, filter, projection: { _id: 1 }, limit: 1, singleBatch: true } as never) as
-    { cursor: { firstBatch: unknown[] } }
-  return answer.cursor.firstBatch.length > 0
+/** Old receipts are those past [PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS] + 1 days from today: no new receipt expires that late. */
+const oldFloor = (now: Date) => date(startOfDay(now) + (PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS + 1) * DAY)
+/** A date as `$runCommandRaw` answers it (extended JSON), or as a Date. */
+const dateOf = (value: unknown): Date => {
+  const raw = value && typeof value === 'object' && '$date' in value ? (value as { $date: unknown }).$date : value
+  const inner = raw && typeof raw === 'object' && '$numberLong' in raw ? Number((raw as { $numberLong: string }).$numberLong) : raw
+  return new Date(inner as string | number | Date)
+}
+
+/** When the newest old receipt expires by itself: one key of the expiry index, never a count of the millions. Null once no old
+ *  receipt is left, which is when this sweep has nothing more to do, with or without its rule. */
+export async function lastOldReceipt(db: PrismaClient, now: Date): Promise<Date | null> {
+  const answer = await db.$runCommandRaw({ find: COLLECTION, filter: { expiresAt: { $gt: oldFloor(now) } }, projection: { _id: 0, expiresAt: 1 },
+    sort: { expiresAt: -1 }, hint: 'product_usage_expiry', limit: 1, singleBatch: true } as never) as { cursor: { firstBatch: Array<{ expiresAt: unknown }> } }
+  const newest = answer.cursor.firstBatch[0]
+  return newest ? dateOf(newest.expiresAt) : null
 }
 
 /** One chunk: up to [chunk] old receipts in expiresAt order, then exactly those, their range checked again. */
 async function removeChunk(db: PrismaClient, now: Date, chunk: number): Promise<number> {
-  const range = { expiresAt: { $gt: date(startOfDay(now) + (PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS + 1) * DAY),
+  const range = { expiresAt: { $gt: oldFloor(now),
     $lte: date(now.getTime() + (OLD_EXPIRY_DAYS - PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS) * DAY) } }
   const found = await db.$runCommandRaw({ find: COLLECTION, filter: range, projection: { _id: 1 }, sort: { expiresAt: 1 },
     hint: 'product_usage_expiry', limit: chunk, singleBatch: true } as never) as { cursor: { firstBatch: Array<{ _id: string }> } }
@@ -90,16 +102,17 @@ export async function sweepOldReceipts(db: PrismaClient, now = new Date(), optio
     removed += n
     if (n < options.chunk) break
   }
-  const done = !await anyReceipt(db, { expiresAt: { $gt: date(startOfDay(now) + (PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS + 1) * DAY) } })
-  return { removed, done }
+  return { removed, done: !await lastOldReceipt(db, now) }
 }
 
 /** Runs a pass a minute in the singleton worker until nothing is left to remove, then stops; a restart checks once more.
- *  While the database refuses the rule, nothing is removed: it says so once and asks again every [refusedEveryMs]. */
+ *  While the database refuses the rule, nothing is removed: each hourly check logs an error saying so and when the old receipts
+ *  expire by themselves (a single warning at start went unseen from 10-29 to 11-03, task #2488), and once none is left the
+ *  sweep stops, rule or not: Mongo's expiry has done its work. */
 export function startReceiptSweep(db: PrismaClient, settings: Partial<SweepOptions & { everyMs: number; refusedEveryMs: number;
-  now: () => Date; log: Pick<typeof logger, 'info' | 'warn'> }> = {}): () => void {
+  now: () => Date; log: Pick<typeof logger, 'info' | 'warn' | 'error'> }> = {}): () => void {
   const { everyMs, refusedEveryMs, now, log, ...options } = { ...RECEIPT_SWEEP, now: () => new Date(), log: logger, ...settings }
-  let running = false, total = 0, refusedUntil = 0, warned = false
+  let running = false, total = 0, refusedUntil = 0
   const run = async () => {
     if (running || now().getTime() < refusedUntil) return
     running = true
@@ -114,8 +127,13 @@ export function startReceiptSweep(db: PrismaClient, settings: Partial<SweepOptio
     } catch (error) {
       if (error instanceof ReceiptRuleRefused) {
         refusedUntil = now().getTime() + refusedEveryMs
-        if (!warned) log.warn('[usage-receipts] waiting: the database user may not install the receipt rule (collMod); nothing is removed, checking hourly')
-        warned = true
+        const last = await lastOldReceipt(db, now()).catch(() => undefined)
+        if (last === null) {
+          stop()
+          log.info('[usage-receipts] done: no old receipts left', { removedSinceStart: total })
+          return
+        }
+        log.error(`[usage-receipts] stuck: the database user may not install the receipt rule (collMod), so nothing is removed. The old receipts expire by themselves by ${last ? last.toISOString().slice(0, 10) : 'a date it could not read'}; grant collMod to finish sooner. Checking hourly.`)
         return
       }
       log.warn('[usage-receipts] pass failed; retrying next minute', { error: error instanceof Error ? error.message : String(error) })
