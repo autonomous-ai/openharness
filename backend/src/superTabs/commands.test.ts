@@ -4764,7 +4764,7 @@ describe('lead.switch', () => {
     s.f.state.machines!.push(destination)
     s.f.run({ ...s.request, machineId: 'destination', model: 'gpt-5.1' })
     const start = s.f.state.starts!.find(candidate => candidate.request.leadFor?.switchId === s.sid())!
-    destination.observation!.profiles = []
+    s.f.state.machines!.find(machine => machine.machineId === 'destination')!.observation!.profiles = []
 
     expect(code(() => s.f.run({ type: 'agent.startDispatch', startId: start.id }, owner,
       { contribution: { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null } }))).toBe('PROFILE_UNKNOWN')

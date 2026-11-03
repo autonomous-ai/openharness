@@ -2325,6 +2325,27 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (grant.machineOwnerId !== start.machineOwnerId || (grant.hostGrant ?? null) !== start.hostGrant) {
           fail('CONTRIBUTION_REVOKED', 'The original machine grant was revoked.', 403)
         }
+        const switchId = start.request.leadFor?.switchId
+        if (switchId) {
+          const switchSource = state.agents.find(a => a.switchRequest?.id === switchId)
+          const destination = machineContribution(state, start.request.machineId)
+          const project = projectOf(state, start.request.leadFor!.projectId)
+          if (!switchSource || switchSource.switchRequest?.targetMachineId !== start.request.machineId
+            || switchSource.switchRequest.engine !== start.request.engine
+            || conversation(state, project.leadConversationId).leadId !== switchSource.id) {
+            fail('STALE_SWITCH', 'This PM switch is no longer current.')
+          }
+          if (!destination?.observation?.capabilities?.includes(SWITCH_CAPABILITY)
+            || !destination.observation.capabilities.includes(LEAD_CAPABILITY)) {
+            fail('HOST_OUTDATED', `Update Harness on ${destination?.name ?? 'that machine'} to move the ${coordinatorNameOf(project)}.`, 409)
+          }
+          const profileId = switchSource.switchRequest.profileId
+          if (profileId !== defaultProfileId(destination.machineId, switchSource.switchRequest.engine)
+            && !destination.observation.profiles?.some(p => p.engine === switchSource.switchRequest!.engine && p.id === profileId)) {
+            fail('PROFILE_UNKNOWN', `That account isn’t on ${destination.name} any more.`, 409)
+          }
+          if (start.request.profileId !== profileId) fail('STALE_SWITCH', 'This PM switch no longer names this account.')
+        }
         admitMachineStart(state, start.request, context.now, start, context.teamMachines, context.otherWorkspaceMachines)
         if (start.dispatched || start.error || start.harnessId) fail('START_CLAIMED', 'This native start was already requested. Read its creation status; do not start another.')
         start.dispatched = true
