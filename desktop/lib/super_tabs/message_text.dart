@@ -5,8 +5,8 @@ import 'package:markdown/markdown.dart' as md;
 import '../core/open_in_browser.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
-import '../widgets/markdown_style.dart';
 import 'code_block.dart';
+import 'swarm_type.dart';
 
 /// Shared content is selectable, never executable. Markdown images are labels,
 /// not automatic network requests or reads from a collaborator's local disk.
@@ -102,7 +102,7 @@ class SuperTabMessageText extends StatelessWidget {
         ),
       },
       paddingBuilders: {'a': _CompactLinkLabel()},
-      styleSheet: desktopMarkdownStyleSheet(context),
+      styleSheet: swarmMarkdownStyleSheet(context),
       onTapLink: (_, href, _) {
         final number = href?.startsWith('workgroup:') == true
             ? int.tryParse(href!.substring(10))

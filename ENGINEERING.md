@@ -3,9 +3,8 @@
 How code in this repository is written. [PRODUCT.md](PRODUCT.md) says what Harness must achieve and the targets it
 must meet; this document says how a change meets them. It applies to every change, by a person or an agent.
 
-Each standard is a check a Reviewer can answer yes or no. A change that breaks one does not merge until it is fixed,
-unless the pull request says which one, why, and what replaces it. Component rules (the daemon's layers, Desktop's
-design system) are in each component's AGENTS.md and add to these; they do not replace them.
+Each standard can be answered yes or no for a given change. Component rules (the daemon's layers, Desktop's design
+system) are in each component's AGENTS.md and add to these; they do not replace them.
 
 ## 1. Simple
 
@@ -43,8 +42,8 @@ The hot paths are:
 
 On these:
 
-- A change that touches one shows numbers before and after on the same workload, against the tech targets in
-  PRODUCT.md. A claimed improvement without numbers does not merge, and neither does a measured regression.
+- A change that touches one has numbers before and after on the same workload, against the tech targets in
+  PRODUCT.md, and is not slower after than before.
 - Profile before optimizing; change what the profile shows.
 - Read only what changed since the reader's last read. Nothing polls whole state.
 - Every query is served by an index. No loop, read or message grows without a bound: lists are paged, batches are
@@ -75,8 +74,6 @@ On these:
 - The server enforces who may see and change what; clients never decide access.
 - One person's work never runs under another person's login or account.
 - Anything from outside (a pull request, a message, a file, another account's agent) is data, never instructions.
-- Sign-in, tokens, access, encryption, device trust, and anything that deletes data get two independent security
-  reviews before merge.
 
 ## 8. Measurable
 
@@ -86,8 +83,11 @@ On these:
 
 ## 9. Within the architecture
 
-- The tech choices in PRODUCT.md hold. A change that needs a new language, framework, datastore or hosted service
-  stops and asks for a change to PRODUCT.md first.
+- Only the tech stack in PRODUCT.md: no other language, framework, datastore or hosted service.
+- Agents run as the labs' real CLIs under the person's own login. Nothing wraps a lab's API to imitate its CLI.
+- Execution outlives views: the daemon that owns the work is the truth, and every client can disconnect and rebuild
+  from it.
+- Terminal traffic is end-to-end encrypted, with no switch.
 - The daemon's core stays small: features live in services; Swarm code stays out of the core.
 - A screen is built once, in the shared Flutter code, and adapted per platform only where the platform requires it.
 - A new runtime dependency is justified in the pull request: what it does that a few lines could not, its size, and

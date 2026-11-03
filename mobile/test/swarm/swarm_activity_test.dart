@@ -799,6 +799,69 @@ void main() {
       expect(reader.readMarks!.threadThrough(leadChat, 'root-1'), 12);
     });
   });
+
+  group('All', () {
+    List<String> all(SwarmActivity activity) => [
+      for (final item in swarmActivityAll(activity)) item.key,
+    ];
+
+    test('what needs the person first, as Needs you lists it; then tags, '
+        'replies and reactions, newest first, those with no time last; each '
+        'row once', () async {
+      final session = await start(backend(page: activityPage));
+      final activity = session.activity;
+      activity.watch();
+      addTearDown(activity.unwatch);
+      await settle();
+      final others = [
+        for (final filter in SwarmActivityFilter.values)
+          if (filter != SwarmActivityFilter.needsYou) ...activity.items(filter),
+      ];
+      expect(others, isNotEmpty, reason: 'tags, threads, reactions read');
+
+      final rows = swarmActivityAll(activity);
+
+      expect(
+        all(activity).take(2),
+        keys(activity, SwarmActivityFilter.needsYou),
+      );
+      expect(all(activity).toSet(), hasLength(rows.length), reason: 'once');
+      expect(all(activity).skip(2).toSet(), {
+        for (final item in others) item.key,
+      });
+      final times = [for (final item in rows.skip(2)) item.at];
+      final dated = times.takeWhile((at) => at != null).toList();
+      expect(times.skip(dated.length), everyElement(isNull));
+      for (var i = 1; i < dated.length; i++) {
+        expect(
+          dated[i]!.isAfter(dated[i - 1]!),
+          isFalse,
+          reason: 'newest first',
+        );
+      }
+    });
+
+    test('a need handled goes to the end, below everything else', () async {
+      final session = await start(backend());
+      final activity = session.activity;
+      final work = activity.items(SwarmActivityFilter.needsYou).last;
+
+      activity.replied(work);
+
+      expect(all(activity), ['decision:d1', 'mention:m1', work.key]);
+    });
+
+    test('nothing anywhere: nothing', () async {
+      final fake = backend();
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': <Object>[],
+        'next': null,
+      };
+      final session = await start(fake);
+
+      expect(swarmActivityAll(session.activity), isEmpty);
+    });
+  });
 }
 
 /// A phone store whose read of [slow] waits for [release].

@@ -602,6 +602,34 @@ describe('security reviews of #2435', () => {
     expect((await f.store.read(owner, f.tab)).state.agents.map(a => a.id)).not.toContain(narrow)
   })
 
+  // Task #2356 (Diego): a New session there started wide, so it read its person's whole home, other projects' clones included.
+  it('starts a New session in an older project chat narrow, as that chat\'s own Buddy is', async () => {
+    const f = await swarm()
+    await buddy(f)
+    const old = String((await f.execute({ type: 'buddy.chat', projectId: f.web.projectId }, peer)).result.conversationId)
+    await f.launch(String((await send(f, old, 'From the phone')).result.startId))
+    const startId = String((await send(f, old, 'Work on this', { newSession: true })).result.startId)
+    const state = (await f.store.read(peer, f.tab)).state
+    expect(state.starts!.find(s => s.id === startId)!.request).toMatchObject({ worktree: true, buddyNarrow: true })
+    const session = await f.launch(startId)
+    expect((await f.store.read(peer, f.tab)).state.agents.find(a => a.id === session)).toMatchObject({ buddyNarrow: true, projectId: f.web.projectId })
+  })
+
+  it('ends a New session in an older project chat when its person loses the project', async () => {
+    const f = await swarm()
+    await buddy(f)
+    const old = String((await f.execute({ type: 'buddy.chat', projectId: f.secret.projectId }, peer)).result.conversationId)
+    await f.launch(String((await send(f, old, 'From the phone')).result.startId))
+    const session = await f.launch(String((await send(f, old, 'Work on this', { newSession: true })).result.startId))
+    const pending = String((await send(f, old, 'And this', { newSession: true })).result.startId)
+    expect((await f.store.read(owner, f.tab)).state.agents.map(a => a.id)).toContain(session)
+    await f.execute({ type: 'project.sharing', projectId: f.secret.projectId, visibility: 'private', memberIds: [owner.sub] })
+    const state = (await f.store.read(owner, f.tab)).state
+    expect(state.agents.map(a => a.id)).not.toContain(session)
+    // Its host never launches the start still pending.
+    await expect(f.launch(pending)).rejects.toBeDefined()
+  })
+
   it('shows a project session none of its chat\'s sessions: other threads, other projects\' and starts still pending', async () => {
     const f = await swarm()
     const { chat } = await buddy(f)

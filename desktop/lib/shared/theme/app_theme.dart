@@ -1437,6 +1437,32 @@ abstract final class AppDesktop {
   static const double dialogRadius = 20;
   static const double dialogElevation = 16;
   static const Color shadow = Color(0x3D000000);
+
+  /// The soft shade a right-side pane (a thread, a task, Members) lays over
+  /// the chat along its left edge, as in Slack (Huy, 11-03): a strip
+  /// [paneEdgeShadeWidth] wide, darkest at the pane, fading to nothing over
+  /// the chat. A gradient rather than a blurred shadow: a straight edge needs
+  /// no blur, and a blur is paid on every repaint of the window. Darker in
+  /// dark mode, where a light shade would not show on charcoal.
+  static const double paneEdgeShadeWidth = 12;
+  static LinearGradient get paneEdgeShade {
+    final edge = AppTheme.pick(
+      const Color(0x17000000),
+      const Color(0x66000000),
+    );
+    return LinearGradient(
+      begin: Alignment.centerRight,
+      end: Alignment.centerLeft,
+      colors: [
+        edge,
+        edge.withValues(alpha: edge.a * 0.55),
+        edge.withValues(alpha: edge.a * 0.2),
+        edge.withValues(alpha: 0),
+      ],
+      stops: const [0, 0.3, 0.65, 1],
+    );
+  }
+
   static const double menuRadius = 16;
   static const double rowRadius = 10;
   static const double fieldRadius = 10;
@@ -1466,6 +1492,11 @@ abstract final class AppDesktop {
   static const double menuInset = 6;
   static const double iconSize = 16;
   static const double identitySize = 28;
+
+  /// A chat or thread message's avatar: a rounded square, as Slack draws one
+  /// (Huy, 2026-11-03). Avatars elsewhere stay round.
+  static const double messageAvatarSize = 36;
+  static const double messageAvatarRadius = 8;
   static const double formWidth = 460;
   static const double focusWidth = 1.5;
 

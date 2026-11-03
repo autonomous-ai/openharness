@@ -3,8 +3,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
+import 'package:harness_mobile/swarm/swarm_activity_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/swarm/swarm_tabs.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 
 import '../voice_fakes.dart';
@@ -117,8 +119,14 @@ void main() {
     expect(i.invitations, isEmpty);
   });
 
-  group('Home', () {
-    Future<SwarmHost> pump(WidgetTester tester, FakeSwarm fake) async {
+  /// The invitations moved from Home to Activity's All and Needs you, counted
+  /// on the tab (Slack's Activity, 2026-11-03).
+  group('Activity', () {
+    Future<SwarmHost> pump(
+      WidgetTester tester,
+      FakeSwarm fake, {
+      Widget page = const Scaffold(body: SwarmActivityView()),
+    }) async {
       tester.view.physicalSize = const Size(1170, 2532);
       tester.view.devicePixelRatio = 3;
       addTearDown(tester.view.reset);
@@ -138,7 +146,7 @@ void main() {
         MaterialApp(
           builder: (context, child) =>
               SwarmScope(notifier: host, child: child!),
-          home: const SwarmPage(),
+          home: page,
         ),
       );
       await tester.pumpAndSettle();
@@ -146,9 +154,10 @@ void main() {
     }
 
     Finder key(String k) => find.byKey(ValueKey(k));
+    final section = key('swarm-activity-invitations');
 
-    testWidgets('a person in a Swarm sees a new invitation, one line, and '
-        'joins it', (tester) async {
+    testWidgets('a person in a Swarm sees a new invitation in All, first and '
+        'on one line, and joins it', (tester) async {
       final fake = backend();
       fake.routes['/api/super-tabs/t-i1/commands'] = (_) {
         fake.routes['/api/super-tabs/list'] = (_) => {
@@ -164,13 +173,23 @@ void main() {
         return <String, Object?>{};
       };
       await pump(tester, fake);
-      expect(find.text('Invitations'), findsOneWidget);
+      expect(section, findsOneWidget);
       final row = key('swarm-invitation-i1');
       expect(
         find.descendant(of: row, matching: find.text('Design Team')),
         findsOneWidget,
       );
       double y(Finder f) => tester.getCenter(f).dy;
+      expect(
+        y(row),
+        greaterThan(y(key('swarm-activity-filter-all'))),
+        reason: 'under the filters, on All',
+      );
+      expect(
+        find.text("You're all caught up."),
+        findsNothing,
+        reason: 'one waits on the person',
+      );
       final line = y(
         find.descendant(of: row, matching: find.text('Design Team')),
       );
@@ -179,7 +198,7 @@ void main() {
       await tester.tap(key('swarm-invitation-join-i1'));
       await tester.pumpAndSettle();
       expect(fake.commands.last, {'type': 'invite.accept', 'inviteId': 'i1'});
-      expect(find.text('Invitations'), findsNothing);
+      expect(section, findsNothing);
       expect(row, findsNothing);
     });
 
@@ -187,7 +206,7 @@ void main() {
       final host = await pump(tester, backend());
       await tester.tap(key('swarm-invitation-later-i1'));
       await tester.pumpAndSettle();
-      expect(find.text('Invitations'), findsNothing);
+      expect(section, findsNothing);
       await host.session!.inbox.refreshAll();
       await tester.pumpAndSettle();
       expect(key('swarm-invitation-i1'), findsNothing);
@@ -212,6 +231,59 @@ void main() {
       final fake = backend();
       fake.routes[invitations] = (_) => <Object>[];
       await pump(tester, fake);
+      expect(section, findsNothing);
+    });
+
+    testWidgets('All and Needs you have them, first, and count them: they '
+        'wait on the person; Mentions and a page pushed over a page do not', (
+      tester,
+    ) async {
+      await pump(tester, backend());
+      Finder count(String filter, String n) => find.descendant(
+        of: key('swarm-activity-filter-$filter'),
+        matching: find.text(n),
+      );
+      expect(count('all', '1'), findsOneWidget);
+      expect(count('needsYou', '1'), findsOneWidget);
+      expect(count('mentions', '0'), findsOneWidget);
+
+      await tester.tap(key('swarm-activity-filter-needsYou'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-invitation-i1'), findsOneWidget);
+      expect(find.text('Nothing needs you.'), findsNothing, reason: 'one does');
+
+      await tester.ensureVisible(key('swarm-activity-filter-mentions'));
+      await tester.tap(key('swarm-activity-filter-mentions'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-invitation-i1'), findsNothing);
+
+      await pump(tester, backend(), page: const SwarmActivityPage());
+      expect(key('swarm-invitation-i1'), findsNothing);
+    });
+
+    testWidgets("the Activity tab's count has them, and loses one put off", (
+      tester,
+    ) async {
+      final host = await pump(tester, backend(), page: const SwarmTabsPage());
+      final badge = key('swarm-tab-badge-activity');
+      expect(swarmActivityTabBadge(host.session!), 1);
+      expect(
+        find.descendant(of: badge, matching: find.text('1')),
+        findsOneWidget,
+      );
+
+      await tester.tap(key('swarm-tab-activity'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-invitation-later-i1'));
+      await tester.pumpAndSettle();
+
+      expect(swarmActivityTabBadge(host.session!), 0);
+      expect(badge, findsNothing);
+    });
+
+    testWidgets('Home lists none: they are Activity\'s', (tester) async {
+      await pump(tester, backend(), page: const SwarmPage());
+      expect(key('swarm-invitation-i1'), findsNothing);
       expect(find.text('Invitations'), findsNothing);
     });
   });
