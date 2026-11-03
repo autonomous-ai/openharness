@@ -438,8 +438,9 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
   const upstream = tracks ? await git(source, ['branch', `--set-upstream-to=${options.ref}`, branch]).then(() => true, () => false) : true
   const added: WorktreeAdd = upstream
     // Offline means nothing fetched, a partial clone's missing files included: they would come with this machine's login.
+    // GIT_NO_LAZY_FETCH is read from git 2.44 on; a protocol list naming no transport stops every git (review 1 of #2770).
     ? await worktreeAdd(source, ['worktree', 'add', '--', destination, branch], options.worktreeTimeout ?? WORKTREE_ADD_TIMEOUT,
-      options.offline ? { GIT_NO_LAZY_FETCH: '1' } : {})
+      options.offline ? { GIT_NO_LAZY_FETCH: '1', GIT_ALLOW_PROTOCOL: 'none' } : {})
     : { ok: false, reason: 'could not track its remote branch', stderr: '', timedOut: false, diskFull: false, running: false }
   if (!added.ok && added.running) {
     // Deleting the folder under a process still writing it would only race it; the next start takes another folder.
