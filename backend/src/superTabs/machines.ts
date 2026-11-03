@@ -48,6 +48,9 @@ export interface ContributedMachine {
   lent?: import('./leaderboard/lent.js').LentWeek[]
   /** The same by day, for the board's rolling periods. Only the leaderboard read gets it (model.ts visibleState). */
   lentDays?: import('./leaderboard/lent.js').LentDay[]
+  /** The projects whose agents may run here, set by its owner (commands.ts machine.projects, Tony 11-03); absent: every
+   *  project, as before. A Mac's Harness Team account keeps none of its own: it follows its Mac's (machineProjectRefusal). */
+  projects?: string[]
   /** Per engine, its failed starts here in a row, until one runs or they suspend it (engineHealth.ts). */
   engineFailures?: Record<string, number>
   /** Per engine, a suspension after failed starts: when, and whether its reading already said signed in with quota then. */
