@@ -18,7 +18,7 @@ import { askedInSchema, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema } from './ru
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
-import { leadOf, TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
+import { leadOf, TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest, workedAgain } from './terminal.js'
 import { changesRequested, engineerAnswered, leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, revisionReady, toldEngineer, waitingForReview } from './liveness.js'
 import { DELETED_SWARM_COMMANDS, isPersonalSwarm, notThere, SWARM_DELETE_GRACE_MS } from './deletion.js'
 import { ABANDONED, askedModel, coordinatorCopy, failureNotice, failureRecipients, MACHINE_REMOVED } from './startFailure.js'
@@ -1392,6 +1392,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     if (group.leadId && group.leadId !== next && group.id === groupProject(state, group).leadConversationId) protectLead(state, group.leadId)
   }
 
+  // An agent reporting its work is working: a usage-limit mark on it is stale (terminal.ts workedAgain). Not a post: its host
+  // posts as the agent too (a skill refresh, a stop it could not make), which says nothing of the agent's engine (review of #2712).
+  if (actor.kind === 'agent' && command.type === 'work.status') workedAgain(state, actor.agentId)
   switch (command.type) {
     case 'agent.screen':
     case 'agent.input': {
