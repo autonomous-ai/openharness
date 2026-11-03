@@ -10,6 +10,7 @@ import { extracted } from './parts/write.js'
 import { stepEndedRows, stepSleeps } from './steps.js'
 import { reportedAs } from './projectUpdates.js'
 import { idleNotices } from './tidy.js'
+import { QUIET_RUNNING_MS, sweepLiveness } from './liveness.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const config: AgentConfiguration = { engine: 'codex', model: 'test-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
@@ -172,6 +173,23 @@ describe('assigning a step', () => {
       post(b.f, b.f.task, [b.rev], b.f.dev)
       expect(b.f.group(b.id).assignment!.toldEngineerAt).toBeUndefined()
       expect(b.f.group(b.id).assignment).toMatchObject({ progressAt: b.f.now })
+    })
+
+    // Diego, 2026-11-03 (#2301): a failed check held the step on its own, so a Reviewer that hung after the Engineer's
+    // "fixed, please re-check" post stayed working for hours and no stall woke the PM.
+    it('ends a failed check hold too with the Engineer\'s post to it', () => {
+      const f = reviewing()
+      f.f.run({ type: 'work.status', conversationId: f.f.task, assignmentId: f.f.group(f.f.task).assignment!.id, status: 'review', result: 'PR 7' } as Command, f.f.as(f.f.dev))
+      f.f.run({ type: 'work.check', conversationId: f.f.task, assignmentId: f.f.group(f.f.task).assignment!.id, checkId: f.f.group(f.f.task).checks[0]!.id,
+        passed: false, evidence: 'Drops the session' } as Command, f.f.as(f.rev))
+      post(f.f, f.id, [f.f.dev], f.rev)
+      f.f.tick(60_000)
+      post(f.f, f.id, [f.rev], f.f.dev)
+      expect(f.f.group(f.id).assignment!.changesRequestedAt).toBeUndefined()
+      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBeUndefined()
+      expect(f.f.group(f.id).assignment).toMatchObject({ status: 'working', progressAt: f.f.now })
+      sweepLiveness(f.f.state, f.f.now + QUIET_RUNNING_MS + 5 * 60_000)
+      expect(f.f.group(f.id).assignment).toMatchObject({ status: 'lost' })
     })
 
     it('gives no time to a Reviewer that isn\'t waiting: the Engineer\'s posts keep no idle Reviewer', () => {
