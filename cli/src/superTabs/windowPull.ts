@@ -55,10 +55,10 @@ const round = (n: number) => Math.round(n * 100) / 100
 const inTime = (ms: number) => ms < 3_600_000 ? `${Math.max(1, Math.round(ms / 60_000))}m` : `${Math.round(ms / 3_600_000)}h`
 
 /** The pull's word on one candidate: its price less up to half ([MAX_DISCOUNT]), by the part of the task its account's weekly
- *  window would otherwise leave unused. Only on a candidate whose quota is known to carry the task (fit `fits`; a Codex
- *  reading of its weekly window alone is complete, route.ts sizeUp): one that would run out partway trades wasted weekly
- *  quota for a stalled task, and one whose 5-hour window could not be read (`unknown`) would, since price ranks before fit,
- *  beat an account known to fit on half a reading (review of f97c022). The reason names the window, never the account or
+ *  window would otherwise leave unused. Only on a candidate whose quota is known to carry the task (fit `fits`; a reading
+ *  of its weekly window alone is complete on either engine, route.ts sizeUp): one that would run out partway trades wasted
+ *  weekly quota for a stalled task, and one whose weekly window could not be read (`unknown`) would, since price ranks before
+ *  fit, beat an account known to fit on half a reading (review of f97c022). The reason names the window, never the account or
  *  the machine a reading was relayed from, since every reader of the route log sees it. */
 export function windowPullAdjust(p: Readonly<Probe & { fit: Fit }>, now: number, held: readonly Commitment[]): Adjustment | null {
   if (p.fit.status !== 'fits' || p.fit.spend.weekly <= 0 || p.fit.effectiveCost <= 0) return null

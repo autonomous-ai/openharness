@@ -11,6 +11,7 @@ import { PERIODS } from '../superTabs/leaderboard/rolling.js'
 import { fail, SuperTabError } from '../superTabs/model.js'
 import { SuperTabStore } from '../superTabs/store.js'
 import { redisPollMemory } from '../superTabs/pollMemory.js'
+import { redisAutoJoinMemory } from '../superTabs/autoJoin.js'
 import { redisReportMemory } from '../superTabs/machineReports.js'
 import { routingPolicySaveSchema } from '../superTabs/routingPolicy.js'
 import { nativeEventSchema, openNativeSchema } from '../superTabs/native.js'
@@ -115,7 +116,8 @@ const hostParams = z.object({ machineId: id })
 const hostStartParams = hostParams.extend({ tabId: id, startId: id })
 const machineParams = hostParams.extend({ tabId: id })
 const projectParams = tabParams.extend({ projectId: id })
-const refreshQuery = z.object({ refresh: z.literal('1').optional() })
+// `record=0`: an app reading again because the project's GitHub revision moved, not a person checking; it records nothing.
+const refreshQuery = z.object({ refresh: z.literal('1').optional(), record: z.literal('0').optional() })
 const approveBody = z.object({ scope: z.enum(['project', 'swarm']) }).strict()
 // What GitHub sends back: a sign-in's code and our state, and after an installation its id and action.
 const callbackQuery = z.object({ code: z.string().max(512).optional(), state: z.string().max(4096).optional(), error: z.string().max(128).optional(),
@@ -238,6 +240,8 @@ async function productionStore(github: GitHubTokens | null): Promise<SuperTabSto
       // Every server answers the quiet delivery poll from any server's full one, and tells the agent's machine of new work
       // through whichever server holds its daemon socket (stability roadmap 2.4). Both only ever drop, never fail, on Redis.
       polls: redisPollMemory(bus.pub),
+      // Each person is tried for joining by domain once per 2 minutes across every server (superTabs/autoJoin.ts).
+      autoJoins: redisAutoJoinMemory(bus.pub),
       // What each machine's full report saw, so its heartbeats skip the Swarm load, and one sweep clock per Swarm (DB 2.5).
       reports: redisReportMemory(bus.pub),
       deliveriesWaiting: announceSwarmDeliveries, terminalWaiting: announceSwarmTerminal,
@@ -277,6 +281,11 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   onMachineRenamed(rename => store.machineRenamed(rename))
   const reads = options.reads ?? new SwarmReads(store, { githubApp: !!github })
   const hosts = options.hosts ?? new HostReads(store, { githubApp: !!github, teamAccountsIdle: !github })
+  // Members' apps read a project's GitHub access again when its revision moves (projects.ts githubRevision). A move that
+  // fails is logged and changes no answer: the apps then read again within 5 minutes, as before.
+  const recorded = (tabId: string, move: () => Promise<unknown>) => move().catch(error => {
+    logger.warn('[github] access change not recorded', { tabId, error: String(error) })
+  })
   app.get('/api/super-tabs/grids', (req, reply) => respond(reply, () => store.hostGrids(req.user!)))
   // Each row says whether this server has the Harness GitHub App, so the host knows to ask for a start's token below.
   app.get('/api/super-tabs/hosts/:machineId/pools', updateRequired)
@@ -320,7 +329,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     { preHandler: [validateParams(projectParams), validateQuery(refreshQuery)] },
     (req, reply) => respond(reply, async () => {
       const project = await store.projectRepository(req.user!, req.params.tabId, req.params.projectId)
-      return projectGitHubAccess(github?.app ?? null, project.repositoryUrl, { canApprove: !!signIn,
+      const access = await projectGitHubAccess(github?.app ?? null, project.repositoryUrl, { canApprove: !!signIn,
         approved: async repository => !project.approvalRequired || approvals.approved(req.user!.autonomousEnv, req.params.tabId, req.params.projectId, repository),
         approvedFor: async repository => {
           const ids = await approvals.approvedProjects(req.user!.autonomousEnv, req.params.tabId, repository)
@@ -328,6 +337,11 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
         },
         you: repository => approvals.reader(req.user!.autonomousEnv, req.params.tabId, req.params.projectId, repository, req.user!.sub) },
         req.query.refresh === '1')
+      // Only a person's check records what it found (opening GitHub access, Check again): every app reads again when the
+      // revision moves, on servers whose caches differ, and recording those reads would move it back and forth (review of
+      // #2713). A read without `refresh` may answer from an older cache, so it records nothing either.
+      if (req.query.refresh === '1' && req.query.record !== '0') await recorded(req.params.tabId, () => store.githubSeen(req.params.tabId, req.params.projectId, access.state))
+      return access
     }))
   // The jobs running and waiting on a project's GitHub Actions, for the route (github/ciLoad.ts): counts only, read through
   // the app, by a person or an agent who may read the project. Only for a repository someone who can push to it approved for
@@ -364,6 +378,11 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     // (local Team account run, 2026-10-28).
     if (req.query.error) return page('Sign-in was cancelled', 'Nothing was allowed. Go back to Harness and choose Continue in GitHub to try again.')
     if (!req.query.code || !signIn || !named) {
+      // Installed just now: this server stops keeping "not installed", and members' apps read again (task #2316).
+      if (named && github) {
+        github.app.forget(named)
+        await recorded(request.tabId, () => store.githubChanged(request.tabId, request.repository))
+      }
       return page('Harness is installed', 'Go back to Harness and choose Continue in GitHub, so this project can use it.')
     }
     const seen = await signIn.permission(req.query.code, named).catch(() => null)
@@ -374,6 +393,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       return page(`You can't push to ${named.fullName}`, 'So you can\'t allow it. Ask someone who can push to it to open the project in Harness and choose Set up GitHub for teammates.', 403)
     }
     await approvals.approve(request, seen.login)
+    await recorded(request.tabId, () => store.githubChanged(request.tabId, request.repository))
     // Named, so the person knows which project it was for (local Team account run, 2026-10-28: 'This project can now use it').
     const where = request.scope === 'swarm' ? 'every project in this Swarm'
       : await store.projectNameFor(request.userId, request.autonomousEnv as AuthUser['autonomousEnv'], request.tabId, request.projectId).catch(() => null) ?? 'this project'
