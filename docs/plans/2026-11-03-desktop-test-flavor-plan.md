@@ -51,7 +51,7 @@ PR's own CLI bundle (`cli/build-bundle.mjs`, `BUNDLE_OUT_DIR`), PlistBuddy and c
 
 **Files:**
 - Modify: `desktop/lib/core/config.dart`
-- Test: `desktop/test/core/config_daemon_port_test.dart`
+- Test: `desktop/test/config_daemon_port_test.dart`
 
 **Interfaces:**
 - Produces: `const int localDaemonPort = int.fromEnvironment('HARNESS_DAEMON_PORT', defaultValue: 18473);`,
@@ -61,7 +61,7 @@ PR's own CLI bundle (`cli/build-bundle.mjs`, `BUNDLE_OUT_DIR`), PlistBuddy and c
 - [ ] **Step 1: Write the failing test.** `localCliBaseUrlFor(18999) == 'http://127.0.0.1:18999'`; without the define,
   `localDaemonPort == 18473` and `AppConfig.dev.localCliBaseUrl == 'http://127.0.0.1:18473'`; a source check that
   `desktop/lib` has no other literal `18473`.
-- [ ] **Step 2: Run** `flutter test test/core/config_daemon_port_test.dart` → FAIL (`localCliBaseUrlFor` not defined).
+- [ ] **Step 2: Run** `flutter test test/config_daemon_port_test.dart` → FAIL (`localCliBaseUrlFor` not defined).
 - [ ] **Step 3: Implement** the two declarations in `config.dart` and use them for the default.
 - [ ] **Step 4: Run** the test → PASS; run `flutter analyze lib/core/config.dart`.
 - [ ] **Step 5: Commit** (test first, then code).
