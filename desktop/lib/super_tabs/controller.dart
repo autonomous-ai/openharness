@@ -877,25 +877,25 @@ class SuperTabController extends ChangeNotifier {
     if (!_threadUnshown) return;
     _threadUnshown = false;
     if (openedThread case final open?) _seeThread(open.root);
-    // The round dial follows a thread whose pane is on screen.
     _changed();
   }
 
   /// The pane of the open thread left the screen: the app went to the
   /// background, another Swarm came to the front, or something covers it.
-  /// Called from a build or a dispose, so the round dial, which follows a
-  /// thread only while its pane is on screen, is told after it.
+  /// Called from a build or a dispose, so listeners are told after it.
   void threadPaneHidden() {
     if (_threadUnshown) return;
     _threadUnshown = true;
     if (openedThread != null) scheduleMicrotask(_changed);
   }
 
-  /// The root of the thread open beside the selected conversation while its
-  /// pane is on screen, which the round dial's face follows; null otherwise.
+  /// The root of the thread open beside the selected conversation, which the
+  /// round dial's face follows; null when none is. Open, not on screen: a
+  /// hidden pane (app in the background, another Swarm in front) is still the
+  /// person's open thread, and the daemon drops the dial out of a thread that
+  /// is not named. Read marks stay gated by [_threadUnshown], not this.
   String? get threadOnScreen => switch (openedThread) {
-    final open? when open.conversationId == selectedId && !_threadUnshown =>
-      open.root,
+    final open? when open.conversationId == selectedId => open.root,
     _ => null,
   };
 
@@ -1634,10 +1634,12 @@ class SuperTabController extends ChangeNotifier {
   }
 
   /// Opens [root]'s thread of the selected conversation beside the chat.
-  void openThread(String root) {
+  /// [shown] false opens it with its pane not on screen (the dial opened it
+  /// in a background tab): nothing reads until [threadPaneShown].
+  void openThread(String root, {bool shown = true}) {
     if (accessRevoked) return;
     openedThread = (conversationId: selectedId, root: root);
-    _threadUnshown = false;
+    _threadUnshown = !shown;
     _pruneThreadFiles();
     _seeThread(root);
     _saveSoon();

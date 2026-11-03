@@ -493,7 +493,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // The devices' (core/devicesLink.ts): a Harness Pro that shows the Swarm cards is attached or gone, wants a Lead's recap, or
         // has one open. They read the account's Swarms as the person, and need no agent.
         // Only this computer's own devices ask: an account owner on another machine does not make this one read the Swarms.
-        if (payload.action === 'cardsWanted' || payload.action === 'cardRecap' || payload.action === 'cardOpen' || payload.action === 'cardSay' || payload.action === 'cardWorker' || payload.action === 'cardSide') {
+        if (payload.action === 'cardsWanted' || payload.action === 'cardRecap' || payload.action === 'cardOpen' || payload.action === 'cardSay' || payload.action === 'cardWorker' || payload.action === 'cardSide' || payload.action === 'cardThreadLeave') {
           if (!asker.local) return { error: 'OWNER_REQUIRED' }
           // A round dial that speaks swarmChat asks for the chat on its face (design 2026-10-28-round-dial-swarm-chat), and one
           // that speaks swarmBuddy for the face on the side it keeps ('buddy', spec 2026-10-29-round-dial-pm-buddy).
@@ -509,15 +509,25 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           }
           if (payload.action === 'cardRecap' && cardId(payload.tabId) && cardId(payload.leadId)) return { ok: true, ...await cards().recap(payload.tabId, payload.leadId, chat) }
           if (payload.action === 'cardSay' && cardId(payload.harnessId) && typeof payload.text === 'string' && payload.text.trim() && payload.text.length <= 32_000) {
+            // `threaded`: the dial speaks swarmThread and the words came from its face; `thread`: the root of the thread on the face
+            // then (null: none), which the words are held to.
+            const options = { ...(payload.threaded === true ? { threaded: true } : {}),
+              ...(payload.thread === null || cardId(payload.thread) ? { thread: payload.thread } : {}) }
             const pinned: [chatId?: string, reviewed?: boolean] = !cardId(payload.chatId) ? []
               : payload.reviewed === true ? [payload.chatId, true] : [payload.chatId]
-            const result = await cards().say(payload.harnessId, payload.text.trim(), chat, ...pinned)
+            const result = Object.keys(options).length
+              ? await cards().say(payload.harnessId, payload.text.trim(), chat, cardId(payload.chatId) ? payload.chatId : undefined, cardId(payload.chatId) && payload.reviewed === true, options)
+              : await cards().say(payload.harnessId, payload.text.trim(), chat, ...pinned)
             // A refusal travels with its code and message, which the dial shows instead of typing the words anywhere.
-            return { ok: true, said: result.said, ...(!result.said && result.refused ? { refused: result.refused } : {}) }
+            return { ok: true, said: result.said, ...(!result.said && result.refused ? { refused: result.refused } : {}), ...(result.said && result.thread ? { thread: result.thread } : {}) }
           }
           // A card's failure from another computer: whether its agent is a Swarm's Builder or Reviewer, from the Swarms read last.
           if (payload.action === 'cardWorker' && identifier(payload.machineId) && identifier(payload.harnessId)) {
             return { ok: true, worker: cards().worker(payload.machineId, payload.harnessId) }
+          }
+          if (payload.action === 'cardThreadLeave' && cardId(payload.tabId) && cardId(payload.leadId)) {
+            const left = cards().threadLeave(payload.tabId, payload.leadId, chat)
+            return { ok: true, ...(left ? { conversationId: left.conversationId } : {}) }
           }
           if (payload.action === 'cardSide' && cardId(payload.tabId) && (payload.side === 'pm' || payload.side === 'buddy')) {
             cards().side(payload.tabId, payload.side)

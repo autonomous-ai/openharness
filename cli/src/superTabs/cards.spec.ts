@@ -770,17 +770,18 @@ describe('SwarmCards open recaps and recap reads', () => {
 /** `web` with its three chats at the given sequences, each conversation's page served from `pages` (newest first or not: the code orders);
  *  a thread's page from `${conversation}#${root}`. */
 /** With `withBuddy`, the Swarm has Buddies on and the reader's Buddy (`y1`, "diego's Buddy" on Codex) is in their `web` chat. */
-function chatSwarm(pages: Record<string, unknown[] | (() => unknown[])>, withBuddy = false, delayMs = 0) {
+function chatSwarm(pages: Record<string, unknown[] | (() => unknown[])>, withBuddy = false, delayMs = 0, post?: () => { status: number; body: Record<string, unknown> }) {
   const state = (lead = 1, pmSeq = 1, groupSeq = 1) => chats({
     ...(withBuddy ? { buddies: true, agents: [...chats().agents as object[], buddy()] } : {}),
     conversations: [
       conv('lead-web', 'a1', { projectId: 'web', lastMessageSequence: lead }), conv('lead-mobile', 'a2', { projectId: 'mobile' }),
       pm({ lastMessageSequence: pmSeq, ...(withBuddy ? { agentIds: ['y1'] } : {}) }), group({ lastMessageSequence: groupSeq })] })
   const t = setup({ t1: { lastChangedAt: 1, state: state() } }, { messages: path => {
-    const id = /conversations\/([^/]+)\/messages/.exec(path)?.[1] ?? '', thread = /[?&]thread=([^&]+)/.exec(path)?.[1]
-    const page = pages[thread ? `${id}#${thread}` : id] ?? []
-    return { messages: typeof page === 'function' ? page() : page, next: null }
-  }, delayMs })
+    const id = /conversations\/([^/]+)\/messages/.exec(path)?.[1] ?? '', thread = /[?&]thread=([^&]+)/.exec(path)?.[1], one = /[?&]messageId=([^&]+)/.exec(path)?.[1]
+    const page = pages[one ? `${id}@${one}` : thread ? `${id}#${thread}` : id] ?? []
+    const rows = typeof page === 'function' ? page() : page
+    return { messages: rows, next: null, ...((rows as { threads?: unknown }).threads ? { threads: (rows as { threads?: unknown }).threads } : {}) }
+  }, delayMs, post })
   const move = async (lead: number, pmSeq = 1, groupSeq = 1) => { t.tabs.t1.lastChangedAt++; t.tabs.t1.state = state(lead, pmSeq, groupSeq); await t.cards.tick() }
   const webLead = (cards = t.seen.at(-1)) => cards?.[0].leads.find(l => l.id === 'a1')
   const reads = (conversation: string) => t.calls.filter(c => c.includes(`/conversations/${conversation}/messages`)).length
@@ -1264,6 +1265,348 @@ describe('SwarmCards chat recap and threads', () => {
     expect(t.webLead()?.notice).toMatchObject({ text: 'in the thread' })
     expect(await t.cards.recap('t1', 'a1', true)).toMatchObject({ text: 'top', chatId: 'lead-web' })
     t.cards.want(false)
+  })
+})
+
+describe('the face thread', () => {
+  const posted = () => ({ status: 200, body: { success: true, data: { result: { messageId: 'm9' } } } })
+  const root = (id: string, text: string) => said(3, 'me', { id, text, author: { kind: 'person', id: 'me' }, thread: id })
+  const pages = {
+    'lead-web#m9': [root('m9', 'build it\nplease'), said(5, 'a1', { text: 'on it', thread: 'm9' })],
+    'lead-web#x1': Object.assign([root('x1', 'fix login\nmore'), said(5, 'a1', { text: 'done', thread: 'x1' })], { threads: [{ id: 'x1', replies: 2 }] }),
+  }
+  const onThread = { tabId: 't1', conversationId: 'lead-web', threadRoot: 'x1' }
+  const started = async (withBuddy = false) => {
+    const t = chatSwarm(pages, withBuddy, 0, posted)
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    return t
+  }
+  const posts = (t: { call: { mock: { calls: unknown[][] } } }) =>
+    t.call.mock.calls.filter(c => c[0] === 'POST').map(c => (c[2] as { command: { conversationId: string; replyTo: string | null } }).command)
+
+  it('words said at top level start the dial\'s thread', async () => {
+    const t = await started()
+    expect(t.webLead()?.chat).not.toHaveProperty('thread')
+    expect(await t.cards.say('h-a1', 'build it\nplease', true, undefined, false, { threaded: true })).toEqual({ said: true, thread: { tabId: 't1', conversationId: 'lead-web', root: 'm9' } })
+    expect(t.webLead()?.chat?.thread).toEqual({ root: 'm9', title: 'build it' })
+    expect(await t.cards.recap('t1', 'a1', true)).toMatchObject({ text: 'on it', chatId: 'lead-web', thread: 'm9' })
+    t.cards.want(false)
+  })
+
+  it('cuts the dial\'s thread title to 80 bytes on a character', async () => {
+    const t = await started()
+    await t.cards.say('h-a1', 'é'.repeat(60), true, undefined, false, { threaded: true })
+    expect(t.webLead()?.chat?.thread?.title).toBe('é'.repeat(40))
+    t.cards.want(false)
+  })
+
+  it('words said by a dial without swarmThread start no thread', async () => {
+    const t = await started()
+    expect(await t.cards.say('h-a1', 'build it', true)).toEqual({ said: true })
+    expect(t.webLead()?.chat).not.toHaveProperty('thread')
+    expect(await t.cards.recap('t1', 'a1', true)).not.toHaveProperty('thread')
+    t.cards.want(false)
+  })
+
+  it('swiping to the Buddy side forgets the PM\'s thread', async () => {
+    const t = await started(true)
+    await t.cards.say('h-a1', 'build it', 'buddy', undefined, false, { threaded: true })
+    expect(t.webLead()?.sideChat?.thread?.root).toBe('m9')
+    t.cards.side('t1', 'buddy')
+    t.cards.side('t1', 'pm')
+    expect(t.webLead()?.sideChat).not.toHaveProperty('thread')
+    expect(t.webLead()?.chat).not.toHaveProperty('thread')
+    t.cards.want(false)
+  })
+
+  it('starts no thread when the answer has no message id', async () => {
+    const t = chatSwarm(pages, false, 0, () => ({ status: 200, body: { success: true, data: {} } }))
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    expect(await t.cards.say('h-a1', 'hello', true, undefined, false, { threaded: true })).toEqual({ said: true })
+    expect(t.webLead()?.chat).not.toHaveProperty('thread')
+    t.cards.want(false)
+  })
+
+  it('words said in a thread reply in it and start nothing', async () => {
+    const t = await started()
+    t.cards.want(true, [], onThread)
+    expect(await t.cards.say('h-a1', 'more', true, undefined, false, { threaded: true })).toEqual({ said: true })
+    expect(posts(t).map(p => [p.conversationId, p.replyTo])).toEqual([['lead-web', 'x1']])
+    t.cards.want(false)
+  })
+
+  it('the app\'s thread is the face\'s, titled from its root and counted from the read', async () => {
+    const t = await started()
+    t.cards.want(true, [], onThread)
+    expect(t.webLead()?.chat?.thread).toMatchObject({ root: 'x1' })
+    expect(await t.cards.recap('t1', 'a1', true)).toMatchObject({ text: 'done', thread: 'x1' })
+    await vi.waitFor(() => expect(t.webLead()?.chat?.thread).toEqual({ root: 'x1', title: 'fix login', replies: 2 }))
+    t.cards.want(false)
+  })
+
+  it('a focus move clears the dial\'s thread', async () => {
+    const t = await started()
+    await t.cards.say('h-a1', 'build it', true, undefined, false, { threaded: true })
+    // The move the dial's own thread caused keeps it.
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'lead-web', threadRoot: 'm9', fromDevice: true })
+    expect(t.webLead()?.chat?.thread?.root).toBe('m9')
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'lead-web' })
+    expect(t.webLead()?.chat).not.toHaveProperty('thread')
+    expect(await t.cards.recap('t1', 'a1', true)).not.toHaveProperty('thread')
+    t.cards.want(false)
+  })
+
+  it('threadLeave clears the dial\'s thread and names the conversation', async () => {
+    const t = await started()
+    await t.cards.say('h-a1', 'build it', true, undefined, false, { threaded: true })
+    expect(t.cards.threadLeave('t1', 'a1')).toEqual({ tabId: 't1', conversationId: 'lead-web' })
+    expect(t.webLead()?.chat).not.toHaveProperty('thread')
+    expect(t.cards.threadLeave('t1', 'a1')).toBeNull()
+    // The app's thread too: the dial is off it until the app moves again.
+    t.cards.want(true, [], onThread)
+    expect(t.cards.threadLeave('t1', 'a1')).toEqual({ tabId: 't1', conversationId: 'lead-web' })
+    expect(t.webLead()?.chat).not.toHaveProperty('thread')
+    expect(t.cards.threadLeave('t1', 'zz')).toBeNull()
+    t.cards.want(false)
+  })
+
+  it('a thread lives only while its conversation is on the face', async () => {
+    const t = await started(true)
+    expect(await t.cards.say('h-a1', 'build it', 'buddy', undefined, false, { threaded: true })).toMatchObject({ said: true, thread: { root: 'm9' } })
+    expect(t.webLead()?.sideChat?.thread?.root).toBe('m9')
+    t.cards.side('t1', 'buddy')
+    expect(t.webLead()?.sideChat).toMatchObject({ kind: 'buddy' })
+    expect(t.webLead()?.sideChat).not.toHaveProperty('thread')
+    expect(await t.cards.recap('t1', 'a1', 'buddy')).not.toHaveProperty('thread')
+    t.cards.want(false)
+  })
+  const asMe = { threaded: true, thread: null as string | null }
+  const hidden = (t: Awaited<ReturnType<typeof started>>, over: Record<string, unknown> = {}) => t.cards.want(true, [], { tabId: 't1', conversationId: 'lead-web', ...over })
+
+  it('a hidden pane keeps the dial\'s thread: the same root announced again clears nothing, the app closing it does', async () => {
+    const t = await started()
+    await t.cards.say('h-a1', 'build it', true, undefined, false, asMe)
+    // The window announces the very thread it was asked to open, and keeps announcing it while the pane is hidden.
+    for (let i = 0; i < 3; i++) {
+      hidden(t, { threadRoot: 'm9' })
+      expect(t.webLead()?.chat?.thread).toEqual({ root: 'm9', title: 'build it' })
+    }
+    hidden(t, { threadRoot: 'x1' })
+    expect(t.webLead()?.chat?.thread?.root).toBe('x1')
+    t.cards.want(false)
+    const u = await started()
+    await u.cards.say('h-a1', 'build it', true, undefined, false, asMe)
+    hidden(u, { threadRoot: 'm9' })
+    hidden(u)
+    expect(u.webLead()?.chat).not.toHaveProperty('thread')
+    u.cards.want(false)
+  })
+
+  it('the window\'s selecting the thread\'s chat keeps the dial\'s thread until it opens it', async () => {
+    const t = await started()
+    await t.cards.say('h-a1', 'build it', true, undefined, false, asMe)
+    hidden(t)
+    expect(t.webLead()?.chat?.thread?.root).toBe('m9')
+    hidden(t, { threadRoot: 'm9' })
+    expect(t.webLead()?.chat?.thread?.root).toBe('m9')
+    hidden(t)
+    expect(t.webLead()?.chat).not.toHaveProperty('thread')
+    t.cards.want(false)
+  })
+
+  it('an unconfirmed dial thread ends 15 s later without the window naming it', async () => {
+    const t = await started()
+    await t.cards.say('h-a1', 'build it', true, undefined, false, asMe)
+    t.advance(14_999)
+    hidden(t)
+    expect(t.webLead()?.chat?.thread?.root).toBe('m9')
+    t.cards.want(true, [], null)
+    t.advance(1)
+    hidden(t)
+    expect(t.webLead()?.chat).not.toHaveProperty('thread')
+    t.cards.want(false)
+  })
+
+  it('another root named before confirmation ends the dial\'s thread', async () => {
+    const t = await started()
+    await t.cards.say('h-a1', 'build it', true, undefined, false, asMe)
+    hidden(t, { threadRoot: 'x1' })
+    expect(t.webLead()?.chat?.thread?.root).toBe('x1')
+    hidden(t)
+    expect(t.webLead()?.chat).not.toHaveProperty('thread')
+    t.cards.want(false)
+  })
+
+  it('a group face\'s thread is kept like a chat\'s', async () => {
+    const t = await started()
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'g-web' })
+    expect(await t.cards.say('h-a1', 'status?', true, undefined, false, asMe)).toEqual({ said: true, thread: { tabId: 't1', conversationId: 'g-web', root: 'm9' } })
+    expect(t.webLead()?.chat).toMatchObject({ kind: 'group', thread: { root: 'm9' } })
+    t.cards.want(false)
+  })
+
+  it('words spoken on a thread face post there even if the face left it (reviewed), and are refused CHAT_MOVED when not reviewed', async () => {
+    const t = await started()
+    hidden(t, { threadRoot: 'x1' })
+    expect(t.webLead()?.chat?.thread?.root).toBe('x1')
+    t.cards.threadLeave('t1', 'a1')
+    const refused = await t.cards.say('h-a1', 'more', true, 'lead-web', false, { thread: 'x1' })
+    expect(refused).toEqual({ said: false, refused: { code: 'CHAT_MOVED', message: 'That chat is no longer on the dial. Say it again.' } })
+    expect(posts(t)).toEqual([])
+    expect(await t.cards.say('h-a1', 'more', true, 'lead-web', true, { thread: 'x1', threaded: true })).toEqual({ said: true })
+    expect(posts(t).map(p => [p.conversationId, p.replyTo])).toEqual([['lead-web', 'x1']])
+    expect(t.webLead()?.chat).not.toHaveProperty('thread')
+    t.cards.want(false)
+  })
+
+  it('words spoken on the main chat never land in a thread the app opened meanwhile', async () => {
+    const t = await started()
+    hidden(t, { threadRoot: 'x1' })
+    expect(await t.cards.say('h-a1', 'main', true, 'lead-web', false, asMe)).toMatchObject({ said: false, refused: { code: 'CHAT_MOVED' } })
+    expect(posts(t)).toEqual([])
+    expect(await t.cards.say('h-a1', 'main', true, 'lead-web', true, asMe)).toEqual({ said: true })
+    expect(posts(t).map(p => p.replyTo)).toEqual([null])
+    // Posted at top level, but the face is in the app's thread now: no thread of the dial's.
+    expect(t.webLead()?.chat?.thread?.root).toBe('x1')
+    t.cards.want(false)
+  })
+
+  it('a post whose face or focus moved meanwhile starts no thread', async () => {
+    let during: (() => void) | undefined
+    const t = chatSwarm(pages, true, 0, () => { during?.(); return posted() })
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    during = () => { during = undefined; t.cards.want(true, [], { tabId: 't1', conversationId: 'lead-web', fromDevice: true }) }
+    expect(await t.cards.say('h-a1', 'one', true, undefined, false, asMe)).toEqual({ said: true })
+    expect(t.webLead()?.chat).not.toHaveProperty('thread')
+    during = () => { during = undefined; t.cards.side('t1', 'buddy') }
+    expect(await t.cards.say('h-a1', 'two', 'buddy', undefined, false, asMe)).toEqual({ said: true })
+    t.cards.side('t1', 'pm')
+    expect(t.webLead()?.sideChat).not.toHaveProperty('thread')
+    during = () => { during = undefined; t.core.account.identity = vi.fn(async () => ({ accountId: 'sam', email: 'sam@x.io' })) as never; t.tabs.t1.lastChangedAt++; void t.cards.tick() }
+    await t.cards.say('h-a1', 'three', true, undefined, false, asMe)
+    await vi.waitFor(() => expect(t.cards.threadLeave('t1', 'a1')).toBeNull())
+    t.cards.want(false)
+  })
+
+  it('an old Desktop\'s re-announce after a leave does not pull the dial back, until the app names another thread', async () => {
+    const t = await started()
+    hidden(t, { threadRoot: 'x1' })
+    expect(t.cards.threadLeave('t1', 'a1')).toEqual({ tabId: 't1', conversationId: 'lead-web' })
+    hidden(t, { threadRoot: 'x1' })
+    hidden(t, { threadRoot: 'x1' })
+    expect(t.webLead()?.chat).not.toHaveProperty('thread')
+    hidden(t, { threadRoot: 'x2' })
+    expect(t.webLead()?.chat?.thread?.root).toBe('x2')
+    hidden(t, { threadRoot: 'x1' })
+    expect(t.webLead()?.chat?.thread?.root).toBe('x1')
+    // Closed in the app, then opened again: it is the app's.
+    t.cards.threadLeave('t1', 'a1')
+    hidden(t)
+    hidden(t, { threadRoot: 'x1' })
+    expect(t.webLead()?.chat?.thread?.root).toBe('x1')
+    t.cards.want(false)
+  })
+
+  it('a leave resolves the face by the dial\'s own chat flag and strips the focus thread only of that conversation', async () => {
+    const t = await started(true)
+    t.cards.side('t1', 'buddy')
+    await t.cards.say('h-a1', 'hello buddy', 'buddy', undefined, false, asMe)
+    const buddyId = t.webLead()?.sideChat?.id
+    expect(t.webLead()?.sideChat?.thread?.root).toBe('m9')
+    // The window is in another conversation's thread, set by the dial's own pick so the dial's thread stays.
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'lead-web', threadRoot: 'x1', fromDevice: true })
+    expect(t.cards.threadLeave('t1', 'a1', 'buddy')).toEqual({ tabId: 't1', conversationId: buddyId })
+    expect(t.webLead()?.chat?.thread?.root).toBe('x1')
+    expect(t.webLead()?.sideChat).not.toHaveProperty('thread')
+    expect(t.cards.threadLeave('t1', 'a1', false)).toBeNull()
+    t.cards.want(false)
+  })
+
+  it('an app thread whose root is not on the page is titled by reading its root once, and keeps the last title', async () => {
+    const t = chatSwarm({ ...pages, 'lead-web#x2': Object.assign([said(5, 'a1', { text: 'reply', thread: 'x2' })], { threads: [{ id: 'x2', replies: 1 }] }),
+      'lead-web@x2': [root('x2', 'old root\nmore')] }, false, 0, posted)
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    hidden(t, { threadRoot: 'x2' })
+    await t.cards.recap('t1', 'a1', true)
+    await vi.waitFor(() => expect(t.webLead()?.chat?.thread).toEqual({ root: 'x2', title: 'old root', replies: 1 }))
+    await t.move(2)
+    await t.cards.recap('t1', 'a1', true)
+    expect(t.webLead()?.chat?.thread?.title).toBe('old root')
+    expect(t.calls.filter(c => c.includes('messageId=x2'))).toHaveLength(1)
+    t.cards.want(false)
+  })
+
+  // Review of #2756 (ENGINEERING.md §6): a failed read of the root was dropped silently and never tried again, so the face kept a
+  // blank title. It is logged, by its code and nothing of the thread, and read again after a wait.
+  it('a failed read of an app thread\'s root is logged and read again after a wait', async () => {
+    let fails = true
+    const t = chatSwarm({ ...pages, 'lead-web#x2': Object.assign([said(5, 'a1', { text: 'reply', thread: 'x2' })], { threads: [{ id: 'x2', replies: 1 }] }),
+      'lead-web@x2': () => { if (fails) throw Object.assign(new Error('busy'), { code: 'SERVICE_UNAVAILABLE' }); return [root('x2', 'old root')] } }, false, 0, posted)
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    hidden(t, { threadRoot: 'x2' })
+    await t.cards.recap('t1', 'a1', true)
+    await vi.waitFor(() => expect(t.calls.filter(c => c.includes('messageId=x2'))).toHaveLength(1))
+    const lines = t.log.mock.calls.map(c => String(c[0])).filter(l => l.includes('thread'))
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).not.toContain('x2')
+    // Within the wait it is not read again; after it, it is, and the face takes the title.
+    await t.move(2)
+    await t.cards.recap('t1', 'a1', true)
+    expect(t.calls.filter(c => c.includes('messageId=x2'))).toHaveLength(1)
+    fails = false
+    t.advance(60_000)
+    await t.move(3)
+    await t.cards.recap('t1', 'a1', true)
+    await vi.waitFor(() => expect(t.webLead()?.chat?.thread?.title).toBe('old root'))
+    expect(t.calls.filter(c => c.includes('messageId=x2'))).toHaveLength(2)
+    t.cards.want(false)
+  })
+
+  it('a thread of a reader that was not signed in when the read ended is not learned', async () => {
+    const t = await started()
+    hidden(t, { threadRoot: 'x1' })
+    const pending = t.cards.recap('t1', 'a1', true)
+    vi.mocked(t.core.account.identity).mockResolvedValue({ accountId: 'sam', email: 'sam@x.io' } as never)
+    t.tabs.t1.lastChangedAt++
+    await t.cards.tick()
+    await pending
+    expect(t.webLead()?.chat?.thread).not.toHaveProperty('title', 'fix login')
+    t.cards.want(false)
+  })
+
+  it('forgets the dial\'s thread when the device is gone, another person signs in, or the Swarm is lost', async () => {
+    const t = await started()
+    await t.cards.say('h-a1', 'build it', true, undefined, false, asMe)
+    t.cards.want(false)
+    const shown = t.seen.length
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen.length).toBeGreaterThan(shown))
+    expect(t.webLead()?.chat).not.toHaveProperty('thread')
+    t.cards.want(false)
+
+    const u = await started()
+    await u.cards.say('h-a1', 'build it', true, undefined, false, asMe)
+    vi.mocked(u.core.account.identity).mockResolvedValue({ accountId: 'sam', email: 'sam@x.io' } as never)
+    u.tabs.t1.lastChangedAt++
+    await u.cards.tick()
+    expect(u.webLead()?.chat).not.toHaveProperty('thread')
+    u.cards.want(false)
+
+    const v = await started()
+    await v.cards.say('h-a1', 'build it', true, undefined, false, asMe)
+    const kept = v.tabs.t1
+    delete v.tabs.t1
+    await v.cards.tick()
+    v.tabs.t1 = kept
+    v.tabs.t1.lastChangedAt++
+    await v.cards.tick()
+    expect(v.webLead()?.chat).not.toHaveProperty('thread')
+    v.cards.want(false)
   })
 })
 
