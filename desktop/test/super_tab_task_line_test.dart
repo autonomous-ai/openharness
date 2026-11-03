@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/message_row.dart';
+import 'package:harness/super_tabs/message_text.dart';
 import 'package:harness/super_tabs/thread_panel.dart';
 
 import 'box_render_preview_test.dart' show loadPreviewFonts;
@@ -25,7 +26,7 @@ Map<String, dynamic> _root(String kind, {bool legacy = false}) => {
   'createdAt': '2026-11-03T09:00:00Z',
   'author': legacy
       ? {'kind': 'agent', 'id': 'buddy', 'name': 'Draft Buddy'}
-      : {'kind': 'person', 'id': 'owner', 'name': 'dee@example.com'},
+      : {'kind': 'person', 'id': 'requester', 'name': 'dee@example.com'},
   'source': {
     'kind': kind,
     if (kind == 'task-line') ...{
@@ -33,7 +34,7 @@ Map<String, dynamic> _root(String kind, {bool legacy = false}) => {
       'title': 'Save offline drafts',
       'state': 'review',
     } else
-      'personId': 'owner',
+      'personId': 'requester',
   },
   'reactions': [
     {
@@ -48,7 +49,12 @@ Map<String, dynamic> _root(String kind, {bool legacy = false}) => {
 
 ConversationServer _server(String kind, {bool legacy = false}) {
   final server = ConversationServer()..threads = true;
-  (server.state['people'] as List).first['username'] = 'dee';
+  (server.state['people'] as List).add({
+    'id': 'requester',
+    'email': 'dee@example.com',
+    'username': 'dee',
+    'role': 'member',
+  });
   server.state['agents'] = [
     {
       'id': 'buddy',
@@ -98,7 +104,7 @@ void main() {
       final avatar = tester.widget<SuperTabAvatar>(
         find.descendant(of: row, matching: find.byType(SuperTabAvatar)).first,
       );
-      expect(avatar.identity, 'person:owner');
+      expect(avatar.identity, 'person:requester');
       expect(
         find.descendant(
           of: row,
@@ -180,17 +186,39 @@ void main() {
           find.descendant(of: row, matching: find.text('Draft Buddy')),
           findsOneWidget,
         );
-        expect(
-          find.descendant(
-            of: row,
-            matching: find.text(
-              kind == 'task-line'
-                  ? 'Save offline drafts · in review'
-                  : _legacyProposal,
-            ),
-          ),
-          findsOneWidget,
+        final text = tester.widget<SuperTabMessageText>(
+          find.descendant(of: row, matching: find.byType(SuperTabMessageText)),
         );
+        expect(
+          text.text,
+          kind == 'task-line'
+              ? 'Save offline drafts · in review'
+              : _legacyProposal,
+        );
+        if (kind == 'buddy-proposal') {
+          expect(
+            find.descendant(
+              of: row,
+              matching: find.textContaining("on Dee's behalf."),
+            ),
+            findsOneWidget,
+          );
+          expect(
+            find.descendant(
+              of: row,
+              matching: find.textContaining('Priority: high'),
+            ),
+            findsOneWidget,
+          );
+        } else {
+          expect(
+            find.descendant(
+              of: row,
+              matching: find.text('Save offline drafts · in review'),
+            ),
+            findsOneWidget,
+          );
+        }
         await tester.tap(find.byKey(const ValueKey('super-thread-line-root')));
         await tester.pumpAndSettle();
         expect(c.openedThread?.root, 'root');
@@ -209,11 +237,9 @@ void main() {
     tester,
   ) async {
     await loadPreviewFonts();
-    final c = await showView(
-      tester,
-      _server('buddy-proposal'),
-      brightness: Brightness.light,
-    );
+    final server = _server('buddy-proposal');
+    server.messages.first['reactions'] = <dynamic>[];
+    final c = await showView(tester, server, brightness: Brightness.light);
     await shot(tester, 'desktop-plain-chat');
     c.openThread('root');
     await tester.pumpAndSettle();

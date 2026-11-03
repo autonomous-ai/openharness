@@ -66,7 +66,6 @@ import 'project_options.dart';
 import 'project_status.dart';
 import 'ship_row.dart';
 import 'switch_pm.dart';
-import 'task_line.dart';
 import 'pane_layout.dart';
 import 'view_room.dart';
 import 'visible_tick.dart';
@@ -2195,12 +2194,6 @@ class _SuperTabViewState extends State<SuperTabView>
   bool get _terminalsVisible =>
       !_devicesVisible && (widget.terminalsVisible || widget.terminal != null);
 
-  /// Whom a Buddy's proposal speaks for, by name; null for other messages.
-  String? _proposalOwner(SuperTabMessage message) =>
-      message.proposalOwnerId == null
-      ? null
-      : buddyPersonName(c, message.proposalOwnerId!);
-
   /// The reader's own chat with their Buddy.
   bool _isBuddyChat(SuperTabConversation group) =>
       c.buddyChat(group.projectId)?.id == group.id;
@@ -2378,11 +2371,10 @@ class _SuperTabViewState extends State<SuperTabView>
     setState(() => _showPullRequests = true);
   }
 
-  /// Members takes the right side from an open thread or task, as in Slack.
+  /// Members takes the right side from an open thread, as in Slack.
   void _toggleRoster() {
     if (!_rosterOpen) c.closeThread();
     setState(() {
-      if (!_rosterOpen) _openedTask = null;
       _rosterOpen = !_rosterOpen;
     });
   }
@@ -2890,7 +2882,6 @@ class _SuperTabViewState extends State<SuperTabView>
         message: message,
         dimmed: sent.state == SuperTabOutgoingState.sending,
         author: _shownAuthor(c, message),
-        proposalOwner: _proposalOwner(message),
         person: person,
         member: _member,
         grouped: grouped,
@@ -2967,31 +2958,6 @@ class _SuperTabViewState extends State<SuperTabView>
     bool inThread = false,
   }) {
     _index();
-    // A task's message and a Buddy's proposal are one line that opens (Quiet
-    // Swarm, screens 1 and 2); inside its own thread, a proposal reads whole.
-    if (message.isTaskLine) {
-      final taskId = message.source['taskId'];
-      return SuperTabTaskLine(
-        key: ValueKey('super-message-${message.id}'),
-        message: message,
-        readerId: c.accountId,
-        onOpen: taskId is String && c.snapshot?.conversation(taskId) != null
-            ? () => _openTask(taskId, message.id)
-            : null,
-      );
-    }
-    final proposer = inThread ? null : _proposalOwner(message);
-    if (proposer != null) {
-      return SuperTabProposalLine(
-        key: ValueKey('super-message-${message.id}'),
-        message: message,
-        owner: proposer,
-        onOpen: () {
-          setState(() => _openedTask = null);
-          c.openThread(message.id);
-        },
-      );
-    }
     if (SuperTabShipRow.shows(message)) {
       return SuperTabShipRow(
         key: ValueKey(
@@ -3063,7 +3029,6 @@ class _SuperTabViewState extends State<SuperTabView>
               facts: _facts,
             ),
       author: _shownAuthor(c, message),
-      proposalOwner: _proposalOwner(message),
       // A person is named by their username, as they are tagged.
       mentions: [
         for (final id in message.mentions)
@@ -3182,9 +3147,6 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The open thread of the selected conversation, beside the chat.
   Widget? _threadPanel() {
     final open = c.openedThread;
-    // A thread opened from anywhere takes the panel's place, for good.
-    if (open != null) _openedTask = null;
-    if (_taskPanel() case final panel?) return panel;
     if (open == null || open.conversationId != c.selectedId) return null;
     final rows = c.threadMessages(open.root);
     final byId = {for (final m in rows) m.id: m};
@@ -3198,42 +3160,6 @@ class _SuperTabViewState extends State<SuperTabView>
       sessionActivity: (session) =>
           superTabSessionActivity(c, widget.app, session),
       machineName: widget.machineName,
-    );
-  }
-
-  /// The task a line opened beside its project's chat (Quiet Swarm, screen 3):
-  /// which, and the line, whose word the panel says.
-  ({String id, String line, String chat})? _openedTask;
-
-  void _openTask(String taskId, String line) {
-    c.closeThread();
-    setState(() => _openedTask = (id: taskId, line: line, chat: c.selectedId));
-  }
-
-  Widget? _taskPanel() {
-    final open = _openedTask;
-    final task = open == null ? null : c.snapshot?.conversation(open.id);
-    if (open == null || task == null || open.chat != c.selectedId) return null;
-    final line = c
-        .messages(open.chat)
-        .where((m) => m.id == open.line)
-        .firstOrNull;
-    final byId = {for (final m in c.taskMessages(open.id)) m.id: m};
-    return SuperTabTaskPanel(
-      key: ValueKey('super-task-panel-${open.id}'),
-      controller: c,
-      taskId: open.id,
-      word: line == null ? '' : superTabTaskWord(line, c.accountId),
-      mark: line == null ? null : superTabTaskMark(line),
-      // The whole conversation (screen 3): agents answer with replies.
-      rows: () => _shownMessages(open.id, replies: true),
-      row: (message) => _message(message, false, byId, inThread: true),
-      outgoing: (sent) => _outgoingRow(sent, byId, grouped: false),
-      onClose: () => setState(() => _openedTask = null),
-      onOpenInFull: () {
-        setState(() => _openedTask = null);
-        unawaited(c.select(open.id));
-      },
     );
   }
 
@@ -4446,7 +4372,6 @@ class _SuperTabViewState extends State<SuperTabView>
                 child: BlockSemantics(
                   child: GestureDetector(
                     onTap: () {
-                      setState(() => _openedTask = null);
                       c.closeThread();
                     },
                     child: ColoredBox(
