@@ -7,19 +7,13 @@ import 'package:harness/super_tabs/model.dart';
 
 /// Huy (11-03): the chat and the thread draw avatars as Slack does, 36 px
 /// rounded squares, with more room above each new sender.
-SuperTabMessage _message(String id, {Map<String, dynamic>? avatar}) =>
-    SuperTabMessage.fromJson({
-      'id': id,
-      'conversationId': 'lead',
-      'text': 'Shipped the fix',
-      'sequence': 1,
-      'author': {
-        'kind': 'person',
-        'id': 'peer',
-        'name': 'ivy@example.com',
-        if (avatar != null) 'avatar': avatar,
-      },
-    });
+SuperTabMessage _message(String id) => SuperTabMessage.fromJson({
+  'id': id,
+  'conversationId': 'lead',
+  'text': 'Shipped the fix',
+  'sequence': 1,
+  'author': {'kind': 'person', 'id': 'peer', 'name': 'ivy@example.com'},
+});
 
 Widget _row(SuperTabMessage message, {bool grouped = false}) =>
     SuperTabMessageRow(
@@ -77,7 +71,10 @@ void main() {
           'id': 'peer',
           'email': 'ivy@example.com',
           'role': 'collaborator',
-          'avatar': {'kind': 'upload', 'url': 'https://storage.googleapis.com/avatars/ivy.png'},
+          'avatar': {
+            'kind': 'upload',
+            'url': 'https://storage.googleapis.com/avatars/ivy.png',
+          },
         }),
       ),
     ]);

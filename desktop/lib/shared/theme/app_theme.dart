@@ -1466,6 +1466,11 @@ abstract final class AppDesktop {
   static const double menuInset = 6;
   static const double iconSize = 16;
   static const double identitySize = 28;
+
+  /// A chat or thread message's avatar: a rounded square, as Slack draws one
+  /// (Huy, 2026-11-03). Avatars elsewhere stay round.
+  static const double messageAvatarSize = 36;
+  static const double messageAvatarRadius = 8;
   static const double formWidth = 460;
   static const double focusWidth = 1.5;
 
