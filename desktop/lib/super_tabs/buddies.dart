@@ -45,12 +45,13 @@ List<SuperTabProject> buddyProjects(SuperTabController c) => [
     if (c.buddy(project.id) == null) project,
 ];
 
-/// A person by the name the Swarm shows: their username.
+/// A person by the name the Swarm shows: the name they set, else their
+/// username.
 String buddyPersonName(SuperTabController c, String personId) {
   return c.snapshot?.people
           .where((p) => p.id == personId)
           .firstOrNull
-          ?.username ??
+          ?.shownName ??
       'its owner';
 }
 

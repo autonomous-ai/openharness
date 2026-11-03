@@ -1,7 +1,7 @@
 import { agentDisplayName } from './agentNames.js'
 import { isBuddyChat } from './buddies.js'
 import { stableId, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-import { usernameOf } from './usernames.js'
+import { writtenNameOf } from './personNames.js'
 
 /** One agent that joined or left one chat in a command. */
 export type MemberChange = { group: Conversation; agent: Agent; added: boolean }
@@ -40,7 +40,7 @@ export function memberRowText(by: { id: string; label: string }, agent: { id: st
   return `${by.label} ${added ? 'added' : 'removed'} ${quotedName(agent.name)}.`
 }
 
-/** How a row names the actor [key] (model.ts actorKey): an agent by its quoted display name, a person by their username; none
+/** How a row names the actor [key] (model.ts actorKey): an agent by its quoted display name, a person by the name the Swarm shows for them; none
  *  once gone. */
 export function actorLabel(state: SuperTabState, key: string): string | undefined {
   const [kind, id] = [key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':') + 1)]
@@ -49,7 +49,7 @@ export function actorLabel(state: SuperTabState, key: string): string | undefine
     return agent && quotedName(agent.displayName ?? agent.name)
   }
   const person = state.people.find(p => p.id === id)
-  return person && (usernameOf(state, id) ?? person.email.split('@')[0])
+  return person && (writtenNameOf(state, id) ?? person.email.split('@')[0])
 }
 
 /**
