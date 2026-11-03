@@ -437,6 +437,10 @@ void main() {
     final f = SuperTabLaunchFixture();
     f.app.teamAccountHereForTest = true;
     f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+    // The Swarm lists this Mac, as the join added it.
+    f.connection.server.state['machines'] = [
+      {'machineId': 'm', 'name': 'Test host', 'contributorId': 'owner'},
+    ];
     f.connection.teamCheck = {'state': 'wanted'};
     f.connection.teamRun = {'state': 'unsupported'};
     await f.app.offerTeamAccount('join', tabId: tabId);
@@ -466,6 +470,10 @@ void main() {
     final f = SuperTabLaunchFixture();
     f.app.teamAccountHereForTest = true;
     f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+    // The Swarm lists this Mac, as the join added it.
+    f.connection.server.state['machines'] = [
+      {'machineId': 'm', 'name': 'Test host', 'contributorId': 'owner'},
+    ];
     f.connection.teamCheck = {'state': 'wanted'};
     f.connection.teamRun = {'state': 'unsupported'};
     await f.app.offerTeamAccount('join', tabId: tabId);
@@ -547,6 +555,9 @@ void main() {
       await tester.pump();
       await appMenu('settings');
       expect(find.byType(SettingsScreen), findsOneWidget);
+      // Settings' own timers end with it.
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 5));
     },
   );
 

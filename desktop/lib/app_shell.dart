@@ -331,7 +331,9 @@ class _RootShellState extends ConsumerState<RootShell>
   /// ([InWindowMenuBar]) fires the same strings directly, so one switch serves
   /// every platform.
   Future<void> runAppMenuAction(String action) async {
-    if (!mounted) return;
+    // The Harness Team account's setup holds the whole window
+    // (super_tabs/team_account_setup.dart); AppKit's own Quit and About stay.
+    if (!mounted || ref.read(appStateProvider).teamSetupLocked) return;
     switch (action) {
       case 'settings':
         final app = ref.read(appStateProvider);

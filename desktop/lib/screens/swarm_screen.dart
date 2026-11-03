@@ -485,6 +485,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// clears first ([_onNative]). A titlebar dropdown is an overlay, not a
   /// cover: the titlebar stays as it is, and a click there closes it.
   _TitlebarCover get _titlebarCover {
+    // The Harness Team account's setup holds the whole window
+    // (TeamAccountSetupLock): menus, shortcuts and the row wait with it.
+    if (app.teamSetupLocked) return _TitlebarCover.modal;
     if (_spokenPaletteOpen) return _TitlebarCover.modal;
     if (settingsPageOnTop.value != null) return _TitlebarCover.settingsPage;
     if (!_routeIsCurrent || _dialogOpen) return _TitlebarCover.modal;
@@ -2462,6 +2465,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// closes every open dropdown first ([dismissTransientMenus]); a row click
   /// pops the Settings page first; a modal still drops it ([_actOnNative]).
   Future<void> _onNative(MethodCall call) async {
+    // Held with the window ([_titlebarCover]): a row or key equivalent that
+    // AppKit sent before it greyed out does nothing either.
+    if (app.teamSetupLocked) return;
     var action = call;
     final args = call.arguments is Map ? call.arguments as Map : const {};
     // AppKit wraps the row's clicks while its menus are off, which, with the

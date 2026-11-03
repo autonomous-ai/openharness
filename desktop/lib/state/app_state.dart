@@ -2398,7 +2398,41 @@ class AppNotifier extends ChangeNotifier {
       await teamAccountMade();
       return;
     }
+    // A Swarm that let this computer go meanwhile (removed from Machines on
+    // another device, or the person's access gone) holds nothing.
+    final here = _teamAccountHere();
+    if (here != null) {
+      for (final tabId in tabs) {
+        if (await _swarmHolds(tabId, here) == false) {
+          _teamLockTabs.remove(tabId);
+        }
+      }
+    }
+    if (_disposed || currentUser?.id != account) return;
     notifyListeners();
+    if (_teamLockTabs.length != tabs.length) await _saveTeamLock(account);
+  }
+
+  /// Whether Swarm [tabId] still has computer [here] in its Machines list, not
+  /// being removed: false when it does not, or when this person can no longer
+  /// open it; null when it cannot be read now (offline), which keeps the lock.
+  Future<bool?> _swarmHolds(String tabId, String here) async {
+    try {
+      final c = await superTabs.open(tabId);
+      await c.refresh();
+      if (c.accessRevoked) return false;
+      final snapshot = c.snapshot;
+      if (snapshot == null || c.error != null) return null;
+      return snapshot.machines.any(
+        (m) => m['machineId'] == here && m['removal'] == null,
+      );
+    } on SuperTabFailure catch (failure) {
+      return const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)
+          ? false
+          : null;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// This computer's Harness Team account exists: the lock ends.
@@ -2420,21 +2454,25 @@ class AppNotifier extends ChangeNotifier {
       return null;
     }
     for (final tabId in [..._teamLockTabs]) {
-      try {
-        final c = await superTabs.open(tabId);
-        await c.refresh();
-        final result = await c.command({
-          'type': 'machine.remove',
-          'machineId': here,
-        });
-        if (result == null) {
-          return c.operationError ?? 'Could not do that. Try again.';
+      // Already gone from it, being removed, or no longer this person's to
+      // open: nothing to remove, and the lock lets it go.
+      final holds = await _swarmHolds(tabId, here);
+      if (holds != false) {
+        try {
+          final c = await superTabs.open(tabId);
+          final result = await c.command({
+            'type': 'machine.remove',
+            'machineId': here,
+          });
+          if (result == null) {
+            return c.operationError ?? 'Could not do that. Try again.';
+          }
+        } on SuperTabFailure catch (failure) {
+          return failure.message;
+        } catch (error) {
+          appLog.info('super-tabs', 'machine not removed for the lock: $error');
+          return 'Could not reach the Swarm. Try again.';
         }
-      } on SuperTabFailure catch (failure) {
-        return failure.message;
-      } catch (error) {
-        appLog.info('super-tabs', 'machine not removed for the lock: $error');
-        return 'Could not reach the Swarm. Try again.';
       }
       _teamLockTabs.remove(tabId);
       notifyListeners();
