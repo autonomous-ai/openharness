@@ -225,11 +225,40 @@ export async function originDefaultRef(path: string): Promise<string | null> {
  * from it. True when it fetched. Offline, slow or refused, the worktree starts from what is here, as `prepareGitProject`'s
  * own fetch does; a repository with no `origin` default branch has nothing to fetch.
  */
-export async function fetchDefaultBranch(source: string, env: NodeJS.ProcessEnv): Promise<boolean> {
+export function fetchDefaultBranch(source: string, env: NodeJS.ProcessEnv): Promise<boolean> {
+  return fetchStartBase(source, env)
+}
+
+/**
+ * `fetchDefaultBranch` for the branch a start names ([branchRef], `refs/remotes/origin/X`), or the default branch when it
+ * names none or a local one. A project clone is single-branch (projectFolder.ts), so X is fetched here or not at all: the
+ * start that follows is offline. In a blob-less clone the files of that branch's tip come too, with the same [env], so the
+ * offline worktree needs nothing fetched lazily (it may not: `prepareGitProject` `offline`). False when nothing was fetched;
+ * files that could not come leave the branch fetched and the start to fail offline, never to use another login.
+ */
+export async function fetchStartBase(source: string, env: NodeJS.ProcessEnv, branchRef?: string): Promise<boolean> {
   if (!validGitPath(source) || !(await insideGitCheckout(source))) return false
-  const remote = remoteBranch(await originDefaultRef(source) ?? undefined)
+  const remote = remoteBranch(branchRef) ?? remoteBranch(await originDefaultRef(source) ?? undefined)
   if (!remote) return false
-  return git(source, ['fetch', '--quiet', '--no-tags', remote.remote, remote.refspec], 60_000, env).then(() => true, () => false)
+  const fetched = await git(source, ['fetch', '--quiet', '--no-tags', remote.remote, remote.refspec], 60_000, env).then(() => true, () => false)
+  if (fetched) await fetchMissingFiles(source, remote.remote, `refs/remotes/${remote.remote}/${remote.branch}`, env)
+  return fetched
+}
+
+/** In a partial clone, fetches what [ref]'s tree lacks from [remote] in one request, as git's own lazy fetch would ask for it
+ *  (promisor-remote.c), but with [env]. Listing what is missing fetches nothing. A clone that is not partial lacks nothing. */
+async function fetchMissingFiles(source: string, remote: string, ref: string, env: NodeJS.ProcessEnv): Promise<void> {
+  if (await git(source, ['config', '--get', `remote.${remote}.promisor`]).catch(() => '') !== 'true') return
+  const listing = await exec('git', gitArgs(source, ['rev-list', '--objects', '--missing=print', '--no-object-names', '--end-of-options', `${ref}^{tree}`]), {
+    timeout: 120_000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 * 1024, env: { ...gitEnv(env), GIT_NO_LAZY_FETCH: '1' },
+  }).then(out => out.stdout, () => '')
+  const missing = listing.split('\n').filter(line => /^\?[0-9a-f]{40,64}$/.test(line)).map(line => line.slice(1))
+  if (missing.length === 0) return
+  await new Promise<void>(resolve => {
+    const child = execFile('git', gitArgs(source, ['-c', 'fetch.negotiationAlgorithm=noop', 'fetch', '--quiet', '--no-tags', '--no-write-fetch-head',
+      '--recurse-submodules=no', '--filter=blob:none', '--stdin', remote]), { timeout: 600_000, killSignal: 'SIGKILL', env: gitEnv(env) }, () => resolve())
+    child.stdin?.end(missing.join('\n') + '\n')
+  })
 }
 
 export type GitProjectOptions = {
@@ -408,7 +437,9 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
   const registered = new Set(await readdir(admin).catch(() => [] as string[]))
   const upstream = tracks ? await git(source, ['branch', `--set-upstream-to=${options.ref}`, branch]).then(() => true, () => false) : true
   const added: WorktreeAdd = upstream
-    ? await worktreeAdd(source, ['worktree', 'add', '--', destination, branch], options.worktreeTimeout ?? WORKTREE_ADD_TIMEOUT)
+    // Offline means nothing fetched, a partial clone's missing files included: they would come with this machine's login.
+    ? await worktreeAdd(source, ['worktree', 'add', '--', destination, branch], options.worktreeTimeout ?? WORKTREE_ADD_TIMEOUT,
+      options.offline ? { GIT_NO_LAZY_FETCH: '1' } : {})
     : { ok: false, reason: 'could not track its remote branch', stderr: '', timedOut: false, diskFull: false, running: false }
   if (!added.ok && added.running) {
     // Deleting the folder under a process still writing it would only race it; the next start takes another folder.
@@ -444,14 +475,14 @@ type WorktreeAdd = { ok: true } | WorktreeAddFailure
  *  the timeout the whole group is killed (on Windows, git's process tree), and the result waits until no process
  *  holds git's stderr any more: until then something git started may still be writing the folder. If that takes
  *  as long again as the timeout (at most a minute), the result says it is `running`. */
-function worktreeAdd(source: string, args: string[], timeout: number): Promise<WorktreeAdd> {
+function worktreeAdd(source: string, args: string[], timeout: number, extraEnv: NodeJS.ProcessEnv = {}): Promise<WorktreeAdd> {
   return new Promise(resolve => {
     let stderr = '', timedOut = false, settled = false, waited: NodeJS.Timeout | undefined
     const done = (result: WorktreeAdd) => { if (!settled) { settled = true; clearTimeout(timer); clearTimeout(waited); resolve(result) } }
     const failed = (reason: string, running = false): WorktreeAddFailure => ({ ok: false, reason, stderr, timedOut, diskFull: diskFull({ stderr }), running })
     const late = () => `timed out after ${Math.round(timeout / 1000)} s`
     const child = spawn('git', gitArgs(source, args), {
-      env: gitEnv(process.env), stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32', windowsHide: true,
+      env: { ...gitEnv(process.env), ...extraEnv }, stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32', windowsHide: true,
     })
     child.stderr.on('data', (chunk: Buffer) => { if (stderr.length < 64 * 1024) stderr += chunk.toString() })
     const timer = setTimeout(() => {
