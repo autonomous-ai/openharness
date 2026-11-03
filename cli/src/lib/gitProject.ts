@@ -246,17 +246,22 @@ export async function fetchStartBase(source: string, env: NodeJS.ProcessEnv, bra
 }
 
 /** In a partial clone, fetches what [ref]'s tree lacks from [remote] in one request, as git's own lazy fetch would ask for it
- *  (promisor-remote.c), but with [env]. Listing what is missing fetches nothing. A clone that is not partial lacks nothing. */
+ *  (promisor-remote.c), but with [env]. Listing what is missing fetches nothing. A clone that is not partial lacks nothing.
+ *  A failure is logged: the offline worktree that follows then fails on the files it lacks. */
 async function fetchMissingFiles(source: string, remote: string, ref: string, env: NodeJS.ProcessEnv): Promise<void> {
   if (await git(source, ['config', '--get', `remote.${remote}.promisor`]).catch(() => '') !== 'true') return
+  const failed = (stderr: string) => console.warn(`[worktree] could not fetch the files of ${ref} for an offline start: ${gitReason(stderr)}`)
   const listing = await exec('git', gitArgs(source, ['rev-list', '--objects', '--missing=print', '--no-object-names', '--end-of-options', `${ref}^{tree}`]), {
     timeout: 120_000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 * 1024, env: { ...gitEnv(env), GIT_NO_LAZY_FETCH: '1' },
-  }).then(out => out.stdout, () => '')
+  }).then(out => out.stdout, (error: { stderr?: string; message?: string }) => { failed(error.stderr || error.message || ''); return '' })
   const missing = listing.split('\n').filter(line => /^\?[0-9a-f]{40,64}$/.test(line)).map(line => line.slice(1))
   if (missing.length === 0) return
   await new Promise<void>(resolve => {
     const child = execFile('git', gitArgs(source, ['-c', 'fetch.negotiationAlgorithm=noop', 'fetch', '--quiet', '--no-tags', '--no-write-fetch-head',
-      '--recurse-submodules=no', '--filter=blob:none', '--stdin', remote]), { timeout: 600_000, killSignal: 'SIGKILL', env: gitEnv(env) }, () => resolve())
+      '--recurse-submodules=no', '--filter=blob:none', '--stdin', remote]), { timeout: 600_000, killSignal: 'SIGKILL', env: gitEnv(env) },
+      (error, _stdout, stderr) => { if (error) failed(stderr || error.message); resolve() })
+    // A git that exits before reading the whole list closes its input; that is its failure above, not another.
+    child.stdin?.on('error', () => {})
     child.stdin?.end(missing.join('\n') + '\n')
   })
 }
