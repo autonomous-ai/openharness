@@ -212,9 +212,14 @@ describe('a Buddy through the store', () => {
       priority: 'normal' }, peer, agentId)
     const sent = await propose()
     const row = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, id: String(sent.result.messageId) } })
-    expect(row).toMatchObject({ conversationId: 'lead', recipientIds: [f.lead], source: { kind: 'buddy-proposal', personId: peer.sub, ownerMessageId: ask },
-      text: 'Proposal from peer\'s Buddy, on peer\'s behalf.\n\nGoal: Offline sync\nScope: Desktop only\nPriority: normal' })
-    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: row.id, agentId: f.lead } })).toBe(1)
+    expect(row).toMatchObject({ conversationId: 'lead', recipientIds: [], author: { kind: 'person', id: peer.sub },
+      source: { kind: 'buddy-proposal', personId: peer.sub, buddyId: agentId, ownerMessageId: ask }, text: "Let's build: Offline sync" })
+    const details = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, thread: row.id, replyTo: row.id } })
+    expect(details).toMatchObject({ author: { kind: 'agent', id: agentId }, recipientIds: [f.lead],
+      text: "Proposal from peer's Buddy, on peer's behalf.\n\nGoal: Offline sync\nScope: Desktop only\nPriority: normal" })
+    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: details.id, agentId: f.lead } })).toBe(1)
+    const page = await f.store.messages(owner, f.tab, 'lead', {})
+    expect(page.threads).toEqual(expect.arrayContaining([expect.objectContaining({ id: row.id, replies: 1 })]))
     await expect(propose()).rejects.toThrow('already sent')
     await expect(f.execute({ type: 'message.send', conversationId: 'lead', text: 'Hi PM', replyTo: null, recipientIds: [] }, peer, agentId))
       .rejects.toThrow('A Buddy posts only in its own chat')
