@@ -22,7 +22,7 @@ import { stableId, type Author, type Conversation, type SuperTabState } from '..
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { resolveByAnswer } from '../src/superTabs/mentions.js'
-import { profiled } from './plans.test-support.js'
+import { plan, profiled } from './plans.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -205,14 +205,14 @@ describe('answering clears tags', () => {
     await db.superTabMention.createMany({ data: tags })
     const answered = agents.slice(0, 5)
     const entries = await profiled(db, () => resolveByAnswer(db as never, tabId, peer.sub, answered, now))
-    const examined = entries.filter(e => e.ns.endsWith('.SuperTabMention')).reduce((sum, e) => sum + (e.docsExamined ?? 0), 0)
+    const ops = entries.filter(e => e.ns.endsWith('.SuperTabMention')), examined = ops.reduce((sum, e) => sum + (e.docsExamined ?? 0), 0)
     const expected = tags.filter(tag => answered.includes(tag.authorAgentId) && !tag.resolvedAt).map(tag => tag.id).sort()
     const after = await db.superTabMention.findMany({ where: { tabId }, select: { id: true, resolvedBy: true } })
     expect(after.filter(row => row.resolvedBy === 'answer').map(row => row.id).sort()).toEqual(expected)
     expect(after.filter(row => row.resolvedBy === 'read')).toHaveLength(50)
     expect(after.filter(row => !row.resolvedBy)).toHaveLength(150 - expected.length)
-    // Each of the person's tags once, then each resolved tag by its id.
-    expect(examined, `examined ${examined} for ${tags.length} tags, ${expected.length} resolved`).toBeLessThanOrEqual(tags.length + expected.length)
+    // Each of the person's tags once, then each resolved tag by its id: Prisma's updateMany reads its row, then writes it.
+    expect(examined, `examined ${examined} for ${tags.length} tags, ${expected.length} resolved: ${JSON.stringify(plan(ops).slice(0, 3))}`).toBeLessThanOrEqual(tags.length + 2 * expected.length)
   })
 
   it('a tag by another agent stays', async () => {

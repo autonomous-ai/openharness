@@ -189,12 +189,16 @@ export function answeredAgents(state: SuperTabState, actor: Extract<Actor, { kin
 }
 
 /** A post to an agent answers every tag that agent made for the person, in any conversation. A held tag (holdUntil) resolved
- *  before its time is never listed, as in resolveByReply (intended). */
+ *  before its time is never listed, as in resolveByReply (intended). The agent that made a tag is in no index: the person's
+ *  waiting tags are read once by theirs, as resolveRead reads them, and the agents' resolved by id. */
 export async function resolveByAnswer(tx: Tx, tabId: string, personId: string, agentIds: readonly string[], now: number): Promise<void> {
   if (!agentIds.length) return
-  for (const authorAgentId of new Set(agentIds)) {
-    await tx.superTabMention.updateMany({ where: { tabId, personId, authorAgentId, createdAt: { lte: new Date(now) }, ...waiting },
-      data: { resolvedAt: new Date(now), resolvedBy: 'answer' } })
+  const answered = new Set(agentIds)
+  const rows = await tx.superTabMention.findMany({ where: { tabId, personId, createdAt: { gt: new Date(now - MENTION_EXPIRY_MS), lte: new Date(now) }, ...waiting },
+    select: { id: true, authorAgentId: true }, orderBy: { createdAt: 'desc' }, take: 500 })
+  for (const row of rows) {
+    if (!answered.has(row.authorAgentId)) continue
+    await tx.superTabMention.updateMany({ where: { id: row.id, tabId, personId, ...waiting }, data: { resolvedAt: new Date(now), resolvedBy: 'answer' } })
   }
 }
 
