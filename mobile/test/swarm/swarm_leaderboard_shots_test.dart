@@ -77,6 +77,36 @@ void main() {
           ),
           'displayName': 'Diego',
           'prevWeekPoints': 20,
+          'details': {
+            'shipped': [
+              for (final (i, title) in [
+                'Phone: the leaderboard shows what each number is made of',
+                'Desktop: a machine shows its agents as one count',
+                'Swarm digest pauses with the Swarm',
+                'CLI: resume keeps the last model',
+                'Backend: the board reads only what changed',
+                'Phone: Undo after answering a decision',
+                'Desktop: Models list leaves out unnamed records',
+                'Daemon: idle timers stop while nothing changed',
+              ].indexed)
+                {
+                  'title': title,
+                  'prUrl': 'https://github.com/o/r/pull/${2800 - i}',
+                },
+            ],
+            'unblocked': [
+              {
+                'title': 'Which sign-in page ships first?',
+                'conversationId': 'c1',
+                'kind': 'decision',
+                'waitedMinutes': 96,
+              },
+            ],
+            'lent': [
+              {'machineName': 'MACs-Mac-Studio.local', 'busyHours': 31.5},
+              {'machineName': 'build-box', 'busyHours': 8.5},
+            ],
+          },
         },
         {
           ...scoreData('ken', points: 21, rank: 2, shipped: 3, unblocked: 4),
@@ -140,6 +170,20 @@ void main() {
                 .toImage(pixelRatio: 3);
         final png = await image.toByteData(format: ui.ImageByteFormat.png);
         await File('$shots/phone-leaderboard-${brightness.name}.png')
+            .writeAsBytes(png!.buffer.asUint8List());
+      });
+      // A person's week: their points and what the numbers are made of.
+      await tester.tap(
+        find.byKey(const ValueKey('swarm-leaderboard-person-diego')),
+      );
+      await tester.pumpAndSettle();
+      await tester.runAsync(() async {
+        final image =
+            await (boundary.currentContext!.findRenderObject()!
+                    as RenderRepaintBoundary)
+                .toImage(pixelRatio: 3);
+        final png = await image.toByteData(format: ui.ImageByteFormat.png);
+        await File('$shots/phone-leaderboard-person-${brightness.name}.png')
             .writeAsBytes(png!.buffer.asUint8List());
       });
       await tester.pumpWidget(const SizedBox());

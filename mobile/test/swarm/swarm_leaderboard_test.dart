@@ -55,6 +55,110 @@ void main() {
       expect(kim.medianAskToShipMs, isNull);
       expect(kim.medianAnswerMs, isNull);
       expect(kim.streakDays, 0);
+      expect(kim.details, isNull, reason: 'a server before details');
+    });
+
+    test("keeps a person's details in the order the backend sends", () {
+      final details = SwarmScore.fromJson({
+        ...scoreData('a', points: 9, rank: 1),
+        'details': {
+          'shipped': [
+            {
+              'title': 'Phone: the board shows details',
+              'prUrl': 'https://github.com/o/r/pull/2',
+              'mergedAt': 2,
+            },
+            {'title': 'Desktop: one count', 'prUrl': 'http://x.dev/pull/1'},
+          ],
+          'unblocked': [
+            {
+              'title': 'Which sign-in page ships first?',
+              'conversationId': 'c1',
+              'kind': 'decision',
+              'waitedMinutes': 96,
+            },
+          ],
+          'lent': [
+            {'machineName': 'MACs-Mac-Studio.local', 'busyHours': 12.5},
+            {'machineName': 'build-box', 'busyHours': 7},
+          ],
+        },
+      }).details!;
+
+      expect(details.shipped.map((s) => s.title), [
+        'Phone: the board shows details',
+        'Desktop: one count',
+      ]);
+      expect(
+        details.shipped.first.link,
+        Uri.parse('https://github.com/o/r/pull/2'),
+      );
+      expect(details.shipped.last.link, Uri.parse('http://x.dev/pull/1'));
+      expect(details.unblocked.single.title, 'Which sign-in page ships first?');
+      expect(details.unblocked.single.waitedMinutes, 96);
+      // The machine as it calls itself, without .local; a whole number of
+      // hours reads as one.
+      expect(details.lent.map((l) => (l.machineName, l.busyHours)), [
+        ('MACs-Mac-Studio', 12.5),
+        ('build-box', 7.0),
+      ]);
+    });
+
+    test('a detail without a title or a web link, or of another type, is '
+        'left out or kept as text', () {
+      final details = SwarmScore.fromJson({
+        ...scoreData('a', points: 1, rank: 1),
+        'details': {
+          'shipped': [
+            {'title': '', 'prUrl': 'https://x.dev/pull/1'},
+            {'prUrl': 'https://x.dev/pull/2'},
+            {'title': 'A file', 'prUrl': 'file:///etc/hosts'},
+            {'title': 'A script', 'prUrl': 'javascript:alert(1)'},
+            {'title': 'An app', 'prUrl': 'x-harness://open'},
+            {'title': 'No host', 'prUrl': 'https:pull/3'},
+            {'title': 'No link'},
+            'not a map',
+          ],
+          'unblocked': [
+            {'title': 'Asked', 'waitedMinutes': 'long'},
+            {'waitedMinutes': 4},
+          ],
+          'lent': [
+            {'machineName': '', 'busyHours': 2},
+            {'machineName': '.local', 'busyHours': 'many'},
+          ],
+        },
+      }).details!;
+
+      expect(details.shipped.map((s) => (s.title, s.link)), [
+        ('A file', null),
+        ('A script', null),
+        ('An app', null),
+        ('No host', null),
+        ('No link', null),
+      ]);
+      expect(details.unblocked.map((u) => (u.title, u.waitedMinutes)), [
+        ('Asked', 0),
+      ]);
+      // A name that is only the suffix stays whole.
+      expect(details.lent.map((l) => (l.machineName, l.busyHours)), [
+        ('.local', 0.0),
+      ]);
+
+      final empty = SwarmScore.fromJson({
+        ...scoreData('b', points: 0, rank: 2),
+        'details': {'shipped': 'none', 'lent': null},
+      }).details!;
+      expect(empty.shipped, isEmpty);
+      expect(empty.unblocked, isEmpty);
+      expect(empty.lent, isEmpty);
+      expect(
+        SwarmScore.fromJson({
+          ...scoreData('c', points: 0, rank: 3),
+          'details': ['not', 'a', 'map'],
+        }).details,
+        isNull,
+      );
     });
   });
 
@@ -125,6 +229,33 @@ void main() {
       expect(swarmDuration(6 * 60000), '6 min');
       expect(swarmDuration(3 * 3600000), '3 h');
       expect(swarmDuration(3 * 3600000 + 6 * 60000), '3.1 h');
+    });
+
+    test("a person's points with the time before beside them", () {
+      SwarmScore score(int points, int? before, {String? period}) =>
+          SwarmScore.fromJson({
+            ...scoreData('a', points: points, rank: 1),
+            'prevWeekPoints': ?before,
+          }, period: period);
+      expect(
+        swarmPersonPoints(score(21, 15, period: '7d')),
+        '21 points in the last 7 days · 15 the 7 days before',
+      );
+      expect(swarmPersonPoints(score(1, 0)), '1 point this week · 0 last week');
+      // Last 30d has no comparison.
+      expect(
+        swarmPersonPoints(score(30, null, period: '30d')),
+        '30 points in the last 30 days',
+      );
+    });
+
+    test('how long an answer waited and a machine was busy', () {
+      expect(swarmWaited(6), 'waited 6 min');
+      expect(swarmWaited(96), 'waited 1.6 h');
+      expect(swarmWaited(0), 'waited 0 min');
+      expect(swarmBusy(12.5), '12.5 h busy');
+      expect(swarmBusy(7), '7 h busy');
+      expect(swarmBusy(0.1), '6 min busy');
     });
 
     test('lent time in whole agent-hours', () {
