@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -7,11 +10,14 @@ import 'package:harness/app_shell.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/auth/cli_login.dart';
 import 'package:harness/core/config.dart';
+
 import 'package:harness/core/models.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/team_account_setup.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
+import 'support/capture.dart';
 import 'support/rename_connection.dart';
 import 'swarm_state_test.dart' show createApp;
 
@@ -61,12 +67,16 @@ class _FakeCli extends CliLogin {
   Future<CliAuthStatus> checkStatus() async => CliAuthStatus(loggedIn: true);
 }
 
+/// Set to a folder to write the PR's pictures there.
+final shots = Platform.environment['TEAM_ACCOUNT_LOCK_SHOTS'];
+
 const _wrongPassword =
     'The Harness Team account was not finished: The administrator user name or '
     'password was incorrect. (-60005). Run `harness team setup` again; it repairs what is there.';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  setUpAll(() => loadCaptureFonts(shots));
   late _Daemon daemon;
   late AppNotifier app;
 
@@ -518,4 +528,95 @@ void main() {
       expect(find.byKey(const Key('screen')), findsOneWidget);
     },
   );
+
+  // The window as people see it, over a stand-in for the app behind it.
+  final scenes = <(String, Future<void> Function(WidgetTester))>[
+    ('1-on-join', (_) async {}),
+    (
+      '2-macos-asking',
+      (tester) async {
+        await tester.tap(find.byKey(const Key('team-account-lock-continue')));
+        await tester.pump();
+      },
+    ),
+    (
+      '3-wrong-password',
+      (tester) async {
+        daemon.statuses
+          ..clear()
+          ..add({'ok': true, 'state': 'failed', 'detail': _wrongPassword});
+        await tester.tap(find.byKey(const Key('team-account-lock-continue')));
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 2));
+      },
+    ),
+    (
+      '4-password-window-closed',
+      (tester) async {
+        daemon.statuses
+          ..clear()
+          ..add({'ok': true, 'state': 'declined'});
+        await tester.tap(find.byKey(const Key('team-account-lock-continue')));
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 2));
+      },
+    ),
+    (
+      '5-cannot-set-up-here',
+      (tester) async {
+        daemon.run = {'error': 'INVALID_REQUEST'};
+        await tester.tap(find.byKey(const Key('team-account-lock-continue')));
+        await tester.pump();
+        await tester.pump();
+      },
+    ),
+  ];
+  for (final brightness in Brightness.values) {
+    for (final (name, arrange) in scenes) {
+      testWidgets('picture $name (${brightness.name})', (tester) async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+        await tester.binding.setSurfaceSize(const Size(1000, 700));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        grid.AppTheme.brightness.value = brightness;
+        addTearDown(() => grid.AppTheme.brightness.value = Brightness.dark);
+        await tester.pumpWidget(
+          MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: grid.buildAppTheme(brightness: brightness),
+            builder: (context, child) => TeamAccountSetupLock(
+              app: app,
+              operatingSystem: 'macos',
+              child: child!,
+            ),
+            home: Scaffold(
+              body: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Pilot', style: grid.AppType.title()),
+                    const SizedBox(height: 12),
+                    for (final line in [
+                      'Lead: the plan for the release is in the thread.',
+                      'Ken: Looks good, go ahead.',
+                      'Builder: PR #2779 is ready for review.',
+                    ])
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Text(line, style: grid.AppType.body()),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+        await lock(tester);
+        await arrange(tester);
+        await captureWindow(tester, shots, '$name-${brightness.name}');
+        await tester.pumpWidget(const SizedBox());
+        debugDefaultTargetPlatformOverride = null;
+      }, skip: shots == null);
+    }
+  }
 }
