@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto'
+import { githubRepository } from '../github/repository.js'
 import { cloneData } from './cloneData.js'
+import { autoJoinOn } from './autoJoinDomain.js'
 import { lostReasonWithoutMachine } from './lostReason.js'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
@@ -22,6 +24,8 @@ export interface Person {
   avatar?: import('./profile.js').Avatar
   /** The name they chose (usernames.ts), or one kept for them; absent, readers work out their default. Only members read it. */
   username?: string
+  /** `domain`: joined by themselves as someone at the owner's email domain (autoJoin.ts), so the people list says so. */
+  joinedVia?: 'domain'
 }
 export interface AgentConfiguration {
   engine: string
@@ -208,7 +212,12 @@ export interface Check {
   independent: boolean
   evidence: string | null
   passedBy: string | null
+  /** Each checker's latest verdict during this attempt (checkVerdicts.ts); `evidence` and `passedBy` are derived from them.
+   *  Absent until the first verdict recorded since verdicts were kept. */
+  verdicts?: CheckVerdict[]
 }
+/** One checker's verdict on a check: its actor key (`agent:ID` or `person:ID`), what it found and when. */
+export interface CheckVerdict { by: string; passed: boolean; evidence: string; at: number }
 export interface Assignment {
   id: string
   agentId: string
@@ -230,6 +239,9 @@ export interface Assignment {
   /** On a linked task (reviewOf): when its own Reviewer's verdict in the build asked for changes. Its quiet time does not count
    *  until the build's next Ready clears it (liveness.ts waitingForRevision). */
   changesRequestedAt?: number
+  /** On a linked task: when its agent last wrote to the build's Engineer, as a verdict usually is. It holds the quiet time while
+   *  the Engineer isn't waiting on a review, until the build's next Ready clears it (liveness.ts waitingForRevision). */
+  toldEngineerAt?: number
   /** A two-review task's hand-overs and reviewers' verdicts, from the automatic reviews (#2382) before project instructions;
    *  never written since (phase 4: the server opens and counts no review), kept on older rows. */
   handoffs?: number
@@ -375,12 +387,6 @@ export interface TaskLiveness {
   personId?: string
 }
 
-/** The GitHub repository a project's address names (https, ssh or scp form), or null for another host or a malformed address. */
-export function githubRepository(repositoryUrl: string | null | undefined): { owner: string; repo: string } | null {
-  const match = repositoryUrl?.match(/^(?:https?:\/\/|ssh:\/\/git@|git@)github\.com[/:]([A-Za-z0-9_-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/)
-  return match ? { owner: match[1]!, repo: match[2]! } : null
-}
-
 /** [url] as the project's own pull request, in the project's spelling of owner and repository (GitHub names are not case
  *  sensitive); null when it belongs to any other repository, whatever its name, since an owner is never guessed. Without a
  *  known GitHub repository nothing can be judged. */
@@ -389,31 +395,14 @@ export function projectPullRequestUrl(url: string, repositoryUrl: string | null 
   if (!own) return url
   const match = url.match(/^https:\/\/github\.com\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_.-]+)\/pull\/([1-9][0-9]*)$/)
   if (!match) return null
-  return match[1]!.toLowerCase() === own.owner.toLowerCase() && match[2]!.toLowerCase() === own.repo.toLowerCase()
-    ? `https://github.com/${own.owner}/${own.repo}/pull/${match[3]}` : null
+  return match[1]!.toLowerCase() === own.owner.toLowerCase() && match[2]!.toLowerCase() === own.name.toLowerCase()
+    ? `https://github.com/${own.fullName}/pull/${match[3]}` : null
 }
 
 /** The GitHub pull request links in [text], each once, in order. With the project's [repositoryUrl], each is that repository's
  *  (in the project's spelling) and a link into any other repository is left out, so one pull request is one link. */
 export const pullRequestLinks = (text: string, repositoryUrl?: string | null): string[] => [...new Set([...text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)]
   .filter(match => Number(match[1]) <= Number.MAX_SAFE_INTEGER).flatMap(match => projectPullRequestUrl(match[0], repositoryUrl) ?? []))]
-
-/** The pull requests [text] lists as what it delivers: its first link, and each next one only when the two are joined by a
- *  list separator (commas, "and", spaces). A link after other words ("builds on", "replaces", "see") is a mention, not
- *  part of the delivery. */
-export function listedPullRequestLinks(text: string, repositoryUrl?: string | null): string[] {
-  const found = [...text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)]
-    .filter(match => Number(match[1]) <= Number.MAX_SAFE_INTEGER)
-  const listed: string[] = []
-  let end = -1
-  for (const match of found) {
-    if (end >= 0 && !/^(?:[\s,;+&]|\band\b)*$/i.test(text.slice(end, match.index))) break
-    end = match.index! + match[0].length
-    const url = projectPullRequestUrl(match[0], repositoryUrl)
-    if (url) listed.push(url)
-  }
-  return [...new Set(listed)]
-}
 
 /** Adds the pull request links of [texts] to [group] and corrects the ones it holds, by the project's [repositoryUrl]. */
 export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>, repositoryUrl?: string | null): void {
@@ -462,6 +451,11 @@ export interface SuperTabState {
   rules?: import('./rules.js').SwarmRule[]
   /** Owner-only sharing configuration; visibleState always removes it. */
   sharing?: import('./sharing.js').SwarmSharing
+  /** People who left or were removed, whom auto-join never adds again (autoJoin.ts); visibleState always removes it. */
+  autoJoinDeclined?: string[]
+  /** Only in what a reader gets (visibleState), never stored: people at the owner's domain join by themselves, so the leave
+   *  dialog says someone who leaves is not added back. */
+  autoJoin?: true
   paused: boolean
   /** Its owner deleted it (deletion.ts): nobody reads or writes it, its row lists no member, and its owner may restore it until
    *  `purgeAt` (ISO times). Absent on a live Swarm. */
@@ -495,6 +489,9 @@ export interface SuperTabState {
     buddyOnly?: true }>
   /** Removed machines whose host still has to clean up (machines.ts expireRemovals), listed only to that host. */
   machineCleanups?: import('./machines.js').MachineCleanup[]
+  /** The machines their person took out of this Swarm, so a sync that adds machines by itself leaves them out; a reader gets only
+   *  the ids of their own (visibleState). */
+  removedMachines?: Array<{ machineId: string; contributorId: string }>
   /** Conversations of a kind a later release added, set aside unchanged by a release that does not know it (parkLaterConversations). */
   parkedConversations?: Conversation[]
   /** The Local models add-on (docs/plans/2026-10-23-swarm-local-models.md): off until the owner turns it on, and only
@@ -585,6 +582,8 @@ export const NOTICE_READERS = {
   'note-removed': 'recipients',
   'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people', 'buddy-proposal-sent': 'people', 'buddy-session-ended': 'people',
   'decision-delegated': 'people', 'machine-removed': 'people', 'machine-left': 'people', ship: 'people',
+  // A task's one line in its project chat, edited as it moves (taskLine.ts): people read a task's state there.
+  'task-line': 'people',
   // A project PM's private line in a person's one Buddy chat, marked with its project (commands.ts person.tell): its person
   // reads it, as they read the line in their older project chat.
   'pm-line': 'people',
@@ -671,6 +670,8 @@ export interface CommandEffects {
   instructions?: import('./instructions.js').InstructionsWrite
   /** A coordinator's note kept or a note removed, written outside the tab state by the store (instructions.ts). */
   notes?: import('./instructions.js').NotesWrite
+  /** Stored messages given new words: a task's line as the task moves (taskLine.ts). */
+  edits?: import('./taskLine.js').MessageEdit[]
 }
 /** `details` go to the caller with the code: what it needs to act on the refusal (a stale save's current text). */
 export class SuperTabError extends Error {
@@ -836,12 +837,17 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // and closing sessions (only that machine's host roster lists them: read/hostRows.ts; a removed private agent's session is
   // not every member's), and overlap alerts. Nor a dormant conversation: it is read on demand, never in a whole-Swarm read
   // (spec, Archive); a command may still load one.
-  const { sharing: _sharing, harnessReservations: _reservations, releasedHarnesses: _released, overlapAlerts: _alerts, closingSessions: _closing,
+  const { sharing: _sharing, autoJoinDeclined: _declined, harnessReservations: _reservations, releasedHarnesses: _released, overlapAlerts: _alerts, closingSessions: _closing,
     removedSessions: _removed, ...kept } = state
   const visible = cloneData({ ...kept, conversations: state.conversations.filter(c => !c.dormant) })
+  if (autoJoinOn(state)) visible.autoJoin = true
   // A Buddy-only machine is no machine of the Swarm to anyone, its own person included (machines.ts buddyOnly): their Buddy
   // shows as a Buddy, and their machine stays theirs. Machines, status and the leaderboard's lent hours all read this.
   if (visible.machines) visible.machines = visible.machines.filter(m => !m.buddyOnly)
+  // A machine taken out says who owned it: a reader gets the ids of their own, which is all their sync asks.
+  const ownRemoved = actor.kind === 'person' ? (visible.removedMachines ?? []).filter(r => r.contributorId === actor.userId).map(r => r.machineId) : []
+  if (ownRemoved.length) (visible as { removedMachines?: unknown }).removedMachines = ownRemoved
+  else delete visible.removedMachines
   // Rows by day and project that only the leaderboard read uses, and it takes them from the Swarm itself.
   for (const pool of visible.machines ?? []) delete pool.lentDays
   // Nor its id, which a Buddy's row carries (machineHiddenFrom).

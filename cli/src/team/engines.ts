@@ -15,6 +15,7 @@ import { userInfo } from 'node:os'
 import { join, win32 } from 'node:path'
 import { engineAccount, type EngineAccount } from '../lib/engineAccount.js'
 import { readTeamConfig, type TeamConfig } from './config.js'
+import { TEAM_USER } from './layout.js'
 import { readTeamStatus, writeTeamStatus, type TeamStatus } from './privacy.js'
 import { teamRelayed } from './relay.js'
 
@@ -160,7 +161,21 @@ export function engineLines(engines: TeamEngines | undefined, ago: (at: number) 
     lines.push('', `  To sign the team account's engines in, once: in Harness, open a terminal on ${computer}'s Harness Team machine`,
       '  (it is listed among your machines), and run there:')
     for (const { name, signIn } of unsigned) lines.push(`    ${signIn.padEnd(28)}${name}`)
+    // A computer used over a terminal has no Harness app to open a terminal in (headless run, 2026-11-03): the same sign-in,
+    // from the terminal the person is already in.
+    if (platform !== 'win32') {
+      lines.push(`  Or from a terminal on ${computer}, as ${TEAM_USER}:`)
+      const terminal = unsigned.map(({ engine, name }) => ({
+        command: `sudo -u ${TEAM_USER} -H bash -lc ${engine === 'claude' ? 'claude' : "'codex login --device-auth'"}`, name,
+      }))
+      const width = Math.max(...terminal.map(({ command }) => command.length)) + 3
+      for (const { command, name } of terminal) lines.push(`    ${command.padEnd(width)}${name}`)
+    }
     lines.push('  Your own sign-ins are not copied into the team account; each engine bills the account you sign in with.')
+    // Why a server reads "not signed in" with a subscription on the account: the relay that lends it lives in this
+    // computer's own daemon (team/relay.ts), so nothing is lent while that daemon is not running.
+    lines.push("  An engine the account has not signed in uses your subscription through this computer's Harness while it runs;",
+      '  when that is not running (harness start, or harness service install), there is nothing to lend.')
   }
   return lines
 }

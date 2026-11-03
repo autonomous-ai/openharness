@@ -36,19 +36,19 @@ describe('the built-in template', () => {
   // groups to hold, batch and triage work. Agents forgot which task they were on (agent context design, section 3).
   it('the template workflow has one task per request, steps, and the context tools', () => {
     expect(TEMPLATE_WORKFLOW).toContain('1. One request is one task.')
-    // Ken, 2026-11-02: the PM sets the task's team once, then stays out of it until the Engineer reports.
-    expect(TEMPLATE_WORKFLOW).toContain('and its Tester when the change needs one')
-    expect(TEMPLATE_WORKFLOW).toContain('assigns them to the Reviewer and the Tester the task names')
+    // Ken, 2026-11-02: the PM says what the task needs once, then stays out of it until the Engineer reports.
+    expect(TEMPLATE_WORKFLOW).toContain('It says which\n   reviews and tests the task needs')
+    expect(TEMPLATE_WORKFLOW).toContain("That is the PM's part until the Engineer reports.")
     expect(TEMPLATE_WORKFLOW).toContain('The PM opens no task to hold, batch, triage or list work')
     expect(TEMPLATE_WORKFLOW).toContain('adds a review step to its task')
     expect(TEMPLATE_WORKFLOW).toContain('it adds no new step for a second round')
     expect(TEMPLATE_WORKFLOW).toContain('run `mine`')
     expect(TEMPLATE_WORKFLOW).toContain('read `task GROUP`')
     expect(TEMPLATE_WORKFLOW).toContain('read the thread before acting on it')
-    // Ken, 2026-11-02 (from openharness): the PM names both Reviewers a two-review task needs, and the Engineer picks a
-    // missing one itself instead of asking the PM.
-    expect(TEMPLATE_WORKFLOW).toContain('two Reviewers when the task needs two reviews')
-    expect(TEMPLATE_WORKFLOW).toContain('the Engineer picks a free Reviewer that has not worked on this task itself, without asking the PM')
+    // Ken, 2026-11-02 (from openharness): a two-review task gets two review steps; the Engineer picks its Reviewers
+    // itself instead of asking the PM (since 2026-11-03, when the pull request is ready).
+    expect(TEMPLATE_WORKFLOW).toContain('A task that needs two\n   reviews gets two review steps.')
+    expect(TEMPLATE_WORKFLOW).toContain('never one that\n   worked on this task itself')
     // Ken, 2026-11-02: an Engineer posted "review and test pass" and then set Done, two messages for one event.
     expect(TEMPLATE_WORKFLOW).toContain('that status is how the PM hears, once')
     expect(TEMPLATE_WORKFLOW).toContain('The PM reads `mine` for progress, not `status`.')
@@ -83,17 +83,49 @@ describe('the built-in template', () => {
     expect(pm).toContain('- When the project owner answers Yes to a nightly routing proposal, writes its line into Routing, naming the owner as who asked.')
     expect(Buffer.byteLength(INSTRUCTIONS_TEMPLATE)).toBeLessThan(16_384)
   })
-  it('routes by each account\'s weekly quota left per day until its reset, which the route\'s order does not rank by', () => {
-    // Ken, 2026-11-02: in a week of the autonomous.ai Swarm the PM took the route's first candidate 7% of the time, work piled
-    // onto one machine, accounts sat at 0% for days while others reset with 95% unused.
-    const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing'))
-    expect(routing).toContain('An account\'s share per day is its weekly quota left')
-    expect(routing).toContain('(20% left resetting in 1 day comes before 80% in 5 days)')
-    expect(routing).toContain('An idle agent is reused only when its account has the quota for the task')
-    expect(routing).toContain('Engineers move to the next model and that quota is kept for reviews and urgent work.')
-    expect(routing).toContain('waits if its 5-hour window resets within 30 minutes')
+  it('keeps a Reviewer or Tester working on its step while the Engineer fixes findings: blocked is for a person', () => {
+    // Ken, 2026-11-02: 47 of a day's "Stuck" statuses reached the PM from Reviewers waiting on the Engineer's fixes.
+    const workflow = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Workflow'), INSTRUCTIONS_TEMPLATE.indexOf('## Routing'))
+    expect(workflow).toContain('While the Engineer fixes them, the Reviewer or Tester stays Working on its step')
+    expect(workflow).toContain('blocked and needs_human are only for something a person must do.')
+  })
+  it('picks Reviewers and Testers when the pull request is ready, the PM naming one only when the task needs that agent', () => {
+    // Ken, 2026-11-03: Reviewers named when a task opened were busy, stopped or out of quota an hour or more later (10 of
+    // 36 named in two days reviewed nothing), and 202 reviews in 48 hours ran on the PM's own Mac Studio account.
+    const workflow = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Workflow'), INSTRUCTIONS_TEMPLATE.indexOf('## Routing'))
+      .replace(/\n +/g, ' ')
+    expect(workflow).toContain('names a Reviewer or Tester only when the task needs that one agent')
+    expect(workflow).toContain('It picks each Reviewer and Tester then, by Routing\'s order (the one the PM named, if any)')
+    expect(workflow).toContain('If an assignment is refused, the Engineer asks the PM once, naming the step and the agent it picked.')
+    expect(workflow).not.toContain('It also names its Reviewer')
+    expect(workflow).not.toContain('When the task needs a Reviewer the PM did not name')
+  })
+  it('orders every assignment by the work\'s needs, the PM\'s own account\'s weekly pace, then the account resetting soonest', () => {
+    // Ken, 2026-11-03: the PM reused idle agents on its own machine about 300 times in 48 hours (it took the route's first
+    // candidate 11% of the time) until that Claude account, the PM's own, reached 0% with 4 days to its reset. The 5-hour
+    // window is never hit, so only the weekly quota counts. No plan size here: projects differ.
+    const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\n +/g, ' ')
+    expect(routing).toContain('Every assignment (an Engineer, a Reviewer, a Tester, an idle agent reused) picks in this order:')
+    expect(routing).toContain('The PM\'s own account (the engine it runs on, on its machine) keeps the PM running for the whole week.')
+    expect(routing).toContain('weekly quota left above the share of its week left (with 5 of 7 days to go, above 71%)')
+    expect(routing).toContain('Every other account is used while it has weekly quota left: the one resetting soonest first')
+    expect(routing).toContain('An idle agent is reused only between candidates equal so far')
+    expect(routing).toContain('"Idle" is not a reason.')
+    expect(routing).toContain('hands its pushed branch to an agent on another account.')
     expect(routing).toContain('Urgent work (production down, security) ignores quota.')
-    expect(routing).toContain('its order does not rank by them')
+    for (const gone of ['share per day', '5-hour', 'Engineers move to the next model', 'Max 20x']) expect(routing).not.toContain(gone)
+  })
+  it('lets the PM\'s own account take work as any other once no other account has weekly quota left', () => {
+    // Ken, 2026-11-03: with every other account out, work should not wait on the PM's weekly line.
+    const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\n +/g, ' ')
+    expect(routing).toContain('- When no other account has weekly quota left, the PM\'s account takes work as any other account does.')
+  })
+  it('says the route lists every engine on every machine with its weekly quota, which the PM orders by itself', () => {
+    // Ken, 2026-11-03: the route's rows now carry each account's quota, and no account is cut from them.
+    const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\n +/g, ' ')
+    expect(routing).toContain('- The route lists the best new agent and the best idle agent of every engine on every machine, each with its quota: '
+      + 'fits or short, weekly quota left and reset time. Its order does not rank by quota: the PM applies this order itself.')
+    expect(routing).not.toContain('The route\'s lines show')
   })
 })
 

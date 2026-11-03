@@ -144,9 +144,13 @@ may lack symbolicated stacks until the matching symbols are supplied.
 | `1.0.10 (73)` | 2026-10-23 | TestFlight. The phone's first session: task chips, one suggestion with a Send button, the keyboard over its task and a mic that sends the prompt, and Desktop's engine choice; a Harness OS computer signed out, its password changed, SSH turned on; Version lists releases and takes a newer OS release only; a pasted image waits for its transcode before uploading. 1.0.9 had been submitted, so it went up as 1.0.10. Built from `feat/mobile-ios-android` at `3c024672` |
 | `1.0.11 (74)` | 2026-10-26 | TestFlight. Claude Code scroll keeps up with the finger. 1.0.10 is approved, so it went up as 1.0.11 to carry refreshed App Store screenshots. Built from `feat/mobile-ios-android` at `13b9b38b` |
 | `1.0.12 (75)` | 2026-10-30 | TestFlight. A Harness OS computer signs in to GitHub, checks for updates, sets up Intern 3 and offers Computer use; Settings ▸ Experimental with Swarm, off by default; WebSocket reconnects back off; terminal uploads no longer freeze. 1.0.11 had been submitted, so it went up as 1.0.12. Built from `feat/mobile-ios-android` at `3a258bb8` |
+| `1.0.12 (76)` | 2026-10-30 | TestFlight. Set up Intern 3 from Computers goes back to that list when done; in Swarm, a calmer Home, a simpler chat, Not delivered yet and Jump to first unread. Built from `feat/mobile-ios-android` at `3ab12ed5` |
+| `1.0.12 (77)` | 2026-11-02 | TestFlight. Start opens the new computer's harness, with a keep-on warning while updating and a bar while an agent installs; in Swarm, the floating chat composer, invitations, task steps and chat files up to 256 MB. Built from `feat/mobile-ios-android` at `78c63a84` |
+| `1.0.12 (78)` | 2026-11-02 | TestFlight. In Swarm only, nothing else in `mobile/lib` changed since 77: the Buddy tab opens your one Swarm Buddy chat, Home's Sort by and Filter menu and always-on While you were away, a long press on a machine opens its menu. Built from `feat/mobile-ios-android` at `2c6939e6` |
+| `1.0.12 (79)` | 2026-11-03 | TestFlight. In Swarm only, nothing else in `mobile/lib` changed since 78: invitations on Home with Join and Not now, Older chats from Home, a project's number counts only its own chat, the Buddy picker says when a machine is paused. Built from `feat/mobile-ios-android` at `e8620dbe` |
 
-`pubspec.yaml` is now at `1.0.12+76`, the next build number. Build 75 (1.0.12) is the last build, for both
-TestFlight and Play (54 went up outside this record, 53 went to Play only); do not upload any of them again. 1.0.1 to 1.0.10 are approved and 1.0.11 is submitted or approved, so new builds go up as 1.0.12 until it is submitted or approved too. Check App Store Connect before uploading if another release has happened meanwhile.
+`pubspec.yaml` is now at `1.0.12+80`, the next build number. Build 79 (1.0.12) is the last TestFlight build and
+the last Play build (54 went up outside this record, 53 went to Play only); do not upload any of them again. 1.0.1 to 1.0.10 are approved and 1.0.11 is submitted or approved, so new builds go up as 1.0.12 until it is submitted or approved too. Check App Store Connect before uploading if another release has happened meanwhile.
 
 ### Why the app is iPhone-only
 
@@ -377,3 +381,5 @@ account (Autonomous Inc.) is exempt — check which kind the account is before p
 | `73` (1.0.10) | 2026-10-23 | Built, same code as iOS 1.0.10 (73); to be uploaded by hand |
 | `74` (1.0.11) | 2026-10-26 | Built at a pulled-back pubspec number, same `mobile/` code as iOS 1.0.11 (74); whether it was uploaded is not recorded, so do not reuse 74 |
 | `75` (1.0.12) | 2026-10-30 | Built, same code as iOS 1.0.12 (75); to be uploaded by hand |
+| `78` (1.0.12) | 2026-11-02 | Built, same code as iOS 1.0.12 (78); to be uploaded by hand |
+| `79` (1.0.12) | 2026-11-03 | Built, same code as iOS 1.0.12 (79), from `e8620dbe`; to be uploaded by hand |

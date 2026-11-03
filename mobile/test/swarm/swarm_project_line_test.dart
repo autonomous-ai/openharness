@@ -40,8 +40,10 @@ void main() {
     );
   }
 
-  SwarmTeamGlance glance({int running = 0, int idle = 0}) =>
-      swarmTeamGlance(read(running: running, idle: idle), now: now);
+  SwarmTeamGlance glance({int running = 0, int idle = 0}) => swarmTeamGlance(
+    read(running: running, idle: idle),
+    now: now,
+  );
 
   const line = ValueKey('swarm-project-line');
 
@@ -69,7 +71,7 @@ void main() {
                     swarmId: 'tab',
                     project: snapshot.projects.first,
                     active: null,
-                    news: swarmNoNews,
+                    news: swarmNoProjectNews,
                   ),
                   glance: swarmTeamGlance(snapshot, now: now),
                   humans: humans,

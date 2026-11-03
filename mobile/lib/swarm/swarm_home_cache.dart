@@ -26,14 +26,14 @@ abstract interface class SwarmHomeKey {
 /// [SwarmHomeKey] in the iOS Keychain (Android: Keystore-backed), readable
 /// after the first unlock and never carried to another device or a backup.
 class KeychainSwarmHomeKey implements SwarmHomeKey {
-  const KeychainSwarmHomeKey();
+  const KeychainSwarmHomeKey({this._name = 'swarm_home_key'});
 
   static const _storage = FlutterSecureStorage(
     iOptions: IOSOptions(
       accessibility: KeychainAccessibility.first_unlock_this_device,
     ),
   );
-  static const _name = 'swarm_home_key';
+  final String _name;
 
   @override
   Future<String?> read() => _storage.read(key: _name);

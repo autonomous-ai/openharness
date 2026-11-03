@@ -478,8 +478,13 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
     const frame = object(native.agent)
     const nativeId = native.state === 'unavailable' ? native.createdAgentId : frame.id
     if (!['created', 'unavailable'].includes(String(native.state)) || !identifier(nativeId)) {
-      return { error: 'START_PENDING', startId, creationId, state: native.state ?? 'unknown',
-        detail: 'Keep this start ID. Run resume with it to check the same native creation; do not make another start request.' }
+      // A creation not yet claimed waits on a dependency (the engine, its executable, a model) and says which. Kept, so
+      // the machine logs it and can fail a start held for good with it: on Diego's Mac's Harness Team account one sat held
+      // for the whole 15 minutes and every report said only "preparing" (2026-10-28).
+      const hold = object(native.held)
+      const held = native.state === 'pending' && text(hold.service) && text(hold.detail) ? { service: String(hold.service), detail: String(hold.detail) } : null
+      return { error: 'START_PENDING', startId, creationId, state: native.state ?? 'unknown', ...(held ? { held } : {}),
+        detail: `${held ? `${held.detail} ` : ''}Keep this start ID. Run resume with it to check the same native creation; do not make another start request.` }
     }
     const reservation = await target.request('super_tabs', { action: 'observeCapacity', creationId }, 10_000).catch(() => null)
     if (reservation?.ok !== true || reservation.reservationId !== creationId || reservation.harnessId !== nativeId) {
@@ -534,6 +539,13 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
         reply = await scoped({ action: 'command', operationId: `joined-legacy-${startId}`, command: join })
       }
       joined = requireSuccess(reply)
+      // Another coordinator was set while this one started (backend leadStart.ts leadOvertaken): it is no agent of the Swarm, so
+      // the session this start created goes, and nothing else does.
+      const refused = text(object(joined.result).refused)
+      if (refused) {
+        const closed = await target.request('agent_close', { agentId: nativeId, mode: 'now' }, 60_000).catch((): Json => ({}))
+        return { ok: false, error: refused, refused, startId, machineId: request.machineId, creationId, harnessId: nativeId, ...(closed.closed === true ? {} : { closeFailed: true }) }
+      }
     }
     await target.request('super_tabs', { action: 'wake' }).catch(() => {})
     await target.request('harness_share_rosters', {}).catch(() => {})

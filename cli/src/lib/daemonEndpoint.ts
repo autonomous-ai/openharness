@@ -1,7 +1,7 @@
 import { request } from 'node:http'
 import { lstatSync } from 'node:fs'
 import { localCredentialHeaders } from './localCredential.js'
-import { daemonFetch } from './localTransport.js'
+import { daemonFetch, notThere } from './localTransport.js'
 import { localSocketPath } from './localSocket.js'
 import { readDaemonRecord, writeDaemonRecord, type DaemonPipeRecord } from './daemonRecord.js'
 import { daemonPipe, type LocalDaemonOptions } from './windows/daemonPipe.js'
@@ -72,9 +72,10 @@ const NULL_BODY = new Set([204, 205, 304])
 
 /**
  * A control call to the running daemon (cli.ts `daemonCall`: `harness pair`, `harness devices`, …). On Windows it
- * goes over the daemon's pipe when there is one, and only an answer that proves the token is taken. It falls back
- * to loopback TCP when there is nothing to reach: no record, a daemon proven gone, or nothing listening. On macOS and
- * Linux it goes over the daemon's private socket, and never the port while a socket can exist (lib/localTransport.ts).
+ * goes over the daemon's pipe, and only an answer that proves the token is taken. With nothing to reach there (no
+ * record, a daemon proven gone, or nothing listening) it fails as a daemon that is down, and never tries the port:
+ * the Team account's daemon may hold it (audit W1). On macOS and Linux it goes over the daemon's private socket, and
+ * never the port while a socket can exist (lib/localTransport.ts).
  * A pipe that answers without the proof is not retried over TCP: whatever answered took the
  * daemon's name, and the caller is told so.
  */
@@ -86,15 +87,14 @@ export async function localDaemonCall(
   const text = body ? JSON.stringify(body) : undefined
   if ((options.platform ?? process.platform) === 'win32') {
     const target = await (options.pipe ?? daemonPipe)(dataDir, configuredPort)
-    if (target) {
-      try {
-        const reply = await pipeRequest(target, { method, path, headers, body: text, timeoutMs: 60_000 })
-        const type = reply.headers['content-type']
-        return new Response(NULL_BODY.has(reply.status) ? null : reply.body,
-          { status: reply.status, headers: typeof type === 'string' ? { 'content-type': type } : {} })
-      } catch (error) {
-        if (!pipeAbsent(error)) throw error
-      }
+    if (!target) throw notThere()
+    try {
+      const reply = await pipeRequest(target, { method, path, headers, body: text, timeoutMs: 60_000 })
+      const type = reply.headers['content-type']
+      return new Response(NULL_BODY.has(reply.status) ? null : reply.body,
+        { status: reply.status, headers: typeof type === 'string' ? { 'content-type': type } : {} })
+    } catch (error) {
+      throw pipeAbsent(error) ? Object.assign(new TypeError('fetch failed'), { cause: error }) : error
     }
   }
   return (options.fetch ?? daemonFetch(dataDir, configuredPort, fetch, options.platform))(`http://127.0.0.1:${options.tcpPort}${path}`, {

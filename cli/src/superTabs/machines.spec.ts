@@ -2,16 +2,20 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { apisOn, ContributedMachines, createQuietGit, liveOn, localModelsStamp, offered, READINGS_RETRY_MS, refusedOn, servedOn, sharedWith, swarmUnconfirmedFile, swarmWorktreesFile } from './machines.js'
 import { SuperTabHostError } from './host.js'
+import { createSwarmAgents } from './inCore/agents.js'
+import { createConfidentialPurge, purgeRecord } from './inCore/teamPurge.js'
+import { PM_HOMES } from './teamDaemon.js'
 import { startAgent } from './start.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
+import { object } from './wire.js'
 import { processCoreApi } from '../services/processCoreApi.js'
 import type { PrivacyObservation } from '../team/privacy.js'
 
@@ -868,6 +872,42 @@ describe('contributed machine executor', () => {
       }
       const settle = () => new Promise(resolve => setTimeout(resolve, 0))
 
+      // Task #2261, security review 1 of #2668: another coordinator was set while this one started, so the server refused its
+      // join. The start's own close deletes nothing, so the agent's data has to go the way a failed start's does.
+      describe('because another coordinator was set', () => {
+        const REASON = 'This project already has Mine as its Product Manager.'
+        const refusedStart = { ok: false, error: REASON, refused: REASON, startId: 'start', machineId: 'host', creationId: 'creation', harnessId: 'launched' }
+
+        it('removes a Team account\'s engine home for it, through the Swarm\'s own close', async () => {
+          const home = mkdtempSync(join(tmpdir(), 'refused-start-'))
+          onTestFinished(() => rmSync(home, { recursive: true, force: true }))
+          const own = join(home, PM_HOMES, 'super-start', 'codex')
+          mkdirSync(own, { recursive: true })
+          const purge = async (request: Record<string, unknown>) => request.mode === 'inspect' ? { reviewId: 'review' } : { ok: true }
+          const ended = createConfidentialPurge({ confidential: () => true, home, record: purgeRecord(join(home, 'purges.json')), purge,
+            session: agentId => ({ agentId, sessionId: 'session', registeredAt: 1, engine: 'codex', cwd: null, codexHome: own }) })
+          const { f, fail } = failedLater(() => ({ error: REASON }))
+          f.core.agents.closeMember = createSwarmAgents({ byAgent: () => null, stoppedIds: () => ['launched'], closeAgent: async () => ({ closed: true }), purgeEnded: ended,
+            members: { leads: () => new Set(), harnesses: () => new Set() } } as never).closeMember as never
+          f.start.mockResolvedValue(refusedStart as never)
+          await f.machine.tick()
+          fail(); f.advance(); await f.machine.tick(); await settle(); await vi.waitFor(() => expect(existsSync(dirname(own))).toBe(false))
+        })
+
+        it('tries again when the purge fails, and stops once it has gone', async () => {
+          const { f, closeMember, fail } = failedLater(() => ({ error: REASON }))
+          closeMember.mockResolvedValueOnce({ error: 'PURGE_FAILED', detail: 'Something still names the session' })
+          f.start.mockResolvedValue(refusedStart as never)
+          await f.machine.tick()
+          fail(); f.advance(); await f.machine.tick(); await settle()
+          expect(closeMember).toHaveBeenCalledWith('launched', 'creation')
+          f.advance(); await f.machine.tick(); await settle()
+          expect(closeMember).toHaveBeenCalledTimes(2)
+          f.advance(); await f.machine.tick(); await settle()
+          expect(closeMember).toHaveBeenCalledTimes(2)
+        })
+      })
+
       it('stops the agent it launched for it, by the start\'s own creation receipt', async () => {
         const { f, closeMember, fail } = failedLater(() => ({ error: 'Mac Auto did not start it within 3 minutes' }))
         await f.machine.tick()
@@ -954,6 +994,66 @@ describe('contributed machine executor', () => {
         f.advance(); await f.machine.tick()
         expect(machinePosts(f).at(-1)).not.toHaveProperty('preparingStartIds')
       }
+    })
+
+    // Diego's Mac, 2026-10-28: a Harness Team account's creation was held on its engine for the whole 15 minutes; the
+    // backend then failed it "still preparing", and nobody could read what it waited for.
+    describe('held on a dependency', () => {
+      const held = { service: 'native', detail: 'Waiting to confirm access to the selected engine executable.' }
+      const heldCreation = { ...pendingCreation, held, detail: `${held.detail} ${pendingCreation.detail}` }
+      const commands = (f: ReturnType<typeof fixture>) => f.backend.mock.calls
+        .filter(c => String(c[2]).includes('/starts/tab/start')).map(c => object(c[3]).command).filter(Boolean)
+      const launched = (result: Record<string, unknown>, cancel: Record<string, unknown> = { creationId: 'creation', state: 'cancelled' }) => {
+        const f = fixture()
+        f.pool.starts[0]!.dispatched = true
+        f.start.mockResolvedValue(result as never)
+        const usage = f.request.getMockImplementation()!
+        f.request.mockImplementation(async (type, ...rest) => type === 'agent_create_cancel' ? cancel : usage(type, ...rest as []))
+        return f
+      }
+
+      it('is stopped on this machine and failed with what it waited for, once held 5 minutes', async () => {
+        const f = launched(heldCreation)
+        await f.machine.tick()
+        f.step(295_000); await f.machine.tick()
+        expect(f.request.mock.calls.filter(c => c[0] === 'agent_create_cancel')).toHaveLength(0)
+        f.step(5_000); await f.machine.tick()
+        expect(f.request.mock.calls.filter(c => c[0] === 'agent_create_cancel')).toEqual([['agent_create_cancel', { creationId: 'creation' }, 10_000]])
+        expect(commands(f)).toEqual([{ type: 'agent.startFailed', startId: 'start',
+          error: 'This machine held the agent\'s launch for 5 minutes and stopped it: Waiting to confirm access to the selected engine executable.' }])
+        expect(f.log).toHaveBeenCalledWith(`Swarm start start is waiting: ${heldCreation.detail}`)
+      })
+
+      it('is never failed while its creation is under way, or Harness installs its engine', async () => {
+        for (const result of [pendingCreation, { ...heldCreation, held: { service: 'install', detail: 'Installing Claude Code.' } }]) {
+          const f = launched(result)
+          await f.machine.tick()
+          f.step(600_000); await f.machine.tick()
+          expect(f.request.mock.calls.filter(c => c[0] === 'agent_create_cancel')).toHaveLength(0)
+          expect(commands(f)).toEqual([])
+        }
+      })
+
+      it('counts its 5 minutes again after a pass that found it no longer held', async () => {
+        const f = launched(heldCreation)
+        await f.machine.tick()
+        f.step(200_000); f.start.mockResolvedValue(pendingCreation as never); await f.machine.tick()
+        f.step(20_000); f.start.mockResolvedValue(heldCreation as never); await f.machine.tick()
+        f.step(200_000); await f.machine.tick()
+        expect(commands(f)).toEqual([])
+        f.step(100_000); await f.machine.tick()
+        expect(commands(f)).toHaveLength(1)
+      })
+
+      it('is not failed when the machine does not confirm the cancellation: its launch may have won', async () => {
+        for (const cancel of [{ creationId: 'creation', state: 'pending' }, { error: 'INTERNAL' }, { creationId: 'other', state: 'cancelled' }]) {
+          const f = launched(heldCreation, cancel)
+          await f.machine.tick()
+          f.step(300_000); await f.machine.tick()
+          expect(f.request.mock.calls.filter(c => c[0] === 'agent_create_cancel')).toHaveLength(1)
+          expect(commands(f)).toEqual([])
+        }
+      })
     })
 
     it('is left out for a backend that refuses it, which then fails it at 3 minutes as before, and offered again ten minutes later', async () => {

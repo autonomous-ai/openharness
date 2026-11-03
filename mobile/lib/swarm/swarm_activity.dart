@@ -10,6 +10,7 @@ import 'swarm_chat_peeks.dart';
 import 'swarm_inbox.dart';
 import 'swarm_reader.dart';
 import 'swarm_session.dart';
+import 'swarm_thread.dart' show SwarmThreadFocus;
 
 /// Activity's filters, as Tony's prototype C3 names them.
 enum SwarmActivityFilter {
@@ -50,6 +51,14 @@ sealed class SwarmActivityItem {
 
   /// When it happened, where that is known.
   DateTime? get at;
+
+  /// The root of the thread the row's message lives only in; null for a
+  /// message in the chat's main stream, which Reply lands on in the chat.
+  String? get threadId => null;
+
+  /// Where that thread lands: on the row's message, or at its first unread
+  /// reply for a row that stands for the whole thread.
+  SwarmThreadFocus? get threadFocus => null;
 }
 
 /// Something a Swarm asks of the person ([SwarmNeed]): Needs you, or @ for a
@@ -72,6 +81,19 @@ class SwarmActivityNeed extends SwarmActivityItem {
   @override
   String? get messageId => switch (need) {
     SwarmMentionNeed(:final mention) => mention.messageId,
+    _ => null,
+  };
+
+  @override
+  String? get threadId => switch (need) {
+    SwarmMentionNeed(:final mention) => mention.threadId,
+    _ => null,
+  };
+
+  @override
+  SwarmThreadFocus? get threadFocus => switch (need) {
+    SwarmMentionNeed(:final mention) when mention.threadId != null =>
+      SwarmThreadFocus.message(mention.messageId),
     _ => null,
   };
 
@@ -137,6 +159,12 @@ class SwarmActivityThread extends SwarmActivityItem {
   String? get messageId => thread.id;
 
   @override
+  String? get threadId => thread.id;
+
+  @override
+  SwarmThreadFocus? get threadFocus => const SwarmThreadFocus.firstUnread();
+
+  @override
   DateTime? get at => thread.lastAt;
 }
 
@@ -160,6 +188,13 @@ class SwarmActivityServerItem extends SwarmActivityItem {
   /// A reply that lives only in its thread opens at the thread.
   @override
   String? get messageId => entry.threadId ?? entry.messageId;
+
+  @override
+  String? get threadId => entry.threadId;
+
+  @override
+  SwarmThreadFocus? get threadFocus =>
+      entry.threadId == null ? null : SwarmThreadFocus.message(entry.messageId);
 
   @override
   DateTime? get at => entry.createdAt;
@@ -192,6 +227,13 @@ class SwarmActivityReaction extends SwarmActivityItem {
 
   @override
   String? get messageId => message.id;
+
+  @override
+  String? get threadId => message.inMainStream ? null : message.thread;
+
+  @override
+  SwarmThreadFocus? get threadFocus =>
+      threadId == null ? null : SwarmThreadFocus.message(message.id);
 
   @override
   DateTime? get at => message.createdAt;
@@ -464,9 +506,10 @@ class SwarmActivity extends ChangeNotifier {
       final decision = need.decision;
       final asks = inbox.asks(need.swarmId);
       final busy =
-          session.held(need) != null ||
+          session.holding(need) ||
           (asks?.answering.contains(decision.id) ?? false) ||
-          asks?.unconfirmed(decision) != null;
+          asks?.unconfirmed(decision) != null ||
+          (asks?.unconfirmedDelegate(decision) ?? false);
       final choice = decision.recommended;
       if (!busy && choice >= 0 && choice < decision.options.length) {
         return decision.options[choice];
@@ -511,6 +554,18 @@ class SwarmActivity extends ChangeNotifier {
     }
     _built = null;
     notifyListeners();
+  }
+
+  /// Where [item]'s thread lands when it is opened: ask before [replied],
+  /// which reads a whole thread, so its first unread reply is still known.
+  SwarmThreadFocus? landingOf(SwarmActivityItem item) {
+    if (item is! SwarmActivityThread) return item.threadFocus;
+    final reader = inbox.reader(item.swarmId);
+    final through =
+        reader?.readMarks?.threadThrough(item.chatId, item.thread.id) ??
+        reader?.snapshot?.threadMarks[item.chatId]?[item.thread.id] ??
+        0;
+    return SwarmThreadFocus.firstUnread(after: through);
   }
 
   bool _open(SwarmActivityNeed item) =>
@@ -597,9 +652,7 @@ class SwarmActivity extends ChangeNotifier {
 
   bool _held(String key) => inbox.needs.any(
     (need) =>
-        need.key == key &&
-        need is SwarmDecisionNeed &&
-        session.held(need) != null,
+        need.key == key && need is SwarmDecisionNeed && session.holding(need),
   );
 
   /// On this phone's first Activity of a Swarm, the reactions already there

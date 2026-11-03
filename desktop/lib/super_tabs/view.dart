@@ -20,7 +20,6 @@ import '../state/harness_attachments.dart';
 import '../state/workspace_chrome.dart';
 import 'chat_scroll.dart';
 import 'leaderboard/reader.dart';
-import 'catch_up_card.dart';
 import 'jump_to_latest.dart';
 import 'unread_line.dart';
 import 'roster.dart';
@@ -56,19 +55,21 @@ import 'buddies.dart';
 import 'decisions.dart';
 import 'decisions_view.dart';
 import 'route_row.dart';
-import 'ship_row.dart';
 import 'terminal_row.dart';
 import 'thread_panel.dart';
-import 'threads_view.dart';
 import 'work_details.dart';
+import 'manage_page.dart';
 import 'project_sidebar.dart';
 import 'buddy_sessions.dart';
 import 'swarm_switcher.dart' show fallBackToPersonal;
 import 'project_options.dart';
+import 'project_status.dart';
+import 'ship_row.dart';
 import 'switch_pm.dart';
-import 'project_status_card.dart';
+import 'task_line.dart';
 import 'pane_layout.dart';
 import 'view_room.dart';
+import 'visible_tick.dart';
 import '../widgets/dial_list_scroll.dart';
 import '../widgets/laid_out_list.dart';
 
@@ -140,10 +141,6 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The Buddy chats whose next message starts its own thread's session.
   final _chatSessions = <String>{};
 
-  /// The project a New session in the reader's one Buddy chat works in, by
-  /// chat; none is a session that reads every project and sends to no PM
-  /// (spec 2026-10-31-one-buddy-per-swarm).
-  final _chatSessionProjects = <String, String>{};
   String? _selected;
   int _scrollRequest = 0;
   bool _jumpingToEnd = false;
@@ -153,8 +150,10 @@ class _SuperTabViewState extends State<SuperTabView>
 
   bool _showNotifications = false;
 
-  /// The Threads view holds the main pane (threads_view.dart).
-  bool _showThreads = false;
+  /// Manage holds the main pane; [_manageTab] is which of its pages, but for
+  /// Devices, which is the pane the view holds for it ([_devicesVisible]).
+  bool _showManage = false;
+  SuperTabManageTab _manageTab = SuperTabManageTab.machines;
   // The message a tag opened, scrolled to once it is laid out.
   String? _target;
   // The conversation a link or tag opened at its own message this visit: its
@@ -266,9 +265,12 @@ class _SuperTabViewState extends State<SuperTabView>
     _composer.addListener(_composerMoved);
     c.addListener(_changed);
     c.buddyChatOpener = _openBuddyChat;
+    SuperTabChatNotices.of(c).chatShown = _chatShown;
     _registerDial();
     _changed();
   }
+
+  bool _chatShown() => _chatIsVisible;
 
   @override
   void didChangeDependencies() {
@@ -281,12 +283,28 @@ class _SuperTabViewState extends State<SuperTabView>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _readVisibleTailAfterFrame();
+    if (state == AppLifecycleState.resumed) {
+      _readVisibleTailAfterFrame();
+    } else {
+      // No frame follows: the poll goes on in the background.
+      _syncThreadPane();
+    }
   }
 
   @override
   void didUpdateWidget(SuperTabView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // A terminal that opens shows: Manage and Activity outrank it in the pane.
+    final terminalNow = widget.terminalsVisible || widget.terminal != null;
+    final terminalBefore =
+        oldWidget.terminalsVisible || oldWidget.terminal != null;
+    if (terminalNow && !terminalBefore && !c.devicesSelected) {
+      _showManage = _showNotifications = false;
+    }
+    if (oldWidget.controller != c) {
+      _noticesLeave(oldWidget.controller);
+      SuperTabChatNotices.of(c).chatShown = _chatShown;
+    }
     if (oldWidget.controller != c || oldWidget.app != widget.app) {
       _dial.cancel();
       _registerDial();
@@ -296,6 +314,7 @@ class _SuperTabViewState extends State<SuperTabView>
     if (oldWidget.controller != c) {
       _board.dispose();
       _board = SuperTabProjectBoard(c);
+      oldWidget.controller.threadPaneHidden();
       oldWidget.controller.removeListener(_changed);
       if (oldWidget.controller.buddyChatOpener == _openBuddyChat) {
         oldWidget.controller.buddyChatOpener = null;
@@ -407,7 +426,6 @@ class _SuperTabViewState extends State<SuperTabView>
       // The line is placed once the messages reach back to the mark.
     } else if (_unread.decide(id, shown, mark, own: c.isOwn)) {
       if (_openedAtMessage != id) _revealUnreadLine(id);
-      _loadCatchUp(id, mark);
     } else if (firstView || (grew && atEnd)) {
       _followEnd(id);
     } else if (atEnd) {
@@ -467,7 +485,7 @@ class _SuperTabViewState extends State<SuperTabView>
         _terminalsVisible ||
         _showPullRequests ||
         _showNotifications ||
-        _showThreads) {
+        _showManage) {
       return false;
     }
     final lifecycle = WidgetsBinding.instance.lifecycleState;
@@ -494,16 +512,28 @@ class _SuperTabViewState extends State<SuperTabView>
     final sequence = c.messages(id).lastOrNull?.sequence ?? 0;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && !_jumpingToEnd) _readToEnd(id, sequence);
-      // A thread restored open counts as read only once its pane is seen.
-      if (mounted &&
-          c.openedThread?.conversationId == c.selectedId &&
-          _viewIsVisible) {
-        c.threadPaneShown();
-      }
     });
+    _syncThreadPane();
     // Widget updates already have a frame in progress. Reuse it so routine
     // polling does not request an otherwise unnecessary frame after each build.
     WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  /// Whether the open thread's pane is on screen: beside its conversation's
+  /// chat, in a view a person can see.
+  bool get _threadPaneVisible =>
+      c.openedThread?.conversationId == c.selectedId && _viewIsVisible;
+
+  /// Tells the controller whether the open thread's pane is on screen, by the
+  /// rule the chat reads by: hidden at once, so a poll landing while it is
+  /// away marks no reply read; shown after the frame that draws it, which
+  /// marks through its newest reply.
+  void _syncThreadPane() {
+    if (c.openedThread == null) return;
+    if (!_threadPaneVisible) return c.threadPaneHidden();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _threadPaneVisible) c.threadPaneShown();
+    });
   }
 
   void _readToEnd(String id, int sequence) {
@@ -569,8 +599,8 @@ class _SuperTabViewState extends State<SuperTabView>
       arrived: (row) {
         // A link or tag opened since takes the reader to its message instead.
         if (request != _scrollRequest) return;
-        // The line itself, not its row: with the catch-up card under it the
-        // row can be taller than the view, and its top would go above it.
+        // The line itself, not its row, which can be taller than the view:
+        // its top would go above it.
         final line = _unread.key.currentContext;
         unawaited(
           Scrollable.ensureVisible(
@@ -581,14 +611,6 @@ class _SuperTabViewState extends State<SuperTabView>
       },
     );
   }
-
-  /// Reads [id]'s catch-up card for the span after [mark], shown under its
-  /// line once it arrives.
-  void _loadCatchUp(String id, int mark) => unawaited(
-    _unread.catchUps.load(id, () => c.readCatchUp(id, mark)).then((shown) {
-      if (shown && mounted) setState(() {});
-    }),
-  );
 
   /// Shows the jump pill while the reader is away from a line not yet seen,
   /// and Jump to latest while the list is away from its newest message.
@@ -703,7 +725,7 @@ class _SuperTabViewState extends State<SuperTabView>
       if (group == null || !c.unreadShown(group)) continue;
       widget.onCloseTerminal?.call();
       setState(() {
-        _showNotifications = _showThreads = false;
+        _showNotifications = _showManage = false;
         _showPullRequests = false;
       });
       unawaited(c.select(group.id));
@@ -764,8 +786,16 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
+  void _noticesLeave(SuperTabController controller) {
+    final notices = SuperTabChatNotices.of(controller);
+    if (notices.chatShown == _chatShown) notices.chatShown = null;
+  }
+
   @override
   void dispose() {
+    _noticesLeave(c);
+    // The controller outlives its view, reading another Swarm's replies.
+    c.threadPaneHidden();
     WidgetsBinding.instance.removeObserver(this);
     _board.dispose();
     _facts.dispose();
@@ -817,7 +847,7 @@ class _SuperTabViewState extends State<SuperTabView>
     final result = await c.send(
       replyTo: _replies[id]?.id,
       newSession: newSession,
-      sessionProjectId: newSession ? _chosenSessionProject(id) : null,
+      sessionProjectId: newSession ? _chosenSessionProject() : null,
       // The reply goes with the message, which shows at the end at once.
       onSending: () {
         if (!mounted) return;
@@ -826,10 +856,7 @@ class _SuperTabViewState extends State<SuperTabView>
       },
     );
     if (!mounted) return;
-    if (newSession && result != null) {
-      _chatSessions.remove(id);
-      _chatSessionProjects.remove(id);
-    }
+    if (newSession && result != null) _chatSessions.remove(id);
     // Refused for New session, its text is back as the chat's draft: it shows
     // in the box, ready to send without it, unless another chat is shown or
     // something was typed meanwhile.
@@ -876,10 +903,13 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  /// The project chosen for chat [id]'s New session while the reader still
-  /// reads it: one they lost is no longer chosen (security review 1 of #2437).
-  String? _chosenSessionProject(String? id) {
-    final chosen = _chatSessionProjects[id];
+  /// The project chosen for a New session, the last one on this device (task
+  /// #2347), while the reader still reads it: one they lost is no longer
+  /// chosen, and the session reads every project (security review 1 of #2437).
+  /// None is a session that reads every project and sends to no PM (spec
+  /// 2026-10-31-one-buddy-per-swarm).
+  String? _chosenSessionProject() {
+    final chosen = c.sessionProjectId;
     return c.snapshot?.projects.any((p) => p.id == chosen) == true
         ? chosen
         : null;
@@ -889,21 +919,16 @@ class _SuperTabViewState extends State<SuperTabView>
   /// they read, sending to no PM, or one project, whose PM it alone sends to.
   /// A quiet menu beside New session, shown while it is on.
   Widget _chatSessionProject(bool writable) {
-    final id = c.selectedId;
     final projects = c.snapshot?.projects ?? const <SuperTabProject>[];
     final chosen = projects
-        .where((p) => p.id == _chatSessionProjects[id])
+        .where((p) => p.id == _chosenSessionProject())
         .firstOrNull;
     return PopupMenuButton<String>(
       key: const ValueKey('super-chat-session-project'),
       enabled: writable,
       tooltip: 'Where this session works',
       initialValue: chosen?.id ?? '',
-      onSelected: (projectId) => setState(
-        () => projectId.isEmpty
-            ? _chatSessionProjects.remove(id)
-            : _chatSessionProjects[id] = projectId,
-      ),
+      onSelected: c.chooseSessionProject,
       itemBuilder: (_) => [
         PopupMenuItem(
           key: const ValueKey('super-chat-session-any'),
@@ -1582,45 +1607,19 @@ class _SuperTabViewState extends State<SuperTabView>
   Widget _sidebar() => ProjectSidebar(
     controller: c,
     app: widget.app,
-    board: _board,
-    onAddAgent: widget.onAddAgent,
     onNewProject: widget.onNewProject,
     onNewSwarm: widget.onNewSwarm,
-    devicesSelected: _devicesVisible,
     notificationsSelected: _notificationsVisible,
     attention: SuperTabAttention.of(c),
     activity: SuperTabActivity.of(c),
-    threadsSelected: _threadsVisible,
-    onThreads: () {
-      _closeSidebar();
-      setState(() {
-        _showThreads = true;
-        _showNotifications = false;
-        _showPullRequests = false;
-      });
-      widget.onCloseTerminal?.call();
-    },
+    onManage: _openManage,
+    manageSelected: _manageOpen,
     // Activity on every platform (Lead, 10-31): the Mac's menu bar and Dock
     // still say what waits, and the sidebar lists it as Slack does.
     onNotifications: _openActivity,
-    onOpenAgent: (agent) {
-      _closeSidebar();
-      setState(() {
-        _showPullRequests = false;
-        _showNotifications = _showThreads = false;
-      });
-      (widget.onChooseAgentTerminal ?? widget.onOpenTerminal)(agent);
-    },
-    onYourDevices: widget.app?.devicesEnabled != true
-        ? null
-        : () {
-            _closeSidebar();
-            setState(() => _showNotifications = _showThreads = false);
-            widget.app!.openDevices();
-          },
     needsHuman: (group) => _needsHuman(group).length,
     onSelect: (id) {
-      setState(() => _showNotifications = _showThreads = false);
+      setState(() => _showNotifications = _showManage = false);
       c.select(id);
       _closeSidebar();
     },
@@ -1633,7 +1632,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// ([SuperTabController.buddyChatOpener]).
   Future<bool> _openBuddyChat(String projectId) {
     setState(() {
-      _showNotifications = _showThreads = false;
+      _showNotifications = _showManage = false;
       _showPullRequests = false;
     });
     widget.onCloseTerminal?.call();
@@ -1650,7 +1649,7 @@ class _SuperTabViewState extends State<SuperTabView>
     widget.onCloseTerminal?.call();
     setState(() {
       _showNotifications = true;
-      _showThreads = false;
+      _showManage = false;
       _showPullRequests = false;
     });
     if (request.kind != 'mention') return;
@@ -1660,21 +1659,15 @@ class _SuperTabViewState extends State<SuperTabView>
     if (mention != null) unawaited(_openMention(mention));
   }
 
-  /// Shows Activity in the main pane, as its sidebar row does; with [filter],
-  /// on that list (the catch-up card's counts). [from] is the controller the
-  /// asking widget was built for: a press arriving once the view has moved to
-  /// another Swarm opens nothing.
-  void _openActivity({
-    SuperTabActivityFilter? filter,
-    SuperTabController? from,
-  }) {
+  /// Shows Activity in the main pane, as its sidebar row does. [from] is the
+  /// controller the asking widget was built for: a press arriving once the
+  /// view has moved to another Swarm opens nothing.
+  void _openActivity({SuperTabController? from}) {
     if (!mounted || (from != null && from != c)) return;
-    // Its row asks for no list: All, whichever one was showing.
-    SuperTabActivity.of(c).setFilter(filter ?? SuperTabActivityFilter.all);
     _closeSidebar();
     setState(() {
       _showNotifications = true;
-      _showThreads = false;
+      _showManage = false;
       _showPullRequests = false;
     });
     widget.onCloseTerminal?.call();
@@ -1683,28 +1676,65 @@ class _SuperTabViewState extends State<SuperTabView>
   bool get _notificationsVisible =>
       _showNotifications && !_devicesVisible && !c.accessRevoked;
 
-  /// Notifications or Threads holds the main pane, with no chat header.
-  bool get _listViewHoldsThePane => _notificationsVisible || _threadsVisible;
+  /// Activity or Manage holds the main pane, with no chat header.
+  bool get _listViewHoldsThePane => _notificationsVisible || _manageVisible;
 
-  bool get _threadsVisible =>
-      _showThreads &&
+  bool get _manageVisible =>
+      _showManage &&
       !_showNotifications &&
       !_devicesVisible &&
       !c.accessRevoked;
 
-  /// Opens [root]'s thread in its chat from the Threads view.
+  /// Manage shows, on any of its pages: Devices is one of them, however it
+  /// was opened.
+  bool get _manageOpen => _manageVisible || _devicesVisible;
+
+  bool get _hasDevices => widget.app?.devicesEnabled == true;
+
+  /// The sidebar's Manage, on the page it last showed.
+  void _openManage() {
+    _closeSidebar();
+    setState(() {
+      _showManage = true;
+      _showNotifications = _showPullRequests = false;
+      if (_manageTab == SuperTabManageTab.devices && !_hasDevices) {
+        _manageTab = SuperTabManageTab.machines;
+      }
+    });
+    if (_manageTab == SuperTabManageTab.devices) widget.app!.openDevices();
+  }
+
+  void _chooseManageTab(SuperTabManageTab tab) {
+    setState(() {
+      _showManage = true;
+      _manageTab = tab;
+    });
+    if (tab == SuperTabManageTab.devices) {
+      widget.app!.openDevices();
+    } else {
+      c.leaveDevices();
+    }
+  }
+
+  /// Opens [root]'s thread in its chat from Activity's New replies.
   void _openThreadFromList(String conversationId, String root) {
+    if (_openConversation(conversationId)) c.openThread(root);
+  }
+
+  /// Opens chat [conversationId] from a row of Activity; false when it is
+  /// gone or the reader's access is.
+  bool _openConversation(String conversationId) {
     if (c.accessRevoked || c.snapshot?.conversation(conversationId) == null) {
-      return;
+      return false;
     }
     widget.onCloseTerminal?.call();
     _closeSidebar();
     setState(() {
-      _showThreads = _showNotifications = false;
+      _showNotifications = _showManage = false;
       _showPullRequests = false;
     });
     c.select(conversationId);
-    c.openThread(root);
+    return true;
   }
 
   /// [messageId] of [id], read from the pages held, then what arrived after
@@ -1778,7 +1808,7 @@ class _SuperTabViewState extends State<SuperTabView>
     }
     final shownBy = _rowShowing(id, messageId) ?? messageId;
     setState(() {
-      _showNotifications = _showThreads = false;
+      _showNotifications = _showManage = false;
       _showPullRequests = false;
       _back = null;
       _target = shownBy;
@@ -1962,14 +1992,27 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// The messages [id]'s list shows, in order.
   /// A thread reply shows in its thread, and here only when also sent.
-  List<SuperTabMessage> _shownMessages(String id) {
+  List<SuperTabMessage> _shownMessages(String id, {bool replies = false}) {
     final messages = c.taskMessages(id);
     final answered = answeredPromptAlerts(
       messages,
       (agentId) => c.snapshot?.agent(agentId),
     );
+    // A task's line says it shipped: its Shipped card, from before it had the
+    // line, leaves. One with no line stays (Quiet Swarm, part 2).
+    final lined = {
+      for (final m in messages)
+        if (m.isTaskLine) m.source['taskId'],
+    };
     return messages
-        .where((m) => _shown(m) && m.inMainStream && !answered.contains(m.id))
+        .where(
+          (m) =>
+              _shown(m) &&
+              (replies || m.inMainStream) &&
+              !answered.contains(m.id) &&
+              !(SuperTabShipRow.shows(m) &&
+                  lined.contains(m.source['conversationId'])),
+        )
         .toList();
   }
 
@@ -1980,9 +2023,26 @@ class _SuperTabViewState extends State<SuperTabView>
       if (m.conversationId == id) m,
   ];
 
-  /// A message waiting for an agent is never announced; notices older
-  /// backends stored stay hidden, in the list and as a reply's quote.
-  static bool _shown(SuperTabMessage m) => m.source['kind'] != 'delivery-hold';
+  /// What people never read in a chat, in the list and as a reply's quote: a
+  /// message waiting for an agent, notices older backends stored, the PM's own
+  /// notices about the work (backend NOTICE_READERS).
+  static const _neverShown = {
+    'delivery-hold',
+    'work-stalled',
+    'work-lost',
+    'work-resumed',
+    'idle-stop',
+    'idle',
+    'review-failed',
+    'update-request',
+    'digest-request',
+    'overlap',
+    'pair-loop',
+    'notice-digest',
+  };
+
+  static bool _shown(SuperTabMessage m) =>
+      !_neverShown.contains(m.source['kind']);
 
   /// The row of [id]'s list that shows [messageId]: its own, or the notice
   /// that folds it in. Null while the message is not loaded.
@@ -2172,12 +2232,10 @@ class _SuperTabViewState extends State<SuperTabView>
   /// [SuperTabWorkgroupName].
   Widget _title(SuperTabConversation? group) {
     final style = DesktopChrome.text(medium: true);
-    final name = _devicesVisible
-        ? 'Your devices'
+    final name = _manageOpen
+        ? 'Manage'
         : _notificationsVisible
         ? 'Activity'
-        : _threadsVisible
-        ? 'Threads'
         : group == null
         ? c.snapshot?.projects.isEmpty == true
               ? c.snapshot!.name
@@ -2190,10 +2248,18 @@ class _SuperTabViewState extends State<SuperTabView>
         ? 'Earlier Buddy chat · ${c.snapshot!.projects.where((p) => p.id == group.projectId).firstOrNull?.name ?? 'a project'}'
         : _buddyName(group) == null
         ? null
+        : group.isSwarmBuddyChat
+        ? 'Buddy'
         : c.buddy(group.projectId) == null && group.buddyName == null
         ? 'Your Buddy'
         : '${_buddyName(group)} · Your Buddy';
     if (name == null) return SuperTabWorkgroupName(group!, style: style);
+    if (group != null &&
+        c.snapshot!.isProjectLead(group.id) &&
+        !_devicesVisible &&
+        !_listViewHoldsThePane) {
+      return _projectMenu(group, name, style);
+    }
     return Text(
       name,
       maxLines: 1,
@@ -2298,10 +2364,11 @@ class _SuperTabViewState extends State<SuperTabView>
   bool get _menuNamesViews =>
       _phone && !_devicesVisible && !_listViewHoldsThePane;
 
-  /// How many terminals [group]'s [term] opens: its agents', and in the
-  /// person's own Personal Swarm their panes of its project.
+  /// How many terminals [group]'s [term] opens: its agents' (a project chat's
+  /// coordinator alone), and in the person's own Personal Swarm their panes of
+  /// its project.
   int _terminalCount(SuperTabConversation group) =>
-      group.agentIds.length +
+      (c.snapshot?.paneAgentIds(group.id) ?? group.agentIds).length +
       switch (widget.app) {
         final app? => PersonalProjects.of(app).panesFor(c, group.id).length,
         null => 0,
@@ -2322,7 +2389,14 @@ class _SuperTabViewState extends State<SuperTabView>
     setState(() => _showPullRequests = true);
   }
 
-  void _toggleRoster() => setState(() => _rosterOpen = !_rosterOpen);
+  /// Members takes the right side from an open thread or task, as in Slack.
+  void _toggleRoster() {
+    if (!_rosterOpen) c.closeThread();
+    setState(() {
+      if (!_rosterOpen) _openedTask = null;
+      _rosterOpen = !_rosterOpen;
+    });
+  }
 
   /// On a phone, the view ⋮ opened in place of the chat, which the bar has no
   /// icon to mark as selected; null while the chat is the view.
@@ -2368,72 +2442,78 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  Widget _header(SuperTabConversation? group, bool narrow, bool showRoster) =>
-      Container(
-        constraints: const BoxConstraints(minHeight: 52),
-        // A phone's rows line up (Huy, 2026-11-02): the sidebar icon starts at
-        // the top bar's edge, and the people icon sits under its avatar.
-        padding: _phone
-            ? kPhoneBarRowPadding
-            : const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
-        decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
-        ),
-        child: Row(
-          children: [
-            if (narrow)
-              fingerTarget(
-                enabled: _phone,
-                AppIconButton(
-                  icon: AppIcons.columns2,
-                  tooltip: 'Conversations',
-                  onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
-                ),
-              ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // A view saved on this device, until the first read
-                    // replaces it ([SuperTabReading.drawsSaved]).
-                    if (c.showingSaved)
-                      Row(
-                        children: [
-                          Flexible(child: _title(group)),
-                          const SizedBox(width: 8),
-                          // Where the copy is; how long it stays and where
-                          // it is cleared, a hover or a long press away.
-                          Flexible(
-                            child: Tooltip(
-                              message:
-                                  'This browser keeps a copy of the Super '
-                                  'Tabs you open until you sign out. '
-                                  'Settings ▸ Account clears it now.',
-                              child: Text(
-                                'Saved in this browser · Updating…',
-                                key: const ValueKey('super-updating'),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: DesktopChrome.metadata(),
-                              ),
-                            ),
-                          ),
-                        ],
-                      )
-                    else
-                      _title(group),
-                    if (!_devicesVisible && !_listViewHoldsThePane)
-                      ?_subtitle(group),
-                  ],
-                ),
+  Widget _header(SuperTabConversation? group, bool narrow) {
+    final isProject =
+        group != null && c.snapshot?.isProjectLead(group.id) == true;
+    // The one Buddy has one chat, as a project does; it has no pull requests.
+    final oneBuddy = group?.isSwarmBuddyChat == true;
+    final restsOnChat = isProject || oneBuddy;
+    return Container(
+      constraints: const BoxConstraints(minHeight: 52),
+      // A phone's rows line up (Huy, 2026-11-02): the sidebar icon starts at
+      // the top bar's edge, and the people icon sits under its avatar.
+      padding: _phone
+          ? kPhoneBarRowPadding
+          : const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
+      ),
+      child: Row(
+        children: [
+          if (narrow)
+            fingerTarget(
+              enabled: _phone,
+              AppIconButton(
+                icon: AppIcons.menu,
+                tooltip: 'Conversations',
+                onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
               ),
             ),
-            if (group != null &&
-                !_devicesVisible &&
-                !_listViewHoldsThePane) ...[
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // A view saved on this device, until the first read
+                  // replaces it ([SuperTabReading.drawsSaved]).
+                  if (c.showingSaved)
+                    Row(
+                      children: [
+                        Flexible(child: _title(group)),
+                        const SizedBox(width: 8),
+                        // Where the copy is; how long it stays and where
+                        // it is cleared, a hover or a long press away.
+                        Flexible(
+                          child: Tooltip(
+                            message:
+                                'This browser keeps a copy of the Super '
+                                'Tabs you open until you sign out. '
+                                'Settings ▸ Account clears it now.',
+                            child: Text(
+                              'Saved in this browser · Updating…',
+                              key: const ValueKey('super-updating'),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: DesktopChrome.metadata(),
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                  else
+                    _title(group),
+                  if (!_devicesVisible && !_listViewHoldsThePane)
+                    ?_subtitle(group),
+                ],
+              ),
+            ),
+          ),
+          if (group != null && !_devicesVisible && !_listViewHoldsThePane) ...[
+            // A project's chat is where its header rests: the button back
+            // to it shows only from another view (Quiet Swarm, screen 1).
+            if (!restsOnChat || _terminalsVisible || _showPullRequests)
               fingerTarget(
                 enabled: _phone,
                 AppIconButton(
@@ -2455,8 +2535,10 @@ class _SuperTabViewState extends State<SuperTabView>
                   },
                 ),
               ),
-              if (!_menuNamesViews) ...[
-                const SizedBox(width: 4),
+            if (isProject || !_menuNamesViews) ...[
+              const SizedBox(width: 4),
+              fingerTarget(
+                enabled: _phone,
                 AppIconButton(
                   key: const ValueKey('super-terminals'),
                   icon: AppIcons.terminal,
@@ -2468,6 +2550,10 @@ class _SuperTabViewState extends State<SuperTabView>
                       : DesktopChrome.muted,
                   onPressed: _openTerminals(group),
                 ),
+              ),
+            ],
+            if (!isProject) ...[
+              if (!_menuNamesViews && !oneBuddy) ...[
                 const SizedBox(width: 4),
                 AppIconButton(
                   key: const ValueKey('super-pull-requests'),
@@ -2487,45 +2573,194 @@ class _SuperTabViewState extends State<SuperTabView>
                 _options(group, views: _menuNamesViews),
               ),
             ],
-            if (!showRoster)
-              fingerTarget(
-                enabled: _phone,
-                AppIconButton(
-                  icon: AppIcons.users,
-                  tooltip: 'Members and machines',
-                  selected: _rosterOpen,
-                  onPressed: _toggleRoster,
+          ],
+          // The right column opens only from here (Quiet Swarm, Dee,
+          // 2026-11-02): closed at rest, at every width.
+          if (group != null &&
+              !_listViewHoldsThePane &&
+              !oneBuddy &&
+              !_devicesVisible)
+            fingerTarget(
+              enabled: _phone,
+              AppIconButton(
+                key: const ValueKey('super-members-button'),
+                icon: AppIcons.users,
+                tooltip: 'Members',
+                selected: _rosterOpen,
+                onPressed: _toggleRoster,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  static const _menuStyle = MenuStyle(
+    minimumSize: WidgetStatePropertyAll(Size(220, 0)),
+    padding: WidgetStatePropertyAll(EdgeInsets.all(grid.AppDesktop.menuInset)),
+  );
+
+  ButtonStyle _menuRowStyle({bool finger = false}) => ButtonStyle(
+    minimumSize: WidgetStatePropertyAll(Size(208, finger ? kFingerTarget : 32)),
+    side: WidgetStatePropertyAll(BorderSide.none),
+    padding: WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 12)),
+    alignment: Alignment.centerLeft,
+    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  );
+
+  /// A menu's row, a finger's height on a phone.
+  Widget _menuItem(
+    String label,
+    VoidCallback? action, {
+    bool finger = false,
+    Widget? trailing,
+  }) => MenuItemButton(
+    style: _menuRowStyle(finger: finger),
+    trailingIcon: trailing,
+    onPressed: action,
+    child: Text(label),
+  );
+
+  /// The reader's own setting for a chat, kept on every device (Slack's channel
+  /// notifications); a viewer has one too. A row like its menu's others, as
+  /// tall as their [finger] rows (Huy, #2342: the chat menu's had a border).
+  Widget _notifyMenu(SuperTabConversation group, {required bool finger}) =>
+      SubmenuButton(
+        key: const ValueKey('super-notify-menu'),
+        style: _menuRowStyle(finger: finger),
+        submenuIcon: const WidgetStatePropertyAll(
+          Icon(AppIcons.chevronRight, size: 14),
+        ),
+        menuChildren: [
+          for (final (level, label) in const [
+            (SuperTabNotify.all, 'All new messages'),
+            (SuperTabNotify.mentions, 'Mentions only'),
+            (SuperTabNotify.muted, 'Muted'),
+          ])
+            MenuItemButton(
+              key: ValueKey('super-notify-${level.name}'),
+              style: _menuRowStyle(finger: finger),
+              leadingIcon: SizedBox(
+                width: 16,
+                child: c.notifyOf(group.id) == level
+                    ? const Icon(AppIcons.check, size: 14)
+                    : null,
+              ),
+              onPressed: () => unawaited(_setNotify(group.id, level)),
+              child: Text(label),
+            ),
+        ],
+        child: const Text('Notifications'),
+      );
+
+  /// Until all of the project's closed groups are read, it may have archived
+  /// ones: the list reads them when it opens.
+  bool _mayHaveArchived(String projectId) =>
+      !c.dormantLoaded(projectId) ||
+      c.hasEarlierDormant(projectId) ||
+      c.snapshot?.conversations.any(
+            (g) => g.archived && g.projectId == projectId,
+          ) ==
+          true;
+
+  /// A project's chat header, `# name ▾`, which opens its menu (Quiet Swarm,
+  /// screen 9).
+  Widget _projectMenu(
+    SuperTabConversation group,
+    String name,
+    TextStyle style,
+  ) {
+    final project = c.snapshot!.projectFor(group.id)!;
+    final editable = c.canWrite && !c.saving && !c.hasPendingAction;
+    final owner = project.ownerId == c.accountId;
+    Widget item(String label, VoidCallback? action, {Widget? trailing}) =>
+        _menuItem(label, action, finger: _phone, trailing: trailing);
+    return MenuAnchor(
+      style: _menuStyle,
+      menuChildren: [
+        item(
+          'Status',
+          project.status == null
+              ? null
+              : () => unawaited(
+                  showSuperTabProjectStatus(context, c, project.id),
+                ),
+          trailing: const Icon(AppIcons.chevronRight, size: 14),
+        ),
+        item('Pull requests', _openPullRequests),
+        // Every member reads the project's instructions; a backend without
+        // them sends no coordinatorName.
+        if (project.hasInstructions)
+          item('Instructions', () => _groupAction('instructions', group)),
+        if (editable && owner)
+          item('Sharing', () => _groupAction('sharing', group)),
+        _notifyMenu(group, finger: _phone),
+        const Divider(height: 9),
+        item(
+          'Project settings…',
+          () => unawaited(_projectSettings(group, project)),
+        ),
+      ],
+      builder: (context, menu, _) => Tooltip(
+        message: 'Project options',
+        child: InkWell(
+          key: const ValueKey('super-project-menu'),
+          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+          onTap: () => menu.isOpen ? menu.close() : menu.open(),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child: Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: style,
                 ),
               ),
-          ],
+              const SizedBox(width: 4),
+              Icon(
+                AppIcons.chevronDown,
+                size: AppIcons.inlineSize,
+                color: DesktopChrome.muted,
+              ),
+            ],
+          ),
         ),
-      );
+      ),
+    );
+  }
+
+  Future<void> _projectSettings(
+    SuperTabConversation group,
+    SuperTabProject project,
+  ) {
+    final editable = c.canWrite && !c.saving && !c.hasPendingAction;
+    final owner = project.ownerId == c.accountId;
+    void act(String action) => unawaited(_groupAction(action, group));
+    return showProjectSettings(context, c, project, [
+      if (editable && owner) ('Rename project', () => act('rename')),
+      ('Project details', () => act('details')),
+      // While the PM has a switch under way, there is nothing to ask for.
+      if (editable &&
+          c.snapshot?.maySwitchLead(project.id, c.accountId) == true &&
+          c.snapshot?.leadOf(project.id)?.switchRequest == null)
+        ('Switch PM…', () => act('switch-pm')),
+      if (_mayHaveArchived(group.projectId))
+        ('Archived conversations', () => act('archived')),
+      if (editable && owner) ('Delete Project', () => act('delete')),
+    ], rowHeight: _phone ? kFingerTarget : 32);
+  }
 
   /// The group's ⋮ menu. With [views] (a phone) it opens on the views the
   /// header has no room for — the group's terminals and its pull requests —
   /// each a finger's height.
   Widget _options(SuperTabConversation group, {bool views = false}) {
-    final project = c.snapshot?.projectFor(group.id);
-    final isProject = c.snapshot?.isProjectLead(group.id) == true;
     final editable = c.canWrite && !c.saving && !c.hasPendingAction;
-    Widget item(String label, VoidCallback? action) => MenuItemButton(
-      style: ButtonStyle(
-        minimumSize: WidgetStatePropertyAll(
-          Size(208, views ? kFingerTarget : 32),
-        ),
-        side: WidgetStatePropertyAll(BorderSide.none),
-        padding: WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 12)),
-        alignment: Alignment.centerLeft,
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      ),
-      onPressed: action,
-      child: Text(label),
-    );
+    Widget item(String label, VoidCallback? action) =>
+        _menuItem(label, action, finger: views);
     return MenuAnchor(
-      style: const MenuStyle(
-        minimumSize: WidgetStatePropertyAll(Size(220, 0)),
-        padding: WidgetStatePropertyAll(EdgeInsets.all(6)),
-      ),
+      style: _menuStyle,
       menuChildren: [
         if (views) ...[
           item(
@@ -2535,25 +2770,7 @@ class _SuperTabViewState extends State<SuperTabView>
           item('Pull requests', _openPullRequests),
           const Divider(height: 9),
         ],
-        if (isProject) ...[
-          if (editable && project?.ownerId == c.accountId)
-            item('Rename project', () => _groupAction('rename', group)),
-          item('Project details', () => _groupAction('details', group)),
-          if (editable && project?.ownerId == c.accountId)
-            item('Sharing', () => _groupAction('sharing', group)),
-          // Every member reads the project's instructions; a backend without
-          // them sends no coordinatorName.
-          if (project?.hasInstructions == true)
-            item('Instructions', () => _groupAction('instructions', group)),
-          // While the PM has a switch under way, there is nothing to ask for.
-          if (editable &&
-              project != null &&
-              c.snapshot?.maySwitchLead(project.id, c.accountId) == true &&
-              c.snapshot?.leadOf(project.id)?.switchRequest == null)
-            item('Switch PM…', () => _groupAction('switch-pm', group)),
-          if (editable && project?.ownerId == c.accountId)
-            item('Delete Project', () => _groupAction('delete', group)),
-        ] else if (_isBuddyChat(group)) ...[
+        if (_isBuddyChat(group)) ...[
           // A Buddy chat is the reader's own: the Buddy itself to name, any
           // time, and to remove. Nothing to archive, and no way to a Chat with
           // PM (Ken, 10-28).
@@ -2599,48 +2816,14 @@ class _SuperTabViewState extends State<SuperTabView>
             ),
           ],
         ],
-        // The reader's own setting for this chat, kept on every device
-        // (Slack's channel notifications); a viewer has one too.
-        SubmenuButton(
-          key: const ValueKey('super-notify-menu'),
-          menuChildren: [
-            for (final (level, label) in const [
-              (SuperTabNotify.all, 'All new messages'),
-              (SuperTabNotify.mentions, 'Mentions only'),
-              (SuperTabNotify.muted, 'Muted'),
-            ])
-              MenuItemButton(
-                key: ValueKey('super-notify-${level.name}'),
-                leadingIcon: SizedBox(
-                  width: 16,
-                  child: c.notifyOf(group.id) == level
-                      ? const Icon(AppIcons.check, size: 14)
-                      : null,
-                ),
-                onPressed: () => unawaited(_setNotify(group.id, level)),
-                child: Text(label),
-              ),
-          ],
-          child: const Text('Notifications'),
-        ),
-        // Until all of the project's closed groups are read, it may have
-        // archived ones: the list reads them when it opens.
-        if (!c.dormantLoaded(group.projectId) ||
-            c.hasEarlierDormant(group.projectId) ||
-            c.snapshot?.conversations.any(
-                  (g) => g.archived && g.projectId == group.projectId,
-                ) ==
-                true)
+        _notifyMenu(group, finger: views),
+        if (_mayHaveArchived(group.projectId))
           item('Archived conversations', () => _groupAction('archived', group)),
       ],
       builder: (context, menu, _) => AppIconButton(
         key: const ValueKey('super-group-options'),
         icon: AppIcons.ellipsisVertical,
-        tooltip: isProject
-            ? 'Project options'
-            : _isBuddyChat(group)
-            ? 'Buddy options'
-            : 'Workgroup options',
+        tooltip: _isBuddyChat(group) ? 'Buddy options' : 'Workgroup options',
         onPressed: () => menu.isOpen ? menu.close() : menu.open(),
       ),
     );
@@ -2795,8 +2978,33 @@ class _SuperTabViewState extends State<SuperTabView>
     bool inThread = false,
   }) {
     _index();
-    if (message.terminalEvent || message.source['kind'] == 'overlap') {
-      return SuperTabTerminalRow(
+    // A task's message and a Buddy's proposal are one line that opens (Quiet
+    // Swarm, screens 1 and 2); inside its own thread, a proposal reads whole.
+    if (message.isTaskLine) {
+      final taskId = message.source['taskId'];
+      return SuperTabTaskLine(
+        key: ValueKey('super-message-${message.id}'),
+        message: message,
+        readerId: c.accountId,
+        onOpen: taskId is String && c.snapshot?.conversation(taskId) != null
+            ? () => _openTask(taskId, message.id)
+            : null,
+      );
+    }
+    final proposer = inThread ? null : _proposalOwner(message);
+    if (proposer != null) {
+      return SuperTabProposalLine(
+        key: ValueKey('super-message-${message.id}'),
+        message: message,
+        owner: proposer,
+        onOpen: () {
+          setState(() => _openedTask = null);
+          c.openThread(message.id);
+        },
+      );
+    }
+    if (SuperTabShipRow.shows(message)) {
+      return SuperTabShipRow(
         key: ValueKey(
           '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
         ),
@@ -2804,8 +3012,8 @@ class _SuperTabViewState extends State<SuperTabView>
         controller: c,
       );
     }
-    if (SuperTabShipRow.shows(message)) {
-      return SuperTabShipRow(
+    if (message.terminalEvent) {
+      return SuperTabTerminalRow(
         key: ValueKey(
           '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
         ),
@@ -2985,6 +3193,9 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The open thread of the selected conversation, beside the chat.
   Widget? _threadPanel() {
     final open = c.openedThread;
+    // A thread opened from anywhere takes the panel's place, for good.
+    if (open != null) _openedTask = null;
+    if (_taskPanel() case final panel?) return panel;
     if (open == null || open.conversationId != c.selectedId) return null;
     final rows = c.threadMessages(open.root);
     final byId = {for (final m in rows) m.id: m};
@@ -2998,6 +3209,42 @@ class _SuperTabViewState extends State<SuperTabView>
       sessionActivity: (session) =>
           superTabSessionActivity(c, widget.app, session),
       machineName: widget.machineName,
+    );
+  }
+
+  /// The task a line opened beside its project's chat (Quiet Swarm, screen 3):
+  /// which, and the line, whose word the panel says.
+  ({String id, String line, String chat})? _openedTask;
+
+  void _openTask(String taskId, String line) {
+    c.closeThread();
+    setState(() => _openedTask = (id: taskId, line: line, chat: c.selectedId));
+  }
+
+  Widget? _taskPanel() {
+    final open = _openedTask;
+    final task = open == null ? null : c.snapshot?.conversation(open.id);
+    if (open == null || task == null || open.chat != c.selectedId) return null;
+    final line = c
+        .messages(open.chat)
+        .where((m) => m.id == open.line)
+        .firstOrNull;
+    final byId = {for (final m in c.taskMessages(open.id)) m.id: m};
+    return SuperTabTaskPanel(
+      key: ValueKey('super-task-panel-${open.id}'),
+      controller: c,
+      taskId: open.id,
+      word: line == null ? '' : superTabTaskWord(line, c.accountId),
+      mark: line == null ? null : superTabTaskMark(line),
+      // The whole conversation (screen 3): agents answer with replies.
+      rows: () => _shownMessages(open.id, replies: true),
+      row: (message) => _message(message, false, byId, inThread: true),
+      outgoing: (sent) => _outgoingRow(sent, byId, grouped: false),
+      onClose: () => setState(() => _openedTask = null),
+      onOpenInFull: () {
+        setState(() => _openedTask = null);
+        unawaited(c.select(open.id));
+      },
     );
   }
 
@@ -3283,8 +3530,6 @@ class _SuperTabViewState extends State<SuperTabView>
           _ => false,
         },
       );
-    // The controller these rows were built for, read when a row is pressed.
-    final shownFor = c;
     Widget row(int index) {
       final entry = entries[index];
       final message = entry.message;
@@ -3303,26 +3548,8 @@ class _SuperTabViewState extends State<SuperTabView>
                 previous?.createdAt?.toLocal(),
               ))
             _date(time),
-          if (message.id == _unread.lineAt(c.selectedId)) ...[
+          if (message.id == _unread.lineAt(c.selectedId))
             SuperTabNewMessagesLine(key: _unread.key),
-            if (_unread.catchUps.of(c.selectedId) case final summary?)
-              SuperTabCatchUpCard(
-                summary: summary,
-                onOpen: (messageId) =>
-                    unawaited(_openMessage(c.selectedId, messageId)),
-                onClose: () =>
-                    setState(() => _unread.catchUps.dismiss(c.selectedId)),
-                // Activity lists only the reader's own decisions and tags.
-                onOpenDecisions: () => _openActivity(
-                  filter: SuperTabActivityFilter.decisions,
-                  from: shownFor,
-                ),
-                onOpenMentions: () => _openActivity(
-                  filter: SuperTabActivityFilter.mentions,
-                  from: shownFor,
-                ),
-              ),
-          ],
           // The message itself is kept in place: its
           // date moves above earlier ones as they come.
           _BuiltRow(
@@ -3423,16 +3650,6 @@ class _SuperTabViewState extends State<SuperTabView>
             decisions: SuperTabDecisions.of(c),
             projectId: group.projectId,
           ),
-        // A project's chat opens with its status card: the coordinator's
-        // progress, replaced in place, and what waits on the reader there.
-        if (group != null && c.snapshot?.isProjectLead(group.id) == true)
-          for (final project in c.snapshot!.projects)
-            if (project.leadConversationId == group.id)
-              SuperTabProjectStatusCard(
-                key: ValueKey('super-project-status-card-${project.id}'),
-                controller: c,
-                projectId: project.id,
-              ),
         Expanded(
           child: c.loading
               ? const Center(child: CircularProgressIndicator())
@@ -4092,10 +4309,13 @@ class _SuperTabViewState extends State<SuperTabView>
   // Every message's files ask this Swarm's controller for fresh links; another
   // Swarm or account is another source, so a late answer is dropped.
   @override
-  Widget build(BuildContext context) => SuperTabFiles(
-    fresh: widget.controller.readFileLink,
-    child: _swarm(context),
-  );
+  Widget build(BuildContext context) {
+    _syncThreadPane();
+    return SuperTabFiles(
+      fresh: widget.controller.readFileLink,
+      child: _swarm(context),
+    );
+  }
 
   Widget _swarm(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
@@ -4103,14 +4323,16 @@ class _SuperTabViewState extends State<SuperTabView>
       final terminal = widget.terminal;
       final narrow =
           constraints.maxWidth < MediaQuery.textScalerOf(context).scale(720);
-      final showRoster =
+      // Wide enough for a right column beside the chat; it shows only an
+      // open thread or Members, closed at rest (Quiet Swarm, 2026-11-02).
+      final wide =
           constraints.maxWidth >= MediaQuery.textScalerOf(context).scale(1080);
       final thread = _threadPanel();
-      final threadDrawer = thread != null && !showRoster;
+      // A thread opened since Members takes its side and closes it.
+      if (thread != null) _rosterOpen = false;
+      final threadDrawer = thread != null && !wide;
       final chatCovered =
-          (narrow && _sidebarOpen) ||
-          (!showRoster && _rosterOpen) ||
-          threadDrawer;
+          (narrow && _sidebarOpen) || (!wide && _rosterOpen) || threadDrawer;
       if (_chatCovered && !chatCovered) {
         // Both dismissing a drawer and widening the window reveal the cached
         // transcript without loading another message.
@@ -4129,6 +4351,7 @@ class _SuperTabViewState extends State<SuperTabView>
           setState(() {
             _showPullRequests = false;
             _rosterOpen = false;
+            _showManage = _showNotifications = false;
           });
           (widget.onChooseAgentTerminal ?? widget.onOpenTerminal)(agent);
         },
@@ -4143,6 +4366,7 @@ class _SuperTabViewState extends State<SuperTabView>
           });
           unawaited(c.select(id));
         },
+        onClose: _closeRoster,
       );
       return Focus(
         canRequestFocus: false,
@@ -4157,21 +4381,32 @@ class _SuperTabViewState extends State<SuperTabView>
                 onLeave: _leaveResize,
                 left: narrow ? null : _sidebar(),
                 // An open thread takes the roster's side, as in Slack.
-                right: !showRoster ? null : thread ?? roster,
+                right: !wide ? null : thread ?? (_rosterOpen ? roster : null),
                 rightDefault: thread == null
                     ? SuperTabPaneLayout.rightWidth
                     : SuperTabPaneLayout.threadWidth,
                 center: Column(
                   children: [
-                    _header(c.selected, narrow, showRoster),
+                    _header(c.selected, narrow),
+                    if (_manageOpen)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: SuperTabManageTabs(
+                          selected: _devicesVisible
+                              ? SuperTabManageTab.devices
+                              : _manageTab,
+                          devices: _hasDevices,
+                          onChoose: _chooseManageTab,
+                        ),
+                      ),
                     Expanded(
-                      child: IndexedStack(
+                      child: SuperTabPages(
                         index: _devicesVisible
                             ? 1
+                            : _manageVisible
+                            ? 4
                             : _notificationsVisible
                             ? 3
-                            : _threadsVisible
-                            ? 4
                             : c.snapshot?.projects.isEmpty == true
                             ? 0
                             : _terminalsVisible
@@ -4194,15 +4429,23 @@ class _SuperTabViewState extends State<SuperTabView>
                                   activity: SuperTabActivity.of(c),
                                   onOpenMention: (mention) =>
                                       unawaited(_openMention(mention)),
-                                  onOpenMessage: (id, messageId) =>
-                                      unawaited(_openMessage(id, messageId)),
+                                  onOpenThread: _openThreadFromList,
+                                  onOpenConversation: _openConversation,
                                 )
                               : const SizedBox.shrink(),
-                          _threadsVisible
-                              ? SuperTabThreadsView(
-                                  attention: SuperTabAttention.of(c),
-                                  onOpen: _openThreadFromList,
-                                  machineName: widget.machineName,
+                          _manageVisible
+                              ? SuperTabManagePage(
+                                  controller: c,
+                                  app: widget.app,
+                                  board: _board,
+                                  tab: _manageTab,
+                                  onAddAgent: widget.onAddAgent,
+                                  onOpenAgent: (agent) {
+                                    setState(() => _showManage = false);
+                                    (widget.onChooseAgentTerminal ??
+                                            widget.onOpenTerminal)
+                                        .call(agent);
+                                  },
                                 )
                               : const SizedBox.shrink(),
                         ],
@@ -4216,7 +4459,10 @@ class _SuperTabViewState extends State<SuperTabView>
               Positioned.fill(
                 child: BlockSemantics(
                   child: GestureDetector(
-                    onTap: c.closeThread,
+                    onTap: () {
+                      setState(() => _openedTask = null);
+                      c.closeThread();
+                    },
                     child: ColoredBox(
                       color: grid.AppDesktop.veil(Theme.of(context).brightness),
                       child: Align(
@@ -4237,7 +4483,7 @@ class _SuperTabViewState extends State<SuperTabView>
                   ),
                 ),
               ),
-            if (!showRoster && _rosterOpen && !threadDrawer)
+            if (!wide && _rosterOpen && !threadDrawer)
               Positioned.fill(
                 child: BlockSemantics(
                   child: FocusScope(

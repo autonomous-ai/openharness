@@ -8,6 +8,7 @@ import 'package:harness_mobile/phone/out_of_sight.dart';
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/phone/tty.dart';
+import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
@@ -60,8 +61,8 @@ bool swarmHomeListed(SwarmInbox inbox, String swarmId, String projectId) {
 
 /// Swarm Home, direction C (Tony's prototype C1, 2026-10-30), the Home tab:
 /// its title the Swarm shown, with a switcher to every Swarm, All Swarms and
-/// Join or create ([showSwarmSwitcher]); While you were away, once the person
-/// has been gone a while ([SwarmAwayCard]); then Threads; then the projects
+/// Join or create ([showSwarmSwitcher]); While you were away, whenever there is
+/// a Swarm to report on ([SwarmAwayCard]); then Threads; then the projects
 /// they pinned on this phone, then the others by their latest activity,
 /// those quiet for a day folded under "Other projects" ([swarmHomeLists]).
 /// Every Swarm's, or the one picked ([SwarmHomePrefs.swarmId]). A round +
@@ -84,7 +85,7 @@ class SwarmPage extends StatefulWidget {
   /// What a project's last move, and the time away, is measured from.
   final DateTime Function() now;
 
-  /// Gone for less is no time away: no card.
+  /// Gone for less, While you were away stays on the time away it was showing.
   static const awayAfter = Duration(minutes: 5);
 
   @override
@@ -127,10 +128,28 @@ class _SwarmPageState extends State<SwarmPage> {
     _lifecycle = AppLifecycleListener(
       onHide: () => _session?.home.seen(widget.now()),
       onShow: () => setState(() {
+        final now = widget.now();
+        final left = _session?.home.seenAt;
+        // A moment away ends nothing: a phone locked or an app glanced at must
+        // not turn "2h, 9 done" into "now, 0 done" for someone still reading it.
+        if (_awaySpansTime &&
+            left != null &&
+            now.difference(left) < SwarmPage.awayAfter) {
+          return;
+        }
         _awayRead = false;
-        _back = widget.now();
+        _back = now;
       }),
     );
+  }
+
+  /// Whether the time away read last was a real one ([SwarmPage.awayAfter]).
+  bool get _awaySpansTime {
+    final since = _away, back = _back;
+    return _awayRead &&
+        since != null &&
+        back != null &&
+        back.difference(since) >= SwarmPage.awayAfter;
   }
 
   @override
@@ -219,7 +238,7 @@ class _SwarmPageState extends State<SwarmPage> {
         appLog.warn('swarm', 'Computers not looked for', error: failure);
       }
     }
-    await inbox.refresh();
+    await inbox.refreshAll();
   }
 
   /// Whether Home offers New message: a Swarm to post in may be there, or
@@ -489,10 +508,11 @@ class _SwarmPageState extends State<SwarmPage> {
     ];
   }
 
-  /// While you were away, once the person has been gone [SwarmPage.awayAfter]
-  /// or more: the work done since in the Swarms shown and what needs them
+  /// While you were away: the work done in the Swarms shown since the person
+  /// last left the app, or on a first open since it opened, and what needs them
   /// there now, each a skeleton while the Swarms, or what waits in them, are
-  /// not read. A tap opens Activity.
+  /// not read. Always there, unless no Swarm is left to report on. A tap opens
+  /// Activity.
   Widget? _awayCard(
     BuildContext context,
     SwarmSession session,
@@ -505,14 +525,14 @@ class _SwarmPageState extends State<SwarmPage> {
       _away = home.seenAt;
       _awayRead = true;
     }
-    final since = _away;
+    // Not known yet: drawn as "now" for a moment, it would then jump.
+    if (!home.loaded) return null;
     // Decided at the return: time in the foreground is no time away.
     final back = _back ?? now;
-    if (since == null || back.difference(since) < SwarmPage.awayAfter) {
-      return null;
-    }
+    final since = _away ?? back;
     final inbox = session.inbox;
     final listing = swarmHomeListing(inbox);
+    if (!listing && shown.isEmpty) return null;
     // A Swarm not read leaves the work done unknown; one no read will bring is
     // left out, or its skeleton would never end.
     int? done = listing ? null : 0;
@@ -585,11 +605,12 @@ class _SwarmPageState extends State<SwarmPage> {
           final news = swarmProjectNews(reader, inbox.asks(swarm.id));
           final activity = swarmProjectActivity(snapshot, reader.buddies);
           for (final project in snapshot.projects) {
+            final projectNews = news[project.id];
             final row = SwarmHomeProject(
               swarmId: swarm.id,
               project: project,
               active: activity[project.id],
-              news: news[project.id] ?? swarmNoNews,
+              news: projectNews ?? swarmNoProjectNews,
             );
             projects.add(row);
             glances[row.key] = swarmTeamGlance(snapshot, projectId: project.id);
@@ -653,9 +674,35 @@ class _SwarmPageState extends State<SwarmPage> {
             onTap: () => unawaited(_newProject(session, shown)),
           )
         : null;
+    final invited = inbox.invitations;
     return [
+      if (invited.isNotEmpty) ...[
+        SwarmCaption('Invitations', first: first),
+        SwarmGroup(
+          children: [
+            for (final invitation in invited)
+              SwarmInvitationRow(
+                key: ValueKey('swarm-invitation-${invitation.inviteId}'),
+                invitation: invitation,
+                joining: inbox.joining.contains(invitation.inviteId),
+                onJoin: () => unawaited(inbox.join(invitation)),
+                onLater: () => inbox.notNow(invitation),
+              ),
+          ],
+        ),
+        if (inbox.joinError case final error?)
+          Padding(
+            key: const ValueKey('swarm-invitation-error'),
+            padding: const EdgeInsets.only(top: AppSpace.s),
+            child: Text(
+              error,
+              style: Tty.of(context)
+                  .style(color: Tty.of(context).red, size: TtySize.meta),
+            ),
+          ),
+      ],
       if (lists.pinned.isNotEmpty) ...[
-        SwarmCaption('Pinned', first: first),
+        SwarmCaption('Pinned', first: first && invited.isEmpty),
         SwarmGroup(children: [for (final p in lists.pinned) row(p)]),
       ],
       if (lists.recent.isNotEmpty ||
@@ -664,7 +711,10 @@ class _SwarmPageState extends State<SwarmPage> {
           nothingListed ||
           mentionsFailed ||
           create != null) ...[
-        SwarmCaption('Projects', first: first && lists.pinned.isEmpty),
+        SwarmCaption(
+          'Projects',
+          first: first && invited.isEmpty && lists.pinned.isEmpty,
+        ),
         SwarmGroup(
           children: [
             if (empty) const SwarmRow(title: 'No project yet', onTap: null),
@@ -702,7 +752,10 @@ class _SwarmPageState extends State<SwarmPage> {
           ],
         ),
       ] else if (reading.isNotEmpty || failed.isNotEmpty)
-        SwarmCaption('Projects', first: first && lists.pinned.isEmpty),
+        SwarmCaption(
+          'Projects',
+          first: first && invited.isEmpty && lists.pinned.isEmpty,
+        ),
       // A Swarm still to be read has its skeleton below: one is enough.
       if (mentionsComing && reading.isEmpty) ...[
         const SizedBox(height: 8),

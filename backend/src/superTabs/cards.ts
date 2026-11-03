@@ -12,6 +12,8 @@ export interface GroupCards {
   task?: string
   /** Each linked pull request's card: the first main-chat message that linked it, and when a merge was recorded. */
   pullRequests?: PullRequestCard[]
+  /** Its one line in its project chat and what it last showed (taskLine.ts). */
+  line?: import('./taskLine.js').TaskLine
 }
 export interface PullRequestCard { url: string; messageId: string; mergedAt?: number }
 
@@ -46,13 +48,9 @@ export function recordCardMerged(group: Conversation, url: string, mergedAt: num
 
 /** Every link [group] holds is its project's own pull request, once: a link into any other repository (another owner's
  *  included) is dropped, a spelling is made the project's, and cards that now name one pull request become one (the earliest
- *  message, the earliest merge). Merged and awaited links are kept the same way. */
+ *  message, the earliest merge). */
 export function cleanPullRequestLinks(group: Conversation, repositoryUrl: string | null | undefined): void {
   if (group.pullRequestUrls) appendPullRequestUrls(group, [], repositoryUrl)
-  const ledger = group.ledger
-  for (const key of ['mergedUrls', 'shipWaiting'] as const) {
-    if (ledger?.[key]) ledger[key] = [...new Set(ledger[key].flatMap(url => projectPullRequestUrl(url, repositoryUrl) ?? []))]
-  }
   const cards = group.cards?.pullRequests
   if (!cards?.some(card => projectPullRequestUrl(card.url, repositoryUrl) !== card.url)) return
   const kept = new Map<string, PullRequestCard>()

@@ -10,6 +10,12 @@
 
 **Spec:** Task #2081 (Diego), brief in the Swarm; ruling by the Lead in the task: an owner is never changed; another owner's link is dropped from text and refused when a command records it. Process note: the project's instructions could not be read when work began (`TEAM_SESSION_LIMITED`), so this plan was written after the first code commit rather than before it.
 
+> **Merged with main, 2026-11-03 (River's call in task #2081):** main replaced the project chat's Shipped line with each task's
+> own line, which reads shipped at its first recorded merge (`taskLine.ts`, #2633). Task 2 below is therefore superseded and
+> removed: its ship logic, ledger fields and tests are gone, and the task line is the ship moment. Tasks 1 and 3 stay; Task 1
+> now uses main's `githubRepository` (`backend/src/github/repository.ts`) instead of a second parser. Waiting for every pull
+> request before "shipped" would be a follow-up task.
+
 ## Global Constraints
 
 - A recorded PR link points at the project's own repository (`autonomous-ai/openharness`); an owner is never guessed or corrected.
@@ -70,7 +76,7 @@ After
 - [x] **Step 5: Integration test** — `superTabs.test.ts` "records a link under the project's repository and corrects the record it held before".
 - [x] **Step 6: Commit.**
 
-### Task 2: Shipped after the merge (backend)
+### Task 2: Shipped after the merge (backend) — superseded by main's task line (see the note above)
 
 **Files:**
 - Modify: `backend/src/superTabs/ship.ts`, `commands.ts`, `leaderboard/record.ts`

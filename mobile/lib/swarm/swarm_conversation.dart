@@ -7,6 +7,7 @@ import 'model.dart';
 import 'prompt_alerts.dart';
 import 'swarm_chat_cache.dart';
 import 'swarm_buddy.dart' show swarmIsOldBuddyChat;
+import 'swarm_buddy_sessions.dart';
 import 'swarm_outbox.dart';
 import 'swarm_outgoing_files.dart';
 import 'swarm_reader.dart';
@@ -51,6 +52,76 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     reader.addListener(_swarmChanged);
     reader.reads.addListener(_swarmChanged);
     files.addListener(_filesChanged);
+    _composer.addListener(_keepDraft);
+    _takeKept();
+  }
+
+  /// What a person wrote and has not got through, from before this chat was
+  /// opened: its draft, and its posts as Not sent. A read that holds one drops
+  /// it ([SwarmOutbox.settle]).
+  void _takeKept() {
+    final kept = reader.kept;
+    if (kept == null || _disposed) return;
+    if (!kept.loaded) {
+      kept.addListener(_takeKeptOnce);
+      return;
+    }
+    if (_draft.isEmpty) {
+      if (kept.draft(reader.tabId, id, null) case final draft?) {
+        _draft = _keptDraft = draft.text;
+        _mentions.addAll(draft.mentions);
+      }
+    }
+    if (_outbox.isEmpty) {
+      final posts = [
+        for (final row in kept.posts(reader.tabId, id, null))
+          ?SwarmPost.fromKept(row, _heldOf),
+      ];
+      if (posts.isNotEmpty) _outbox.restore(posts);
+    }
+    _composer.changed();
+  }
+
+  void _takeKeptOnce() {
+    reader.kept?.removeListener(_takeKeptOnce);
+    _takeKept();
+  }
+
+  /// What a kept post puts back in the box if it is refused: only its words.
+  static Object? _heldOf(String text) => (
+    draft: text,
+    mentions: const <String, String>{},
+    replyTo: null as SuperTabMessage?,
+    newSession: false,
+    sessionProjectId: null as String?,
+  );
+
+  String _keptDraft = '';
+
+  void _keepDraft() {
+    if (_disposed || _refused || _draft == _keptDraft) return;
+    _keptDraft = _draft;
+    reader.kept?.setDraft(reader.tabId, id, null, _draft, _mentions);
+  }
+
+  void _keepPosts() {
+    if (_disposed) return;
+    reader.kept?.setPosts(reader.tabId, id, null, [
+      for (final post in _outbox.posts)
+        if (post.state != SwarmPostState.confirmed) post.kept,
+    ]);
+  }
+
+  /// Takes [post], Not sent, away for good: Delete. It may still have arrived,
+  /// and then it shows when the chat is next read.
+  void deletePost(SwarmPost post) {
+    if (_disposed || post.state != SwarmPostState.unconfirmed) return;
+    _uploads.forget(post.files);
+    _outbox.remove(post);
+    if (error != null && error == _postError && _outbox.unconfirmed == null) {
+      error = null;
+      _tell();
+    }
   }
 
   final SwarmReader reader;
@@ -125,8 +196,13 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   /// `threadDraft`): a thread closed and opened again finds it.
   final _threadDrafts = <String, String>{};
 
-  String threadDraft(String root) => _threadDrafts[root] ?? '';
+  String threadDraft(String root) =>
+      _threadDrafts[root] ??
+      reader.kept?.draft(reader.tabId, id, root)?.text ??
+      '';
   void setThreadDraft(String root, String text) {
+    if (_refused) return;
+    reader.kept?.setDraft(reader.tabId, id, root, text);
     if (text.isEmpty) {
       _threadDrafts.remove(root);
     } else {
@@ -237,6 +313,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     path: '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/commands',
     timeout: sendTimeout,
     onChanged: () {
+      _keepPosts();
       if (!_disposed) _tell();
     },
     onTaken: (post) {
@@ -257,7 +334,12 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
         _uploads.forget(post.files);
       }
       _restore(post);
-      error = post.error;
+      if (swarmRefusedForSessions(post)) {
+        swarmSessionsRefused(reader);
+        error = swarmSessionsUnavailable;
+      } else {
+        error = post.error;
+      }
     },
   );
 
@@ -314,6 +396,106 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   set replyingTo(SuperTabMessage? message) {
     _replyingTo = message;
     _composer.changed();
+  }
+
+  /// New session is chosen for the next post (Desktop's chat composer), and
+  /// the project it works in: none is All projects.
+  bool _newSession = false;
+  String? _sessionProjectId;
+
+  /// Whether the composer shows New session: the person's own Buddy chat, on
+  /// a server that takes it, where they may post. It may still show disabled,
+  /// saying why ([sessionBlocked]).
+  bool get offersSessions {
+    final group = conversation;
+    return group != null && canPost && swarmOffersChatSessions(reader, group);
+  }
+
+  /// Why New session cannot start a session now; null when it can.
+  String? get sessionBlocked {
+    final group = conversation;
+    return group == null || !offersSessions
+        ? null
+        : swarmSessionBlocked(reader, group);
+  }
+
+  /// Whether the next post starts a session: chosen, offered and not blocked.
+  bool get newSession =>
+      _newSession && offersSessions && sessionBlocked == null;
+  set newSession(bool value) {
+    if (_newSession == value) return;
+    _newSession = value;
+    _composer.changed();
+  }
+
+  /// The project the next session works in, while the person still reads it
+  /// (a lost one is no longer chosen); null is All projects: it reads every
+  /// project and sends no work to a PM.
+  String? get sessionProjectId =>
+      reader.snapshot?.projects.any((p) => p.id == _sessionProjectId) == true
+      ? _sessionProjectId
+      : null;
+  set sessionProjectId(String? value) {
+    if (_sessionProjectId == value) return;
+    _sessionProjectId = value;
+    _composer.changed();
+  }
+
+  /// The threads whose session an end is under way for.
+  final _ending = <String>{};
+
+  /// Why the last End session was refused; null when it was not. The page
+  /// that pressed it says it (the thread's).
+  String? endRefusal;
+
+  /// Whether an end is under way for [root]'s session.
+  bool endingSession(String root) => _ending.contains(root);
+
+  /// Ends [root]'s session in the person's own Buddy chat (Desktop's
+  /// `endThreadSession`): closing the thread only hides it, this stops it.
+  /// False when there is none, one end is already under way, or the backend
+  /// refused (said in [error]).
+  Future<bool> endSession(String root) async {
+    final group = conversation;
+    if (_disposed ||
+        group == null ||
+        !canPost ||
+        group.sessionFor(root) == null ||
+        !_ending.add(root)) {
+      return false;
+    }
+    endRefusal = null;
+    notifyListeners();
+    String? refused;
+    try {
+      await reader.request(
+        'POST',
+        '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/commands',
+        body: {
+          'operationId': superTabOperationId(),
+          'command': {
+            'type': 'buddy.sessionEnd',
+            'conversationId': id,
+            'thread': root,
+            'reason': 'ended',
+          },
+        },
+      );
+    } on SuperTabFailure catch (failure) {
+      refused = failure.message;
+    } catch (_) {
+      refused = 'The session did not end. Try again.';
+    }
+    if (_disposed) return refused == null;
+    _ending.remove(root);
+    if (refused != null) {
+      endRefusal = refused;
+    } else {
+      unawaited(reader.refresh());
+      unawaited(_reread());
+    }
+    notifyListeners();
+    return refused == null;
   }
 
   /// The person may post here: a writer of the Swarm, in a conversation that
@@ -513,8 +695,9 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
         error != null;
     _refused = true;
     _forget();
-    _draft = '';
+    _draft = _keptDraft = '';
     _threadDrafts.clear();
+    reader.kept?.dropChat(reader.tabId, id);
     // A thread's files go too; its own screen hears it and gives up theirs.
     for (final box in _threadFiles.values) {
       box.clear();
@@ -674,7 +857,10 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
         );
       }
       // A post read back shows as its message, once, whatever its answer.
-      changed |= _outbox.settle(messages);
+      if (_outbox.settle(messages)) {
+        changed = true;
+        _keepPosts();
+      }
       if (older || !_read || latest) {
         final before = SuperTabPage.read(answer['next']);
         changed |=
@@ -734,6 +920,8 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     if (ids == null || _disposed) return false;
     final body = _compose(ids);
     if (body == null) return false;
+    final startsSession = newSession;
+    final root = _replyingTo?.thread ?? _replyingTo?.id;
     final post = SwarmPost(
       body: body,
       messageId: superTabMessageId(
@@ -742,17 +930,40 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
         operationId: body['operationId'] as String,
       ),
       files: outgoing,
-      held: (draft: _draft, mentions: Map.of(_mentions), replyTo: _replyingTo),
+      held: (
+        draft: _draft,
+        mentions: Map.of(_mentions),
+        replyTo: _replyingTo,
+        newSession: _newSession,
+        sessionProjectId: _sessionProjectId,
+      ),
     );
     _draft = '';
     _mentions.clear();
+    _keepDraft();
     _replyingTo = null;
+    _newSession = false;
+    _sessionProjectId = null;
     // Only what goes with this post: more may have been added meanwhile.
     for (final file in outgoing) {
       files.remove(file);
     }
     error = null;
-    return _answered(post, await _outbox.add(post));
+    final taken = _answered(post, await _outbox.add(post));
+    // Its thread opens beside the chat: the session answers there. A
+    // top-level message is its own thread's root.
+    if (taken && startsSession) _startedRoot = root ?? post.messageId;
+    return taken;
+  }
+
+  String? _startedRoot;
+
+  /// The thread whose session the last post started, once the backend took
+  /// it; read once.
+  String? takeStartedSession() {
+    final root = _startedRoot;
+    _startedRoot = null;
+    return root;
   }
 
   /// Sends [post], not confirmed, again under its own operation id: the
@@ -1208,12 +1419,20 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
           String draft,
           Map<String, String> mentions,
           SuperTabMessage? replyTo,
+          bool newSession,
+          String? sessionProjectId,
         })) {
       return;
     }
     _draft = _draft.trim().isEmpty ? sent.draft : '${sent.draft}\n$_draft';
     _mentions.addAll(sent.mentions);
     _replyingTo ??= sent.replyTo;
+    // Refused for New session itself, it comes back without it, ready to send
+    // as a plain message; refused for anything else, the choice stays.
+    if (!swarmRefusedForSessions(post)) {
+      _newSession = _newSession || sent.newSession;
+      _sessionProjectId ??= sent.sessionProjectId;
+    }
     if (post.files.isNotEmpty) {
       final since = files.files;
       files
@@ -1250,12 +1469,18 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
         if (attachmentIds.isNotEmpty) 'attachmentIds': attachmentIds,
         // As the desktop's: the server refuses it in an older Buddy chat.
         if (reader.snapshot?.swarmBuddy == true) 'oneBuddy': true,
+        if (newSession) 'newSession': true,
+        // A New session in one project of the person's one Buddy chat.
+        if (newSession && sessionProjectId != null && group.isSwarmBuddyChat)
+          'sessionProjectId': sessionProjectId,
       },
     };
   }
 
   @override
   void dispose() {
+    _keepDraft();
+    reader.kept?.removeListener(_takeKeptOnce);
     _disposed = true;
     _uploads.close();
     _outbox.close();

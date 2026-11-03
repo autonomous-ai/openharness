@@ -163,33 +163,39 @@ void main() {
       });
     });
 
-    // A receipt moves on the delivery's own record, which no Swarm push names.
-    test(
-      'keeps the poll while the person\'s own message waits for its receipt',
-      () {
-        fakeAsync((async) {
-          final server = ConversationServer()..append('Build it');
-          server.messages.last['deliveries'] = [
-            {'id': 'd', 'agentId': 'lead-agent', 'status': 'queued'},
-          ];
-          final reads = _Reads(server);
-          final c = _controller(reads)..start();
-          async.flushMicrotasks();
-          _pushes(c);
-          reads.clear();
-          async.elapse(const Duration(seconds: 9));
-          expect(reads.states, 3);
-          server.messages.last['deliveries'] = [
-            {'id': 'd', 'agentId': 'lead-agent', 'status': 'answered'},
-          ];
-          async.elapse(const Duration(seconds: 3));
-          reads.clear();
-          async.elapse(const Duration(seconds: 30));
-          expect(reads.states, 0);
-          c.dispose();
-        });
-      },
-    );
+    // A receipt moves on the delivery's own record, which no Swarm push names:
+    // its row alone is read every 30 s, not the Swarm every 3 s (spec
+    // 2026-11-02-poll-cost, Part 2).
+    test('reads the person\'s own message while it waits for its receipt', () {
+      fakeAsync((async) {
+        final server = ConversationServer()..append('Build it');
+        server.messages.last['deliveries'] = [
+          {'id': 'd', 'agentId': 'lead-agent', 'status': 'queued'},
+        ];
+        final reads = _Reads(server);
+        final c = _controller(reads)..start();
+        async.flushMicrotasks();
+        _pushes(c);
+        reads.clear();
+        async.elapse(const Duration(seconds: 30));
+        expect(reads.states, 0);
+        expect(reads.paths, [
+          '/api/super-tabs/tab/conversations/lead/messages?messageId=message-1',
+        ]);
+        server.messages.last['deliveries'] = [
+          {'id': 'd', 'agentId': 'lead-agent', 'status': 'answered'},
+        ];
+        async.elapse(const Duration(seconds: 30));
+        expect(
+          c.messages('lead').single.deliveries.single['status'],
+          'answered',
+        );
+        reads.clear();
+        async.elapse(const Duration(seconds: 25));
+        expect(reads.paths, isEmpty);
+        c.dispose();
+      });
+    });
 
     test(
       'goes back to the 3 s poll once the server\'s word is over 5 minutes old',

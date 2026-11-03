@@ -44,7 +44,9 @@ export const routeRecordSchema = z.object({
     kind: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/).optional(),
     /** A person asked for a local model, or named one (cli superTabs/route.ts Assessment), kept with the decision. */
     local: z.literal(true).optional(), model: z.string().trim().min(1).max(200).optional() }).strict(),
-  candidates: z.array(routeCandidateSchema).min(1).max(12),
+  /** Every engine on every machine, a new agent and an idle member each (cli superTabs/route.ts RECORD_MAX, Ken 2026-11-03); 12
+   *  before, when the route showed one row a machine. */
+  candidates: z.array(routeCandidateSchema).min(1).max(64),
   excluded: z.array(z.object({ title: z.string().trim().min(1).max(160), reason: z.string().trim().min(1).max(500) }).strict()).max(200),
   floor: z.number().int().min(1).max(3),
   notes: z.boolean(),

@@ -15,7 +15,7 @@ vi.mock('./buddyHome.js', async (original) => ({ ...await original<object>(), pr
 const where = { port: 14001, machineId: 'lead-machine', dataDir: '/fixture' }
 /** A queued start is watched before the Lead moves on (startAgent); these tests read the queued answer at once. */
 const noPause = async () => {}
-function fixture(options: { state?: Record<string, unknown> | Error; githubApp?: boolean; refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; acceptedLaunchModel?: { model: string | null; effort: string | null }; refuseModel?: string; frame?: string; guest?: boolean; identity?: { sessionId: string; createdAt: string } } = {}) {
+function fixture(options: { state?: Record<string, unknown> | Error; refused?: string; loseClose?: boolean; githubApp?: boolean; refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; acceptedLaunchModel?: { model: string | null; effort: string | null }; refuseModel?: string; frame?: string; guest?: boolean; identity?: { sessionId: string; createdAt: string } } = {}) {
   const start = { creationId: 'super-native-receipt', error: null as string | null, request: { machineId: 'target', conversationId: 'group', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }, dispatched: false }
   let nativeState = 'missing', lostJoin = false
@@ -32,6 +32,7 @@ function fixture(options: { state?: Record<string, unknown> | Error; githubApp?:
       start.error = String(cmd.error)
     }
     if (cmd.type === 'agent.started' && lostJoin) { lostJoin = false; throw new Error('Join interrupted') }
+    if (cmd.type === 'agent.started' && options.refused) { start.error = options.refused; return { ok: true, value: { result: { refused: options.refused } } } }
     return { ok: true, value: { result: cmd.type === 'agent.start' ? { startId: 'start' } : { agentId: 'worker' } } }
   })
   const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}, _ms?: number): Promise<Record<string, unknown>> => {
@@ -50,6 +51,10 @@ function fixture(options: { state?: Record<string, unknown> | Error; githubApp?:
       if (options.refuseModel && payload.model !== undefined) return { error: options.refuseModel, detail: 'This daemon cannot launch with a model.' }
       if (options.refuse) return { error: options.refuse, detail: 'This agent does not support that permission mode.' }
       nativeState = 'created'; return { creationId: start.creationId, state: 'created', agent: { id: 'native', engine: 'claude', selectedModel: 'runtime-v1:native:claude:fixture-model@high', ...options.identity } }
+    }
+    if (type === 'agent_close') {
+      if (options.loseClose) throw new Error('Close interrupted')
+      return { closed: true, agentId: payload.agentId }
     }
     if (type === 'agent_create_cancel') {
       nativeState = 'cancelled'
@@ -71,6 +76,33 @@ async function onFakeClock<T>(run: () => Promise<T>): Promise<T> {
     return await result
   } finally { vi.useRealTimers() }
 }
+
+// Task #2248: the server answered that another coordinator was set while this one started, so it never joined.
+describe('a join the server refused', () => {
+  const closes = (f: { request: { mock: { calls: unknown[][] } } }) => f.request.mock.calls.filter(c => c[0] === 'agent_close')
+  const REASON = 'This project already has Mine as its Product Manager.'
+
+  it('closes the session this start created, and says why, with no model switch', async () => {
+    const f = fixture({ refused: REASON, frame: 'claude-opus-5-5' })
+    const result = await onFakeClock(() => startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open))
+    expect(closes(f)).toEqual([['agent_close', { agentId: 'native', mode: 'now' }, expect.any(Number)]])
+    expect(switchCall(f)).toBeUndefined()
+    expect(result).toMatchObject({ ok: false, error: REASON, startId: 'start', creationId: 'super-native-receipt', harnessId: 'native', refused: REASON })
+    expect(result).not.toHaveProperty('agentId')
+  })
+
+  it('says so when the session could not be closed', async () => {
+    const f = fixture({ refused: REASON, frame: 'claude-opus-5-5', loseClose: true })
+    const result = await onFakeClock(() => startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open))
+    expect(result).toMatchObject({ ok: false, refused: REASON, closeFailed: true })
+  })
+
+  it('closes nothing on a join that went through', async () => {
+    const f = fixture({ frame: 'claude-opus-5-5' })
+    expect(await onFakeClock(() => startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open))).toMatchObject({ ok: true, agentId: 'worker' })
+    expect(closes(f)).toEqual([])
+  })
+})
 
 describe('Swarm permission mode', () => {
   it('admits installed Claude when an API environment is opaque to the vendor login probe', async () => {
@@ -718,6 +750,22 @@ it.each(['pending', 'unconfirmed', 'created'])('preserves native %s evidence whe
   expect(result).toMatchObject(state === 'created' ? { ok: true, harnessId: 'native' } : { error: 'START_PENDING', state })
   expect(f.start.error).toBeNull()
   expect(f.request.mock.calls.filter(c => c[0] === 'agent_create')).toHaveLength(1)
+})
+
+// Diego's Mac, 2026-10-28: a Team account's creation sat held for the whole 15 minutes, and the start said only "pending".
+it('says what a pending native creation is held on, and nothing of a hold for one under way', async () => {
+  const f = fixture(), request = f.request.getMockImplementation()!
+  f.start.dispatched = true
+  const held = { service: 'native', detail: 'Waiting to confirm access to the selected engine executable.' }
+  let answer: Record<string, unknown> = { creationId: f.start.creationId, state: 'pending', held }
+  f.request.mockImplementation(async (type, payload) => type === 'agent_create_status' ? answer : request(type, payload))
+  const input = { action: 'resume', tabId: 'tab', startId: 'start', hostDispatch: true }
+  expect(await startAgent(input, f.scoped, where, f.open)).toMatchObject({ error: 'START_PENDING', state: 'pending', held,
+    detail: 'Waiting to confirm access to the selected engine executable. Keep this start ID. Run resume with it to check the same native creation; do not make another start request.' })
+  answer = { creationId: f.start.creationId, state: 'pending' }
+  const underWay = await startAgent(input, f.scoped, where, f.open)
+  expect(underWay).toMatchObject({ error: 'START_PENDING', state: 'pending' })
+  expect(underWay).not.toHaveProperty('held')
 })
 
 it.each([

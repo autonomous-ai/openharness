@@ -717,7 +717,7 @@ export class CommanderMirror {
   }
 
   /**
-   * [tell] once `decideTier` answers (it waits at most its own budget, 1 s). A newer turn, a cancel or a forget
+   * [tell] once `decideTier` answers (by fixed rules, at once: lib/notifyTier.ts). A newer turn, a cancel or a forget
    * waits for nothing: the recap goes out at once at the fallback's tier, from inside the abort, so it still
    * lands before the next turn's first card — the dial would otherwise draw the old recap over "Working…".
    */

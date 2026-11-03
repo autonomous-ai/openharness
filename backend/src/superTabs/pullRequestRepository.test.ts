@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { bindPullRequestCards, cleanPullRequestLinks, pullRequestCard } from './cards.js'
-import { appendPullRequestUrls, createSuperTab, githubRepository, projectPullRequestUrl, pullRequestLinks, type Actor, type Conversation } from './model.js'
+import { githubRepository } from '../github/repository.js'
+import { appendPullRequestUrls, createSuperTab, projectPullRequestUrl, pullRequestLinks, type Actor, type Conversation } from './model.js'
 
 const REPO = 'https://github.com/autonomous-ai/openharness.git'
 const WRONG_OWNER = 'https://github.com/openharness/openharness/pull/1'
@@ -24,7 +25,7 @@ function fixture(repositoryUrl: string | null = REPO) {
 describe('a project\'s pull request links', () => {
   it('reads the repository of an https, ssh or scp address, and nothing for another host', () => {
     for (const url of [REPO, 'https://github.com/autonomous-ai/openharness', 'git@github.com:autonomous-ai/openharness.git', 'ssh://git@github.com/autonomous-ai/openharness.git/']) {
-      expect(githubRepository(url)).toEqual({ owner: 'autonomous-ai', repo: 'openharness' })
+      expect(githubRepository(url)).toEqual({ owner: 'autonomous-ai', name: 'openharness', fullName: 'autonomous-ai/openharness' })
     }
     expect(githubRepository('https://gitlab.com/autonomous-ai/openharness')).toBeNull()
     expect(githubRepository(null)).toBeNull()
@@ -46,12 +47,10 @@ describe('a project\'s pull request links', () => {
 
   it('cleans a group\'s record: the other owner\'s link goes and the right one stays, as does another repository\'s removal', () => {
     const group = { pullRequestUrls: [WRONG_OWNER, RIGHT, 'https://github.com/autonomous-ai/other/pull/9'],
-      ledger: { mergedUrls: [WRONG_OWNER, RIGHT], shipWaiting: [WRONG_OWNER, 'https://github.com/AUTONOMOUS-AI/openharness/pull/1'] },
       cards: { pullRequests: [{ url: WRONG_OWNER, messageId: 'm1' }, { url: RIGHT, messageId: 'm2', mergedAt: 5 },
         { url: 'https://github.com/AUTONOMOUS-AI/openharness/pull/1', messageId: 'm4', mergedAt: 3 }, { url: 'https://github.com/o/other/pull/9', messageId: 'm3' }] } } as unknown as Conversation
     cleanPullRequestLinks(group, REPO)
     expect(group.pullRequestUrls).toEqual([RIGHT])
-    expect(group.ledger).toEqual({ mergedUrls: [RIGHT], shipWaiting: [RIGHT] })
     expect(group.cards!.pullRequests).toEqual([{ url: RIGHT, messageId: 'm2', mergedAt: 3 }])
     cleanPullRequestLinks(group, null)
     expect(group.pullRequestUrls).toEqual([RIGHT])
@@ -73,7 +72,6 @@ describe('a project\'s pull request links', () => {
     f.run({ type: 'conversation.merged', conversationId: f.id, pullRequestUrl: 'https://github.com/Autonomous-AI/OpenHarness/pull/1' })
     f.run({ type: 'conversation.merged', conversationId: f.id, pullRequestUrl: RIGHT })
     expect(f.group().pullRequestUrls).toEqual([RIGHT])
-    expect(f.group().ledger!.mergedUrls).toEqual([RIGHT])
     expect(f.group().cards!.pullRequests).toEqual([expect.objectContaining({ url: RIGHT, mergedAt: 1000 })])
   })
 

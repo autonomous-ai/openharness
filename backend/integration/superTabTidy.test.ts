@@ -9,6 +9,8 @@ import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
+import type { Conversation } from '../src/superTabs/model.js'
+import type { HeadData } from '../src/superTabs/parts/index.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import { poolRows, rosterRows } from './hostRows.test-support.js'
 import { archiveFinishedGroups, markFinishedGroups, type PullRequestState } from '../src/superTabs/archive.js'
@@ -224,7 +226,7 @@ describe('a finished group', () => {
     expect(prs.read).toContain(PR)
     expect(prs.closed).toBe(true)
     expect(await archiveLines(f)).toEqual([expect.objectContaining({ recipientIds: [],
-      text: 'Archived: the work is cancelled and its pull requests are merged or closed.' })])
+      text: 'Archived: the work is cancelled (Done elsewhere) and its pull requests are merged or closed.' })])
     // It never archives twice.
     f.clock.now += 40 * MINUTE
     await archiveFinishedGroups(db, f.timed, prs, f.clock.now)
@@ -251,6 +253,64 @@ describe('a finished group', () => {
     await archiveFinishedGroups(db, f.timed, github({}), f.clock.now)
     expect(await archived(f)).toBe(true)
     expect(await db.superTabDecision.findUnique({ where: { id } })).toMatchObject({ withdrawn: true, choice: null, answeredAt: new Date(f.clock.now) })
+  })
+
+  it('waits for a pull request its cancel names only as "PR #N", read in the project\'s repository, until it is merged or closed', async () => {
+    const f = await swarm()
+    // As a Lead started in its repository records it (tab.project).
+    const head = await db.swarmHead.findUniqueOrThrow({ where: { id: `${f.tab}:head` } }), data = head.data as unknown as HeadData
+    const repository = { machineId: 'lead-host', cwd: '/repo', repositoryUrl: 'https://github.com/acme/app' }
+    await db.swarmHead.update({ where: { id: head.id }, data: { data: (data.projects
+      ? { ...data, projects: data.projects.map(p => p.id === 'lead' ? { ...p, repository } : p) } : { ...data, project: repository }) as object } })
+    const handed = String((await f.execute({ type: 'conversation.create', title: 'Phone leaderboard', brief: 'Ship it', checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
+    const worker = await f.add(handed, 'test-host', randomUUID(), 'Phone')
+    const work = String((await f.execute({ type: 'work.assign', conversationId: handed, agentId: worker })).result.assignmentId)
+    await f.execute({ type: 'work.cancel', conversationId: handed, assignmentId: work, reason: 'Handed off as PR #1875' })
+    const open = async () => !(await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: handed } })).archived
+    f.clock.now += 40 * MINUTE
+    const prs = github({ 'https://github.com/acme/app/pull/1875': 'open' })
+    await archiveFinishedGroups(db, f.timed, prs, f.clock.now)
+    expect(prs.read).toContain('https://github.com/acme/app/pull/1875')
+    expect(await open()).toBe(true)
+    await archiveFinishedGroups(db, f.timed, github({ 'https://github.com/acme/app/pull/1875': 'merged' }), f.clock.now)
+    expect(await open()).toBe(false)
+  })
+
+  it('stays open when its work names "PR #N" and the project has no repository to read it in', async () => {
+    const f = await swarm()
+    const handed = String((await f.execute({ type: 'conversation.create', title: 'Sidebar', brief: 'Ship it', checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
+    const worker = await f.add(handed, 'test-host', randomUUID(), 'Sidebar')
+    const work = String((await f.execute({ type: 'work.assign', conversationId: handed, agentId: worker })).result.assignmentId)
+    await f.execute({ type: 'work.cancel', conversationId: handed, assignmentId: work, reason: 'PR #1868 is in the merge queue' })
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, f.timed, github({}), f.clock.now)
+    expect((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: handed } })).archived).toBe(false)
+    expect(await archived(f)).toBe(true)
+  })
+
+  it('stays open while its task is lost, even marked finished, so unfinished work never closes silently', async () => {
+    const f = await swarm()
+    const lost = String((await f.execute({ type: 'conversation.create', title: 'Round tabs', brief: 'Drop closed tabs', checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
+    const worker = await f.add(lost, 'test-host', randomUUID(), 'Dial')
+    await f.execute({ type: 'work.assign', conversationId: lost, agentId: worker })
+    const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: lost } })
+    const data = part.data as unknown as Conversation
+    await db.swarmGroup.update({ where: { id: part.id }, data: { workFinished: true,
+      data: { ...data, assignment: { ...data.assignment!, status: 'lost', lost: { reason: 'its model keeps failing', at: f.clock.now } } } as object } })
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, f.timed, github({}), f.clock.now)
+    expect((await db.swarmGroup.findUniqueOrThrow({ where: { id: part.id } })).archived).toBe(false)
+    expect(await archived(f)).toBe(true)
+  })
+
+  it('tags the person who asked for a cancelled task, with the reason, when it archives', async () => {
+    const f = await swarm()
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, f.timed, github({}), f.clock.now)
+    const [line] = await archiveLines(f)
+    expect(line).toMatchObject({ text: 'Archived: the work is cancelled (Done elsewhere).', mentions: [owner.sub] })
+    expect(await db.superTabMention.findMany({ where: { tabId: f.tab, conversationId: f.group } }))
+      .toEqual([expect.objectContaining({ personId: owner.sub, messageId: line!.id, resolvedAt: null })])
   })
 
   it('stays open once the owner turned tidying off, and never archives the Lead conversation', async () => {

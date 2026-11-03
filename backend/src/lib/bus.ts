@@ -866,7 +866,8 @@ export function subscribeDeviceMachineListChanged(userId: string, cb: (msg: Devi
 
 // Per-MACHINE Swarm deliveries: a delivery committed for one of this machine's agents (superTabs/store.ts deliveriesWaiting),
 // on some REST worker; the worker holding that machine's adapter socket tells its host (lib/swarmDeliveryPushes.ts).
-export interface SwarmDeliveriesMsg { tabId: string; agentId: string }
+/** `terminal`: a terminal request waits, not a delivery (lib/swarmDeliveryPushes.ts announceSwarmTerminal). */
+export interface SwarmDeliveriesMsg { tabId: string; agentId: string; terminal?: true }
 
 const swarmDeliveriesChannel = (machineId: string): string => `swarm-deliveries:${machineId}`
 

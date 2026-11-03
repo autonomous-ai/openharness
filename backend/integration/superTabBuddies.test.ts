@@ -692,7 +692,9 @@ describe('naming a Buddy through the store (Diego, 10-29)', () => {
 
   it('refuses the name of an agent still starting (review of #2094)', async () => {
     const f = await swarm()
-    await f.execute({ type: 'agent.start', request: { conversationId: 'lead', machineId: 'peer-mac', engine: 'claude', name: 'Sparky', cwd: '/swarm/lead',
+    // Into a task: no agent but its coordinator starts into the project chat (#2207).
+    const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Parser', brief: '', checks: [] }, peer)).result.conversationId)
+    await f.execute({ type: 'agent.start', request: { conversationId: group, machineId: 'peer-mac', engine: 'claude', name: 'Sparky', cwd: '/swarm/lead',
       worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } as Command, peer)
     const mine = String((await f.execute({ type: 'buddy.chat', projectId: 'lead' }, peer)).result.conversationId)
     await expect(rename(f, mine, 'sparky')).rejects.toThrow('taken')

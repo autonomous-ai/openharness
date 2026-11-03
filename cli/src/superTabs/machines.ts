@@ -57,6 +57,12 @@ const START_REFUSED_MS = 60_000
 /** What a start answers while its launch may already have happened or is under way: never failed from here, or an agent
  *  could run with no start to show for it. The failures already reported say so themselves. */
 const NOT_REFUSED = new Set(['START_UNCERTAIN', 'START_PENDING', 'START_REFUSED', 'START_FAILED', 'SWARM_ENGINE'])
+/** How long a launched start's creation may wait on a dependency it names (the engine's executable, its launch
+ *  environment, a model) before this machine cancels it and fails the start with that reason. Past the three minutes the
+ *  daemon gives a credential preparation (core/agents/pendingLaunches.ts), well inside the backend's 15 (liveness.ts):
+ *  on Diego's Mac's Harness Team account a held creation used them all, and the Lead read only "still preparing"
+ *  (2026-10-28). Not while Harness installs the engine, which the backend's 15 minutes cover. */
+const START_HELD_MS = 300_000
 
 /** How often the executor asks the backend what its tabs want of it (a start waiting, a pause) and compares what it
  *  would report with what it last did. Only this read is this frequent: the resource readers run when there is
@@ -217,6 +223,8 @@ export class ContributedMachines {
    *  last pass found them. Reported so the backend waits past its 3 minutes (backend liveness.ts): Diego's Mac fetched and
    *  checked out a 470 MB project, and the start failed while it did (2026-10-27). */
   private readonly preparing = new Set<string>()
+  /** Per launched start whose creation is held on a dependency, since when without a break. */
+  private readonly heldSince = new Map<string, number>()
   /** Starts this host launched whose engine has not yet recorded its session: the agent each created, by start id. */
   private readonly unconfirmed = new Map<string, Unconfirmed>()
   /** Removals cleaned and acknowledged by this host, and the one in progress per removal. */
@@ -472,6 +480,7 @@ export class ContributedMachines {
     for (const id of this.waiting.keys()) if (!pendingIds.has(id)) this.waiting.delete(id)
     for (const id of this.refusedSince.keys()) if (!pendingIds.has(id)) this.refusedSince.delete(id)
     for (const id of this.preparing) if (!pendingIds.has(id)) this.preparing.delete(id)
+    for (const id of this.heldSince.keys()) if (!pendingIds.has(id)) this.heldSince.delete(id)
     this.loadUnconfirmed()
     for (const [id, launch] of this.unconfirmed) if (!pendingIds.has(id) && !launch.checking) void this.abandoned(id, launch)
     for (const tab of this.published.keys()) if (!pools.some(row => row.tabId === tab)) this.published.delete(tab)
@@ -680,10 +689,32 @@ export class ContributedMachines {
               // Launched, and its creation still under way on the daemon: anything else is not preparing.
               if (result.error === 'START_PENDING' && result.state === 'pending') this.preparing.add(String(start.id))
               else this.preparing.delete(String(start.id))
-              // Launched, its engine yet to record its session: if the Swarm fails this start meanwhile, [abandoned] stops it.
-              if (result.error === 'START_PENDING' && identifier(result.harnessId) && identifier(result.creationId)) {
+              // Launched, its engine yet to record its session: if the Swarm fails this start meanwhile, [abandoned] stops it. So
+              // with a join the server refused (backend leadStart.ts leadOvertaken): the start's own close deletes nothing, and
+              // this close runs a Team account's confidential purge, and tries again until it has (security review 1 of #2668).
+              if ((result.error === 'START_PENDING' || typeof result.refused === 'string') && identifier(result.harnessId) && identifier(result.creationId)) {
                 this.remember(String(start.id), { path, harnessId: result.harnessId, creationId: result.creationId, tries: 0, checking: false })
               } else this.forget(String(start.id))
+              const held = result.error === 'START_PENDING' && result.state === 'pending' ? object(result.held) : {}
+              if (typeof held.detail !== 'string' || held.service === 'install') this.heldSince.delete(start.id)
+              else {
+                const since = this.heldSince.get(start.id) ?? began
+                this.heldSince.set(start.id, since)
+                if (began - since >= START_HELD_MS && identifier(result.creationId)) {
+                  // Only a cancellation the daemon confirms fails the start: a launch that won the race is reconciled next pass.
+                  local ??= await this.deps.open(where)
+                  const cancelled = object(await local.request('agent_create_cancel', { creationId: result.creationId }, 10_000).catch(() => null))
+                  if (cancelled.creationId === result.creationId && cancelled.state === 'cancelled') {
+                    await local.request('super_tabs', { action: 'observeCapacity', creationId: result.creationId }, 10_000).catch(() => {})
+                    this.preparing.delete(String(start.id))
+                    // Its creation was cancelled here: nothing it launched is left to stop as abandoned.
+                    this.forget(String(start.id))
+                    await scoped({ action: 'command', operationId: `held-${start.id}`, command: { type: 'agent.startFailed', startId: start.id,
+                      error: `This machine held the agent's launch for ${START_HELD_MS / 60_000} minutes and stopped it: ${held.detail}` } })
+                    continue
+                  }
+                }
+              }
               if (!refused) this.refusedSince.delete(start.id)
               if (result.ok === true && identifier(result.harnessId)) {
                 this.waiting.delete(start.id)
