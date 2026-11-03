@@ -127,25 +127,18 @@ class SuperTabAttention extends ChangeNotifier {
       '/api/super-tabs/${Uri.encodeComponent(controller.tabId)}';
 
   /// Unread tags Activity shows under Needs you for [conversationId]. A tag
-  /// in a followed thread that is new in this visit is represented by New
-  /// replies instead; other unread thread tags need the reader and belong on
-  /// the conversation row.
+  /// in a followed thread can also appear under New replies; it remains a
+  /// separate item that needs the reader and counts on its conversation row.
   int tagsIn(String conversationId) {
     if (controller.accessRevoked) return 0;
     // A muted chat never counts (Slack); its tags stay listed in Activity.
     if (controller.notifyOf(conversationId) == SuperTabNotify.muted) return 0;
-    final newThreads = {
-      for (final thread in shown)
-        if (isNew(thread)) thread.key,
-    };
     return mentions.waiting.where((m) {
       if (m.conversationId != conversationId) return false;
       final mark = m.threadId == null
           ? controller.readMark(conversationId)
           : controller.threadReadMark(m.threadId!);
-      return (m.messageSequence ?? _unknown) > mark &&
-          (m.threadId == null ||
-              !newThreads.contains('$conversationId/${m.threadId}'));
+      return (m.messageSequence ?? _unknown) > mark;
     }).length;
   }
 

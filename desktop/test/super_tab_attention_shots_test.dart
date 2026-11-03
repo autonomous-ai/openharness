@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/view.dart';
 
@@ -78,18 +79,17 @@ ConversationServer _swarm() {
     conversationId: 'web-lead',
     projectId: 'web',
   );
-  server.tag('message-1', threadId: 'message-1');
   _fromLead(server, 'Weekly plan', 'lead');
+  final threadRoot = server.messages.last['id'] as String;
   _fromLead(server, 'Looks right to me.', 'lead');
-  server.messages.last['thread'] =
-      server.messages[server.messages.length - 2]['id'];
+  server.messages.last['thread'] = threadRoot;
   server.followedThreads = {
     'unread': [
       {
         'conversationId': 'lead',
-        'rootId': server.messages[server.messages.length - 2]['id'],
+        'rootId': threadRoot,
         'root': _root(
-          server.messages[server.messages.length - 2]['id'] as String,
+          threadRoot,
           'Weekly plan: badges first, then the Threads view.',
           '2026-10-31T01:00:00Z',
         ),
@@ -118,6 +118,14 @@ ConversationServer _swarm() {
     ],
     'more': false,
   };
+  server.tag(
+    threadRoot,
+    threadId: threadRoot,
+    messageSequence: server.revision + 1,
+  );
+  server.mentions.last
+    ..['leadName'] = 'River'
+    ..['projectName'] = 'openharness';
   return server;
 }
 
@@ -149,6 +157,12 @@ void main() {
         await attention.mentions.load();
         await attention.decisions.load();
         await attention.load();
+        final activity = SuperTabActivity.of(c);
+        expect(attention.mentionsIn('lead'), 1);
+        expect(
+          activity.needsYou.where((need) => need.conversationId == 'lead'),
+          hasLength(1),
+        );
         c.select('roster');
         if (!c.expandedProjects.contains('lead')) c.toggleProject('lead');
         final picture = GlobalKey();
@@ -186,9 +200,7 @@ void main() {
           await mouse.addPointer(location: Offset.zero);
           await mouse.moveTo(
             tester.getCenter(
-              find.text(
-                'Weekly plan: badges first, then the Threads view.',
-              ),
+              find.text('Weekly plan: badges first, then the Threads view.'),
             ),
           );
           await tester.pumpAndSettle();

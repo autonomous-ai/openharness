@@ -291,7 +291,7 @@ void main() {
           'read': [],
           'more': false,
         };
-        server.tag('message-1', threadId: 'message-1');
+        server.tag('message-1', threadId: 'message-1', messageSequence: 2);
         final (c, attention) = await opened(server);
         final activity = SuperTabActivity.of(c);
         await activity.mentions.load();
@@ -299,9 +299,14 @@ void main() {
         expect(attention.threadMentions, 1);
         expect(attention.mentionsIn('lead'), 1);
         expect(activity.needsYou, hasLength(1));
+        expect(inRow('super-group-lead', find.text('1')), findsOneWidget);
+        c.markThreadRead('lead', 'message-1', 2);
+        await tester.pumpAndSettle();
+        expect(attention.mentionsIn('lead'), 0);
+        expect(activity.needsYou, isEmpty);
         expect(
-          inRow('super-group-lead', find.text('1')),
-          findsOneWidget,
+          inRow('super-group-lead', find.byType(SuperTabCountBadge)),
+          findsNothing,
         );
         await close(tester, c);
       });
