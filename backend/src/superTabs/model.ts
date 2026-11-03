@@ -601,6 +601,8 @@ export const NOTICE_READERS = {
   switch: 'people',
   // The machine owner's one line when another person moves a PM onto one of their non-default accounts (commands.ts agent.switchResult).
   'pm-switch-notice': 'people',
+  // The machine owner's line, once a week, when someone else's work starts on their machine (othersWork.ts).
+  'others-work-notice': 'people',
   'start-timeout': 'people', 'terminal-alert': 'people', 'terminal-input': 'people',
 } as const satisfies Record<string, 'people' | 'recipients' | 'agent'>
 const readersOf = (kind: unknown): 'people' | 'recipients' | 'agent' =>
