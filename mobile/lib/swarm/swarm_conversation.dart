@@ -1611,15 +1611,18 @@ mixin SwarmMentioning {
   /// [agentIds], its recipients. The backend checks each again, and refuses
   /// a person who cannot read the chat.
   /// Whether [text] still names an agent picked for it that is not one of
-  /// [agentIds] any more: left the chat since. As the desktop's `_tagsSaid`,
-  /// whoever is not a person of the Swarm counts as an agent.
+  /// [agentIds] any more: an agent of the Swarm that has left the chat
+  /// since, which the desktop refuses (`send`, `sendThreadReply`). A person
+  /// who left the Swarm is only no longer tagged, as before.
   bool namesAgentGone(String text, List<String> agentIds) {
-    final people = {...?reader.snapshot?.people.map((p) => p.id)};
+    final snapshot = reader.snapshot;
+    if (snapshot == null) return false;
     return _mentions.entries.any(
       (entry) =>
           SwarmConversation.containsMention(text, entry.value) &&
-          !people.contains(entry.key) &&
-          !agentIds.contains(entry.key),
+          !agentIds.contains(entry.key) &&
+          snapshot.agent(entry.key) != null &&
+          !snapshot.people.any((p) => p.id == entry.key),
     );
   }
 
