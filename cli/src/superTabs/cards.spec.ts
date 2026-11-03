@@ -1978,8 +1978,8 @@ describe('SwarmCards with one Buddy per Swarm', () => {
   const state = (seq = 1, over: Record<string, unknown> = {}) => chats({ buddies: true, agents: [...chats().agents as object[], buddy({ buddyScope: 'swarm' })],
     conversations: [...swarm().conversations, sb(seq), group()], ...over })
   const hears = [said(1, 'a1', { text: 'from the PM' }), said(2, 'y1', { text: 'from the Buddy' }), said(3, 'me', { author: { kind: 'person', id: 'me' }, text: 'mine' })]
-  const build = (pages: Record<string, unknown[]> = { sb: hears }) => {
-    const t = setup({ t1: { lastChangedAt: 1, state: state() } }, { messages: path => ({ messages: pages[/conversations\/([^/]+)\/messages/.exec(path)?.[1] ?? ''] ?? [], next: null }) })
+  const build = (pages: Record<string, unknown[]> = { sb: hears }, post?: () => { status: number; body: Record<string, unknown> }) => {
+    const t = setup({ t1: { lastChangedAt: 1, state: state() } }, { messages: path => ({ messages: pages[/conversations\/([^/]+)\/messages/.exec(path)?.[1] ?? ''] ?? [], next: null }), post })
     const lead = (id: string, cards = t.seen.at(-1)) => cards?.[0].leads.find(l => l.id === id)
     const reads = () => t.calls.filter(c => c.includes('/conversations/sb/messages')).length
     const move = async (seq: number, over: Record<string, unknown> = {}) => { t.tabs.t1.lastChangedAt++; t.tabs.t1.state = state(seq, over); await t.cards.tick() }
@@ -2058,6 +2058,34 @@ describe('SwarmCards with one Buddy per Swarm', () => {
     await t.move(10, { conversations: [...swarm().conversations, { ...sb(10), buddyOwnerId: 'sam' }, group()] })
     expect(t.reads()).toBe(readsBefore)
     expect(t.lead('a1')).not.toHaveProperty('buddyNotice')
+  })
+
+  // Task #2525: the Swarm chat is every project's Buddy face, so a thread matched by conversation landed on every Lead, and
+  // with 12 projects the round dial's frame passed the firmware's 512-token guard. The thread is on the face Lead's alone.
+  it('puts a dial thread in the Swarm chat on the Lead it was started from only', async () => {
+    const t = build({ sb: hears }, () => ({ status: 200, body: { success: true, data: { result: { messageId: 'm9' } } } }))
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    t.cards.side('t1', 'buddy')
+    expect(await t.cards.say('h-a1', 'help me\nplease', 'buddy', undefined, false, { threaded: true }))
+      .toEqual({ said: true, thread: { tabId: 't1', conversationId: 'sb', root: 'm9' } })
+    expect(t.lead('a1')?.sideChat).toMatchObject({ kind: 'buddy', id: 'sb', thread: { root: 'm9', title: 'help me' } })
+    // The other project's Buddy face is the same chat, read as its main stream.
+    expect(t.lead('a2')?.sideChat).toMatchObject({ kind: 'buddy', id: 'sb' })
+    expect(t.lead('a2')?.sideChat).not.toHaveProperty('thread')
+    expect(await t.cards.recap('t1', 'a2', 'buddy')).not.toHaveProperty('thread')
+    t.cards.want(false)
+  })
+
+  it('puts the window\'s thread in the Swarm chat on the Lead the dial has open only', async () => {
+    const t = build()
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    t.cards.open('s1', 't1', 'a2', 'buddy')
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'sb', threadRoot: 'r1' })
+    expect(t.lead('a2')?.sideChat?.thread?.root).toBe('r1')
+    expect(t.lead('a1')?.sideChat).not.toHaveProperty('thread')
+    t.cards.want(false)
   })
 
   it('refuses a recap or a word for the Swarm chat once it stops being the reader\'s while the read is out, and for a stale or foreign chat id', async () => {
