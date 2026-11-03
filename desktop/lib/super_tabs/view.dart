@@ -2373,9 +2373,12 @@ class _SuperTabViewState extends State<SuperTabView>
     // centred on the controls, and a longer message's last line keeps that
     // place.
     final row = grid.AppControl.heightFieldScaled;
+    // The line of the style the field draws with: a padding measured on
+    // another one left the chips a pixel off the line once the composer took
+    // Slack's 15 px on 22 px lines (#2732).
+    final style = SwarmType.composer(context);
     final line =
-        MediaQuery.textScalerOf(context).scale(DesktopChrome.text().fontSize!) *
-        DesktopChrome.text().height!;
+        MediaQuery.textScalerOf(context).scale(style.fontSize!) * style.height!;
     final inset = math.max(0.0, (row - line) / 2);
     return ConstrainedBox(
       constraints: BoxConstraints(minHeight: row),
