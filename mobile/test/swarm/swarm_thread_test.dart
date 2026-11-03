@@ -51,7 +51,7 @@ void main() {
 
   /// A Swarm with conversation g1 at [sequence] while [listed] says so, its
   /// chat read with [chatRows]: root m1 and its first reply unless told.
-  /// Files go up to [uploads].
+  /// Files go up to [uploads]; [others] are members besides the person.
   Future<({FakeSwarm swarm, SwarmReader reader, SwarmConversation chat})> rig({
     int sequence = 2,
     String role = 'owner',
@@ -59,6 +59,7 @@ void main() {
     List<Map<String, dynamic>>? chatRows,
     bool Function()? listed,
     FakeUploads? uploads,
+    List<Map<String, dynamic>> others = const [],
   }) async {
     final swarm = FakeSwarm();
     swarm.routes['/api/super-tabs/$tab/parts'] = (_) => {
@@ -74,7 +75,10 @@ void main() {
             ),
         ],
       ),
-      'members': [part(me, 1, person(me, role: role))],
+      'members': [
+        part(me, 1, person(me, role: role)),
+        for (final other in others) part(other['id'] as String, 1, other),
+      ],
     };
     swarm.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
     swarm.routes[messages] = (_) => {
@@ -496,6 +500,147 @@ void main() {
       expect(t.canSend, isFalse);
       expect(await t.send(), isFalse);
       expect(r.swarm.commands, isEmpty);
+    });
+  });
+
+  group('@ in a reply (Desktop thread panel `@`)', () {
+    /// Thread m1 of g1 read, with Dee in the Swarm besides the person.
+    Future<({FakeSwarm swarm, SwarmConversation chat, SwarmThread thread})>
+    tagging() async {
+      final r = await rig(others: [person('dee', role: 'collaborator')]);
+      r.swarm.routes[thread] = (_) => {
+        'messages': [message('m1', 1)],
+        'next': null,
+      };
+      readsBack(r.swarm);
+      final t = open(r.chat);
+      await t.load();
+      return (swarm: r.swarm, chat: r.chat, thread: t);
+    }
+
+    test('offers whom the chat\'s composer offers: its agents and the people '
+        'who read it, never the reader', () async {
+      final r = await tagging();
+      expect(
+        [for (final a in r.thread.mentionable) a.id],
+        ['agent-lead', 'agent-builder'],
+      );
+      expect([for (final p in r.thread.mentionablePeople) p.id], ['dee']);
+    });
+
+    test('a picked agent is a recipient and a picked person is tagged, while '
+        'the text names them', () async {
+      final r = await tagging();
+      final t = r.thread;
+
+      t.draft = 'Can you check';
+      t.mention('agent-builder');
+      t.mention('dee');
+      expect(t.draft, 'Can you check @Nova @dee ');
+      t.draft = '${t.draft}this';
+      expect(await t.send(), isTrue);
+
+      expect(r.swarm.commands.single, {
+        'type': 'message.send',
+        'conversationId': 'g1',
+        'text': 'Can you check @Nova @dee this',
+        'replyTo': 'm1',
+        'recipientIds': ['agent-builder'],
+        'mentions': ['dee'],
+      });
+      expect(t.mentions, isEmpty, reason: 'the next reply names no one yet');
+      expect(r.chat.threadMentions('m1'), isEmpty);
+    });
+
+    test('Tag ends the draft in an @ or takes it back, and a pick takes the '
+        'place of the name being typed', () async {
+      final r = await tagging();
+      final t = r.thread;
+
+      t.draft = 'ask';
+      t.toggleMention();
+      expect(t.draft, 'ask @');
+      expect(t.mentionQuery, '');
+      t.toggleMention();
+      expect(t.draft, 'ask ');
+      expect(t.mentionQuery, isNull);
+
+      t.draft = 'ask @No';
+      expect(t.mentionQuery, 'No');
+      t.completeMention('agent-builder');
+      expect(t.draft, 'ask @Nova ');
+      expect(t.mentionQuery, isNull);
+      expect(t.mentions, {'agent-builder': '@Nova'});
+    });
+
+    test('a name taken out of the text names nobody', () async {
+      final r = await tagging();
+      final t = r.thread;
+
+      t.mention('agent-builder');
+      t.mention('dee');
+      t.draft = 'never mind';
+      expect(t.mentions, isEmpty);
+      expect(await t.send(), isTrue);
+
+      expect(r.swarm.commands.single['recipientIds'], isEmpty);
+      expect(r.swarm.commands.single.containsKey('mentions'), isFalse);
+    });
+
+    test('refused, the reply goes back to the box with its names, which go '
+        'with it again', () async {
+      final r = await tagging();
+      var refuse = true;
+      r.swarm.routes[commands] = (body) => refuse
+          ? throw const SuperTabFailure(
+              'TOO_LONG',
+              'This message is too long.',
+              statusCode: 400,
+            )
+          : {'ok': true};
+      final t = r.thread;
+      t.mention('agent-builder');
+      t.mention('dee');
+      t.draft = '${t.draft}please';
+
+      expect(await t.send(), isFalse);
+      expect(t.draft, '@Nova @dee please');
+      expect(t.mentions, {'agent-builder': '@Nova', 'dee': '@dee'});
+      expect(t.error, 'This message is too long.');
+
+      refuse = false;
+      expect(await t.send(), isTrue);
+      expect(r.swarm.commands.last['recipientIds'], ['agent-builder']);
+      expect(r.swarm.commands.last['mentions'], ['dee']);
+    });
+
+    test('the names stay with the thread\'s draft while the chat is open, '
+        'and not with another thread\'s', () async {
+      final r = await rig();
+      readsBack(r.swarm);
+      final first = SwarmThread(r.chat, 'm1')..mention('agent-builder');
+      first.dispose();
+
+      final again = open(r.chat);
+      expect(again.draft, '@Nova ');
+      expect(again.mentions, {'agent-builder': '@Nova'});
+      expect(open(r.chat, 'm9').mentions, isEmpty);
+      again.draft = '${again.draft}look';
+      expect(await again.send(), isTrue);
+      expect(r.swarm.commands.single['recipientIds'], ['agent-builder']);
+    });
+
+    test('access lost while the thread is open takes its names too', () async {
+      final r = await tagging();
+      r.thread.mention('agent-builder');
+
+      r.chat.reader.revoke();
+      await settle();
+
+      expect(r.thread.state, SwarmChatState.lost);
+      expect(r.thread.draft, isEmpty);
+      expect(r.thread.mentions, isEmpty);
+      expect(r.chat.threadMentions('m1'), isEmpty);
     });
   });
 

@@ -48,10 +48,18 @@ class SwarmThreadFocus {
 /// picker, limits and upload ([SwarmUploads]) to the chat's conversation,
 /// before the reply. They wait in the chat's box for this thread
 /// ([SwarmConversation.threadFiles]) while the chat is open.
-class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
+///
+/// An @ names people and agents as in the chat's composer ([SwarmMentioning],
+/// the desktop thread panel's `@`): a reply goes to the agents it names and
+/// tags the people.
+class SwarmThread extends ChangeNotifier
+    with SwarmMentioning
+    implements SwarmFilesBox {
   SwarmThread(this.chat, this.root)
     : _draft = chat.threadDraft(root),
       files = chat.threadFiles(root) {
+    restoreMentions(chat.threadMentions(root));
+    keepMentionsOf(_draft);
     _listed = chat.conversation != null;
     chat.addListener(_chatChanged);
     reader.addListener(_chatChanged);
@@ -65,8 +73,12 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
   }
 
   /// What a kept reply puts back in the box if it is refused: only its words.
-  static Object? _heldOf(String text) =>
-      (draft: text, alsoSend: false, newSession: false);
+  static Object? _heldOf(String text) => (
+    draft: text,
+    mentions: const <String, String>{},
+    alsoSend: false,
+    newSession: false,
+  );
 
   void _keepPosts() {
     if (_disposed) return;
@@ -118,6 +130,7 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
   @override
   double? uploadProgress(SwarmOutgoingFile file) => _uploads.progress(file);
 
+  @override
   SwarmReader get reader => chat.reader;
 
   /// How many pages a thread reads when it opens; past them "Show earlier
@@ -219,12 +232,23 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
   final _composer = _Changes();
 
   String _draft;
+  @override
   String get draft => _draft;
+  @override
   set draft(String value) {
     _draft = value;
-    chat.setThreadDraft(root, value);
+    keepMentionsOf(value);
+    chat.setThreadDraft(root, value, mentions);
     _composer.changed();
   }
+
+  /// The agents a reply can name: the chat's, but none where the thread's
+  /// own session alone hears the reply (Desktop's thread `_tagChoices`).
+  List<SuperTabAgent> get mentionable =>
+      newSession || session != null ? const [] : chat.mentionable;
+
+  /// The people a reply can tag: the chat's.
+  List<SuperTabPerson> get mentionablePeople => chat.mentionablePeople;
 
   /// The reply also goes to the chat's main stream.
   bool get alsoSend => _alsoSend;
@@ -445,6 +469,7 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
     _uploads.cancel();
     files.clear();
     _draft = '';
+    forgetMentions();
     _alsoSend = false;
     _outbox.clear();
     error = null;
@@ -619,7 +644,8 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
     }
   }
 
-  /// Sends the draft to the thread's root, also to the chat with [alsoSend]
+  /// Sends the draft to the thread's root, to the agents it names and tagging
+  /// the people it names, also to the chat with [alsoSend]
   /// — or, with nothing typed while a reply is [unconfirmed], sends that one
   /// again. The reply leaves the box at once and shows in [outgoing] until it
   /// is read back; one on its way never holds this one back. True once the
@@ -636,6 +662,14 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
       return again != null && await retry(again);
     }
     if (chat.conversation == null) return false;
+    if (_namesAgentInSession) {
+      // As the desktop's, before any file goes up.
+      error =
+          "Only this thread's session hears a reply here. "
+          "Remove the agent's mention.";
+      _tell();
+      return false;
+    }
     // The files go up first, the draft and the files staying in the box
     // meanwhile, as the chat's do.
     var ids = const <String>[];
@@ -655,9 +689,11 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
       if (up.ids == null) return false;
     }
     final text = _draft.trim();
-    if ((text.isEmpty && ids.isEmpty) || chat.conversation == null) {
+    final group = chat.conversation;
+    if ((text.isEmpty && ids.isEmpty) || group == null) {
       return false;
     }
+    final (:tagged, :addressed) = mentionsSaid(text, group.agentIds);
     final operationId = superTabOperationId();
     final startsSession = newSession;
     final post = SwarmPost(
@@ -668,7 +704,8 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
           'conversationId': chat.id,
           'text': text,
           'replyTo': root,
-          'recipientIds': const <String>[],
+          'recipientIds': addressed,
+          if (tagged.isNotEmpty) 'mentions': tagged,
           // A session's thread stays in the thread: never also sent.
           if (_alsoSend && offersAlsoSend) 'alsoSend': true,
           if (startsSession) 'newSession': true,
@@ -683,9 +720,15 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
         operationId: operationId,
       ),
       files: outgoing,
-      held: (draft: _draft, alsoSend: _alsoSend, newSession: _newSession),
+      held: (
+        draft: _draft,
+        mentions: mentions,
+        alsoSend: _alsoSend,
+        newSession: _newSession,
+      ),
     );
     _draft = '';
+    forgetMentions();
     chat.setThreadDraft(root, '');
     _alsoSend = false;
     _newSession = false;
@@ -695,6 +738,15 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
     }
     error = null;
     return _answered(post, await _outbox.add(post), current);
+  }
+
+  /// The draft names an agent where the thread's own session alone hears a
+  /// reply (backend routeBuddySession), which would refuse it.
+  bool get _namesAgentInSession {
+    final group = chat.conversation;
+    return group != null &&
+        (newSession || session != null) &&
+        mentionsSaid(_draft, group.agentIds).addressed.isNotEmpty;
   }
 
   /// Sends [post], not confirmed, again under its own operation id: the
@@ -741,7 +793,17 @@ class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
   /// typed or added since.
   void _restore(SwarmPost post) {
     final sent = post.held;
-    if (sent is! ({String draft, bool alsoSend, bool newSession})) return;
+    if (sent
+        is! ({
+          String draft,
+          Map<String, String> mentions,
+          bool alsoSend,
+          bool newSession,
+        })) {
+      return;
+    }
+    // Picked again first: the draft keeps those its text names.
+    restoreMentions(sent.mentions);
     draft = _draft.trim().isEmpty ? sent.draft : '${sent.draft}\n$_draft';
     _alsoSend = _alsoSend || sent.alsoSend;
     // Refused for New session itself, it comes back as a plain reply.

@@ -353,6 +353,38 @@ void main() {
       await shoot(tester, key, 'swarm-thread-open-$look');
     });
 
+    testWidgets(
+      'the thread, Reply options open, Also send ticked ($look)',
+      skip: skip,
+      (tester) async {
+        final key = await chat(tester);
+        await tester.tap(find.byKey(const ValueKey('swarm-thread-line-m1')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('swarm-thread-options')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('swarm-thread-also-send')));
+        await tester.pumpAndSettle();
+        await shoot(tester, key, 'swarm-thread-options-open-$look');
+        // Folded again: the line says what is on.
+        await tester.tap(find.byKey(const ValueKey('swarm-thread-options')));
+        await tester.pumpAndSettle();
+        await shoot(tester, key, 'swarm-thread-options-folded-on-$look');
+      },
+    );
+
+    testWidgets('the thread, its @ picker open ($look)', skip: skip, (
+      tester,
+    ) async {
+      final key = await chat(tester);
+      await tester.tap(find.byKey(const ValueKey('swarm-thread-line-m1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('swarm-tag')));
+      await tester.pumpAndSettle();
+      await shoot(tester, key, 'swarm-thread-tag-$look');
+      // The draft's save, a moment after it changed.
+      await tester.pump(const Duration(seconds: 1));
+    });
+
     testWidgets('the thread, its mic listening ($look)', skip: skip, (
       tester,
     ) async {

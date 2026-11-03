@@ -2219,7 +2219,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (query != null && snapshot != null && !talking)
-            _MentionPicker(
+            SwarmMentionPicker(
               people: c.mentionablePeople,
               agents: c.mentionable,
               snapshot: snapshot,
@@ -2393,7 +2393,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                                 : () => unawaited(_pickFiles(c)),
                           ),
                         if (taggable)
-                          _TagChip(
+                          SwarmTagChip(
                             open: query != null,
                             onTap: () {
                               c.toggleMention();
@@ -3300,8 +3300,10 @@ class _Ask extends StatelessWidget {
 /// Over the composer, who the @ being typed can name, as Desktop offers
 /// them: the chat's people whose username holds what follows it, then its
 /// agents whose name starts with it, each with its role and what it is doing.
-class _MentionPicker extends StatelessWidget {
-  const _MentionPicker({
+/// The chat's and a thread's reply box alike.
+class SwarmMentionPicker extends StatelessWidget {
+  const SwarmMentionPicker({
+    super.key,
     required this.people,
     required this.agents,
     required this.snapshot,
@@ -3779,11 +3781,11 @@ class SwarmAttachButton extends StatelessWidget {
   );
 }
 
-/// The chat composer's @ Tag chip ([SwarmConversation.toggleMention]): ends
-/// the draft in an @, which opens the picker, or closes it again while no
-/// name is typed. In the accent while the picker is open.
-class _TagChip extends StatelessWidget {
-  const _TagChip({required this.open, required this.onTap});
+/// The composer's @ Tag chip ([SwarmMentioning.toggleMention]), the chat's
+/// and a thread's: ends the draft in an @, which opens the picker, or closes
+/// it again while no name is typed. In the accent while the picker is open.
+class SwarmTagChip extends StatelessWidget {
+  const SwarmTagChip({super.key, required this.open, required this.onTap});
 
   final bool open;
   final VoidCallback onTap;

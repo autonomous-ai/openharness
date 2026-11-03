@@ -131,6 +131,30 @@ void main() {
       expect(after.threadDraft('root-1'), 'in the thread');
     });
 
+    test('a thread reply keeps its mentions too, across a restart', () async {
+      final before = await app();
+      final c = await chat(before);
+      final t = SwarmThread(c, 'root-1');
+      addTearDown(t.dispose);
+      t.draft = 'ask';
+      t.mention('agent-lead');
+      final draft = t.draft;
+      await before.kept.flush();
+      final again = await app();
+      final after = SwarmThread(await chat(again), 'root-1');
+      addTearDown(after.dispose);
+      expect(after.draft, draft);
+      expect(after.mentions, {'agent-lead': '@River'});
+      expect(again.kept.draft(tab, 'g1', 'root-1')?.mentions.keys, [
+        'agent-lead',
+      ]);
+      expect(
+        again.kept.draft(tab, 'g1', null),
+        isNull,
+        reason: 'the chat\'s own draft is apart',
+      );
+    });
+
     test(
       'goes once sent, and a kill right after brings nothing back',
       () async {
