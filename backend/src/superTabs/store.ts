@@ -31,7 +31,7 @@ import { noteClaim, recordDeliveryCall } from '../lib/deliveryCalls.js'
 import { retryTransient } from './retry.js'
 import { recordReload } from './retryStats.js'
 import { buddyChatId, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
-import { accountOf, wordsOf, buddyPerson, canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey } from './projects.js'
+import { accountOf, wordsOf, buddyPerson, canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type SwarmProject } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
 import { isBuddy, isBuddyChat, isBuddyReader, refuseBuddyRouting, routingRow } from './buddies.js'
@@ -2879,6 +2879,41 @@ export class SuperTabStore {
     const person = await this.db.user.findUnique({ where: { id: userId }, select: { email: true } })
     if (!person) return null
     try { return (await this.projectRepository({ sub: userId, email: person.email, role: 'user', autonomousEnv }, tabId, projectId)).name } catch { return null }
+  }
+
+  /** Moves the GitHub revision of every project of [tabId] on [repository] (owner/name, any case): someone allowed it, or
+   *  GitHub sent someone back after installing the app there, so members' apps read its access again (projects.ts
+   *  githubRevision). A deleted or missing Swarm moves nothing. */
+  async githubChanged(tabId: string, repository: string): Promise<void> {
+    const key = repository.toLowerCase()
+    await this.moveGitHub(tabId, project => githubRepository(project.repository?.repositoryUrl ?? '')?.fullName.toLowerCase() === key)
+  }
+
+  /** Records what a check that asked GitHub again found for [projectId], moving its GitHub revision when that differs
+   *  from the last one recorded. States that are no answer from GitHub record nothing. Whether it moved. */
+  async githubSeen(tabId: string, projectId: string, state: string): Promise<boolean> {
+    if (!(GITHUB_SEEN as readonly string[]).includes(state)) return false
+    const seen = state as GitHubSeen
+    return this.moveGitHub(tabId, project => project.id === projectId && project.githubSeen !== seen, project => { project.githubSeen = seen })
+  }
+
+  /** One state write moving the GitHub revision of the projects [moves] picks, re-read in its transaction; none picked
+   *  writes nothing. */
+  private async moveGitHub(tabId: string, moves: (project: SwarmProject) => boolean, also?: (project: SwarmProject) => void): Promise<boolean> {
+    return transaction(this.db, async tx => {
+      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+      if (!row || row.deletedAt) return false
+      const loaded = await loadRow(tx, requireParts(row), {})
+      const state = cloneData(loaded.state)
+      const moved = (state.projects ?? []).filter(moves)
+      if (!moved.length) return false
+      for (const project of moved) {
+        project.githubRevision = (project.githubRevision ?? 0) + 1
+        also?.(project)
+      }
+      await this.save(tx, loaded, state, clock.next(), [{ kind: 'head', key: 'head' }])
+      return true
+    })
   }
 
   async machineRemoval(user: AuthUser, tabId: string, machineId: string) {
