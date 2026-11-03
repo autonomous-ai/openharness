@@ -4754,6 +4754,27 @@ describe('lead.switch', () => {
       machineId: 'destination', model: 'gpt-5.1', leadFor: expect.objectContaining({ switchId: s.sid() }) }) }))
   })
 
+  it('promotes a running destination candidate to the same lead conversation exactly when it starts', () => {
+    const s = setup()
+    const destination = structuredClone(s.f.state.machines![0]!)
+    destination.machineId = 'destination'
+    destination.name = 'Destination Mac'
+    destination.generation = 'g2'
+    destination.observation!.generation = 'g2'
+    destination.observation!.capabilities = ['leadSwitch', 'leadStart']
+    s.f.state.machines!.push(destination)
+    s.f.run({ ...s.request, machineId: 'destination', model: 'gpt-5.1' })
+    const start = s.f.state.starts!.find(candidate => candidate.request.leadFor?.switchId === s.sid())!
+    const contribution = { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }
+
+    const started = s.f.run({ type: 'agent.started', startId: start.id, harnessId: 'destination-pm',
+      configuration: { ...config, engine: 'codex', model: 'gpt-5.1' } }, owner, { contribution })
+
+    const candidateId = started.result.agentId as string
+    expect(s.f.state.conversations.find(c => c.id === 'lead')!.leadId).toBe(candidateId)
+    expect(s.f.state.agents.find(a => a.id === s.pm)!.switchLanded).toMatchObject({ id: s.sid(), candidateAgentId: candidateId })
+  })
+
   it('lets only the PM itself claim, with a 15 minute lease', () => {
     const s = setup()
     s.f.run(s.request)
