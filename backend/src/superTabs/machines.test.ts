@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { createSuperTab, SuperTabError, type AgentStart, type AgentStartRequest, type SuperTabState } from './model.js'
-import { admitMachineStart, defaultProfileId, machineSlots, machineObservationSchema, preparableStart, readingOnly, servedLocalModels, storedObservation, type ContributedMachine,
+import { admitMachineStart, defaultProfileId, machineSlots, machineObservationSchema, preparableStart, readingOnly, removalPreview, servedLocalModels, storedObservation, type ContributedMachine,
   type MachineObservation } from './machines.js'
+import { NOW, owner, peer, richSwarm } from './read/fixture.test-support.js'
 
 const NOW = 1_000_000
 const requirements = { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 50, tools: ['git'], devices: [], quotaRequired: false }
@@ -291,4 +292,36 @@ describe('a machine\'s reading as a report stores it (DB 2.5)', () => {
 
 it('names the default account the same way the CLI and Desktop do', () => {
   expect(defaultProfileId('m', 'claude')).toBe('71dc90339553114c')
+})
+
+it('the removal preview names only the agents and projects its owner reads', () => {
+  const s = richSwarm(NOW)
+  s.contribute('host')
+  const secretTask = s.group('Private task title', s.secret)
+  const secretPm = s.add('hidden-pm-harness', secretTask, true)
+  const secretWorker = s.add('hidden-builder-harness', secretTask)
+  s.run({ type: 'work.assign', conversationId: secretTask, agentId: secretWorker })
+  s.edit(state => {
+    // The peer owns this machine but is not a member of the owner's private project.
+    const machine = state.machines!.find(item => item.machineId === 'host')!
+    machine.contributorId = peer.userId
+    machine.membershipGeneration = state.people.find(person => person.id === peer.userId)!.generation
+    // The public project's PM is elsewhere; the first PM on this machine is from the unreadable project.
+    state.agents.find(agent => agent.id === s.lead)!.machineId = 'elsewhere'
+    state.projects!.find(project => project.id === s.secret)!.repository = { machineId: 'host', cwd: '/private/repo', repositoryUrl: null }
+  })
+
+  const preview = removalPreview(s.state, peer, 'host')
+
+  expect(preview).toEqual({
+    blockedBy: { reason: "A PM of a project you can't see runs here." },
+    agents: [{ id: s.worker, name: 'worker-harness', projectName: 'Pilot', task: 'Web' }],
+    hiddenAgentCount: 2,
+    soleSourceProjects: [],
+    hiddenSoleSourceProjectCount: 1,
+  })
+  const response = JSON.stringify(preview)
+  for (const unreadable of [secretPm, secretWorker, 'hidden-pm-harness', 'hidden-builder-harness', 'Private task title', 'Secret', '/private/repo']) {
+    expect(response).not.toContain(unreadable)
+  }
 })
