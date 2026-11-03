@@ -447,10 +447,37 @@ describe('reading a usage limit off a screen', () => {
     ['claude-weekly-limit', { resetAt: new Date(2026, 9, 30, 9, 0).toISOString() }],
     ['claude-opus-limit', { resetAt: new Date(2026, 9, 30, 9, 0).toISOString() }],
     ['claude-fable-limit', {}],
+    // Mid-turn, its notice is a row of its own after a tool's output (review of #2712, Important 1).
+    ['claude-limit-after-tool', { resetAt: new Date(2026, 9, 23, 15, 0).toISOString() }],
     ['codex-usage-limit', { resetAt: new Date(2026, 9, 27, 15, 5).toISOString() }],
     ['codex-model-limit', { resetAt: new Date(2026, 9, 23, 16, 5).toISOString() }],
   ])('reads the %s screen', (name, limit) => {
     expect(limitOf(fixture(name), now)).toEqual(limit)
+  })
+  // Task #2321 (Ken, 11-03): River was listed limited while it worked, as it had just printed another agent's screen,
+  // which showed Codex's limit line. Only the engine's own notice marks an agent limited, never text it prints.
+  it.each([
+    ['claude-printed-codex-limit', 'a screen Claude Code printed, the limit line further down its tool output'],
+    ['claude-printed-limit-first-line', 'the limit line first in its tool output, right above the prompt'],
+  ])('reads no limit off %s: %s', name => {
+    expect(limitOf(fixture(name), now)).toBeNull()
+  })
+  it('reads no limit off a log a tool printed, quoted or indented, near the prompt', () => {
+    expect(limitOf('⏺ Read(logs/codex.log)\n  ⎿  Read 3 lines\n     5-hour limit reached ∙ resets 3pm\n\n❯ ', now)).toBeNull()
+    expect(limitOf('• Ran cat codex.log\n  └ ■ You\'ve hit your usage limit. Try again at 4:05 PM.\n\n› ', now)).toBeNull()
+    // A Claude Code screen printed in a tool's output, its header scrolled off: its "⎿" rows sit deeper than the engine's own.
+    expect(limitOf('       └  Test Files  1 passed (1)\n     ⎿  You\'ve hit your session limit · resets 3pm\n\n❯ ', now)).toBeNull()
+    expect(limitOf('⏺ Update(notes.md)\n  ⎿  Added 1 line\n       1 + You\'ve hit your session limit · resets 3pm\n\n❯ ', now)).toBeNull()
+  })
+  it('still reads Claude Code\'s limit dialog', () => {
+    expect(limitOf([
+      '╭──────────────────────────────────────────────────────────╮',
+      '│ You\'ve hit your limit · resets 3pm (Asia/Saigon)         │',
+      '│                                                          │',
+      '│ ❯ 1. Stop and wait for limit to reset                    │',
+      '│   2. Upgrade your plan                                   │',
+      '╰──────────────────────────────────────────────────────────╯',
+    ].join('\n'), now)).toEqual({ resetAt: new Date(2026, 9, 23, 15, 0).toISOString() })
   })
   it('knows a limit without a reset time, and ignores the words in an agent\'s own prose or far above the prompt', () => {
     expect(limitOf('⎿  API Error: Usage limit reached\n> ', now)).toEqual({})
@@ -459,6 +486,8 @@ describe('reading a usage limit off a screen', () => {
     expect(limitOf('> ', now)).toBeNull()
     // A full context is not a usage limit; a workspace out of credits is one.
     expect(limitOf('  ⎿  Context limit reached · /compact or /clear to continue\n> ', now)).toBeNull()
+    // A notice under Claude Code's reply whose start has scrolled off the screen is still its own.
+    expect(limitOf('  ⎿  You\'ve hit your session limit · resets 3pm\n\n❯ ', now)).toEqual({ resetAt: new Date(2026, 9, 23, 15, 0).toISOString() })
     expect(limitOf('■ You\'ve reached your workspace credit limit\n› ', now)).toEqual({})
   })
 })
