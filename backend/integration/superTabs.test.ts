@@ -12,7 +12,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { ABANDONED_START_MS, GrantReads, SuperTabStore } from '../src/superTabs/store.js'
 import { HostReads } from '../src/superTabs/read/host.js'
-import { attachmentsFromEnv, MemoryAttachmentStore, MemoryAvatarStore } from '../src/superTabs/attachments.js'
+import { attachmentsFromEnv, MemoryAttachmentStore, MemoryAvatarStore, REMOVING_UPLOAD_PURPOSE } from '../src/superTabs/attachments.js'
 import { startAttachmentSweepFrom, sweepUnsentAttachments } from '../src/lib/attachmentSweep.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
@@ -3038,6 +3038,22 @@ describe('Super Tab chat attachments', () => {
       expect([(await row(usedPicture.id))?.id, pictures.objects.has(usedPicture.key)]).toEqual([usedPicture.id, true])
       // A young file is still sent as usual.
       expect((await send(tab, [young.id])).result.messageId).toBeTruthy()
+    })
+
+    it('leaves an upload still on its link, or being removed by its own sweep, to the pending-upload sweep, however old', async () => {
+      const { tab } = await fixture()
+      const [pending, removing] = [(await linkFor(tab, { size: 5 })).upload, (await linkFor(tab, { size: 5 })).upload]
+      for (const link of [pending, removing]) expect(await files.receive(link.url, link.headers, Buffer.alloc(5))).toBe(200)
+      await db.superTabAttachment.update({ where: { id: removing.id }, data: { purpose: REMOVING_UPLOAD_PURPOSE } })
+      for (const id of [pending.id, removing.id]) await aged(id, 25)
+      const keys = [(await row(pending.id))!.objectKey, (await row(removing.id))!.objectKey]
+
+      expect(await sweep()).toEqual({ removed: 0, failed: 0 })
+      expect([(await row(pending.id))?.usedBy, (await row(removing.id))?.usedBy]).toEqual([null, null])
+      expect(keys.map(key => files.objects.has(key))).toEqual([true, true])
+      // Its own sweep takes them, file and row (lib/pendingUploadSweep.ts).
+      expect(await sweepPendingUploads(db, files, Date.now())).toEqual({ removed: 2, failed: 0 })
+      expect(keys.map(key => files.objects.has(key))).toEqual([false, false])
     })
 
     it('keeps a file whose object could not be deleted for the next run, and nothing can use it meanwhile', async () => {
