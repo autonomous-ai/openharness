@@ -3161,6 +3161,9 @@ class _SuperTabViewState extends State<SuperTabView>
             },
       thread: thread,
       threadUnread: thread != null && c.threadUnread(thread),
+      threadTagged:
+          thread != null &&
+          SuperTabAttention.of(c).hasUnreadTagInThread(c.selectedId, thread.id),
       // A thread its own Buddy session answers says so on its line.
       threadTrailing: switch (thread == null || inThread
           ? null

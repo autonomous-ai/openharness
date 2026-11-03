@@ -252,6 +252,7 @@ class ProjectSidebar extends StatelessWidget {
     // Slack's way). Tags in the task conversations it hides make it bold, and
     // are on their own rows and in Activity.
     final badge = attention?.mentionsIn(group.id) ?? 0;
+    final badgeTooltip = attention?.badgeTooltipIn(group.id);
     return _drawRow(
       group,
       project: project,
@@ -260,6 +261,7 @@ class ProjectSidebar extends StatelessWidget {
       waiting: waiting,
       unread: unread,
       badge: badge,
+      badgeTooltip: badgeTooltip,
       buddyChat: reading?.buddyChat,
       selectedProjectId: reading?.sidebar.selectedProjectId,
     );
@@ -295,6 +297,7 @@ class ProjectSidebar extends StatelessWidget {
         waiting: reading.waiting.contains(group.id),
         unread: reading.unread.contains(group.id),
         badge: attention?.mentionsIn(group.id) ?? 0,
+        badgeTooltip: attention?.badgeTooltipIn(group.id),
       );
 
   Widget _drawRow(
@@ -307,6 +310,7 @@ class ProjectSidebar extends StatelessWidget {
     required bool waiting,
     required bool unread,
     int badge = 0,
+    String? badgeTooltip,
     SuperTabConversation? buddyChat,
     String? selectedProjectId,
     Widget? trailing,
@@ -480,15 +484,18 @@ class ProjectSidebar extends StatelessWidget {
                                       if (badge > 0) ...[
                                         const SizedBox(width: 8),
                                         Semantics(
-                                          label: badge == 1
-                                              ? '1 mention'
-                                              : '$badge mentions',
+                                          label:
+                                              badgeTooltip ??
+                                              (badge == 1
+                                                  ? '1 mention'
+                                                  : '$badge mentions'),
                                           excludeSemantics: true,
                                           child: SuperTabCountBadge(
                                             badge,
                                             key: ValueKey(
                                               'super-mentions-${group.id}',
                                             ),
+                                            tooltip: badgeTooltip,
                                           ),
                                         ),
                                       ],
@@ -738,6 +745,7 @@ class ProjectSidebar extends StatelessWidget {
           chat != null && !_paneCovered && controller.selectedId == chat.id,
       unread: chat != null && controller.unreadShown(chat),
       badge: chat == null ? 0 : attention?.mentionsIn(chat.id) ?? 0,
+      badgeTooltip: chat == null ? null : attention?.badgeTooltipIn(chat.id),
       onTap: chat != null
           ? () => onSelect(chat.id)
           : controller.saving || controller.hasPendingAction
