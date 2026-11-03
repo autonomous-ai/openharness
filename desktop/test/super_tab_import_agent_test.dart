@@ -1037,7 +1037,12 @@ void main() {
 
     // ENGINEERING.md 8: each import is counted by its outcome alone, with no
     // name, path or id.
-    ({ProductMeasurement usage, Map<String, int> Function() totals}) counted() {
+    ({
+      ProductMeasurement usage,
+      Map<String, int> Function() totals,
+      Future<void> Function(WidgetTester) bind,
+    })
+    counted() {
       final reports = <Map<String, dynamic>>[];
       final usage = ProductMeasurement(
         surface: 'desktop',
@@ -1048,18 +1053,22 @@ void main() {
           production: true,
         ),
         sendSetup: (_) async => {'accepted': true},
-      )..proxyVocabulary = 7;
-      usage.account(
-        'owner',
-        choice: () async => {'enabled': true, 'revision': 0},
-        send: (report) async {
-          reports.add(report);
-          return {'accepted': true};
-        },
-      );
-      addTearDown(usage.dispose);
+      )..proxyVocabulary = 7; // The app disposes it with itself.
       return (
         usage: usage,
+        // After the app is made, which binds its own (signed-out) account:
+        // this account, its sharing choice read.
+        bind: (tester) async {
+          usage.account(
+            'owner',
+            choice: () async => {'enabled': true, 'revision': 0},
+            send: (report) async {
+              reports.add(report);
+              return {'accepted': true};
+            },
+          );
+          await tester.runAsync(usage.flush);
+        },
         totals: () {
           final all = <String, int>{};
           for (final report in reports) {
@@ -1077,6 +1086,7 @@ void main() {
     ) async {
       final m = counted();
       final f = await roster(tester, measurement: m.usage);
+      await m.bind(tester);
       await preview(tester, f);
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
@@ -1089,6 +1099,7 @@ void main() {
     testWidgets('an Import is counted as ok', (tester) async {
       final m = counted();
       final f = await roster(tester, measurement: m.usage);
+      await m.bind(tester);
       await preview(tester, f);
       await tester.tap(find.widgetWithText(FilledButton, 'Import'));
       await settle(
@@ -1105,6 +1116,7 @@ void main() {
     ) async {
       final m = counted();
       final f = await roster(tester, measurement: m.usage);
+      await m.bind(tester);
       await preview(tester, f);
       f.server.unknownCommand = (command) => command['type'] == 'agent.start';
       await tester.tap(find.widgetWithText(FilledButton, 'Import'));
