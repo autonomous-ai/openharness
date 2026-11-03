@@ -25,6 +25,20 @@ describe('engineAccount', () => {
     expect(asked).toEqual([])
   })
 
+  it('counts a saved model API as a sign-in, so a machine with no subscription can take Swarm work', async () => {
+    // Headless run, 2026-11-03: a working OpenRouter key was saved for the team account, and the machine still read
+    // "not signed in", so no Swarm start was admitted.
+    const root = home()
+    const data = join(root, '.harness', 'cli', 'data', 'api-connections')
+    mkdirSync(data, { recursive: true })
+    writeFileSync(join(data, 'connections.json'), JSON.stringify({ version: 1, recognizedBases: ['https://openrouter.ai/api/v1'],
+      connections: [{ id: 'openrouter', provider: 'openrouter', name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1',
+        keyEnv: 'OPENROUTER_API_KEY', authHeader: 'Authorization', authPrefix: 'Bearer', apiKey: 'sk-x' }] }))
+    expect((await engineAccount('claude', { home: root, ...linux })).signedIn).toBe(true)
+    // Codex's own launch needs its config, so a saved API alone does not sign it in.
+    expect((await engineAccount('codex', { home: root, ...linux })).signedIn).toBe(false)
+  })
+
   it('finds Claude Code signed in by its credential file, an apiKeyHelper, its Keychain item, or the environment', async () => {
     const withFile = home()
     mkdirSync(join(withFile, '.claude'), { recursive: true })
