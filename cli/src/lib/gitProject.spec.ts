@@ -7,8 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { encryptDownFrame, encryptRpcResult } from './e2ee/applicationFrames.js'
 import { placeholderBranch, sessionBranchNames, worktreeFolderName } from './agentNames.js'
 import { nameBranchAfterSession } from './branchNaming.js'
-import { fetchDefaultBranch, harnessMadeWorktree, prepareGitProject, readGitProject, validGitPath } from './gitProject.js'
-import { parseProjectFolder, prepareProjectFolder } from './projectFolder.js'
+import { fetchDefaultBranch, fetchStartBase, harnessMadeWorktree, prepareGitProject, readGitProject, validGitPath } from './gitProject.js'
+import { cloneRepository, parseProjectFolder, prepareProjectFolder } from './projectFolder.js'
 import { engineSessionTitle, namingTitle } from './sessionTitle.js'
 
 const exec = promisify(execFile)
@@ -493,6 +493,59 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
       expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('main')
       const asked = await prepareGitProject(managed, { root: join(root, 'harnesses'), worktree: true, branchName: 'asked', fromDefaultBranch: true })
       expect(await readFile(join(asked, 'src', 'value'), 'utf8')).toBe('pushed')
+    })
+  })
+
+  describe('a Swarm start for another person\'s work in a blob-less, single-branch clone', () => {
+    // The project clone fetches only the default branch, and file contents as they are needed (projectFolder.ts). A start
+    // for another person's work is offline: its host fetches with the app's token first, and the owner's login is never
+    // used, so nothing may be fetched lazily while its worktree is made.
+    let origin: string, managed: string, contacts: string
+    const identity = ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null']
+    const inClone = (...args: string[]) => exec('git', ['-C', managed, ...args]).then(out => out.stdout.trim())
+    const offlineStart = (name: string, extra: Partial<{ branchRef: string }> = {}) => prepareProjectFolder({ source: 'worktree', gitSource: managed,
+      branchName: name, offline: true, ...(extra.branchRef ? { branchRef: extra.branchRef } : { fromDefaultBranch: true }) }, options())
+    /** Someone pushes [value] to [branch] after the managed clone was made. */
+    const pushToOrigin = async (branch: string, value: string) => {
+      const pusher = join(root, `pusher-${branch}`)
+      await exec('git', ['clone', '--quiet', '--branch', branch, origin, pusher])
+      await writeFile(join(pusher, 'src', 'value'), value)
+      await exec('git', ['-C', pusher, ...identity, 'commit', '-qam', value])
+      await exec('git', ['-C', pusher, 'push', '--quiet', 'origin', branch])
+    }
+    beforeEach(async () => {
+      origin = join(root, 'origin.git'); managed = join(root, 'managed'); contacts = join(root, 'contacts.log')
+      await exec('git', ['clone', '--quiet', '--bare', repo, origin])
+      for (const key of ['uploadpack.allowFilter', 'uploadpack.allowAnySHA1InWant']) await exec('git', ['-C', origin, 'config', key, 'true'])
+      await cloneRepository(`file://${origin}`, managed)
+      // Every time this clone asks the origin for anything, it says so.
+      const uploadPack = join(root, 'upload-pack')
+      await writeFile(uploadPack, `#!/bin/sh\necho contact >> '${contacts}'\nexec git-upload-pack "$@"\n`, { mode: 0o755 })
+      await inClone('config', 'remote.origin.uploadpack', uploadPack)
+    })
+
+    it('fetches the start\'s own base branch and its files with the token, so its offline worktree needs nothing else', async () => {
+      await pushToOrigin('feature', 'feature, later')
+      expect(await fetchStartBase(managed, process.env, 'refs/remotes/origin/feature')).toBe(true)
+      await rm(origin, { recursive: true })
+      const folder = await offlineStart('super-tab/start-1', { branchRef: 'refs/remotes/origin/feature' })
+      expect(await readFile(join(folder, 'src', 'value'), 'utf8')).toBe('feature, later')
+    })
+
+    it('fetches the default branch and its files when the start names no branch', async () => {
+      await pushToOrigin('main', 'main, later')
+      expect(await fetchStartBase(managed, process.env)).toBe(true)
+      await rm(origin, { recursive: true })
+      expect(await readFile(join(await offlineStart('super-tab/start-1'), 'src', 'value'), 'utf8')).toBe('main, later')
+    })
+
+    it('never fetches missing files while making an offline worktree', async () => {
+      await pushToOrigin('main', 'main, later')
+      // The branch, without its files: what a fetch with no file contents leaves.
+      await inClone('fetch', '--quiet', '--no-tags', 'origin', '+refs/heads/main:refs/remotes/origin/main')
+      await rm(contacts, { force: true })
+      await expect(offlineStart('super-tab/start-1')).rejects.toThrow()
+      expect(await readFile(contacts, 'utf8').catch(() => '')).toBe('')
     })
   })
 
