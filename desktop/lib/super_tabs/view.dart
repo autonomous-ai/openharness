@@ -141,10 +141,6 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The Buddy chats whose next message starts its own thread's session.
   final _chatSessions = <String>{};
 
-  /// The project a New session in the reader's one Buddy chat works in, by
-  /// chat; none is a session that reads every project and sends to no PM
-  /// (spec 2026-10-31-one-buddy-per-swarm).
-  final _chatSessionProjects = <String, String>{};
   String? _selected;
   int _scrollRequest = 0;
   bool _jumpingToEnd = false;
@@ -287,7 +283,12 @@ class _SuperTabViewState extends State<SuperTabView>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _readVisibleTailAfterFrame();
+    if (state == AppLifecycleState.resumed) {
+      _readVisibleTailAfterFrame();
+    } else {
+      // No frame follows: the poll goes on in the background.
+      _syncThreadPane();
+    }
   }
 
   @override
@@ -313,6 +314,7 @@ class _SuperTabViewState extends State<SuperTabView>
     if (oldWidget.controller != c) {
       _board.dispose();
       _board = SuperTabProjectBoard(c);
+      oldWidget.controller.threadPaneHidden();
       oldWidget.controller.removeListener(_changed);
       if (oldWidget.controller.buddyChatOpener == _openBuddyChat) {
         oldWidget.controller.buddyChatOpener = null;
@@ -510,16 +512,28 @@ class _SuperTabViewState extends State<SuperTabView>
     final sequence = c.messages(id).lastOrNull?.sequence ?? 0;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && !_jumpingToEnd) _readToEnd(id, sequence);
-      // A thread restored open counts as read only once its pane is seen.
-      if (mounted &&
-          c.openedThread?.conversationId == c.selectedId &&
-          _viewIsVisible) {
-        c.threadPaneShown();
-      }
     });
+    _syncThreadPane();
     // Widget updates already have a frame in progress. Reuse it so routine
     // polling does not request an otherwise unnecessary frame after each build.
     WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  /// Whether the open thread's pane is on screen: beside its conversation's
+  /// chat, in a view a person can see.
+  bool get _threadPaneVisible =>
+      c.openedThread?.conversationId == c.selectedId && _viewIsVisible;
+
+  /// Tells the controller whether the open thread's pane is on screen, by the
+  /// rule the chat reads by: hidden at once, so a poll landing while it is
+  /// away marks no reply read; shown after the frame that draws it, which
+  /// marks through its newest reply.
+  void _syncThreadPane() {
+    if (c.openedThread == null) return;
+    if (!_threadPaneVisible) return c.threadPaneHidden();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _threadPaneVisible) c.threadPaneShown();
+    });
   }
 
   void _readToEnd(String id, int sequence) {
@@ -780,6 +794,8 @@ class _SuperTabViewState extends State<SuperTabView>
   @override
   void dispose() {
     _noticesLeave(c);
+    // The controller outlives its view, reading another Swarm's replies.
+    c.threadPaneHidden();
     WidgetsBinding.instance.removeObserver(this);
     _board.dispose();
     _facts.dispose();
@@ -831,7 +847,7 @@ class _SuperTabViewState extends State<SuperTabView>
     final result = await c.send(
       replyTo: _replies[id]?.id,
       newSession: newSession,
-      sessionProjectId: newSession ? _chosenSessionProject(id) : null,
+      sessionProjectId: newSession ? _chosenSessionProject() : null,
       // The reply goes with the message, which shows at the end at once.
       onSending: () {
         if (!mounted) return;
@@ -840,10 +856,7 @@ class _SuperTabViewState extends State<SuperTabView>
       },
     );
     if (!mounted) return;
-    if (newSession && result != null) {
-      _chatSessions.remove(id);
-      _chatSessionProjects.remove(id);
-    }
+    if (newSession && result != null) _chatSessions.remove(id);
     // Refused for New session, its text is back as the chat's draft: it shows
     // in the box, ready to send without it, unless another chat is shown or
     // something was typed meanwhile.
@@ -890,10 +903,13 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  /// The project chosen for chat [id]'s New session while the reader still
-  /// reads it: one they lost is no longer chosen (security review 1 of #2437).
-  String? _chosenSessionProject(String? id) {
-    final chosen = _chatSessionProjects[id];
+  /// The project chosen for a New session, the last one on this device (task
+  /// #2347), while the reader still reads it: one they lost is no longer
+  /// chosen, and the session reads every project (security review 1 of #2437).
+  /// None is a session that reads every project and sends to no PM (spec
+  /// 2026-10-31-one-buddy-per-swarm).
+  String? _chosenSessionProject() {
+    final chosen = c.sessionProjectId;
     return c.snapshot?.projects.any((p) => p.id == chosen) == true
         ? chosen
         : null;
@@ -903,21 +919,16 @@ class _SuperTabViewState extends State<SuperTabView>
   /// they read, sending to no PM, or one project, whose PM it alone sends to.
   /// A quiet menu beside New session, shown while it is on.
   Widget _chatSessionProject(bool writable) {
-    final id = c.selectedId;
     final projects = c.snapshot?.projects ?? const <SuperTabProject>[];
     final chosen = projects
-        .where((p) => p.id == _chatSessionProjects[id])
+        .where((p) => p.id == _chosenSessionProject())
         .firstOrNull;
     return PopupMenuButton<String>(
       key: const ValueKey('super-chat-session-project'),
       enabled: writable,
       tooltip: 'Where this session works',
       initialValue: chosen?.id ?? '',
-      onSelected: (projectId) => setState(
-        () => projectId.isEmpty
-            ? _chatSessionProjects.remove(id)
-            : _chatSessionProjects[id] = projectId,
-      ),
+      onSelected: c.chooseSessionProject,
       itemBuilder: (_) => [
         PopupMenuItem(
           key: const ValueKey('super-chat-session-any'),
@@ -2611,16 +2622,15 @@ class _SuperTabViewState extends State<SuperTabView>
   );
 
   /// The reader's own setting for a chat, kept on every device (Slack's channel
-  /// notifications); a viewer has one too.
-  Widget _notifyMenu(SuperTabConversation group, {bool asRow = false}) =>
+  /// notifications); a viewer has one too. A row like its menu's others, as
+  /// tall as their [finger] rows (Huy, #2342: the chat menu's had a border).
+  Widget _notifyMenu(SuperTabConversation group, {required bool finger}) =>
       SubmenuButton(
         key: const ValueKey('super-notify-menu'),
-        style: asRow ? _menuRowStyle(finger: _phone) : null,
-        submenuIcon: asRow
-            ? const WidgetStatePropertyAll(
-                Icon(AppIcons.chevronRight, size: 14),
-              )
-            : null,
+        style: _menuRowStyle(finger: finger),
+        submenuIcon: const WidgetStatePropertyAll(
+          Icon(AppIcons.chevronRight, size: 14),
+        ),
         menuChildren: [
           for (final (level, label) in const [
             (SuperTabNotify.all, 'All new messages'),
@@ -2629,6 +2639,7 @@ class _SuperTabViewState extends State<SuperTabView>
           ])
             MenuItemButton(
               key: ValueKey('super-notify-${level.name}'),
+              style: _menuRowStyle(finger: finger),
               leadingIcon: SizedBox(
                 width: 16,
                 child: c.notifyOf(group.id) == level
@@ -2683,7 +2694,7 @@ class _SuperTabViewState extends State<SuperTabView>
           item('Instructions', () => _groupAction('instructions', group)),
         if (editable && owner)
           item('Sharing', () => _groupAction('sharing', group)),
-        _notifyMenu(group, asRow: true),
+        _notifyMenu(group, finger: _phone),
         const Divider(height: 9),
         item(
           'Project settings…',
@@ -2805,7 +2816,7 @@ class _SuperTabViewState extends State<SuperTabView>
             ),
           ],
         ],
-        _notifyMenu(group),
+        _notifyMenu(group, finger: views),
         if (_mayHaveArchived(group.projectId))
           item('Archived conversations', () => _groupAction('archived', group)),
       ],
@@ -4298,10 +4309,13 @@ class _SuperTabViewState extends State<SuperTabView>
   // Every message's files ask this Swarm's controller for fresh links; another
   // Swarm or account is another source, so a late answer is dropped.
   @override
-  Widget build(BuildContext context) => SuperTabFiles(
-    fresh: widget.controller.readFileLink,
-    child: _swarm(context),
-  );
+  Widget build(BuildContext context) {
+    _syncThreadPane();
+    return SuperTabFiles(
+      fresh: widget.controller.readFileLink,
+      child: _swarm(context),
+    );
+  }
 
   Widget _swarm(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {

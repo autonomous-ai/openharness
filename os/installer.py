@@ -656,8 +656,11 @@ def install_image(config, source, target, progress, resources):
             write(target, RECOVERY_CONF, recovery_conf(recovery_uuid, platform['kernel'], platform['parameters']))
         lock = json.loads((target / 'usr/share/harness-os/lock.json').read_text())
         snapshot = lock['arch_snapshot']
+        # IgnorePkg: OpenCode stays the one this image brought (tools/opencode_package.py), newer than its
+        # snapshot's; a system update to a later snapshot never changes it (owner, 2026-11-03).
         write(target, '/etc/pacman.conf',
               '[options]\nArchitecture = auto\nCheckSpace\nSigLevel = Required DatabaseOptional\nLocalFileSigLevel = Optional\n'
+              'IgnorePkg = opencode\n'
               + ''.join(f'[{repo}]\nServer = https://archive.archlinux.org/repos/{snapshot}/$repo/os/$arch\n' for repo in ['core', 'extra']))
         # Retain network configuration explicitly, not the live user's home or credentials.
         networks = Path('/etc/NetworkManager/system-connections')

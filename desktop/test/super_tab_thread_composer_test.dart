@@ -714,6 +714,44 @@ void main() {
         expect(server.threadMarkPosts, isNotEmpty);
       });
 
+      // A thread left open behind another Swarm or an app in the background:
+      // the Swarm is still read, and its replies must stay unread.
+      test(
+        'a hidden thread pane marks no new reply read until it is shown again',
+        () async {
+          final server = threaded();
+          final c = server.controller();
+          addTearDown(c.dispose);
+          await c.refresh();
+          c.openThread('message-1');
+          await c.loadThread();
+          c.threadPaneShown();
+          await pumpEventQueue();
+          server.threadMarkPosts.clear();
+          c.threadPaneHidden();
+          server.append('A reply while the pane was hidden.');
+          server.messages.last
+            ..['thread'] = 'message-1'
+            ..['replyTo'] = 'message-1'
+            ..['author'] = {
+              'kind': 'person',
+              'id': 'member',
+              'name': 'member@example.com',
+            };
+          final reply = server.messages.last['sequence'] as int;
+          await c.refresh();
+          await pumpEventQueue();
+          expect(server.threadMarkPosts, isEmpty);
+          expect(c.threadUnread(c.thread('lead', 'message-1')!), isTrue);
+          c.threadPaneShown();
+          await pumpEventQueue();
+          expect(server.threadMarkPosts, [
+            {'conversationId': 'lead', 'root': 'message-1', 'sequence': reply},
+          ]);
+          expect(c.threadUnread(c.thread('lead', 'message-1')!), isFalse);
+        },
+      );
+
       // A Swarm's view can be built while hidden: the canvas stays Offstage on a utility tab, and the app can start in the background.
       Map<String, dynamic> savedOpen() => {
         'tabId': 'tab',
@@ -795,6 +833,91 @@ void main() {
           expect(server.threadMarkPosts, isNotEmpty);
         },
       );
+
+      // A thread opened by hand and seen, then left open while the pane goes
+      // away: the poll goes on bringing replies, and none is marked read.
+      group('a pane seen, then hidden', () {
+        late ConversationServer server;
+        late int reply;
+        Future<SuperTabController> seen(WidgetTester tester) async {
+          await tester.binding.setSurfaceSize(const Size(1400, 900));
+          addTearDown(() => tester.binding.setSurfaceSize(null));
+          server = threaded();
+          final c = shown = server.controller();
+          addTearDown(c.dispose);
+          await c.refresh();
+          c.openThread('message-1');
+          await mountHidden(tester, c, hidden: false);
+          expect(server.threadMarkPosts, isNotEmpty);
+          server.threadMarkPosts.clear();
+          return c;
+        }
+
+        Future<void> replyArrives(
+          WidgetTester tester,
+          SuperTabController c,
+        ) async {
+          server.append('A reply while the pane was hidden.');
+          server.messages.last
+            ..['thread'] = 'message-1'
+            ..['replyTo'] = 'message-1'
+            ..['author'] = {
+              'kind': 'person',
+              'id': 'member',
+              'name': 'member@example.com',
+            };
+          reply = server.messages.last['sequence'] as int;
+          await c.refresh();
+          await tester.pump(const Duration(milliseconds: 50));
+          expect(server.threadMarkPosts, isEmpty);
+        }
+
+        List<Map<String, Object>> markedThroughReply() => [
+          {'conversationId': 'lead', 'root': 'message-1', 'sequence': reply},
+        ];
+
+        testThread(
+          'sent to the background marks no new reply, and marks once it is back',
+          (tester) async {
+            addTearDown(
+              () => tester.binding.handleAppLifecycleStateChanged(
+                AppLifecycleState.resumed,
+              ),
+            );
+            final c = await seen(tester);
+            tester.binding.handleAppLifecycleStateChanged(
+              AppLifecycleState.inactive,
+            );
+            await replyArrives(tester, c);
+            tester.binding.handleAppLifecycleStateChanged(
+              AppLifecycleState.resumed,
+            );
+            await tester.pumpAndSettle();
+            expect(server.threadMarkPosts, markedThroughReply());
+          },
+        );
+
+        testThread(
+          'put offstage marks no new reply, and marks once it is shown',
+          (tester) async {
+            final c = await seen(tester);
+            await mountHidden(tester, c, hidden: true);
+            await replyArrives(tester, c);
+            await mountHidden(tester, c, hidden: false);
+            expect(server.threadMarkPosts, markedThroughReply());
+          },
+        );
+
+        testThread('let go of, as for another Swarm, marks no new reply', (
+          tester,
+        ) async {
+          final c = await seen(tester);
+          await tester.pumpWidget(const SizedBox());
+          await replyArrives(tester, c);
+          await mountHidden(tester, c, hidden: false);
+          expect(server.threadMarkPosts, markedThroughReply());
+        });
+      });
 
       testThread('the real pane says it is shown', (tester) async {
         final server = threaded();

@@ -77,8 +77,10 @@ const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', '
 /** An engine retrying a model that does not answer: Claude Code's "Waiting for API response · will retry in 2m 38s · check
  *  your network" and its "API Error: 503 …", "Request timed out" or "Connection error", and Codex's "stream disconnected -
  *  retrying" and "Reconnecting…". 2026-10-24: a Builder on a small local model retried for an hour, the relay giving up on
- *  every answer, while its Lead waited on it. Only near the prompt, as a limit is. */
-const MODEL_LINE = /waiting for api response|api error:\s*(?:5\d\d|overloaded|request timed out|connection)|stream (?:error|disconnected)[^\n]*retrying|^\W*reconnecting\b/i
+ *  every answer, while its Lead waited on it. Only near the prompt, as a limit is. Claude Code 2.1 names a connection's
+ *  failure instead ("Unable to connect to API (ECONNREFUSED)", "No internet route — …"), and Codex says "Connection
+ *  failed: error sending request" under its reconnect: Team agents whose relay was gone after an update (2026-11-03). */
+const MODEL_LINE = /waiting for api response|api error:\s*(?:5\d\d|overloaded|request timed out|connection)|unable to connect to api\b|no internet route\b|connection failed: error sending request|stream (?:error|disconnected)[^\n]*retrying|^\W*reconnecting\b/i
 /** Retries come and go on a busy model; ten minutes of them is a model the work cannot get answers from. */
 const MODEL_WAIT_MS = 10 * 60_000
 /** How long a screen must stay clear of retries before its model counts as answering again. Between retries the engine
@@ -91,11 +93,33 @@ export function modelFailing(text: string): boolean {
   return text.split('\n').slice(-LIMIT_NEAR_LINES).some(line => MODEL_LINE.test(line))
 }
 
+/** Claude Code's tool call, whose output it draws under it: "⏺ Bash(…)", "⏺ Read(…)", "⏺ mcp__github__get_pr(…)". */
+const TOOL_CALL = /^⏺\s+[\w.-]+\(/
+
+/** Whether line [at] of [lines] is where an engine draws its own notice, not text the agent printed (Ken, 11-03: River
+ *  was listed limited while working, as it had just printed another agent's screen showing Codex's limit line). An engine
+ *  draws its notice at the margin: Claude Code's status line and the border of its limit dialog, Codex's "■" line. Or, in
+ *  Claude Code, as a row of its own at its two-space "  ⎿  ": under its reply ("⏺ All green." then the notice), or after
+ *  a blank line, as it comes mid-turn after a tool's output (review of #2712). A tool's output starts right under its call
+ *  ("⏺ Bash(…)", no blank line between), and the rest is indented deeper, as is any screen a tool printed. */
+function ownNotice(lines: string[], at: number): boolean {
+  const line = lines[at]!
+  if (/^\S/.test(line)) return true
+  if (!/^ {2}⎿\s/.test(line)) return false
+  for (let above = at - 1; above >= 0; above--) {
+    const before = lines[above]!
+    if (!before.trim()) return true
+    if (/^\S/.test(before)) return !TOOL_CALL.test(before)
+  }
+  return true
+}
+
 /** A usage limit on screen, with when it resets if the screen says; null for none. */
 export function limitOf(text: string, now: number): { resetAt?: string } | null {
   const lines = text.split('\n')
-  const tail = lines.slice(-LIMIT_NEAR_LINES)
-  const at = tail.findIndex(line => LIMIT_LINE.test(line))
+  const from = Math.max(0, lines.length - LIMIT_NEAR_LINES)
+  const tail = lines.slice(from)
+  const at = tail.findIndex((line, i) => LIMIT_LINE.test(line) && ownNotice(lines, from + i))
   if (at < 0) return null
   const said = tail.slice(at, at + 3).join(' ')
   const reset = resetOf(said, now)

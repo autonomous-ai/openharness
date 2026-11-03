@@ -483,4 +483,45 @@ void main() {
       'Test: PR #2514 (Nova): working',
     );
   });
+
+  // Diego, 2026-11-03 (#2311): a check a Tester failed and a Reviewer then
+  // passed, as the backend writes it now: each verdict kept, the failure wins.
+  test('a check one checker failed reads failed after another passed it', () {
+    final server = groupServer(
+      linked: [
+        {
+          ...conversationFixture('t', 'Tested'),
+          'number': 21,
+          'reviewOf': 'offline',
+          'checks': [
+            {
+              'id': 'c',
+              'description': 'Signs in offline',
+              'evidence': 'Crashes offline',
+              'passedBy': null,
+              'verdicts': [
+                {
+                  'by': 'agent:tester',
+                  'passed': false,
+                  'evidence': 'Crashes offline',
+                  'at': 1,
+                },
+                {
+                  'by': 'agent:reviewer',
+                  'passed': true,
+                  'evidence': 'Diff reads right',
+                  'at': 2,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    );
+    final snapshot = SuperTabSnapshot.fromJson(server.state);
+    expect(
+      superTabLinkedLine(snapshot, snapshot.conversation('offline')!),
+      'Tested: 1 check failed',
+    );
+  });
 }
