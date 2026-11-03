@@ -852,6 +852,11 @@ class ConversationServer {
               'status': command['status']
             else if (command['type'] == 'member.username')
               'username': (command['username'] as String?)?.toLowerCase()
+            else if (command['type'] == 'member.name')
+              'name': (command['name'] as String?)?.replaceAll(
+                RegExp(r'\s+'),
+                ' ',
+              )
             else
               'avatar': command['avatar'] == null
                   ? null
@@ -1107,6 +1112,7 @@ class ConversationServer {
         }
       } else if (command['type'] == 'member.status' ||
           command['type'] == 'member.username' ||
+          command['type'] == 'member.name' ||
           command['type'] == 'member.avatar' ||
           command['type'] == 'agent.avatar') {
         _profile(command, reader ?? 'owner');
