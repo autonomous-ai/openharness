@@ -1537,15 +1537,14 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// cannot read it (#2090).
   /// The people [m] tags: each one's address by their username, as the
   /// server names them; an older server's member without one goes by their
-  /// email's name.
+  /// email name.
   static Map<String, String> _taggedOf(
     SwarmConversation c,
     SuperTabMessage m,
   ) => {
     if (m.mentions.isNotEmpty)
       for (final person in c.reader.snapshot?.people ?? <SuperTabPerson>[])
-        if (m.mentions.contains(person.id))
-          person.chosenUsername ?? person.email.split('@').first: person.email,
+        if (m.mentions.contains(person.id)) person.username: person.email,
   };
 
   /// The open task's steps, each read on its own, merged into its chat (task
@@ -1602,13 +1601,14 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       (picture: agent?.avatar, status: null);
 
   /// Who gave a reaction, by name and never by email: "You", an agent's
-  /// name, another person's email name.
+  /// name, another person's username.
   String _reactorName(SwarmConversation c, String kind, String id) {
     if (kind == 'person' && id == c.reader.accountId) return 'You';
     final snapshot = c.reader.snapshot;
     if (kind == 'agent') return snapshot?.agentName(id) ?? 'Agent';
-    final email = snapshot?.people.where((p) => p.id == id).firstOrNull?.email;
-    return email == null ? 'Someone' : superTabPersonName(email);
+    final person = snapshot?.people.where((p) => p.id == id).firstOrNull;
+    return person?.username ??
+        (person == null ? 'Someone' : superTabPersonName(person.email));
   }
 
   /// The reaction picker over thread [t]'s message [id], as [_pickReaction]

@@ -317,7 +317,7 @@ void main() {
     expect(find.text('PM'), findsOneWidget);
     expect(find.text('Nova'), findsOneWidget);
     expect(find.text('Dev'), findsOneWidget);
-    expect(find.text('tony'), findsOneWidget);
+    expect(find.text('person-me'), findsOneWidget);
     expect(find.text(time(0)), findsOneWidget);
     expect(find.text(time(1)), findsNothing, reason: 'a follow-up has none');
     expect(find.text(time(2)), findsOneWidget);
