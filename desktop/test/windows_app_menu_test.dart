@@ -103,6 +103,11 @@ void main() {
     );
 
     expect(tester.getSize(find.byIcon(AppIcons.menu)).width, 16);
+    // The drawn box is the hit area (design note UI-WAM-001: Z1 x H3).
+    expect(
+      tester.getSize(find.byKey(const Key('app-menu-button'))),
+      const Size(32, 32),
+    );
   });
 
   testWidgets('Escape closes the panel', (tester) async {

@@ -229,7 +229,12 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
   /// and a margin for the screen edge; past that a menu really does scroll.
   MenuStyle get _panelStyle {
     final height = MediaQuery.sizeOf(context).height;
-    final style = grid.AppMenu.style(maxHeight: height - 36 - 24);
+    // The compact panel hangs off a button inside the 40px tab strip, so that
+    // is the air it must keep above itself; 36 is the strip it replaced, which
+    // is not the row it opens from.
+    final style = grid.AppMenu.style(
+      maxHeight: height - (widget.compact ? 40 : 36) - 24,
+    );
     return widget.compact
         ? style.copyWith(
             minimumSize: const WidgetStatePropertyAll(Size(280, 0)),
@@ -336,11 +341,15 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
     final controller = _controllers.putIfAbsent('app-menu', MenuController.new);
     final isOpen = identical(_openMenu, controller);
     final sections = <Widget>[];
+    var first = true;
     void section(String label, List<Widget> rows) {
+      // The divider separates sections; the panel ends with its last row, not
+      // with a rule under it.
+      if (!first) sections.add(const AppMenuDivider());
+      first = false;
       sections
         ..add(_SectionHeading(label))
-        ..addAll(rows)
-        ..add(const AppMenuDivider());
+        ..addAll(rows);
     }
 
     section('Harness', _buildHarnessMenu());
@@ -355,6 +364,8 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
       MenuAnchor(
         controller: controller,
         style: _panelStyle,
+        // The same air every other menu keeps from the control it hangs off.
+        alignmentOffset: const Offset(0, grid.AppControl.menuGap),
         onOpen: () {
           setState(() => _openMenu = controller);
           _readFullScreen();
@@ -393,8 +404,11 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
               foregroundColor: isOpen
                   ? grid.AppPalette.textPrimary
                   : grid.AppPalette.textSecondary,
+              // Icon-only controls keep a 32-point target in this system: the
+              // drawn box IS the hit area, not a 28px button with dead rows
+              // either side of the glyph.
               padding: const EdgeInsets.symmetric(horizontal: 8),
-              minimumSize: const Size(0, 28),
+              minimumSize: const Size(32, 32),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               shape: const RoundedRectangleBorder(),
             ),
