@@ -59,6 +59,33 @@ class FlavorEnvTest(unittest.TestCase):
         for key in inherited:
             self.assertNotIn(key, env, key)
 
+    def test_keeps_only_an_allowlist_so_no_credential_an_agent_pane_carries_passes(self):
+        # Security review 1 of #2796: an agent pane carries git's credential helper and hooks, gh's sign-in and
+        # model API keys. Only what a program needs to run is kept.
+        credentials = {
+            'GIT_CONFIG_PARAMETERS': "'credential.helper'='/Users/person/.harness/cli/data/swarm-github/bin/git-credential'",
+            'GH_CONFIG_DIR': '/Users/person/.harness/cli/data/gh',
+            'GITHUB_TOKEN': 'ghs_x',
+            'GIT_ASKPASS': '/Users/person/.harness/askpass',
+            'ANTHROPIC_AUTH_TOKEN': 'sk-ant-x',
+            'ANTHROPIC_BASE_URL': 'https://proxy.example',
+            'OPENAI_API_KEY': 'sk-x',
+            'SSH_AUTH_SOCK': '/private/tmp/ssh-x/agent.1',
+        }
+        kept = {'LANG': 'en_US.UTF-8', 'LC_ALL': 'en_US.UTF-8', 'TERM': 'xterm-256color', 'USER': 'person',
+                'LOGNAME': 'person', 'SHELL': '/bin/zsh', 'TMPDIR': '/var/folders/x/T/',
+                '__CF_USER_TEXT_ENCODING': '0x1F5:0x0:0x0'}
+        env = test_flavor.flavor_env({**self.base, **credentials, **kept}, self.test_home, self.shared, 18990)
+        for key in credentials:
+            self.assertNotIn(key, env, key)
+        for key, value in kept.items():
+            self.assertEqual(env.get(key), value, key)
+
+    def test_drops_path_entries_inside_the_person_s_harness_folder(self):
+        base = {**self.base, 'PATH': '/Users/person/.harness/runtime/node/bin:/Users/person/.local/bin:/usr/bin:/bin'}
+        env = test_flavor.flavor_env(base, self.test_home, self.shared, 18990)
+        self.assertEqual(env['PATH'], '/Users/person/.local/bin:/usr/bin:/bin')
+
     def test_no_path_reaches_the_person_s_harness_folder(self):
         real_harness = self.real_home / '.harness'
         for key, value in self.env.items():

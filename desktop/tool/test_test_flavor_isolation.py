@@ -23,6 +23,8 @@ import test_flavor  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 CALL_LOG = 'calls.log'
+INHERITED_CREDENTIALS = ('GIT_CONFIG_PARAMETERS', 'GH_CONFIG_DIR', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL',
+                         'OPENAI_API_KEY', 'SSH_AUTH_SOCK')
 RECORDER = '#!/bin/sh\necho "$(basename "$0") $*" >> "{log}"\n{tail}\n'
 
 
@@ -80,17 +82,23 @@ class IsolationProofTest(unittest.TestCase):
             'PATH': f'{self.bin}:{Path(self.node).parent}:/usr/bin:/bin:/usr/sbin:/sbin',
             'USER': os.environ.get('USER', 'person'),
             'TMPDIR': str(self.root / 'tmp'),
-            # No backend: the proof is about this Mac, and a closed port answers at once.
-            'BACKEND_WS_URL': 'ws://127.0.0.1:1',
-            # What a Tester's agent pane inherits from the person's daemon.
+            # What a Tester's agent pane inherits from the person's daemon, and the credentials it carries.
             'ADAPTER_DATA_DIR': str(self.real_home / '.harness/cli/data'),
             'HARNESS_HOOK_ROUTES_DIR': str(self.real_home / '.harness/hook-routes'),
             'TMUX': f'/private/tmp/tmux-{os.getuid()}/default,1,0',
+            **{name: f'person-{name.lower()}' for name in INHERITED_CREDENTIALS},
         }
         (self.root / 'tmp').mkdir()
         self.env = test_flavor.flavor_env(base, self.test_home, self.shared, self.port)
+        # No backend: the proof is about this Mac, and a closed port answers at once.
+        self.env['BACKEND_WS_URL'] = 'ws://127.0.0.1:1'
         self.cli = test_flavor.install_cli(REPO / 'cli', self.test_home, Path(self.node))
         self.addCleanup(self.stop_daemon)
+
+    def test_the_cli_runs_without_the_credentials_a_tester_s_pane_carries(self):
+        # The daemon renames its process, so macOS will not show its environment; the CLI gets exactly self.env.
+        for name in INHERITED_CREDENTIALS:
+            self.assertNotIn(name, self.env, name)
 
     def harness(self, *args, timeout=120):
         return subprocess.run([self.node, str(self.cli), *args], env=self.env, capture_output=True, text=True,
