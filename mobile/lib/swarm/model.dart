@@ -1268,11 +1268,6 @@ class SuperTabMessage {
   SuperTabRoute? get route => SuperTabRoute.fromSource(source);
   bool get routeOverride => source['kind'] == 'route-override';
 
-  /// The person a Buddy's proposal speaks for, from the tag the server writes
-  /// on it; null for every other message, whatever its text says.
-  String? get proposalOwnerId =>
-      source['kind'] == 'buddy-proposal' ? source['personId'] as String? : null;
-
   /// A "Let's build" root the server posted in its person's name (plain chat,
   /// #2294): theirs to read, not their own writing, so it reads nothing
   /// before it and is unread for them as anyone else's message is.

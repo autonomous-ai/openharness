@@ -67,10 +67,8 @@ describe('ordinary task messages and progress replies', () => {
     expect(thread(f.status(id, builder, 'review', `Fixed: ${PR}`), root)).toEqual(['Ready for review: PR #7'])
     const done = f.status(id, builder, 'done', `Checks passed: ${PR}`)
     expect(thread(done, root)).toEqual([])
-    expect(done.edits ?? []).toEqual([])
     const merged = f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR })
     expect(thread(merged, root)).toEqual(['Merged: PR #7. Ships in the next release.'])
-    expect(merged.edits ?? []).toEqual([])
     expect(thread(f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR }), root)).toEqual([])
   })
 
@@ -167,7 +165,6 @@ describe('ordinary task messages and progress replies', () => {
     f.run({ type: 'work.assign', conversationId: id, agentId: builder })
     f.task(id).cards!.line!.messageId = 'old-root'
     const effects = f.status(id, builder, 'review', 'Review this.')
-    expect(effects.edits ?? []).toEqual([])
     expect(effects.messages.filter(m => m.thread === 'old-root')).toHaveLength(1)
   })
 

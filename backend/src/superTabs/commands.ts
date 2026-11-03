@@ -743,8 +743,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   // no longer a member (a command that removed them).
   let sender: Author | undefined
   try { sender = author(effects.state, actor) } catch { sender = undefined }
-  syncTaskLines(original, effects, input.type === 'work.status' ? input.conversationId : undefined, sender,
-    stableId(original.id, actorKey(actor), context.operationId))
+  syncTaskLines(original, effects, sender, stableId(original.id, actorKey(actor), context.operationId))
   return effects
 }
 
@@ -1918,8 +1917,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       recordAsked(state.conversations.at(-1)!, requesterId, context.now)
       if (proposal) recordProposal(state.conversations.at(-1)!, { buddyId: proposal.buddyId, messageId: proposal.messageId })
       // The asker's message is the task's root; its thread takes the task's replies (taskLine.ts).
-      if (request) state.conversations.at(-1)!.cards = { line: { messageId: request.messageId, conversationId: project.leadConversationId,
-        state: 'planned', title: command.title, builderId: '' } }
+      if (request) state.conversations.at(-1)!.cards = { line: { messageId: request.messageId, conversationId: project.leadConversationId } }
       result.conversationId = operationId
       result.number = number
       // A build group an agent opens for nobody credits nobody when it ships: say so, as the PM can still name them.

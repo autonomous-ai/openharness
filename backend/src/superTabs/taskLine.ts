@@ -1,42 +1,22 @@
 import { agentDisplayName } from './agentNames.js'
 import { isBuddyChat } from './buddies.js'
 import { shippedNotice } from './buddyNews.js'
-import { isLeads, stableId, type Author, type CommandEffects, type Conversation, type SuperTabState, type WorkStatus } from './model.js'
+import { isLeads, stableId, type Author, type CommandEffects, type Conversation, type SuperTabState } from './model.js'
 import { groupProject, projectsOf } from './projects.js'
 import { isStep } from './steps.js'
 import { usernameOf } from './usernames.js'
 
 /** A task's ordinary opening message in the project chat. Its details and progress are replies; the root is never edited. */
 export const TASK_LINE_KIND = 'task-line'
-/** `ready`: Done with its pull request, not merged yet; `shipped`: a merge of it recorded; `done`: Done with no pull request,
- *  such as a review (PM, review of #2633). */
-export type TaskLineState = 'planned' | 'working' | 'waiting' | 'review' | 'ready' | 'shipped' | 'done' | 'stopped'
-/** What the line last showed, kept on its task (cards.ts GroupCards.line). `reported`: the assignment whose agent has sent a
- *  status, so the line reads planned until then. */
-export interface TaskLine { messageId: string; conversationId: string; state: TaskLineState; title: string; builderId: string; answerFor?: string; reported?: string }
-/** A stored message's new words, written by the store over the row with that id (store.ts). */
-export interface MessageEdit { id: string; conversationId: string; text: string; source: Record<string, unknown> }
-
-const MOVING: ReadonlySet<WorkStatus> = new Set(['working', 'blocked', 'reconciling', 'lost'])
+/** Where a task's root is, kept on its task (cards.ts GroupCards.line). A line stored before plain chat (2026-11-03) also
+ *  holds state, title, builderId, answerFor and reported, which nothing reads; they go with their task when it archives, and
+ *  this note can go once no open task predates 2026-11-03. */
+export interface TaskLine { messageId: string; conversationId: string }
 
 /** A task of a project with work of its own: never a step, the project chat, a Buddy chat, the Leads chat, or a private
  *  conversation (chat only: it holds no work, and its words are its own). */
 function lined(chats: ReadonlySet<string>, group: Conversation): boolean {
   return !group.kind && !isLeads(group) && !isBuddyChat(group) && !isStep(group) && !group.audience && !chats.has(group.id)
-}
-
-/** What [group]'s line shows now. [reported]: its agent sent a status in this command. */
-function drawn(group: Conversation, line: TaskLine | undefined, reported: boolean): Omit<TaskLine, 'messageId' | 'conversationId'> {
-  const assignment = group.assignment
-  if (!assignment) return { state: 'planned', title: group.title, builderId: '' }
-  const status = assignment.status
-  const heard = reported || line?.reported === assignment.id
-  // Shipped only once a merge is recorded (conversation.merged), never on Done alone: the batch merges after the review passed.
-  const state: TaskLineState = status === 'working' && !heard ? 'planned' : MOVING.has(status) ? 'working'
-    : status === 'needs_human' ? 'waiting' : group.ledger?.mergedAt != null ? 'shipped' : status === 'review' ? 'review'
-    : status === 'done' ? group.pullRequestUrls?.length ? 'ready' : 'done' : 'stopped'
-  return { state, title: group.title, builderId: assignment.agentId, ...(state === 'waiting' && assignment.askedOf ? { answerFor: assignment.askedOf } : {}),
-    ...(heard ? { reported: assignment.id } : {}) }
 }
 
 /** Only stable linkage is on the root. State belongs to replies, never its text or visible source. */
@@ -69,15 +49,16 @@ const PULL_REQUEST = /https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+/g
 
 /** The thread's reply for what changed in [group] in this command, in the words Dee approved (2026-11-03), or none. */
 function progress(state: SuperTabState, effects: CommandEffects, group: Conversation, previous: Conversation | undefined, pm: string): string | null {
-  const merged = (group.cards?.pullRequests ?? []).filter(card => card.mergedAt !== undefined
-    && previous?.cards?.pullRequests?.find(was => was.url === card.url)?.mergedAt === undefined).map(card => card.url)
+  const cards = group.cards?.pullRequests
+  const merged = cards?.length ? cards.filter(card => card.mergedAt !== undefined
+    && previous?.cards?.pullRequests?.find(was => was.url === card.url)?.mergedAt === undefined).map(card => card.url) : []
   if (merged.length) return `Merged: ${pullRequests(merged)}. Ships in the next release.`
   const assignment = group.assignment
-  if (!assignment) return null
-  const builder = agentDisplayName(state.agents, assignment.agentId)
   const was = previous?.assignment
+  // Most tasks did not move in this command: they say nothing, and nothing more is read for them.
+  if (!assignment || (was?.id === assignment.id && was.status === assignment.status)) return null
+  const builder = agentDisplayName(state.agents, assignment.agentId)
   if (was?.id !== assignment.id) return assignment.status === 'lost' ? null : `On it: ${builder} is building it.`
-  if (was.status === assignment.status) return null
   switch (assignment.status) {
     case 'needs_human': {
       const asked = assignment.askedOf && usernameOf(state, assignment.askedOf)
@@ -99,51 +80,66 @@ function progress(state: SuperTabState, effects: CommandEffects, group: Conversa
   }
 }
 
+/** Whether [group] neither moved nor merged in this command: true for nearly every task on every command. */
+function still(group: Conversation, previous: Conversation): boolean {
+  const now = group.assignment, was = previous.assignment
+  if (now?.id !== was?.id || now?.status !== was?.status || group.brief !== previous.brief) return false
+  if (group.ledger?.mergedAt != null && previous.ledger?.mergedAt == null) return false
+  const cards = group.cards?.pullRequests
+  return !cards?.some(card => card.mergedAt !== undefined && previous.cards?.pullRequests?.find(old => old.url === card.url)?.mergedAt === undefined)
+}
+
 /** Keep task commands in their own conversation while presenting their work in one ordinary project-chat thread: its root,
  *  the brief as its first reply, then the PM's one reply per change (Dee, 2026-11-03). Agents' own posts stay in the task.
- *  Replies wake nobody. */
-export function syncTaskLines(before: SuperTabState, effects: CommandEffects, reported: string | undefined, sender: Author | undefined, operationId: string): void {
+ *  Replies wake nobody. It runs on every command, so a task that did not move costs a few field reads; its chat, its author
+ *  and a map of the conversations before are looked up only for one that did. */
+export function syncTaskLines(before: SuperTabState, effects: CommandEffects, sender: Author | undefined, operationId: string): void {
   const state = effects.state
-  const earlier = new Map(before.conversations.map(c => [c.id, c]))
-  const chats = new Set(projectsOf(state).map(p => p.leadConversationId))
-  for (const group of state.conversations) {
-    if (!lined(chats, group)) continue
-    const previous = earlier.get(group.id)
-    let line = group.cards?.line
-    const now = drawn(group, line, reported === group.id)
-    const changed = !previous || previous.assignment?.id !== group.assignment?.id || previous.assignment?.status !== group.assignment?.status
-      || previous.brief !== group.brief || previous.title !== group.title
-    if (!line && !changed) continue
-    const chat = state.conversations.find(c => c.id === (line?.conversationId ?? groupProject(state, group).leadConversationId))
-    const coordinator = chat && lineAuthor(state, chat, sender)
-    if (!chat || !coordinator) continue
-    const reply = (id: string, text: string) => {
-      const root = group.cards!.line!.messageId
-      effects.messages.push({ id, conversationId: chat.id, author: coordinator, text, replyTo: root, thread: root, recipients: [], source: { kind: 'system' } })
+  // The clone keeps the order, and a command appends new conversations: a task is at its own index before, unless one was
+  // removed; only then is the map built.
+  let earlier: Map<string, Conversation> | undefined
+  let chats: ReadonlySet<string> | undefined
+  for (let index = 0; index < state.conversations.length; index++) {
+    const group = state.conversations[index]!
+    const same = before.conversations[index]
+    const previous = same?.id === group.id ? same : (earlier ??= new Map(before.conversations.map(c => [c.id, c]))).get(group.id)
+    if (previous && still(group, previous)) continue
+    if (!lined(chats ??= new Set(projectsOf(state).map(p => p.leadConversationId)), group)) continue
+    moved(state, effects, group, previous, sender, operationId)
+  }
+}
+
+/** [group] is new, or moved in this command: its root when it has none, then its details and progress replies. */
+function moved(state: SuperTabState, effects: CommandEffects, group: Conversation, previous: Conversation | undefined, sender: Author | undefined,
+  operationId: string): void {
+  const line = group.cards?.line
+  const chat = state.conversations.find(c => c.id === (line?.conversationId ?? groupProject(state, group).leadConversationId))
+  const coordinator = chat && lineAuthor(state, chat, sender)
+  if (!chat || !coordinator) return
+  // Stuck names the coordinator, never the agent that is stuck when there is no coordinator to sign.
+  const pm = chat.leadId && coordinator.kind === 'agent' && coordinator.id === chat.leadId ? coordinator.displayName ?? coordinator.name : 'the PM'
+  const reply = (id: string, words: string) => {
+    const root = group.cards!.line!.messageId
+    effects.messages.push({ id, conversationId: chat.id, author: coordinator, text: words, replyTo: root, thread: root, recipients: [], source: { kind: 'system' } })
+  }
+  if (!line) {
+    const proposal = group.ledger?.proposal
+    const root = proposal?.messageId ?? stableId(operationId, TASK_LINE_KIND, group.id)
+    group.cards = { ...group.cards, line: { messageId: root, conversationId: chat.id } }
+    // A proposal's root already has the proposal as its first reply; only a root the server posts gets the brief.
+    if (!proposal) {
+      const requester = state.people.find(p => p.id === group.requesterId)
+      effects.messages.push({ id: root, conversationId: chat.id,
+        author: requester ? { kind: 'person', id: requester.id, name: requester.email, membershipGeneration: requester.generation } : coordinator,
+        text: `Let's build: ${group.title}`, replyTo: null, recipients: [], source: { kind: TASK_LINE_KIND, ...fields(group) } })
+      if (group.brief) reply(stableId(operationId, 'task-details', group.id), group.brief)
     }
-    if (!line) {
-      const proposal = group.ledger?.proposal
-      const root = proposal?.messageId ?? stableId(operationId, TASK_LINE_KIND, group.id)
-      group.cards = { ...group.cards, line: { messageId: root, conversationId: chat.id, ...now } }
-      // A proposal's root already has the proposal as its first reply; only a root the server posts gets the brief.
-      if (!proposal) {
-        const requester = state.people.find(p => p.id === group.requesterId)
-        effects.messages.push({ id: root, conversationId: chat.id,
-          author: requester ? { kind: 'person', id: requester.id, name: requester.email, membershipGeneration: requester.generation } : coordinator,
-          text: `Let's build: ${group.title}`, replyTo: null, recipients: [], source: { kind: TASK_LINE_KIND, ...fields(group) } })
-        if (group.brief) reply(stableId(operationId, 'task-details', group.id), group.brief)
-      }
-      line = group.cards.line!
-    } else {
-      group.cards = { ...group.cards, line: { ...line, ...now } }
-      if (previous && previous.brief !== group.brief && group.brief) reply(stableId(operationId, 'task-details', group.id), group.brief)
-    }
-    const text = progress(state, effects, group, previous, coordinator.kind === 'agent' ? coordinator.displayName ?? coordinator.name : 'the PM')
-    if (text) reply(stableId(operationId, 'task-progress', group.id), text)
-    // Only its first recorded merge is news to the Buddy, as the Shipped line was: a merge recorded again tells nobody again.
-    if (group.ledger?.mergedAt != null && previous?.ledger?.mergedAt == null) {
-      const news = sender && shippedNotice(state, group, sender, operationId)
-      if (news) effects.messages.push(news)
-    }
+  } else if (previous && previous.brief !== group.brief && group.brief) reply(stableId(operationId, 'task-details', group.id), group.brief)
+  const text = progress(state, effects, group, previous, pm)
+  if (text) reply(stableId(operationId, 'task-progress', group.id), text)
+  // Only its first recorded merge is news to the Buddy, as the Shipped line was: a merge recorded again tells nobody again.
+  if (group.ledger?.mergedAt != null && previous?.ledger?.mergedAt == null) {
+    const news = sender && shippedNotice(state, group, sender, operationId)
+    if (news) effects.messages.push(news)
   }
 }
