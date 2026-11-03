@@ -53,7 +53,7 @@ Run focused API and Swarm transport tests for each red/green cycle, then the com
 
 **Interfaces:**
 - Consume: existing `AccessTokenSource`, `BearerAuthInterceptor`, Dio adapter and Swarm envelope semantics.
-- Produce: `Future<Object?> ApiClient.swarmWrite(String path, {Map<String, dynamic>? body})`, POST only, signed with the phone bearer, unchanged JSON, no cross-host or redirect forwarding; retain `swarmRead(String path)` for current consumers.
+- Produce: `Future<Object?> ApiClient.swarmWrite(String path, {Map<String, dynamic>? body, CancelToken? cancel})`, POST only, signed with the phone bearer, unchanged JSON, no cross-host or redirect forwarding; retain `swarmRead(String path)` for current consumers.
 
 - [ ] Add and commit failing API tests: POST message and decision payloads use the phone bearer/environment; 401 refresh replays identical JSON/operation ID with the refreshed token; missing credentials make no HTTP request; access failures retain code/status; redirects are refused; foreign absolute paths are rejected; tokens and private text stay out of logs.
 - [ ] Run `flutter test --no-pub --concurrency=2 --timeout=60s test/api/api_client_test.dart`; observe the new transport tests fail before adding production code.
@@ -76,7 +76,7 @@ Run focused API and Swarm transport tests for each red/green cycle, then the com
 - [ ] Add and commit failing tests using a real ApiClient with an in-process HTTP adapter and an in-memory AppNotifier: post and decision answer with all account machines disconnected; lost response then retry retains operation ID; network/5xx fallback carries the same JSON; 400/401/403/404/426/429 refusals never reach a machine; sign-out during held success/failure drops it with no fallback; non-command writes use direct POST too.
 - [ ] Replace the old test asserting commands always use a machine with the new direct-first expectation; preserve existing GET/machine tests.
 - [ ] Run `flutter test --no-pub --concurrency=2 --timeout=60s test/swarm/swarm_direct_writes_test.dart test/swarm/swarm_request_test.dart`; record expected failures.
-- [ ] Try `swarmWrite` for POST before selecting a machine. Check the original authentication revision after each asynchronous direct result and before fallback; allow write fallback only for transport/server unavailability. Preserve GET fallback policy and machine-local requests.
+- [ ] Try `swarmWrite` for POST before selecting a machine. Cancel in-flight writes on account invalidation to prevent bearer refresh after sign-out. Check the original authentication revision after each asynchronous direct result and before fallback; allow write fallback only for transport/server unavailability. Preserve GET fallback policy and machine-local requests.
 - [ ] Update README to describe direct signed-in reads/writes, bounded machine fallback and unchanged encrypted terminal transport; update stale transport comments.
 - [ ] Run focused tests, the complete mobile suite and targeted analysis/style validation; commit passing code and push.
 - [ ] Record red/green evidence in a PR comment, mark Ready, keep head stable, route two independent security reviews and a simulator Tester, then record passed acceptance checks and hand off to the PM.

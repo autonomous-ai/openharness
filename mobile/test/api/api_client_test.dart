@@ -385,21 +385,20 @@ void main() {
       expect(tokens.asks.where((a) => a.force), isEmpty);
     });
 
-    test(
-      'a foreign absolute URL is rejected before credentials are used',
-      () async {
+    for (final path in [
+      'https://elsewhere.invalid/api/super-tabs/t/commands',
+      '//elsewhere.invalid/api/super-tabs/t/commands',
+      '/api/super-tabs/../auth/logout',
+      '/api/super-tabs/%2e%2e/auth/logout',
+      '/api/machines',
+    ]) {
+      test('rejects an unsafe Swarm write path before using credentials: $path', () async {
         final tokens = _Tokens(['token']);
-        await expectLater(
-          client(tokens).swarmWrite(
-            'https://elsewhere.invalid/api/super-tabs/t/commands',
-            body: body,
-          ),
-          throwsArgumentError,
-        );
+        await expectLater(client(tokens).swarmWrite(path, body: body), throwsArgumentError);
         expect(tokens.asks, isEmpty);
         expect(backend.requests, isEmpty);
-      },
-    );
+      });
+    }
 
     test(
       'logs contain neither the bearer nor the private command text',
