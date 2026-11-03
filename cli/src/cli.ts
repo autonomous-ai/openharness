@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import './lib/connectWait.js'
 import './config/startHome.js'
 import './config/loadEnv.js'
 import { runDevicesCommand } from './devices/client.js'
@@ -216,6 +217,14 @@ Machine:
                                neither touches a local install-cli.sh build without --force)
   harness flash [flags]        re-flash a plugged-in circle device over USB. Flags go straight to the
                                flasher: --detect-only, --port, --version, --yes, --erase-nvs
+
+Team account (the separate "harnessteam" user that runs Swarm work on this computer):
+  harness team setup           make the account, its daemon and its engines, so teammates' agents cannot read
+                               your files; run again to repair (--sign-in-again: a new sign-in)
+  harness team status          whether it exists and runs, its sign-in, privacy check and engines
+  harness team on | off        a computer used only for agents runs Swarm work only (on), or signs back in as
+                               your own computer (off)
+  harness team remove          delete the account, its home folder and its daemon
 
 Grid (the fleet of AI engines the \`grid\` CLI serves — needs \`grid\` on PATH):
   harness grid login           sign in to your grid reusing THIS computer's Autonomous account —

@@ -200,9 +200,14 @@ void main() {
     expect(newSession, findsOneWidget);
     expect(alsoSend, findsOneWidget);
     expect(box(tester, newSession).on, isFalse);
-    // Left of Also send on one row, at any width (Scholes, 10-31).
+    // Left of Also send on one row, or above it where Also send takes its
+    // own line under the box (Scholes, 11-03).
     final a = tester.getRect(newSession), b = tester.getRect(alsoSend);
-    expect(a.top == b.top && a.left < b.left, isTrue);
+    expect(
+      (a.top == b.top && a.left < b.left) ||
+          (b.top > a.bottom && (a.left - b.left).abs() < .5),
+      isTrue,
+    );
     expect(
       find.byTooltip('Starts a separate Buddy session for this thread'),
       findsOneWidget,
@@ -212,7 +217,7 @@ void main() {
     await tester.pump();
     expect(box(tester, newSession).on, isTrue);
     // A session's thread stays in the thread.
-    expect(alsoSend, findsNothing);
+    expect(alsoSend.hitTestable(), findsNothing);
 
     await tester.enterText(composer, 'Measure it now');
     await tester.pump();
@@ -228,8 +233,8 @@ void main() {
     expect(newSession, findsNothing);
   });
 
-  testSessions('the choices are compact chips on the send row, not '
-      'checkboxes', (tester) async {
+  testSessions('the choices are compact checkboxes drawn as a square before '
+      'the label, not Material checkboxes', (tester) async {
     final server = buddyChat();
     final c = await show(tester, server);
     await openThread(tester, c, 'message-1');
@@ -239,25 +244,28 @@ void main() {
       findsNothing,
     );
     expect(box(tester, newSession).label, 'New session');
-    // The default 280px pane has no room for the full wording beside New
-    // session: its hint keeps it.
-    expect(box(tester, alsoSend).label, 'Also to chat');
+    // Always the full wording (Scholes, 11-03): with no room beside New
+    // session, it takes its own line under the box.
+    expect(box(tester, alsoSend).label, 'Also post to the main chat');
     expect(
       find.byTooltip('Also post to the main chat as well as this thread'),
       findsOneWidget,
     );
-    // Both sit on the send row, left of its buttons, and are compact: no
-    // taller than the send button. (One line at real fonts: the PR's
-    // screenshots; the test font is far wider.)
+    // New session sits on the send row, left of its buttons; Also send on
+    // its line under the box. Both are compact: no taller than the send
+    // button. (The PR's screenshots show real fonts; the test font is far
+    // wider.)
     final row = tester.getRect(send);
     final surface = tester.getRect(
       find.byKey(const ValueKey('super-thread-composer-surface')),
     );
-    for (final chip in [newSession, alsoSend]) {
-      final rect = tester.getRect(chip);
-      expect(rect.right, lessThan(row.left));
+    final session = tester.getRect(newSession);
+    expect(session.right, lessThan(row.left));
+    expect(surface.contains(session.center), isTrue);
+    final also = tester.getRect(alsoSend);
+    expect(also.top, greaterThanOrEqualTo(surface.bottom));
+    for (final rect in [session, also]) {
       expect(rect.height, lessThanOrEqualTo(row.height));
-      expect(surface.contains(rect.center), isTrue);
     }
     // The muted line shows only while the reply starts a session; its place
     // is kept, so it never pushes the box up under the cursor.
@@ -271,7 +279,7 @@ void main() {
     await tester.tap(newSession);
     await tester.pump();
     expect(box(tester, newSession).on, isTrue);
-    expect(alsoSend, findsNothing);
+    expect(alsoSend.hitTestable(), findsNothing);
     expect(
       tester.widget<Text>(note).data,
       'Your reply starts a new Buddy session',
@@ -413,7 +421,7 @@ void main() {
     await openThread(tester, c, 'message-1');
     expect(tester.widget<Text>(state).data, 'Own session · Starting…');
     expect(newSession, findsNothing);
-    expect(alsoSend, findsNothing);
+    expect(alsoSend.hitTestable(), findsNothing);
   });
 
   testSessions('a session on a computer that went offline names it', (
@@ -486,7 +494,7 @@ void main() {
     );
     expect(box(tester, newSession).on, isTrue);
     expect(box(tester, newSession).onChanged, isNull);
-    expect(alsoSend, findsNothing);
+    expect(alsoSend.hitTestable(), findsNothing);
     await tester.enterText(composer, 'Go on');
     await tester.pump();
     await tester.tap(send);
@@ -680,7 +688,7 @@ void main() {
     await openThread(tester, c, 'message-1');
     expect(box(tester, newSession).on, isTrue);
     expect(box(tester, newSession).onChanged, isNull);
-    expect(alsoSend, findsNothing);
+    expect(alsoSend.hitTestable(), findsNothing);
     expect(tester.widget<Text>(ended).data, 'Session ended');
   });
 

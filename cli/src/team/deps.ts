@@ -81,6 +81,32 @@ export function teamCommandDeps(options: {
       const rl = createInterface({ input: process.stdin, output: process.stdout })
       rl.question(question, (answer) => { rl.close(); resolve(answer) })
     }),
+    // A key is never echoed, and never asked where nothing can hide it (a pipe): the command tells that caller to use
+    // --key-stdin instead.
+    askSecret: (question) => new Promise((resolve) => {
+      const stdin = process.stdin
+      process.stdout.write(question)
+      const wasRaw = stdin.isRaw
+      let text = ''
+      const finish = (value: string) => {
+        stdin.off('data', onData)
+        stdin.setRawMode?.(wasRaw === true)
+        stdin.pause()
+        process.stdout.write('\n')
+        resolve(value)
+      }
+      const onData = (chunk: Buffer) => {
+        for (const char of chunk.toString('utf8')) {
+          if (char === '\r' || char === '\n') return finish(text)
+          if (char === '\u0003') { finish(''); process.exit(130) }
+          if (char === '\u007f') { text = text.slice(0, -1); continue }
+          text += char
+        }
+      }
+      stdin.setRawMode?.(true)
+      stdin.resume()
+      stdin.on('data', onData)
+    }),
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     session: readAuthSession,

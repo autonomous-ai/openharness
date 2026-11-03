@@ -1,6 +1,6 @@
 import { isAbsolute, join, resolve } from 'node:path'
 import type { CoreApi } from '../core/api.js'
-import { fetchDefaultBranch } from '../lib/gitProject.js'
+import { fetchStartBase } from '../lib/gitProject.js'
 import { otherGitHubTransport, parseProjectFolder, prepareProjectFolder, ProjectFolderError, RepositoryAccessError } from '../lib/projectFolder.js'
 import { revokeGitHubToken, swarmGitPrepareEnv } from '../lib/swarmGitHub.js'
 import { identifier, object, SuperTabHostError } from './wire.js'
@@ -65,12 +65,12 @@ async function revokeQuietly(token: string, revoke = revokeGitHubToken): Promise
 
 /**
  * Everything a queued start on this machine needs before its agent is created: the Harness GitHub App's token when the work
- * is another person's (`startGitHub`), the Swarm folder's checkout (`prepareSwarmProject`) and, for a worktree, its default
- * branch brought up to date with that token, so the agent's worktree starts from it (the core then fetches nothing itself:
+ * is another person's (`startGitHub`), the Swarm folder's checkout (`prepareSwarmProject`) and, for a worktree, the branch it
+ * starts from (the default one unless it names another) brought up to date with that token, its files included, so the agent's worktree starts from it (the core then fetches nothing itself:
  * core/agents/launches.ts). Returns whom the work is for, for the start; null when this machine's own login is right for it.
  */
 export async function prepareSwarmStart(core: CoreApi, row: Json, start: Json,
-  deps: { backend: Backend; team: boolean; prepare?: typeof prepareProjectFolder; fetch?: typeof fetchDefaultBranch; revoke?: (token: string) => Promise<void> }):
+  deps: { backend: Backend; team: boolean; prepare?: typeof prepareProjectFolder; fetch?: typeof fetchStartBase; revoke?: (token: string) => Promise<void> }):
   Promise<{ requester: string } | null> {
   const request = object(start.request)
   // A person's one Buddy has no project: its launch makes its folder from the checkouts already here and fetches nothing
@@ -81,7 +81,8 @@ export async function prepareSwarmStart(core: CoreApi, row: Json, start: Json,
   try {
     if (object(row.machine).scope === 'swarm') await prepareSwarmProject(core, row, start, deps.prepare, gitEnv)
     if (gitEnv && request.worktree === true && typeof request.cwd === 'string' && isAbsolute(request.cwd)) {
-      await (deps.fetch ?? fetchDefaultBranch)(resolve(request.cwd), gitEnv)
+      // The branch the start names, when it names one: a project clone has only the default branch (lib/projectFolder.ts).
+      await (deps.fetch ?? fetchStartBase)(resolve(request.cwd), gitEnv, ...(typeof request.branchRef === 'string' ? [request.branchRef] : []))
     }
   } finally {
     // The read-only token is done with: the agent gets a token of its own for its task (superTabs/github.ts).

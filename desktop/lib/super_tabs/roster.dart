@@ -91,6 +91,10 @@ class _SuperTabRosterState extends State<SuperTabRoster>
   /// this visit.
   bool _idleOpen = false;
 
+  /// Whether the people folded under Others (N) show; folded at first, for
+  /// this visit.
+  bool _othersOpen = false;
+
   SuperTabController get c => widget.controller;
 
   /// The board read here when the view shares none.
@@ -538,8 +542,9 @@ class _SuperTabRosterState extends State<SuperTabRoster>
         if (scoped == null || personInProject(scoped, person.id, board: board))
           person,
     ];
-    final scores = {
-      for (final score in board?.people ?? const []) score.personId: score,
+    final scores = <String, SuperTabPersonScore>{
+      for (final score in board?.people ?? const <SuperTabPersonScore>[])
+        score.personId: score,
     };
     // The selected week's points, highest first; equal points, and no points
     // at all, by name, letter case aside (Dee, 2026-10-29).
@@ -553,6 +558,12 @@ class _SuperTabRosterState extends State<SuperTabRoster>
         final byName = sortName(a).compareTo(sortName(b));
         return byName != 0 ? byName : a.id.compareTo(b.id);
       });
+    // This project lists who is active in it; everyone else who can read it
+    // folds under Others (Dee, 2026-11-03). Only on its own board's numbers:
+    // before they land there is nothing to tell the two apart.
+    final split = scoped != null && board != null
+        ? splitProjectPeople(sorted, scores)
+        : (active: sorted, others: const <SuperTabPerson>[]);
     // Most urgent first, as the tabs order their marks: needs input, working,
     // idle, offline; within a mark, the most recent progress first (Dee,
     // 2026-10-30). Equals keep today's order, the Lead first. Each agent's
@@ -609,14 +620,19 @@ class _SuperTabRosterState extends State<SuperTabRoster>
       ),
       // Points are the last 7 days, the period on hover; who waits on whom is
       // Activity's Needs you (Quiet Swarm, 2026-11-02).
-      for (final person in sorted)
-        LeaderboardPersonRow(
-          person: person,
-          score: scores[person.id],
-          columns: columns,
-          own: person.id == c.accountId,
-          onTap: () => _person(person, scores[person.id]),
+      for (final person in split.active) _personRow(person, scores, columns),
+      if (split.others case final others when others.isNotEmpty) ...[
+        SuperTabSectionHeading(
+          'Others (${others.length})',
+          key: const ValueKey('super-members-others'),
+          // In line with the rows, as Idle (N) is under Agents.
+          startInset: 16,
+          collapsed: !_othersOpen,
+          onToggleCollapsed: () => setState(() => _othersOpen = !_othersOpen),
         ),
+        if (_othersOpen)
+          for (final person in others) _personRow(person, scores, columns),
+      ],
       const SizedBox(height: DesktopChrome.groupGap),
       SuperTabSectionHeading(
         'Agents',
@@ -644,6 +660,18 @@ class _SuperTabRosterState extends State<SuperTabRoster>
       ],
     ];
   }
+
+  Widget _personRow(
+    SuperTabPerson person,
+    Map<String, SuperTabPersonScore> scores,
+    LeaderboardColumns? columns,
+  ) => LeaderboardPersonRow(
+    person: person,
+    score: scores[person.id],
+    columns: columns,
+    own: person.id == c.accountId,
+    onTap: () => _person(person, scores[person.id]),
+  );
 
   /// The column's heading: the project-or-Swarm choice while a project is
   /// open ([narrowed] says which is chosen), All projects alone otherwise,

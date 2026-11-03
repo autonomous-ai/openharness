@@ -879,6 +879,9 @@ model HarnessShare {
 
   @@unique([machineId, agentId, recipientEmail])
   @@index([recipientEmail, autonomousEnv, expiresAt])
+  /// The share list (routes/harnessShares.ts): one recipient's unrevoked shares by createdAt, read without a sort in memory and
+  /// without fetching the revoked ones. expiresAt last, so an expired share is dropped from its key before it is fetched.
+  @@index([recipientEmail, autonomousEnv, revokedAt, createdAt, expiresAt])
   @@index([ownerId, machineId])
   @@map("harness_shares")
 }
@@ -1032,6 +1035,11 @@ model SuperTab {
   autonomousEnv  String
   memberIds      String[]
   invitedEmails  String[]
+  /// The domain whose people join this Swarm by themselves while its owner has auto-join on (superTabs/autoJoin.ts); absent
+  /// otherwise. Derived from the head's sharing in every commit (parts/commit.ts indexesOf).
+  autoJoinDomain String?
+  /// People who left or were removed: auto-join never adds them again. Cleared by an invitation accepted or a link join.
+  autoJoinDeclined String[]
   machineIds     String[]
   /// Machines whose host still has to clean up after their removal: read apart from the 100-Swarm host poll.
   cleanupMachineIds String[] @default([])
@@ -1066,6 +1074,8 @@ model SuperTab {
   /// A machine's Swarms, newest first: the host poll's lookup, once a second per host (superTabs/swarmRows.ts machineSwarms).
   @@index([autonomousEnv, machineIds, updatedAt])
   @@index([autonomousEnv, cleanupMachineIds, updatedAt])
+  /// The Swarms a person at a domain joins by themselves: one read per person at most every 2 minutes (superTabs/autoJoin.ts).
+  @@index([autonomousEnv, autoJoinDomain])
 }
 
 // A terminal retains its history when removed from a roster. These bindings
@@ -1688,6 +1698,9 @@ model SwarmWorkspace {
   createdAt     DateTime  @default(now())
   deletedAt     DateTime?
   purgeAt       DateTime?
+  /// People this Workspace removed, whom Swarm auto-join never adds again (superTabs/autoJoin.ts). Kept past the purge of their
+  /// member row; cleared when they are added back on purpose (workspaceStore.ts addMember).
+  autoJoinDeclined String[]
 
   /// Removed rows go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
   @@index([purgeAt], map: "workspace_purge")
