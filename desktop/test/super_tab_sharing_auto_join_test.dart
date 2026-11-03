@@ -5,6 +5,7 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/manage_page.dart';
 import 'package:harness/super_tabs/sharing.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
 
 import 'swarm_sharing_test.dart' show SwarmSharingServer;
 import 'swarm_state_test.dart' show createApp;
@@ -90,6 +91,9 @@ Finder get _autoJoin => find.byKey(const Key('swarm-sharing-auto-join'));
 CheckboxListTile _toggle(WidgetTester tester) =>
     tester.widget<CheckboxListTile>(_autoJoin);
 
+Color? _titleColor(WidgetTester tester) =>
+    tester.widget<Text>(find.text('Add them automatically')).style?.color;
+
 Future<void> _save(WidgetTester tester) async {
   await tester.tap(find.byKey(const Key('swarm-sharing-save')));
   await tester.pumpAndSettle();
@@ -115,6 +119,7 @@ void main() {
         // The owner turns it on by hand.
         expect(_toggle(tester).value, isFalse);
         expect(_toggle(tester).onChanged, isNotNull);
+        expect(_titleColor(tester), isNot(DesktopChrome.muted));
         await tester.tap(_autoJoin);
         await tester.pumpAndSettle();
         expect(_toggle(tester).value, isTrue);
@@ -169,6 +174,8 @@ void main() {
         await tester.enterText(field, 'partner.com');
         await tester.pumpAndSettle();
         expect(_toggle(tester).onChanged, isNull);
+        // Reads as unavailable, not only its box.
+        expect(_titleColor(tester), DesktopChrome.muted);
         expect(_toggle(tester).value, isFalse);
         expect(find.text(_partner), findsOneWidget);
         expect(find.text(_help), findsNothing);

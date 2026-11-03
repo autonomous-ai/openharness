@@ -505,7 +505,12 @@ class _SwarmSharingDialogState extends State<SwarmSharingDialog> {
         dense: true,
         contentPadding: EdgeInsets.zero,
         controlAffinity: ListTileControlAffinity.leading,
-        title: Text('Add them automatically', style: DesktopChrome.control()),
+        title: Text(
+          'Add them automatically',
+          style: DesktopChrome.control(
+            color: _own ? null : DesktopChrome.muted,
+          ),
+        ),
         subtitle: _own
             ? Text(
                 'Anyone who signs in with an @$own email joins this Swarm. You can remove anyone.',
