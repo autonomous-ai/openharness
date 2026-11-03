@@ -198,6 +198,7 @@ class FakeRunner:
         self.built_app = built_app
         self.shared = shared
         self.account = account
+        self.email = 'tester@example.com'
         self.commands = []
         self.launched = []
         self.terminated = []
@@ -222,6 +223,9 @@ class FakeRunner:
         self.alive_pids.add(4242)
         self.executables[4242] = str(argv[0])
         return 4242
+
+    def account_email(self, session):
+        return self.email if session.exists() else None
 
     def executable_of(self, pid):
         return self.executables.get(pid) if pid in self.alive_pids else None
@@ -256,6 +260,8 @@ class CommandsTest(unittest.TestCase):
         (self.person_home / '.harness/auth/session.json').write_text(
             json.dumps({'version': 1, 'accessToken': 'a.b.c', 'signInAcct': 'acct-owner'}))
         self.shared = self.person_home / '.harness-test'
+        self.shared.mkdir()
+        (self.shared / 'account').write_text('tester@example.com\n')
         self.paths = test_flavor.Paths(repo=self.repo, shared=self.shared, person_home=self.person_home)
         self.runner = FakeRunner(built.parent, self.shared)
         self.homes = []
@@ -350,6 +356,55 @@ class CommandsTest(unittest.TestCase):
         self.assertEqual(self.runner.terminated, [])
         self.assertFalse(home.exists())
         self.assertIsNone(self.state())
+
+    def test_the_first_start_needs_the_test_account_named(self):
+        (self.shared / 'account').unlink()
+        with self.assertRaises(test_flavor.Refused) as refused:
+            self.main('start')
+        self.assertEqual(str(refused.exception),
+                         "Name the project's test account the first time: start --account EMAIL")
+        self.assertEqual(self.runner.launched, [])
+        self.assertFalse(any('login' in argv for argv, _ in self.runner.commands))
+
+    def test_start_keeps_the_named_test_account(self):
+        (self.shared / 'account').unlink()
+        self.assertEqual(self.main('start', '--account', 'Tester@Example.com'), 0)
+        self.assertEqual((self.shared / 'account').read_text().strip(), 'tester@example.com')
+
+    def test_naming_another_account_than_this_mac_keeps_is_refused(self):
+        with self.assertRaises(test_flavor.Refused) as refused:
+            self.main('start', '--account', 'other@example.com')
+        self.assertEqual(str(refused.exception),
+                         "This Mac's test account is tester@example.com; run forget to change it.")
+        self.assertEqual(self.runner.launched, [])
+
+    def test_a_sign_in_to_another_account_than_the_named_one_is_refused(self):
+        # Security review 2 of #2796: "not the owner" passes any account when the owner's own session is missing.
+        (self.person_home / '.harness/auth/session.json').unlink()
+        self.runner.email = 'owner@example.com'
+        with self.assertRaises(test_flavor.Refused) as refused:
+            self.main('start')
+        self.assertEqual(str(refused.exception),
+                         'The test copy signed in as owner@example.com, not the test account tester@example.com. '
+                         'Sign it in with the test account instead.')
+        self.assertEqual(self.runner.launched, [])
+        self.assertFalse((self.shared / 'auth').exists(), 'the wrong sign-in is removed')
+        self.assertTrue(any('logout' in argv for argv, _ in self.runner.commands))
+
+    def test_an_account_it_cannot_confirm_is_refused(self):
+        self.runner.email = None
+        with self.assertRaises(test_flavor.Refused) as refused:
+            self.main('start')
+        self.assertIn('an account it could not confirm', str(refused.exception))
+        self.assertEqual(self.runner.launched, [])
+
+    def test_an_unreadable_person_session_is_refused(self):
+        (self.person_home / '.harness/auth/session.json').write_text('{broken')
+        with self.assertRaises(test_flavor.Refused) as refused:
+            self.main('start')
+        self.assertEqual(str(refused.exception),
+                         "Could not read this Mac's own sign-in to compare the test account with it.")
+        self.assertEqual(self.runner.launched, [])
 
     def test_stop_leaves_alone_a_recorded_pid_that_is_now_another_process(self):
         # Security reviews 1 and 2 of #2796: after a crash or a reboot the pid can belong to anything.
