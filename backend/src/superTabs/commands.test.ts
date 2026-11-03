@@ -3358,7 +3358,7 @@ describe('machine.remove', () => {
     const named = (id: string) => { const a = f.state.agents.find(x => x.id === id)!; return a.displayName ?? a.name }
     expect(removalPreview(f.state, owner, 'host')).toEqual({ blockedBy: { projectId: 'lead', projectName: 'Pilot' },
       agents: [{ id: lead, name: named(lead), projectName: 'Pilot' }, { id: worker, name: named(worker), projectName: 'Pilot', task: 'Offline editing' }],
-      soleSourceProjects: [{ id: 'lead', name: 'Pilot' }] })
+      hiddenAgentCount: 0, soleSourceProjects: [{ id: 'lead', name: 'Pilot' }], hiddenSoleSourceProjectCount: 0 })
     f.state.agents.find(a => a.id === lead)!.machineId = 'elsewhere'
     expect(removalPreview(f.state, owner, 'host').blockedBy).toBeNull()
     f.invite()
