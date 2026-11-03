@@ -42,6 +42,9 @@ SuperTabTaskGroup superTabTaskGroupOf(
         SuperTabTaskGroup.waitingOnOthers,
       _ => SuperTabTaskGroup.needsYou,
     },
+    // An agent at a question makes no progress, so its task goes quiet
+    // after 30 minutes: the question still waits on the reader.
+    ('quiet', _) when needsHuman > 0 => SuperTabTaskGroup.needsYou,
     ('waiting', 'review' || 'revision' || 'blocked' || 'queued') ||
     ('quiet' || 'orphaned', _) => SuperTabTaskGroup.waitingOnOthers,
     ('waiting', 'starting') => SuperTabTaskGroup.working,
