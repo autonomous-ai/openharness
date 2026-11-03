@@ -84,6 +84,8 @@ export interface StoredRouteRecord extends Omit<RouteRecord, 'excluded'> {
 /** What a decision keeps of [record]: a label only on the pick (the route showed the others when it ran; Desktop's Details shows
  *  a candidate's label only when it has one), and each exclusion reason once, with its titles in order. */
 export function storedRecord(record: RouteRecord): StoredRouteRecord {
+  // A record route.record validated has both lists; one without them (a test's, a future field's absence) is kept as it is.
+  if (!Array.isArray(record.candidates) || !Array.isArray(record.excluded)) return record
   const { excluded, ...rest } = record
   const candidates = record.candidates.map(({ label, ...c }) => c.id === record.pick ? { ...c, label } : c) as RouteCandidate[]
   const byReason = new Map<string, string[]>()
