@@ -4895,14 +4895,12 @@ describe('Swarm sweeps', () => {
       const previous = (await storedState(tab)).agents.find(a => a.id === agentId)!.configurationVersion ?? null
       await run(tab, { type: 'agent.configuration', previousVersion: previous, configuration: { ...config, effort } }, host, agentId)
     }
-    const before = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: agentId } })
     await run(tab, { type: 'agent.remove', agentId })
-    // Past the tombstone's 7 days: its record stays, compacted, and holds the version; nothing purges it.
+    const tombstone = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: agentId } })
+    expect(tombstone.deleted).toBe(true)
+    // Past the tombstone's 7 days it goes (agentTombstones.ts); the Swarm's agent floor keeps its version.
     await sweepSwarms(db, Date.now() + 8 * day)
-    const kept = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: agentId } })
-    expect(kept.deleted).toBe(true)
-    expect(kept.data).toEqual({})
-    expect(kept.version).toBeGreaterThan(before.version)
+    expect(await db.swarmAgent.findFirst({ where: { tabId: tab, key: agentId } })).toBeNull()
     await ensurePartExpiry(db)
     for (const collection of ['SwarmMember', 'SwarmAgent', 'SwarmMachine']) {
       const indexes = await db.$runCommandRaw({ listIndexes: collection }) as { cursor: { firstBatch: Array<{ expireAfterSeconds?: number }> } }
@@ -4911,7 +4909,8 @@ describe('Swarm sweeps', () => {
     await add()
     const back = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: agentId } })
     expect(back.deleted).toBe(false)
-    expect(back.version).toBeGreaterThan(kept.version)
+    // Above the tombstone a Desktop open all along last saw.
+    expect(back.version).toBeGreaterThan(tombstone.version)
     const history = await db.superTabConfiguration.findMany({ where: { tabId: tab, agentId }, orderBy: { revision: 'asc' } })
     expect(history.at(-1)!.configuration).toMatchObject({ effort: 'high' })
   })
