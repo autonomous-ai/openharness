@@ -151,23 +151,20 @@ void main() {
   Map<String, Object?> ok(Object? data) => {'success': true, 'data': data};
 
   group('a Swarm read', () {
-    test(
-      'answers the value, signed with this sign-in, its query kept',
-      () async {
-        backend.answer = (_, _) =>
-            (status: 200, body: ok({'tabs': <Object>[]}));
+    test('answers the value, signed with this sign-in, its query kept', () async {
+      backend.answer = (_, _) => (status: 200, body: ok({'tabs': <Object>[]}));
 
-        final value = await client(_Tokens(['t1']))
-            .swarmRead('/api/super-tabs/t/changes?cursor=c1');
+      final value = await client(_Tokens(['t1'])).swarmRead(
+        '/api/super-tabs/t/changes?cursor=c1',
+      );
 
-        expect(value, {'tabs': <Object>[]});
-        final request = backend.requests.single;
-        expect(request.method, 'GET');
-        expect(request.path, '/api/super-tabs/t/changes');
-        expect(request.query, {'cursor': 'c1'});
-        expect(request.headers.value('authorization'), 'Bearer t1');
-      },
-    );
+      expect(value, {'tabs': <Object>[]});
+      final request = backend.requests.single;
+      expect(request.method, 'GET');
+      expect(request.path, '/api/super-tabs/t/changes');
+      expect(request.query, {'cursor': 'c1'});
+      expect(request.headers.value('authorization'), 'Bearer t1');
+    });
 
     test('with no credentials never reaches the backend', () async {
       final api = ApiClient(
@@ -175,10 +172,7 @@ void main() {
         session: AuthSession(storage: MemoryKeyValueStore()),
         httpClientAdapter: backend,
       );
-      await expectLater(
-        api.swarmRead('/api/super-tabs/list'),
-        throwsStateError,
-      );
+      await expectLater(api.swarmRead('/api/super-tabs/list'), throwsStateError);
       expect(backend.requests, isEmpty);
     });
 
@@ -186,7 +180,11 @@ void main() {
         isA<SuperTabFailure>()
             .having((f) => f.code, 'code', code)
             .having((f) => f.statusCode, 'statusCode', status)
-            .having((f) => f.message, 'message', message ?? isNotEmpty);
+            .having(
+              (f) => f.message,
+              'message',
+              message ?? isNotEmpty,
+            );
 
     test("a refusal carries the backend's code, status and words", () async {
       backend.answer = (_, _) => (
@@ -213,8 +211,7 @@ void main() {
     });
 
     test('a 502 from a proxy, not JSON, keeps its status', () async {
-      backend.answer = (_, _) =>
-          (status: 502, body: '<html>Bad gateway</html>');
+      backend.answer = (_, _) => (status: 502, body: '<html>Bad gateway</html>');
 
       await expectLater(
         client(_Tokens(['t1'])).swarmRead('/api/super-tabs/list'),
@@ -657,25 +654,28 @@ void main() {
       },
     );
 
-    test("a Swarm avatar goes up as one PNG of its own and answers the upload's id", () async {
-      backend.answer = (_, _) => (
-        status: 200,
-        body: ok({
-          'avatar': {'id': 'up-1'},
-        }),
-      );
-      final png = Uint8List.fromList(List.generate(32, (i) => i));
-      expect(
-        await client(_Tokens(['t'])).uploadSwarmAvatar('tab/1', png),
-        'up-1',
-      );
-      final sent = backend.requests.single;
-      expect(sent.path, '/api/super-tabs/tab%2F1/avatars');
-      expect(sent.headers.contentType!.mimeType, 'multipart/form-data');
-      final body = latin1.decode(sent.body);
-      expect(body, contains('filename="avatar.png"'));
-      expect(body, contains('Content-Type: image/png'));
-    });
+    test(
+      "a Swarm avatar goes up as one PNG of its own and answers the upload's id",
+      () async {
+        backend.answer = (_, _) => (
+          status: 200,
+          body: ok({
+            'avatar': {'id': 'up-1'},
+          }),
+        );
+        final png = Uint8List.fromList(List.generate(32, (i) => i));
+        expect(
+          await client(_Tokens(['t'])).uploadSwarmAvatar('tab/1', png),
+          'up-1',
+        );
+        final sent = backend.requests.single;
+        expect(sent.path, '/api/super-tabs/tab%2F1/avatars');
+        expect(sent.headers.contentType!.mimeType, 'multipart/form-data');
+        final body = latin1.decode(sent.body);
+        expect(body, contains('filename="avatar.png"'));
+        expect(body, contains('Content-Type: image/png'));
+      },
+    );
 
     test('a Swarm avatar the server refuses says why', () async {
       backend.answer = (_, _) => (
@@ -743,41 +743,45 @@ void main() {
           () => Stream.value(Uint8List.fromList([1, 2, 3])),
         );
 
-    test('goes straight to the backend as the conversation, then one file', () async {
-      final attachment = {
-        'id': 'att-1',
-        'name': 'shot.jpg',
-        'mime': 'image/jpeg',
-        'size': 3,
-        'url': 'https://cdn.harness.autonomous.ai/x/shot.jpg',
-      };
-      backend.answer = (_, _) =>
-          (status: 200, body: ok({'attachment': attachment}));
+    test(
+      'goes straight to the backend as the conversation, then one file',
+      () async {
+        final attachment = {
+          'id': 'att-1',
+          'name': 'shot.jpg',
+          'mime': 'image/jpeg',
+          'size': 3,
+          'url': 'https://cdn.harness.autonomous.ai/x/shot.jpg',
+        };
+        backend.answer = (_, _) =>
+            (status: 200, body: ok({'attachment': attachment}));
 
-      final answer = await upload(client(_Tokens(['t1'])));
+        final answer = await upload(client(_Tokens(['t1'])));
 
-      expect(answer, {'attachment': attachment});
-      final sent = backend.requests.single;
-      expect(sent.method, 'POST');
-      expect(sent.path, '/api/super-tabs/tab-1/attachments');
-      expect(sent.headers.value('authorization'), 'Bearer t1');
-      expect(sent.headers.contentType!.mimeType, 'multipart/form-data');
-      final boundary = sent.headers.contentType!.parameters['boundary']!;
-      expect(sent.body, [
-        ...utf8.encode(
-          '--$boundary\r\n'
-          'Content-Disposition: form-data; name="conversationId"\r\n\r\n'
-          'conv-1\r\n'
-          '--$boundary\r\n'
-          'Content-Disposition: form-data; name="file"; filename="shot.jpg"\r\n'
-          'Content-Type: image/jpeg\r\n\r\n',
-        ),
-        1,
-        2,
-        3,
-        ...utf8.encode('\r\n--$boundary--\r\n'),
-      ]);
-    });
+        expect(answer, {'attachment': attachment});
+        final sent = backend.requests.single;
+        expect(sent.method, 'POST');
+        expect(sent.path, '/api/super-tabs/tab-1/attachments');
+        expect(sent.headers.value('authorization'), 'Bearer t1');
+        expect(sent.headers.contentType!.mimeType, 'multipart/form-data');
+        final boundary = sent.headers.contentType!.parameters['boundary']!;
+        expect(
+          sent.body,
+          [
+            ...utf8.encode(
+              '--$boundary\r\n'
+              'Content-Disposition: form-data; name="conversationId"\r\n\r\n'
+              'conv-1\r\n'
+              '--$boundary\r\n'
+              'Content-Disposition: form-data; name="file"; filename="shot.jpg"\r\n'
+              'Content-Type: image/jpeg\r\n\r\n',
+            ),
+            1, 2, 3,
+            ...utf8.encode('\r\n--$boundary--\r\n'),
+          ],
+        );
+      },
+    );
 
     test('a name cannot break out of its header', () async {
       backend.answer = (_, _) =>
