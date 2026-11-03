@@ -273,6 +273,18 @@ describe('creating an agent', () => {
     expect(vi.mocked(agentTmpEnv).mock.calls.length).toBe(calls)
   })
 
+  // A Buddy starts no MCP server (docs/swarms.md, Buddies): a thread session started on a shared model carries none of the
+  // grid's web tools either (task #2354). Another Swarm session on the same grid keeps them.
+  it('builds a Buddy\'s grid launch without the grid\'s web MCP', async () => {
+    const grid = { baseUrl: 'https://grid.example/relay/v1', networkName: 'g', model: 'm', mcpUrl: 'https://grid.example/v1/grid/web-mcp' }
+    vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
+    expect(await setup().create(request({ dsh: 'blender', swarmRole: 'buddy', grid }))).toMatchObject({ ok: true })
+    expect(buildGridLaunch.mock.calls.at(-1)![0].override).not.toHaveProperty('mcpUrl')
+    vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
+    expect(await setup().create(request({ dsh: 'blender', swarmRole: 'agent', grid }))).toMatchObject({ ok: true })
+    expect(buildGridLaunch.mock.calls.at(-1)![0].override).toMatchObject({ mcpUrl: grid.mcpUrl })
+  })
+
   it('keeps a selected Store harness when attaching a Swarm skill', async () => {
     vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
     expect(await setup().create(request({ dsh: 'blender', swarmRole: 'agent' }))).toMatchObject({ ok: true })

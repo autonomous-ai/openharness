@@ -12,7 +12,6 @@ import 'package:harness_mobile/shared/theme/app_type.dart';
 
 import 'swarm_inbox.dart' show SwarmListing;
 import 'swarm_project_page.dart' show swarmChatRoute;
-import 'swarm_row.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
 import 'swarm_threads.dart';
@@ -48,82 +47,6 @@ void openSwarmThreads(BuildContext context, {String? swarmId}) => unawaited(
     ),
   ),
 );
-
-/// Home's Threads row, over the projects: bold while a followed thread has
-/// new replies, the person's tags in threads at its end (desktop's Threads
-/// row, #2434). A tap opens Threads.
-class SwarmThreadsRow extends StatelessWidget {
-  const SwarmThreadsRow({
-    super.key,
-    required this.threads,
-    required this.onTap,
-  });
-
-  final SwarmThreadsMerge threads;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) => ListenableBuilder(
-    listenable: threads,
-    builder: (context, _) {
-      AppTheme.watch(context);
-      final unread = threads.unread, tags = threads.mentions;
-      final bright = unread || tags > 0;
-      return Material(
-        type: MaterialType.transparency,
-        child: InkWell(
-          key: const ValueKey('swarm-threads-row'),
-          onTap: onTap,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: SwarmRow.height),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppSpace.l,
-                vertical: AppSpace.m,
-              ),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 16,
-                    child: Icon(
-                      LucideIcons.messagesSquare300,
-                      size: 16,
-                      color: bright
-                          ? AppPalette.textPrimary
-                          : AppPalette.textSecondary,
-                    ),
-                  ),
-                  const SizedBox(width: AppSpace.s),
-                  Expanded(
-                    child: Semantics(
-                      label: unread && tags == 0 ? 'New replies' : null,
-                      child: Text(
-                        'Threads',
-                        style: AppType.label(
-                          color: bright
-                              ? AppPalette.textPrimary
-                              : AppPalette.textSecondary,
-                          height: 1.3,
-                          fontWeight: bright ? AppFont.semibold : null,
-                        ),
-                      ),
-                    ),
-                  ),
-                  if (tags > 0)
-                    SwarmTags(
-                      tags,
-                      key: const ValueKey('swarm-threads-tags'),
-                      filled: true,
-                    ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      );
-    },
-  );
-}
 
 /// Threads, as Slack's and the desktop's (#2434): the threads the person
 /// follows, those with new replies first under New replies, each with its

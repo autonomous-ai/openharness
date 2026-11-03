@@ -59,6 +59,21 @@ describe('restart role lookup through the service', () => {
     expect(await service.port.swarmRole('old-native')).toBeUndefined()
     service.port.stop()
   })
+  // Import an agent (security review of #2783): whether any Swarm lists the harness here, for its owner only; an unreadable
+  // roster answers no `listed`, which Desktop refuses on.
+  it('says whether any Swarm lists a harness on this machine, for the owner only', async () => {
+    const agent = { id: 'agent', machineId: 'machine-1', harnessId: 'kept' }
+    const call = vi.fn<CoreApi['account']['backend']>(async (_method, path) => ({ status: 200, body: { data:
+      path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent, stopRequested: true }])
+        : swarmReply(path, { agents: [agent], conversations: [{ archived: true, agentIds: ['agent'] }] }) } }))
+    const service = superTabService(fakeCore({ account: { backend: call } }))
+    expect(await service.requests.super_tabs({ action: 'swarmListed', harnessId: 'kept' }, owner)).toEqual({ ok: true, listed: true })
+    expect(await service.requests.super_tabs({ action: 'swarmListed', harnessId: 'personal' }, owner)).toEqual({ ok: true, listed: false })
+    expect(await service.requests.super_tabs({ action: 'swarmListed', harnessId: 'kept' }, visitor)).toMatchObject({ error: 'OWNER_REQUIRED' })
+    call.mockRejectedValueOnce(new Error('Offline'))
+    expect(await service.requests.super_tabs({ action: 'swarmListed', harnessId: 'kept' }, owner)).toEqual({ ok: true })
+    service.port.stop()
+  })
   // Project instructions, phase 4 (decision 1): the process answers the core in the wire's values, which a core from before
   // role kinds reads too; a Reviewer's answer keeps its swarm-review file.
   it('answers the core\'s role lookup in the values every core reads', async () => {
@@ -864,7 +879,7 @@ it('documents finished worker decisions and explains an older backend without re
 
 describe('the Swarm cards the devices ask for', () => {
   function withCards() {
-    const cards = { want: vi.fn(), open: vi.fn(), side: vi.fn(), say: vi.fn(async (): Promise<SaidOnCard> => ({ said: true })), worker: vi.fn((machineId: string, harnessId: string) => machineId === 'm2' && harnessId === 'h-r1'), recap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'Shipped', at: 5, none: false })), onCards: undefined as unknown, onRecap: undefined as unknown }
+    const cards = { want: vi.fn(), open: vi.fn(), side: vi.fn(), threadLeave: vi.fn((..._a: unknown[]): { tabId: string; conversationId: string } | null => null), say: vi.fn(async (): Promise<SaidOnCard> => ({ said: true })), worker: vi.fn((machineId: string, harnessId: string) => machineId === 'm2' && harnessId === 'h-r1'), recap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'Shipped', at: 5, none: false })), onCards: undefined as unknown, onRecap: undefined as unknown }
     const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
     const core = fakeCore({ superTabs })
     const make = vi.fn(() => cards as never)
@@ -965,6 +980,28 @@ describe('the Swarm cards the devices ask for', () => {
     expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', 'buddy', 'pm1', true)
     await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', reviewed: true }, owner)
     expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', 'buddy')
+  })
+  it('cardThreadLeave tells the cards and answers the project; cardSay answers the thread its words started', async () => {
+    const t = withCards()
+    t.cards.threadLeave.mockReturnValueOnce({ tabId: 't1', conversationId: 'lead-web' })
+    expect(await t.ask({ action: 'cardThreadLeave', tabId: 't1', leadId: 'l1', chat: 'buddy' }, owner)).toEqual({ ok: true, conversationId: 'lead-web' })
+    expect(t.cards.threadLeave).toHaveBeenLastCalledWith('t1', 'l1', 'buddy')
+    expect(await t.ask({ action: 'cardThreadLeave', tabId: 't1', leadId: 'l1' }, owner)).toEqual({ ok: true })
+    for (const bad of [{ tabId: 'bad id', leadId: 'l1' }, { tabId: 't1', leadId: 'x'.repeat(48) }, { tabId: 't1' }]) {
+      expect(await t.ask({ action: 'cardThreadLeave', ...bad }, owner)).toEqual({ error: 'INVALID_REQUEST' })
+    }
+    expect(await t.ask({ action: 'cardThreadLeave', tabId: 't1', leadId: 'l1' }, visitor)).toEqual({ error: 'OWNER_REQUIRED' })
+    expect(t.cards.threadLeave).toHaveBeenCalledTimes(2)
+    expect(t.cards.threadLeave).toHaveBeenLastCalledWith('t1', 'l1', false)
+    await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true, threaded: true, thread: null }, owner)
+    expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', true, undefined, false, { threaded: true, thread: null })
+    await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true, chatId: 'lead-web', reviewed: true, thread: 'm9' }, owner)
+    expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', true, 'lead-web', true, { thread: 'm9' })
+    await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true, thread: 'bad id' }, owner)
+    expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', true)
+    t.cards.say.mockResolvedValueOnce({ said: true, thread: { tabId: 't1', conversationId: 'lead-web', root: 'm9' } })
+    expect(await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true }, owner))
+      .toEqual({ ok: true, said: true, thread: { tabId: 't1', conversationId: 'lead-web', root: 'm9' } })
   })
   it('cardSay passes a refused post\'s code and message on, and says nothing of a refusal otherwise', async () => {
     const t = withCards()

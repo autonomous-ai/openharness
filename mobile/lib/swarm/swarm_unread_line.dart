@@ -15,9 +15,8 @@ import 'swarm_message_row.dart' show swarmChatText;
 /// does not reach back to the mark while there are [hasOlder] messages: the
 /// first unread may be among those, and the chat then opens at its foot.
 /// A message [drawn] says the chat does not draw (a prompt's warning already
-/// answered, a Shipped card its task's line replaced) is passed over, as
-/// Desktop decides from what it shows (`_ownShown`): the line never sits
-/// above a row that is not there.
+/// answered) is passed over, as Desktop decides from what it shows
+/// (`_ownShown`): the line never sits above a row that is not there.
 String? swarmFirstUnread(
   List<SuperTabMessage> messages,
   int? mark, {
@@ -27,7 +26,8 @@ String? swarmFirstUnread(
 }) {
   if (mark == null || mark <= 0 || messages.isEmpty) return null;
   if (hasOlder && messages.first.sequence > mark + 1) return null;
-  bool own(SuperTabMessage m) => !m.fromAgent && m.authorId == accountId;
+  bool own(SuperTabMessage m) =>
+      !m.fromAgent && !m.postedForAuthor && m.authorId == accountId;
   var read = mark;
   for (final m in messages) {
     if (own(m) && m.inMainStream && m.sequence > read) read = m.sequence;

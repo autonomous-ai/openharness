@@ -99,14 +99,15 @@ class SuperTabAgentInfo {
   bool get hasQuestion =>
       app?.questionFor(agent.machineId, agent.harnessId) != null;
 
-  /// The agent's machine owner, named as the sidebar Humans list names them.
+  /// The agent's machine owner, named as People names them: the name they
+  /// set, else their username.
   String? get owner => _personName(agent.machineOwnerId);
 
   String? _personName(Object? personId) {
     final person = controller.snapshot?.people
         .where((p) => p.id == personId)
         .firstOrNull;
-    return _known(person?.username);
+    return _known(person?.shownName);
   }
 
   String? get questionOwner {

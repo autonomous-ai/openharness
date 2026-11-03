@@ -86,7 +86,7 @@ class _SuperTabUsernameEditorState extends State<SuperTabUsernameEditor> {
       ),
       const SizedBox(height: 4),
       Text(
-        'How people see and tag you in this Swarm.',
+        'How people tag you in this Swarm.',
         style: DesktopChrome.metadata(),
       ),
       if (_error case final error?) ...[

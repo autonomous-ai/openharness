@@ -35,6 +35,19 @@ void _fromLead(
     'id': 'lead-agent',
     'name': 'Lead',
   };
+  _spread(server);
+}
+
+/// [server]'s messages a minute apart, with six more before every third: the
+/// long chat of three-message groups these tests were measured on, now that
+/// one sender's messages within five minutes share one header (#2419).
+void _spread(ConversationServer server) {
+  for (final row in server.messages) {
+    final sequence = row['sequence'] as int;
+    row['createdAt'] = DateTime.utc(2026, 10, 18)
+        .add(Duration(minutes: sequence + 6 * ((sequence - 1) ~/ 3)))
+        .toIso8601String();
+  }
 }
 
 void main() {
@@ -42,6 +55,7 @@ void main() {
     WidgetTester tester,
     ConversationServer server,
   ) async {
+    _spread(server);
     final c = server.controller();
     await c.refresh();
     await tester.pumpWidget(
@@ -648,7 +662,8 @@ void main() {
     expect(find.byKey(_jump), findsNothing);
     final unread = await linkedTop(tester, offlineChat(22));
     expect(find.byKey(_jump), findsOneWidget);
-    expect(unread, read);
+    // Layout arithmetic differs in the last bits with the rows above.
+    expect(unread, moreOrLessEquals(read, epsilon: .5));
   });
 
   testWidgets('the band going as the reader scrolls up to the line moves the '
@@ -731,6 +746,9 @@ void main() {
         .style
         ?.fontWeight;
     await tester.tap(find.byKey(const ValueKey('super-group-lead')));
+    await tester.pumpAndSettle();
+    // A workgroup with no work is in The rest, which starts folded (#2309).
+    await tester.tap(find.byKey(const ValueKey('super-task-group-lead-rest')));
     await tester.pumpAndSettle();
     expect(weight(), grid.AppFont.semibold);
     // Read on another device.

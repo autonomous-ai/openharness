@@ -44,8 +44,9 @@ Color _tone(BuildContext context, double hue) => HSLColor.fromAHSL(
   );
 }
 
-/// The round face inside an avatar: [picture] when there is one, else the
-/// agent pattern when [pattern] is set, else the name's initial.
+/// The face inside an avatar: [picture] when there is one, else the agent
+/// pattern when [pattern] is set, else the name's initial. Round, or a rounded
+/// square with [radius] corners.
 class SuperTabAvatarFace extends StatelessWidget {
   const SuperTabAvatarFace({
     super.key,
@@ -54,16 +55,18 @@ class SuperTabAvatarFace extends StatelessWidget {
     required this.size,
     this.picture,
     this.pattern = false,
+    this.radius,
   });
   final String identity, name;
   final double size;
   final SuperTabAvatarPicture? picture;
   final bool pattern;
+  final double? radius;
 
   @override
   Widget build(BuildContext context) => switch (picture) {
-    SuperTabUploadedAvatar(:final url) => ClipOval(
-      child: Image.network(
+    SuperTabUploadedAvatar(:final url) => _clip(
+      Image.network(
         url.toString(),
         width: size,
         height: size,
@@ -82,6 +85,14 @@ class SuperTabAvatarFace extends StatelessWidget {
     null => _fallback(context),
   };
 
+  Widget _clip(Widget child) => switch (radius) {
+    final radius? => ClipRRect(
+      borderRadius: BorderRadius.circular(radius),
+      child: child,
+    ),
+    null => ClipOval(child: child),
+  };
+
   Widget _fallback(BuildContext context) =>
       pattern ? _pattern(context) : _initial(context);
 
@@ -91,7 +102,11 @@ class SuperTabAvatarFace extends StatelessWidget {
     alignment: Alignment.center,
     decoration: BoxDecoration(
       color: (color ?? _tone(context, _hue(identity))).withValues(alpha: .14),
-      shape: BoxShape.circle,
+      shape: radius == null ? BoxShape.circle : BoxShape.rectangle,
+      borderRadius: switch (radius) {
+        final radius? => BorderRadius.circular(radius),
+        null => null,
+      },
     ),
     child: child,
   );

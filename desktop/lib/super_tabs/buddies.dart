@@ -9,6 +9,7 @@ import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'buddy_machines.dart';
+import 'buddy_model.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'model.dart';
@@ -45,12 +46,13 @@ List<SuperTabProject> buddyProjects(SuperTabController c) => [
     if (c.buddy(project.id) == null) project,
 ];
 
-/// A person by the name the Swarm shows: their username.
+/// A person by the name the Swarm shows: the name they set, else their
+/// username.
 String buddyPersonName(SuperTabController c, String personId) {
   return c.snapshot?.people
           .where((p) => p.id == personId)
           .firstOrNull
-          ?.username ??
+          ?.shownName ??
       'its owner';
 }
 
@@ -337,7 +339,7 @@ Future<void> confirmRemoveBuddy(
 ) async {
   final remove = await showAppDialog<bool>(
     context: context,
-    builder: (context) => SuperTabDialogScope(
+    builder: (context) => _BuddyDialogScope(
       controller: c,
       projectId: projectId,
       child: AlertDialog(
@@ -382,12 +384,40 @@ Future<void> showRenameBuddy(
   String projectId,
 ) => showAppDialog<void>(
   context: context,
-  builder: (context) => SuperTabDialogScope(
+  builder: (context) => _BuddyDialogScope(
     controller: c,
     projectId: projectId,
     child: _RenameBuddyDialog(controller: c, projectId: projectId),
   ),
 );
+
+/// A Buddy dialog's scope: its project while the project is there, or the
+/// one Buddy's chat while that is there. The one Buddy belongs to no project
+/// (its key is [SuperTabController.kSwarmBuddyKey]), so a scope that wanted a
+/// project showed "This action is no longer available." in place of Rename
+/// Buddy and Remove Buddy (task #2428, 11-03).
+class _BuddyDialogScope extends StatelessWidget {
+  const _BuddyDialogScope({
+    required this.controller,
+    required this.projectId,
+    required this.child,
+  });
+
+  final SuperTabController controller;
+  final String projectId;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final swarm = projectId == SuperTabController.kSwarmBuddyKey;
+    return SuperTabDialogScope(
+      controller: controller,
+      projectId: swarm ? null : projectId,
+      conversationId: swarm ? controller.buddyChat(projectId)?.id : null,
+      child: child,
+    );
+  }
+}
 
 class _RenameBuddyDialog extends StatefulWidget {
   const _RenameBuddyDialog({required this.controller, required this.projectId});
@@ -596,7 +626,17 @@ class SuperTabBuddyBar extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(where, style: DesktopChrome.metadata()),
+          // The one Buddy switches between its person's subscription and a
+          // model shared in the Swarm (task #2354); a project's Buddy cannot.
+          if (chat.isSwarmBuddyChat)
+            BuddyModelLine(
+              controller: c,
+              agent: agent,
+              machine: machine,
+              rest: where,
+            )
+          else
+            Text(where, style: DesktopChrome.metadata()),
           if (agent.downSince != null)
             Row(
               children: [

@@ -12,6 +12,7 @@ import '../widgets/new_harness_paste.dart';
 import 'composer_files.dart';
 import 'composer_newline.dart';
 import 'controller.dart';
+import 'swarm_type.dart';
 
 /// A thread's reply box, one everywhere a reply is written (the thread pane,
 /// the Threads view): files dropped, pasted or attached, Enter sends and
@@ -135,12 +136,15 @@ class SuperTabReplyBox extends StatelessWidget {
                   maxLength: kComposerMaxLength,
                   inputFormatters: inputFormatters,
                   keyboardType: TextInputType.multiline,
-                  style: DesktopChrome.text(),
+                  style: SwarmType.composer(context),
                   decoration: InputDecoration(
                     isCollapsed: true,
                     constraints: const BoxConstraints(),
                     hintText: hint,
-                    hintStyle: DesktopChrome.text(color: DesktopChrome.muted),
+                    hintStyle: SwarmType.composer(
+                      context,
+                      color: DesktopChrome.muted,
+                    ),
                     contentPadding: EdgeInsets.zero,
                     border: InputBorder.none,
                     enabledBorder: InputBorder.none,

@@ -1183,6 +1183,31 @@ void main() {
       ]);
     });
 
+    // Diego (11-03): the chat notice named no Swarm or chat, so the macOS
+    // runner dropped its click and Linux had nothing to open.
+    test(
+      'a chat notice names its Swarm and chat, so a click opens it',
+      () async {
+        final notices = ShownNotices();
+        final store = DesktopNotificationStore(storage: MemoryStore());
+        await store.set(true);
+        final system = SystemNotifications(store: store, notifier: notices);
+        expect(superTabChatNotice(system, web: true), isNull);
+        superTabChatNotice(system, web: false)!(
+          'tab-1',
+          SuperTabConversation.fromJson(
+            conversationFixture('offline', 'Offline editing'),
+          ),
+          7,
+        );
+        await pumpEventQueue();
+        expect(notices.shown, [
+          (title: 'Offline editing', body: 'New messages'),
+        ]);
+        expect(notices.routes, [('@chat', 'tab-1/offline')]);
+      },
+    );
+
     test('the client hands each new tag of an open Swarm over', () async {
       final server = ConversationServer()..tag('message-1', text: 'Old');
       final arrived = <String>[];

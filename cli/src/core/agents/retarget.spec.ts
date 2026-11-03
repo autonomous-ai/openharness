@@ -71,6 +71,7 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RetargetDe
       updateProcessIdentity: vi.fn(),
       setGridLaunch: vi.fn(),
       setSubscriptionModel: vi.fn(),
+      setSubscriptionSession: vi.fn(),
       setActive: vi.fn(),
     } as unknown as RetargetDeps['registry'],
     runtimeProfiles: { selectedModel: vi.fn(() => 'runtime-v1:claude:opus') } as never,
@@ -683,6 +684,95 @@ describe('retargeting an agent', () => {
       expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: false, error: 'RESPAWN_FAILED',
         detail: expect.stringContaining('native model change was applied') })
       expect(run.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
+    })
+  })
+  // A fresh move starts a new conversation on the grid (a long one would not fit its window) and keeps the one it
+  // left; the way home reopens that one, not the grid's (design: "Two generic additions to agent_retarget").
+  describe('a fresh session, and the way home to the one it left', () => {
+    const onGrid = (over: Partial<RegisteredSession> = {}) =>
+      agent({ grid: { baseUrl: 'x' }, gridLaunch: grid, sessionId: 'S2', subscriptionSessionId: 'S1', ...over } as Partial<RegisteredSession>)
+    const home = { relaunchOverrides: vi.fn(async () => ({ ok: true, overrides: {} })) as never }
+    const order = (fn: unknown) => vi.mocked(fn as () => void).mock.invocationCallOrder[0]
+
+    it('a fresh move onto a grid relaunches without --resume and keeps the session it left', async () => {
+      const run = setup(agent({ sessionId: 'S1' }))
+      expect(await run.retarget({ agentId: 'a1', grid, fresh: true })).toEqual({ ok: true })
+      expect(vi.mocked(restartAgent).mock.calls[0][0]).toEqual({ engine: 'claude', sessionId: '' })
+      expect(run.deps.registry.setSubscriptionSession).toHaveBeenCalledExactlyOnceWith('a1', 'S1')
+      // Kept only once the move worked.
+      expect(order(run.deps.registry.setSubscriptionSession)).toBeGreaterThan(order(restartAgent))
+    })
+
+    it('a fresh Codex move starts a new conversation rather than forking the one it leaves', async () => {
+      const run = setup(agent({ engine: 'codex', sessionId: 'S1' }))
+      expect(await run.retarget({ agentId: 'a1', grid, fresh: true })).toEqual({ ok: true })
+      expect(vi.mocked(restartAgent).mock.calls[0][0]).toEqual({ engine: 'codex', sessionId: '' })
+      expect(run.deps.registry.setSubscriptionSession).toHaveBeenCalledWith('a1', 'S1')
+    })
+
+    it('a fresh OpenCode move leaves the model of the session it left as it was', async () => {
+      const run = setup(agent({ engine: 'opencode', sessionId: 'S1' }), { relaunchOverrides: vi.fn(async () => ({ ok: true as const,
+        overrides: { env: {}, extraArgs: [], clearEnv: [], sessionModel: 'grid/big' } })) })
+      expect(await run.retarget({ agentId: 'a1', grid, fresh: true })).toEqual({ ok: true })
+      expect(applyOpencodeSessionModel).not.toHaveBeenCalled()
+      expect(vi.mocked(restartAgent).mock.calls[0][0]).toEqual({ engine: 'opencode', sessionId: '' })
+    })
+
+    it('the move home reopens the session a fresh move left, and forgets it once home', async () => {
+      const run = setup(onGrid(), home)
+      expect(await run.retarget({ agentId: 'a1', grid: null })).toEqual({ ok: true })
+      expect(vi.mocked(restartAgent).mock.calls[0][0]).toEqual({ engine: 'claude', sessionId: 'S1' })
+      // The swap prepares, guards and (on a fallback) keeps the conversation it reopens, not the grid's.
+      expect(vi.mocked(run.deps.paneSwapDeps).mock.calls[0][5]).toBe('S1')
+      expect(run.deps.registry.setSubscriptionSession).toHaveBeenCalledExactlyOnceWith('a1', null)
+      expect(order(run.deps.registry.setSubscriptionSession)).toBeGreaterThan(order(restartAgent))
+    })
+
+    it('the move home resumes a Codex conversation it left on the own login, without a fork', async () => {
+      const run = setup(onGrid({ engine: 'codex' }), home)
+      expect(await run.retarget({ agentId: 'a1', grid: null })).toEqual({ ok: true })
+      expect(vi.mocked(restartAgent).mock.calls[0][0]).toEqual({ engine: 'codex', sessionId: 'S1' })
+    })
+
+    it('the move home rewrites the model of the OpenCode session it reopens', async () => {
+      const run = setup(onGrid({ engine: 'opencode', subscriptionModel: 'anthropic/claude' }), { relaunchOverrides: vi.fn(async () => ({ ok: true as const,
+        overrides: { sessionModel: 'anthropic/claude', gridLaunchRecord: null } })) as never })
+      expect(await run.retarget({ agentId: 'a1', grid: null })).toEqual({ ok: true })
+      expect(vi.mocked(applyOpencodeSessionModel).mock.calls[0][0]).toMatchObject({ sessionId: 'S1' })
+    })
+
+    it('a grid-to-grid move keeps the remembered session, fresh or resumed', async () => {
+      const fresh = setup(onGrid())
+      expect(await fresh.retarget({ agentId: 'a1', grid: { ...grid, networkId: 'g2' }, fresh: true })).toEqual({ ok: true })
+      expect(vi.mocked(restartAgent).mock.calls[0][0]).toEqual({ engine: 'claude', sessionId: '' })
+      expect(fresh.deps.registry.setSubscriptionSession).not.toHaveBeenCalled()
+      const resumed = setup(onGrid())
+      expect(await resumed.retarget({ agentId: 'a1', grid: { ...grid, networkId: 'g2' } })).toEqual({ ok: true })
+      expect(vi.mocked(restartAgent).mock.calls[1][0]).toEqual({ engine: 'claude', sessionId: 'S2' })
+      expect(resumed.deps.registry.setSubscriptionSession).not.toHaveBeenCalled()
+    })
+
+    it('a move from the own login that keeps its conversation forgets an earlier remembered one', async () => {
+      const run = setup(agent({ sessionId: 'S3', subscriptionSessionId: 'S1' } as Partial<RegisteredSession>))
+      expect(await run.retarget({ agentId: 'a1', grid })).toEqual({ ok: true })
+      expect(vi.mocked(restartAgent).mock.calls[0][0]).toEqual({ engine: 'claude', sessionId: 'S3' })
+      expect(run.deps.registry.setSubscriptionSession).toHaveBeenCalledExactlyOnceWith('a1', null)
+    })
+
+    it('a refused or failed move leaves the remembered session unchanged', async () => {
+      // Refused: a turn is open.
+      const busyOut = setup(agent({ sessionId: 'S1' }), { sessionTurnOpen: vi.fn(() => true) })
+      expect(await busyOut.retarget({ agentId: 'a1', grid, fresh: true })).toMatchObject({ ok: false, error: 'AGENT_BUSY' })
+      const busyHome = setup(onGrid(), { ...home, sessionTurnOpen: vi.fn(() => true) })
+      expect(await busyHome.retarget({ agentId: 'a1', grid: null })).toMatchObject({ ok: false, error: 'AGENT_BUSY' })
+      expect(restartAgent).not.toHaveBeenCalled()
+      // Failed: the replacement did not come up.
+      vi.mocked(restartAgent).mockResolvedValueOnce({ ok: false, detail: 'no process' } as never).mockResolvedValueOnce({ ok: false, detail: 'no process' } as never)
+      const failedOut = setup(agent({ sessionId: 'S1' }))
+      expect(await failedOut.retarget({ agentId: 'a1', grid, fresh: true })).toMatchObject({ ok: false, error: 'RESPAWN_FAILED' })
+      const failedHome = setup(onGrid(), home)
+      expect(await failedHome.retarget({ agentId: 'a1', grid: null })).toMatchObject({ ok: false, error: 'RESPAWN_FAILED' })
+      for (const run of [busyOut, busyHome, failedOut, failedHome]) expect(run.deps.registry.setSubscriptionSession).not.toHaveBeenCalled()
     })
   })
 })

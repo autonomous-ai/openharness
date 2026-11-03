@@ -184,14 +184,25 @@ Future<void> _pause(
 /// the desktop's Remove question reads): the agents that stop, the projects whose code is only there, and the Product
 /// Manager that blocks it.
 class _Preview {
-  const _Preview(this.agents, this.soleSourceProjects, this.blockedProject);
+  const _Preview(
+    this.agents,
+    this.soleSourceProjects,
+    this.blockedProject,
+    this.blockedReason,
+    this.hiddenAgentCount,
+    this.hiddenSoleSourceProjectCount,
+  );
 
   final List<({String name, String project, String? task})> agents;
   final List<String> soleSourceProjects;
   final String? blockedProject;
+  final String? blockedReason;
+  final int hiddenAgentCount;
+  final int hiddenSoleSourceProjectCount;
 
   static _Preview parse(Object? raw) {
     if (raw is! Map ||
+        raw['previewVersion'] != 2 ||
         raw['agents'] is! List ||
         raw['soleSourceProjects'] is! List) {
       throw const FormatException('Invalid machine removal preview');
@@ -203,6 +214,27 @@ class _Preview {
 
     final blocked = raw['blockedBy'];
     if (blocked != null && blocked is! Map) {
+      throw const FormatException('Invalid machine removal preview');
+    }
+    final blockedMap = blocked as Map?;
+    final blockedProject = blockedMap?['projectName'];
+    final blockedReason = blockedMap?['reason'];
+    if (blocked != null &&
+        !((blockedProject is String && blockedProject.isNotEmpty) ||
+            (blockedReason is String && blockedReason.isNotEmpty))) {
+      throw const FormatException('Invalid machine removal preview');
+    }
+    if ((blockedProject != null && blockedProject is! String) ||
+        (blockedReason != null && blockedReason is! String)) {
+      throw const FormatException('Invalid machine removal preview');
+    }
+    final hiddenAgentCount = raw['hiddenAgentCount'] ?? 0;
+    final hiddenSoleSourceProjectCount =
+        raw['hiddenSoleSourceProjectCount'] ?? 0;
+    if (hiddenAgentCount is! int ||
+        hiddenAgentCount < 0 ||
+        hiddenSoleSourceProjectCount is! int ||
+        hiddenSoleSourceProjectCount < 0) {
       throw const FormatException('Invalid machine removal preview');
     }
     return _Preview(
@@ -229,7 +261,10 @@ class _Preview {
           else
             throw const FormatException('Invalid machine removal preview'),
       ],
-      blocked == null ? null : text((blocked as Map)['projectName']),
+      blockedProject as String?,
+      blockedReason as String?,
+      hiddenAgentCount,
+      hiddenSoleSourceProjectCount,
     );
   }
 }
@@ -251,12 +286,26 @@ String _warning(_Preview preview) {
       lines.add('and ${preview.agents.length - _listed} more');
     }
   }
+  if (preview.hiddenAgentCount > 0) {
+    lines.add(
+      preview.hiddenAgentCount == 1
+          ? "1 agent of a project you can't see will stop."
+          : "${preview.hiddenAgentCount} agents of projects you can't see will stop.",
+    );
+  }
   if (preview.soleSourceProjects.isNotEmpty) {
     lines.add('\nThese projects have code only on this machine:');
     lines.addAll(preview.soleSourceProjects.take(_listed));
     if (preview.soleSourceProjects.length > _listed) {
       lines.add('and ${preview.soleSourceProjects.length - _listed} more');
     }
+  }
+  if (preview.hiddenSoleSourceProjectCount > 0) {
+    lines.add(
+      preview.hiddenSoleSourceProjectCount == 1
+          ? "1 project you can't see has code only on this machine."
+          : "${preview.hiddenSoleSourceProjectCount} projects you can't see have code only on this machine.",
+    );
   }
   lines.add(
     '\nThe Swarm folders on this machine will be deleted, including uncommitted or unpushed work.',
@@ -286,7 +335,7 @@ Future<void> removeSwarmMachine(
     preview = _Preview.parse(
       await reader.request(
         'GET',
-        '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/machines/${Uri.encodeComponent(machineId)}/removal',
+      '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/machines/${Uri.encodeComponent(machineId)}/removal/v2',
       ),
     );
   } on SuperTabFailure catch (failure) {
@@ -304,6 +353,10 @@ Future<void> removeSwarmMachine(
       reader,
       'This machine runs the Product Manager of project $project. Delete the project first.',
     );
+    return;
+  }
+  if (preview.blockedReason case final reason?) {
+    _tell(messenger, reader, reason);
     return;
   }
   final confirmed = await confirmPhoneAction(

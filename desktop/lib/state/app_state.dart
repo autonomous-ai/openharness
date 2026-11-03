@@ -2255,18 +2255,24 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// The Harness Team account on this computer (cli/src/team/autoSetup.ts),
-  /// offered while the person is here: as they join a Swarm ([reason]
-  /// `join`), add this computer to one (`contribute`), or open the app
-  /// (`startup`). This computer's own daemon decides whether it is wanted: no
-  /// account yet, not declined before, and at start only while this computer
-  /// is in a Swarm with other people in it. It is then explained before the
-  /// system asks ([teamSetupAsks]): macOS's prompt is titled "osascript",
-  /// which nobody recognised as Harness (2026-10-27). On a Mac, Linux and
-  /// Windows ([teamAccountOn]), and never for another machine, where nobody
-  /// may be at it.
+  /// asked of this computer's own daemon while the person is here: as they
+  /// join a Swarm ([reason] `join`), add this computer to one (`contribute`),
+  /// or open the app (`startup`). On a Mac, Linux and Windows
+  /// ([teamAccountOn]), and never for another machine, where nobody may be at
+  /// it.
+  ///
+  /// A join or a contribution with the account missing locks the app until it
+  /// exists ([teamSetupLocked]; Scholes, 2026-11-03: Macs that joined stayed
+  /// "not set up" until someone found their row in Machines). For a join, a
+  /// cancel or a failure the daemon remembers from before locks too: this is
+  /// a new join. A contribution locks only while it is wanted or running.
+  /// At start the daemon decides (no account, not declined, in a Swarm with
+  /// other people), and it is explained once a launch ([teamSetupAsks]),
+  /// never behind the lock.
   ///
   /// [tabId]: the Swarm joined or added to, so a Swarm its server does not
-  /// try team accounts in yet asks nothing (the daemon reads it).
+  /// try team accounts in yet asks nothing (the daemon reads it), and the lock
+  /// knows where Remove this Mac from the Swarm removes it from.
   ///
   /// True when the daemon answered, whatever it decided; false when it was not
   /// asked or could not say.
@@ -2279,18 +2285,20 @@ class AppNotifier extends ChangeNotifier {
         'reason': reason,
         'tabId': ?tabId,
       });
-      appLog.info(
-        'super-tabs',
-        'team account offer ($reason): ${answer['state']}',
-      );
-      if (answer['state'] == 'wanted') {
+      final state = answer['state'];
+      appLog.info('super-tabs', 'team account offer ($reason): $state');
+      if (reason == 'startup') {
         // The start check runs once for each daemon process, so a restart
         // with the explanation still open must not show it again: once a
-        // launch at start. A join, a contribution or the machine row's Set up
-        // is the person asking, and always explains.
-        if (reason != 'startup' || !_teamStartExplained)
+        // launch.
+        if (state == 'wanted' && !_teamStartExplained && !teamSetupLocked) {
           _teamSetupAsks.add(reason);
-        if (reason == 'startup') _teamStartExplained = true;
+        }
+        if (state == 'wanted') _teamStartExplained = true;
+      } else if (tabId != null &&
+          (reason == 'join' ? _teamLockStates : _teamContributeLockStates)
+              .contains(state)) {
+        await _lockForTeamSetup(tabId);
       }
       return true;
     } catch (error) {
@@ -2298,6 +2306,227 @@ class AppNotifier extends ChangeNotifier {
       appLog.info('super-tabs', 'team account not offered ($reason): $error');
       return false;
     }
+  }
+
+  /// The daemon's answers that leave the account to be made here: wanted, or
+  /// held back only by an earlier cancel or failure, already running, or with
+  /// no prompt to ask in (the window then says how).
+  static const _teamLockStates = {
+    'wanted',
+    'declined',
+    'waiting',
+    'running',
+    'no-prompt',
+  };
+
+  /// A contribution locks only while the account is to be made now: wanted,
+  /// or already running. A cancel or failure the daemon remembers was the
+  /// person's answer, and a contribution (settings saved, this Mac added
+  /// again) is no new Swarm to ask it again for (Diego, 2026-11-03).
+  static const _teamContributeLockStates = {'wanted', 'running'};
+
+  /// The Swarms this computer joined, or was added to, while its Harness Team
+  /// account was missing, for [_teamLockAccount]. Kept on this computer so a
+  /// restart locks again.
+  final _teamLockTabs = <String>{};
+  String? _teamLockAccount;
+  String? _teamLockRestored;
+
+  static String _teamLockKey(String account) => 'team_setup_lock.$account';
+
+  /// Whether the app is held until this computer's Harness Team account exists
+  /// (super_tabs/team_account_setup.dart `TeamAccountSetupLock`).
+  bool get teamSetupLocked =>
+      _teamLockTabs.isNotEmpty &&
+      _teamLockAccount != null &&
+      _teamLockAccount == currentUser?.id &&
+      _teamAccountHere() != null;
+
+  Future<void> _lockForTeamSetup(String tabId) async {
+    final account = currentUser?.id;
+    if (account == null) return;
+    if (_teamLockAccount != account) {
+      _teamLockAccount = account;
+      _teamLockTabs.clear();
+    }
+    if (!_teamLockTabs.add(tabId)) return;
+    notifyListeners();
+    await _saveTeamLock(account);
+  }
+
+  Future<void> _saveTeamLock(String account) async {
+    final store = localStore;
+    if (store == null) return;
+    try {
+      if (_teamLockTabs.isEmpty) {
+        await store.delete(_teamLockKey(account));
+      } else {
+        await store.write(
+          _teamLockKey(account),
+          jsonEncode(_teamLockTabs.toList()),
+        );
+      }
+    } catch (error) {
+      appLog.info('super-tabs', 'team account lock not saved: $error');
+    }
+  }
+
+  /// At each connection of this computer's daemon: a lock left by a join
+  /// before the app closed holds again, unless the account exists by now.
+  /// Read once for each account.
+  Future<void> _restoreTeamSetupLock() async {
+    final account = currentUser?.id;
+    final store = localStore;
+    if (account == null || store == null || _teamLockRestored == account) {
+      return;
+    }
+    if (_teamAccountHere() == null) return;
+    _teamLockRestored = account;
+    List<String> tabs;
+    try {
+      final raw = await store.read(_teamLockKey(account));
+      tabs = raw == null
+          ? const []
+          : [
+              for (final id in jsonDecode(raw) as List)
+                if (id is String) id,
+            ];
+    } catch (error) {
+      appLog.info('super-tabs', 'team account lock not read: $error');
+      return;
+    }
+    if (tabs.isEmpty || _disposed || currentUser?.id != account) return;
+    final setup = await teamSetupStatus();
+    if (_disposed || currentUser?.id != account) return;
+    if (_teamLockAccount != account) {
+      _teamLockAccount = account;
+      _teamLockTabs.clear();
+    }
+    _teamLockTabs.addAll(tabs);
+    if (setup?.state == 'exists') {
+      await teamAccountMade();
+      return;
+    }
+    // A Swarm that let this computer go meanwhile (removed from Machines on
+    // another device, or the person's access gone) holds nothing.
+    final here = _teamAccountHere();
+    if (here != null) {
+      for (final tabId in tabs) {
+        if (await _swarmHolds(tabId, here) == false) {
+          _teamLockTabs.remove(tabId);
+        }
+      }
+    }
+    if (_disposed || currentUser?.id != account) return;
+    notifyListeners();
+    if (_teamLockTabs.length != tabs.length) await _saveTeamLock(account);
+  }
+
+  /// Whether Swarm [tabId] still has computer [here] in its Machines list, not
+  /// being removed: false when it does not, or when this person can no longer
+  /// open it; null when it cannot be read now (offline), which keeps the lock.
+  Future<bool?> _swarmHolds(String tabId, String here) async {
+    try {
+      final c = await superTabs.open(tabId);
+      await c.refresh();
+      if (c.accessRevoked) return false;
+      final snapshot = c.snapshot;
+      if (snapshot == null || c.error != null) return null;
+      return snapshot.machines.any(
+        (m) => m['machineId'] == here && m['removal'] == null,
+      );
+    } on SuperTabFailure catch (failure) {
+      return const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)
+          ? false
+          : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// The Swarms the lock holds for, by the names they go by, read now so
+  /// Remove can say which it leaves; "a Swarm" for one that cannot be read.
+  Future<List<String>> readTeamSetupLockSwarmNames() async => [
+    for (final id in [..._teamLockTabs])
+      switch (await _swarmName(id)) {
+        final String name when name.isNotEmpty => name,
+        _ => 'a Swarm',
+      },
+  ];
+
+  /// A Swarm's name, given up after [_teamLockNameWait] (offline): Remove
+  /// still asks, naming it "a Swarm".
+  Future<String?> _swarmName(String tabId) async {
+    try {
+      return await () async {
+        final c = await superTabs.open(tabId);
+        if (c.snapshot == null) await c.refresh();
+        return c.snapshot?.name.trim();
+      }().timeout(_teamLockNameWait);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static const _teamLockNameWait = Duration(seconds: 5);
+
+  /// This computer's Harness Team account exists: the lock ends.
+  Future<void> teamAccountMade() async {
+    final account = _teamLockAccount;
+    if (account == null || _teamLockTabs.isEmpty) return;
+    _teamLockTabs.clear();
+    notifyListeners();
+    await _saveTeamLock(account);
+  }
+
+  /// The lock's one way out, where setup can never finish here: removes this
+  /// computer from each Swarm it is held for. Null when that is done;
+  /// otherwise why not, and the lock stays for the Swarms not done.
+  Future<String?> removeLockedMachine() async {
+    final here = _teamAccountHere();
+    final account = currentUser?.id;
+    if (here == null || account == null || _teamLockAccount != account) {
+      return null;
+    }
+    for (final tabId in [..._teamLockTabs]) {
+      // Already gone from it, being removed, or no longer this person's to
+      // open: nothing to remove, and the lock lets it go.
+      final holds = await _swarmHolds(tabId, here);
+      if (holds != false) {
+        try {
+          final c = await superTabs.open(tabId);
+          final result = await c.command({
+            'type': 'machine.remove',
+            'machineId': here,
+          });
+          if (result == null) {
+            return c.operationError ?? 'Could not do that. Try again.';
+          }
+        } on SuperTabFailure catch (failure) {
+          return failure.message;
+        } catch (error) {
+          appLog.info('super-tabs', 'machine not removed for the lock: $error');
+          return 'Could not reach the Swarm. Try again.';
+        }
+      }
+      _teamLockTabs.remove(tabId);
+      notifyListeners();
+      await _saveTeamLock(account);
+    }
+    return null;
+  }
+
+  /// The lock's last way out, once Remove was refused (the Mac runs a
+  /// project's PM, say): "Not now", recorded with the daemon so it is not
+  /// offered again on its own, and the app opens. The machine row keeps its
+  /// Set up button.
+  Future<void> declineTeamSetupLock() async {
+    await declineTeamAccount();
+    final account = _teamLockAccount;
+    if (account == null || _teamLockTabs.isEmpty) return;
+    _teamLockTabs.clear();
+    notifyListeners();
+    await _saveTeamLock(account);
   }
 
   /// The start offer, once for each process of this Mac's daemon: Macs
@@ -4743,7 +4972,8 @@ class AppNotifier extends ChangeNotifier {
         );
         if (_disposed || _devicePick != pick) return;
       } else {
-        controller.select(project.leadConversationId);
+        await controller.select(project.leadConversationId);
+        if (_disposed || _devicePick != pick) return;
       }
       // Selecting what is already selected announces nothing by itself.
       _announceOpenPanesToDial();
@@ -4753,6 +4983,94 @@ class AppNotifier extends ChangeNotifier {
       abandon.cancel();
       if (_devicePick == pick) _announceFromDevice = false;
     }
+  }
+
+  /// A thread the dial opened ([root] a string) or closed (null) in
+  /// [conversationId] of the Swarm tab [tabId], without any navigation.
+  Future<void> _dialThreadOnly(
+    String tabId,
+    String conversationId,
+    Object? root,
+  ) async {
+    if (!_superTabNames.containsKey(tabId) &&
+        !swarms.any((s) => s.superTabId == tabId)) {
+      return;
+    }
+    // Every thread frame, a leave included, supersedes a pending open.
+    final token = ++_dialThreadToken;
+    try {
+      final controller = await superTabs.open(tabId);
+      if (_disposed) return;
+      if (root is String) {
+        if (controller.snapshot == null) await controller.refresh();
+        if (_disposed ||
+            controller.snapshot?.conversation(conversationId) == null) {
+          return;
+        }
+        if (controller.selectedId != conversationId) {
+          await controller.select(conversationId);
+        }
+        if (_disposed || controller.selectedId != conversationId) return;
+        if (_dialThreadToken != token) return;
+        // Not a new pick: a later pick bumps [_devicePick] and drops this.
+        await _openDialThread(controller, root, _devicePick, token);
+      } else if (controller.openedThread?.conversationId == conversationId) {
+        controller.closeThread();
+      }
+    } catch (error) {
+      appLog.warn('super-tab', 'Could not open the dial\'s thread: $error');
+    }
+  }
+
+  /// Opens [root] beside the selected chat once the chat holds it. The dial
+  /// names a thread right after its post made the root, so the app often has
+  /// not read it: read once, then wait for a later read, until another pick,
+  /// another chat or 10 seconds. A root the chat never holds opens nothing.
+  Future<void> _openDialThread(
+    SuperTabController controller,
+    String root,
+    int pick, [
+    int? token,
+  ]) async {
+    final id = controller.selectedId;
+    // The person's own open or close while this waits makes it stale.
+    final before = controller.openedThread;
+    void open() {
+      // The pane may not be on screen (another Swarm tab, background window):
+      // the view's _syncThreadPane calls threadPaneShown when it is.
+      controller.openThread(root, shown: false);
+    }
+    bool holds() => controller
+        .messages(id)
+        .any((m) => m.id == root || m.thread == root);
+    if (!holds()) await controller.refresh();
+    bool superseded() =>
+        _disposed ||
+        _devicePick != pick ||
+        controller.selectedId != id ||
+        (token != null && _dialThreadToken != token) ||
+        controller.openedThread != before;
+    if (superseded()) return;
+    if (holds()) return open();
+    Timer? giveUp;
+    void listener() {
+      final stale = superseded();
+      if (!stale && !holds()) return;
+      giveUp?.cancel();
+      controller.removeListener(listener);
+      if (!stale) open();
+    }
+
+    controller.addListener(listener);
+    giveUp = Timer(dialThreadWaitForTest, () {
+      controller.removeListener(listener);
+      // A later dial frame asks again; nothing of the thread is logged.
+      appLog.warn(
+        'super-tab',
+        'The dial\'s thread never reached its chat in '
+            '${dialThreadWaitForTest.inSeconds} s; it stays closed',
+      );
+    });
   }
 
   void _noteNavigation() {
@@ -5821,6 +6139,7 @@ class AppNotifier extends ChangeNotifier {
       // joined a Swarm before teammates' work went only to Team machines never
       // met the join or contribute moment.
       if (!machine.machine.isSharedMachine) {
+        unawaited(_restoreTeamSetupLock());
         unawaited(_offerTeamAccountAtStart());
       }
     } else {
@@ -6057,6 +6376,11 @@ class AppNotifier extends ChangeNotifier {
 
   bool _announceFromDevice = false;
   int _devicePick = 0;
+  int _dialThreadToken = 0;
+
+  /// How long the dial's thread waits for its root to reach the chat.
+  @visibleForTesting
+  Duration dialThreadWaitForTest = const Duration(seconds: 10);
 
   /// The project each Swarm tab's row last told the dial, by backend tab id;
   /// null while its Swarm had not loaded. See `onSnapshot`.
@@ -6084,8 +6408,8 @@ class AppNotifier extends ChangeNotifier {
     return controller.snapshot?.conversation(id) == null ? null : id;
   }
 
-  /// The thread whose pane is on screen beside that conversation, by its
-  /// root: the round dial shows and answers it while it stays open.
+  /// The thread open beside that conversation, by its root, shown or hidden:
+  /// the round dial shows and answers it while it stays open.
   String? _dialThread(String tabId) => _dialConversation(tabId) == null
       ? null
       : superTabs.peek(tabId)?.threadOnScreen;
@@ -6664,7 +6988,8 @@ class AppNotifier extends ChangeNotifier {
   final _startupTimings = <String, int>{};
   final _startupClock = Stopwatch();
   void _markStartup(String step) {
-    if (_startupClock.isRunning) _startupTimings[step] = _startupClock.elapsedMilliseconds;
+    if (_startupClock.isRunning)
+      _startupTimings[step] = _startupClock.elapsedMilliseconds;
   }
 
   /// Set by any install during this boot: what the CLI said before it is out of date.
@@ -6713,10 +7038,13 @@ class AppNotifier extends ChangeNotifier {
         // Beside the tool probe, as neither waits on the other (task #2169). A fresh computer has no CLI yet: a check that
         // fails is asked again after. One from before a sign-out or an install says nothing about now.
         final askedAt = _authRevision;
-        final early = cliLogin.checkStatus().then<CliAuthStatus?>((status) {
-          _markStartup('signed-in check');
-          return status;
-        }).catchError((Object _) => null);
+        final early = cliLogin
+            .checkStatus()
+            .then<CliAuthStatus?>((status) {
+              _markStartup('signed-in check');
+              return status;
+            })
+            .catchError((Object _) => null);
         final environmentReady = await _prepareEnvironment();
         _markStartup('tools');
         if (!environmentReady) return;
@@ -6938,7 +7266,9 @@ class AppNotifier extends ChangeNotifier {
   /// What `bootstrap()` does right after the environment is confirmed ready — pulled out so
   /// [recheckEnvironmentStep] can reach the same destination without repeating `bootstrap()`'s config
   /// load and update-check startup, which already ran on the launch that got stuck here.
-  Future<void> _continueAfterEnvironmentReady({Future<CliAuthStatus?>? early}) async {
+  Future<void> _continueAfterEnvironmentReady({
+    Future<CliAuthStatus?>? early,
+  }) async {
     agentPrefetch?.setupRunning = false;
     final revision = _authRevision;
     if (!_authWorkCurrent(revision)) return;
@@ -7230,10 +7560,12 @@ class AppNotifier extends ChangeNotifier {
     // have answered, so the tiles are there for it, as before.
     Object? daemonFailure;
     var daemonFailed = false;
-    final daemon = ensureCliDaemonReady().then<void>((_) => _markStartup('daemon')).catchError((Object error) {
-      daemonFailed = true;
-      daemonFailure = error;
-    });
+    final daemon = ensureCliDaemonReady()
+        .then<void>((_) => _markStartup('daemon'))
+        .catchError((Object error) {
+          daemonFailed = true;
+          daemonFailure = error;
+        });
     await _restorePaneLayout(claimOnAttach: true);
     _armLaunchClaimExpiry();
     if (!_authWorkCurrent(revision)) {
@@ -7649,7 +7981,10 @@ class AppNotifier extends ChangeNotifier {
       } catch (_) {
         return;
       }
-      if (!_authWorkCurrent(revision) || !still.loggedIn || still.machineId != machineId) return;
+      if (!_authWorkCurrent(revision) ||
+          !still.loggedIn ||
+          still.machineId != machineId)
+        return;
       _keptProfileId = profile.id;
     }
     await _profileCache.write(machineId, profile);
@@ -7664,7 +7999,8 @@ class AppNotifier extends ChangeNotifier {
       if (me != null) {
         currentUser = CurrentUserProfile.fromMe(me);
         _profileConfirmed = true;
-        if (currentUser case final profile?) unawaited(_keepProfile(profile, revision));
+        if (currentUser case final profile?)
+          unawaited(_keepProfile(profile, revision));
         // A sign-in by hand: the device log keeps which account it was made to.
         if (currentUser!.id case final id?)
           unawaited(_deviceLog?.signedInAs(id));
@@ -17867,6 +18203,27 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// Asks [machineId]'s daemon for the Change agent handoff of [agentId]
+  /// (`agent_handoff_prepare`, owner only): the record and transcript it
+  /// writes in the agent's folder under change [changeId], for an agent of
+  /// [targetEngine]. Answers the daemon's reply, an explicit refusal included;
+  /// throws when it gives none in time.
+  Future<Map<String, dynamic>> prepareAgentHandoff(
+    String machineId, {
+    required String agentId,
+    required String changeId,
+    required String targetEngine,
+  }) => _agentHandoffRequest(
+    machineId,
+    'agent_handoff_prepare',
+    payload: {
+      'agentId': agentId,
+      'changeId': changeId,
+      'targetEngine': targetEngine,
+    },
+    timeout: const Duration(seconds: 6),
+  );
+
   /// Fill [change].handoff for the new agent, or return why the switch must not go on.
   ///
   /// First choice: the machine writes a record of the whole conversation into the project and the
@@ -17883,15 +18240,11 @@ class AppNotifier extends ChangeNotifier {
   ) async {
     change.handoffHeld = true;
     try {
-      final reply = await _agentHandoffRequest(
+      final reply = await prepareAgentHandoff(
         machineId,
-        'agent_handoff_prepare',
-        payload: {
-          'agentId': source.id,
-          'changeId': change.creation._id,
-          'targetEngine': change.engine,
-        },
-        timeout: const Duration(seconds: 6),
+        agentId: source.id,
+        changeId: change.creation._id,
+        targetEngine: change.engine,
       );
       final accepted = acceptAgentHandoffReply(
         reply,
@@ -22472,7 +22825,18 @@ class AppNotifier extends ChangeNotifier {
         // Buddy chat there; anything else is the Lead chat.
         final tabId = payload['superTabId'];
         final projectId = payload['projectId'];
-        if (tabId is String && projectId is String) {
+        if (payload['threadOnly'] == true) {
+          // The dial opened or closed a thread of a chat the app already
+          // shows: no window raised, no Swarm switched, no chat re-selected.
+          final conversationId = payload['conversationId'];
+          if (tabId is String && conversationId is String) {
+            await _dialThreadOnly(
+              tabId,
+              conversationId,
+              payload['threadRoot'] as Object?,
+            );
+          }
+        } else if (tabId is String && projectId is String) {
           await _openSuperTabProject(
             machine,
             tabId,

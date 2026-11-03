@@ -90,6 +90,13 @@ class SwarmProfile {
     'username': username?.trim(),
   }, viewer: true);
 
+  /// The name the Swarm shows for the reader ("Minh Nguyen"), trimmed, or
+  /// back to their username when null (the server's `member.name`); a viewer
+  /// sets theirs too. A refused or taken name comes back in the server's
+  /// words.
+  Future<String?> setName(String? name) =>
+      _send({'type': 'member.name', 'name': name?.trim()}, viewer: true);
+
   /// [preset], or back to the initial when null.
   Future<String?> setAvatar(SuperTabPresetAvatar? preset) => _send({
     'type': 'member.avatar',

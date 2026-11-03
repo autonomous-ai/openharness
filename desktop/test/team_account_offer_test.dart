@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -6,15 +7,21 @@ import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/team_account_setup.dart';
 
+import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 import 'support/rename_connection.dart';
-import 'swarm_state_test.dart' show createApp;
+import 'swarm_state_test.dart' show MemoryStore, createApp;
 
 /// Records what this Mac's daemon is asked; no socket is opened.
 class _Daemon extends RenameConnection {
   final asked = <Map<String, dynamic>>[];
   Map<String, dynamic> answer = {'ok': true, 'state': 'wanted'};
+
   /// Answers in turn before [answer]; a Completer's future is awaited.
   final queued = <Object>[];
+
+  /// What `teamSetupStatus` answers: what this Mac's daemon remembers of the
+  /// account's setup.
+  Map<String, dynamic> status = {'ok': true, 'state': 'none'};
 
   @override
   Future<Map<String, dynamic>> request(
@@ -25,6 +32,7 @@ class _Daemon extends RenameConnection {
     if (type == 'super_tabs' &&
         '${payload['action']}'.startsWith('teamSetup')) {
       asked.add(Map.of(payload));
+      if (payload['action'] == 'teamSetupStatus') return Future.value(status);
       if (queued.isNotEmpty) {
         final next = queued.removeAt(0);
         return next is Completer<Map<String, dynamic>>
@@ -52,11 +60,20 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late _Daemon daemon;
   late AppNotifier app;
+
   /// Which daemon process answers this Mac: a new one after a restart, null
   /// when its status could not be read.
   String? running = 'pid-1';
-  AppNotifier make(_Daemon daemon) {
-    final app = createApp(connectionForTest: (_) => daemon, connected: true);
+  AppNotifier make(_Daemon daemon, {MemoryStore? store}) {
+    final app = createApp(
+      connectionForTest: (_) => daemon,
+      connected: true,
+      store: store,
+    );
+    app.currentUser = const CurrentUserProfile(
+      id: 'owner',
+      email: 'owner@example.com',
+    );
     app.machineStates['m']!.localOnly = true;
     app.teamAccountHereForTest = true;
     app.daemonIdentityForTest = () async => running;
@@ -71,20 +88,119 @@ void main() {
   });
   tearDown(() => app.dispose());
 
-  test('asks this Mac\'s own daemon whether it is wanted, and explains it only then', () async {
+  test('asks this Mac\'s own daemon whether it is wanted, for the Swarm joined or added to', () async {
     final explained = <String>[];
     final listening = app.teamSetupAsks.listen(explained.add);
     await app.offerTeamAccount('join', tabId: 'tab-1');
     daemon.answer = {'ok': true, 'state': 'declined'};
-    await app.offerTeamAccount('contribute');
+    await app.offerTeamAccount('contribute', tabId: 'tab-2');
     await pumpEventQueue();
     expect(daemon.asked, [
       {'action': 'teamSetupCheck', 'reason': 'join', 'tabId': 'tab-1'},
-      {'action': 'teamSetupCheck', 'reason': 'contribute'},
+      {'action': 'teamSetupCheck', 'reason': 'contribute', 'tabId': 'tab-2'},
     ]);
-    expect(explained, ['join']);
+    // A join or a contribution locks the app instead (team_account_setup.dart
+    // TeamAccountSetupLock): nothing is explained behind it.
+    expect(explained, isEmpty);
+    expect(app.teamSetupLocked, isTrue);
     await listening.cancel();
   });
+
+  // Scholes 11-03: a Mac joined a Swarm and stayed "not set up" until someone
+  // found its row in Machines. The window now opens on join and stays.
+  test('a join locks the app once, however often it is asked, until the account exists', () async {
+    var changes = 0;
+    app.addListener(() => changes++);
+    expect(app.teamSetupLocked, isFalse);
+    await app.offerTeamAccount('join', tabId: 'tab-1');
+    expect(app.teamSetupLocked, isTrue);
+    final first = changes;
+    await app.offerTeamAccount('join', tabId: 'tab-1');
+    expect(changes, first, reason: 'the same Swarm again changes nothing');
+    await app.offerTeamAccount('join', tabId: 'tab-2');
+    expect(app.teamSetupLocked, isTrue);
+    await app.teamAccountMade();
+    expect(app.teamSetupLocked, isFalse);
+  });
+
+  test('a join on a Mac that has the account, or whose daemon cannot say, does not lock', () async {
+    for (final answer in [
+      {'ok': true, 'state': 'exists'},
+      {'ok': true, 'state': 'unsupported'},
+      {'ok': true, 'state': 'dedicated'},
+      {'error': 'UNKNOWN_ACTION'},
+    ]) {
+      daemon.answer = answer;
+      await app.offerTeamAccount('join', tabId: 'tab-1');
+      expect(app.teamSetupLocked, isFalse, reason: '$answer');
+    }
+  });
+
+  // A cancel remembered from before (the old "Not now", or macOS's prompt
+  // closed) kept every later join from asking.
+  test(
+    'a cancel or a failure remembered from before still locks a new join',
+    () async {
+      for (final state in ['declined', 'waiting', 'running', 'no-prompt']) {
+        daemon.answer = {'ok': true, 'state': state};
+        await app.offerTeamAccount('join', tabId: 'tab-1');
+        expect(app.teamSetupLocked, isTrue, reason: state);
+        await app.teamAccountMade();
+      }
+    },
+  );
+
+  test(
+    'the start check never locks: only a join or a contribution does',
+    () async {
+      await app.offerTeamAccount('startup');
+      expect(app.teamSetupLocked, isFalse);
+    },
+  );
+
+  test('the lock comes back after a restart, until the account exists', () async {
+    final store = MemoryStore();
+    final first = make(daemon, store: store);
+    await first.offerTeamAccount('join', tabId: 'tab-1');
+    expect(first.teamSetupLocked, isTrue);
+    first.dispose();
+
+    // Quit and opened again, the account still missing: locked as it connects.
+    final again = _Daemon()..answer = {'ok': true, 'state': 'not-shared'};
+    final second = make(again, store: store);
+    addTearDown(second.dispose);
+    expect(second.teamSetupLocked, isFalse);
+    second.onMachineConnectedForTest('m');
+    await until(() => second.teamSetupLocked);
+
+    // Set up meanwhile (in Terminal): the next start is not locked, and
+    // forgets it.
+    final made = _Daemon()
+      ..answer = {'ok': true, 'state': 'exists'}
+      ..status = {'ok': true, 'state': 'exists'};
+    final third = make(made, store: store);
+    addTearDown(third.dispose);
+    third.onMachineConnectedForTest('m');
+    await until(() => made.asked.any((a) => a['action'] == 'teamSetupStatus'));
+    await pumpEventQueue();
+    expect(third.teamSetupLocked, isFalse);
+    expect(
+      store.values.keys.where((k) => k.startsWith('team_setup_lock')),
+      isEmpty,
+    );
+  });
+
+  test(
+    'another account signed in on this computer is not held by it',
+    () async {
+      await app.offerTeamAccount('join', tabId: 'tab-1');
+      app.currentUser = const CurrentUserProfile(
+        id: 'other',
+        email: 'other@example.com',
+      );
+      expect(app.teamSetupLocked, isFalse);
+    },
+  );
 
   test('sets it up when the person asks, and remembers "Not now"', () async {
     daemon.answer = {'ok': true, 'state': 'started'};
@@ -105,17 +221,14 @@ void main() {
     expect(await app.setUpTeamAccount(), 'update');
   });
 
-  test(
-    'asks nothing where the account cannot be made, or when the only machine here is another one',
-    () async {
-      app.teamAccountHereForTest = false;
-      await app.offerTeamAccount('join');
-      app.teamAccountHereForTest = true;
-      app.machineStates['m']!.localOnly = false;
-      await app.offerTeamAccount('join');
-      expect(daemon.asked, isEmpty);
-    },
-  );
+  test('asks nothing where the account cannot be made, or when the only machine here is another one', () async {
+    app.teamAccountHereForTest = false;
+    await app.offerTeamAccount('join');
+    app.teamAccountHereForTest = true;
+    app.machineStates['m']!.localOnly = false;
+    await app.offerTeamAccount('join');
+    expect(daemon.asked, isEmpty);
+  });
 
   // Linux and Windows make the same account a Mac does (plans of 2026-10-28;
   // Windows' daemon sets it up behind User Account Control). A phone, a tablet
@@ -129,25 +242,28 @@ void main() {
     }
   });
 
-  test('never for a machine shared with this account, at a join or at start', () async {
-    final state = app.machineStates['m']!;
-    state.machine = Machine(
-      machineId: 'm',
-      authMode: MachineAuthMode.remote,
-      name: 'Dee\'s computer',
-      machineShare: const MachineShare(
-        ownerName: 'Dee',
-        ownerEmail: 'dee@acme.io',
-        via: 'email',
-        added: true,
-      ),
-    );
-    expect(app.canSetUpTeamAccount, isFalse);
-    await app.offerTeamAccount('join');
-    app.onMachineConnectedForTest('m');
-    await Future<void>.delayed(const Duration(milliseconds: 20));
-    expect(daemon.asked, isEmpty);
-  });
+  test(
+    'never for a machine shared with this account, at a join or at start',
+    () async {
+      final state = app.machineStates['m']!;
+      state.machine = Machine(
+        machineId: 'm',
+        authMode: MachineAuthMode.remote,
+        name: 'Dee\'s computer',
+        machineShare: const MachineShare(
+          ownerName: 'Dee',
+          ownerEmail: 'dee@acme.io',
+          via: 'email',
+          added: true,
+        ),
+      );
+      expect(app.canSetUpTeamAccount, isFalse);
+      await app.offerTeamAccount('join');
+      app.onMachineConnectedForTest('m');
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(daemon.asked, isEmpty);
+    },
+  );
 
   test('a daemon that refuses or cannot say is left alone', () async {
     daemon.answer = {'error': 'UNKNOWN_ACTION'};
@@ -155,47 +271,57 @@ void main() {
     expect(daemon.asked, hasLength(1));
   });
 
-  test('checks once for each process of this Mac\'s daemon, as it connects', () async {
-    app.onMachineConnectedForTest('m');
-    app.onMachineConnectedForTest('m');
-    await until(() => daemon.asked.isNotEmpty);
-    await pumpEventQueue();
-    expect(daemon.asked, [startCheck]);
-  });
+  test(
+    'checks once for each process of this Mac\'s daemon, as it connects',
+    () async {
+      app.onMachineConnectedForTest('m');
+      app.onMachineConnectedForTest('m');
+      await until(() => daemon.asked.isNotEmpty);
+      await pumpEventQueue();
+      expect(daemon.asked, [startCheck]);
+    },
+  );
 
   // Macs already in a Swarm met no join or contribute moment, and the one ask
   // a launch went to whichever daemon answered first: one still starting, or
   // the version from before an update, so nobody saw the prompt (2026-10-27).
-  test('checks again when this Mac\'s daemon has restarted, which decides', () async {
-    app.onMachineConnectedForTest('m');
-    await until(() => daemon.asked.length == 1);
-    await pumpEventQueue();
-    // A new daemon process, after an update for instance: asked again.
-    running = 'pid-2';
-    app.onMachineConnectedForTest('m');
-    await until(() => daemon.asked.length == 2);
-    expect(daemon.asked, everyElement(startCheck));
-  });
+  test(
+    'checks again when this Mac\'s daemon has restarted, which decides',
+    () async {
+      app.onMachineConnectedForTest('m');
+      await until(() => daemon.asked.length == 1);
+      await pumpEventQueue();
+      // A new daemon process, after an update for instance: asked again.
+      running = 'pid-2';
+      app.onMachineConnectedForTest('m');
+      await until(() => daemon.asked.length == 2);
+      expect(daemon.asked, everyElement(startCheck));
+    },
+  );
 
   // A start check runs for each daemon process, so a restart while the
   // explanation is still open must not show it a second time.
-  test('explains at start once a launch, though a restarted daemon still wants it', () async {
-    final explained = <String>[];
-    final listening = app.teamSetupAsks.listen(explained.add);
-    app.onMachineConnectedForTest('m');
-    await until(() => daemon.asked.length == 1);
-    await pumpEventQueue();
-    running = 'pid-2';
-    app.onMachineConnectedForTest('m');
-    await until(() => daemon.asked.length == 2);
-    await pumpEventQueue();
-    expect(explained, ['startup']);
-    // The person asking, by joining, is always explained.
-    await app.offerTeamAccount('join');
-    await pumpEventQueue();
-    expect(explained, ['startup', 'join']);
-    await listening.cancel();
-  });
+  test(
+    'explains at start once a launch, though a restarted daemon still wants it',
+    () async {
+      final explained = <String>[];
+      final listening = app.teamSetupAsks.listen(explained.add);
+      app.onMachineConnectedForTest('m');
+      await until(() => daemon.asked.length == 1);
+      await pumpEventQueue();
+      running = 'pid-2';
+      app.onMachineConnectedForTest('m');
+      await until(() => daemon.asked.length == 2);
+      await pumpEventQueue();
+      expect(explained, ['startup']);
+      // The person joining is held by the lock instead, never explained again.
+      await app.offerTeamAccount('join', tabId: 'tab-1');
+      await pumpEventQueue();
+      expect(explained, ['startup']);
+      expect(app.teamSetupLocked, isTrue);
+      await listening.cancel();
+    },
+  );
 
   test('checks one at a time', () async {
     final pending = Completer<Map<String, dynamic>>();
@@ -255,32 +381,38 @@ void main() {
     await until(() => daemon.asked.length == 6);
   });
 
-  test('checks again, a few times, a daemon that could not answer yet', () async {
-    daemon.queued.addAll([
-      {'error': 'SERVICE_UNAVAILABLE'},
-      {'error': 'SERVICE_UNAVAILABLE'},
-    ]);
-    app.onMachineConnectedForTest('m');
-    // Two that could not say, then an answer.
-    await until(() => daemon.asked.length == 3);
-    await Future<void>.delayed(const Duration(milliseconds: 20));
-    expect(daemon.asked, hasLength(3));
-  });
+  test(
+    'checks again, a few times, a daemon that could not answer yet',
+    () async {
+      daemon.queued.addAll([
+        {'error': 'SERVICE_UNAVAILABLE'},
+        {'error': 'SERVICE_UNAVAILABLE'},
+      ]);
+      app.onMachineConnectedForTest('m');
+      // Two that could not say, then an answer.
+      await until(() => daemon.asked.length == 3);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(daemon.asked, hasLength(3));
+    },
+  );
 
   // Review of #1790: a request still out at dispose resumed and scheduled a
   // retry on a disposed app.
-  test('schedules nothing after it is disposed, though a request was out', () async {
-    final own = _Daemon();
-    final other = make(own);
-    final pending = Completer<Map<String, dynamic>>();
-    own.queued.add(pending);
-    other.onMachineConnectedForTest('m');
-    await until(() => own.asked.isNotEmpty);
-    other.dispose();
-    pending.complete({'error': 'ACCOUNT_CHANGED'});
-    await Future<void>.delayed(const Duration(milliseconds: 30));
-    expect(own.asked, hasLength(1));
-  });
+  test(
+    'schedules nothing after it is disposed, though a request was out',
+    () async {
+      final own = _Daemon();
+      final other = make(own);
+      final pending = Completer<Map<String, dynamic>>();
+      own.queued.add(pending);
+      other.onMachineConnectedForTest('m');
+      await until(() => own.asked.isNotEmpty);
+      other.dispose();
+      pending.complete({'error': 'ACCOUNT_CHANGED'});
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(own.asked, hasLength(1));
+    },
+  );
 
   Future<void> open(
     WidgetTester tester, {
@@ -378,75 +510,80 @@ void main() {
     );
   });
 
-  testWidgets('on Linux the dialog says this computer, and the system asks for the password', (
-    tester,
-  ) async {
-    await open(tester, operatingSystem: 'linux');
-    expect(shown(tester), [
-      'Set up Harness Team on this computer',
-      computerParagraph1,
-      'Your system asks for your password once.',
-      paragraph3,
-    ]);
-    expect(find.text('Continue'), findsOneWidget);
-    expect(find.text('Cancel'), findsOneWidget);
-    await tester.tap(find.text('Cancel'));
-    await tester.pumpAndSettle();
-    expect(
-      await outcome(tester, 'linux', {'ok': true, 'state': 'started'}),
-      'Your system is asking for your password. Setup then takes a minute or two. '
-      'This computer\'s row updates when it is ready.',
-    );
-    // No desktop session to ask in (the owner's daemon under systemd --user, or SSH): the daemon answers `no-prompt` up
-    // front (cli/src/team/autoSetup.ts) and nothing runs, so the terminal is the way.
-    expect(
-      await outcome(tester, 'linux', {'ok': true, 'state': 'no-prompt'}),
-      'Run harness team setup in a terminal on this computer.',
-    );
-    expect(
-      await outcome(tester, 'linux', {'ok': true, 'state': 'exists'}),
-      'Harness Team is already set up on this computer.',
-    );
-    expect(
-      await outcome(tester, 'linux', {'error': 'INVALID_REQUEST'}),
-      'This computer\'s Harness is too old to set it up from here. Update Harness, '
-      'or run harness team setup in a terminal.',
-    );
-    expect(
-      await outcome(tester, 'linux', {'ok': true, 'state': 'unsupported'}),
-      'Harness Team cannot be set up on this computer right now.',
-    );
-  });
+  testWidgets(
+    'on Linux the dialog says this computer, and the system asks for the password',
+    (tester) async {
+      await open(tester, operatingSystem: 'linux');
+      expect(shown(tester), [
+        'Set up Harness Team on this computer',
+        computerParagraph1,
+        'Your system asks for your password once.',
+        paragraph3,
+      ]);
+      expect(find.text('Continue'), findsOneWidget);
+      expect(find.text('Cancel'), findsOneWidget);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(
+        await outcome(tester, 'linux', {'ok': true, 'state': 'started'}),
+        'Your system is asking for your password. Setup then takes a minute or two. '
+        'This computer\'s row updates when it is ready.',
+      );
+      // No desktop session to ask in (the owner's daemon under systemd --user, or SSH): the daemon answers `no-prompt` up
+      // front (cli/src/team/autoSetup.ts) and nothing runs, so the terminal is the way.
+      expect(
+        await outcome(tester, 'linux', {'ok': true, 'state': 'no-prompt'}),
+        'Run harness team setup in a terminal on this computer.',
+      );
+      expect(
+        await outcome(tester, 'linux', {'ok': true, 'state': 'exists'}),
+        'Harness Team is already set up on this computer.',
+      );
+      expect(
+        await outcome(tester, 'linux', {'error': 'INVALID_REQUEST'}),
+        'This computer\'s Harness is too old to set it up from here. Update Harness, '
+        'or run harness team setup in a terminal.',
+      );
+      expect(
+        await outcome(tester, 'linux', {'ok': true, 'state': 'unsupported'}),
+        'Harness Team cannot be set up on this computer right now.',
+      );
+    },
+  );
 
-  testWidgets('on Windows the dialog says this computer, and User Account Control asks', (
-    tester,
-  ) async {
-    await open(tester, operatingSystem: 'windows', asked: true);
-    expect(shown(tester), [
-      'Set up Harness Team on this computer',
-      computerParagraph1,
-      'Windows asks for permission once (User Account Control).',
-      paragraph3,
-    ]);
-    expect(find.text('Not now'), findsOneWidget);
-    await tester.tap(find.text('Not now'));
-    await tester.pumpAndSettle();
-    daemon.asked.clear();
-    expect(
-      await outcome(tester, 'windows', {'ok': true, 'state': 'started'}),
-      'Windows is asking for permission. Setup then takes a minute or two. '
-      'This computer\'s row updates when it is ready.',
-    );
-    expect(
-      await outcome(tester, 'windows', {'ok': true, 'state': 'exists'}),
-      'Harness Team is already set up on this computer.',
-    );
-    // A refusal says the daemon's own sentence, as on a Mac.
-    expect(
-      await outcome(tester, 'windows', {'error': 'NO_PROMPT', 'detail': 'The daemon\'s sentence.'}),
-      'The daemon\'s sentence.',
-    );
-  });
+  testWidgets(
+    'on Windows the dialog says this computer, and User Account Control asks',
+    (tester) async {
+      await open(tester, operatingSystem: 'windows', asked: true);
+      expect(shown(tester), [
+        'Set up Harness Team on this computer',
+        computerParagraph1,
+        'Windows asks for permission once (User Account Control).',
+        paragraph3,
+      ]);
+      expect(find.text('Not now'), findsOneWidget);
+      await tester.tap(find.text('Not now'));
+      await tester.pumpAndSettle();
+      daemon.asked.clear();
+      expect(
+        await outcome(tester, 'windows', {'ok': true, 'state': 'started'}),
+        'Windows is asking for permission. Setup then takes a minute or two. '
+        'This computer\'s row updates when it is ready.',
+      );
+      expect(
+        await outcome(tester, 'windows', {'ok': true, 'state': 'exists'}),
+        'Harness Team is already set up on this computer.',
+      );
+      // A refusal says the daemon's own sentence, as on a Mac.
+      expect(
+        await outcome(tester, 'windows', {
+          'error': 'NO_PROMPT',
+          'detail': 'The daemon\'s sentence.',
+        }),
+        'The daemon\'s sentence.',
+      );
+    },
+  );
 
   testWidgets(
     'explains the account and the "osascript" prompt before macOS asks',
@@ -483,5 +620,129 @@ void main() {
     expect(daemon.asked, [
       {'action': 'teamSetupDecline'},
     ]);
+  });
+
+  group('Remove this Mac from the Swarm, the one way out', () {
+    Map<String, dynamic> thisMac() => {
+      'machineId': 'm',
+      'name': 'Test host',
+      'contributorId': 'owner',
+      'teamWork': {'allowed': false, 'code': 'TEAM_ACCOUNT_REQUIRED'},
+    };
+
+    Future<SuperTabLaunchFixture> joined() async {
+      final f = SuperTabLaunchFixture();
+      f.app.teamAccountHereForTest = true;
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.teamCheck = {'state': 'wanted'};
+      // The Swarm lists this Mac, as the join added it.
+      f.connection.server.state['machines'] = [thisMac()];
+      await f.app.offerTeamAccount('join', tabId: tabId);
+      expect(f.app.teamSetupLocked, isTrue);
+      return f;
+    }
+
+    List<Object?> commands(SuperTabLaunchFixture f) =>
+        f.connection.server.posts.map((p) => p['command']).toList();
+
+    // Review of #2779: a lock whose Swarms all refused Remove held for good.
+    test(
+      'a Swarm that no longer holds this Mac is let go without a command',
+      () async {
+        final f = await joined();
+        f.connection.server.state['machines'] = [];
+        expect(await f.app.removeLockedMachine(), isNull);
+        expect(
+          commands(f),
+          isNot(contains(containsPair('type', 'machine.remove'))),
+        );
+        expect(f.app.teamSetupLocked, isFalse);
+        f.app.superTabs.dispose();
+      },
+    );
+
+    test('a Swarm already removing this Mac is let go', () async {
+      final f = await joined();
+      f.connection.server.state['machines'] = [
+        {
+          ...thisMac(),
+          'removal': {'requestedAt': 1},
+        },
+      ];
+      // As the Swarm answers a second removal.
+      f.connection.server.refuse = {
+        'code': 'MACHINE_REMOVING',
+        'message': 'This machine is already being removed.',
+      };
+      expect(await f.app.removeLockedMachine(), isNull);
+      expect(f.app.teamSetupLocked, isFalse);
+      f.app.superTabs.dispose();
+    });
+
+    test('a Swarm this person can no longer open is let go', () async {
+      final f = await joined();
+      (await f.app.superTabs.open(tabId)).accessRevoked = true;
+      expect(await f.app.removeLockedMachine(), isNull);
+      expect(f.app.teamSetupLocked, isFalse);
+      f.app.superTabs.dispose();
+    });
+
+    Future<SuperTabLaunchFixture> restarted(List<Object?> machines) async {
+      final f = SuperTabLaunchFixture();
+      f.app.teamAccountHereForTest = true;
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.teamSetup = {'state': 'none'};
+      f.connection.server.state['machines'] = machines;
+      f.store.values['team_setup_lock.owner'] = jsonEncode([tabId]);
+      f.app.onMachineConnectedForTest('m');
+      return f;
+    }
+
+    test(
+      'a lock restored for a Swarm that still holds this Mac holds',
+      () async {
+        final f = await restarted([thisMac()]);
+        await until(() => f.app.teamSetupLocked);
+        f.app.superTabs.dispose();
+      },
+    );
+
+    test(
+      'a lock restored for a Swarm that no longer holds this Mac does not hold',
+      () async {
+        final f = await restarted([]);
+        await until(() => !f.store.values.containsKey('team_setup_lock.owner'));
+        expect(f.app.teamSetupLocked, isFalse);
+        f.app.superTabs.dispose();
+      },
+    );
+
+    test(
+      'removes this Mac from the Swarm it joined, and ends the lock',
+      () async {
+        final f = await joined();
+        expect(await f.app.removeLockedMachine(), isNull);
+        expect(
+          f.connection.server.posts.map((p) => p['command']),
+          contains(equals({'type': 'machine.remove', 'machineId': 'm'})),
+        );
+        expect(f.app.teamSetupLocked, isFalse);
+        f.app.superTabs.dispose();
+      },
+    );
+
+    test('a removal the Swarm refuses says why and keeps the lock', () async {
+      final f = await joined();
+      f.connection.server.refuse = {
+        'code': 'FORBIDDEN',
+        'message': 'Only the Swarm owner can do that.',
+      };
+      expect(
+        await f.app.removeLockedMachine(),
+        'Only the Swarm owner can do that.',
+      );
+      expect(f.app.teamSetupLocked, isTrue);
+      f.app.superTabs.dispose();
+    });
   });
 }

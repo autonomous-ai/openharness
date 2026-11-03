@@ -114,4 +114,22 @@ void main() {
       reason: 'a hidden message still counts toward reaching the mark',
     );
   });
+
+  test("a message the server posted in the person's name reads nothing "
+      'before it (plain chat, #2294)', () {
+    SuperTabMessage posted(int sequence, String kind) =>
+        SuperTabMessage.fromJson({
+          'id': 'm$sequence',
+          'conversationId': 'g1',
+          'text': "Let's build: Offline drafts",
+          'sequence': sequence,
+          'author': {'kind': 'person', 'id': me, 'name': me},
+          'source': {'kind': kind},
+        });
+    for (final kind in ['task-line', 'buddy-proposal']) {
+      expect(first([message(1), message(2), posted(3, kind)], 1), 'm2');
+      expect(posted(3, kind).postedForAuthor, isTrue);
+    }
+    expect(mine(4).postedForAuthor, isFalse);
+  });
 }
