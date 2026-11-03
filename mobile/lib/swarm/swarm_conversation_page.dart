@@ -179,13 +179,8 @@ class SwarmConversationPage extends StatefulWidget {
   /// it is their Buddy chat.
   final SwarmBuddyActions? buddy;
 
-  /// Swarm Home C's project chat (Tony, 2026-10-30): a New messages line
-  /// above the first message the person had not read as it opened
-  /// ([swarmFirstUnread]), placed once, the chat opening at it when it is
-  /// above the screen; Jump to first unread while the line is above the view
-  /// and has not been seen; and Jump to latest while they read more than a
-  /// screen back. The person's own Buddy chat has them too, in the project's
-  /// Buddy tab and on its own page.
+  /// Swarm Home C's project chat (Tony, 2026-10-30): it gates only the
+  /// add-reaction chip after a message's reactions.
   final bool homeC;
 
   /// At the root of a tab, as the Buddy tab holds the person's Buddy chat: no
@@ -263,15 +258,11 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// says how many. Null at the foot.
   final _held = ValueNotifier<String?>(null);
 
-  /// Whether this chat has the New messages line and Jump to latest: Swarm
-  /// Home C's project chat and the person's own Buddy chat, known as the chat
-  /// opens. Not a work chat.
-  bool _unreadLine = false;
-
-  /// Whether this chat's Swarm has not been read yet, so whose Buddy chat it
-  /// is is not known: [_unreadLine] waits for the first read that works, and
+  /// Whether this chat's Swarm has not been read yet, so the server's read
+  /// mark for it is not known (a notice tapped at launch, a Swarm read that
+  /// failed): the New messages line waits for the first read that works, and
   /// nothing is read until then, as until the line is placed.
-  bool _ownerUnknown = false;
+  bool _swarmUnread = false;
 
   /// The chat's first read is done, so its line can be placed.
   bool _firstRead = false;
@@ -283,8 +274,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// Each entry's row as last built, with what it was built from ([_row]).
   final _rows = <String, ({Object inputs, Widget row})>{};
 
-  /// Swarm Home C's New messages line: the message it sits above once
-  /// placed, and whether it was placed this visit.
+  /// The New messages line: the message it sits above once placed, and
+  /// whether it was placed this visit.
   String? _lineAt;
   bool _lineDecided = false;
 
@@ -381,12 +372,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       return;
     }
     session.inbox.removeListener(_attach);
-    _ownerUnknown =
-        !widget.homeC && widget.buddy == null && reader.snapshot == null;
-    _unreadLine =
-        widget.homeC ||
-        widget.buddy != null ||
-        swarmIsOwnBuddyChat(reader, widget.conversationId);
+    _swarmUnread = reader.snapshot == null;
     // Set before what the chat kept is shown, so it is read only as far as
     // it is seen: with a New messages line to place, nothing until it is
     // placed, a notice's message included, or the line would sit under it;
@@ -395,9 +381,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       reader,
       widget.conversationId,
       shown: _seen,
-      heldAt: (_unreadLine || _ownerUnknown) && !_lineDecided
-          ? _undecided
-          : widget.messageId ?? _held.value,
+      heldAt: _lineDecided ? widget.messageId ?? _held.value : _undecided,
     );
     c.composer.addListener(_drafted);
     // The draft it kept, in the box.
@@ -422,22 +406,21 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     if (rebuild && mounted) setState(() {});
   }
 
-  /// Places Swarm Home C's New messages line once, from what the chat's
+  /// Places the chat's New messages line once, from what the chat's
   /// first read brought and how far the person had read it
   /// ([SwarmReadMarks.readThrough]; nothing here is read until then, so that is
-  /// how far as it opened) ([swarmFirstUnread]). The phone's marks may come
-  /// back after the first read: the chat stays held, and the line is placed
-  /// once they are back ([_marksMoved]). It stays there however the chat and
-  /// its marks move on. Without one, everything shown is read. A line above
+  /// how far as it opened) ([swarmFirstUnread]), above a row the chat draws:
+  /// never a prompt's warning already answered, which a task's chat often
+  /// has (Desktop's `_ownShown`).
+  /// The phone's marks may come back after the first read: the chat stays
+  /// held, and the line is placed once they are back ([_marksMoved]). It
+  /// stays there however the chat and its marks move on. Without one,
+  /// everything shown is read. A line above
   /// the screen opens the chat at it ([_openAtLine]), unless a notice opened
   /// it at a message. A read that failed says nothing of what is unread: the
   /// chat stays held, and the first read that works places it ([_chatMoved]).
   void _placeLine(SwarmConversation c) {
-    if (!mounted || _conversation != c || _lineDecided || _ownerUnknown) {
-      return;
-    }
-    if (!_unreadLine) {
-      _releaseHold(c);
+    if (!mounted || _conversation != c || _lineDecided || _swarmUnread) {
       return;
     }
     if (c.state != SwarmChatState.loaded || c.error != null) return;
@@ -451,11 +434,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     }
     _stopAwaitingMarks();
     _lineDecided = true;
+    final drawn = {for (final m in _drawnOf(c).rows) m.id};
     final at = swarmFirstUnread(
       c.messages,
       c.reader.readMarks?.readThrough(c.id),
       accountId: c.reader.accountId,
       hasOlder: c.hasOlder,
+      drawn: (m) => drawn.contains(m.id),
     );
     if (at == null) {
       _releaseHold(c);
@@ -662,9 +647,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     final session = _session, c = _conversation;
     if (session == null || c == null) return;
     _syncSteps(c);
-    if (_ownerUnknown && c.reader.snapshot != null) {
-      _ownerUnknown = false;
-      _unreadLine = swarmIsOwnBuddyChat(c.reader, widget.conversationId);
+    if (_swarmUnread && c.reader.snapshot != null) {
+      _swarmUnread = false;
       if (_firstRead) _placeLine(c);
     }
     final view = _view.value = _ChatView.of(session, c, _view.value);
@@ -719,7 +703,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _lineSeen = false;
     _landing = null;
     _offersUnread.value = false;
-    _ownerUnknown = false;
+    _swarmUnread = false;
     _firstRead = false;
     _farBack.value = false;
     _stopAwaitingMarks();
@@ -799,9 +783,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     if (!_scroll.hasClients) return;
     _measureLineSoon();
     final back = _scroll.offset > _readingBack;
-    if (_unreadLine) {
-      _farBack.value = _scroll.offset > _scroll.position.viewportDimension;
-    }
+    _farBack.value = _scroll.offset > _scroll.position.viewportDimension;
     // At the foot all is seen; reading back, only what was seen at the foot
     // before, or the message a notice opened the chat at.
     if (_conversation case final c?) {
@@ -1783,6 +1765,36 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     messageId: id,
   );
 
+  /// What [c]'s list draws, oldest first ([rows]): its main stream, a reply
+  /// only in its thread showing there alone, with a task's steps' rows merged
+  /// in by time (task steps design) ([stream]); less the prompt warnings
+  /// already [answered].
+  ({
+    List<SuperTabMessage> stream,
+    Set<String> answered,
+    List<SuperTabMessage> rows,
+  })
+  _drawnOf(SwarmConversation c) {
+    final snapshot = c.reader.snapshot;
+    final stream = _steps.isEmpty
+        ? c.stream
+        : _merge.of(c.stream, {
+            for (final MapEntry(:key, :value) in _steps.entries)
+              key: value.stream,
+          });
+    final answered = answeredPromptAlerts(
+      stream,
+      (agentId) => snapshot?.agent(agentId),
+    );
+    final rows = answered.isEmpty
+        ? stream
+        : [
+            for (final m in stream)
+              if (!answered.contains(m.id)) m,
+          ];
+    return (stream: stream, answered: answered, rows: rows);
+  }
+
   /// The messages, newest at the foot, with the decisions asked among them.
   /// The entries are made again only when what they are made from changed,
   /// and each row is the one built before while it draws the same ([_row]):
@@ -1816,24 +1828,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       }
     }
     final snapshot = c.reader.snapshot;
-    // A reply only in its thread shows there alone. A task's steps' rows are
-    // merged in by time (task steps design).
-    final stream = _steps.isEmpty
-        ? c.stream
-        : _merge.of(c.stream, {
-            for (final MapEntry(:key, :value) in _steps.entries)
-              key: value.stream,
-          });
-    final answered = answeredPromptAlerts(
-      stream,
-      (agentId) => snapshot?.agent(agentId),
-    );
-    final messages = answered.isEmpty
-        ? stream
-        : [
-            for (final m in stream)
-              if (!answered.contains(m.id)) m,
-          ];
+    final (:stream, :answered, rows: messages) = _drawnOf(c);
     // The notes hidden are part of what the rows were made from: a warning
     // goes once its agent's prompt is answered, with no new message.
     final from = (
@@ -2725,7 +2720,7 @@ class _ChatView {
 /// One row of the chat.
 sealed class _Entry {}
 
-/// Swarm Home C's New messages line, above the first unread message.
+/// The New messages line, above the first unread message.
 final class _LineEntry extends _Entry {}
 
 /// Where a day starts.
@@ -3046,7 +3041,7 @@ class _Day extends StatelessWidget {
 }
 
 /// How many messages arrived below while the person read back — or, with
-/// none ([count] 0), Jump to latest while they read far back (Swarm Home C);
+/// none ([count] 0), Jump to latest while they read far back;
 /// a tap goes down to the foot. The chat's and a thread's.
 class SwarmNewPill extends StatelessWidget {
   const SwarmNewPill({super.key, required this.count, required this.onTap});
