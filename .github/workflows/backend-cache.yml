@@ -1,0 +1,56 @@
+name: Prepare backend caches
+
+# PR CI's backend-integration shards restore the mongod download the Super Tab integration suite needs. A cache saved on a
+# PR is visible to that PR alone; one saved on main is visible to every PR, so main saves it, once per key.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/package-lock.json'
+      - '.github/workflows/backend-cache.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-cache-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mongod:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /backend/
+      - id: cached
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/harness-super-tab-mongodb-binaries
+          key: super-tab-mongod-7.0.24-${{ runner.os }}-${{ runner.arch }}
+          lookup-only: true
+      - uses: actions/setup-node@v7
+        if: steps.cached.outputs.cache-hit != 'true'
+        with:
+          node-version: 22.23.2
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - if: steps.cached.outputs.cache-hit != 'true'
+        run: npm ci --no-audit --no-fund --ignore-scripts
+      # The version and folder the integration files use (integration/plans.test-support.ts).
+      - name: Download mongod 7.0.24
+        if: steps.cached.outputs.cache-hit != 'true'
+        run: >-
+          node -e "import('mongodb-memory-server-core').then(m => m.MongoBinary.getPath({ version: '7.0.24',
+          downloadDir: '/tmp/harness-super-tab-mongodb-binaries' })).then(p => console.log(p))"
+      - if: steps.cached.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/harness-super-tab-mongodb-binaries
+          key: super-tab-mongod-7.0.24-${{ runner.os }}-${{ runner.arch }}
