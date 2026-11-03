@@ -1540,6 +1540,33 @@ describe('the face thread', () => {
     t.cards.want(false)
   })
 
+  // Review of #2756 (ENGINEERING.md §6): a failed read of the root was dropped silently and never tried again, so the face kept a
+  // blank title. It is logged, by its code and nothing of the thread, and read again after a wait.
+  it('a failed read of an app thread\'s root is logged and read again after a wait', async () => {
+    let fails = true
+    const t = chatSwarm({ ...pages, 'lead-web#x2': Object.assign([said(5, 'a1', { text: 'reply', thread: 'x2' })], { threads: [{ id: 'x2', replies: 1 }] }),
+      'lead-web@x2': () => { if (fails) throw Object.assign(new Error('busy'), { code: 'SERVICE_UNAVAILABLE' }); return [root('x2', 'old root')] } }, false, 0, posted)
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    hidden(t, { threadRoot: 'x2' })
+    await t.cards.recap('t1', 'a1', true)
+    await vi.waitFor(() => expect(t.calls.filter(c => c.includes('messageId=x2'))).toHaveLength(1))
+    const lines = t.log.mock.calls.map(c => String(c[0])).filter(l => l.includes('thread'))
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).not.toContain('x2')
+    // Within the wait it is not read again; after it, it is, and the face takes the title.
+    await t.move(2)
+    await t.cards.recap('t1', 'a1', true)
+    expect(t.calls.filter(c => c.includes('messageId=x2'))).toHaveLength(1)
+    fails = false
+    t.advance(60_000)
+    await t.move(3)
+    await t.cards.recap('t1', 'a1', true)
+    await vi.waitFor(() => expect(t.webLead()?.chat?.thread?.title).toBe('old root'))
+    expect(t.calls.filter(c => c.includes('messageId=x2'))).toHaveLength(2)
+    t.cards.want(false)
+  })
+
   it('a thread of a reader that was not signed in when the read ended is not learned', async () => {
     const t = await started()
     hidden(t, { threadRoot: 'x1' })
