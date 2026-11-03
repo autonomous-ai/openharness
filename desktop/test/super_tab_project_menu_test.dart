@@ -1,12 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_icons.dart';
+import 'package:harness/super_tabs/project_status.dart';
 
 import 'super_tab_mentions_test.dart' show showView;
 import 'support/super_tab_fixture.dart';
 
-// 20:33 on this computer, whatever its zone.
-final reported = DateTime(2026, 11, 2, 20, 33);
+// 20:33 today on this computer, so the label shows the time and no date
+// whatever the day this runs.
+final reported = DateTime(
+  DateTime.now().year,
+  DateTime.now().month,
+  DateTime.now().day,
+  20,
+  33,
+);
 
 ConversationServer swarm({bool status = true, String owner = 'owner'}) {
   final server = ConversationServer();
@@ -107,6 +115,39 @@ void main() {
     await tester.tap(find.byTooltip('Close'));
     await tester.pumpAndSettle();
     expect(find.text('Three fixes are on main tonight.'), findsNothing);
+  });
+
+  testWidgets('Status shows the time alone on any day it runs', (tester) async {
+    final day = DateTime.now();
+    final late = DateTime(day.year, day.month, day.day, 23, 30);
+    final c = swarm().controller();
+    addTearDown(c.dispose);
+    await c.refresh();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showSuperTabProjectStatusWith(
+                context,
+                c,
+                'lead',
+                now: () => late,
+              ),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Status · updated 8:33 PM'),
+      findsOneWidget,
+      reason: 'today, so no date, whatever the day',
+    );
+    expect(find.text('Three fixes are on main tonight.'), findsOneWidget);
   });
 
   testWidgets('with no report, Status is there and opens nothing', (
