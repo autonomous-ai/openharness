@@ -10,12 +10,12 @@ import 'package:harness/widgets/harness_activity_mark.dart';
 import 'package:harness/super_tabs/buddies.dart' show kBuddyEngineRefusals;
 import 'package:harness/super_tabs/buddy_machines.dart' show kBuddyNoMachine;
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/decisions_view.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/buddy_fixture.dart';
 import 'support/pm_chat_fixture.dart';
 import 'support/super_tab_fixture.dart';
+import 'support/super_tab_members.dart';
 import 'swarm_state_test.dart' show createApp;
 
 /// Buddies (Ken's spec, 10-28): a person's private agent per project. Since
@@ -1357,6 +1357,7 @@ void main() {
         final server = buddySwarm();
         giveBuddy(server);
         final c = await show(tester, server);
+        await openSuperTabMembers(tester);
         expect(
           find.byKey(const ValueKey('super-person-owner')),
           findsOneWidget,
@@ -1490,7 +1491,7 @@ void main() {
       });
 
       testWidgets(
-        'Notifications keep Decisions, for anyone with or without a Buddy',
+        'Activity keeps Needs you, for anyone with or without a Buddy',
         (tester) async {
           final server = buddySwarm();
           server.ask(['Ship it?']);
@@ -1498,13 +1499,7 @@ void main() {
           await tester.tap(find.byKey(const ValueKey('super-activity')));
           await tester.pumpAndSettle();
 
-          expect(
-            find.descendant(
-              of: find.byType(SuperTabDecisionList),
-              matching: find.text('Decisions'),
-            ),
-            findsOneWidget,
-          );
+          expect(find.text('Needs you'), findsOneWidget);
           expect(find.text('Ship it?'), findsOneWidget);
           await close(tester, c);
         },
@@ -1532,7 +1527,7 @@ void main() {
 
           expect(find.textContaining('Chat with PM'), findsNothing);
           await tester.tap(
-            find.byKey(const ValueKey('super-mention-mention-1')),
+            find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
           );
           await tester.pumpAndSettle();
 

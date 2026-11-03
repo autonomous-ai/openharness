@@ -122,7 +122,6 @@ void main() {
                 return ProjectSidebar(
                   controller: controller,
                   onSelect: controller.select,
-                  onAddAgent: (_) {},
                   needsHuman: (group) {
                     asked.update(group.id, (n) => n + 1, ifAbsent: () => 1);
                     return 0;

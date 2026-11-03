@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { configureSwarmStamps, freeze, noteChange, readStamps, sizeOf, stampOwed, swarmTransaction, SwarmCache } from './cache.js'
 import { MemoryStamps } from './cache.test-support.js'
-import { machinesRule, type PatchRule } from './cachePatch.js'
+import { feedRule, machinesRule, type PatchRule } from './cachePatch.js'
 import { logger } from '../utils/logger.js'
 import type { MachineData, Part, PartKind } from './parts/index.js'
 import type { SwarmDelta } from './parts/load.js'
@@ -569,6 +569,25 @@ describe('the verify sample (spec 2026-11-02, "Checking it on prod")', () => {
     try {
       await read()
       await vi.waitFor(() => expect(calls).toBe(2))
+      await new Promise(resolve => setTimeout(resolve, 10))
+      expect(warn).not.toHaveBeenCalled()
+    } finally { warn.mockRestore() }
+  })
+
+  // Final review, Important 2: a feed loaded for another reader starts at another `from`; only what both cover compares.
+  it('a feed loaded from another starting point is not a mismatch', async () => {
+    const stamps = new MemoryStamps()
+    const cache = new SwarmCache(stamps, { verifyRate: 1, random: () => 0, delta: async () => ({ parts: [machine('m1', 2, { a: 2 })], head: null }) })
+    let from = 100
+    const load = vi.fn(async () => ({ from: from += 50, parts: [machine('m1', from > 200 ? 2 : 1, { a: from > 200 ? 2 : 1 })] }))
+    const read = async () => (await cache.at(['t1'])).get('t1', 'feed', 'all', load, feedRule)
+    await read()
+    await stamps.bump('t1', ['machine'])
+    from = 200
+    const warn = vi.spyOn(logger, 'warn')
+    try {
+      await read()
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2))
       await new Promise(resolve => setTimeout(resolve, 10))
       expect(warn).not.toHaveBeenCalled()
     } finally { warn.mockRestore() }

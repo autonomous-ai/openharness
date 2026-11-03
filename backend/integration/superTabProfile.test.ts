@@ -413,7 +413,8 @@ describe('reactions', () => {
 
   it('shows an agent\'s 👀 and then ✅ on the message it took, to every reader of the conversation', async () => {
     const tab = await swarm()
-    const builder = await agentIn(tab, 'lead', 'Kai')
+    // Kai coordinates: the project chat holds only its coordinator among agents (#2207).
+    const builder = await agentIn(tab, 'lead', 'Kai', true)
     const messageId = await post(tab, 'Kai, please add avatars.')
     await agentReact(tab, 'lead', messageId, builder, 'eyes')
     expect(await countsOf(tab, messageId, peer)).toEqual([{ emoji: 'eyes', count: 1, by: [{ kind: 'agent', id: builder }] }])
@@ -439,20 +440,23 @@ describe('reactions', () => {
     const parts = await read(tab, peer)
     expect(parts.text).not.toContain(conversationId)
     // An agent outside the private project is not even told it exists, and another agent's private notice is not there for it to mark.
-    const builder = await agentIn(tab, 'lead', 'Kai')
+    // Both agents share a task, as the project chat holds only its coordinator among agents (#2207).
+    const group = (await run(tab, { type: 'conversation.create', title: 'Avatars', brief: 'Add avatars.', checks: [] })).result.conversationId as string
+    const builder = await agentIn(tab, group, 'Kai')
     await expect(agentReact(tab, conversationId, secret, builder, 'eyes')).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 })
-    const lead = await agentIn(tab, 'lead', 'River', true)
-    const notice = (await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Your skill changed.', replyTo: null, recipientIds: [lead],
+    const lead = await agentIn(tab, group, 'River', true)
+    const notice = (await run(tab, { type: 'message.send', conversationId: group, text: 'Your skill changed.', replyTo: null, recipientIds: [lead],
       agentOnly: true }, owner, lead)).result.messageId as string
-    await expect(agentReact(tab, 'lead', notice, builder, 'eyes')).rejects.toMatchObject({ code: 'NOT_FOUND' })
-    await agentReact(tab, 'lead', notice, lead, 'eyes')
-    expect((await page(tab, peer)).map(m => m.id)).not.toContain(notice)
+    await expect(agentReact(tab, group, notice, builder, 'eyes')).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await agentReact(tab, group, notice, lead, 'eyes')
+    expect(((await read(tab, peer, `conversations/${group}/messages`)).body.data.messages as Array<{ id: string }>).map(m => m.id)).not.toContain(notice)
   })
 })
 
 describe('the ship moment', () => {
   const config = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
-  it('posts one celebration in the project chat when linked work is Done, waking nobody', async () => {
+  // The task's own line says it shipped, in place of the Shipped line (taskLine.ts; Quiet Swarm, Dee, 11-02).
+  it('edits the task\'s one line in the project chat to shipped when its merge is recorded, once on a retry, waking nobody', async () => {
     const tab = await swarm()
     await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: randomUUID(), name: 'River', configuration: config, lead: true })
     const group = (await run(tab, { type: 'conversation.create', title: 'Avatars', brief: 'Add avatars.',
@@ -466,13 +470,18 @@ describe('the ship moment', () => {
       evidence: 'npm test: 12 passed' }, owner, builder)
     const operationId = randomUUID()
     const done: Command = { type: 'work.status', conversationId: group, assignmentId: work.assignment!.id, status: 'done',
-      result: 'Merged https://github.com/example/app/pull/7' }
+      result: 'Review passed: https://github.com/example/app/pull/7' }
     await run(tab, done, owner, builder, operationId)
     await run(tab, done, owner, builder, operationId)
+    const merged: Command = { type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/example/app/pull/7' }
+    const mergeId = randomUUID()
+    await run(tab, merged, owner, undefined, mergeId)
+    await run(tab, merged, owner, undefined, mergeId)
     const rows = await db.superTabMessage.findMany({ where: { tabId: tab, conversationId: 'lead' } })
-    const ships = rows.filter(m => (m.source as { kind?: string } | null)?.kind === 'ship')
-    expect(ships).toHaveLength(1)
-    expect(ships[0]).toMatchObject({ text: '🎉 Shipped: Avatars, requested by owner, built by Kai. https://github.com/example/app/pull/7', recipientIds: [] })
-    expect(await db.superTabDelivery.count({ where: { tabId: tab, messageId: ships[0]!.id } })).toBe(0)
+    expect(rows.filter(m => (m.source as { kind?: string } | null)?.kind === 'ship')).toEqual([])
+    const lines = rows.filter(m => (m.source as { kind?: string } | null)?.kind === 'task-line')
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toMatchObject({ text: 'Avatars · shipped', recipientIds: [], source: { taskId: group, state: 'shipped', builderId: builder } })
+    expect(await db.superTabDelivery.count({ where: { tabId: tab, messageId: lines[0]!.id } })).toBe(0)
   })
 })

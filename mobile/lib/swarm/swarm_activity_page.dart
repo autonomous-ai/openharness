@@ -472,7 +472,8 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
     );
   }
 
-  /// Opens where [item] was asked, at its message, and counts it handled. A
+  /// Opens where [item] was asked, at its message — in its thread, opened
+  /// over the chat, when it lives there — and counts it handled. A
   /// decision opens its chat at the end: decisions are answered here, never
   /// shown in a chat.
   void _reply(
@@ -480,13 +481,18 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
     SwarmSession session,
     SwarmActivityItem item,
   ) {
+    final focus = session.activity.landingOf(item);
     session.activity.replied(item);
     unawaited(
       Navigator.of(context).push(
         swarmChatRoute(
           swarmId: item.swarmId,
           conversationId: item.conversationId,
-          messageId: item.messageId,
+          // A thread opens over the chat at its root, which the chat shows
+          // behind it.
+          messageId: item.threadId ?? item.messageId,
+          threadId: item.threadId,
+          threadFocus: focus,
         ),
       ),
     );

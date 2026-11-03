@@ -5,7 +5,6 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:flutter/services.dart';
-import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
@@ -207,7 +206,6 @@ Future<(SuperTabController, GlobalKey)> _show(
   await attention.mentions.load();
   await attention.decisions.load();
   await attention.load();
-  await SuperTabActivity.of(c).load();
   await c.select(selected);
   if (!c.expandedProjects.contains('lead')) c.toggleProject('lead');
   final picture = GlobalKey();
@@ -272,7 +270,7 @@ void main() {
             if (c.unreadShown(c.snapshot!.conversation(id)!)) id,
         ];
         expect(order, isNot(contains('roster')));
-        await tester.tap(find.byKey(const ValueKey('super-group-lead')));
+        await tester.tap(find.byKey(const ValueKey('super-message-composer')));
         await tester.pumpAndSettle();
         await _keys(tester, [
           LogicalKeyboardKey.altLeft,
@@ -342,7 +340,7 @@ void main() {
       final (c, _) = await _show(tester, Brightness.dark);
       final unread = c.snapshot!.conversations.where(c.unreadShown).length;
       expect(unread, greaterThan(1));
-      await tester.tap(find.byKey(const ValueKey('super-group-web-lead')));
+      await tester.tap(find.byKey(const ValueKey('super-message-composer')));
       await tester.pumpAndSettle();
       await _keys(tester, [
         LogicalKeyboardKey.shiftLeft,

@@ -340,8 +340,15 @@ class SuperTabConversation {
       task = row['task'] is Map
           ? SuperTabTask.fromJson(superTabMap(row['task']))
           : null,
+      requesterId = row['requesterId'] as String?,
+      shippedAt = row['shippedAt'] is num
+          ? DateTime.fromMillisecondsSinceEpoch(
+              (row['shippedAt'] as num).toInt(),
+            )
+          : null,
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
+      reactionSeq = (row['reactionSeq'] as num?)?.toInt() ?? 0,
       assignment = row['assignment'] == null
           ? null
           : Map.unmodifiable(superTabMap(row['assignment'])),
@@ -415,6 +422,19 @@ class SuperTabConversation {
   /// leaves it. Null from a backend before threads, or before this
   /// conversation's first message since.
   final int? lastMainSequence;
+
+  /// Counts reaction changes here (backend reactions.ts), as its messages
+  /// pages also say: a move asks for the page shown again. Absent, as before
+  /// the first reaction, it is 0, the pages' own value then.
+  final int reactionSeq;
+
+  /// The person who asked for this task; null on a conversation that is no
+  /// task, and from a server that does not say.
+  final String? requesterId;
+
+  /// When it shipped (its first Done); null until it has, and from a server
+  /// that does not say.
+  final DateTime? shippedAt;
   final Map<String, dynamic>? assignment;
 
   /// Whether its task waits on purpose or is stuck, as the server last found
@@ -703,6 +723,17 @@ class SuperTabSnapshot {
 
   bool isProjectLead(String conversationId) =>
       projects.any((p) => p.leadConversationId == conversationId);
+
+  /// The agents whose terminals [conversationId] opens: a project chat's
+  /// coordinator alone, whoever else an older Swarm still holds there (#2207);
+  /// any other group's members.
+  List<String> paneAgentIds(String conversationId) {
+    final group = conversation(conversationId);
+    if (group == null) return const [];
+    if (!isProjectLead(conversationId)) return group.agentIds;
+    final lead = group.leadId;
+    return lead != null && group.agentIds.contains(lead) ? [lead] : const [];
+  }
 
   SuperTabProject? leadProjectForAgent(String agentId) => projects
       .where((p) => conversation(p.leadConversationId)?.leadId == agentId)

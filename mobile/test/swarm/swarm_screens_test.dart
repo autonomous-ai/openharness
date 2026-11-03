@@ -252,8 +252,8 @@ void main() {
       final row = key('swarm-project-$tab-$project');
       expect(
         find.descendant(of: row, matching: find.text('@1')),
-        findsOneWidget,
-        reason: "River's tag, waiting in it",
+        findsNothing,
+        reason: "River's task-chat tag stays on its own row",
       );
       expect(
         find.descendant(of: row, matching: find.text('1 human')),

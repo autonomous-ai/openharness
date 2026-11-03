@@ -21,6 +21,7 @@ import { buddyChatId } from '../src/superTabs/buddies.js'
 import { resetInboxReads } from '../src/superTabs/read/inbox.js'
 import { MAX_READ_THREADS, resetThreadsReads, TAGGED_THREADS, THREADS_READS, THREADS_WINDOW_MS } from '../src/superTabs/read/followedThreads.js'
 import type { Author, Conversation, SuperTabState } from '../src/superTabs/model.js'
+import { stableId } from '../src/superTabs/model.js'
 import { THREAD_MARK_CAP, writeThreadFollow, writeThreadMark } from '../src/superTabs/readMarks.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
@@ -619,5 +620,51 @@ describe('a thread the person is tagged in, in a chat they never opened (GET /th
     expect(roots(body.data.read)).toEqual(['Older root'])
     expect(body.data.more).toBe(false)
     expect(JSON.stringify(body.data)).not.toMatch(/Newer/)
+  })
+})
+
+// Task #2265 (Diego): a person's own message from the phone, the web or the dial left the chat bold on their other apps, and a chat
+// set to All could tell them of it, as a send never moved its author's mark.
+describe('a person\'s own message leaves the chat read for them', () => {
+  const send = async (tabId: string, conversationId: string, as: AuthUser, text: string, more: Record<string, unknown> = {}) => {
+    const answer = await call('POST', `/api/super-tabs/${tabId}/commands`, as, { operationId: randomUUID(),
+      command: { type: 'message.send', conversationId, text, replyTo: null, recipientIds: [], ...more } })
+    expect(answer.status).toBe(200)
+    return answer.body.data.result.messageId as string
+  }
+  const markOf = async (tabId: string, conversationId: string, as: AuthUser) =>
+    (await db.superTabReadMark.findUnique({ where: { id: stableId(tabId, conversationId, as.sub) }, select: { sequence: true } }))?.sequence ?? 0
+
+  it('moves their mark to their message, and nobody else\'s', async () => {
+    const s = await scene()
+    const id = await send(s.tabId, s.web, owner, 'From my phone')
+    expect(await markOf(s.tabId, s.web, owner)).toBe(await sequenceOf(id))
+    expect(await markOf(s.tabId, s.web, peer)).toBe(0)
+  })
+
+  it('tells their other apps in the same read that says the chat moved', async () => {
+    const s = await scene()
+    const id = await send(s.tabId, s.web, owner, 'From my phone')
+    const derived = (await call('GET', `/api/super-tabs/${s.tabId}/parts`, owner)).body.data.derived
+    expect(derived.readMarks[s.web]).toBe(await sequenceOf(id))
+  })
+
+  it('leaves the mark for a reply only in a thread, and moves it for one also sent to the chat', async () => {
+    const s = await scene()
+    const root = await send(s.tabId, s.web, owner, 'Root')
+    const at = await markOf(s.tabId, s.web, owner)
+    await send(s.tabId, s.web, owner, 'Only in the thread', { replyTo: root })
+    expect(await markOf(s.tabId, s.web, owner)).toBe(at)
+    const also = await send(s.tabId, s.web, owner, 'Also in the chat', { replyTo: root, alsoSend: true })
+    expect(await markOf(s.tabId, s.web, owner)).toBe(await sequenceOf(also))
+  })
+
+  it('never reads a thread for them: a teammate\'s reply it passes still counts in the inbox', async () => {
+    const s = await scene()
+    const [root] = await insert(s.tabId, s.web, [{ text: 'Owner root', author: personAuthor(owner) }])
+    await markRead(s.tabId, s.web, await sequenceOf(root!), owner)
+    await insert(s.tabId, s.web, [{ text: 'Worker reply', author: agentAuthor(s.worker), thread: root }])
+    await send(s.tabId, s.web, owner, 'From my phone')
+    expect(roots((await inbox(s.tabId, owner)).body.data.threads)).toEqual(['Owner root'])
   })
 })

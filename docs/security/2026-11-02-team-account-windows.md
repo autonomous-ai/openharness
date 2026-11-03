@@ -11,13 +11,13 @@ text and values the code produces. Nothing on a real account, permission or file
 **The folders hold; the daemon's port does not.** Ports were covered only in part: the Team daemon's own port was not read. The ACLs setup writes keep the Team account out of the owner's profile.
 Other accounts can't read the sign-in code or the relay's token, and the daemon's pipe proves both ends. On Windows the owner's
 local credential went over TCP to whoever holds the daemon's port, and the daemon accepted it from any account (W1, fixed in
-task #2095; the connectors bridge's port is still open, its own task, so Team accounts on Windows are not closed yet).
+task #2095; the connectors bridge's port is fixed in task #2162).
 The Team account's daemon starts at boot, before the owner signs in. Purge was written for POSIX paths. It never deleted a
 Codex Product Manager's own home on Windows (W2, fixed in this pull request), and it can't finish a Claude Code one there (W3).
 
 | ID | Rating | Finding | Status |
 |---|---|---|---|
-| W1 | **High** | The owner's local credential goes to whoever holds the daemon's port, and opens the daemon from any account | **Fixed** in task #2095 for every client, test first. The Store add-ons over the pipe (task #2161): fixed, and run on real Windows x64 and Arm against the installed daemon (Windows workflow run 41464966703). The connectors bridge is still open (own task) |
+| W1 | **High** | The owner's local credential goes to whoever holds the daemon's port, and opens the daemon from any account | **Fixed** in task #2095 for every client, test first. The Store add-ons over the pipe (task #2161): fixed, and run on real Windows x64 and Arm against the installed daemon (Windows workflow run 41464966703). The connectors bridge: fixed in task #2162, and run on real Windows x64 and Arm (Windows workflow run 41488691783) |
 | W2 | **High** | Purge left a Codex Product Manager's whole home on Windows, and could take every PM's home on any platform | **Fixed here**, test first |
 | W3 | Medium | Purge can't scrub a Claude Code Product Manager on Windows: the account stays held, its memory stays | Read in code, fix requested |
 | W4 | Medium | The Team account can stall the owner's read of its status file | Read in code, fix requested |
@@ -61,16 +61,19 @@ make the daemon refuse the credential over TCP from another account. Windows can
 (`GetExtendedTcpTable` gives the owning process, whose token names its account).
 
 **Fixed (task #2095).** All three parts, each test first; the W1 tests above are turned around:
-- The daemon asks Windows who owns the calling end of a TCP connection that showed a valid secret (`lib/peerAccount.ts`
-  `windowsPeerQuery`: `Get-NetTCPConnection`, then the process's owner SID against this account's). Anything but a clear yes is
-  no. This alone makes a credential heard on the port useless to another account, from an old client or plugin too.
-  It takes only a process that started before the connection was made, compared in whole seconds (the connection's time comes
-  only to the second), never the lookup's own process, and never a PowerShell or console host the daemon started (another
-  lookup running at once). A process id taken within the connection's own second by some other process of the owner's is
-  still open until the native lookup. At most four
+- The daemon asks Windows who owns the calling end of a TCP connection that showed a valid secret: `harness-pty peer-account`
+  (`pty/src/peer.rs`, the TCP table, then the process's token), in milliseconds, or for a host too old to know that command,
+  `lib/peerAccount.ts` `windowsPeerQuery` (`Get-NetTCPConnection`, then the process's owner SID against this account's). The two
+  apply the same rules. Anything but a clear yes is no, and the helper's no is final. This alone makes a credential heard on the
+  port useless to another account, from an old client or plugin too.
+  It takes only a process that started before the connection was made, never the lookup's own process, and never a harness-pty,
+  PowerShell or console host the daemon started (another lookup running at once). PowerShell compares in whole seconds, as it gets
+  the connection's time only to the second, so a process id taken within that second by some other process of the owner's stays
+  open on an older host. The helper compares exactly when Windows gives the connection's time finer than a second, and refuses a time later than
+  the clock, so a time misread can only fail closed. At most four
   lookups run at once and up to 32 wait their turn; one past those is no for now, and is asked again on its next request. A
-  lookup that times out (45 s: about a second on x64, 20 to 25 s on the Windows ARM runner) stays no for that connection; a
-  native lookup in harness-pty is its own task.
+  lookup that times out (5 s for the helper; 45 s for PowerShell, about a second on x64 and 20 to 25 s on the Windows ARM runner)
+  stays no for that connection.
 - Hooks post over the daemon's pipe (`hook/notify.mjs` `windowsDaemonPipe`), proving the token without sending it, and take an
   answer only with the daemon's proof. With no live pipe they post nothing, as on macOS with no socket.
 - CLI clients never put the credential on TCP (`localCredentialHeaders` gives nothing on Windows). Their fetch helper and their
@@ -83,12 +86,25 @@ make the daemon refuse the credential over TCP from another account. Windows can
   is not running. Their `localCredentialHeaders` give nothing on Windows and their 401 probe never runs there
   (`store/tools/windows-pipe.test.mjs`, run on Windows by the Windows workflow, with `store/tools/windows-ci/store-pipe.mjs`
   against the installed daemon).
-- Still open, rated Medium, its own task: the connectors bridge. Its default port (51793) is the same for every account, the Team
-  daemon also starts connectors, and on Windows `portHolderIsThisAccount` answers null, so the owner's bridge never moves off a
-  held port (`services/connectors.ts`). Whoever holds it from boot reads every tool call of the owner's agents and can answer them
-  falsely, and Harness's own `bridgeRoute` trusts those answers too. The key opens nothing from another account now. macOS has the
-  stdio shim and the move-off (#2558, #2550); Windows has neither. The fix is the shim and Harness's route over the proven pipe;
-  a Windows listener-owner lookup, so the bridge moves off a held port, is a cheap first step.
+- The connectors bridge (task #2162, from Reed's review of #2605, Medium at least; fixed, and run on real Windows x64 and Arm: Windows workflow run 41488691783). Until then, `portHolderIsThisAccount`
+  answered null on Windows, so the bridge never moved off a port another account held, and agents' entries and Harness's own
+  `bridgeRoute` named that port. The bridge's default port, 51793, is the same for every account, and the Team account's daemon
+  starts connectors at boot, so in practice the Team account read every tool call of the owner's agents and could return false
+  tool answers to agents running with the owner's rights. The key opened nothing from another account after W1, but the answers
+  were taken. Now:
+  - Windows is asked whose the listener is (`lib/peerAccount.ts` `windowsListenerQuery`: `Get-NetTCPConnection -State Listen`,
+    the process's owner SID against this account's; a process that started after its listener, its time cut to the second as
+    Windows gives the listener's, or the lookup's own process, counted as not this account's),
+    so the bridge moves off another account's port, as on macOS and Linux.
+  - The bridge also listens on a pipe of a new name at each start, `\\.\pipe\harness-<id>`, whose every request proves a token
+    new at each start, and whose every answer proves it back (`lib/connectors/bridge.ts` `serveBridgePipe`). The pipe, the
+    serving process and the token are recorded in `bridge-pipe.json` in the vault's private folder.
+  - Agents' entries run the stdio shim with `--pipe <record>` (`mcpShimSource.ts`), and Harness's own `bridgeRoute` goes over the
+    same pipe. Both dial it only while the recorded process runs as this account (EPERM is no), and take no answer without the
+    proof. With no live pipe they say Harness or Connections is not running; nothing goes to the port. As on macOS, Harness's key
+    is replaced once and never crosses the port, and the agents' old key opens the port for a day, for agents still running on it.
+  - Left as for the daemon's pipe: a recorded pid this account's own process took since (by chance) is still dialled, and the
+    request reaches whatever made a pipe of the name; its answer is refused by the proof.
 - Still open: the OpenCode, Kilo, Pi and Amp plugins (`engines/kit/pluginFetch.ts`) have no socket on Windows and post to the
   port with the hook-only token and the session's details. The token opens nothing from another account now, but whoever holds
   the port hears both, and each new connection costs the daemon's one-second lookup. They need the pipe too, a separate task.

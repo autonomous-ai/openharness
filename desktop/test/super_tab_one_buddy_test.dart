@@ -1,17 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
-import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/section_heading.dart';
-import 'package:harness/super_tabs/threads_view.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/buddy_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
 /// One Buddy per person per Swarm (Dee, 10-31; spec
-/// 2026-10-31-one-buddy-per-swarm): `# buddy` is the first row under
+/// 2026-10-31-one-buddy-per-swarm): `Buddy` is the row over
 /// Projects, with no Buddies section; New session picks a project; older
 /// project Buddy chats read only.
 void main() {
@@ -137,40 +135,45 @@ void main() {
   });
 
   group('the sidebar', () {
-    testWidgets('shows # buddy first under Projects and no Buddies section', (
-      tester,
-    ) async {
-      final server = oneBuddySwarm();
-      giveSwarmBuddy(server);
-      final c = await show(tester, server);
+    testWidgets(
+      'shows Buddy above Projects, with no # and no Buddies section',
+      (tester) async {
+        final server = oneBuddySwarm();
+        giveSwarmBuddy(server);
+        final c = await show(tester, server);
 
-      expect(buddyRow, findsOneWidget);
-      expect(
-        find.descendant(of: buddyRow, matching: find.text('buddy')),
-        findsOneWidget,
-      );
-      expect(titles(tester), isNot(contains('Buddies')));
-      expect(titles(tester), contains('Projects'));
-      // First under Projects: above every project's row.
-      final projectsHeading = tester.getBottomLeft(find.text('Projects')).dy;
-      final top = tester.getTopLeft(buddyRow).dy;
-      expect(top, greaterThan(projectsHeading));
-      expect(
-        top,
-        lessThan(
-          tester
-              .getTopLeft(find.byKey(const ValueKey('super-project-lead')))
-              .dy,
-        ),
-      );
+        expect(buddyRow, findsOneWidget);
+        expect(
+          find.descendant(of: buddyRow, matching: find.text('Buddy')),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: buddyRow, matching: find.text('#')),
+          findsNothing,
+        );
+        expect(titles(tester), isNot(contains('Buddies')));
+        expect(titles(tester), contains('Projects'));
+        // Over Projects' heading, so over every project's row (Quiet Swarm,
+        // screen 1).
+        final projectsHeading = tester.getTopLeft(find.text('Projects')).dy;
+        expect(tester.getBottomLeft(buddyRow).dy, lessThan(projectsHeading));
+        expect(
+          projectsHeading,
+          lessThan(
+            tester
+                .getTopLeft(find.byKey(const ValueKey('super-project-lead')))
+                .dy,
+          ),
+        );
 
-      await tester.tap(buddyRow);
-      await tester.pumpAndSettle();
-      expect(c.selectedId, 'swarm-buddy-peer');
-      // Its chat says it reads every project, and only its person reads it.
-      expect(find.textContaining('reads all your projects'), findsOneWidget);
-      await close(tester, c);
-    });
+        await tester.tap(buddyRow);
+        await tester.pumpAndSettle();
+        expect(c.selectedId, 'swarm-buddy-peer');
+        // Its chat says it reads every project, and only its person reads it.
+        expect(find.textContaining('reads all your projects'), findsOneWidget);
+        await close(tester, c);
+      },
+    );
 
     testWidgets(
       'opens the one Buddy chat on the server before any Buddy, from the row',
@@ -422,79 +425,5 @@ void main() {
         await close(tester, c);
       },
     );
-  });
-
-  testWidgets('the Threads list offers no reply in an earlier Buddy chat, '
-      'and still offers one in # buddy (merge with #2434)', (tester) async {
-    final server = oneBuddySwarm()..threads = true;
-    giveSwarmBuddy(server);
-    giveBuddy(server, id: 'old', name: 'Wren');
-    Map<String, dynamic> thread(String chat) {
-      server.append('Root in $chat', conversationId: chat);
-      final root = server.messages.last['id'] as String;
-      server.append('New reply in $chat', conversationId: chat);
-      server.messages.last['thread'] = root;
-      return {
-        'conversationId': chat,
-        'rootId': root,
-        'root': {
-          'id': root,
-          'sequence': 1,
-          'author': {'kind': 'agent', 'id': 'wren', 'name': 'Wren'},
-          'text': 'Root in $chat',
-          'createdAt': '2026-10-31T01:00:00Z',
-          'attachments': 0,
-        },
-        'lastReplyAt': '2026-10-31T02:00:00Z',
-        'lastReplySequence': 2,
-        'lastReplier': {'kind': 'agent', 'id': 'wren', 'name': 'Wren'},
-        'unreadReplies': 1,
-        'follow': null,
-      };
-    }
-
-    final earlier = thread('buddy-peer-lead');
-    final current = thread('swarm-buddy-peer');
-    server.followedThreads = {
-      'unread': [earlier, current],
-      'read': [],
-      'more': false,
-    };
-    final c = server.controller(account: 'peer');
-    await c.refresh();
-    final attention = SuperTabAttention.of(c);
-    await attention.load();
-    expect(attention.shown, hasLength(2));
-    await tester.binding.setSurfaceSize(const Size(700, 900));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.dark),
-        home: Scaffold(
-          body: SuperTabThreadsView(attention: attention, onOpen: (_, _) {}),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-    expect(find.text('Root in buddy-peer-lead'), findsOneWidget);
-    expect(
-      find.byKey(
-        ValueKey(
-          'super-thread-open-reply-buddy-peer-lead/${earlier['rootId']}',
-        ),
-      ),
-      findsNothing,
-    );
-    expect(
-      find.byKey(
-        ValueKey(
-          'super-thread-open-reply-swarm-buddy-peer/${current['rootId']}',
-        ),
-      ),
-      findsOneWidget,
-    );
-    await tester.pumpWidget(const SizedBox());
-    await c.flush();
-    c.dispose();
   });
 }

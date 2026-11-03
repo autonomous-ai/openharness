@@ -11,14 +11,12 @@ import 'package:harness/api/access_token_source.dart';
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
-import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/backend_transport.dart';
 import 'package:harness/super_tabs/client.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 
-import 'super_tab_activity_test.dart' show reply;
 import 'super_tab_attention_test.dart' show projectServer, unreadThread;
 import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show MemoryStore;
@@ -541,8 +539,6 @@ void main() {
       expect(
         paths,
         containsAll([
-          '/api/super-tabs/1/activity',
-          '/api/super-tabs/1/activity/read',
           '/api/super-tabs/1/threads',
           '/api/super-tabs/1/inbox',
           '/api/super-tabs/1/conversations/1/threads/1/follow',
@@ -611,121 +607,6 @@ void main() {
   }
 
   group('on the web, through the backend', () {
-    test('Activity lists replies to the reader, and leaving it marks them '
-        'read on the backend', () async {
-      final server = projectServer();
-      server.state['activityDigest'] = 'd1';
-      server.activity = {
-        'items': [reply('r1')],
-        'more': false,
-      };
-      final c = await webSwarm(server);
-      final activity = SuperTabActivity.of(c);
-      await settle();
-      expect(activity.error, isNull);
-      expect(activity.supported, isTrue);
-      expect(activity.items.map((i) => i.id), ['r1']);
-      activity.opened();
-      await settle();
-      activity.closed();
-      await settle();
-      expect(server.activityReadPosts, hasLength(1));
-      expect(
-        sent(),
-        containsAll([
-          'GET /api/super-tabs/tab/activity',
-          'POST /api/super-tabs/tab/activity/read',
-        ]),
-      );
-    });
-
-    test(
-      'Activity that failed its first read recovers on the next change',
-      () async {
-        final server = projectServer();
-        server.state['activityDigest'] = 'd1';
-        server.activityStatus = 503;
-        server.activity = {
-          'items': [reply('r1')],
-          'more': false,
-        };
-        final c = await webSwarm(server);
-        final activity = SuperTabActivity.of(c);
-        await settle();
-        expect(activity.error, isNotNull);
-        expect(activity.items, isEmpty);
-        server.activityStatus = 0;
-        server.append('Something else changed');
-        await c.refresh();
-        await settle();
-        expect(activity.error, isNull);
-        expect(activity.items.map((i) => i.id), ['r1']);
-      },
-    );
-
-    test('Activity drops its rows when access goes, and an answer on its way '
-        'shows nothing', () async {
-      final server = projectServer();
-      server.state['activityDigest'] = 'd1';
-      server.activity = {
-        'items': [reply('r1')],
-        'more': false,
-      };
-      final c = await webSwarm(server);
-      final activity = SuperTabActivity.of(c);
-      await settle();
-      expect(activity.items, hasLength(1));
-      server.holdActivity = Completer();
-      unawaited(activity.load());
-      await settle();
-      c.revokeAccess('Removed from this Swarm.');
-      expect(activity.items, isEmpty);
-      server.holdActivity!.complete();
-      await settle();
-      expect(activity.items, isEmpty);
-      expect(activity.count, 0);
-    });
-
-    test(
-      'Threads lists followed threads, and Follow is kept on the backend',
-      () async {
-        final server = projectServer();
-        server.followedThreads = {
-          'unread': [
-            unreadThread('message-1', 2),
-            // A chat this reader does not have: never shown on its word.
-            unreadThread('message-9', 3, conversationId: 'elsewhere'),
-          ],
-          'read': [],
-          'more': false,
-        };
-        final c = await webSwarm(server);
-        final attention = SuperTabAttention.of(c);
-        await attention.load();
-        expect(attention.error, isNull);
-        expect(attention.followSupported, isTrue);
-        expect(attention.unread.map((t) => t.rootId), ['message-1']);
-        expect(sent(), contains('GET /api/super-tabs/tab/threads'));
-        expect(sent(), isNot(contains('GET /api/super-tabs/tab/inbox')));
-        expect(
-          await attention.setFollow(attention.unread.single, false),
-          isTrue,
-        );
-        expect(server.followPosts, [
-          {'conversationId': 'lead', 'root': 'message-1', 'follow': false},
-        ]);
-        // Access gone: no Follow is sent at all. (A kept Follow reads the
-        // list again first.)
-        await settle();
-        final thread = attention.unread.single;
-        backend.requests.clear();
-        c.revokeAccess('Removed from this Swarm.');
-        expect(await attention.setFollow(thread, true), isFalse);
-        await settle();
-        expect(backend.requests, isEmpty);
-      },
-    );
-
     test(
       'Threads on a backend before followed threads reads its inbox',
       () async {

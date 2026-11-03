@@ -79,6 +79,9 @@ int? _maxAgentSlots(MachineResources? resources) {
 int? _suggestedAgentSlots(MachineResources? resources) =>
     superTabSuggestedAgentSlots(resources);
 
+/// Where a machine's row starts in Manage, so its mark sits under the heading.
+const _manageRowStart = 12.0;
+
 class SuperTabMachines extends StatefulWidget {
   const SuperTabMachines({
     super.key,
@@ -92,10 +95,15 @@ class SuperTabMachines extends StatefulWidget {
     this.onToggleCollapsed,
     this.onOpenAgent,
     this.ticks,
+    this.manage = false,
   });
   final SuperTabController controller;
   final AppNotifier? app;
   final bool embedded;
+
+  /// Manage › Machines: one line per machine with its owner and status, and
+  /// Add machine at the foot, with no heading of its own (Quiet Swarm, screen 10).
+  final bool manage;
 
   /// Runs the one-second clock; by default everywhere but under `flutter test`.
   @visibleForTesting
@@ -901,7 +909,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     }
     _syncTick();
     _redrawMoved();
-    if (!c.away && _timer?.isActive != true && !_reading && widget.app?.foreground.value == true && (!kUnderTest || widget.readLocal != null)) {
+    if (!c.away &&
+        _timer?.isActive != true &&
+        !_reading &&
+        widget.app?.foreground.value == true &&
+        (!kUnderTest || widget.readLocal != null)) {
       unawaited(_refresh());
     }
   }
@@ -1971,6 +1983,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   expanded: expanded,
                   child: _MachineLine(
                     view: view,
+                    words: widget.manage,
                     onMore: BrowserMenuGuard.inBrowser
                         ? (at) => _menu(view, at)
                         : null,
@@ -2372,19 +2385,67 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   @override
   Widget build(BuildContext context) {
     final failingSince = c.backendUnreachable ? c.unreachableSince : null;
+    final add = c.canWrite && widget.app != null
+        ? () => unawaited(
+            showAddComputers(
+              context,
+              c,
+              widget.app!,
+              readResources: widget.readLocal,
+            ),
+          )
+        : null;
+    if (widget.manage) {
+      return LaidOutListView(
+        // A row's mark starts under Manage's heading, its words end at the
+        // page's edge (Swarm's and Models' 24).
+        padding: const EdgeInsets.fromLTRB(
+          _manageRowStart,
+          grid.AppDesktop.controlGap,
+          grid.AppDesktop.groupGap,
+          grid.AppDesktop.controlGap,
+        ),
+        children: [
+          // Only a Swarm that can't be read is news, as under the old heading.
+          if (c.backendUnreachable)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: SuperTabMachinesPill(
+                connecting: c.stillConnecting,
+                reconnectingFor: failingSince == null
+                    ? Duration.zero
+                    : widget.now().difference(failingSince),
+              ),
+            ),
+          if (_ids.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(grid.AppDesktop.controlGap),
+              child: Text(
+                "Add a machine for this Swarm's agents to use.",
+                style: DesktopChrome.metadata(),
+              ),
+            )
+          else
+            ..._machines(),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Padding(
+              padding: const EdgeInsets.only(right: grid.AppDesktop.controlGap),
+              child: TextButton(
+                key: const ValueKey('super-manage-add-machine'),
+                onPressed: add,
+                child: const Text('Add machine'),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
     final children = [
       SuperTabSectionHeading(
         'Machines',
-        onAdd: c.canWrite && widget.app != null
-            ? () => unawaited(
-                showAddComputers(
-                  context,
-                  c,
-                  widget.app!,
-                  readResources: widget.readLocal,
-                ),
-              )
-            : null,
+        onAdd: add,
         addTooltip: 'Add machine',
         // Only a Swarm that can't be read is news; a live one says nothing.
         trailing: c.backendUnreachable
@@ -2677,9 +2738,17 @@ const _noQuotaLeft = 'No quota left until it resets.';
 
 /// The same leading icon/name and trailing status column as projects.
 class _MachineLine extends StatelessWidget {
-  const _MachineLine({required this.view, this.onSetUpTeam, this.onMore});
+  const _MachineLine({
+    required this.view,
+    this.onSetUpTeam,
+    this.onMore,
+    this.words = false,
+  });
 
   final _MachineView view;
+
+  /// Its owner and status in words (Manage), not their marks.
+  final bool words;
 
   /// In a browser, opens the machine's menu at a point until it closes: the ⋯ that needs no right-click.
   final Future<void> Function(Offset at)? onMore;
@@ -2777,7 +2846,29 @@ class _MachineLine extends StatelessWidget {
               ),
             ),
           ),
-          if (owner != null)
+          if (words) ...[
+            if (owner != null)
+              Padding(
+                padding: const EdgeInsets.only(
+                  left: grid.AppDesktop.controlGap,
+                ),
+                child: Text(
+                  owner.username,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: DesktopChrome.metadata(),
+                ),
+              ),
+            Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: grid.AppDesktop.controlGap,
+              ),
+              child: Text(switch (view.status) {
+                SuperTabMachineStatus.live => 'online',
+                final status => superTabMachineStateLabel(status).toLowerCase(),
+              }, style: DesktopChrome.metadata()),
+            ),
+          ] else if (owner != null)
             Padding(
               padding: const EdgeInsets.only(left: 6),
               child: Tooltip(
@@ -2795,21 +2886,22 @@ class _MachineLine extends StatelessWidget {
               key: ValueKey('super-machine-more-${view.id}'),
               onOpen: open,
             ),
-          SizedBox(
-            width: 32,
-            child: Center(
-              child: KeyedSubtree(
-                key: ValueKey(
-                  'super-machine-state-${view.id}-${view.status.name}',
-                ),
-                child: SuperTabMachineDot(
-                  status: view.status,
-                  readingAt: view.readingAt,
-                  arrived: view.arrived,
+          if (!words)
+            SizedBox(
+              width: 32,
+              child: Center(
+                child: KeyedSubtree(
+                  key: ValueKey(
+                    'super-machine-state-${view.id}-${view.status.name}',
+                  ),
+                  child: SuperTabMachineDot(
+                    status: view.status,
+                    readingAt: view.readingAt,
+                    arrived: view.arrived,
+                  ),
                 ),
               ),
             ),
-          ),
         ],
       ),
     );

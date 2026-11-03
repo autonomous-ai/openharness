@@ -12,9 +12,9 @@ import 'model.dart';
 import 'swarm_switcher.dart' show PersonalSwarm;
 
 /// Deleting a Swarm (Dee, 10-31: "owners can delete a Swarm, like deleting a
-/// Slack workspace"). Its owner picks Delete in the Swarm dropdown and types
-/// its name; everyone loses it at once. For 7 days it is listed under the
-/// dropdown's Restore rows, its owner's alone (backend superTabs/deletion.ts).
+/// Slack workspace"). Its owner picks Delete in Manage › Swarm and types
+/// its name; everyone loses it at once. For 7 days it is listed there to
+/// restore, its owner's alone (backend superTabs/deletion.ts).
 
 /// One deleted Swarm its owner can still restore.
 typedef DeletedSwarm = ({String id, String name, DateTime purgeAt});

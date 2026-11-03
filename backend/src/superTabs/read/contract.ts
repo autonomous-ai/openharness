@@ -34,7 +34,10 @@ export type AgentView = Omit<Agent, 'downNamed' | 'downSince' | 'limitedUntil' |
 export interface Audience { people: Array<{ id: string; generation: string }> }
 /** A conversation with its own message counter (`lastMessageSequence` and message sequences compare within one group).
  *  `dormant` is set only on a dormant group fetched on demand; `audience` only on a private conversation. */
-export type GroupView = Omit<Conversation, 'messageSeq' | 'reportSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger' | 'proposals'>
+export type GroupView = Omit<Conversation, 'messageSeq' | 'reportSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger' | 'proposals'> & {
+  /** When it shipped (ms): its first Done; absent until it has. Nothing else of its ledger is sent. */
+  shippedAt?: number
+}
   & { messageSeq: number; dormant?: true; audience?: Audience
     /** A Buddy chat's owner, in place of its audience (read/views.ts groupView). */
     buddyOwnerId?: string }

@@ -6,6 +6,7 @@ import type { ReviewedAnswer } from '../cable/questionInbox.js'
 // the LANE costs a cloud socket and only exists while the user is actually looking at another machine. A
 // dial parked on the local machine — which is where it sits most of the time — holds no socket at all.
 import { isTerminalEngine } from '../engines/types.js'
+import { isTier } from '../lib/notifyTier.js'
 import { FleetError, type FleetEvent, type FleetMachine, type MachineFleet } from '../cable/machineFleet.js'
 import type { CableAgent } from '../cable/cableSession.js'
 import type { RecentTurn } from '../cable/cableHost.js'
@@ -426,6 +427,9 @@ export class DeviceFleet implements MachineFleet {
         ...(kind === 'processing' && typeof payload.update === 'string' ? { update: payload.update } : {}),
         // A specialist on another Mac is as silent here as one on this one.
         ...(payload.subagent === true ? { subagent: true } : {}),
+        // How loudly it ends, decided by that machine's recaps, which know its agents: this dial has no list of them, and
+        // decided again here a Swarm agent on another of the person's Macs alerted (#2648's review).
+        ...(kind === 'summary' && isTier(payload.tier) ? { tier: payload.tier } : {}),
       })
       return
     }

@@ -130,7 +130,7 @@ void main() {
   ) async {
     final f = await swarm(tester);
     await f.show(tester);
-    await choose(tester, 'openharness');
+    await choose(tester, 'This project');
     // The board of openharness names Ken and Dee; Tony cannot read it.
     expect(person('owner'), findsOneWidget);
     expect(person('dee'), findsOneWidget);
@@ -154,7 +154,7 @@ void main() {
       "project's board", (tester) async {
     final f = await swarm(tester);
     await f.show(tester);
-    await choose(tester, 'openharness');
+    await choose(tester, 'This project');
     await f.controller.select('os-lead');
     await tester.pumpAndSettle();
     // The scope follows the project now open: autonomous-os.
@@ -178,7 +178,7 @@ void main() {
       final store = _Memory();
       final f = await swarm(tester, store: store);
       await f.show(tester);
-      await choose(tester, 'openharness');
+      await choose(tester, 'This project');
       final key = SuperTabRosterScopeChoice.keyFor('owner', f.controller.tabId);
       expect(store.values[key], 'project');
       // The web sweeps it with the account's other keys at sign-out.
@@ -190,7 +190,7 @@ void main() {
       expect(person('tony'), findsNothing);
       expect(agent(2), findsNothing);
       expect(
-        find.descendant(of: scope, matching: find.text('openharness')),
+        find.descendant(of: scope, matching: find.text('This project')),
         findsOneWidget,
       );
       await again.close(tester);
@@ -213,7 +213,7 @@ void main() {
     await f.show(tester);
     expect(f.controller.tabId, 'tab');
     // All projects is picked (the project is not saved yet), then the disk answers.
-    await choose(tester, 'openharness');
+    await choose(tester, 'This project');
     await choose(tester, 'All projects');
     store.hold!.complete();
     await tester.pumpAndSettle();
@@ -231,7 +231,7 @@ void main() {
     final store = _Memory();
     final f = await swarm(tester, store: store);
     await f.show(tester);
-    await choose(tester, 'openharness');
+    await choose(tester, 'This project');
     expect(person('tony'), findsNothing);
     // The Swarm stops sending the project and its chat (access revoked).
     (f.server.state['projects'] as List).removeWhere((p) => p['id'] == 'lead');
@@ -279,7 +279,7 @@ void main() {
       final f = await swarm(tester, board: false);
       f.server.failLeaderboardReads = 1;
       await f.show(tester);
-      await choose(tester, 'openharness');
+      await choose(tester, 'This project');
       expect(person('owner'), findsOneWidget);
       expect(person('dee'), findsOneWidget);
       expect(person('tony'), findsOneWidget, reason: 'public: everyone');
@@ -301,7 +301,7 @@ void main() {
       ];
       await f.controller.refresh();
       await f.show(tester);
-      await choose(tester, 'openharness');
+      await choose(tester, 'This project');
       expect(person('owner'), findsOneWidget);
       expect(person('dee'), findsOneWidget);
       expect(person('tony'), findsNothing);
@@ -315,7 +315,7 @@ void main() {
       final store = _Memory()..failWrites = true;
       final f = await swarm(tester, store: store);
       await f.show(tester);
-      await choose(tester, 'openharness');
+      await choose(tester, 'This project');
       expect(person('tony'), findsNothing);
       expect(tester.takeException(), isNull);
       await f.close(tester);
@@ -345,7 +345,7 @@ void main() {
     Finder points(String id, String value) =>
         find.descendant(of: person(id), matching: find.textContaining(value));
 
-    testWidgets('All projects shows Swarm-wide points for the chosen period; '
+    testWidgets('All projects shows Swarm-wide points for the last 7 days; '
         'a project its own', (tester) async {
       final f = await swarm(tester);
       rolling(f);
@@ -353,24 +353,19 @@ void main() {
       expect(f.server.leaderboardReads.last, endsWith('&period=7d&scope=all'));
       expect(points('owner', '90'), findsWidgets);
       expect(points('tony', '40'), findsWidgets);
+      // One period, the last 7 days, said on hover (Quiet Swarm).
       expect(find.byKey(const ValueKey('leaderboard-week')), findsNothing);
+      expect(find.byKey(const ValueKey('leaderboard-period')), findsNothing);
+      expect(find.byTooltip('Points in the last 7 days'), findsWidgets);
 
-      await tester.tap(find.byKey(const ValueKey('leaderboard-period')));
-      await tester.pumpAndSettle();
-      expect(find.text('Last 24h'), findsWidgets);
-      expect(find.text('Last 30d'), findsWidgets);
-      await tester.tap(find.text('Last 30d').last);
-      await tester.pumpAndSettle();
-      expect(f.server.leaderboardReads.last, endsWith('&period=30d&scope=all'));
-
-      await choose(tester, 'openharness');
-      expect(f.server.leaderboardReads.last, endsWith('&period=30d'));
+      await choose(tester, 'This project');
+      expect(f.server.leaderboardReads.last, endsWith('&period=7d'));
       expect(points('owner', '30'), findsWidgets);
       expect(points('owner', '90'), findsNothing);
       expect(person('tony'), findsNothing);
 
       await choose(tester, 'All projects');
-      expect(f.server.leaderboardReads.last, endsWith('&period=30d&scope=all'));
+      expect(f.server.leaderboardReads.last, endsWith('&period=7d&scope=all'));
       expect(points('owner', '90'), findsWidgets);
       expect(person('tony'), findsOneWidget);
       await f.close(tester);
@@ -385,7 +380,7 @@ void main() {
       f.server.leaderboardGate = gate.future;
       await tester.tap(scope);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('openharness').last);
+      await tester.tap(find.text('This project').last);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
       expect(points('owner', '90'), findsNothing);
@@ -400,7 +395,7 @@ void main() {
       final f = await swarm(tester);
       rolling(f);
       await f.show(tester);
-      await choose(tester, 'openharness');
+      await choose(tester, 'This project');
       expect(f.server.leaderboardReads.last, isNot(contains('scope=all')));
       f.server.state['projects'] = (f.server.state['projects'] as List)
           .where((p) => (p as Map)['id'] != 'lead')
@@ -411,7 +406,7 @@ void main() {
       await f.close(tester);
     });
 
-    testWidgets('light and dark, both menus and Swarm-wide points', (
+    testWidgets('light and dark, the scope menu and Swarm-wide points', (
       tester,
     ) async {
       final f = await swarm(tester);
@@ -424,13 +419,7 @@ void main() {
         FocusManager.instance.primaryFocus?.unfocus();
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
-        expect(
-          find.descendant(
-            of: find.byKey(const ValueKey('leaderboard-period')),
-            matching: find.text('Last 7d'),
-          ),
-          findsOneWidget,
-        );
+        expect(points('owner', '90'), findsWidgets);
         if (captureDir != null) {
           await captureBoundary(
             tester,
@@ -444,11 +433,12 @@ void main() {
       await f.close(tester);
     });
 
-    testWidgets('from a server before periods: the week menu, its own project '
+    testWidgets('from a server before periods: this week, its own project '
         'as before', (tester) async {
       final f = await swarm(tester);
       await f.show(tester);
-      expect(find.byKey(const ValueKey('leaderboard-week')), findsOneWidget);
+      expect(find.byKey(const ValueKey('leaderboard-week')), findsNothing);
+      expect(find.byTooltip('Points this week'), findsWidgets);
       expect(find.byKey(const ValueKey('leaderboard-period')), findsNothing);
       expect(points('owner', '30'), findsWidgets);
       await f.close(tester);
@@ -476,14 +466,14 @@ void main() {
     expect(personInProject(project, 'owner', board: other), isTrue);
   });
 
-  testWidgets('light and dark, with both menus', (tester) async {
+  testWidgets('light and dark, with the scope menu', (tester) async {
     final f = await swarm(tester);
     final saved = grid.AppTheme.brightness.value;
     addTearDown(() => grid.AppTheme.brightness.value = saved);
     for (final brightness in Brightness.values) {
       grid.AppTheme.brightness.value = brightness;
       await f.show(tester, brightness: brightness);
-      await choose(tester, 'openharness');
+      await choose(tester, 'This project');
       FocusManager.instance.primaryFocus?.unfocus();
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);

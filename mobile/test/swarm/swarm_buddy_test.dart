@@ -428,8 +428,20 @@ void main() {
       await r.refresh();
 
       expect(swarmBuddyMachines(r), [
-        (id: 'mac-4', name: 'Mac Studio', inSwarm: true, away: false),
-        (id: 'mac-1', name: 'Tonys-MacBook-Pro', inSwarm: true, away: false),
+        (
+          id: 'mac-4',
+          name: 'Mac Studio',
+          inSwarm: true,
+          away: false,
+          paused: false,
+        ),
+        (
+          id: 'mac-1',
+          name: 'Tonys-MacBook-Pro',
+          inSwarm: true,
+          away: false,
+          paused: false,
+        ),
       ]);
     });
 
@@ -454,9 +466,27 @@ void main() {
           ],
         ),
         [
-          (id: 'studio', name: 'Studio', inSwarm: false, away: false),
-          (id: 'mac-1', name: 'tropic', inSwarm: true, away: false),
-          (id: 'air', name: 'MacBook Air', inSwarm: false, away: true),
+          (
+            id: 'studio',
+            name: 'Studio',
+            inSwarm: false,
+            away: false,
+            paused: false,
+          ),
+          (
+            id: 'mac-1',
+            name: 'tropic',
+            inSwarm: true,
+            away: false,
+            paused: false,
+          ),
+          (
+            id: 'air',
+            name: 'MacBook Air',
+            inSwarm: false,
+            away: true,
+            paused: false,
+          ),
         ],
       );
       expect(
@@ -673,7 +703,13 @@ void main() {
       await actions.start(
         machineId: 'studio',
         engine: 'claude',
-        machine: (id: 'studio', name: 'Studio', inSwarm: false, away: false),
+        machine: (
+          id: 'studio',
+          name: 'Studio',
+          inSwarm: false,
+          away: false,
+          paused: false,
+        ),
         computers: computers,
       );
 
@@ -711,7 +747,13 @@ void main() {
       await actions.start(
         machineId: 'mac-1',
         engine: 'claude',
-        machine: (id: 'mac-1', name: 'tropic', inSwarm: true, away: false),
+        machine: (
+          id: 'mac-1',
+          name: 'tropic',
+          inSwarm: true,
+          away: false,
+          paused: false,
+        ),
         computers: computers,
       );
 
@@ -731,7 +773,13 @@ void main() {
         await actions.start(
           machineId: 'studio',
           engine: 'claude',
-          machine: (id: 'studio', name: 'Studio', inSwarm: false, away: false),
+          machine: (
+            id: 'studio',
+            name: 'Studio',
+            inSwarm: false,
+            away: false,
+            paused: false,
+          ),
           computers: computers,
         );
 

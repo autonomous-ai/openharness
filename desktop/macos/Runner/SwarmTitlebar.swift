@@ -2408,6 +2408,9 @@ private final class SwarmTabStrip: NSView {
     // was before the key existed.
     phoneButton.isHidden = state["addPhoneVisible"] as? Bool == false
     phoneButton.setAccessibilityHidden(phoneButton.isHidden)
+    // Absent is shown, as for Add Phone. They moved into the avatar menu.
+    storeButton.isHidden = state["storeVisible"] as? Bool == false
+    storeButton.setAccessibilityHidden(storeButton.isHidden)
     // The row's last control: Sign in, or whose account this is. Absent (a
     // viewer build, teardown), nothing is drawn.
     let account = state["account"] as? [String: Any]
@@ -2440,7 +2443,7 @@ private final class SwarmTabStrip: NSView {
     children.append(searchButton)
     if !phoneButton.isHidden { children.append(phoneButton) }
     if !devicesButton.isHidden { children.append(devicesButton) }
-    children.append(storeButton)
+    if !storeButton.isHidden { children.append(storeButton) }
     if !accountButton.isHidden { children.append(accountButton) }
     if !(statusBar.isHidden || passiveFooter) { children.append(statusBar) }
     setAccessibilityChildren(children)
@@ -2460,7 +2463,7 @@ private final class SwarmTabStrip: NSView {
       control.isEnabled = actionsEnabled
     }
     storeButton.font = navigationFont
-    storeButton.isEnabled = actionsEnabled
+    storeButton.isEnabled = actionsEnabled && !storeButton.isHidden
     devicesButton.isEnabled = actionsEnabled && !devicesButton.isHidden
     accountButton.isEnabled = actionsEnabled && !accountButton.isHidden
     searchButton.foreground = palette.navigationForeground
@@ -2563,6 +2566,7 @@ private final class SwarmTabStrip: NSView {
       tab.selected = id == activeId
       tab.keyboardFocus = tabsFocused && id == activeId
       tab.actionsEnabled = actionsEnabled
+      tab.quiet = row["quiet"] as? Bool == true
       tab.attention = (row["attention"] as? Int ?? 0) > 0
       tab.activity = HarnessNativeActivity(row["activity"] as? [String: Any])
       tab.canShowAgentMessages = row["canShowAgentMessages"] as? Bool == true
@@ -2719,7 +2723,7 @@ private final class SwarmTabStrip: NSView {
     accountButton.frame = NSRect(x: bounds.width - trailing - accountWidth,
       y: (bounds.height - capsuleHeight) / 2, width: accountWidth, height: capsuleHeight)
     let actionsEdge = accountButton.isHidden ? bounds.width - trailing : accountButton.frame.minX - 8
-    let storeWidth = min(storeButton.preferredWidth, max(0, actionsEdge))
+    let storeWidth = storeButton.isHidden ? 0 : min(storeButton.preferredWidth, max(0, actionsEdge))
     storeButton.frame = NSRect(x: actionsEdge - storeWidth,
       y: (bounds.height - toolHeight) / 2, width: storeWidth, height: toolHeight)
     let devicesWidth = devicesButton.isHidden ? 0 : devicesButton.preferredWidth
@@ -3050,6 +3054,8 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   var preferredWidth: CGFloat { Self.maximumLayoutWidth }
   var selected = false { didSet { if selected != oldValue { invalidateLabel(); updateAccessibility() } } }
   var attention = false { didSet { if attention != oldValue { invalidateLabel(); updateAccessibility() } } }
+  /// A Swarm's tab: its name alone, bold while something there needs you.
+  var quiet = false { didSet { if quiet != oldValue { invalidateLabel(); updateAccessibility() } } }
   var activity: HarnessNativeActivity? {
     didSet { if activity != oldValue { invalidateLabel(); updateAccessibility() } }
   }
@@ -3061,6 +3067,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   // Keep the old question payload useful for an older Flutter fixture/runner.
   private var activityLabel: String? { activity?.label ?? (attention ? "Needs your input" : nil) }
   private var activityMark: String? {
+    if quiet { return nil }
     if let activity { return activity.symbol(frame: activityFrame) }
     return attention ? "?" : nil
   }
@@ -3266,7 +3273,8 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     paragraph.lineBreakMode = .byTruncatingTail
     paragraph.alignment = .center
     let label = MeasuredLabel(NSAttributedString(string: displayLabel,
-      attributes: [.font: labelFont,
+      attributes: [.font: quiet && attention
+          ? NSFont.systemFont(ofSize: labelFont.pointSize, weight: .semibold) : labelFont,
         .foregroundColor: foreground, .paragraphStyle: paragraph]))
     cachedLabel = label
     return label

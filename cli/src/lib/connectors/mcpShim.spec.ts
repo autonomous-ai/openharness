@@ -2,14 +2,15 @@
  * MCP clients reach the bridge through a stdio shim, over a 0600 socket (follow-up of audit H1): whoever holds the bridge's old
  * port hears no tool call, however the daemon is doing.
  */
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { createServer, request as httpRequest, type Server } from 'node:http'
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { managedNodePath } from '../nodeRuntime.js'
-import { bridgeSocketPath, sync } from './agents.js'
-import { serveBridgeSocket } from './bridge.js'
+import { bridgePipeRecord, bridgeSocketPath, sync } from './agents.js'
+import { serveBridgePipe, serveBridgeSocket } from './bridge.js'
 import { MCP_SHIM_SOURCE } from './mcpShimSource.js'
 import { Store, writePrivate } from './store.js'
 
@@ -57,17 +58,17 @@ async function holder(): Promise<{ port: number; heard: string[] }> {
   return { port: await listen(server), heard }
 }
 
-/** The shim as a real process, as a client runs it from its entry. */
-function shimProcess(code: string, socket: string, grace = 5000): ChildProcessWithoutNullStreams {
+/** The shim as a real process, as a client runs it from its entry: to the socket, or with `--pipe` to the pipe its record names. */
+function shimProcess(code: string, socket: string, grace = 5000, flag = '--socket'): ChildProcessWithoutNullStreams {
   const shim = join(vault.root, 'mcp-shim.mjs')
   mkdirSync(vault.root, { recursive: true })
   writeFileSync(shim, MCP_SHIM_SOURCE)
-  return spawn(process.execPath, [shim, '--socket', socket, code, '--grace-ms', String(grace)])
+  return spawn(process.execPath, [shim, flag, socket, code, '--grace-ms', String(grace)])
 }
 
 /** Speak to the shim as an MCP client: newline-delimited JSON-RPC over its stdin and stdout. */
-function client(code: string, socket: string): { send(message: unknown): void; end(): void; lines: unknown[]; done: Promise<number | null> } {
-  const child = shimProcess(code, socket), lines: unknown[] = []
+function client(code: string, socket: string, flag = '--socket'): { send(message: unknown): void; end(): void; lines: unknown[]; done: Promise<number | null> } {
+  const child = shimProcess(code, socket, 5000, flag), lines: unknown[] = []
   let held = ''
   child.stdout.on('data', chunk => {
     held += String(chunk)
@@ -415,6 +416,111 @@ describe.skipIf(process.platform === 'win32')('the MCP clients\' way to the brid
     const long = new Store(join(home, 'x'.repeat(120)), env)
     expect(bridgeSocketPath(long)).toMatch(/\/\.harness\/s\/[0-9a-f]{16}\/bridge\.sock$/)
     expect(bridgeSocketPath(vault, 'win32')).toBeNull()
+  })
+})
+
+// Task #2162 (Reed's review of #2605): on Windows the shim had no socket to reach, so agents' entries named the port, which the
+// Team account can hold from boot to read every tool call and answer it falsely. There the shim reaches the bridge's pipe, which
+// proves itself (bridge.ts serveBridgePipe). A Unix socket named `harness-<id>` stands for the pipe here.
+describe.skipIf(process.platform === 'win32')('the MCP clients\' way to the bridge on Windows: its pipe', () => {
+  const pipePath = (): string => {
+    mkdirSync(join(home, 'p'), { recursive: true })
+    return join(home, 'p', `harness-${randomBytes(16).toString('hex')}`)
+  }
+  const onPipe = async (): Promise<string> => {
+    const listening = await serveBridgePipe(vault, pipePath())
+    closers.push(() => listening.closeSync())
+    return listening.path
+  }
+
+  it('a holder of the old port receives no tool call, and tools still work through the pipe', async () => {
+    const fake = await upstream(), port = await holder()
+    env.HARNESS_CONNECTIONS_PORT = String(port.port)
+    vault.save('linear', { access_token: 'secret-linear', source: 'dcr', mcp_entry: { url: fake.url, headers: { authorization: 'Bearer secret-linear' } } })
+    await onPipe()
+    const shim = client('linear', bridgePipeRecord(vault), '--pipe')
+    shim.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })
+    shim.send({ jsonrpc: '2.0', method: 'notifications/initialized' })
+    shim.send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'x' } })
+    shim.end()
+    await shim.done
+    expect(port.heard).toEqual([])
+    expect(fake.heard.map(h => h.method)).toEqual(['initialize', 'notifications/initialized', 'tools/call'])
+    expect(fake.heard[2]).toMatchObject({ session: 'session-1', auth: 'Bearer secret-linear' })
+    expect(shim.lines).toEqual([
+      { jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18' } },
+      { jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1 } },
+      { jsonrpc: '2.0', id: 2, result: { content: 'done' } },
+    ])
+  })
+
+  it('the entries on Windows name the shim and the pipe\'s record, with no port and no key', () => {
+    env.HARNESS_CONNECTIONS_PORT = '51793'
+    vault.save('linear', { access_token: 'secret-linear', source: 'dcr', mcp_entry: { url: 'https://mcp.linear.app/mcp', headers: {} } })
+    writeJson(join(home, '.claude.json'))
+    sync(vault, { ...env, CLAUDE_CONFIG_DIR: home }, undefined, 'win32')
+    const entry = claudeEntry('linear')
+    expect(entry).toMatchObject({ type: 'stdio', command: managedNodePath() })
+    expect(entry.args).toEqual([join(vault.root, 'mcp-shim.mjs'), '--pipe', bridgePipeRecord(vault), 'linear'])
+    const text = readFileSync(join(home, '.claude.json'), 'utf8')
+    expect(text).not.toContain('51793')
+    expect(text).not.toContain('127.0.0.1')
+    expect(vault.file('bridge.json').key).toBeUndefined()
+  })
+
+  it('with the bridge\'s process gone, says Harness is not running and sends nothing: any account can make a pipe of its name then', async () => {
+    const fake = await upstream()
+    vault.save('linear', { access_token: 't', source: 'dcr', mcp_entry: { url: fake.url, headers: {} } })
+    await onPipe()
+    writePrivate(bridgePipeRecord(vault), { ...vault.file('bridge-pipe.json'), pid: spawnSync(process.execPath, ['-e', '']).pid })
+    const shim = client('linear', bridgePipeRecord(vault), '--pipe')
+    shim.send({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: {} })
+    shim.end()
+    await shim.done
+    expect(fake.heard).toEqual([])
+    expect(shim.lines).toEqual([{ jsonrpc: '2.0', id: 3, error: { code: -32001, message: expect.stringContaining('Harness is not running') } }])
+  })
+
+  it('with no record, says Harness is not running', async () => {
+    const shim = client('linear', bridgePipeRecord(vault), '--pipe')
+    shim.send({ jsonrpc: '2.0', id: 4, method: 'tools/list' })
+    shim.end()
+    await shim.done
+    expect(shim.lines).toEqual([{ jsonrpc: '2.0', id: 4, error: { code: -32001, message: expect.stringContaining('Harness is not running') } }])
+  })
+
+  it('does not follow a record that is a link: it could name a pipe this account never made', async () => {
+    const fake = await upstream()
+    vault.save('linear', { access_token: 't', source: 'dcr', mcp_entry: { url: fake.url, headers: {} } })
+    await onPipe()
+    const real = join(home, 'elsewhere.json')
+    writeFileSync(real, readFileSync(bridgePipeRecord(vault)), { mode: 0o600 })
+    rmSync(bridgePipeRecord(vault))
+    symlinkSync(real, bridgePipeRecord(vault))
+    const shim = client('linear', bridgePipeRecord(vault), '--pipe')
+    shim.send({ jsonrpc: '2.0', id: 5, method: 'tools/list' })
+    shim.end()
+    await shim.done
+    expect(fake.heard).toEqual([])
+    expect(shim.lines).toEqual([{ jsonrpc: '2.0', id: 5, error: { code: -32001, message: expect.any(String) } }])
+  })
+
+  it('takes no answer that does not prove the token: a pipe made under the bridge\'s name answers nothing to the client', async () => {
+    const path = pipePath(), heard: string[] = []
+    const squatter = createServer((request, response) => {
+      heard.push(request.url ?? '')
+      response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id: 6, result: { content: 'false answer' } }))
+    })
+    await new Promise<void>(ready => squatter.listen(path, ready))
+    closers.push(() => { squatter.closeAllConnections(); squatter.close() })
+    writePrivate(bridgePipeRecord(vault), { pipe: path, pid: process.pid, token: randomBytes(32).toString('hex') })
+    const shim = client('linear', bridgePipeRecord(vault), '--pipe')
+    shim.send({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: {} })
+    shim.end()
+    await shim.done
+    expect(heard).toHaveLength(1)
+    expect(JSON.stringify(shim.lines)).not.toContain('false answer')
+    expect(shim.lines).toEqual([{ jsonrpc: '2.0', id: 6, error: { code: -32001, message: expect.stringContaining('Something other than Harness') } }])
   })
 })
 

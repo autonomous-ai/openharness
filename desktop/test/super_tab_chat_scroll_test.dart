@@ -58,6 +58,14 @@ void main() {
   void fromAgent(ConversationServer server) => server.messages.last['author'] =
       {'kind': 'agent', 'id': 'lead-agent', 'name': 'Lead'};
 
+  /// A reaction changes somewhere in the conversation: the next read takes
+  /// the page shown again, with every receipt in it as it is now. A receipt
+  /// alone is no reason to (spec 2026-11-02-poll-cost, Part 2).
+  void reacted(ConversationServer server) {
+    final group = (server.state['conversations'] as List).first as Map;
+    group['reactionSeq'] = ((group['reactionSeq'] as int?) ?? 0) + 1;
+  }
+
   void agentUpdates(ConversationServer server, int count) {
     for (var i = 0; i < count; i++) {
       server.append(
@@ -131,6 +139,7 @@ void main() {
       server.messages.first['deliveries'] = [
         {'id': 'delivery-1', 'agentId': 'lead-agent', 'status': 'uncertain'},
       ];
+      reacted(server);
       await c.refresh();
       await tester.pumpAndSettle();
 
@@ -161,6 +170,7 @@ void main() {
       server.messages.last['deliveries'] = [
         {'id': 'delivery-1', 'agentId': 'lead-agent', 'status': 'uncertain'},
       ];
+      reacted(server);
       await c.refresh();
       await tester.pumpAndSettle();
       expect(find.text("Couldn't confirm delivery"), findsOneWidget);
@@ -427,9 +437,10 @@ void main() {
       'moves and regroups no row', (tester) async {
     final server = ConversationServer();
     agentUpdates(server, 30);
-    // Desktop's: the messages read lands beside the state read, before the
-    // view hears of either.
-    final c = await show(tester, server, reading: SuperTabReading.desktop);
+    // A reading that asks for the messages after every state read: one with
+    // nothing new still cuts. Desktop's asks only when the conversation's
+    // counters move (spec 2026-11-02-poll-cost, Part 2).
+    final c = await show(tester, server);
     position(tester).jumpTo(position(tester).maxScrollExtent / 2);
     await tester.pumpAndSettle();
     await poll(tester, server, c, 600, () {});
