@@ -213,6 +213,8 @@ class SuperTabDayPill extends StatelessWidget {
       decoration: ShapeDecoration(
         color: DesktopChrome.surface,
         shape: StadiumBorder(side: BorderSide(color: DesktopChrome.rim)),
+        // Lifted off the rows it floats over, as Slack's.
+        shadows: grid.AppGlass.cardShadow,
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(
