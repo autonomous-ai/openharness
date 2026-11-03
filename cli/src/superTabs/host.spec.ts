@@ -3435,12 +3435,25 @@ describe('built-in skill text after a CLI update', () => {
     expect(f.sent.map(s => [s.asAgentId, s.command.recipientIds, s.command.conversationId]).sort()).toEqual([
       ['a-builder', ['a-builder'], 'work'], ['a-lead', ['a-lead'], 'lead-group'], ['a-reviewer', ['a-reviewer'], 'lead-group']])
     for (const s of f.sent) expect(s.command.text).toContain(f.files[s.asAgentId.slice(2)]!)
-    // Only the agent sees its notice; no person reads it in a chat.
+    // Only the agent sees its notice; no person reads it in a chat. Marked as a skills notice, its coordinator's goes in its digest.
     for (const s of f.sent) expect(s.command.agentOnly).toBe(true)
+    for (const s of f.sent) expect(s.command.notice).toBe('skills')
     expect(f.sent.find(s => s.asAgentId === 'a-reviewer')!.command.text).toContain('swarm-review skill')
     // A second pass and a restarted host find the files current and say nothing more.
     await f.pass(host, 5_000)
     await f.pass()
+    expect(f.sent).toHaveLength(3)
+  })
+
+  it('drops the skills mark, once, when a backend refuses it, and keeps the notice agent-only', async () => {
+    const f = syncFixture()
+    f.setRefuse(request => 'notice' in request.command ? { status: 400, body: { success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "notice"' } } } : undefined)
+    const host = await f.pass()
+    expect(f.refused).toHaveLength(3)
+    expect(f.sent.map(s => [s.asAgentId, s.command.agentOnly, 'notice' in s.command]).sort()).toEqual([
+      ['a-builder', true, false], ['a-lead', true, false], ['a-reviewer', true, false]])
+    await f.pass(host, 120_000)
     expect(f.sent).toHaveLength(3)
   })
 
@@ -3450,8 +3463,8 @@ describe('built-in skill text after a CLI update', () => {
       error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "agentOnly"' } } } : undefined)
     const host = await f.pass()
     expect(f.refused.map(r => r.operationId).sort()).toEqual(f.sent.map(s => s.operationId).sort())
-    expect(f.sent.map(s => [s.asAgentId, s.command.recipientIds, 'agentOnly' in s.command]).sort()).toEqual([
-      ['a-builder', ['a-builder'], false], ['a-lead', ['a-lead'], false], ['a-reviewer', ['a-reviewer'], false]])
+    expect(f.sent.map(s => [s.asAgentId, s.command.recipientIds, 'agentOnly' in s.command, 'notice' in s.command]).sort()).toEqual([
+      ['a-builder', ['a-builder'], false, false], ['a-lead', ['a-lead'], false, false], ['a-reviewer', ['a-reviewer'], false, false]])
     await f.pass(host, 120_000)
     expect(f.sent).toHaveLength(3)
     expect(f.refused).toHaveLength(3)
