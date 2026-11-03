@@ -4,9 +4,9 @@
 
 **Goal:** A check failed by one checker stays failed until that same checker passes it, every checker's latest verdict and evidence is kept, and the leaderboard counts each checker's first verdict without inventing rework rounds.
 
-**Architecture:** `work.check` overwrites `check.evidence` and `check.passedBy`, so a Reviewer's pass erases a Tester's failure. Each check gets `verdicts`: one entry per checker (`by`, `passed`, `evidence`, `at`), the latest replacing that checker's earlier one. `passedBy` and `evidence` are derived from it on every verdict, a failing checker winning, so every reader (Desktop, phone, CLI, tidy, links) reads the right state without knowing `verdicts`. The leaderboard keys its "first verdict" and rework trail by check and checker instead of check alone. The CLI's task output lists each checker's verdict.
+**Architecture:** `work.check` overwrites `check.evidence` and `check.passedBy`, so a Reviewer's pass erases a Tester's failure. Each check gets `verdicts`: one entry per checker (`by`, `passed`, `evidence`, `at`), the latest replacing that checker's earlier one. `passedBy` and `evidence` are derived from it on every verdict, a failing checker winning, so every reader (Desktop, phone, CLI, tidy, links) reads the right state without knowing `verdicts`. The leaderboard keys its "first verdict" and rework trail by check and checker instead of check alone. The CLI's task output lists each checker's verdict; Desktop and the phone need no change.
 
-**Tech Stack:** TypeScript, Vitest (backend, CLI); Dart, Flutter 3.47.2 (Desktop).
+**Tech Stack:** TypeScript, Vitest (backend, CLI); Dart, Flutter 3.47.2 (Desktop tests).
 
 **Spec:** Task #2311 (Diego), its brief.
 
@@ -32,12 +32,12 @@
 - **Concurrency:** the Swarm's existing per-tab command lock; nothing new.
 - **Read cost:** the verdicts ride on the check already read; readers that only need the state read the derived `passedBy`.
 - **Scale:** 10x checkers on a check is still tens of entries; the state part size of a group warns first.
-- **Compatibility:** older clients read `passedBy` and `evidence`, now derived so a failure wins; newer clients read `verdicts` when present and fall back to those fields.
+- **Compatibility:** older clients, Desktop and the phone read `passedBy` and `evidence`, now derived so a failure wins; the CLI reads `verdicts` when present and falls back to those fields.
 - **Migration + rollback:** no migration. A check from before has no `verdicts`; its first new verdict seeds its kept pass (`passedBy`) as that checker's verdict. A kept failure names no checker and is not seeded (as today, a later verdict replaces it). Rolling back leaves `verdicts` unread and the old overwrite again.
 - **Audience:** verdicts are part of the check, read by whoever reads the group, as its evidence already is.
 - **Identity:** a verdict is keyed by the actor's key (`agent:ID` or `person:ID`), never a machine owner's login.
 - **Failure:** nothing new fails; a refused `work.check` is refused as before.
-- **Platforms:** backend, CLI and Desktop; the phone app reads the derived fields unchanged.
+- **Platforms:** backend and CLI change; Desktop and the phone read the derived fields unchanged.
 
 ---
 
@@ -105,22 +105,22 @@
 - [ ] **Step 5: Run** the file and `npx tsc --noEmit`: PASS.
 - [ ] **Step 6: Commit and push.**
 
-### Task 4: Desktop reads a failed check from its verdicts
+### Task 4: Desktop shows the failed check
+
+Desktop reads `passedBy` and `evidence`, which the backend now derives with a failure winning, so it needs no code change.
+Reading `verdicts` on Desktop would change `linked_tasks.dart`, which is kept byte-identical with the phone's copy
+(`mobile/test/swarm/desktop_parity_test.dart`), for no reader that the derived fields do not already serve. These tests pin
+what Desktop shows for a check as the backend writes it now; the red test for the risk is Task 1's.
 
 **Files:**
-- Create: `desktop/lib/super_tabs/checks.dart`
-- Modify: `desktop/lib/super_tabs/live_card.dart`, `linked_tasks.dart`, `work_details.dart`
-- Test: `desktop/test/super_tab_checks_test.dart`
+- Test: `desktop/test/super_tab_review_test.dart`, `desktop/test/super_tab_work_details_test.dart`
 
 **Interfaces:**
-- Produces: `bool superTabCheckPassed(Map<String, dynamic> check)` and `bool superTabCheckFailed(Map<String, dynamic> check)`: from `verdicts` when it is a non-empty list (passed: every verdict passed; failed: any failed), else from `passedBy` and `evidence` as today. No copy changes: "Verified", "Not verified", "N of M checks passed", "1 check failed".
+- Consumes: a check as Task 1 writes it: `verdicts` [Tester failed 'Crashes offline', Reviewer passed], `passedBy` null, `evidence` 'Crashes offline'.
 
-- [ ] **Step 1: Write the failing tests:** a check whose verdicts hold a failure reads failed and not passed even when an older field says passed; a check without verdicts reads as today; the live card counts it unpassed and the linked task line says "1 check failed".
-- [ ] **Step 2: Run** `flutter test test/super_tab_checks_test.dart` in `desktop`: FAIL (no `checks.dart`).
-- [ ] **Step 3: Commit** the failing tests.
-- [ ] **Step 4: Implement** and use the helpers at the three readers.
-- [ ] **Step 5: Run** the file, `super_tab_live_card_test.dart`, `super_tab_review_test.dart`, `super_tab_work_details_test.dart` and `flutter analyze lib/super_tabs`: PASS.
-- [ ] **Step 6: Commit and push.**
+- [ ] **Step 1: Write the tests:** the linked line reads "1 check failed"; work details show "Not verified" and the Tester's evidence, never "Verified".
+- [ ] **Step 2: Run** `flutter test test/super_tab_review_test.dart test/super_tab_work_details_test.dart` in `desktop`: PASS.
+- [ ] **Step 3: Commit and push.**
 
 ### Task 5: Before Ready
 
