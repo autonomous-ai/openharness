@@ -150,7 +150,7 @@ may lack symbolicated stacks until the matching symbols are supplied.
 | `1.0.12 (79)` | 2026-11-03 | TestFlight. In Swarm only, nothing else in `mobile/lib` changed since 78: invitations on Home with Join and Not now, Older chats from Home, a project's number counts only its own chat, the Buddy picker says when a machine is paused. Built from `feat/mobile-ios-android` at `e8620dbe` |
 
 `pubspec.yaml` is now at `1.0.12+80`, the next build number. Build 79 (1.0.12) is the last TestFlight build and
-build 78 (1.0.12) the last Play build (54 went up outside this record, 53 went to Play only); do not upload any of them again. 1.0.1 to 1.0.10 are approved and 1.0.11 is submitted or approved, so new builds go up as 1.0.12 until it is submitted or approved too. Check App Store Connect before uploading if another release has happened meanwhile.
+the last Play build (54 went up outside this record, 53 went to Play only); do not upload any of them again. 1.0.1 to 1.0.10 are approved and 1.0.11 is submitted or approved, so new builds go up as 1.0.12 until it is submitted or approved too. Check App Store Connect before uploading if another release has happened meanwhile.
 
 ### Why the app is iPhone-only
 
@@ -382,3 +382,4 @@ account (Autonomous Inc.) is exempt — check which kind the account is before p
 | `74` (1.0.11) | 2026-10-26 | Built at a pulled-back pubspec number, same `mobile/` code as iOS 1.0.11 (74); whether it was uploaded is not recorded, so do not reuse 74 |
 | `75` (1.0.12) | 2026-10-30 | Built, same code as iOS 1.0.12 (75); to be uploaded by hand |
 | `78` (1.0.12) | 2026-11-02 | Built, same code as iOS 1.0.12 (78); to be uploaded by hand |
+| `79` (1.0.12) | 2026-11-03 | Built, same code as iOS 1.0.12 (79), from `e8620dbe`; to be uploaded by hand |
