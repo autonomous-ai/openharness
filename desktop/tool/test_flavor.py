@@ -32,6 +32,8 @@ TEST_NAME = 'Harness Test'
 
 CLAUDE_KEYCHAIN_SERVICE = 'Claude Code-credentials'
 
+INHERITED_PREFIXES = ('ADAPTER_', 'HARNESS', 'TMUX', 'CLAUDE', 'CODEX')
+
 SAME_ACCOUNT = "The test copy signed in as this Mac's own account. Sign it in with the test account instead."
 
 
@@ -48,7 +50,9 @@ def flavor_env(base, test_home, shared, port):
 
     [shared] (~/.harness-test) keeps the test account's sign-in and this Mac's test computer id, reused across runs.
     """
-    env = dict(base)
+    # A Tester is usually a Harness agent, whose pane carries the person's daemon's folders, its tmux server and
+    # the agent's own Claude/Codex settings: none of them may reach the test copy.
+    env = {key: value for key, value in base.items() if not key.startswith(INHERITED_PREFIXES)}
     claude = str(test_home / '.claude')
     env.update({
         'HOME': str(test_home),
