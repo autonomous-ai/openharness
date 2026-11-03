@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { cloneData } from './cloneData.js'
-import { autoJoinOn } from './sharing.js'
+import { autoJoinOn } from './autoJoinDomain.js'
 import { lostReasonWithoutMachine } from './lostReason.js'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'

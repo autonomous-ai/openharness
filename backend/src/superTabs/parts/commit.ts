@@ -1,6 +1,6 @@
 import type { Prisma } from '@prisma/client'
 import { agentOnly, conversation, fail, isLeads, type AgentStart, type MessageDraft, type SuperTabState } from '../model.js'
-import { autoJoinOn } from '../sharing.js'
+import { autoJoinOn } from '../autoJoinDomain.js'
 import { split } from './shape.js'
 import { guardedWrite, PartConflict, type HeadColumns, type HostColumns, type PartWrite } from './write.js'
 import type { GroupData, MachineData, Part, PartKind, SwarmParts } from './types.js'

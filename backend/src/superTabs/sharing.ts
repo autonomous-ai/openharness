@@ -2,6 +2,9 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { z } from 'zod'
 import { decryptMachineCredential, encryptMachineCredential } from '../lib/machineCredential.js'
 import { emailDomain, isPublicEmailDomain } from '../lib/publicEmailDomains.js'
+import { autoJoinOn } from './autoJoinDomain.js'
+
+export { autoJoinOn }
 import { fail, person, type SuperTabState } from './model.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
@@ -70,12 +73,6 @@ export function configureSharing(previous: SwarmSharing | undefined, input: Gene
  *  still work past it. */
 export const AUTO_JOIN_CAP = 200
 
-/** The domain whose people join this Swarm by themselves, while its owner has that on; null otherwise. A saved domain anyone
- *  can have an address at never counts, whatever an older release saved. */
-export function autoJoinOn(state: Pick<SuperTabState, 'sharing' | 'deletion'>): string | null {
-  const access = state.sharing?.access
-  return !state.deletion && access?.mode === 'domain' && access.autoJoin === true && !isPublicEmailDomain(access.domain) ? access.domain : null
-}
 
 /** The people auto-join never adds again, with `userId` added: someone who left or was removed (spec, Leaving is final). Kept
  *  sorted, so the same people always write the same row. */
