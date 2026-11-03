@@ -211,8 +211,18 @@ class Runner:
             return True
         return True
 
+    def executable_of(self, pid):
+        """The executable a running pid runs (macOS `ps -o comm=` gives its path), or None."""
+        found = subprocess.run(['ps', '-p', str(pid), '-o', 'comm='], capture_output=True, text=True)
+        if found.returncode != 0:
+            return None
+        return found.stdout.strip() or None
+
     def terminate(self, pid):
-        os.kill(pid, signal.SIGTERM)
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            return
         for _ in range(50):
             if not self.alive(pid):
                 return
@@ -321,7 +331,9 @@ def stop(runner, paths):
         return 0
     problems = []
     pid = state.get('appPid')
-    if isinstance(pid, int) and runner.alive(pid):
+    app_executable = str(Path(state.get('app', paths.app)) / 'Contents/MacOS' / TEST_NAME)
+    # Only while the pid still runs this copy: after a crash or a reboot it can be any of the person's processes.
+    if isinstance(pid, int) and runner.alive(pid) and runner.executable_of(pid) == app_executable:
         runner.terminate(pid)
     test_home = Path(state['testHome'])
     node, cli = _cli(test_home)
