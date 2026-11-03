@@ -2435,6 +2435,32 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// The Swarms the lock holds for, by the names they go by, read now so
+  /// Remove can say which it leaves; "a Swarm" for one that cannot be read.
+  Future<List<String>> readTeamSetupLockSwarmNames() async => [
+    for (final id in [..._teamLockTabs])
+      switch (await _swarmName(id)) {
+        final String name when name.isNotEmpty => name,
+        _ => 'a Swarm',
+      },
+  ];
+
+  /// A Swarm's name, given up after [_teamLockNameWait] (offline): Remove
+  /// still asks, naming it "a Swarm".
+  Future<String?> _swarmName(String tabId) async {
+    try {
+      return await () async {
+        final c = await superTabs.open(tabId);
+        if (c.snapshot == null) await c.refresh();
+        return c.snapshot?.name.trim();
+      }().timeout(_teamLockNameWait);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static const _teamLockNameWait = Duration(seconds: 5);
+
   /// This computer's Harness Team account exists: the lock ends.
   Future<void> teamAccountMade() async {
     final account = _teamLockAccount;

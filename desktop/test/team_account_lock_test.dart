@@ -637,6 +637,24 @@ void main() {
         await tester.pump();
       },
     ),
+    (
+      '6-remove-asks-first',
+      (tester) async {
+        daemon.run = {'error': 'INVALID_REQUEST'};
+        await tester.tap(find.byKey(const Key('team-account-lock-continue')));
+        await tester.pump();
+        await tester.pump();
+        await tester.tap(find.byKey(const Key('team-account-lock-remove')));
+        await tester.pump();
+        // No Swarm answers here: its name is given up on, and it still asks.
+        await tester.pump(const Duration(seconds: 6));
+        await tester.pump();
+        expect(
+          find.byKey(const Key('team-account-lock-confirm')),
+          findsOneWidget,
+        );
+      },
+    ),
   ];
   for (final brightness in Brightness.values) {
     for (final (name, arrange) in scenes) {

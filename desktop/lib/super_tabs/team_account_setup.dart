@@ -50,6 +50,7 @@ class _Words {
     required this.removeWhy,
     required this.removeOnly,
     required this.remove,
+    required this.here,
     this.noPrompt,
   });
 
@@ -77,6 +78,7 @@ class _Words {
           'You can add it again from Machines.',
       removeOnly: _computerRemoveOnly,
       remove: _computerRemove,
+      here: 'this computer',
     ),
     'windows' => const _Words(
       title: 'Set up Harness Team on this computer',
@@ -100,6 +102,7 @@ class _Words {
           'You can add it again from Machines.',
       removeOnly: _computerRemoveOnly,
       remove: _computerRemove,
+      here: 'this computer',
     ),
     _ => const _Words(
       title: 'Set up Harness Team on this Mac',
@@ -131,6 +134,7 @@ class _Words {
           'You can add it again from Machines.',
       removeOnly: 'To go on, remove this Mac from the Swarm. You can add it again from Machines.',
       remove: 'Remove this Mac from the Swarm',
+      here: 'this Mac',
     ),
   };
 
@@ -144,18 +148,50 @@ class _Words {
       'Teammates\' agents in your Swarms run on this computer in a separate '
       'account, Harness Team. They cannot read your files or use your GitHub login. '
       'They use this computer\'s Claude Code and Codex subscriptions, so nobody signs in again.';
-  static const _computerExists = 'Harness Team is already set up on this computer.';
+  static const _computerExists =
+      'Harness Team is already set up on this computer.';
   static const _computerUpdate =
       'This computer\'s Harness is too old to set it up from here. Update Harness, '
       'or run harness team setup in a terminal.';
-  static const _computerCannot = 'Harness Team cannot be set up on this computer right now.';
-  static const _computerUnreachable = 'Could not reach Harness on this computer. Try again.';
+  static const _computerCannot =
+      'Harness Team cannot be set up on this computer right now.';
+  static const _computerUnreachable =
+      'Could not reach Harness on this computer. Try again.';
 
-  final String title, account, prompt, started, exists, update, cannot, unreachable;
+  final String title,
+      account,
+      prompt,
+      started,
+      exists,
+      update,
+      cannot,
+      unreachable;
 
   /// The lock's ([TeamAccountSetupLock]): why the app waits, setup under way,
   /// the password refused, the system's window closed, and the one way out.
-  final String lead, waiting, rejected, cancelled, removeWhy, removeOnly, remove;
+  final String lead,
+      waiting,
+      rejected,
+      cancelled,
+      removeWhy,
+      removeOnly,
+      remove;
+
+  /// "this Mac", or "this computer": what Remove takes out of the Swarms.
+  final String here;
+
+  /// What Remove asks before it removes anything (security review of #2779):
+  /// it deletes this computer from each Swarm in [swarms], which it names.
+  String confirmRemove(List<String> swarms) {
+    final names = switch (swarms.length) {
+      0 => 'the Swarm',
+      1 => swarms.single,
+      _ =>
+        '${swarms.sublist(0, swarms.length - 1).join(', ')} and ${swarms.last}',
+    };
+    return 'Remove $here from $names? Its agents there stop, and teammates\' '
+        'work no longer runs on it. You can add it again from Machines.';
+  }
 
   /// For the daemon's `no-prompt` (cli/src/team/autoSetup.ts): no desktop session to ask in, so the terminal is the
   /// way. Null where that never happens.
@@ -328,6 +364,11 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
   _LockStep _step = _LockStep.intro;
   String? _outcome, _removeError;
   bool _busy = false;
+
+  /// Remove was pressed: the panel asks before anything is removed, naming
+  /// these Swarms.
+  bool _confirming = false;
+  List<String> _confirmSwarms = const [];
   Timer? _read;
   DateTime? _since;
 
@@ -366,6 +407,7 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
     _step = _LockStep.intro;
     _outcome = _removeError = null;
     _busy = false;
+    _confirming = false;
   }
 
   void _show(_LockStep step, String outcome) {
@@ -453,6 +495,20 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
   static String _sentence(String text) =>
       RegExp(r'[.!?]$').hasMatch(text) ? text : '$text.';
 
+  Future<void> _askRemove() async {
+    setState(() {
+      _busy = true;
+      _removeError = null;
+    });
+    final swarms = await widget.app.readTeamSetupLockSwarmNames();
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _confirming = true;
+      _confirmSwarms = swarms;
+    });
+  }
+
   Future<void> _remove() async {
     setState(() {
       _busy = true;
@@ -462,6 +518,7 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
     if (!mounted) return;
     setState(() {
       _busy = false;
+      _confirming = false;
       _removeError = why;
     });
   }
@@ -495,12 +552,30 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
       onPressed: _busy ? null : _start,
       child: const Text('Try again'),
     );
+    // It deletes this computer from the Swarms: never focused, so no Enter
+    // presses it, and it asks first (security review of #2779).
     final remove = TextButton(
       key: const Key('team-account-lock-remove'),
-      autofocus: _step == _LockStep.cannot,
-      onPressed: _busy ? null : _remove,
+      onPressed: _busy ? null : () => unawaited(_askRemove()),
       child: Text(words.remove),
     );
+    final confirming = [
+      TextButton(
+        key: const Key('team-account-lock-remove-back'),
+        autofocus: true,
+        onPressed: _busy ? null : () => setState(() => _confirming = false),
+        child: const Text('Back'),
+      ),
+      FilledButton(
+        key: const Key('team-account-lock-remove-confirm'),
+        style: FilledButton.styleFrom(
+          backgroundColor: Theme.of(context).colorScheme.error,
+          foregroundColor: Theme.of(context).colorScheme.onError,
+        ),
+        onPressed: _busy ? null : _remove,
+        child: const Text('Remove'),
+      ),
+    ];
     final removeError = _removeError;
     return Center(
       key: const Key('team-account-lock'),
@@ -545,11 +620,17 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
                       ),
                     ],
                   ),
-                  if (_step == _LockStep.cancelled) ...[
+                  if (_confirming) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      words.confirmRemove(_confirmSwarms),
+                      key: const Key('team-account-lock-confirm'),
+                      style: body,
+                    ),
+                  ] else if (_step == _LockStep.cancelled) ...[
                     const SizedBox(height: 12),
                     Text(words.removeWhy, style: muted),
-                  ],
-                  if (_step == _LockStep.cannot) ...[
+                  ] else if (_step == _LockStep.cannot) ...[
                     const SizedBox(height: 12),
                     Text(words.removeOnly, style: muted),
                   ],
@@ -566,20 +647,22 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
               ],
             ),
           ),
-          actions: switch (_step) {
-            _LockStep.intro => [
-              FilledButton(
-                key: const Key('team-account-lock-continue'),
-                autofocus: true,
-                onPressed: _busy ? null : _start,
-                child: const Text('Continue'),
-              ),
-            ],
-            _LockStep.waiting => const [],
-            _LockStep.retry => [retry],
-            _LockStep.cancelled => [remove, retry],
-            _LockStep.cannot => [remove],
-          },
+          actions: _confirming
+              ? confirming
+              : switch (_step) {
+                  _LockStep.intro => [
+                    FilledButton(
+                      key: const Key('team-account-lock-continue'),
+                      autofocus: true,
+                      onPressed: _busy ? null : _start,
+                      child: const Text('Continue'),
+                    ),
+                  ],
+                  _LockStep.waiting => const [],
+                  _LockStep.retry => [retry],
+                  _LockStep.cancelled => [remove, retry],
+                  _LockStep.cannot => [remove],
+                },
         ),
       ),
     );
