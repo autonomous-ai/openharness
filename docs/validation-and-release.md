@@ -118,7 +118,8 @@ from `main` before relying on its CI.
 
 Record what you ran, with run links, in the PR. Release workflows are not a full
 test suite: the CLI release runs typecheck and bundle checks, and the Desktop release
-builds, signs and verifies downloads. A release failure is still a code failure: fix
+builds, signs and verifies downloads. Windows files are signed through Azure Artifact
+Signing once `WINDOWS_SIGNING` is `required` ([Windows code signing](windows-code-signing.md)). A release failure is still a code failure: fix
 it and cut the next version.
 
 Do not add CI runs to a PR. Don't start **CI → Run workflow** for a PR that already has
