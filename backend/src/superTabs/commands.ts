@@ -146,6 +146,8 @@ export const commandSchema = z.discriminatedUnion('type', [
     unlessRemoved: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('machine.pause'), machineId: id, paused: z.boolean() }).strict(),
   z.object({ type: z.literal('machine.engineResume'), machineId: id, engine: z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), askedIn: askedInSchema.optional() }).strict(),
+  // The projects that may use a machine; null: every project (Tony, 11-03).
+  z.object({ type: z.literal('machine.projects'), machineId: id, projectIds: z.array(id).min(1).max(64).nullable(), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('machine.remove'), machineId: id }).strict(),
   z.object({ type: z.literal('machine.cleaned'), machineId: id, removalId: id }).strict(),
   z.object({ type: z.literal('localModels.set'), enabled: z.boolean() }).strict(),
@@ -622,7 +624,7 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if ('agentId' in command) readAgent(state, actor, command.agentId)
   if (command.type === 'agent.start') readConversation(state, actor, command.request.conversationId)
   if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
-    || command.type === 'machine.engineResume') && command.askedIn) {
+    || command.type === 'machine.engineResume' || command.type === 'machine.projects') && command.askedIn) {
     readConversation(state, actor, command.askedIn.conversationId)
   }
   if ('startId' in command && command.type !== 'route.modelResult') {
@@ -832,6 +834,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   const sender = author(state, actor, !leaving && command.type !== 'decision.answer' && command.type !== 'member.username')
   authorizeCommandAccess(state, actor, command, context)
+  /** A machine's owner said so: they sent the command, or the Lead of the chat [askedIn] names passes on a message they wrote
+   *  there in the last day, as routing rules are (machine.engineResume, machine.projects). */
+  const machineOwnerWord = (pool: ContributedMachine, askedIn: { conversationId: string } | undefined) => {
+    if (actor.kind === 'person') return actor.userId === pool.contributorId
+    const asked = askedIn && context.askedIn
+    return !!asked && asked.author.kind === 'person' && asked.author.id === pool.contributorId && !asked.source
+      && context.now - asked.createdAt <= RULE_MESSAGE_MS && state.conversations.find(c => c.id === askedIn.conversationId)?.leadId === actor.agentId
+  }
   const rememberAttempt = (group: ReturnType<typeof conversation>) => {
     if (group.assignment) effects.previousAttempts.push(structuredClone({ conversationId: group.id,
       brief: group.brief, checks: group.checks, assignment: group.assignment }))
@@ -1549,6 +1559,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (start.request.buddySession?.projectId === project.id && !start.harnessId && !start.error) start.error = 'Its project was deleted.'
       }
       deleteProject(state, actor, command.projectId)
+      // No machine keeps it any more; one kept only for it now serves none (machines.ts machineProjectRefusal).
+      for (const pool of state.machines ?? []) if (pool.projects) pool.projects = pool.projects.filter(id => id !== project.id)
       break
     }
     case 'project.sharing': {
@@ -1713,6 +1725,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Added as its person joined (Desktop's join): teammates' work only through its Harness Team account, for as long as
       // it stays contributed. Saving its settings sends the contribution without the field, and must not drop the rule.
       const teamAccountOnly = command.teamAccountOnly || state.machines.find(m => m.machineId === command.machineId)?.teamAccountOnly
+      // Its owner's choice of projects is its own command's (machine.projects): saving the settings keeps it.
+      const projects = state.machines.find(m => m.machineId === command.machineId && !m.buddyOnly)?.projects
       state.machines = state.machines.filter(m => m.machineId !== command.machineId)
       state.machineCleanups = state.machineCleanups?.filter(c => c.machineId !== command.machineId)
       if (!state.machineCleanups?.length) delete state.machineCleanups
@@ -1720,7 +1734,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       state.machines.push({ machineId: command.machineId, name: mac?.name ?? context.contribution?.machineName ?? command.name, cwd: command.cwd, engines: [...new Set(command.engines)],
         maxAgents: mac?.maxAgents ?? command.maxAgents, ...(command.scope ? { scope: command.scope } : {}),
         contributorId: actor.userId, membershipGeneration: contributor.generation, generation: operationId, paused,
-        ...(host ? { hostMachineId: host } : {}), ...(teamAccountOnly ? { teamAccountOnly: true as const } : {}) })
+        ...(host ? { hostMachineId: host } : {}), ...(teamAccountOnly ? { teamAccountOnly: true as const } : {}), ...(projects && !host ? { projects } : {}) })
       // A Mac given other slots or a new name gives its team account the same, and its pause; its own folder, engines and grant stay.
       const added = state.machines.at(-1)!
       for (const team of teamPoolsOf(state, added)) if (!team.removal) Object.assign(team, { name: added.name, maxAgents: added.maxAgents, paused: added.paused })
@@ -1739,14 +1753,25 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A suspended engine (engineHealth.ts) is offered again at its owner's word: theirs, or a Lead's passing on a chat
       // message they wrote in the last day, as routing rules are. No new button: the only visible change is the struck name.
       const pool = machineContribution(state, command.machineId) ?? fail('NOT_FOUND', 'This machine has not been contributed.', 404)
-      const asked = actor.kind === 'agent' && command.askedIn && context.askedIn
-      const ownerAsked = !!asked && asked.author.kind === 'person' && asked.author.id === pool.contributorId && !asked.source
-        && context.now - asked.createdAt <= RULE_MESSAGE_MS && !!state.conversations.find(c => c.id === command.askedIn!.conversationId)?.leadId
-        && state.conversations.find(c => c.id === command.askedIn!.conversationId)!.leadId === actor.agentId
-      if (!(actor.kind === 'person' && actor.userId === pool.contributorId) && !ownerAsked) {
+      if (!machineOwnerWord(pool, command.askedIn)) {
         fail('OWNER_REQUIRED', "Only the machine's owner, or the Lead passing on a chat message the owner wrote in the last day, resumes an engine there.", 403)
       }
       resumeEngine(pool, command.engine)
+      break
+    }
+    case 'machine.projects': {
+      // Which projects may run agents here (Tony, 11-03): its owner's choice, or a Lead's passing on their chat message. A Mac's
+      // Harness Team account follows its Mac (machines.ts machineProjectRefusal), so it is set on the Mac.
+      const pool = machineContribution(state, command.machineId) ?? fail('NOT_FOUND', 'This machine has not been contributed.', 404)
+      if (pool.hostMachineId || pool.buddyOnly) fail('NOT_FOUND', 'This machine has not been contributed.', 404)
+      if (!machineOwnerWord(pool, command.askedIn)) {
+        fail('OWNER_REQUIRED', "Only the machine's owner, or the Lead passing on a chat message the owner wrote in the last day, chooses its projects.", 403)
+      }
+      if (command.projectIds === null) { delete pool.projects; break }
+      // Only projects its owner may read: they cannot keep a machine for a project they do not see.
+      const keeper = person(state, pool.contributorId)
+      const asOwner: Actor = { kind: 'person', userId: keeper.id, email: keeper.email }
+      pool.projects = [...new Set(command.projectIds)].map(projectId => readProject(state, asOwner, projectId).id)
       break
     }
     case 'machine.remove': {
