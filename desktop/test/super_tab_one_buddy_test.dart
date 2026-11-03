@@ -209,6 +209,68 @@ void main() {
     );
   });
 
+  // Task #2428 (reported 11-03): Rename Buddy and Remove Buddy on the one
+  // Buddy showed "This action is no longer available." in place of either
+  // dialog. Their scope wanted the chat's project to exist, and the one
+  // Buddy's chat is in none (its project id is the empty key).
+  group('Rename Buddy and Remove Buddy on the one Buddy', () {
+    const unavailable = 'This action is no longer available.';
+
+    testWidgets('Rename Buddy opens its dialog and names the Buddy', (
+      tester,
+    ) async {
+      final server = oneBuddySwarm();
+      giveSwarmBuddy(server);
+      final c = await show(tester, server);
+      await openMenu(tester);
+      await tester.tap(find.text('Rename Buddy…'));
+      await tester.pumpAndSettle();
+
+      expect(find.text(unavailable), findsNothing);
+      expect(find.text('Rename your Buddy'), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const ValueKey('super-buddy-name')),
+        'Sparky',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await tester.pumpAndSettle();
+
+      expect(commands(server, 'buddy.rename'), [
+        {
+          'type': 'buddy.rename',
+          'conversationId': 'swarm-buddy-peer',
+          'name': 'Sparky',
+        },
+      ]);
+      expect(find.text('Rename your Buddy'), findsNothing);
+      await close(tester, c);
+    });
+
+    testWidgets('Remove Buddy asks first, then removes it naming no project', (
+      tester,
+    ) async {
+      final server = oneBuddySwarm();
+      giveSwarmBuddy(server);
+      final c = await show(tester, server);
+      await openMenu(tester);
+      await tester.tap(find.text('Remove Buddy'));
+      await tester.pumpAndSettle();
+
+      expect(find.text(unavailable), findsNothing);
+      expect(find.text('Remove Buddy?'), findsOneWidget);
+      expect(commands(server, 'buddy.remove'), isEmpty);
+      await tester.tap(find.widgetWithText(FilledButton, 'Remove'));
+      await tester.pumpAndSettle();
+
+      expect(commands(server, 'buddy.remove'), [
+        {'type': 'buddy.remove'},
+      ]);
+      expect(c.buddy(SuperTabController.kSwarmBuddyKey), isNull);
+      expect(c.buddyChat(SuperTabController.kSwarmBuddyKey), isNotNull);
+      await close(tester, c);
+    });
+  });
+
   group('older project Buddy chats', () {
     testWidgets('are listed in the one chat\'s menu and open read only', (
       tester,

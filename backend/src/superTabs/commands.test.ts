@@ -2197,8 +2197,11 @@ describe('cancelling work', () => {
     const assignment = f.state.conversations.find(c => c.id === group)!.assignment!
     expect(assignment).toMatchObject({ status: 'cancelled', result: 'Duplicate of another task' })
     expect(activeWork(f.state.conversations.find(c => c.id === group)!)).toBe(false)
-    expect(effects.messages).toHaveLength(1)
-    expect(effects.messages[0]).toMatchObject({ recipients: [worker], text: 'lead cancelled this task: Duplicate of another task. Stop working on it.' })
+    // Beside it, only the task's ordinary thread reply in the project chat (taskLine.ts).
+    const inTask = effects.messages.filter(m => m.conversationId === group)
+    expect(inTask).toHaveLength(1)
+    expect(inTask[0]).toMatchObject({ recipients: [worker], text: 'lead cancelled this task: Duplicate of another task. Stop working on it.' })
+    expect(effects.messages.filter(m => m.conversationId !== group)).toEqual([expect.objectContaining({ text: 'Not building this: Duplicate of another task.', recipients: [] })])
     expect(f.run(cancel, leadActor).messages).toHaveLength(0)
     expect(f.state.agents.find(a => a.id === worker)!.workDecision).toBe('awaiting')
     f.run({ type: 'agent.release', agentId: worker, decision: 'keep' }, leadActor)
@@ -2229,8 +2232,9 @@ describe('cancelling work', () => {
     expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('reconciling')
     const effects = f.run(cancel, leadActor)
     expect(f.state.conversations.find(c => c.id === group)!.assignment).toMatchObject({ status: 'cancelled', result: 'Duplicate of another task' })
-    expect(effects.messages).toHaveLength(1)
-    expect(effects.messages[0]).toMatchObject({ recipients: [], text: 'lead cancelled this task: Duplicate of another task.' })
+    const inTask = effects.messages.filter(m => m.conversationId === group)
+    expect(inTask).toHaveLength(1)
+    expect(inTask[0]).toMatchObject({ recipients: [], text: 'lead cancelled this task: Duplicate of another task.' })
     expect(f.run(cancel, leadActor).messages).toHaveLength(0)
   })
   it('still refuses the removed worker or a collaborator cancelling its task', () => {

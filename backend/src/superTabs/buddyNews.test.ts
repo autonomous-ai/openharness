@@ -195,11 +195,10 @@ describe('work the PM opens from a Buddy\'s proposal without naming anyone (grou
     // and their Buddy hears it inside the task, once.
     const done = f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'done', result: 'Review passed: https://github.com/o/r/pull/7' },
       agentActor(worker))
-    expect(done.edits).toEqual([expect.objectContaining({ conversationId: f.app.conversationId, source: expect.objectContaining({ kind: TASK_LINE_KIND,
-      state: 'ready', requesterId: 'peer' }) })])
+    expect(done.messages.filter(m => m.thread === find().cards!.line!.messageId)).toEqual([])
     expect(done.messages.filter(m => m.recipients.includes('buddy'))).toEqual([])
     const merged = f.run({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/o/r/pull/7' }, agentActor(worker))
-    expect(merged.edits).toEqual([expect.objectContaining({ source: expect.objectContaining({ state: 'shipped' }) })])
+    expect(merged.messages).toEqual(expect.arrayContaining([expect.objectContaining({ thread: find().cards!.line!.messageId, text: 'Merged: PR #7. Ships in the next release.' })]))
     expect(merged.messages.filter(m => m.recipients.includes('buddy'))).toEqual([expect.objectContaining({ conversationId: group,
       source: { kind: 'agent-only' }, text: expect.stringContaining('which they requested, shipped') })])
     expect(f.run({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/o/r/pull/7' }, agentActor(worker))
@@ -233,7 +232,8 @@ describe('work the PM opens from a Buddy\'s proposal without naming anyone (grou
     const web = f.run({ type: 'project.create', name: 'Web', visibility: 'public', brief: '' }).result as { projectId: string; conversationId: string }
     const before = f.state.conversations.length
     const wrongs = [{ ...sent, conversationId: web.conversationId }, { ...sent, conversationId: f.chat },
-      { ...sent, author: { kind: 'person' as const, id: 'peer', name: 'peer', membershipGeneration: 'first' } },
+      { ...sent, author: { kind: 'person' as const, id: 'owner', name: 'owner', membershipGeneration: 'first' } },
+      { ...sent, source: { ...sent.source, buddyId: f.pm } },
       { ...sent, author: { ...sent.author, id: f.pm } }, { ...sent, source: { kind: 'route', personId: 'peer' } }]
     for (const wrong of wrongs) {
       expect(() => f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline', brief: 'Save.',

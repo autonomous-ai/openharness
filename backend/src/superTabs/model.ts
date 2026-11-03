@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { githubRepository } from '../github/repository.js'
 import { cloneData } from './cloneData.js'
 import { autoJoinOn } from './autoJoinDomain.js'
 import { lostReasonWithoutMachine } from './lostReason.js'
@@ -386,13 +387,27 @@ export interface TaskLiveness {
   personId?: string
 }
 
-/** The GitHub pull request links in [text], each once, in order. */
-export const pullRequestLinks = (text: string): string[] => [...new Set([...text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)]
-  .filter(match => Number(match[1]) <= Number.MAX_SAFE_INTEGER).map(match => match[0]))]
+/** [url] as the project's own pull request, in the project's spelling of owner and repository (GitHub names are not case
+ *  sensitive); null when it belongs to any other repository, whatever its name, since an owner is never guessed. Without a
+ *  known GitHub repository nothing can be judged. */
+export function projectPullRequestUrl(url: string, repositoryUrl: string | null | undefined): string | null {
+  const own = githubRepository(repositoryUrl)
+  if (!own) return url
+  const match = url.match(/^https:\/\/github\.com\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_.-]+)\/pull\/([1-9][0-9]*)$/)
+  if (!match) return null
+  return match[1]!.toLowerCase() === own.owner.toLowerCase() && match[2]!.toLowerCase() === own.name.toLowerCase()
+    ? `https://github.com/${own.fullName}/pull/${match[3]}` : null
+}
 
-export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>): void {
-  const urls = new Set(group.pullRequestUrls ?? [])
-  for (const text of texts) if (text) for (const url of pullRequestLinks(text)) urls.add(url)
+/** The GitHub pull request links in [text], each once, in order. With the project's [repositoryUrl], each is that repository's
+ *  (in the project's spelling) and a link into any other repository is left out, so one pull request is one link. */
+export const pullRequestLinks = (text: string, repositoryUrl?: string | null): string[] => [...new Set([...text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)]
+  .filter(match => Number(match[1]) <= Number.MAX_SAFE_INTEGER).flatMap(match => projectPullRequestUrl(match[0], repositoryUrl) ?? []))]
+
+/** Adds the pull request links of [texts] to [group] and corrects the ones it holds, by the project's [repositoryUrl]. */
+export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>, repositoryUrl?: string | null): void {
+  const urls = new Set((group.pullRequestUrls ?? []).flatMap(url => projectPullRequestUrl(url, repositoryUrl) ?? []))
+  for (const text of texts) if (text) for (const url of pullRequestLinks(text, repositoryUrl)) urls.add(url)
   group.pullRequestUrls = [...urls]
 }
 export interface Invitation {
@@ -586,6 +601,8 @@ export const NOTICE_READERS = {
   switch: 'people',
   // The machine owner's one line when another person moves a PM onto one of their non-default accounts (commands.ts agent.switchResult).
   'pm-switch-notice': 'people',
+  // The machine owner's line, once a week, when someone else's work starts on their machine (othersWork.ts).
+  'others-work-notice': 'people',
   'start-timeout': 'people', 'terminal-alert': 'people', 'terminal-input': 'people',
 } as const satisfies Record<string, 'people' | 'recipients' | 'agent'>
 const readersOf = (kind: unknown): 'people' | 'recipients' | 'agent' =>
@@ -655,8 +672,6 @@ export interface CommandEffects {
   instructions?: import('./instructions.js').InstructionsWrite
   /** A coordinator's note kept or a note removed, written outside the tab state by the store (instructions.ts). */
   notes?: import('./instructions.js').NotesWrite
-  /** Stored messages given new words: a task's line as the task moves (taskLine.ts). */
-  edits?: import('./taskLine.js').MessageEdit[]
 }
 /** `details` go to the caller with the code: what it needs to act on the refusal (a stale save's current text). */
 export class SuperTabError extends Error {
@@ -907,6 +922,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
       if (pool.observation.harnessProgress) pool.observation.harnessProgress = Object.fromEntries(Object.entries(pool.observation.harnessProgress).filter(([id]) => harnesses.has(id)))
       // Each attempt's tokens are read through the cost summary (costs/read.ts), never from the machine's raw counts.
       delete pool.observation.harnessTokens
+      // What the server refused this machine's host is for the sweep alone (liveness.ts failRefusedStarts), never a reader.
+      delete pool.observation.refusedStarts
       if (pool.observation.stoppedReservations) pool.observation.stoppedReservations = pool.observation.stoppedReservations.filter(r => harnesses.has(r.harnessId))
       if (pool.observation.preparingStartIds) pool.observation.preparingStartIds = pool.observation.preparingStartIds.filter(id => visible.starts?.some(s => s.id === id))
     }

@@ -820,6 +820,27 @@ describe('Super Tab native delivery handoff', () => {
     expect(prompt).not.toContain('email addresses')
     expect(prompt).not.toContain('Report exact revisions')
   })
+  it('only the machine\'s own person\'s message may close its question', async () => {
+    const signedIn = (t: ReturnType<typeof setup>, accountId: string | null) =>
+      vi.mocked(t.core.account.identity).mockResolvedValue(accountId ? { accountId, email: `${accountId}@example.com` } : null)
+    const person = { kind: 'person', id: 'p1', name: 'sam@example.com' }
+    const own = setup({ author: person, text: 'Yes', createdAt: '2026-11-03T05:00:00.000Z' })
+    signedIn(own, 'p1')
+    await own.open().tick()
+    expect(vi.mocked(own.core.turns.deliver).mock.calls[0]![3]).toEqual({ answersQuestion: true, writtenAt: Date.parse('2026-11-03T05:00:00.000Z') })
+    const other = setup({ author: person, text: 'Yes', createdAt: '2026-11-03T05:00:00.000Z' })
+    signedIn(other, 'p2')
+    await other.open().tick()
+    expect(vi.mocked(other.core.turns.deliver).mock.calls[0]![3]).toBeUndefined()
+    const out = setup({ author: person, text: 'Yes' })
+    signedIn(out, null)
+    await out.open().tick()
+    expect(vi.mocked(out.core.turns.deliver).mock.calls[0]![3]).toBeUndefined()
+    const agent = setup({ author: { kind: 'agent', id: 'p1', name: 'Builder' }, text: 'Done' })
+    signedIn(agent, 'p1')
+    await agent.open().tick()
+    expect(vi.mocked(agent.core.turns.deliver).mock.calls[0]![3]).toBeUndefined()
+  })
   // Final review: with no --to a reply reaches the coordinator (or, from the coordinator, the task's assignee), so an Engineer
   // answering a Reviewer reached the PM, and the PM answering an agent that was not the assignee reached no one.
   it('names an agent author with --to in the reply line, and no one for a person', async () => {
@@ -5086,7 +5107,8 @@ describe('a delivery held by a busy pane', () => {
     expect(t.saved().entries).toEqual({})
     await seconds(t, host, 5)
     expect(writes(t)).toBe(122)
-  })
+    // 120 simulated ticks: about 2 s here, past the 5 s default on a loaded CI runner.
+  }, 20_000)
 
   it('a cancel pushed while held stops the retry', async () => {
     const t = setup(), host = t.open()

@@ -14,11 +14,14 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/measurement/product_measurement.dart';
 import 'package:harness_mobile/shared/widgets/app_dialog.dart';
+import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/appearance_prefs_store.dart';
 import 'package:harness_mobile/shared/theme/color_palette.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/swarm/swarm_start.dart' show SwarmIntroPage;
+import 'package:harness_mobile/swarm/swarm_style.dart'
+    show SwarmAvatar, SwarmBackButton, SwarmCaption, SwarmRowGlyph, SwarmTopBar;
 import 'package:harness_mobile/terminal/terminal_font_store.dart';
 import 'package:harness_mobile/terminal/terminal_theme_store.dart';
 
@@ -26,6 +29,7 @@ import 'add_device/add_device_page.dart';
 import 'approve_sign_in.dart';
 import 'connectors_page.dart';
 import 'devices_page.dart';
+import 'machine_index.dart' show visibleMachines;
 import 'machine_profile_picker.dart';
 import 'machines_tab.dart';
 import 'out_of_sight.dart';
@@ -85,9 +89,15 @@ class SettingsPage extends StatelessWidget {
     required this.notifier,
     this.large = true,
     this.experiments,
+    this.swarm = false,
   });
 
   final AppNotifier notifier;
+
+  /// Drawn as Swarm's pages are ([SettingsSwarmLook]): opened from Swarm's You. Swarm's top bar
+  /// then stands in for the big title, whatever [large] says, and the list is Swarm's shorter one —
+  /// every setting still there, fewer rows and captions (`docs/design/2026-11-03-swarm-settings.md`).
+  final bool swarm;
 
   /// What Experimental switches: [experimentalFeaturesStore] unless a test hands in its own, so a
   /// tap there never writes to the developer's own state file.
@@ -105,6 +115,33 @@ class SettingsPage extends StatelessWidget {
     builder: (context) {
       AppTheme.watch(context);
       final tty = Tty.of(context);
+      final body = _Body(
+        notifier: notifier,
+        experiments: experiments ?? experimentalFeaturesStore,
+      );
+      // In the app's face, as Swarm's pages are; only the bar's title is the terminal's.
+      if (swarm) {
+        return Scaffold(
+          backgroundColor: tty.ground,
+          body: SafeArea(
+            bottom: false,
+            child: SettingsSwarmLook(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SwarmTopBar(
+                    leading: SwarmBackButton(
+                      onPressed: () => Navigator.of(context).maybePop(),
+                    ),
+                    title: 'Settings',
+                  ),
+                  Expanded(child: body),
+                ],
+              ),
+            ),
+          ),
+        );
+      }
       return Scaffold(
         backgroundColor: tty.ground,
         body: SafeArea(
@@ -147,12 +184,7 @@ class SettingsPage extends StatelessWidget {
                       weight: FontWeight.w600,
                     ),
                   ),
-                  Expanded(
-                    child: _Body(
-                      notifier: notifier,
-                      experiments: experiments ?? experimentalFeaturesStore,
-                    ),
-                  ),
+                  Expanded(child: body),
                 ],
               ),
             ),
@@ -181,111 +213,58 @@ class _Body extends StatelessWidget {
       MediaQuery.paddingOf(context).bottom + 24,
     ),
     children: [
-      SettingsCaption(_sample(context) == null ? 'Account' : 'Sample'),
-      // Who you are, what you have used, the computers you reach and what they call this phone —
-      // one group, so no row stands alone under a heading that only repeats it.
-      SettingsGroup(
-        children: [
-          _accountRow(context),
-          // ⚠️ Usage sits right under the account, above everything that is set once and left
-          // alone, and that is deliberate: it is the only row here anybody opens twice.
-          // No Stats row: counters this app keeps about itself are nobody's daily question.
-          buildUsageSettingsRow(context, notifier),
-          if (_sample(context) == null)
-            SettingsRow(title: 'Privacy', onTap: () => Navigator.of(context).push(
-              phoneRoute((_) => PrivacyPage(request: ({bool? enabled}) async {
-                final value = await notifier.productUsageSettings(enabled: enabled);
-                // Set here by the person: it also settles an opt-out made before sign-in.
-                notifier.productMeasurement.savedChoice(value, explicit: enabled != null);
-                await notifier.productMeasurement.setupChoiceSaved;
-                return value;
-              }, feedback: notifier.api.productUsageFeedback)),
-            )),
-          // The computers this phone reaches — here rather than a menu of their own: linking one is
-          // a once-a-while errand, and Find already reaches every agent on them.
-          // Each computer's sheet there holds what the account can do to it — try it again, rename
-          // it, take it off the account (`machine_actions.dart`).
-          SettingsRow(
-            title: 'Computers',
-            onTap: () {
-              notifier.productMeasurement.screenOpened(
-                PhoneScreen.computers,
-                ScreenOpening.button,
-              );
-              Navigator.of(context).push(
-                phoneRoute(
-                  (_) => MachinesTab(
-                    notifier: notifier,
-                    large: false,
-                    fromSettings: true,
-                  ),
-                ),
-              );
-            },
-          ),
-          // Which computer's tabs this phone shows — the desktop's Profiles. Beside Computers: it
-          // is a choice among them, and changes nothing on any of them. Only once there IS a choice
-          // — two computers or more — or one is already made, so it can be undone.
-          if (notifier.machines.length > 1 || notifier.machineProfileId != null)
-            SettingsRow(
-              key: const Key('settings-profile'),
-              title: 'Profile',
-              value: machineProfileLabel(notifier),
-              onTap: () =>
-                  unawaited(showMachineProfilePicker(context, notifier)),
-            ),
-          // The services those computers' agents use (Linear, GitHub…), signed in to from here.
-          SettingsRow(
-            key: const Key('settings-connectors'),
-            title: 'Connectors',
-            onTap: () => Navigator.of(context).push(
-              phoneRoute((_) => ConnectorsPage(notifier: notifier)),
-            ),
-          ),
-          // Every device signed in to the account — each trusted by the others because of that, so
-          // this is where one that is not yours is seen and taken out.
-          // A computer showing its sign-in QR (`harness login --qr`, or the web app's "Scan with your
-          // phone"): this phone approves it with its own account.
-          SettingsRow(
-            key: const Key('settings-sign-in-computer'),
-            title: 'Sign in a computer',
-            onTap: () => unawaited(signInAComputer(context, notifier)),
-          ),
-          // A Harness with no screen (a box, a mini PC): onto the person's Wi-Fi and signed in to
-          // this account through its setup hotspot.
-          SettingsRow(
-            key: const Key('settings-add-device'),
-            title: 'Set up Intern 3',
-            onTap: () => Navigator.of(context).push(
-              phoneRoute((_) => AddDevicePage(notifier: notifier)),
-            ),
-          ),
-          SettingsRow(
-            title: 'Your devices',
-            value: notifier.newDevices.isEmpty ? null : '${notifier.newDevices.length} new',
-            onTap: () => Navigator.of(context).push(
-              phoneRoute((_) => DevicesPage(notifier: notifier)),
-            ),
-          ),
-          // Under Your devices: a new device on the account is one of the two things a notice says.
-          // Not in the sample, whose notices go nowhere.
-          if (_sample(context) == null) _NotificationsRow(notifier: notifier),
-          // The name those computers show when this phone takes a harness over — which makes it a
-          // fact about the account's computers, not about how the terminal looks.
-          _PhoneNameRow(notifier: notifier),
-        ],
-      ),
+      if (SettingsSwarmLook.of(context))
+        ..._swarmAccount(context)
+      else ...[
+        SettingsCaption(_sample(context) == null ? 'Account' : 'Sample'),
+        // Who you are, what you have used, the computers you reach and what they call this phone —
+        // one group, so no row stands alone under a heading that only repeats it.
+        SettingsGroup(
+          children: [
+            _accountRow(context),
+            // ⚠️ Usage sits right under the account, above everything that is set once and left
+            // alone, and that is deliberate: it is the only row here anybody opens twice.
+            // No Stats row: counters this app keeps about itself are nobody's daily question.
+            buildUsageSettingsRow(context, notifier),
+            ?_privacyRow(context),
+            _computersRow(context),
+            ?_profileRow(context),
+            _connectorsRow(context),
+            _signInRow(context),
+            _addDeviceRow(context),
+            _devicesRow(context),
+            // Under Your devices: a new device on the account is one of the two things a notice
+            // says.
+            ?_notificationsRow(context),
+            // The name those computers show when this phone takes a harness over — which makes it
+            // a fact about the account's computers, not about how the terminal looks.
+            _PhoneNameRow(notifier: notifier),
+          ],
+        ),
+      ],
       const SettingsCaption('Terminal'),
       SettingsGroup(
-        children: [_FontPreview(), _FontRow(), _SizeRow(), _TerminalThemeRow()],
+        children: [
+          _FontPreview(),
+          _FontRow(),
+          _SizeRow(),
+          _TerminalThemeRow(),
+          // In Swarm's look the mic's language closes Terminal's card instead of a Voice section
+          // of its own: there every row leads with a glyph, and the mic's says what the row is
+          // about where the plain rows below needed a caption to.
+          // See docs/design/2026-11-03-swarm-settings.md.
+          if (SettingsSwarmLook.of(context)) _VoiceLanguageRow(),
+        ],
       ),
       // ⚠️ **Its own section, not a row under Terminal.** The rows above answer
       // what the pane LOOKS like — face, size, colours. This one answers what the mic HEARS, which is
       // the other half of the terminal and the one people go looking for when
       // the transcript comes back in the wrong language. Under a Terminal
-      // caption it read as another thing about the type.
-      const SettingsCaption('Voice'),
-      SettingsGroup(children: [_VoiceLanguageRow()]),
+      // caption it read as another thing about the type. (Swarm's look aside, above.)
+      if (!SettingsSwarmLook.of(context)) ...[
+        const SettingsCaption('Voice'),
+        SettingsGroup(children: [_VoiceLanguageRow()]),
+      ],
       const SettingsCaption('Appearance'),
       SettingsGroup(children: [_PaletteRow(), _TextSizeRow()]),
       // The desktop's Labs ▸ Experimental, and in the same place: after how the app looks, before
@@ -297,51 +276,238 @@ class _Body extends StatelessWidget {
             _ExperimentRow(experiment: experiment, store: experiments),
         ],
       ),
-      const SettingsCaption('Help'),
-      SettingsGroup(
-        children: [
-          SettingsRow(
-            title: 'How Harness works',
-            onTap: () => unawaited(openHowItWorks(context)),
-          ),
-          // The offline sample, from inside the real app too — to show somebody, or to try a
-          // gesture without touching a real harness. Not offered inside the sample itself.
-          if (_sample(context) == null)
+      // Help's three rows and About's two are each one row in Swarm's look, opening a sheet of
+      // them: all five are opened once in a while, and as rows they were a fifth of the page.
+      if (SettingsSwarmLook.of(context)) ...[
+        const SizedBox(height: AppSpace.xl),
+        SettingsGroup(children: [_helpRow(context), const _AboutRow()]),
+      ] else ...[
+        const SettingsCaption('Help'),
+        SettingsGroup(
+          children: [
             SettingsRow(
-              title: 'Try the sample',
-              onTap: () => unawaited(openSampleMode(context)),
+              title: 'How Harness works',
+              glyph: LucideIcons.circleHelp300,
+              onTap: () => unawaited(openHowItWorks(context)),
             ),
-          SettingsRow(
-            title: 'Show the tips again',
-            onTap: () {
-              unawaited(FocusHintsSeen.shared.forget());
-              ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-                const SnackBar(
-                  content: Text('The tips come back on the next harness.'),
-                ),
-              );
-            },
-          ),
-        ],
-      ),
-      const SettingsCaption('About'),
-      SettingsGroup(
-        children: [
-          const _VersionRow(),
-          const _BuildRow(),
-          // The stores want the policy reachable from inside the app — see [kPrivacyPolicyUrl].
-          SettingsRow(
-            title: 'Privacy Policy',
-            onTap: () => unawaited(openPrivacyPolicy(context)),
-          ),
-        ],
-      ),
+            // The offline sample, from inside the real app too — to show somebody, or to try a
+            // gesture without touching a real harness. Not offered inside the sample itself.
+            if (_sample(context) == null)
+              SettingsRow(
+                title: 'Try the sample',
+                glyph: LucideIcons.play300,
+                onTap: () => unawaited(openSampleMode(context)),
+              ),
+            SettingsRow(
+              title: 'Show the tips again',
+              glyph: LucideIcons.lightbulb300,
+              onTap: () => _showTipsAgain(context),
+            ),
+          ],
+        ),
+        const SettingsCaption('About'),
+        SettingsGroup(
+          children: [
+            const _VersionRow(),
+            const _BuildRow(),
+            // The stores want the policy reachable from inside the app — see [kPrivacyPolicyUrl].
+            SettingsRow(
+              title: 'Privacy Policy',
+              glyph: LucideIcons.fileText300,
+              onTap: () => unawaited(openPrivacyPolicy(context)),
+            ),
+          ],
+        ),
+      ],
     ],
+  );
+
+  void _showTipsAgain(BuildContext context) {
+    unawaited(FocusHintsSeen.shared.forget());
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(content: Text('The tips come back on the next harness.')),
+    );
+  }
+
+  /// Help's rows as one, in Swarm's look: the same three, in the same words, in a sheet. Each
+  /// runs after the sheet has closed ([PhoneSheetAction.onTap]), so on this page's context.
+  Widget _helpRow(BuildContext context) => SettingsRow(
+    key: const ValueKey('settings-help'),
+    title: 'Help',
+    glyph: LucideIcons.circleHelp300,
+    onTap: () => showPhoneSheet(
+      context,
+      title: 'Help',
+      actions: [
+        PhoneSheetAction(
+          icon: LucideIcons.circleHelp300,
+          label: 'How Harness works',
+          chevron: true,
+          onTap: () => unawaited(openHowItWorks(context)),
+        ),
+        if (_sample(context) == null)
+          PhoneSheetAction(
+            icon: LucideIcons.play300,
+            label: 'Try the sample',
+            chevron: true,
+            onTap: () => unawaited(openSampleMode(context)),
+          ),
+        PhoneSheetAction(
+          icon: LucideIcons.lightbulb300,
+          label: 'Show the tips again',
+          onTap: () => _showTipsAgain(context),
+        ),
+      ],
+    ),
   );
 
   /// The sample this page is in, or null in the real app — see `lib/demo/sample_mode.dart`.
   SampleSession? _sample(BuildContext context) =>
       SampleMode.maybeOf(context) ?? SampleMode.ofNotifier(notifier);
+
+  /// The account's rows as Swarm splits You's, in cards with no caption (prototype A lean,
+  /// 2026-11-03, `docs/design/2026-11-03-swarm-settings.md`): you and what you use and hear of;
+  /// your computers; this phone.
+  List<Widget> _swarmAccount(BuildContext context) => [
+    if (_sample(context) != null)
+      const SwarmCaption('Sample', first: true)
+    else
+      const SizedBox(height: AppSpace.s),
+    SettingsGroup(
+      children: [
+        _accountRow(context),
+        buildUsageSettingsRow(context, notifier),
+        ?_notificationsRow(context),
+        ?_privacyRow(context),
+      ],
+    ),
+    const SizedBox(height: AppSpace.l),
+    SettingsGroup(
+      children: [
+        _computersRow(context),
+        ?_profileRow(context),
+        _connectorsRow(context),
+        _signInRow(context),
+        // ⚠️ Only while Computers has no list. Its Set up Intern 3 sits under the list
+        // (`machines_tab.dart` `_ConnectBar`), and with no computer — none yet, still loading, or
+        // not fetched — that page is an empty state whose one button is Add computer. Somebody
+        // whose first Harness is an Intern 3 would have had no way to set it up from here.
+        if (visibleMachines(notifier).isEmpty) _addDeviceRow(context),
+      ],
+    ),
+    const SizedBox(height: AppSpace.l),
+    SettingsGroup(
+      children: [_devicesRow(context), _PhoneNameRow(notifier: notifier)],
+    ),
+  ];
+
+  /// Not in the sample.
+  Widget? _privacyRow(BuildContext context) => _sample(context) != null
+      ? null
+      : SettingsRow(
+          title: 'Privacy',
+          glyph: LucideIcons.shield300,
+          onTap: () => Navigator.of(context).push(
+            phoneRoute(
+              (_) => PrivacyPage(
+                request: ({bool? enabled}) async {
+                  final value = await notifier.productUsageSettings(
+                    enabled: enabled,
+                  );
+                  // Set here by the person: it also settles an opt-out made before sign-in.
+                  notifier.productMeasurement.savedChoice(
+                    value,
+                    explicit: enabled != null,
+                  );
+                  await notifier.productMeasurement.setupChoiceSaved;
+                  return value;
+                },
+                feedback: notifier.api.productUsageFeedback,
+              ),
+            ),
+          ),
+        );
+
+  /// The computers this phone reaches — here rather than a menu of their own: linking one is a
+  /// once-a-while errand, and Find already reaches every agent on them.
+  /// Each computer's sheet there holds what the account can do to it — try it again, rename it,
+  /// take it off the account (`machine_actions.dart`).
+  Widget _computersRow(BuildContext context) => SettingsRow(
+    title: 'Computers',
+    glyph: LucideIcons.laptop300,
+    onTap: () {
+      notifier.productMeasurement.screenOpened(
+        PhoneScreen.computers,
+        ScreenOpening.button,
+      );
+      Navigator.of(context).push(
+        phoneRoute(
+          (_) => MachinesTab(notifier: notifier, large: false, fromSettings: true),
+        ),
+      );
+    },
+  );
+
+  /// Which computer's tabs this phone shows — the desktop's Profiles. Beside Computers: it is a
+  /// choice among them, and changes nothing on any of them. Only once there IS a choice — two
+  /// computers or more — or one is already made, so it can be undone.
+  Widget? _profileRow(BuildContext context) =>
+      notifier.machines.length > 1 || notifier.machineProfileId != null
+      ? SettingsRow(
+          key: const Key('settings-profile'),
+          title: 'Profile',
+          glyph: LucideIcons.layers300,
+          value: machineProfileLabel(notifier),
+          onTap: () => unawaited(showMachineProfilePicker(context, notifier)),
+        )
+      : null;
+
+  /// The services those computers' agents use (Linear, GitHub…), signed in to from here.
+  Widget _connectorsRow(BuildContext context) => SettingsRow(
+    key: const Key('settings-connectors'),
+    title: 'Connectors',
+    glyph: LucideIcons.plug300,
+    onTap: () => Navigator.of(context).push(
+      phoneRoute((_) => ConnectorsPage(notifier: notifier)),
+    ),
+  );
+
+  /// A computer showing its sign-in QR (`harness login --qr`, or the web app's "Scan with your
+  /// phone"): this phone approves it with its own account.
+  Widget _signInRow(BuildContext context) => SettingsRow(
+    key: const Key('settings-sign-in-computer'),
+    title: 'Sign in a computer',
+    glyph: LucideIcons.qrCode300,
+    onTap: () => unawaited(signInAComputer(context, notifier)),
+  );
+
+  /// A Harness with no screen (a box, a mini PC): onto the person's Wi-Fi and signed in to this
+  /// account through its setup hotspot.
+  Widget _addDeviceRow(BuildContext context) => SettingsRow(
+    key: const Key('settings-add-device'),
+    title: 'Set up Intern 3',
+    glyph: LucideIcons.server300,
+    onTap: () => Navigator.of(context).push(
+      phoneRoute((_) => AddDevicePage(notifier: notifier)),
+    ),
+  );
+
+  /// Every device signed in to the account — each trusted by the others because of that, so this
+  /// is where one that is not yours is seen and taken out.
+  Widget _devicesRow(BuildContext context) => SettingsRow(
+    title: 'Your devices',
+    glyph: LucideIcons.monitorSmartphone300,
+    value: notifier.newDevices.isEmpty
+        ? null
+        : '${notifier.newDevices.length} new',
+    onTap: () => Navigator.of(context).push(
+      phoneRoute((_) => DevicesPage(notifier: notifier)),
+    ),
+  );
+
+  /// Not in the sample, whose notices go nowhere.
+  Widget? _notificationsRow(BuildContext context) =>
+      _sample(context) == null ? _NotificationsRow(notifier: notifier) : null;
 
   /// Who is signed in — or, in sample mode, which has no account to show or sign out of, the
   /// way back out of it.
@@ -351,6 +517,7 @@ class _Body extends StatelessWidget {
       return SettingsRow(
         key: const ValueKey('settings-leave-sample'),
         title: 'Leave the sample',
+        glyph: LucideIcons.logOut300,
         onTap: () => sample.leave(),
       );
     }
@@ -462,10 +629,18 @@ class _SigningOut extends StatelessWidget {
   }
 }
 
-/// Settings over the current page — the page Find and a terminal's menu push.
-void openPhoneSettings(BuildContext context, AppNotifier notifier) => unawaited(
-  Navigator.of(context)
-      .push(phoneRoute((_) => SettingsPage(notifier: notifier, large: false))),
+/// Settings over the current page — the page Find and a terminal's menu push, and Swarm's You
+/// ([swarm], in Swarm's look).
+void openPhoneSettings(
+  BuildContext context,
+  AppNotifier notifier, {
+  bool swarm = false,
+}) => unawaited(
+  Navigator.of(context).push(
+    phoneRoute(
+      (_) => SettingsPage(notifier: notifier, large: false, swarm: swarm),
+    ),
+  ),
 );
 
 /// Settings, at the top right of the screens a phone stands on before it can reach any harness:
@@ -523,6 +698,10 @@ class _Avatar extends StatelessWidget {
     final source = (user?.name?.trim().isNotEmpty ?? false)
         ? user!.name!.trim()
         : (user?.email ?? '');
+    // Swarm's round mark, in the colour Swarm gives this account on every screen.
+    if (SettingsSwarmLook.of(context)) {
+      return SwarmAvatar(id: user?.id ?? source, name: source, size: 40);
+    }
     // ⚠️ The first CHARACTER, not the first code unit: a name that opens with an emoji starts on
     // half of a surrogate pair, and a lone half is a string the text engine refuses — it threw,
     // and took the whole Settings page down with it.
@@ -572,6 +751,7 @@ class _VoiceLanguageRow extends StatelessWidget {
         // already said Voice, and a row that repeats its own section reads as
         // though there were a second kind of language further down.
         title: 'Language',
+        glyph: LucideIcons.mic300,
         value: voiceLanguageName(code),
         onTap: () => unawaited(showVoiceLanguagePicker(context)),
       );
@@ -656,7 +836,9 @@ class _NotificationsRowState extends State<_NotificationsRow>
     return SettingsRow(
       key: const ValueKey('settings-notifications'),
       title: 'Notifications',
-      detail: 'When $noticesWhen.',
+      glyph: LucideIcons.bell300,
+      // On or Off says it in Swarm's look, which keeps its rows to one line.
+      detail: SettingsSwarmLook.of(context) ? null : 'When $noticesWhen.',
       value: switch (_on) {
         true => 'On',
         false => 'Off',
@@ -698,7 +880,10 @@ class _ExperimentRow extends StatelessWidget {
         child: SettingsRow(
           key: ValueKey('settings-experiment-${experiment.id}'),
           title: experiment.label,
-          detail: experiment.description,
+          glyph: LucideIcons.flaskConical300,
+          // Swarm's look keeps its rows to one line; what Swarm is, its own intro page says as it
+          // is turned on.
+          detail: SettingsSwarmLook.of(context) ? null : experiment.description,
           trailing: Switch.adaptive(
             value: on,
             activeTrackColor: Tty.of(context).green,
@@ -727,6 +912,7 @@ class _PhoneNameRow extends StatelessWidget {
         key: const ValueKey('settings-phone-name'),
         // What the row sets, not what it is about: "This phone · Phone" read as a heading.
         title: 'Phone name',
+        glyph: LucideIcons.smartphone300,
         value: notifier.phoneClientDescriptor().name,
         onTap: () => unawaited(
           showAppDialog<void>(
@@ -821,7 +1007,15 @@ class _FontPreview extends StatelessWidget {
       );
       return ExcludeSemantics(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(13, 14, 13, 14),
+          // In Swarm's look the line starts where the rows' titles do, after their glyphs.
+          padding: EdgeInsets.fromLTRB(
+            SettingsSwarmLook.of(context)
+                ? AppSpace.l + SwarmRowGlyph.width + AppSpace.m
+                : 13,
+            14,
+            13,
+            14,
+          ),
           child: Text.rich(
             TextSpan(
               children: [
@@ -849,6 +1043,7 @@ class _FontRow extends StatelessWidget {
       AppTheme.watch(context);
       return SettingsRow(
         title: 'Font',
+        glyph: LucideIcons.type300,
         value: terminalFontStore.family.label,
         onTap: () => showPhoneSheet(
           context,
@@ -881,6 +1076,7 @@ class _SizeRow extends StatelessWidget {
       final size = terminalFontStore.size;
       return SettingsRow(
         title: 'Size',
+        glyph: LucideIcons.aLargeSmall300,
         trailing: SettingsStepper(
           value: size.toStringAsFixed(0),
           // The bounds are the store's own, so a lit + that does nothing is impossible.
@@ -913,6 +1109,7 @@ class _TerminalThemeRow extends StatelessWidget {
               : option.label;
           return SettingsRow(
             title: 'Colors',
+            glyph: LucideIcons.palette300,
             value: label(choice),
             onTap: () => showPhoneSheet(
               context,
@@ -961,6 +1158,7 @@ class _PaletteRow extends StatelessWidget {
         // "App colors", beside the terminal's own "Colors": both read Graphite by default, and
         // two rows with one value looked like the same setting twice.
         title: 'App colors',
+        glyph: LucideIcons.contrast300,
         value: prefs.palette.label,
         onTap: () => showPhoneSheet(
           context,
@@ -994,6 +1192,7 @@ class _TextSizeRow extends StatelessWidget {
       final size = prefs.uiSize;
       return SettingsRow(
         title: 'Text size',
+        glyph: LucideIcons.aLargeSmall300,
         trailing: SettingsStepper(
           value: size.toStringAsFixed(0),
           onDecrease: size > AppearancePrefs.uiSizeMin
@@ -1018,6 +1217,55 @@ class _VersionRow extends StatelessWidget {
     builder: (context, snapshot) {
       AppTheme.watch(context);
       return SettingsRow(title: 'Version', value: snapshot.data ?? '');
+    },
+  );
+}
+
+/// About as one row, as Settings opened from Swarm has it: "About  1.0.12 (80)", the version and
+/// the build together — short enough that the build is not lost to an ellipsis, which is why the
+/// phone's own look gives it a row of its own ([_BuildRow]). A tap opens a sheet that names them
+/// again over the Privacy Policy, the stores' required link (see [kPrivacyPolicyUrl]).
+class _AboutRow extends StatefulWidget {
+  const _AboutRow();
+
+  @override
+  State<_AboutRow> createState() => _AboutRowState();
+}
+
+class _AboutRowState extends State<_AboutRow> {
+  /// Read once for the row, not once per build: the list rebuilds on every [AppNotifier]
+  /// notification, and a new future each time would flash the row empty (see [_BuildRow._info]).
+  /// [PackageInfo] keeps what the platform said, so a row built again asks no channel.
+  late final Future<String> _label = () async {
+    final version = await runningAppVersion();
+    final build = (await PackageInfo.fromPlatform()).buildNumber;
+    return build.isEmpty ? version : '$version ($build)';
+  }();
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<String>(
+    future: _label,
+    builder: (context, snapshot) {
+      AppTheme.watch(context);
+      final label = snapshot.data ?? '';
+      return SettingsRow(
+        key: const ValueKey('settings-about'),
+        title: 'About',
+        glyph: LucideIcons.info300,
+        value: label,
+        onTap: () => showPhoneSheet(
+          context,
+          title: label.isEmpty ? 'Version' : 'Version $label',
+          actions: [
+            PhoneSheetAction(
+              icon: LucideIcons.fileText300,
+              label: 'Privacy Policy',
+              chevron: true,
+              onTap: () => unawaited(openPrivacyPolicy(context)),
+            ),
+          ],
+        ),
+      );
     },
   );
 }

@@ -179,6 +179,12 @@ describe('a team session on its own machine', () => {
     ['GET', '/api/super-tabs/tab-1/projects/project-1/instructions?asAgentId=agent-1', undefined, 'instructions'],
     ['GET', '/api/super-tabs/tab-1/projects/project-1/instructions/revisions?asAgentId=agent-1', undefined, 'instructionRevisions'],
     ['GET', '/api/super-tabs/tab-1/projects/project-1/instructions/revisions/3?asAgentId=agent-1', undefined, 'instructionRevision'],
+    // The route's measures and a file over the form's 10 MB (2026-11-03: refused here, so a Team PM routed without the CI hold
+    // and a Team Engineer could not attach a big file). Each store method holds the agent to this machine (integration test).
+    ['GET', '/api/super-tabs/tab-1/costs?days=7&asAgentId=agent-1', undefined, 'costSummary'],
+    ['GET', '/api/super-tabs/tab-1/projects/project-1/ci-load?asAgentId=agent-1', undefined, 'ciRepository'],
+    ['POST', '/api/super-tabs/tab-1/attachments/uploads?asAgentId=agent-1', { conversationId: 'lead', name: 'trace.zip', mime: 'application/zip', size: 20_000_000 }, 'uploadLink'],
+    ['POST', '/api/super-tabs/tab-1/attachments/uploads/upload-1/complete?asAgentId=agent-1', {}, 'completeUpload'],
   ]
   for (const [method, url, payload, reached] of own) {
     it(`${method} ${url.split('?')[0]} reaches the store as the team session`, async () => {
@@ -265,6 +271,10 @@ describe('a team session reaching past its own machine', () => {
       '/api/super-tabs/tab-1/projects/project-1/instructions', '/api/super-tabs/tab-1/projects/project-1/instructions/revisions',
       '/api/super-tabs/tab-1/projects/project-1/instructions/revisions/3']) limited(await call('GET', url))
     limited(await call('POST', '/api/super-tabs/tab-1/attachments'))
+    limited(await call('GET', '/api/super-tabs/tab-1/costs?days=7'))
+    limited(await call('GET', '/api/super-tabs/tab-1/projects/project-1/ci-load'))
+    limited(await call('POST', '/api/super-tabs/tab-1/attachments/uploads', { conversationId: 'lead', name: 'trace.zip', mime: 'application/zip', size: 20_000_000 }))
+    limited(await call('POST', '/api/super-tabs/tab-1/attachments/uploads/upload-1/complete', {}))
     expect(store.calls).toEqual([])
   })
 

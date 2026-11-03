@@ -11,6 +11,7 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/parts.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
+import 'package:harness/super_tabs/task_groups.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/super_tabs/workgroup_name.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
@@ -556,6 +557,8 @@ void main() {
         final c = await openHere(server);
         await SuperTabAttention.of(c).mentions.load();
         c.toggleProject('lead');
+        // A muted chat's tag needs no one: it is in The rest, unfolded here.
+        c.toggleTaskGroup('lead', SuperTabTaskGroup.rest);
         await c.setNotify('offline', SuperTabNotify.muted);
         await pumpSidebar(tester, c, brightness: brightness);
         expect(find.text('Notifications'), findsNothing);
@@ -602,6 +605,8 @@ void main() {
       fromLead(server, 'Hushed news', conversationId: 'hushed');
       final c = await openHere(server);
       c.toggleProject('lead');
+      // Workgroups with no work are in The rest, unfolded here (#2309).
+      c.toggleTaskGroup('lead', SuperTabTaskGroup.rest);
       await c.setNotify('hushed', SuperTabNotify.muted);
       await pumpSidebar(tester, c);
       expect(find.byKey(const ValueKey('super-group-quiet')), findsOneWidget);

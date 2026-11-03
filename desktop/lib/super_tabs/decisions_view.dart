@@ -78,9 +78,14 @@ class SuperTabDecisionsPanel extends StatelessWidget {
     super.key,
     required this.decisions,
     required this.projectId,
+    this.edge = false,
   });
   final SuperTabDecisions decisions;
   final String projectId;
+
+  /// Ends with the chrome's rim while it shows, where the chat's list stops
+  /// right under it; nothing is drawn while there are no decisions.
+  final bool edge;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -91,7 +96,7 @@ class SuperTabDecisionsPanel extends StatelessWidget {
       if (open.isEmpty) return const SizedBox.shrink();
       final shown = decisions.shownIn(projectId);
       final folded = shown.isEmpty;
-      return ConstrainedBox(
+      final panel = ConstrainedBox(
         constraints: const BoxConstraints(maxHeight: 320),
         child: LaidOutListView(
           key: const ValueKey('super-pm-decisions'),
@@ -125,6 +130,14 @@ class SuperTabDecisionsPanel extends StatelessWidget {
           ],
         ),
       );
+      return edge
+          ? DecoratedBox(
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
+              ),
+              child: panel,
+            )
+          : panel;
     },
   );
 }

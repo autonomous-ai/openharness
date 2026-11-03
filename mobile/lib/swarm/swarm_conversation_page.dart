@@ -52,7 +52,6 @@ import 'swarm_reactions.dart';
 import 'swarm_read_marks.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
-import 'swarm_task_line.dart';
 import 'swarm_thread.dart';
 import 'swarm_thread_line.dart';
 import 'swarm_thread_page.dart';
@@ -948,20 +947,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     );
   }
 
-  VoidCallback? _taskOpener(SwarmConversation c, SuperTabMessage message) {
-    final taskId = message.source['taskId'];
-    if (!swarmIsTaskLine(message) ||
-        taskId is! String ||
-        c.reader.snapshot?.conversation(taskId) == null) {
-      return null;
-    }
-    return () {
-      if (c.reader.snapshot?.conversation(taskId) != null) {
-        openSwarmConversation(context, widget.swarmId, taskId);
-      }
-    };
-  }
-
   void _openNumberedConversation(SwarmConversation c, String id) {
     final reader = _session?.inbox.reader(c.reader.tabId);
     if (mounted && swarmCanOpenNumberedConversation(reader, id)) {
@@ -1013,7 +998,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       tagged: _taggedOf(c, m).keys.toList(),
       taggedAddresses: _taggedOf(c, m),
       readerId: c.reader.accountId,
-      onOpenTask: _taskOpener(c, m),
       references: _numberedReferences(c, m.text).references,
       onOpenConversation: (id) => _openNumberedConversation(c, id),
       grouped: grouped,
@@ -1252,14 +1236,14 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     ),
   );
 
-  /// The back button, then the chat's name and its project under it — or,
-  /// while the chat is not known yet ([title] null), placeholders of their
-  /// size — and [action] at its end.
+  /// The back button, then the chat's name and [subtitle] under it — its
+  /// project, or its Swarm — or, while the chat is not known yet ([title]
+  /// null), placeholders of their size — and [action] at its end.
   Widget _header(
     BuildContext context,
     Tty tty, {
     required String? title,
-    String? project,
+    String? subtitle,
     Widget? action,
     SwarmBuddyMark? mark,
   }) => Padding(
@@ -1288,6 +1272,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         Expanded(
           child: _switchOnTitle(
             title,
+            subtitle,
             title == null
                 ? Column(
                     key: const ValueKey('swarm-header-placeholder'),
@@ -1316,9 +1301,10 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                           weight: FontWeight.w600,
                         ),
                       ),
-                      if (project != null)
+                      if (subtitle != null)
                         Text(
-                          project,
+                          subtitle,
+                          key: const ValueKey('swarm-subtitle'),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: swarmChatText(
@@ -1346,13 +1332,14 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
 
   /// The Buddy tab's title, with several Swarms to switch between: a tap on
   /// it opens the switcher, as Home's title does (Tony, 2026-11-03); the
-  /// menu's Swarm row stays. [words] alone otherwise.
-  Widget _switchOnTitle(String? title, Widget words) {
+  /// menu's Swarm row stays, and a screen reader hears [subtitle] with the
+  /// title. [words] alone otherwise.
+  Widget _switchOnTitle(String? title, String? subtitle, Widget words) {
     final swarm = widget.swarmSwitch;
     if (!widget.tabRoot || swarm == null || title == null) return words;
     return Semantics(
       button: true,
-      label: '$title. Switch Swarm',
+      label: '${subtitle == null ? title : '$title, $subtitle'}. Switch Swarm',
       excludeSemantics: true,
       onTap: swarm.open,
       child: InkWell(
@@ -1392,7 +1379,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
             title: view.known || c.state == SwarmChatState.lost
                 ? view.title
                 : null,
-            project: view.project,
+            subtitle: view.project ?? view.swarm,
             mark: widget.tabRoot ? swarmBuddyMark(c.reader) : null,
             // The person's own Buddy chat: its Notifications, Rename Buddy,
             // Remove Buddy. Any other chat: its Notifications (the desktop's
@@ -1827,14 +1814,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       stream,
       (agentId) => snapshot?.agent(agentId),
     );
-    final messages = swarmTaskLineMessages(
-      answered.isEmpty
-          ? stream
-          : [
-              for (final m in stream)
-                if (!answered.contains(m.id)) m,
-            ],
-    );
+    final messages = answered.isEmpty
+        ? stream
+        : [
+            for (final m in stream)
+              if (!answered.contains(m.id)) m,
+          ];
     // The notes hidden are part of what the rows were made from: a warning
     // goes once its agent's prompt is answered, with no new message.
     final from = (
@@ -1984,7 +1969,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               tagged: tagged.keys.toList(),
               taggedAddresses: tagged,
               readerId: c.reader.accountId,
-              onOpenTask: _taskOpener(c, m),
               references: references,
               onOpenConversation: (id) => _openNumberedConversation(c, id),
               grouped: grouped,
@@ -2014,9 +1998,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                   ? () => _openThread(c, root)
                   : () => _reply(c, m),
               inThread: root != null,
-              onOpenProposal: m.proposalOwnerId == null
-                  ? null
-                  : () => _openThread(c, m.id),
               card: card == null
                   ? null
                   : SwarmLiveCard(
@@ -2499,6 +2480,7 @@ class _ChatView {
     required this.known,
     required this.title,
     required this.project,
+    required this.swarm,
     required this.canPost,
     required this.archived,
     required this.old,
@@ -2543,6 +2525,15 @@ class _ChatView {
         .where((p) => p.id == group?.projectId)
         .firstOrNull
         ?.name;
+    // The person's one Buddy chat for the Swarm is in no project: its
+    // Swarm's name stands under it instead, the Swarm the Buddy tab switches
+    // between (Tony, 11-03).
+    final swarm = buddyProject == swarmBuddyKey
+        ? session.inbox.swarms
+              .where((s) => s.id == reader.tabId)
+              .firstOrNull
+              ?.name
+        : null;
     // Only the person's own Buddy chat holds decisions, its project's, as
     // Desktop shows them above it; every other chat leaves them to Activity
     // (Dee, 11-01: they blocked the project chat). A chat not open to the
@@ -2571,6 +2562,7 @@ class _ChatView {
           ? 'Old chat'
           : buddy ?? group.label,
       project: buddy != null && project != null ? '#$project' : project,
+      swarm: swarm,
       canPost: c.canPost,
       archived: group?.archived ?? false,
       old: old,
@@ -2615,6 +2607,10 @@ class _ChatView {
   final bool known;
   final String title;
   final String? project;
+
+  /// The Swarm's name, under the person's one Buddy chat for it; null for any
+  /// other chat.
+  final String? swarm;
   final bool canPost, archived;
 
   /// An older Buddy chat, kept to read ([swarmIsOldBuddyChat]).
@@ -2676,6 +2672,7 @@ class _ChatView {
       other.known == known &&
       other.title == title &&
       other.project == project &&
+      other.swarm == swarm &&
       other.canPost == canPost &&
       other.archived == archived &&
       other.old == old &&
@@ -2694,6 +2691,7 @@ class _ChatView {
     known,
     title,
     project,
+    swarm,
     canPost,
     archived,
     old,
@@ -2861,11 +2859,9 @@ String swarmDayLabel(DateTime day, DateTime now) {
 Set<String> swarmGroupedMessages(List<SuperTabMessage> messages) {
   bool joins(SuperTabMessage current, SuperTabMessage previous) {
     bool plain(SuperTabMessage m) =>
-        !swarmIsTaskLine(m) &&
         m.source['kind'] != 'ship' &&
         m.route == null &&
         !m.terminalEvent &&
-        m.proposalOwnerId == null &&
         m.replyTo == null &&
         m.text.length <= 280 &&
         !m.text.contains('\n') &&
