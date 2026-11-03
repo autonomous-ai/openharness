@@ -46,9 +46,8 @@ Dee asked on 2026-10-31 for one draft a day at about 19:00 VN, as a reply in
 his thread in the project chat (his message asking for daily X posts).
 
 1. `TZ=Asia/Ho_Chi_Minh date`. If `log.md` already has today's VN date, stop.
-   A fresh agent is not in the project chat yet (10-31 and 11-01 both hit
-   this): ask the Lead in your task chat to add you to the project chat now,
-   so the post in step 7 isn't refused at the end.
+   Since 11-03 the project chat holds only the PM among agents, so you can't
+   post there; the Lead forwards your draft (step 7).
 2. Pick one topic not in `log.md`, from PRs merged since the last row:
    `gh pr list -R autonomous-ai/openharness --state merged --search "merged:>=YYYY-MM-DD"`.
    Prefer a feature a user can see, with a screenshot committed in the PR.
@@ -64,5 +63,6 @@ his thread in the project chat (his message asking for daily X posts).
    it isn't downloadable yet.
 6. Save `drafts/DATE.txt` and `drafts/DATE.png`, add a row to `log.md`,
    commit those files by name and push this branch.
-7. Post the draft and the image as one reply in Dee's thread. Nothing else in
-   the project chat. Never post to X or sign in anywhere.
+7. Post the draft in your task chat as a reply to the Lead's brief: the text,
+   its character count, the PR it's about, and the image attached. The Lead
+   puts it in Dee's thread. Never post to X or sign in anywhere.
