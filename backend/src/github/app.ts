@@ -521,9 +521,9 @@ export class GitHubApp {
         checkSuites: list((suites as Record<string, unknown>).check_suites).map(suite => ({ status: text(suite.status),
           runs: typeof suite.latest_check_runs_count === 'number' ? suite.latest_check_runs_count : 0 })),
         reviews: list(reviews).filter(review => typeof review.id === 'number').map(review => ({ id: review.id as number, login: login(review.user),
-          state: text(review.state), body: text(review.body), url: text(review.html_url) })),
+          association: text(review.author_association) || 'NONE', state: text(review.state), body: text(review.body), url: text(review.html_url) })),
         comments: list(comments).filter(comment => typeof comment.id === 'number').map(comment => ({ id: comment.id as number,
-          login: login(comment.user), body: text(comment.body), url: text(comment.html_url) })),
+          login: login(comment.user), association: text(comment.author_association) || 'NONE', body: text(comment.body), url: text(comment.html_url) })),
       }
     } catch (error) {
       if (error instanceof GitHubAppError) return null

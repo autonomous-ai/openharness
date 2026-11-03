@@ -24,8 +24,9 @@ export interface PullRequestWatch {
   checkRuns: Array<{ name: string; status: string; conclusion: string | null; completedAt: number | null }>
   /** The head's check suites, with how many check runs each has. */
   checkSuites: Array<{ status: string; runs: number }>
-  reviews: Array<{ id: number; login: string; state: string; body: string; url: string }>
-  comments: Array<{ id: number; login: string; body: string; url: string }>
+  /** Each with its author's tie to the repository, GitHub's author_association (OWNER, MEMBER, COLLABORATOR, NONE...). */
+  reviews: Array<{ id: number; login: string; association: string; state: string; body: string; url: string }>
+  comments: Array<{ id: number; login: string; association: string; body: string; url: string }>
 }
 
 /** One message for the Engineer, and the key it is posted under once. */
@@ -43,6 +44,13 @@ const quoted = (body: string) => {
   return text.length > QUOTE ? `${text.slice(0, QUOTE - 1)}…` : text
 }
 const REVIEWED: Record<string, string> = { CHANGES_REQUESTED: 'asked for changes on', APPROVED: 'approved' }
+/** Whose words reach the Engineer: the repository's own people. Anyone can comment on a public pull request, and the line
+ *  reaches an agent as its Lead's, so anyone else's text stays on GitHub behind the link (ENGINEERING.md 7, review of #2750). */
+const QUOTED = new Set(['OWNER', 'MEMBER', 'COLLABORATOR'])
+const said = (association: string, body: string, url: string) => {
+  const text = QUOTED.has(association) ? quoted(body) : ''
+  return text ? `: "${text}" ${url}` : `: ${url}`
+}
 
 /**
  * What is new in [watch] since the keys in [seen], and the keys to keep from now on. The first read of a pull request
@@ -79,12 +87,11 @@ export function pullRequestEvents(watch: PullRequestWatch, seen: readonly string
   }
   for (const review of watch.reviews) {
     if (review.login === botLogin) continue
-    const body = quoted(review.body)
-    add(`review:${review.id}`, `${review.login} ${REVIEWED[review.state] ?? 'reviewed'} your pull request #${number}${body ? `: "${body}"` : '.'} ${review.url}`)
+    add(`review:${review.id}`, `${review.login} ${REVIEWED[review.state] ?? 'reviewed'} your pull request #${number}${said(review.association, review.body, review.url)}`)
   }
   for (const comment of watch.comments) {
     if (comment.login === botLogin) continue
-    add(`comment:${comment.id}`, `${comment.login} commented on your pull request #${number}: "${quoted(comment.body)}" ${comment.url}`)
+    add(`comment:${comment.id}`, `${comment.login} commented on your pull request #${number}${said(comment.association, comment.body, comment.url)}`)
   }
   // The newest first: what this read found, then what was seen before; the current head's ready mark always stays.
   const keys = [...new Set([...found, ...seen])]
