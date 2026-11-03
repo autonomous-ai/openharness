@@ -2153,6 +2153,47 @@ describe('cable session', () => {
     await session.stop()
   })
 
+  // Diego's dial, 2026-11-03: a Kilo agent's 325 models made a 32 KB frame against the 8 KB cap, and the daemon closed the
+  // whole USB link over it. Every tap on the picker did it again.
+  it('answers a catalog too big for one frame within the cap and keeps the link', async () => {
+    const catalog = Array.from({ length: 325 }, (_, i) => `runtime-v1:kilo:openrouter:provider-${String(i).padStart(3, '0')}/a-model-name-long-enough-to-be-about-one-hundred-bytes@high`)
+    const { session, port } = await connect(makeHost({ listModels: async () => catalog }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      port.sent.length = 0
+      port.frames.length = 0
+      port.say({ t: 'models.list', agentId: 'a1', mode: 'model', selected: catalog[299], request: 7 })
+      await vi.waitFor(() => expect(port.types()).toContain('models'))
+      const replies = port.sent.filter((m) => m.t === 'models')
+      expect(replies).toHaveLength(1)
+      const [reply] = replies
+      expect(reply.request).toBe(7)
+      const items = reply.items as Array<{ id: string }>
+      expect(items.length).toBeGreaterThan(1)
+      expect(items.length).toBeLessThanOrEqual(48)
+      expect(items[0]).toEqual({ id: catalog[299] })
+      // The rest in the catalog's order, the selected one not again.
+      expect(items.slice(1).map((m) => m.id)).toEqual(catalog.filter((id) => id !== catalog[299]).slice(0, items.length - 1))
+      for (const frame of port.frames) expect(frame.length).toBeLessThanOrEqual(8192)
+      expect(port.isOpen).toBe(true)
+    } finally { await session.stop() }
+  })
+
+  it('leaves out a selected id the catalog does not list, and an id too long to fit, and sends the rest', async () => {
+    const huge = `runtime-v1:x:${'y'.repeat(9000)}`
+    const { session, port } = await connect(makeHost({ listModels: async () => ['m-1', huge, 'm-2'] }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      port.sent.length = 0
+      port.say({ t: 'models.list', agentId: 'a1', selected: 'gone', request: 8 })
+      await vi.waitFor(() => expect(port.types()).toContain('models'))
+      expect(port.sent.find((m) => m.t === 'models')).toMatchObject({ request: 8, items: [{ id: 'm-1' }, { id: 'm-2' }] })
+      expect(port.isOpen).toBe(true)
+    } finally { await session.stop() }
+  })
+
   it('answers models.list when the provider throws', async () => {
     const { session, port } = await connect(makeHost({ listModels: async () => { throw new Error('no engine') } }))
     port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
