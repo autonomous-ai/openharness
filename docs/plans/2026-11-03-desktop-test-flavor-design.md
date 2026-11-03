@@ -61,11 +61,13 @@ The test flavor signs in as a test account, never as the person whose Mac it is.
   is reused by every run. The CLI's own `session.lock` keeps two runs from refreshing it at once.
 - **How.** The first `start` runs `harness login --code` in the test home. The code is approved in a browser where the
   test account is signed in: a private window, never the person's own window.
-- **Guard.** After sign-in, `start` reads the account id in the test session and in the person's
-  `~/.harness/auth/session.json` (`signInAcct`, or for an older session the access token's subject, compared in memory
-  and never printed). It only reads the file: it does not run the person's CLI, which could refresh the
-  token. If they are the same account, `start` signs the test home out, deletes it, and stops with: "The test copy
-  signed in as this Mac's own account. Sign it in with the test account instead."
+- **Guard.** The first `start` on a Mac names the project's test account (`start --account EMAIL`), kept in
+  `~/.harness-test/account`; changing it takes `forget`. After sign-in, `start` asks the backend's `/api/auth/me` with
+  the test account's own access token (in memory, never printed; the person's token is never read), and refuses
+  anything but that account: it signs the test home out, removes the test sign-in and stops with "The test copy
+  signed in as …, not the test account …". It also refuses the Mac owner's own account id, and refuses when the
+  person's `~/.harness/auth/session.json` exists but cannot be read. It only reads that file, never runs the person's
+  CLI. `status` asks again and warns (security reviews of #2796).
 - **Signing out.** The test copy's own Sign out runs the test home's CLI, so it can sign out only the test session.
   `python3 desktop/tool/test_flavor.py forget` signs the test account out on this Mac and removes `~/.harness-test`.
 
@@ -117,8 +119,9 @@ branch. The test flavor adds no way around that, and changes nothing in it.
 - §3 Correct: each risk has a test that fails first (plan).
 - §6 Failures are seen: `start` stops with a plain message on a busy port, a missing Xcode or Flutter, a failed build
   or the same-account guard. `stop` reports anything it could not remove.
-- §7 Secure: no token is read by the script. It reads only the account identity in the session files, and prints only
-  the email. The test account's sign-in stays in its own folder. Two security reviews (sign-in and Keychain isolation).
+- §7 Secure: the script reads the person's session file only for its account id (in memory). It uses the test
+  account's own token to ask the backend which account that is. It prints no token, and passes the test copy no
+  credential from the Tester's environment: the environment is an allowlist. The test account's sign-in stays in its own folder. Two security reviews (sign-in and Keychain isolation).
 - §10 Platforms: macOS only. A Desktop test on Linux or Windows is not part of this task.
 
 ## Design (docs/feature-design-rules.md)
