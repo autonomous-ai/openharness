@@ -38,6 +38,14 @@ notifications, Store, account at the right).
   cells of the 13px bar font are 14–16px on Windows and a narrower slot does not
   overflow, it squashes the ☰ silently (10px in a 26px slot, 0 at 16). The tab
   budget comes down by exactly that.
+- The button keeps the design system's **32-point target for icon-only
+  controls** (`32 x 32`): the drawn box is the hit area, not a 28px control with
+  dead rows either side of the glyph.
+- The panel keeps **menuGap 6** from the button like every other menu in the
+  app, ends with its last row rather than a rule, and sizes its maximum height
+  from the **40px tab strip** it opens from (`Hwin − 40 − 24`).
+- Section names are **sentence case** at caption size, the way Windows 11's own
+  menus, Slack and Figma label a group; caps read as a settings list.
 - Screens before the workspace — sign-in, setup, the welcome tour — have no tab
   strip, so on Windows they keep the strip (the shell mounts it whenever the
    workspace is not on screen, and never as an invisible ghost in it).
