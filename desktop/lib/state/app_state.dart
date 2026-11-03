@@ -2263,8 +2263,9 @@ class AppNotifier extends ChangeNotifier {
   ///
   /// A join or a contribution with the account missing locks the app until it
   /// exists ([teamSetupLocked]; Scholes, 2026-11-03: Macs that joined stayed
-  /// "not set up" until someone found their row in Machines). A cancel or a
-  /// failure the daemon remembers from before locks too: this is a new join.
+  /// "not set up" until someone found their row in Machines). For a join, a
+  /// cancel or a failure the daemon remembers from before locks too: this is
+  /// a new join. A contribution locks only while it is wanted or running.
   /// At start the daemon decides (no account, not declined, in a Swarm with
   /// other people), and it is explained once a launch ([teamSetupAsks]),
   /// never behind the lock.
@@ -2294,7 +2295,9 @@ class AppNotifier extends ChangeNotifier {
           _teamSetupAsks.add(reason);
         }
         if (state == 'wanted') _teamStartExplained = true;
-      } else if (tabId != null && _teamLockStates.contains(state)) {
+      } else if (tabId != null &&
+          (reason == 'join' ? _teamLockStates : _teamContributeLockStates)
+              .contains(state)) {
         await _lockForTeamSetup(tabId);
       }
       return true;
@@ -2315,6 +2318,12 @@ class AppNotifier extends ChangeNotifier {
     'running',
     'no-prompt',
   };
+
+  /// A contribution locks only while the account is to be made now: wanted,
+  /// or already running. A cancel or failure the daemon remembers was the
+  /// person's answer, and a contribution (settings saved, this Mac added
+  /// again) is no new Swarm to ask it again for (Diego, 2026-11-03).
+  static const _teamContributeLockStates = {'wanted', 'running'};
 
   /// The Swarms this computer joined, or was added to, while its Harness Team
   /// account was missing, for [_teamLockAccount]. Kept on this computer so a
@@ -2505,6 +2514,19 @@ class AppNotifier extends ChangeNotifier {
       await _saveTeamLock(account);
     }
     return null;
+  }
+
+  /// The lock's last way out, once Remove was refused (the Mac runs a
+  /// project's PM, say): "Not now", recorded with the daemon so it is not
+  /// offered again on its own, and the app opens. The machine row keeps its
+  /// Set up button.
+  Future<void> declineTeamSetupLock() async {
+    await declineTeamAccount();
+    final account = _teamLockAccount;
+    if (account == null || _teamLockTabs.isEmpty) return;
+    _teamLockTabs.clear();
+    notifyListeners();
+    await _saveTeamLock(account);
   }
 
   /// The start offer, once for each process of this Mac's daemon: Macs

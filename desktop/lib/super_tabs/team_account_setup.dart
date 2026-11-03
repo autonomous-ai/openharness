@@ -523,6 +523,12 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
     });
   }
 
+  Future<void> _notNow() async {
+    setState(() => _busy = true);
+    await widget.app.declineTeamSetupLock();
+    if (mounted) setState(() => _busy = false);
+  }
+
   @override
   Widget build(BuildContext context) {
     final locked = widget.app.teamSetupLocked;
@@ -577,6 +583,13 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
       ),
     ];
     final removeError = _removeError;
+    // Remove was refused: the one way left, so nobody is held without an
+    // administrator's password (Diego, 2026-11-03).
+    final notNow = TextButton(
+      key: const Key('team-account-lock-not-now'),
+      onPressed: _busy ? null : _notNow,
+      child: const Text('Not now'),
+    );
     return Center(
       key: const Key('team-account-lock'),
       child: FocusScope(
@@ -660,8 +673,12 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
                   ],
                   _LockStep.waiting => const [],
                   _LockStep.retry => [retry],
-                  _LockStep.cancelled => [remove, retry],
-                  _LockStep.cannot => [remove],
+                  _LockStep.cancelled => [
+                    if (removeError != null) notNow,
+                    remove,
+                    retry,
+                  ],
+                  _LockStep.cannot => [if (removeError != null) notNow, remove],
                 },
         ),
       ),
