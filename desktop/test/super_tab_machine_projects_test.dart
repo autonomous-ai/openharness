@@ -30,6 +30,9 @@ Future<List<List<String>?>> _show(
   GlobalKey? picture,
 }) async {
   final sent = <List<String>?>[];
+  // As the app's own scope sets the design tokens from the theme (main.dart _GridTokenScope).
+  grid.AppTheme.brightness.value = brightness;
+  addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
   await tester.pumpWidget(
     MaterialApp(
       theme: grid.buildAppTheme(brightness: brightness),
@@ -37,7 +40,9 @@ Future<List<List<String>?>> _show(
         body: Center(
           child: RepaintBoundary(
             key: picture,
-            child: SizedBox(
+            child: Container(
+              // The details dialog's card, which the setting sits on.
+              color: grid.AppCard.base,
               width: 520,
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -58,47 +63,48 @@ Future<List<List<String>?>> _show(
   return sent;
 }
 
-Checkbox _box(WidgetTester tester, String name) => tester.widget<Checkbox>(
-  find.byKey(ValueKey('machine-project-$name')),
-);
+Checkbox _box(WidgetTester tester, String name) =>
+    tester.widget<Checkbox>(find.byKey(ValueKey('machine-project-$name')));
 
 void main() {
-  testWidgets('a machine nobody limited serves every project, and Only starts with every project ticked', (
-    tester,
-  ) async {
-    final sent = await _show(tester);
-    expect(find.text('Projects that may use it'), findsOneWidget);
-    expect(find.text('All projects'), findsOneWidget);
-    // No project boxes until the owner chooses Only.
-    expect(find.byType(Checkbox), findsNothing);
-    await tester.tap(find.byKey(const ValueKey('machine-projects-only')));
-    await tester.pump();
-    expect(sent, [
-      ['oh', 'lampos', 'spaceship', 'computer', 'router'],
-    ]);
-    expect(tester.takeException(), isNull);
-  });
+  testWidgets(
+    'a machine nobody limited serves every project, and Only starts with every project ticked',
+    (tester) async {
+      final sent = await _show(tester);
+      expect(find.text('Projects that may use it'), findsOneWidget);
+      expect(find.text('All projects'), findsOneWidget);
+      // No project boxes until the owner chooses Only.
+      expect(find.byType(Checkbox), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('machine-projects-only')));
+      await tester.pump();
+      expect(sent, [
+        ['oh', 'lampos', 'spaceship', 'computer', 'router'],
+      ]);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
-  testWidgets('the owner ticks and unticks projects, never the last one, and All sends every project again', (
-    tester,
-  ) async {
-    final sent = await _show(tester, kept: ['oh', 'lampos']);
-    expect(_box(tester, 'oh').value, isTrue);
-    expect(_box(tester, 'spaceship').value, isFalse);
-    await tester.tap(find.byKey(const ValueKey('machine-project-lampos')));
-    await tester.tap(find.byKey(const ValueKey('machine-project-computer')));
-    await tester.tap(find.byKey(const ValueKey('machine-projects-all')));
-    await tester.pump();
-    expect(sent, [
-      ['oh'],
-      ['oh', 'lampos', 'computer'],
-      null,
-    ]);
-    // The one project left ticked cannot be unticked: a machine kept for no project is no choice to offer.
-    await _show(tester, kept: ['oh']);
-    expect(_box(tester, 'oh').onChanged, isNull);
-    expect(_box(tester, 'lampos').onChanged, isNotNull);
-  });
+  testWidgets(
+    'the owner ticks and unticks projects, never the last one, and All sends every project again',
+    (tester) async {
+      final sent = await _show(tester, kept: ['oh', 'lampos']);
+      expect(_box(tester, 'oh').value, isTrue);
+      expect(_box(tester, 'spaceship').value, isFalse);
+      await tester.tap(find.byKey(const ValueKey('machine-project-lampos')));
+      await tester.tap(find.byKey(const ValueKey('machine-project-computer')));
+      await tester.tap(find.byKey(const ValueKey('machine-projects-all')));
+      await tester.pump();
+      expect(sent, [
+        ['oh'],
+        ['oh', 'lampos', 'computer'],
+        null,
+      ]);
+      // The one project left ticked cannot be unticked: a machine kept for no project is no choice to offer.
+      await _show(tester, kept: ['oh']);
+      expect(_box(tester, 'oh').onChanged, isNull);
+      expect(_box(tester, 'lampos').onChanged, isNotNull);
+    },
+  );
 
   testWidgets('a teammate sees which projects may use it, without controls', (
     tester,
@@ -108,10 +114,10 @@ void main() {
     expect(find.text('openharness'), findsOneWidget);
     expect(find.text('lampos'), findsNothing);
     expect(find.byType(Checkbox), findsNothing);
-    expect(find.byType(RadioListTile<bool>), findsNothing);
+    expect(find.byType(Radio<bool>), findsNothing);
     await _show(tester, editable: false);
     expect(find.text('All projects'), findsOneWidget);
-    expect(find.byType(RadioListTile<bool>), findsNothing);
+    expect(find.byType(Radio<bool>), findsNothing);
   });
 
   for (final brightness in Brightness.values) {
@@ -125,12 +131,16 @@ void main() {
         final image = await boundary.toImage(pixelRatio: 2);
         final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
         await Directory(shots!).create(recursive: true);
-        await File(
-          '$shots/machine-projects-$name-${brightness.name}.png',
-        ).writeAsBytes(bytes!.buffer.asUint8List());
+        await File('$shots/machine-projects-$name-${brightness.name}.png')
+            .writeAsBytes(bytes!.buffer.asUint8List());
         image.dispose();
       });
-      await _show(tester, kept: ['oh'], brightness: brightness, picture: picture);
+      await _show(
+        tester,
+        kept: ['oh'],
+        brightness: brightness,
+        picture: picture,
+      );
       await shot('owner-only');
       await _show(tester, brightness: brightness, picture: picture);
       await shot('owner-all');
