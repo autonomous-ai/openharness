@@ -80,6 +80,15 @@ describe('ordinary task messages and progress replies', () => {
     expect(posted.messages.filter(m => m.recipients.includes(f.pm))).toHaveLength(1)
   })
 
+  it('posts a newly linked pull request only once in the task thread', () => {
+    const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId
+    const builder = f.add('Kai', id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: builder })
+    f.status(id, builder, 'working', 'Started.')
+    const posted = f.run({ type: 'message.send', conversationId: id, text: `Please review ${PR}`, replyTo: null, recipientIds: [] }, f.as(builder))
+    expect(posted.messages.filter(m => m.thread === root && m.text.includes(PR))).toHaveLength(1)
+  })
+
   it('links a proposal root instead of posting a second opening message', () => {
     const f = fixture()
     const created = f.run({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [], proposalMessageId: 'proposal' }, f.as(f.pm),
