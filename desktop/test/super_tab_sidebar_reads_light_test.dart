@@ -339,4 +339,40 @@ void main() {
       await close(tester, controller);
     },
   );
+
+  // Review of #2790 (Sedge): a wait made a row bold for every viewer, though
+  // only the person it waits on has something to do. A wait on someone else
+  // keeps its ? mark and stays regular; a wait on the reader is bold.
+  testWidgets(
+    'a task waiting on the reader is bold; one waiting on someone else is not',
+    (tester) async {
+      final server = humansSwarm();
+      addNumberedWorkgroups(server, 2);
+      final groups = (server.state['conversations'] as List)
+          .cast<Map<String, dynamic>>();
+      for (final (id, on) in [('g1', 'owner'), ('g2', 'peer')]) {
+        groups.firstWhere((g) => g['id'] == id)
+          ..['agentIds'] = ['lead-agent']
+          ..['assignment'] = {
+            'id': 'a-$id',
+            'agentId': 'lead-agent',
+            'status': 'needs_human',
+            'askedOf': on,
+            'result': 'Which machine?',
+          };
+      }
+      final controller = await show(tester, server);
+      final g2 = find.byKey(const ValueKey('super-group-g2'));
+      // The reader is peer: g1 waits on the owner, g2 on them.
+      expect(
+        titleStyle(tester, g1, 'Workgroup 1').fontWeight,
+        isNot(grid.AppFont.semibold),
+      );
+      expect(
+        titleStyle(tester, g2, 'Workgroup 2').fontWeight,
+        grid.AppFont.semibold,
+      );
+      await close(tester, controller);
+    },
+  );
 }
