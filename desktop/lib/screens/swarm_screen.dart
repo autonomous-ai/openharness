@@ -758,6 +758,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
         );
         return;
       }
+      // A chat's New messages notice carries its Swarm tab and chat: the click opens that chat.
+      if (machineId == SystemNotifications.chatNoticeMachine) {
+        final slash = agentId.indexOf('/');
+        if (slash <= 0) return;
+        await _openChatNotice(
+          agentId.substring(0, slash),
+          agentId.substring(slash + 1),
+        );
+        return;
+      }
       // A device notice puts its marker where an agent's machine goes and the device's key where the
       // agent goes: the click opens that device.
       if (machineId == SystemNotifications.deviceNoticeMachine) {
@@ -7297,6 +7307,36 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _closeSearch(restoreFocus: false);
     app.openSuperTab(tabId, name);
     controller.openNotice('mention', mentionId);
+  }
+
+  /// A chat's New messages notice: its Swarm tab comes forward on that chat,
+  /// once the person can still read it, as a tag's notice opens its tag.
+  Future<void> _openChatNotice(String tabId, String conversationId) async {
+    final name = app.superTabName(tabId);
+    if (name == null) return;
+    final loadedHere = app.superTabs.peek(tabId) == null;
+    void letGo() {
+      if (loadedHere && app.activeSwarm.superTabId != tabId) {
+        app.superTabs.release(tabId);
+      }
+    }
+
+    final SuperTabController controller;
+    try {
+      controller = await app.superTabs.open(tabId);
+    } catch (_) {
+      return;
+    }
+    // A chat held, or one the backend still gives this reader by id.
+    final readable =
+        controller.snapshot?.conversation(conversationId) != null ||
+        await controller.loadGroup(conversationId);
+    if (!mounted || !readable || controller.accessRevoked) return letGo();
+    if (_newHarness?.requestDismiss() == false) return letGo();
+    _closeNewHarness(restoreFocus: false);
+    _closeSearch(restoreFocus: false);
+    app.openSuperTab(tabId, name);
+    await controller.select(conversationId);
   }
 
   /// A row of the menu bar's Swarm section: its Swarm tab comes forward and

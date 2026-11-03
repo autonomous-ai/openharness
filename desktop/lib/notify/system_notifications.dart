@@ -30,8 +30,7 @@ class DesktopNotificationStore extends OnOffPreference {
 /// and nothing told them. Asked once, whatever the answer: a second offer is a
 /// nag.
 class NotificationOfferStore extends OnOffPreference {
-  NotificationOfferStore({super.storage})
-    : super('app_notifications_offered');
+  NotificationOfferStore({super.storage}) : super('app_notifications_offered');
 }
 
 final notificationOfferStore = NotificationOfferStore();
@@ -371,8 +370,12 @@ ProcessRunner offUiIsolate([ProcessRunner run = Process.run]) =>
         Isolate.run(() => run(executable, arguments), debugName: executable);
 
 /// Linux: `notify-send`, which talks to whatever notification daemon the
-/// desktop already runs. No native dependency, and no click action — the tool
-/// has none, so a click does what the desktop's own default is.
+/// desktop already runs. No native dependency. A Swarm tag's or chat's notice
+/// offers its default action and waits for it (`--action`, `--wait`, libnotify
+/// 0.7.10 and later), so a click opens that tag or chat (Diego, 2026-11-03:
+/// no click did anything). An agent's alert keeps `--replace-id` instead,
+/// which a waiting notice cannot learn, so a click on it does what the
+/// desktop's own default is.
 class LinuxSystemNotifier implements SystemNotifier {
   LinuxSystemNotifier({ProcessRunner? run}) : _run = run ?? offUiIsolate();
 
@@ -386,6 +389,17 @@ class LinuxSystemNotifier implements SystemNotifier {
   /// 0.7.9 and later). An older one refuses the flags; it is asked once, and
   /// every notification after that is posted plainly.
   bool _canReplace = true;
+
+  /// Whether this `notify-send` knows `--action`/`--wait`; asked once, as above.
+  bool _canAct = true;
+
+  /// The notices whose `notify-send` is still waiting for a click, each on an
+  /// isolate of its own until its notice closes. A daemon may keep a notice
+  /// until it is dismissed, so past [_maxWaiting] they go up without a click.
+  int _waiting = 0;
+  static const _maxWaiting = 8;
+
+  void Function(String machineId, String agentId)? _onTap;
 
   @override
   bool get supported => true;
@@ -417,6 +431,52 @@ class LinuxSystemNotifier implements SystemNotifier {
     required String machineId,
     required String agentId,
   }) async {
+    final opens =
+        (machineId == SystemNotifications.mentionNoticeMachine ||
+            machineId == SystemNotifications.chatNoticeMachine) &&
+        agentId.isNotEmpty;
+    if (opens && _canAct && _waiting < _maxWaiting) {
+      _waiting++;
+      unawaited(
+        _run('notify-send', [
+              '--app-name=Harness',
+              '--action=default=Open',
+              '--wait',
+              '--',
+              title,
+              body,
+            ])
+            .then((result) async {
+              if (result.exitCode == 0) {
+                // The invoked action's name, on a line of its own; nothing when the notice
+                // expired or was dismissed.
+                final lines = '${result.stdout}'
+                    .split('\n')
+                    .map((l) => l.trim());
+                if (lines.contains('default')) _onTap?.call(machineId, agentId);
+                return;
+              }
+              // Only a notify-send that does not KNOW the flags gives them up, and its notice
+              // still goes up, plainly.
+              if ('${result.stderr}'.toLowerCase().contains('unknown option')) {
+                _canAct = false;
+                await _post(id, title, body);
+              }
+            })
+            .catchError((Object _) {})
+            .whenComplete(() => _waiting--),
+      );
+      // Its answer comes when the notice closes; what the platform last said stands meanwhile.
+      return NotificationPermission.unknown;
+    }
+    return _post(id, title, body);
+  }
+
+  Future<NotificationPermission> _post(
+    String id,
+    String title,
+    String body,
+  ) async {
     List<String> args({required bool replace}) => [
       '--app-name=Harness',
       if (replace) '--print-id',
@@ -457,7 +517,8 @@ class LinuxSystemNotifier implements SystemNotifier {
   Future<void> withdraw(String id) async => _ids.remove(id);
 
   @override
-  set onTap(void Function(String machineId, String agentId)? handler) {}
+  set onTap(void Function(String machineId, String agentId)? handler) =>
+      _onTap = handler;
 }
 
 /// The notifier for the platform this build runs on ([operatingSystem] is
@@ -564,15 +625,21 @@ class SystemNotifications {
   /// `<swarm tab id>/<tag id>` ([mention]), which the click opens (swarm_screen.dart).
   static const mentionNoticeMachine = '@mention';
 
-  /// News about the ACCOUNT rather than an agent — a device joined it, a person was tagged. The same
-  /// switch and the same rules as [post]; a click on it opens that device ([devicePub]) or that tag
-  /// in its Swarm ([mention]) when given, else nothing.
+  /// What a Swarm chat's New messages notice puts in the `machineId` slot; the `agentId` slot holds
+  /// `<swarm tab id>/<conversation id>` ([chat]), which the click opens (swarm_screen.dart).
+  static const chatNoticeMachine = '@chat';
+
+  /// News about the ACCOUNT rather than an agent — a device joined it, a person was tagged, a chat
+  /// has new messages. The same switch and the same rules as [post]; a click on it opens that device
+  /// ([devicePub]), that tag in its Swarm ([mention]) or that chat in its Swarm ([chat]) when given,
+  /// else nothing.
   void postNotice({
     required String id,
     required String title,
     required String body,
     String? devicePub,
     ({String tabId, String mentionId})? mention,
+    ({String tabId, String conversationId})? chat,
   }) {
     if (!store.value || !supported) return;
     if (permission.value == NotificationPermission.unavailable) return;
@@ -585,11 +652,15 @@ class SystemNotifications {
             body: body,
             machineId: mention != null
                 ? mentionNoticeMachine
+                : chat != null
+                ? chatNoticeMachine
                 : devicePub == null
                 ? ''
                 : deviceNoticeMachine,
             agentId: mention != null
                 ? '${mention.tabId}/${mention.mentionId}'
+                : chat != null
+                ? '${chat.tabId}/${chat.conversationId}'
                 : devicePub ?? '',
           )
           .then((answer) {
