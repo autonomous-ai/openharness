@@ -2648,6 +2648,7 @@ class _SuperTabViewState extends State<SuperTabView>
           ])
             MenuItemButton(
               key: ValueKey('super-notify-${level.name}'),
+              style: _menuRowStyle(finger: finger),
               leadingIcon: SizedBox(
                 width: 16,
                 child: c.notifyOf(group.id) == level
