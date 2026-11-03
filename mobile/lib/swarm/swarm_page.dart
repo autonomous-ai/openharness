@@ -61,8 +61,8 @@ bool swarmHomeListed(SwarmInbox inbox, String swarmId, String projectId) {
 
 /// Swarm Home, direction C (Tony's prototype C1, 2026-10-30), the Home tab:
 /// its title the Swarm shown, with a switcher to every Swarm, All Swarms and
-/// Join or create ([showSwarmSwitcher]); While you were away, once the person
-/// has been gone a while ([SwarmAwayCard]); then Threads; then the projects
+/// Join or create ([showSwarmSwitcher]); While you were away, whenever there is
+/// a Swarm to report on ([SwarmAwayCard]); then Threads; then the projects
 /// they pinned on this phone, then the others by their latest activity,
 /// those quiet for a day folded under "Other projects" ([swarmHomeLists]).
 /// Every Swarm's, or the one picked ([SwarmHomePrefs.swarmId]). A round +
@@ -85,7 +85,7 @@ class SwarmPage extends StatefulWidget {
   /// What a project's last move, and the time away, is measured from.
   final DateTime Function() now;
 
-  /// Gone for less is no time away: no card.
+  /// Gone for less, While you were away stays on the time away it was showing.
   static const awayAfter = Duration(minutes: 5);
 
   @override
@@ -128,10 +128,28 @@ class _SwarmPageState extends State<SwarmPage> {
     _lifecycle = AppLifecycleListener(
       onHide: () => _session?.home.seen(widget.now()),
       onShow: () => setState(() {
+        final now = widget.now();
+        final left = _session?.home.seenAt;
+        // A moment away ends nothing: a phone locked or an app glanced at must
+        // not turn "2h, 9 done" into "now, 0 done" for someone still reading it.
+        if (_awaySpansTime &&
+            left != null &&
+            now.difference(left) < SwarmPage.awayAfter) {
+          return;
+        }
         _awayRead = false;
-        _back = widget.now();
+        _back = now;
       }),
     );
+  }
+
+  /// Whether the time away read last was a real one ([SwarmPage.awayAfter]).
+  bool get _awaySpansTime {
+    final since = _away, back = _back;
+    return _awayRead &&
+        since != null &&
+        back != null &&
+        back.difference(since) >= SwarmPage.awayAfter;
   }
 
   @override
@@ -490,10 +508,11 @@ class _SwarmPageState extends State<SwarmPage> {
     ];
   }
 
-  /// While you were away, once the person has been gone [SwarmPage.awayAfter]
-  /// or more: the work done since in the Swarms shown and what needs them
+  /// While you were away: the work done in the Swarms shown since the person
+  /// last left the app, or on a first open since it opened, and what needs them
   /// there now, each a skeleton while the Swarms, or what waits in them, are
-  /// not read. A tap opens Activity.
+  /// not read. Always there, unless no Swarm is left to report on. A tap opens
+  /// Activity.
   Widget? _awayCard(
     BuildContext context,
     SwarmSession session,
@@ -506,14 +525,14 @@ class _SwarmPageState extends State<SwarmPage> {
       _away = home.seenAt;
       _awayRead = true;
     }
-    final since = _away;
+    // Not known yet: drawn as "now" for a moment, it would then jump.
+    if (!home.loaded) return null;
     // Decided at the return: time in the foreground is no time away.
     final back = _back ?? now;
-    if (since == null || back.difference(since) < SwarmPage.awayAfter) {
-      return null;
-    }
+    final since = _away ?? back;
     final inbox = session.inbox;
     final listing = swarmHomeListing(inbox);
+    if (!listing && shown.isEmpty) return null;
     // A Swarm not read leaves the work done unknown; one no read will bring is
     // left out, or its skeleton would never end.
     int? done = listing ? null : 0;
