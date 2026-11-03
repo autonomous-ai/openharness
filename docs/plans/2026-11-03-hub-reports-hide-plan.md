@@ -51,7 +51,7 @@ so it shows Mongo's behavior; a new integration test runs the same flow on a rea
 - Produces: nothing new for other code; a module-private `notRestored` where-input
   (`{ OR: [{ restoredAt: null }, { restoredAt: { isSet: false } }] }`).
 
-- [ ] **Step 1: Write the failing integration test** — `src/lib/prisma.js` mocked to the `planDatabase` client (the
+- [x] **Step 1: Write the failing integration test** — `src/lib/prisma.js` mocked to the `planDatabase` client (the
   `harnessSharesList.test.ts` pattern). Cases:
   - `three reports hide a harness from readers who did not report it`: r1, r2, r3 report harness `h1`;
     `isHiddenFrom(env, 'harness', 'h1')` and `(…, 'h1', 'stranger')` are `true`; `hiddenFrom(env, 'harness')` and
@@ -60,13 +60,15 @@ so it shows Mongo's behavior; a new integration test runs the same flow on a rea
     `hiddenFrom(env, 'comment', undefined, 'h1')` contains `c1`.
   - `a hide row stored without restoredAt hides it too`: raw insert into `community_hidden` with no `restoredAt`;
     anonymous and stranger see it hidden in both readers.
+  - `the hide row three reports write stores restoredAt as an explicit null` (raw `$type: 'null'` count is 1): pins
+    change (1), which the readers' fix alone would otherwise hide.
   - `two reports hide it only from those who reported it`: anonymous and r3 not hidden; r1 hidden.
   - `a restored item is shown until three new reports`: restored row (date) is visible; three later reports hide it.
-- [ ] **Step 2: Run it, watch it fail** — `npx vitest run --config vitest.super-tabs.config.ts integration/communityReports.test.ts`.
+- [x] **Step 2: Run it, watch it fail** — `npx vitest run --config vitest.super-tabs.config.ts integration/communityReports.test.ts`.
   Expected: the three "hide" cases FAIL (`expected false to be true`), the others pass.
-- [ ] **Step 3: Make the route unit fake honest** — fake `isSet: false` matches only `undefined`; drop the
+- [x] **Step 3: Make the route unit fake honest** — fake `isSet: false` matches only `undefined`; drop the
   `restoredAt` default. Run `npx vitest run src/routes/community.test.ts`: expect the report-hiding cases to FAIL as on Mongo.
-- [ ] **Step 4: Commit the failing tests.**
-- [ ] **Step 5: Fix `communityReports.ts`** — `notRestored` in both readers; `create: { ...key, harnessId, restoredAt: null }`.
-- [ ] **Step 6: Run both test files, then `npm test` and `npm run test:super-tabs`.** Expected: all PASS.
-- [ ] **Step 7: Commit the fix; post red/green evidence as a PR comment.**
+- [x] **Step 4: Commit the failing tests.**
+- [x] **Step 5: Fix `communityReports.ts`** — `notRestored` in both readers; `create: { ...key, harnessId, restoredAt: null }`.
+- [x] **Step 6: Run both test files, then `npm test` and `npm run test:super-tabs`.** Expected: all PASS.
+- [x] **Step 7: Commit the fix; post red/green evidence as a PR comment.**
