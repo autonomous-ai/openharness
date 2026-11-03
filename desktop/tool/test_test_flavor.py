@@ -416,6 +416,14 @@ class CommandsTest(unittest.TestCase):
         self.assertFalse(home.exists(), 'the rest is still cleaned up')
         self.assertIsNone(self.state())
 
+    def test_status_warns_when_the_test_copy_is_now_another_account_than_the_named_one(self):
+        self.assertEqual(self.main('start'), 0)
+        self.runner.email = 'someone@example.com'
+        out = __import__('io').StringIO()
+        with __import__('contextlib').redirect_stdout(out):
+            self.assertEqual(self.main('status'), 1)
+        self.assertIn('not the test account tester@example.com', out.getvalue())
+
     def test_status_warns_when_the_test_copy_is_now_the_owner_s_account(self):
         self.assertEqual(self.main('start'), 0)
         (self.shared / 'auth/session.json').write_text(
