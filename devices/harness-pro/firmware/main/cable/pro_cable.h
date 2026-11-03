@@ -28,6 +28,8 @@ bool pro_cable_request_library(int offset, uint32_t request);
 // recap on screen; `lead` NULL or "" when it closes) and "supertab.select" (pick the Lead on the desktop). Anything else, or
 // no `tab`, sends nothing. Never waits (the render and touch tasks send it); a busy link loses it, so the caller asks again.
 bool pro_cable_supertab_send(const char *t, const char *tab, const char *lead);
+// `supertab.side` {tab, side}: the side the person picked for that Swarm, "pm" or "buddy" (anything else: false). Dropped on a busy link, not retried.
+bool pro_cable_supertab_side(const char *tab, const char *side);
 
 // Voice: begin sends voice.begin and remembers `upload_id` (<= 23 chars) to match the reply; pcm is a CABLE_TYPE_PCM
 // frame (16-bit mono); end finishes the recording (the reply arrives as pro_app_voice_result); abort/cancel discard it.

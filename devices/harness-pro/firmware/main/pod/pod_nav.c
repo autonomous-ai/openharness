@@ -353,6 +353,7 @@ static pod_out_t nav_act(pod_nav_t *n, pod_model_t *m, pod_action_t a, int arg, 
     case POD_A_NONE:
     case POD_A_BANNER:
     case POD_A_LEAD:
+    case POD_A_SIDE:
         break;
     }
     return out_none();

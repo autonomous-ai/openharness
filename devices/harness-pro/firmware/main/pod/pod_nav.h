@@ -51,7 +51,8 @@ typedef enum {
     POD_A_FOLLOW,       // arg: index into model->agents: open that agent from anywhere (Inbox rows with no unread entry); the glue resolves the id
     POD_A_SCROLL,       // arg: signed delta added to the top frame's scroll (clamped to >= 0): rows, whatever the screen draws as one.
     POD_A_ENTER_TAB,    // arg: tab index, only from the TABS frame: push the TAB frame and the tab's first agent (AGENT_OPEN). An empty or unknown tab: nothing.
-    POD_A_LEAD          // hit only for now (the Swarm card's Lead pets): arg = the Lead's index in its Swarm, hit id = the Swarm's id. The nav ignores it
+    POD_A_LEAD,         // hit only for now (the Swarm card's Lead pets): arg = the Lead's index in its Swarm, hit id = the Swarm's id. The nav ignores it
+    POD_A_SIDE          // hit only (the Lead view's PM | Buddy pill): arg = POD_SIDE_PM or POD_SIDE_BUDDY, hit id = the Swarm's id. The nav ignores it; the glue sends supertab.side and never talks on it
 } pod_action_t;
 
 typedef enum { POD_FX_NONE, POD_FX_VOICE_BEGIN, POD_FX_VOICE_END, POD_FX_VOICE_ABORT, POD_FX_AGENT_OPEN } pod_effect_t;
