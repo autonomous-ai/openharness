@@ -237,7 +237,8 @@ class SwarmTerminalRow extends StatelessWidget {
     AppTheme.watch(context);
     final alert = message.source['kind'] != 'terminal-input';
     final style = _quiet();
-    final until = message.source['alert'] == 'limit'
+    // Only the coordinator's: a worker's note says its time in its own words.
+    final until = message.leadLimitAgentId != null
         ? DateTime.tryParse(message.source['limitedUntil'] as String? ?? '')
         : null;
     return Padding(
@@ -255,7 +256,7 @@ class SwarmTerminalRow extends StatelessWidget {
             child: Align(
               alignment: Alignment.topRight,
               child: Padding(
-                padding: const EdgeInsets.only(right: AppSpace.s, top: 2),
+                padding: const EdgeInsets.only(right: AppSpace.s),
                 child: Icon(
                   alert
                       ? LucideIcons.triangleAlert300
@@ -384,7 +385,7 @@ class SwarmProposalLabel extends StatelessWidget {
     padding: const EdgeInsets.only(top: SwarmMessageFrame.bodyGap),
     child: Container(
       key: const ValueKey('swarm-proposal-label'),
-      padding: const EdgeInsets.symmetric(horizontal: AppSpace.s, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpace.s),
       decoration: BoxDecoration(
         border: Border.all(color: AppPalette.textFaint),
         borderRadius: BorderRadius.circular(AppSpace.s),
