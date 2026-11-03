@@ -72,6 +72,7 @@ final _picker = find.byKey(const ValueKey('swarm-machine-picker'));
 
 class _RemovalServer extends ConversationServer {
   Map<String, dynamic> preview = {
+    'previewVersion': 2,
     'blockedBy': null,
     'agents': <dynamic>[],
     'soleSourceProjects': <dynamic>[],
@@ -85,7 +86,7 @@ class _RemovalServer extends ConversationServer {
     String path, {
     Map<String, dynamic>? body,
   }) async {
-    if (method == 'GET' && path.endsWith('/machines/studio/removal')) {
+    if (method == 'GET' && path.contains('/machines/studio/removal')) {
       previewReads.add(path);
       if (failPreview) {
         throw const SuperTabFailure(
@@ -1522,6 +1523,7 @@ void main() {
         server.state['machines'] = [machine('owner')];
         server.state['agents'] = [agent('a1', 'owner'), agent('a2', 'owner')];
         server.preview = {
+          'previewVersion': 2,
           'blockedBy': null,
           'agents': [
             {
@@ -1548,7 +1550,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('Remove Studio from this Swarm?'), findsOneWidget);
         expect(server.previewReads, [
-          '/api/super-tabs/tab/machines/studio/removal',
+          '/api/super-tabs/tab/machines/studio/removal/v2',
         ]);
         expect(find.textContaining('Mira'), findsWidgets);
         expect(find.textContaining('River'), findsWidgets);
@@ -1611,6 +1613,7 @@ void main() {
         final server = _RemovalServer();
         server.state['machines'] = [machine('owner')];
         server.preview = {
+          'previewVersion': 2,
           'blockedBy': null,
           'agents': [
             {'id': 'a1', 'name': 'Wren', 'projectName': ''},
@@ -2020,6 +2023,7 @@ void main() {
       final server = _RemovalServer();
       server.state['machines'] = [machine('owner')];
       server.preview = {
+        'previewVersion': 2,
         'blockedBy': {'projectId': 'hidden', 'projectName': 'Hidden Pilot'},
         'agents': <dynamic>[],
         'soleSourceProjects': <dynamic>[],
@@ -2058,7 +2062,8 @@ void main() {
       final server = _RemovalServer();
       server.state['machines'] = [machine('owner')];
       server.preview = {
-        'blockedBy': {'reason': "A PM of a project you can't see runs here."},
+        'previewVersion': 2,
+        'blockedBy': {'reason': "A Product Manager of a project you can't see runs on this machine."},
         'agents': <dynamic>[],
         'hiddenAgentCount': 2,
         'soleSourceProjects': <dynamic>[],
@@ -2076,7 +2081,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        find.text("A PM of a project you can't see runs here."),
+        find.text("A Product Manager of a project you can't see runs on this machine."),
         findsOneWidget,
       );
       expect(
@@ -2098,6 +2103,38 @@ void main() {
             .onPressed,
         isNull,
       );
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    });
+
+    testWidgets('fails closed when the backend lacks the versioned preview', (
+      tester,
+    ) async {
+      final server = _RemovalServer()
+        ..state['machines'] = [machine('owner')]
+        ..preview = {
+          'blockedBy': null,
+          'agents': <dynamic>[],
+          'soleSourceProjects': <dynamic>[],
+        };
+      final c = server.controller();
+      await c.refresh();
+      await mount(tester, c);
+      await openMachineDetails(
+        tester,
+        find.byKey(const ValueKey('super-machine-studio')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-machine-remove')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Could not check this machine.'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('super-machine-remove-confirm')),
+        findsNothing,
+      );
+      expect(server.posts, isEmpty);
       await tester.pumpWidget(const SizedBox());
       await c.flush();
       c.dispose();
