@@ -589,7 +589,7 @@ export function removalPreview(state: SuperTabState, actor: Actor, machineId: st
   const visibleSoleSourceProjects = soleSourceProjects.filter(p => canReadProject(state, actor, p))
   return {
     blockedBy: led ? canReadProject(state, actor, led)
-      ? { projectId: led.id, projectName: led.name } : { reason: "A PM of a project you can't see runs here." } : null,
+      ? { projectId: led.id, projectName: led.name } : { reason: "A Product Manager of a project you can't see runs on this machine." } : null,
     agents: visibleAgents.map(a => {
       const task = state.conversations.find(c => activeWork(c) && c.assignment!.agentId === a.id)
       return { id: a.id, name: a.displayName ?? a.name, projectName: projectsOf(state).find(p => p.id === agentProjectId(state, a))?.name ?? '',
