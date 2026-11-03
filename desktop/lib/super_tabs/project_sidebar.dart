@@ -1219,7 +1219,9 @@ class _ProjectReading {
       if (waits) waiting.add(g.id);
       if (controller.unreadForPeople(g) ||
           (sidebar.attention?.mentionsIn(g.id) ?? 0) > 0 ||
-          (waits && controller.notifyOf(g.id) != SuperTabNotify.muted)) {
+          (waits &&
+              controller.waitsOnReader(g) &&
+              controller.notifyOf(g.id) != SuperTabNotify.muted)) {
         unread.add(g.id);
       }
     }

@@ -3428,6 +3428,18 @@ class SuperTabController extends ChangeNotifier {
       notifyOf(group.id) != SuperTabNotify.muted &&
       group.lastPersonSequence > readMark(group.id);
 
+  /// [group]'s work waits on the reader: whoever it asked, else whoever asked
+  /// for the task, else the Swarm's owner, as Activity reads it
+  /// (activity.dart `_waiting`). A wait on someone else is theirs to answer,
+  /// so it makes no row bold for this reader (review of #2790).
+  bool waitsOnReader(SuperTabConversation group) {
+    final work = group.assignment;
+    if (work == null || !superTabWorkWaits(work['status'])) return false;
+    final on =
+        work['askedOf'] as String? ?? group.requesterId ?? snapshot?.ownerId;
+    return on == accountId;
+  }
+
   /// Keeps [level] for [id] on every device of the reader. Shown at once;
   /// false, and the old setting back, when the server did not keep it. A
   /// later choice for the same chat wins over an earlier one still on its way.
