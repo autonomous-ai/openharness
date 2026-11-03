@@ -224,6 +224,27 @@ describe('lastAgentMessage', () => {
   })
 })
 
+// Diego's dial, 2026-11-03: the chat recap showed the PM's latest thread reply, not its latest message in the chat.
+describe('lastAgentMessage in a chat or a thread', () => {
+  const row = (sequence: number, over: Record<string, unknown> = {}) => ({ id: `m${sequence}`, sequence, text: `t${sequence}`, author: { kind: 'agent', id: 'a1' }, createdAt: '2026-10-22T00:00:00.000Z', ...over })
+  const lead = new Set(['a1'])
+  const rows = [row(1, { thread: 'm1' }), row(2), row(3, { thread: 'm1', alsoInChat: true }), row(4, { thread: 'm1' }), row(5, { thread: 'm9' })]
+
+  it('in the chat, skips a thread reply but keeps a top-level message, one from before threads and a reply also sent to the chat', () => {
+    expect(lastAgentMessage(rows, lead, 'chat')?.text).toBe('t3')
+    expect(lastAgentMessage(rows.filter(r => r.sequence !== 3), lead, 'chat')?.text).toBe('t2')
+    expect(lastAgentMessage([row(1, { thread: 'm1' }), row(4, { thread: 'm1' })], lead, 'chat')?.text).toBe('t1')
+    // Unscoped, as the notices read: every row.
+    expect(lastAgentMessage(rows, lead)?.text).toBe('t5')
+  })
+
+  it('in a thread, takes only that thread\'s rows, its root among them', () => {
+    expect(lastAgentMessage(rows, lead, { thread: 'm1' })?.text).toBe('t4')
+    expect(lastAgentMessage([row(1, { thread: 'm1' }), row(5, { thread: 'm9' })], lead, { thread: 'm1' })?.text).toBe('t1')
+    expect(lastAgentMessage(rows, lead, { thread: 'nope' })).toBeNull()
+  })
+})
+
 /** A fake backend: tabs by id with the time each last changed, a message store per conversation, and call counting. */
 function setup(tabs: Record<string, { lastChangedAt: number; state: Record<string, unknown> }>, extra: { activity?: Record<string, 'working' | 'idle'>; elapsed?: number; messages?: (path: string) => unknown; post?: () => { status: number; body: Record<string, unknown> }; delayMs?: number } = {}) {
   const calls: string[] = []
@@ -1167,6 +1188,27 @@ describe('SwarmCards dial recap', () => {
     const answers = await Promise.all([t.cards.recap('t1', 'a1', true), t.cards.recap('t1', 'a2', true), t.cards.recap('t1', 'a1')])
     expect(answers.map(a => a.text)).toEqual(['web says', 'mobile says', 'web says'])
     expect(t.mostReading()).toBe(1)
+    t.cards.want(false)
+  })
+})
+
+describe('SwarmCards chat recap and threads', () => {
+  it('recaps the chat with the agent\'s latest top-level message, not a thread reply', async () => {
+    const t = chatSwarm({ 'lead-web': [said(1, 'a1', { text: 'top', thread: 'x1' }), said(2, 'a1', { text: 'in the thread', thread: 'x1' })] })
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    expect(await t.cards.recap('t1', 'a1', true)).toMatchObject({ text: 'top', chatId: 'lead-web' })
+    expect(await t.cards.recap('t1', 'a1')).toMatchObject({ text: 'top' })
+    t.cards.want(false)
+  })
+
+  it('never answers the chat recap from a notice that is a thread reply', async () => {
+    const t = chatSwarm({ 'lead-web': [said(1, 'a1', { text: 'top', thread: 'x1' }), said(2, 'a1', { text: 'in the thread', thread: 'x1' })] })
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    await t.move(2)
+    expect(t.webLead()?.notice).toMatchObject({ text: 'in the thread' })
+    expect(await t.cards.recap('t1', 'a1', true)).toMatchObject({ text: 'top', chatId: 'lead-web' })
     t.cards.want(false)
   })
 })
