@@ -174,7 +174,8 @@ void main() {
         );
         await tester.pumpAndSettle();
         if (scene.startsWith('threads')) {
-          await tester.tap(find.byKey(const ValueKey('super-threads')));
+          // New replies are in Activity, not a separate Threads control.
+          await tester.tap(find.byKey(const ValueKey('super-activity')));
           await tester.pumpAndSettle();
           await tester.pumpAndSettle();
         }
@@ -186,7 +187,7 @@ void main() {
           await mouse.moveTo(
             tester.getCenter(
               find.text(
-                'Should heavy CI wait while the account is at its job limit?',
+                'Weekly plan: badges first, then the Threads view.',
               ),
             ),
           );
