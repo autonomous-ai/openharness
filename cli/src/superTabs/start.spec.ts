@@ -7,6 +7,9 @@ import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 import { readCapacityDisk } from './disk.js'
 import { SuperTabHostError } from './wire.js'
 import { PM_HOMES } from './teamDaemon.js'
+import { buddyNarrowFile } from '../lib/buddyGuard.js'
+import { worktreeFolderName } from '../lib/agentNames.js'
+import { env } from '../config/env.js'
 const teamDaemon = vi.hoisted(() => ({ value: false, relayed: true, offered: null as null | { slugs: string[]; listed: string[] } }))
 vi.mock('./teamDaemon.js', async (original) => ({ ...await original<object>(), isTeamDaemon: () => teamDaemon.value }))
 vi.mock('../team/relay.js', async (original) => ({ ...await original<object>(), teamRelayed: () => teamDaemon.relayed, offeredCodexModels: async () => teamDaemon.offered }))
@@ -450,6 +453,22 @@ it.each(['claude'])('starts a %s thread session as a Buddy in every way, told it
   expect(prompt).toContain('only in this thread')
   expect(prompt).not.toContain('greet')
   expect(prompt).not.toContain('assign')
+})
+
+// Task #2356 (Diego): a thread session of one project, in an older project's Buddy chat or a project session, launches with no
+// wide guard, as its chat's own Buddy does (lib/buddyGuard.ts buddyLaunchWide): its folder is marked before it launches.
+it('marks a narrow thread session\'s folder before it launches, and a wide one\'s not', async () => {
+  const mark = buddyNarrowFile(env.ADAPTER_DATA_DIR, worktreeFolderName('super-tab/start'))
+  const wide = fixture()
+  wide.start.request = { ...wide.start.request, buddyOf: { personId: 'peer', generation: 'g' }, buddySession: { thread: 'root-1', from: 1 } } as typeof wide.start.request
+  await startAgent({ action: 'start', tabId: 'tab', operationId: 'buddy-session-wide', request: wide.start.request }, wide.scoped, where, wide.open)
+  expect(wide.request.mock.calls.some(call => call[0] === 'agent_create')).toBe(true)
+  expect(existsSync(mark)).toBe(false)
+  const f = fixture()
+  f.start.request = { ...f.start.request, buddyOf: { personId: 'peer', generation: 'g' }, buddySession: { thread: 'root-1', from: 1 }, buddyNarrow: true } as typeof f.start.request
+  await startAgent({ action: 'start', tabId: 'tab', operationId: 'buddy-session-narrow', request: f.start.request }, f.scoped, where, f.open)
+  expect(f.request.mock.calls.some(call => call[0] === 'agent_create')).toBe(true)
+  expect(existsSync(mark)).toBe(true)
 })
 
 it('refuses a Codex thread session before anything launches: Codex runs without the Buddy guard hook (security review 1 of #2345)', async () => {

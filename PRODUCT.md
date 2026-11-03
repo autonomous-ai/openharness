@@ -11,16 +11,17 @@ It describes the product we are heading for, not the product as it is today. How
 
 ## What Harness is
 
-**Harness runs a crew of agents from every lab, on the machines you own, directed by a Product Manager agent, with
-work verified before it ships.**
+**A Swarm pools the machines and subscriptions its people bring, and its Product Manager agent directs a crew of
+agents from every lab on them, with work verified before it ships.**
 
-- **A person says what they want; the crew delivers verified work.** The Product Manager turns accepted requests into
-  tasks. Engineers build, Reviewers and Testers check, and the result is a merged change that works.
+- **A person says what they want; the crew delivers verified work.** A crew of agents led by a Product Manager agent
+  builds and checks it, and delivers a merged change that works.
 - **People give direction, taste and acceptance, from anywhere.** They answer questions and approve results at the desk,
   in the browser, on the phone or on the Harness device. Agents do the execution.
 - **Agents are the labs' real CLIs** (Claude Code, Codex, OpenCode and the rest) under each person's own login, so a
   lab's new feature works in Harness the day it ships.
-- **Capacity is one pool**: every person's machines and subscriptions in a Swarm, used before anyone waits.
+- **People bring the capacity; the Product Manager decides what it builds.** Everyone in a Swarm can bring a machine
+  or a subscription, and it joins one pool used before anyone waits.
 
 ## Who it is for
 
@@ -29,12 +30,29 @@ In this order:
 1. **The Swarm owner.** One person running 5–50 agents on two or more machines: a founder, a staff engineer.
    Customer zero is Harness itself: the openharness project and Autonomous's other Swarms ship through Harness every
    day. A wall they hit is the most trustworthy backlog item we have.
-2. **The people the owner invites.** A domain expert, a tester, someone lending a machine or a device. Inviting a
-   second person is how a Swarm spreads, and the moment it becomes worth paying for.
+2. **Contributors.** People who bring a machine or a subscription into a Swarm: a teammate's idle Mac, a GPU box, a
+   Claude or Codex subscription with room to spare. Every contributor makes the Swarm stronger, and contributing is how
+   a Swarm spreads and the moment it becomes worth paying for.
 3. **The company.** Several owners, many Swarms, shared capacity, roles, audit and budgets.
 
 The [voice and wording rules](docs/ideal-users.md#the-identity-how-we-use-the-word-polymath) for describing these
 people still apply.
+
+## Contribution
+
+What people contribute to a Swarm is capacity:
+
+- **Machines**: computers, the devices plugged into them for testing, GPUs.
+- **Subscriptions**: Claude, Codex and the other labs' plans, shared through a Team account.
+
+Contributing has four properties:
+
+- **Easy.** A machine or a subscription is working for the Swarm within 5 minutes, started from the phone if need be.
+- **Safe.** The contributor's files, secrets and accounts are never exposed. Their own work comes first; they set the
+  limits and take it back at any time.
+- **Seen.** The contributor sees what their capacity shipped, and gets credit for it. Their quota is never drained
+  without them knowing.
+- **Used.** Contributed capacity never sits idle while work waits.
 
 ## Why we can win
 
@@ -67,6 +85,8 @@ If a lab or GitHub ships real cross-vendor capacity and verification, this posit
 - Something shipped that our own Swarms do not use.
 - Locking a customer to one lab, or to our servers, for their agents' execution.
 - The server silently changing or hiding a customer's data.
+- A contributor's own work slowed, or their quota drained, without them knowing; a contributor's data exposed.
+- Contributed capacity sitting idle while work waits.
 
 ## Bets until December
 
@@ -74,7 +94,7 @@ If a lab or GitHub ships real cross-vendor capacity and verification, this posit
 | --- | --- | --- |
 | Customer zero runs on Swarm | openharness and Autonomous's Swarms do all their work through Harness, and their walls are gone | Verified tasks shipped rise while people's attention per task falls |
 | An outside company | A company outside Autonomous owns a Swarm and ships work every week, set up without our hands on their machines | At least one such Swarm |
-| The second person | Inviting an expert, a tester or a machine lender takes a minute and is useful in their first hour | Share of active Swarms with two or more people grows |
+| Contribution | Bringing a machine or a subscription into a Swarm is easy, safe, seen and used, and people keep doing it | The contribution targets below |
 | Verification is the moat | Problems are caught before merge, not after | Fixes after merge stay under target |
 | One pool of capacity | No work waits for capacity while any machine or subscription in the Swarm has some left | Work waiting for capacity, cost per shipped task |
 
@@ -87,7 +107,7 @@ In order:
    that got worse.
 3. A wall our own Swarms hit today.
 4. What the outside company needs by December.
-5. The second-person loop.
+5. Contribution: bringing machines and subscriptions into a Swarm.
 6. Polish of other surfaces.
 
 ## Product targets
@@ -107,10 +127,14 @@ test, where the task had one), and no revert or fix of it lands within 7 days. I
 | Cost per shipped task | Lower each month | Work must cost less than it is worth |
 | Tasks with no progress for 30 minutes, unnoticed | 0 | Work must never stop silently |
 | Outside Swarms shipping every week | ≥ 1 | The milestone |
-| Weekly active Swarms with two or more people | Growing every week | The way a Swarm spreads |
+| Contributors per week, in each Swarm with two or more people | ≥ 3 | A Swarm grows by what its people bring |
+| Work run on capacity someone other than the owner brought | ≥ 50% | The pool, not the owner, carries the work |
+| From starting to contribute to the first work run on it | ≤ 5 min | Contributing is easy |
+| Contributors this week still contributing next week | ≥ 80% | Contributing is worth it |
+| Contributed capacity idle while work waits | 0 | Contributing is used |
 
-A Swarm is active in a week when it ships at least one verified task; a one-person Swarm counts. A person is active when
-they post, answer a decision, or lend a machine that ran work.
+A Swarm is active in a week when it ships at least one verified task; a one-person Swarm counts. A contributor in a
+week is a person whose machine or subscription ran work in that Swarm that week.
 
 ## Tech targets
 
