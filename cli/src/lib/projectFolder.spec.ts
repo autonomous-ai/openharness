@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  cloneFailure, otherGitHubTransport, parseProjectFolder, prepareProjectFolder, ProjectFolderError, projectsRoot, repositoryIdentity, RepositoryAccessError, RepositoryHostKeyError,
+  cloneFailure, cloneRepository, otherGitHubTransport, parseProjectFolder, prepareProjectFolder, ProjectFolderError, projectsRoot, repositoryIdentity, RepositoryAccessError, RepositoryHostKeyError,
 } from './projectFolder.js'
 
 /** A checkout at [folder] whose origin is [origin] (none when null), made by the real git, with no network. */
@@ -364,6 +364,50 @@ describe('a clone GitHub refuses', () => {
     const folder = await prepareProjectFolder(remote('https://github.com/owner/repo'), { root, clone, resolveHost: async alias => alias === 'gh-work' ? 'github.com' : null })
     expect(folder).toBe(join(root, 'repo'))
     expect(clone).not.toHaveBeenCalled()
+  })
+})
+
+/** Real git with nothing of this machine's own config: no owner credential helper or url rewrite reaches these clones. */
+const isolatedGit: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' }
+const gitIn = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args],
+  { cwd, env: isolatedGit, encoding: 'utf8' }).trim()
+
+/** An origin that serves partial clones, with `main` and a `feature` branch, each holding a file of its own. */
+async function originWithBranches(root: string): Promise<string> {
+  const origin = join(root, 'origin')
+  execFileSync('git', ['init', '-q', '-b', 'main', origin], { env: isolatedGit })
+  for (const [key, value] of [['uploadpack.allowFilter', 'true'], ['uploadpack.allowAnySHA1InWant', 'true']]) gitIn(origin, 'config', key!, value!)
+  await writeFile(join(origin, 'main.txt'), 'first\n')
+  gitIn(origin, 'add', '.'); gitIn(origin, 'commit', '-q', '-m', 'first')
+  await writeFile(join(origin, 'main.txt'), 'first\nsecond\n')
+  gitIn(origin, 'commit', '-q', '-am', 'second')
+  gitIn(origin, 'checkout', '-q', '-b', 'feature')
+  await writeFile(join(origin, 'feature.txt'), 'feature work\n')
+  gitIn(origin, 'add', '.'); gitIn(origin, 'commit', '-q', '-m', 'feature')
+  gitIn(origin, 'checkout', '-q', 'main')
+  return origin
+}
+
+describe('the project clone of a large repository', () => {
+  let root: string
+  beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'harness-clone-test-')) })
+  afterEach(async () => { await rm(root, { recursive: true, force: true }) })
+
+  it('clones only the default branch without file contents, and fetches another branch on demand', async () => {
+    const origin = await originWithBranches(root)
+    const dest = join(root, 'checkout')
+    await cloneRepository(`file://${origin}`, dest, isolatedGit)
+    expect(gitIn(dest, 'config', 'remote.origin.promisor')).toBe('true')
+    expect(gitIn(dest, 'config', 'remote.origin.partialclonefilter')).toBe('blob:none')
+    // Only the default branch came: lampOS has about 4,400.
+    expect(gitIn(dest, 'for-each-ref', '--format=%(refname)', 'refs/remotes/origin/')).not.toContain('feature')
+    // A later fetch still sees every branch, as a full clone's would.
+    expect(gitIn(dest, 'config', '--get-all', 'remote.origin.fetch')).toBe('+refs/heads/*:refs/remotes/origin/*')
+    expect(gitIn(dest, 'log', '--format=%s')).toBe('second\nfirst')
+    expect(gitIn(dest, 'blame', '--porcelain', 'main.txt')).toContain('summary first')
+    gitIn(dest, 'fetch', '-q', 'origin', 'feature')
+    gitIn(dest, 'checkout', '-q', 'feature')
+    expect(await readFile(join(dest, 'feature.txt'), 'utf8')).toBe('feature work\n')
   })
 })
 
