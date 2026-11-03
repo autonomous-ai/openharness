@@ -66,11 +66,15 @@ resolves the swarm’s harnesses for navigation.
 `lib/swarm/` brings a Swarm (the desktop's collaborative tab, not the desk groups above) to the
 phone: what needs the person first (decisions, the Product Manager's tags, work waiting on them),
 the Swarms and their projects, a project's conversations, posting with @mentions, and decisions
-answered with one tap. The phone has no backend route of its own for it: every read and command
-goes to the Swarm read API through one of the account's machines (`AppNotifier.swarmRequest`,
-the `super_tabs` relay request, end-to-end encrypted), so who can read what is the backend's
-answer, the same as on the desktop. `model.dart` and `parts.dart` are copies of the desktop's,
-held to them by `test/swarm/desktop_parity_test.dart`.
+answered with one tap. Reads and writes go straight to the backend using the phone's own sign-in
+(`AppNotifier.swarmRequest`), so posting and answering decisions work while every account machine
+is offline. Command retries keep the same operation ID, including after a bearer refresh or a
+fallback through an account machine (`super_tabs`, end-to-end encrypted). Writes fall back only
+when the direct transport or server is unavailable; authentication, access and rate-limit refusals
+stand. The backend enforces what the signed-in person may read and change. Operations that run on
+a computer still need that computer, and regular terminals keep their end-to-end encrypted path
+through the machine. `model.dart` and `parts.dart` are copies of the desktop's, held to them by
+`test/swarm/desktop_parity_test.dart`.
 
 - **Cost.** One `SwarmSession` per signed-in account while Swarm is on. In the foreground it reads
   what needs the person every 15 seconds, and an open Swarm's changes (first load, then `/changes`)

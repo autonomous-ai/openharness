@@ -41,9 +41,9 @@ abstract final class SwarmComposer {
   /// The toolbar's 44pt row inside the card.
   static const EdgeInsets toolbarPadding = EdgeInsets.fromLTRB(6, 0, 6, 4);
 
-  /// The @ Tag chip's pill.
-  static const EdgeInsets tagPadding = EdgeInsets.only(left: 10, right: 13);
-  static const double tagRadius = 18;
+  /// The New session chip's pill.
+  static const EdgeInsets pillPadding = EdgeInsets.only(left: 10, right: 13);
+  static const double pillRadius = 18;
 
   /// The voice row's stop: a filled square with softened corners.
   static const double stopRadius = 2;

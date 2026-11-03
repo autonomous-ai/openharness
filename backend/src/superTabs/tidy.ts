@@ -1,8 +1,9 @@
-import { isStep, onlyStepsHeld, taskEnded } from './steps.js'
+import { checksOpenWork, isStep, taskEnded } from './steps.js'
 import { isBuddy } from './buddies.js'
 import { agentDisplayName } from './agentNames.js'
-import { activeWork, stableId, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-import { agentProjectId, groupProject, ledProject, projectsOf } from './projects.js'
+import { githubRepository } from '../github/repository.js'
+import { activeWork, appendPullRequestUrls, stableId, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import { agentProjectId, canReadGroup, groupProject, ledProject, projectsOf } from './projects.js'
 import { toLead } from './terminal.js'
 
 // Nobody has to tidy a Swarm by hand (roadmap, December). The server stops no agent (project instructions, phase 4): an agent
@@ -63,8 +64,8 @@ export function idleNotices(state: SuperTabState, projectId: string, now: number
     const groups = groupsOf(state, target)
     if (groups.some(activeWork)) continue
     // A Reviewer or Tester, by what it worked on: the instructions keep it while the work it checked is open (Ken,
-    // 2026-11-02: "Tester has had no open task" twice in 8 minutes, nothing for the PM to do).
-    if (onlyStepsHeld(groups, target.id)) continue
+    // 2026-11-02: "Tester has had no open task" twice in 8 minutes, nothing for the PM to do), and no longer.
+    if (checksOpenWork(state, groups, target.id)) continue
     const since = idleSince(target, groups)
     if (since === undefined || now - since < IDLE_NOTICE_MS || target.idleNoticedAt === since) continue
     target.idleNoticedAt = since
@@ -121,10 +122,45 @@ export function archivable(state: SuperTabState, group: Conversation, now: numbe
   return last !== undefined && now - last >= ARCHIVE_QUIET_MS
 }
 
-/** The one quiet line an archived group gets, to nobody, written as its project's Lead; none when the project has no Lead. */
+/** Work that ended without finishing: only a cancel with a reason closes it, never an archive alone (#558). */
+export const unfinishedWork = (group: Conversation): boolean => ['lost', 'stopped'].includes(group.assignment?.status ?? '')
+
+/** Who hears that a group archives without shipping: the person who asked for its cancelled task, unless they archive it
+ *  themselves or can no longer read it (#558). */
+export function cancelledTags(state: SuperTabState, group: Conversation, actor?: Actor): string[] {
+  if (group.assignment?.status !== 'cancelled' || !group.requesterId) return []
+  if (actor?.kind === 'person' && actor.userId === group.requesterId) return []
+  const requester = state.people.find(p => p.id === group.requesterId)
+  return requester && canReadGroup(state, { kind: 'person', userId: requester.id, email: requester.email }, group) ? [requester.id] : []
+}
+
+/** Why a cancelled task ended, as its cancel recorded it, without the final full stop. */
+export const cancelReason = (group: Conversation): string => (group.assignment?.result ?? '').replace(/[.\s]+$/, '')
+
+/** "PR #1875", as a Lead's cancel or a builder's result names a pull request without its link. */
+const PR_NUMBER = /\bPR #([1-9][0-9]{0,8})\b/gi
+
+/** The pull requests a group's archive waits on: those it links, and those its result and check evidence name, a "PR #N"
+ *  read in its project's repository. A cancel saying "Handed off as PR #1875" linked nothing, so the group archived while
+ *  that PR was open (#558). Null when it names a number with no GitHub repository to read it in: it stays open. */
+export function archiveWaitsFor(group: Conversation, repositoryUrl: string | null | undefined): string[] | null {
+  const texts = [group.assignment?.result, ...group.checks.map(check => check.evidence)]
+  const named = { pullRequestUrls: [...group.pullRequestUrls ?? []] } as Conversation
+  appendPullRequestUrls(named, texts)
+  const numbers = texts.flatMap(text => [...(text ?? '').matchAll(PR_NUMBER)].map(match => match[1]!))
+  if (!numbers.length) return named.pullRequestUrls!
+  const repository = githubRepository(repositoryUrl)
+  if (!repository) return null
+  return [...new Set([...named.pullRequestUrls!, ...numbers.map(n => `https://github.com/${repository.fullName}/pull/${n}`)])]
+}
+
+/** The one quiet line an archived group gets, to nobody, written as its project's Lead; none when the project has no Lead.
+ *  A cancelled task's requester is tagged in it (cancelledTags). */
 export function archiveLine(state: SuperTabState, group: Conversation, now: number): MessageDraft | null {
   const prs = group.pullRequestUrls?.length ? ' and its pull requests are merged or closed' : ''
-  return leadLine(state, group, now, `Archived: the work is ${group.assignment!.status}${prs}.`)
+  const mentions = cancelledTags(state, group), reason = mentions.length && cancelReason(group) ? ` (${cancelReason(group)})` : ''
+  const line = leadLine(state, group, now, `Archived: the work is ${group.assignment!.status}${reason}${prs}.`)
+  return line && mentions.length ? { ...line, mentions } : line
 }
 
 function leadLine(state: SuperTabState, group: Conversation, now: number, text: string): MessageDraft | null {

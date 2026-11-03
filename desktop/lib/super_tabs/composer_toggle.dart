@@ -4,11 +4,13 @@ import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 
-/// A composer choice on the send row (New session, Also send): the shared
-/// compact pill, read as an option to turn on (Scholes, 10-31). Off, it is
-/// outlined with an empty circle; on, accent-tinted with a check. Its hover
-/// hint says what it does, or why it can't be chosen now ([onChanged] null).
-/// A label too long for its place ends in "…"; the circle always shows.
+/// A composer choice (New session, Also send): a checkbox, an empty square
+/// before its label when off and an accent checked square when on, with no
+/// pill around it, so two of them read as independent options, never an
+/// either-or choice (Scholes, 11-03; a circle in an outlined pill read as a
+/// radio). Hover shades it as any quiet control. Its hover hint says what it
+/// does, or why it can't be chosen now ([onChanged] null: greyed). A label too
+/// long for its place ends in "…"; the square always shows.
 class SuperTabComposerToggle extends StatelessWidget {
   const SuperTabComposerToggle({
     super.key,
@@ -29,8 +31,8 @@ class SuperTabComposerToggle extends StatelessWidget {
 
   /// The width this choice takes with [label] in one line, as drawn in
   /// [context] (its text size included): what a send row measures to tell
-  /// whether a label fits. Matches [DesktopPill]'s compact choice: side
-  /// padding, the icon and its gap, and the reserved rim.
+  /// whether a label fits. Matches [DesktopPill]'s compact quiet control:
+  /// side padding, the icon and its gap, and the reserved rim.
   static double widthOf(BuildContext context, String label) {
     final text = TextPainter(
       text: TextSpan(
@@ -60,13 +62,11 @@ class SuperTabComposerToggle extends StatelessWidget {
       child: DesktopPill(
         label: label,
         compact: true,
-        choice: true,
+        quiet: true,
         textSize: _textSize,
-        selected: on,
-        foregroundColor: on ? DesktopChrome.accent : null,
         leadingGap: _gap,
         leading: Icon(
-          on ? AppIcons.circleCheck : AppIcons.circle,
+          on ? AppIcons.squareCheck : AppIcons.square,
           key: ValueKey(on ? 'composer-toggle-check' : 'composer-toggle-off'),
           size: _iconSize,
           color: onChanged == null ? ink.withValues(alpha: .38) : ink,
