@@ -283,8 +283,8 @@ void main() {
         await close(tester, c);
       });
 
-      testWidgets('a tag in a reply that lives only in a thread counts on '
-          'its thread, not on the project row', (tester) async {
+      testWidgets('a tag in a reply that lives only in an unread thread '
+          'counts on its thread and on the project row', (tester) async {
         final server = projectServer();
         server.followedThreads = {
           'unread': [unreadThread('message-1', 2, conversationId: 'lead')],
@@ -293,11 +293,15 @@ void main() {
         };
         server.tag('message-1', threadId: 'message-1');
         final (c, attention) = await opened(server);
+        final activity = SuperTabActivity.of(c);
+        await activity.mentions.load();
         await pumpSidebar(tester, c, attention);
         expect(attention.threadMentions, 1);
+        expect(attention.mentionsIn('lead'), 1);
+        expect(activity.needsYou, hasLength(1));
         expect(
-          inRow('super-group-lead', find.byType(SuperTabCountBadge)),
-          findsNothing,
+          inRow('super-group-lead', find.text('1')),
+          findsOneWidget,
         );
         await close(tester, c);
       });
@@ -336,8 +340,8 @@ void main() {
       });
     });
 
-    testWidgets('a tag in the chat counts on its row; a tag in a thread on '
-        'Threads; a decision on its row; plain unread is bold with no '
+    testWidgets('a tag in the chat and thread counts on its row; a decision '
+        'on its row; plain unread is bold with no '
         'number', (tester) async {
       final server = projectServer();
       server.followedThreads = {
@@ -357,14 +361,13 @@ void main() {
       await attention.load();
       c.toggleProject('lead');
       await pumpSidebar(tester, c, attention);
-      // The workgroup: one tag in its chat and one decision, not the tag in
-      // its thread.
+      // The workgroup: one tag in its chat, one in its thread, and one decision.
       expect(
         inRow('super-group-offline', find.byType(SuperTabCountBadge)),
         findsOneWidget,
       );
-      expect(inRow('super-group-offline', find.text('2')), findsOneWidget);
-      // The tag inside a thread is counted apart from the row.
+      expect(inRow('super-group-offline', find.text('3')), findsOneWidget);
+      // The unread thread is still available in Activity's New replies.
       expect(attention.threadMentions, 1);
       // The project chat: unread, nothing for the reader, so no number.
       expect(
