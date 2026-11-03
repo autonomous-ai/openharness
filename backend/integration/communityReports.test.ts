@@ -45,6 +45,12 @@ describe('community reports on Mongo', () => {
     expect(await hiddenFromEveryone('harness', harness)).toEqual(everyone)
   })
 
+  it('the hide row three reports write stores restoredAt as an explicit null', async () => {
+    const harness = randomUUID()
+    for (const reader of ['r1', 'r2', 'r3']) await report('harness', harness, harness, reader)
+    expect(await db.$runCommandRaw({ count: 'community_hidden', query: { targetId: harness, restoredAt: { $type: 'null' } } })).toMatchObject({ n: 1 })
+  })
+
   it('three reports hide a comment from readers who did not report it', async () => {
     const harness = randomUUID(), comment = randomUUID()
     for (const reader of ['r1', 'r2', 'r3']) await report('comment', comment, harness, reader)
