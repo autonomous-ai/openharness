@@ -1756,13 +1756,15 @@ export class CableSession {
         // start. Quoted text, carried text, questions and edits already have their own pinned targets.
         // Except words for a Swarm face's chat: the dial shows that chat, so a pane focused in the window never takes them.
         const plain = str('agentId') && !formVoice && !searchVoice && !draftVoice && !questionVoice && !carryVoice && !('selectionId' in msg)
-        const dialFace = plain ? this.voiceFaceOf(str('agentId')!) : undefined
+        // A Pro says `face` when the words were spoken on its Lead view, which shows that chat (Swarm parity, part 3).
+        const proFace = msg.face === true
+        const dialFace = plain ? this.voiceFaceOf(str('agentId')!, proFace) : undefined
         // A Swarm Lead's id (the backend's 24 hex; a harness's is a UUID) with no card here yet (the devices process just
         // restarted) or any more: words for a Lead on another machine, which the focused pane must not take (review of #2232).
         const swarmId = plain && !dialFace && SWARM_AGENT_ID.test(str('agentId')!)
         const focused = plain && !dialFace && !swarmId ? this.host.appFocus?.() : undefined
         const agentId = focused?.agentId ?? str('agentId')
-        const swarmFace = dialFace ?? (agentId ? this.voiceFaceOf(agentId) : undefined)
+        const swarmFace = dialFace ?? (agentId ? this.voiceFaceOf(agentId, proFace) : undefined)
         this.voice = {
           agentId,
           ...(swarmFace ? { swarmFace } : {}),
@@ -2795,10 +2797,12 @@ export class CableSession {
    * The chat words spoken to this Lead are posted in: its face chat, for a dial that names where words go. Never for a Pro:
    * it shows the face chat but no "Sending to", and its plain agent room shows no chat at all, so following the desktop's
    * open chat would post the person's words in a group or PM chat they cannot see they are talking to (review of #2298). Its
-   * words go to the Lead conversation, as before it said swarmChat, until voice comes to the Pro (Swarm parity, part 3).
+   * words go to the Lead conversation, as before it said swarmChat, unless its voice.begin says `face`: spoken on its Lead
+   * view, which shows the face chat and the PM | Buddy side (Swarm parity, part 3). Without it, a Buddy-side word would be
+   * posted in the shared Lead chat.
    */
-  private voiceFaceOf(harnessId: string): SwarmFace | undefined {
-    return this.seqOn ? undefined : this.swarmFaceOf(harnessId)
+  private voiceFaceOf(harnessId: string, proFace: boolean): SwarmFace | undefined {
+    return this.seqOn && !proFace ? undefined : this.swarmFaceOf(harnessId)
   }
 
   /** Whether `harnessId` is a Swarm Lead's harness on this machine. */
@@ -2808,8 +2812,9 @@ export class CableSession {
 
   /** The extra arguments of words spoken to a Swarm Lead: the dial's chat flag, and the chat they were spoken to. */
   private sayArgs(face: SwarmFace | undefined): [chat?: CardChat, chatId?: string] {
-    // A chat flag with no id means "the chat open on the desktop" to the Swarm service: a Pro sends neither (voiceFaceOf).
-    if (this.seqOn) return []
+    // A chat flag with no id means "the chat open on the desktop" to the Swarm service: a Pro sends neither unless its words
+    // were for the face chat it showed (voiceFaceOf), and then names that chat.
+    if (this.seqOn && !face) return []
     const [chat] = this.chatFlag()
     if (chat === undefined) return []
     return face ? [chat, face.id] : [chat]
