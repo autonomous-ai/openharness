@@ -491,6 +491,7 @@ def read_gate(client, run):
     reused = check_reused_records(receipt.get("reused", {}), suites, receipt["source_sha"], receipt["event"])
     # Every job this planner requires must have run and passed (checked above for each listed job). A receipt may list more:
     # the merge helper runs from main, so a PR that adds a CI job brings jobs main does not know yet (#2804, batch #2815).
+    # Only adding works: a PR that removes or renames a job main requires still fails here until main has the change.
     required = receipt["required_jobs"]
     if (required != sorted(set(required))
             or not {"process-checks"} | set().union(*(JOBS[name] for name in set(suites) - set(reused))) <= set(required)):
