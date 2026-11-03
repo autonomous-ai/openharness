@@ -457,6 +457,7 @@ class SuperTabProject {
       instructionsRevision =
           (row['instructionsRevision'] as num?)?.toInt() ?? 0,
       notesRevision = (row['notesRevision'] as num?)?.toInt() ?? 0,
+      githubRevision = (row['githubRevision'] as num?)?.toInt() ?? 0,
       isPrivate = row['visibility'] == 'private',
       memberIds = [
         for (final member in row['members'] as List? ?? const [])
@@ -475,6 +476,10 @@ class SuperTabProject {
   /// What this project calls its coordinator; null from a backend before project instructions.
   final String? coordinatorName;
   final int instructionsRevision, notesRevision;
+
+  /// Moves when its repository's GitHub access may have changed (someone allowed it, or the app was installed): the
+  /// app reads that access again at once rather than keeping it 5 minutes. 0 from a backend before it (task #2316).
+  final int githubRevision;
 
   /// Whether the backend keeps an instruction document for it.
   bool get hasInstructions => coordinatorName != null;

@@ -196,48 +196,52 @@ void main() {
       c.dispose();
     });
 
-    test('a read in flight when it moves is read again once it lands', () async {
-      final c = controllerFor();
-      await c.refresh();
-      final project = c.snapshot!.projects.first;
-      hold = Completer<void>();
-      final first = c.readGitHubAccess(project.id);
-      await moved(c, 1);
-      // Asked while the first read is still out: that one answers for the revision before.
-      unawaited(c.readGitHubAccess(project.id));
-      hold!.complete();
-      await first;
-      hold = null;
-      await c.readGitHubAccess(project.id);
-      expect(asked, hasLength(2));
-      expect(asked.last, endsWith('/github?refresh=1'));
-      await c.readGitHubAccess(project.id);
-      expect(asked, hasLength(2));
-      c.dispose();
-    });
+    test(
+      'a read in flight when it moves is read again once it lands',
+      () async {
+        final c = controllerFor();
+        await c.refresh();
+        final project = c.snapshot!.projects.first;
+        hold = Completer<void>();
+        final first = c.readGitHubAccess(project.id);
+        await moved(c, 1);
+        // Asked while the first read is still out: that one answers for the revision before.
+        unawaited(c.readGitHubAccess(project.id));
+        hold!.complete();
+        await first;
+        hold = null;
+        await c.readGitHubAccess(project.id);
+        expect(asked, hasLength(2));
+        expect(asked.last, endsWith('/github?refresh=1'));
+        await c.readGitHubAccess(project.id);
+        expect(asked, hasLength(2));
+        c.dispose();
+      },
+    );
   });
 
   // Task #2316: a setup done on GitHub's own site is picked up when anyone opens the dialog or Project details.
-  testWidgets('opening GitHub access asks GitHub again, even within 5 minutes', (
-    tester,
-  ) async {
-    final c = controllerFor();
-    await c.refresh();
-    final project = c.snapshot!.projects.first;
-    await c.readGitHubAccess(project.id);
-    expect(asked, hasLength(1));
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: ProjectGitHubAccess(controller: c, projectId: project.id),
+  testWidgets(
+    'opening GitHub access asks GitHub again, even within 5 minutes',
+    (tester) async {
+      final c = controllerFor();
+      await c.refresh();
+      final project = c.snapshot!.projects.first;
+      await c.readGitHubAccess(project.id);
+      expect(asked, hasLength(1));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ProjectGitHubAccess(controller: c, projectId: project.id),
+          ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
-    expect(asked, hasLength(2));
-    expect(asked.last, endsWith('/github?refresh=1'));
-    c.dispose();
-  });
+      );
+      await tester.pumpAndSettle();
+      expect(asked, hasLength(2));
+      expect(asked.last, endsWith('/github?refresh=1'));
+      c.dispose();
+    },
+  );
 
   testWidgets('nothing is asked or shown in a Swarm of one, or when covered', (
     tester,
