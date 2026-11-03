@@ -66,8 +66,29 @@ its thread pane (so the focus stops naming it).
 
 ### Desktop
 
-`dial_super_tab` takes `threadRoot`: a string opens that thread beside the project's chat it opens; `null` closes the open
-thread pane. Absent, today's behaviour.
+- The window names the open thread (`threadRoot` on its Swarm row) while the thread pane is open in the selected
+  conversation, whether or not the pane is on screen; read marks still wait for the pane to be shown.
+- `dial_super_tab { superTabId, conversationId, threadRoot: string | null, threadOnly: true }` (no `projectId`, so an older
+  Desktop ignores it): a string opens that thread in that conversation (any kind: Lead, Buddy, group) once its chat has read
+  the root, without raising the window, switching the Swarm or reselecting the Lead chat; `null` closes that conversation's
+  thread pane and nothing else. A newer thread-only frame, a leave, or the person opening another thread cancels a pending
+  open. A thread opened this way marks nothing read until its pane is shown.
+- Ordinary dial picks keep today's `{ superTabId, projectId, chat? }`.
+
+### Voice
+
+- Words start the dial's thread only when spoken from the Swarm face (not from a Lead's terminal tile picked in the window).
+- The thread on the face when the words are spoken is pinned: if the face's thread changed by the time they are sent, they
+  are refused with `CHAT_MOVED` ("Say it again"), unless the person reviewed and pressed Send, in which case they go to the
+  pinned thread (or top level when none was pinned). A thread starts only if nothing moved while the words were posted.
+- The dial's own thread waits for the window to open it: a selection announce with no thread in that conversation does not
+  end it until the window has named the thread once (or 15 s have passed).
+
+### Known limits
+
+- Words said from the dial's own AGENT view of a Lead's terminal tile still count as the Swarm face (the dial does not say
+  which view it spoke from).
+- Two round dials on one daemon share the face thread; an older dial without `swarmThread` follows it unmarked.
 
 ## Design
 
