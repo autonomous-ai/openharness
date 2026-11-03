@@ -4,7 +4,7 @@
 
 **Goal:** The machine removal preview names only agents and projects the machine owner may read, counts hidden entries, and keeps removal blocked when an unreadable project's PM runs on the machine.
 
-**Architecture:** Filter preview details with the existing project access rules in the backend. Return aggregate counts for hidden agents and sole source projects, and a generic blocking reason when the Product Manager's project is unreadable. Current Desktop and Mobile clients request a versioned preview and require its response marker. Released clients keep the old response shape when every detail is readable; when hidden details apply, the server refuses with a generic update-required message. Filter unreadable agent IDs from the removal command result too.
+**Architecture:** Filter preview details with the existing project access rules in the backend. Return aggregate counts for hidden agents and sole source projects, and a generic blocking reason when the Product Manager's project is unreadable. Current Desktop and Mobile clients request `/removal/v2` and require its response marker; older backends return not found, so current clients fail closed without fetching legacy data. Released clients keep the old `/removal` response shape when every detail is readable; when hidden details apply, the server refuses with a generic update-required message. Filter unreadable agent IDs from the removal command result too.
 
 **Tech Stack:** TypeScript, Vitest, Fastify integration tests, Dart, Flutter widget tests.
 
@@ -123,7 +123,7 @@ Added after the independent security review found that the phone rejected a reas
 - Test: `mobile/test/swarm/swarm_machines_test.dart`
 
 **Interfaces:**
-- Current clients request preview version 2 and require `previewVersion: 2`; older backends therefore fail closed.
+- Current clients request the `/removal/v2` endpoint and require `previewVersion: 2`; older backends therefore fail closed without returning the legacy preview.
 - Older clients receive an update-required refusal whenever hidden counts or an unreadable Product Manager apply, and the old shape when all details are readable.
 - Generic Product Manager copy follows the Naming System and remains accurate across refusal paths.
 - `machine.remove` returns only agent IDs readable by its actor.
