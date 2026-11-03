@@ -26,114 +26,105 @@ void main() {
   });
 
   for (final brightness in Brightness.values) {
-    testWidgets(
-      'the chat list stops at a drawn edge under the Buddy line while '
-      'scrolling (${brightness.name})',
-      (tester) async {
-        final picture = GlobalKey();
-        final server = oneBuddySwarm();
-        giveSwarmBuddy(server);
-        for (var i = 1; i <= 40; i++) {
-          server.append(
-            'Line $i of a long Buddy chat, long enough to wrap onto a second '
-            'line in the pane so rows are tall.',
-            conversationId: 'swarm-buddy-peer',
-          );
-        }
-        grid.AppTheme.brightness.value = brightness;
-        addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
-        await tester.binding.setSurfaceSize(const Size(1280, 800));
-        addTearDown(() => tester.binding.setSurfaceSize(null));
-        final c = server.controller(account: 'peer');
-        await c.refresh();
-        await c.select('swarm-buddy-peer');
-        await tester.pumpWidget(
-          MaterialApp(
-            theme: grid.buildAppTheme(brightness: brightness),
-            builder: (context, child) =>
-                RepaintBoundary(key: picture, child: child),
-            home: Scaffold(
-              body: SuperTabView(
-                controller: c,
-                onInvite: () {},
-                onAddAgent: (_) {},
-                onOpenTerminal: (_) {},
-                machineName: (_) => 'Kens-MacBook',
-              ),
+    testWidgets('the chat list stops at a drawn edge under the Buddy line while '
+        'scrolling (${brightness.name})', (tester) async {
+      final picture = GlobalKey();
+      final server = oneBuddySwarm();
+      giveSwarmBuddy(server);
+      for (var i = 1; i <= 40; i++) {
+        server.append(
+          'Line $i of a long Buddy chat, long enough to wrap onto a second '
+          'line in the pane so rows are tall.',
+          conversationId: 'swarm-buddy-peer',
+        );
+      }
+      grid.AppTheme.brightness.value = brightness;
+      addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
+      await tester.binding.setSurfaceSize(const Size(1280, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final c = server.controller(account: 'peer');
+      await c.refresh();
+      await c.select('swarm-buddy-peer');
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: brightness),
+          builder: (context, child) =>
+              RepaintBoundary(key: picture, child: child),
+          home: Scaffold(
+            body: SuperTabView(
+              controller: c,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Kens-MacBook',
             ),
           ),
-        );
-        await tester.pumpAndSettle();
-        expect(find.textContaining('reads all your projects'), findsOneWidget);
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.textContaining('reads all your projects'), findsOneWidget);
 
-        // Read back part way, so a message straddles the top of the list.
-        final list = find.byKey(
-          PageStorageKey('super-messages-${c.tabId}-swarm-buddy-peer'),
-        );
-        final scroll = tester.widget<CustomScrollView>(list).controller!;
-        scroll.jumpTo(scroll.position.maxScrollExtent / 2 + 7);
-        await tester.pumpAndSettle();
+      // Read back part way, so a message straddles the top of the list.
+      final list = find.byKey(
+        PageStorageKey('super-messages-${c.tabId}-swarm-buddy-peer'),
+      );
+      final scroll = tester.widget<CustomScrollView>(list).controller!;
+      scroll.jumpTo(scroll.position.maxScrollExtent / 2 + 30);
+      await tester.pumpAndSettle();
 
-        final bar = tester.getRect(
-          find.byKey(const ValueKey('super-buddy-bar')),
-        );
-        final top = tester.getRect(list).top;
-        // The list starts below the line and clips what scrolls past its top.
-        expect(top, greaterThanOrEqualTo(bar.bottom));
-        expect(
-          tester.widget<CustomScrollView>(list).clipBehavior,
-          Clip.hardEdge,
-        );
+      final bar = tester.getRect(find.byKey(const ValueKey('super-buddy-bar')));
+      final top = tester.getRect(list).top;
+      // The list starts below the line and clips what scrolls past its top.
+      expect(top, greaterThanOrEqualTo(bar.bottom));
+      expect(tester.widget<CustomScrollView>(list).clipBehavior, Clip.hardEdge);
 
-        // And there is an edge to see: the row just above the list is the
-        // chrome's rim drawn over the pane, as under the header.
-        final rim = DesktopChrome.rim;
-        final rows = await tester.runAsync(() async {
+      // Written before the check, so the PR shows the chat before the fix too.
+      if (shots != null) {
+        await tester.runAsync(() async {
           final boundary =
               picture.currentContext!.findRenderObject()!
                   as RenderRepaintBoundary;
-          final image = await boundary.toImage();
-          final bytes = (await image.toByteData())!;
-          final edge = (top - 1).floor(), pane = (top - 4).floor();
-          final pairs = [
-            for (var x = bar.left.ceil() + 8; x < bar.right.floor() - 8; x += 4)
-              (
-                Color(_argb(bytes, image.width, x, edge)),
-                Color(_argb(bytes, image.width, x, pane)),
-              ),
-          ];
+          final image = await boundary.toImage(pixelRatio: 1.5);
+          final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+          await Directory(shots!).create(recursive: true);
+          await File('$shots/chat-edge-${brightness.name}.png')
+              .writeAsBytes(bytes!.buffer.asUint8List());
           image.dispose();
-          return pairs;
         });
-        final onRim = rows!
-            .where((pair) => _near(pair.$1, Color.alphaBlend(rim, pair.$2)))
-            .length;
-        expect(
-          onRim,
-          greaterThan(rows.length * 0.9),
-          reason: 'the row above the list should be the rim over the pane',
-        );
+      }
+      // And there is an edge to see: the row just above the list is the
+      // chrome's rim drawn over the pane, as under the header.
+      final rim = DesktopChrome.rim;
+      final rows = await tester.runAsync(() async {
+        final boundary =
+            picture.currentContext!.findRenderObject()!
+                as RenderRepaintBoundary;
+        final image = await boundary.toImage();
+        final bytes = (await image.toByteData())!;
+        final edge = (top - 1).floor(), pane = (top - 4).floor();
+        final pairs = [
+          for (var x = bar.left.ceil() + 8; x < bar.right.floor() - 8; x += 4)
+            (
+              Color(_argb(bytes, image.width, x, edge)),
+              Color(_argb(bytes, image.width, x, pane)),
+            ),
+        ];
+        image.dispose();
+        return pairs;
+      });
+      final onRim = rows!
+          .where((pair) => _near(pair.$1, Color.alphaBlend(rim, pair.$2)))
+          .length;
+      expect(
+        onRim,
+        greaterThan(rows.length * 0.9),
+        reason: 'the row above the list should be the rim over the pane',
+      );
 
-        if (shots != null) {
-          await tester.runAsync(() async {
-            final boundary =
-                picture.currentContext!.findRenderObject()!
-                    as RenderRepaintBoundary;
-            final image = await boundary.toImage(pixelRatio: 1.5);
-            final bytes = await image.toByteData(
-              format: ui.ImageByteFormat.png,
-            );
-            await Directory(shots!).create(recursive: true);
-            await File('$shots/chat-edge-${brightness.name}.png')
-                .writeAsBytes(bytes!.buffer.asUint8List());
-            image.dispose();
-          });
-        }
-        await tester.pumpWidget(const SizedBox());
-        await c.flush();
-        c.dispose();
-      },
-    );
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    });
   }
 }
 
