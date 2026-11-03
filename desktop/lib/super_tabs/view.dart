@@ -1986,20 +1986,12 @@ class _SuperTabViewState extends State<SuperTabView>
       messages,
       (agentId) => c.snapshot?.agent(agentId),
     );
-    // A task's line says it shipped: its Shipped card, from before it had the
-    // line, leaves. One with no line stays (Quiet Swarm, part 2).
-    final lined = {
-      for (final m in messages)
-        if (m.isTaskLine) m.source['taskId'],
-    };
     return messages
         .where(
           (m) =>
               _shown(m) &&
               (replies || m.inMainStream) &&
-              !answered.contains(m.id) &&
-              !(SuperTabShipRow.shows(m) &&
-                  lined.contains(m.source['conversationId'])),
+              !answered.contains(m.id),
         )
         .toList();
   }
