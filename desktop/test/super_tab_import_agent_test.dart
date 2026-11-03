@@ -321,7 +321,7 @@ void main() {
       final change = payload['changeId'];
       expect(handoff.record.name, 'fix-$change.md');
       expect(handoff.record.text, '# Handoff\nkey ****\n');
-      expect(handoff.record.size, 18);
+      expect(handoff.record.size, 19);
       expect(handoff.transcript.name, 'fix-$change.transcript.md');
       expect(handoff.transcript.text, '## Turn 1\nFix the login.\n');
       expect(handoff.transcript.size, 25);

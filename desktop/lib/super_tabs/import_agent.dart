@@ -1,5 +1,14 @@
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:path/path.dart' as p;
+
 import '../core/models.dart';
+import '../logging/app_log.dart';
+import '../state/agent_handoff_file.dart';
 import '../state/app_state.dart';
+import '../widgets/engine_identity.dart';
 import 'controller.dart';
 import 'model.dart';
 
@@ -81,4 +90,121 @@ String? importUnavailable(AppNotifier app, SuperTabController c) {
     {'allowed': false, 'reason': final String reason} => reason,
     _ => null,
   };
+}
+
+/// The steps of an import, in order, each named where it fails.
+enum ImportStep {
+  prepare('Preparing the handoff'),
+  conversation('Opening the conversation'),
+  upload('Sharing the files'),
+  start('Starting the agent'),
+  message('Sending the handoff');
+
+  const ImportStep(this.label);
+
+  /// What the person reads beside its failure.
+  final String label;
+}
+
+/// Why a step of an import did not happen, in words the person reads.
+class ImportFailure implements Exception {
+  ImportFailure(this.step, this.message, {String code = 'refused'}) {
+    // Named, without names, paths or content.
+    appLog.warn('super-tabs', 'agent import failed at ${step.name}: $code');
+  }
+  final ImportStep step;
+  final String message;
+
+  @override
+  String toString() => '${step.label}: $message';
+}
+
+/// One file of a handoff, as read from this Mac: exactly what is shared.
+class ImportFile {
+  ImportFile(this.name, this.bytes);
+  final String name;
+  final Uint8List bytes;
+  int get size => bytes.length;
+  late final String text = utf8.decode(bytes, allowMalformed: true);
+}
+
+/// The two files of an agent's handoff: the redacted record and the
+/// conversation with its tool calls.
+class ImportHandoff {
+  const ImportHandoff({required this.record, required this.transcript});
+  final ImportFile record, transcript;
+}
+
+/// Prepares [agent]'s handoff on its own machine, the Change agent's
+/// (`agent_handoff_prepare`, owner only), with a fresh change id and the
+/// agent's own engine as target, then reads both files it wrote. Nothing is
+/// sent anywhere. Throws an [ImportFailure] when the daemon holds or refuses
+/// it, or a file cannot be read.
+Future<ImportHandoff> prepareImportHandoff(
+  AppNotifier app,
+  ImportableAgent agent,
+) async {
+  final source = agent.agent;
+  final machine = app.stateOf(agent.machineId);
+  final folder = source.project?.cwd ?? machine?.projectOf(source)?.cwd;
+  if (machine == null || folder == null) {
+    throw ImportFailure(
+      ImportStep.prepare,
+      'This agent has no project folder to hand off from.',
+      code: 'no-folder',
+    );
+  }
+  final changeId = superTabOperationId();
+  final Map<String, dynamic> reply;
+  try {
+    reply = await app.prepareAgentHandoff(
+      agent.machineId,
+      agentId: source.id,
+      changeId: changeId,
+      targetEngine: source.engine!,
+    );
+  } catch (_) {
+    throw ImportFailure(
+      ImportStep.prepare,
+      'Preparing the handoff took too long. Try again.',
+      code: 'no-answer',
+    );
+  }
+  final accepted = acceptAgentHandoffReply(
+    reply,
+    agentId: source.id,
+    changeId: changeId,
+    folder: folder,
+    sourceLabel: engineIdentity(source.engine).label,
+  );
+  if (!accepted.accepted || accepted.prompt == null) {
+    final error = reply['error'];
+    throw ImportFailure(ImportStep.prepare, switch (error) {
+      'UNSUPPORTED' => 'Update Harness on this Mac to import its agents.',
+      'IDENTITY_UNAVAILABLE' =>
+        "This agent's conversation is not confirmed yet. Try again in a "
+            'minute.',
+      'TIMEOUT' || 'BUSY' => 'Preparing the handoff took too long. Try again.',
+      _ when accepted.accepted =>
+        'This agent has no conversation to hand off yet.',
+      _ => 'The handoff could not be prepared. Try again.',
+    }, code: error is String ? error : 'unaccepted');
+  }
+  final record = p.join(folder, agentHandoffFile(source.id, changeId));
+  final transcript = '${p.withoutExtension(record)}.transcript.md';
+  try {
+    return ImportHandoff(
+      record: ImportFile(p.basename(record), await File(record).readAsBytes()),
+      transcript: ImportFile(
+        p.basename(transcript),
+        await File(transcript).readAsBytes(),
+      ),
+    );
+  } on FileSystemException {
+    throw ImportFailure(
+      ImportStep.prepare,
+      'Could not read the handoff files on this Mac. Try again.',
+      code: 'unreadable',
+    );
+  }
 }
