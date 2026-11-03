@@ -863,10 +863,12 @@ class _ProjectMenu extends StatelessWidget {
     // computers do ([SwarmScope.computersOf] depends on its host).
     final terminal = allowed()
         ? swarmTerminalAction(
+            context: context,
             agent: () => swarmProjectPm(reader.snapshot, projectId),
             allowed: allowed,
             shell: shell,
             computers: computers,
+            until: reader,
           )
         : null;
     return MenuTheme(
