@@ -72,7 +72,7 @@ export interface GroupLedger {
   firstAssignedAt?: number
   /** The attempt it shipped on, and what that ran on, kept from the moment it shipped: a later attempt or older attempts
    *  rolling off never move its model's credit (review of #2097). */
-  shippedBy?: RanOn & { assignmentId: string; at: number }
+  shippedBy?: RanOn & { assignmentId: string; at: number; machineId?: string }
   /** Who led the group when it shipped, null for nobody: the PM's credit, kept whoever leads it later (review of #2097). */
   shippedLeadId?: string | null
   /** Review verdicts by week and model, for the last LEDGER_WEEKS weeks, oldest first. */
