@@ -1406,6 +1406,42 @@ describe('routing contributed capacity', () => {
     const answer = await routeTask(input, s, where, opener())
     expect(answer).toMatchObject({ ok: true, pick: { machineId: 'm1', engine: 'codex' } })
     expect((answer.alternatives as Array<{ machineId: string; engine: string }>).map(x => [x.machineId, x.engine])).toEqual([['m1', 'claude'], ['m2', 'claude'], ['m3', 'claude']])
+    // Each row says its account's weekly quota, which the project's order picks by (Ken, 2026-11-03).
+    expect((answer.pick as { quota: string }).quota).toBe('fits: weekly 80% left, resets in 5 days')
+    expect((answer.alternatives as Array<{ quota: string }>).map(x => x.quota)).toEqual(['fits: weekly 80% left, resets in 5 days', 'metered', 'metered'])
+  })
+  // The coordinator picks by the project's order among accounts, so every account is an alternative, once: a Claude account with
+  // 99% left on a machine whose Codex was used up never reached it (Ken, 2026-11-03).
+  it('offers the best row of every engine on every machine as an alternative, and no second row of an account', async () => {
+    const week = (usedPercent: number) => [{ name: 'weekly', usedPercent, resetsAt: Date.now() + 30 * 3_600_000 }]
+    const box = (machineId: string) => Object.assign({ ...healthy(), machineId, name: `Box ${machineId}`, engines: ['claude', 'codex'] }, {
+      observation: { ...healthy().observation, runningHarnessIds: [], quotas: [{ engine: 'claude', known: true, windows: week(1) }, { engine: 'codex', known: true, windows: week(100) }] } })
+    const enabled = { ...floorPolicy, models: floorPolicy.models.map(m => ({ ...m, enabled: true })) }
+    const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: [], conversations: conversations(), machines: ['m1', 'm2', 'm3'].map(box) } },
+      policy: { policy: enabled, warnings: [] }, machines: [] } } })
+    const answer = await routeTask(input, s, where, opener())
+    const rows = [answer.pick, ...answer.alternatives as unknown[]] as Array<{ machineId: string; engine: string; quota: string }>
+    expect(rows.map(x => `${x.machineId} ${x.engine}`).sort()).toEqual(['m1 claude', 'm1 codex', 'm2 claude', 'm2 codex', 'm3 claude', 'm3 codex'])
+    expect(rows.find(x => x.engine === 'claude')!.quota).toBe('fits: weekly 99% left, resets in 30h')
+    expect(rows.find(x => x.engine === 'codex')!.quota).toBe('short: weekly 0% left, resets in 30h')
+  })
+  // A backend from before 2026-11-03 keeps 12 candidates of a decision: the route records the first 12 and offers only those, as the
+  // agent choosing assigns by a recorded candidate.
+  it('records and offers the first 12 rows when the backend keeps no more', async () => {
+    const week = [{ name: 'weekly', usedPercent: 10, resetsAt: Date.now() + 30 * 3_600_000 }]
+    const box = (machineId: string) => Object.assign({ ...healthy(), machineId, name: `Box ${machineId}`, engines: ['claude', 'codex'] }, {
+      observation: { ...healthy().observation, runningHarnessIds: [], quotas: [{ engine: 'claude', known: true, windows: week }, { engine: 'codex', known: true, windows: week }] } })
+    const enabled = { ...floorPolicy, models: floorPolicy.models.map(m => ({ ...m, enabled: true })) }
+    const base = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: [], conversations: conversations(),
+      machines: Array.from({ length: 8 }, (_, i) => box(`m${i}`)) } }, policy: { policy: enabled, warnings: [] }, machines: [] } } })
+    const s = vi.fn(async (payload: Record<string, any>) => payload.action === 'command' && payload.command.decision.candidates.length > 12
+      ? { error: 'VALIDATION_ERROR', detail: 'command.decision.candidates: Too big' } : base(payload))
+    const answer = await routeTask(input, s as never, where, opener())
+    expect(answer).toMatchObject({ ok: true, routeDecisionId: 'd1' })
+    const sent = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0].command.decision.candidates.length)
+    expect(sent).toEqual([16, 12])
+    const recordedIds = new Set(s.mock.calls.filter(c => c[0].action === 'command').at(-1)![0].command.decision.candidates.map((c: { id: string }) => c.id))
+    for (const row of [answer.pick, ...answer.alternatives as unknown[]] as Array<{ id: string }>) expect(recordedIds.has(row.id)).toBe(true)
   })
   it('leaves out a machine that cannot take a teammate\'s project, with the backend\'s reason, and keeps its owner\'s own work there', async () => {
     const reason = 'Contributed laptop has no Harness Team account yet, so it runs only its owner\'s projects.'
