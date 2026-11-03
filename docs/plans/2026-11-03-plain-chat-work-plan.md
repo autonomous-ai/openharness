@@ -92,3 +92,34 @@
 - Choose checks before running: backend typecheck and affected unit tests; full Super Tab integration suite; bounded Desktop/phone affected widget tests and phone parity; CLI affected swarmSkills/command tests. Automatic ready PR CI supplies full affected component Linux suites. Native user testing on Mac/simulator supplies screenshots and ordinary thread interaction evidence.
 - Start independent checks within machine capacity, maximum two local workers per check. Time-bound each scoped check to 180–300 seconds, integration suite to 900 seconds. Investigate new failures; record known unrelated failures explicitly without claiming a pass.
 - Post red/green PR evidence, make the stable head Ready, route/assign independent Review and Test steps, and request both directly. Complete acceptance checks only with actual evidence; read task before setting Done for PM batch merge.
+
+### Task 5: Dee's approved thread copy and chat-asked roots (resumed by Sorrel, 2026-11-03)
+
+Dee approved the exact thread lines on 2026-11-03 (task conversation, River's copy). Tasks 1–4 posted their own wording and
+copied every plain post of the task's conversation into the chat thread; this task replaces both.
+
+**Files:** Modify backend/src/superTabs/taskLine.ts, buddies.ts, commands.ts, store.ts (load the asked-in message as the
+proposal is loaded); tests taskLine.test.ts, buddies.test.ts, integration/superTabTaskLines.test.ts,
+integration/superTabBuddies.test.ts, integration/superTabSwarmBuddy.test.ts. Update cli/src/lib/swarmSkills.ts and
+cli/src/superTabs/service.ts help text.
+
+**Interfaces:** conversation.create takes optional `requestMessageId`: a person's own top-level message in the project's chat
+that asked for the work. It becomes the task's root (no new message, no brief reply) and its author the requester when none
+is named. Every thread reply is authored by the project's coordinator, wakes nobody, and is one of:
+
+- assigned: `On it: <agent> is building it.`
+- needs a person (with ask): `@<user> Your call: <question>. Default: <recommended option>.`
+- review: `Ready for review: PR #<n>` (`Ready for review.` without a pull request)
+- review → working: `Changes needed: <first line of the result>. <agent> is fixing it.`
+- blocked: `Stuck: <first line of the result>. Next: <PM> is looking at it.`; lost: `Stuck: <agent> stopped. Next: another engineer takes it over.`
+- merged: `Merged: PR #<n>. Ships in the next release.`
+- cancelled or stopped: `Not building this: <reason>.`
+- done without a pull request: `Done.`; done with one says nothing (the merge reply follows).
+
+Agents' posts in the task's own conversation stay there. A proposal's first reply is `Goal: …\nScope: …\nPriority: …` from the
+Buddy, and a task from it adds no brief reply. Queued, Released and Duplicate have no server event yet and are not posted.
+
+- [ ] Write/commit failing tests for each line, coordinator authorship, no mirrored chatter, no brief reply under a proposal,
+  the chat-asked root (and refusals: another chat, a reply, a server row, an agent's message), and the proposal details text.
+- [ ] Run `cd backend && npm test -- src/superTabs/taskLine.test.ts src/superTabs/buddies.test.ts`; record red.
+- [ ] Implement; run affected tests, typecheck and `npm run test:super-tabs -- --maxWorkers=2`; commit and push.
