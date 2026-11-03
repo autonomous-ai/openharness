@@ -511,51 +511,7 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                           order: SuperTabReplyBox.fieldOrder,
                           child: _composerBox(),
                         ),
-                        // Its square under the send row's first one: the box's
-                        // inset.
-                        // Kept in place while New session is on, as the
-                        // note below is.
-                        if (_alsoSendPossible && _alsoBelow)
-                          Visibility(
-                            visible: _offersAlsoSend,
-                            maintainSize: true,
-                            maintainAnimation: true,
-                            maintainState: true,
-                            child: Padding(
-                              key: const ValueKey('super-thread-also-line'),
-                              padding: const EdgeInsets.only(
-                                top: grid.AppDesktop.controlGap,
-                                left: grid.AppDesktop.groupGap,
-                              ),
-                              child: Align(
-                                alignment: Alignment.centerLeft,
-                                child: _alsoSendChoice(_writable),
-                              ),
-                            ),
-                          ),
-                        // Its place is kept while New session is offered, so the
-                        // box never moves as the choice is toggled.
-                        if (_offersSession)
-                          Padding(
-                            padding: const EdgeInsets.only(
-                              top: grid.AppDesktop.controlGap,
-                            ),
-                            child: Visibility(
-                              visible: _startsSession,
-                              maintainSize: true,
-                              maintainAnimation: true,
-                              maintainState: true,
-                              child: Text(
-                                'Your reply starts a new Buddy session',
-                                key: const ValueKey(
-                                  'super-thread-session-note',
-                                ),
-                                style: DesktopChrome.metadata(
-                                  color: DesktopChrome.muted,
-                                ),
-                              ),
-                            ),
-                          ),
+                        ?_underBox(),
                       ],
                     ),
                   ),
@@ -602,6 +558,49 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     },
     inputFormatters: [_tagBackspace],
   );
+
+  /// What sits under the box: Also send on its own line where it has no room
+  /// on the send row, and the muted note while the reply starts a session.
+  /// They never show together, so they share one place; each keeps its place
+  /// while hidden, so the box never moves as New session is toggled.
+  Widget? _underBox() {
+    final note = _offersSession
+        ? Padding(
+            padding: const EdgeInsets.only(top: grid.AppDesktop.controlGap),
+            child: Visibility(
+              visible: _startsSession,
+              maintainSize: true,
+              maintainAnimation: true,
+              maintainState: true,
+              child: Text(
+                'Your reply starts a new Buddy session',
+                key: const ValueKey('super-thread-session-note'),
+                style: DesktopChrome.metadata(color: DesktopChrome.muted),
+              ),
+            ),
+          )
+        : null;
+    if (!(_alsoSendPossible && _alsoBelow)) return note;
+    // Its square under the send row's first one: the box's inset.
+    final line = Visibility(
+      visible: _offersAlsoSend,
+      maintainSize: true,
+      maintainAnimation: true,
+      maintainState: true,
+      child: Padding(
+        key: const ValueKey('super-thread-also-line'),
+        padding: const EdgeInsets.only(
+          top: grid.AppDesktop.controlGap,
+          left: grid.AppDesktop.groupGap,
+        ),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: _alsoSendChoice(_writable),
+        ),
+      ),
+    );
+    return note == null ? line : Stack(children: [line, note]);
+  }
 
   /// The send row's options, left of attach and send (Scholes, 11-03): New
   /// session, then Also send in full where both fit; where they do not, Also
