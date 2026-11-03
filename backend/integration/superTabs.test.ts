@@ -3668,7 +3668,8 @@ describe('machine removal', () => {
     const preview = (user: AuthUser) => app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/machines/test-host/removal`, headers: { authorization: `Bearer ${user.sub}` } })
     const shown = await preview(host)
     expect(shown.statusCode, shown.body).toBe(200)
-    expect(shown.json().data).toEqual({ blockedBy: null, agents: [{ id: worker, name: 'Worker', projectName: 'Remove' }], soleSourceProjects: [] })
+    expect(shown.json().data).toEqual({ blockedBy: null, agents: [{ id: worker, name: 'Worker', projectName: 'Remove' }], hiddenAgentCount: 0,
+      soleSourceProjects: [], hiddenSoleSourceProjectCount: 0 })
     expect((await preview(owner)).statusCode).toBe(403)
     await expect(run(tab, { type: 'machine.remove', machineId: 'test-host' })).rejects.toMatchObject({ code: 'FORBIDDEN' })
 
