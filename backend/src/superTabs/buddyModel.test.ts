@@ -7,7 +7,7 @@ import { createSuperTab, type Actor } from './model.js'
 import type { ContributedMachine } from './machines.js'
 import { swarmBuddyChatId } from './buddies.js'
 import { sweepLiveness } from './liveness.js'
-import { BUDDY_MODEL_LEASE_MS } from './tidy.js'
+import { BUDDY_MODEL_GONE_MS, BUDDY_MODEL_LEASE_MS } from './tidy.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -186,5 +186,125 @@ describe('the Buddy\'s machine reporting the switch', () => {
     expect(f.agent().modelRequest).toBeUndefined()
     expect(after.filter(m => m.conversationId === f.chat).map(m => m.text))
       .toEqual(["Couldn't switch your Buddy: its computer didn't answer. It is still on your subscription."])
+  })
+})
+
+describe('the member who serves the model', () => {
+  const landed = (gridModel = MODEL) => {
+    const f = setup()
+    f.run({ type: 'buddy.model', gridModel })
+    return { f, effects: f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId: f.agent().modelRequest!.id, ok: true }, f.buddy()) }
+  }
+  const ownerChat = swarmBuddyChatId({ id: 'owner', generation: 'owner-gen' })
+
+  it('is told, in their own Buddy chat, whose Buddy now runs on their machine\'s model', () => {
+    const { effects } = landed()
+    expect(effects.messages.filter(m => m.conversationId === ownerChat).map(m => m.text))
+      .toEqual(["peer's Buddy now runs on DeepSeek 4.1 Flash, served by your Mac Studio."])
+  })
+
+  it('is told when it is their saved API', () => {
+    const { effects } = landed('gpt-6.1-sol')
+    expect(effects.messages.filter(m => m.conversationId === ownerChat).map(m => m.text))
+      .toEqual(["peer's Buddy now runs on gpt-6.1-sol, on your saved API."])
+  })
+
+  it('is not told about their own Buddy', () => {
+    const f = setup()
+    f.state.machines!.find(m => m.machineId === 'peer-mac')!.observation!.localModels = [{ grid: f.grid, model: 'peer-model', kind: 'local' }]
+    f.run({ type: 'buddy.model', gridModel: 'peer-model' })
+    const effects = f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId: f.agent().modelRequest!.id, ok: true }, f.buddy())
+    expect(effects.messages.map(m => m.conversationId)).toEqual([f.chat])
+  })
+})
+
+describe('a Buddy coming home by itself', () => {
+  /** peer's Buddy on DeepSeek, served by owner's Mac Studio. */
+  const onModel = () => {
+    const f = setup()
+    f.agent().gridModel = MODEL
+    return f
+  }
+  const finish = (f: ReturnType<typeof setup>, now = NOW) =>
+    f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId: f.agent().modelRequest!.id, ok: true }, f.buddy(), { now })
+
+  it('goes back to the subscription when its machine says the model hit a limit', () => {
+    const f = onModel()
+    f.run({ type: 'agent.alert', agentId: f.buddyId, alert: 'limit', active: true }, f.buddy())
+    expect(f.agent().modelRequest).toMatchObject({ gridModel: null, reason: 'limit' })
+    expect(finish(f).messages.map(m => m.text)).toEqual(['DeepSeek 4.1 Flash hit a limit, so your Buddy is back on your subscription.'])
+    expect(f.agent().gridModel).toBeUndefined()
+  })
+
+  it('goes back when the model keeps failing', () => {
+    const f = onModel()
+    f.run({ type: 'agent.alert', agentId: f.buddyId, alert: 'model', active: true }, f.buddy())
+    expect(f.agent().modelRequest).toMatchObject({ gridModel: null, reason: 'failing' })
+    expect(finish(f).messages.map(m => m.text)).toEqual(['DeepSeek 4.1 Flash keeps failing, so your Buddy is back on your subscription.'])
+  })
+
+  it('stays put on a limit of its own subscription, and leaves a switch already under way as it is', () => {
+    const f = setup()
+    f.run({ type: 'agent.alert', agentId: f.buddyId, alert: 'limit', active: true }, f.buddy())
+    expect(f.agent().modelRequest).toBeUndefined()
+    const g = onModel()
+    g.run({ type: 'buddy.model', gridModel: 'gpt-6.1-sol' })
+    const pending = g.agent().modelRequest
+    g.run({ type: 'agent.alert', agentId: g.buddyId, alert: 'limit', active: true }, g.buddy())
+    expect(g.agent().modelRequest).toEqual(pending)
+  })
+
+  it('goes back once nobody has served the model for 2 minutes, and not before', () => {
+    const f = onModel()
+    const studio = f.state.machines!.find(m => m.machineId === 'owner-studio')!
+    const peerMac = f.state.machines!.find(m => m.machineId === 'peer-mac')!
+    studio.observation!.localModels = studio.observation!.localModels!.filter(l => l.model !== MODEL)
+    const at = (now: number) => { peerMac.observation!.receivedAt = now; studio.observation!.receivedAt = now; return sweepLiveness(f.state, now) }
+    at(NOW + 1000)
+    expect(f.agent().modelRequest).toBeUndefined()
+    at(NOW + 1000 + BUDDY_MODEL_GONE_MS - 1)
+    expect(f.agent().modelRequest).toBeUndefined()
+    at(NOW + 1000 + BUDDY_MODEL_GONE_MS)
+    expect(f.agent().modelRequest).toMatchObject({ gridModel: null, reason: 'gone' })
+    expect(finish(f, NOW + 1000 + BUDDY_MODEL_GONE_MS).messages.map(m => m.text))
+      .toEqual(['Nobody serves DeepSeek 4.1 Flash now, so your Buddy is back on your subscription.'])
+  })
+
+  it('stays when the model is served again within the 2 minutes', () => {
+    const f = onModel()
+    const studio = f.state.machines!.find(m => m.machineId === 'owner-studio')!
+    const peerMac = f.state.machines!.find(m => m.machineId === 'peer-mac')!
+    const served = studio.observation!.localModels!
+    const at = (now: number) => { peerMac.observation!.receivedAt = now; studio.observation!.receivedAt = now; return sweepLiveness(f.state, now) }
+    studio.observation!.localModels = served.filter(l => l.model !== MODEL)
+    at(NOW + 1000)
+    studio.observation!.localModels = served
+    at(NOW + 1000 + 60_000)
+    studio.observation!.localModels = served.filter(l => l.model !== MODEL)
+    at(NOW + 1000 + BUDDY_MODEL_GONE_MS)
+    expect(f.agent().modelRequest).toBeUndefined()
+  })
+})
+
+describe('a Buddy\'s new thread session', () => {
+  it('starts on the shared model its Buddy runs on, on the Swarm\'s grid', () => {
+    const f = setup()
+    f.agent().gridModel = MODEL
+    f.agent().configuration = { ...configuration, model: MODEL }
+    f.run({ type: 'message.send', conversationId: f.chat, text: 'Look into the CPU spike', replyTo: null, recipientIds: [], newSession: true })
+    const request = f.state.starts!.at(-1)!.request
+    expect(request).toMatchObject({ gridModel: MODEL, gridName: f.grid })
+    expect(request.model).toBeUndefined()
+    expect(request.effort).toBeUndefined()
+  })
+
+  it('starts on the subscription when nobody serves that model now, never naming the grid model as a Claude model', () => {
+    const f = setup()
+    f.agent().gridModel = 'gone-model'
+    f.agent().configuration = { ...configuration, model: 'gone-model' }
+    f.run({ type: 'message.send', conversationId: f.chat, text: 'Look into the CPU spike', replyTo: null, recipientIds: [], newSession: true })
+    const request = f.state.starts!.at(-1)!.request
+    expect(request.gridModel).toBeUndefined()
+    expect(request.model).toBeUndefined()
   })
 })
