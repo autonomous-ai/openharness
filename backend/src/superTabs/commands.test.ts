@@ -12,7 +12,7 @@ import { modelMatches } from './rules.js'
 import { appendRouting, instructionsHash } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy } from './routingPolicy.js'
-import { NOW, owner as richOwner, richSwarm } from './read/fixture.test-support.js'
+import { NOW, owner as richOwner, peer as richPeer, richSwarm } from './read/fixture.test-support.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 /** What an older client's routing, policy, skill-set or role save answers (project instructions, phase 4). */
@@ -3029,6 +3029,24 @@ describe('machine.remove', () => {
     expect(new Set(effects.messages.map(m => m.id)).size).toBe(effects.messages.length)
   })
 
+  it('does not return IDs for agents the machine owner cannot read', () => {
+    const s = richSwarm(NOW)
+    s.contribute('host')
+    const hiddenTask = s.group('Secret task', s.secret)
+    const hidden = s.add('hidden-harness', hiddenTask)
+    s.edit(state => {
+      state.agents.find(agent => agent.id === s.lead)!.machineId = 'elsewhere'
+      const machine = state.machines!.find(item => item.machineId === 'host')!
+      machine.contributorId = richPeer.userId
+      machine.membershipGeneration = state.people.find(person => person.id === richPeer.userId)!.generation
+    })
+
+    const result = s.run({ type: 'machine.remove', machineId: 'host' }, richPeer)
+
+    expect(result.removedAgents).not.toContain(hidden)
+    expect(JSON.stringify(result)).not.toContain(hidden)
+  })
+
   it('removes a machine that only runs agents, so nothing lists it any more', () => {
     const f = fixture(), worker = f.add('worker')
     f.run({ type: 'machine.remove', machineId: 'host' })
@@ -3363,7 +3381,7 @@ describe('machine.remove', () => {
     const named = (id: string) => { const a = f.state.agents.find(x => x.id === id)!; return a.displayName ?? a.name }
     expect(removalPreview(f.state, owner, 'host')).toEqual({ blockedBy: { projectId: 'lead', projectName: 'Pilot' },
       agents: [{ id: lead, name: named(lead), projectName: 'Pilot' }, { id: worker, name: named(worker), projectName: 'Pilot', task: 'Offline editing' }],
-      soleSourceProjects: [{ id: 'lead', name: 'Pilot' }] })
+      hiddenAgentCount: 0, soleSourceProjects: [{ id: 'lead', name: 'Pilot' }], hiddenSoleSourceProjectCount: 0 })
     f.state.agents.find(a => a.id === lead)!.machineId = 'elsewhere'
     expect(removalPreview(f.state, owner, 'host').blockedBy).toBeNull()
     f.invite()

@@ -2992,12 +2992,17 @@ export class SuperTabStore {
     })
   }
 
-  async machineRemoval(user: AuthUser, tabId: string, machineId: string) {
+  async machineRemoval(user: AuthUser, tabId: string, machineId: string, version: 'legacy' | 'v2' = 'legacy') {
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)
       const actor = await this.actor(tx, user, state)
       author(state, actor)
-      return removalPreview(state, actor, machineId)
+      const preview = removalPreview(state, actor, machineId)
+      if (version === 'v2') return { previewVersion: 2, ...preview }
+      if (preview.hiddenAgentCount > 0 || preview.hiddenSoleSourceProjectCount > 0 || preview.blockedBy?.reason) {
+        fail('UPDATE_REQUIRED', 'Update Harness to remove this machine.', 426)
+      }
+      return { blockedBy: preview.blockedBy, agents: preview.agents, soleSourceProjects: preview.soleSourceProjects }
     })
   }
 
