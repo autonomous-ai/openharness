@@ -71,6 +71,10 @@ export function createQuestions({
   }
   // What is still being asked, by session — handed to a window that connects later (openQuestions below).
   const openQuestions = new Map<string, Record<string, unknown>>()
+  // The AskUserQuestions open by session, and when each was seen open: what lets the input close one for a person's message
+  // (core/input.ts `beforeTeamWrite`). A permission prompt is not one.
+  const pending = new Map<string, { openedAt: number; text: string }>()
+  const pendingQuestion = (sessionId: string): { openedAt: number; text: string } | null => pending.get(sessionId) ?? null
   // The same, of the questions this module asked, for an app away from this desk that connects later: the
   // cloud agents' questions share `openQuestions` (core/agents/cloud.ts) and never go over the relay.
   const askedRemotely = new Map<string, Frame>()
@@ -89,6 +93,7 @@ export function createQuestions({
     onQuestion: (sessionId, requestId, shaped, detail) => {
       deviceInput.setUserAction(agentIdFor(sessionId), true)
       questions.remember(requestId, sessionId)
+      if (!detail?.permission) pending.set(sessionId, { openedAt: Date.now(), text: shaped[0]?.q ?? '' })
       showAwaitingAnswer(sessionId)
       const asked = {
         type: 'commander_question',
@@ -123,6 +128,7 @@ export function createQuestions({
     // disagree about whether a question is still open.
     onQuestionGone: (sessionId, requestId) => {
       heard?.('answered', sessionId, requestId)
+      pending.delete(sessionId)
       deviceInput.setUserAction(agentIdFor(sessionId), false)
       const closed = {
         type: 'commander_question_close',
@@ -153,7 +159,7 @@ export function createQuestions({
     clients.sendRemote({ type: 'commander_questions_open', payload: { requestIds } })
   }
   const questionResponse = createQuestionResponse(answer)
-  return { questions, showAwaitingAnswer, answer, questionResponse, openQuestions, monitorActivity, hearQuestions, questionWatcher, reannounceRemote }
+  return { questions, showAwaitingAnswer, answer, questionResponse, openQuestions, pendingQuestion, monitorActivity, hearQuestions, questionWatcher, reannounceRemote }
 }
 
 /**

@@ -157,6 +157,137 @@ describe('the session input controller\'s dependencies', () => {
     expect(sessionInputDeps({ ...given, moveGate }, () => lock([])).moveGate).toBe(moveGate)
   })
 
+  describe('a person\'s Swarm message closes the question it answers', () => {
+    const QUESTION = fixture('question-tabs.txt')
+    const OTHER_QUESTION = QUESTION.replace('Which colors do you like?', 'Which size do you like?')
+    const ID = 'team:service:superTabs:answer'
+    type Over = { answers?: { writtenAt?: number } | null; pending?: { openedAt: number; text: string } | null; engine?: 'a1' | 'cx'; held?: boolean }
+    /** The pane shows `first` until a key is pressed, then `after`; a question was opened at 1000, the message written at 2000. */
+    const asking = (first: string, after: string, over: Over = {}) => {
+      const t = deps({
+        answersQuestion: () => over.answers === undefined ? { writtenAt: 2000 } : over.answers,
+        pendingQuestion: () => over.pending === undefined ? { openedAt: 1000, text: 'q' } : over.pending,
+        controlHeld: () => over.held === true,
+      })
+      const wired = sessionInputDeps(t.deps, () => lock(t.calls))
+      t.setPane(first)
+      vi.mocked(t.deps.terminal.keyTerminalAction).mockImplementation(async (id, key) => { t.calls.push(`key ${id} ${key}`); t.setPane(after); return ok })
+      return { t, wired, session: agents.get(over.engine ?? 'a1')! }
+    }
+    const keys = (calls: string[]) => calls.filter((c) => c.startsWith('key '))
+
+    it('presses Escape once and delivers when the question closes', async () => {
+      const { t, wired, session } = asking(QUESTION, READY_PANE)
+      expect(await wired.beforeTeamWrite!(session, ID)).toBeNull()
+      expect(keys(t.calls)).toEqual(['key a1 Escape'])
+      expect(t.calls).toContain('lock a1')
+    })
+    // An answer typed at the terminal replaces the free-text row's placeholder: Escape would end the question and lose it.
+    describe.each([
+      ['a single-select question', fixture('question-single.txt'), 'Type something.', 'Iced tea, no sugar'],
+      ['a multi-select question', QUESTION, '[ ] Type something', '[ ] Teal, please'],
+    ])('in %s', (_, empty, placeholder, answer) => {
+      it('presses Escape while its free-text row is empty', async () => {
+        const { t, wired, session } = asking(empty, READY_PANE)
+        expect(await wired.beforeTeamWrite!(session, ID)).toBeNull()
+        expect(keys(t.calls)).toEqual(['key a1 Escape'])
+      })
+      it('holds, pressing no Escape, while its free-text row holds a typed answer', async () => {
+        const typed = empty.replace(placeholder, answer)
+        expect(typed).not.toBe(empty)
+        const { t, wired, session } = asking(typed, READY_PANE)
+        expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
+        expect(keys(t.calls)).toEqual([])
+      })
+    })
+    it('never presses Escape on a permission prompt', async () => {
+      const { t, wired, session } = asking(CLAUDE_PERMISSION, READY_PANE)
+      expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
+      expect(keys(t.calls)).toEqual([])
+    })
+    it('leaves an agent\'s message waiting', async () => {
+      const { t, wired, session } = asking(QUESTION, READY_PANE, { answers: null })
+      expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
+      expect(keys(t.calls)).toEqual([])
+    })
+    it('leaves another engine waiting', async () => {
+      const { t, wired, session } = asking(fixture('question-codex.txt'), READY_PANE, { engine: 'cx' })
+      expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
+      expect(keys(t.calls)).toEqual([])
+    })
+    it('holds when Escape was not sent, or the delivery or the pane is unknown', async () => {
+      const { t, wired, session } = asking(QUESTION, READY_PANE)
+      vi.mocked(t.deps.terminal.keyTerminalAction).mockResolvedValueOnce({ state: 'failed', dispatch: 'not_started', reason: 'gone' })
+      expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
+      expect(await wired.beforeTeamWrite!(session)).toBe('team_waiting_user')
+      t.setPane(null)
+      expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_unavailable')
+      expect(keys(t.calls)).toEqual([])
+    })
+    it('still holds when the question stays after Escape', async () => {
+      vi.useFakeTimers()
+      try {
+        const { t, wired, session } = asking(QUESTION, QUESTION)
+        const held = wired.beforeTeamWrite!(session, ID)
+        await vi.advanceTimersByTimeAsync(3000)
+        expect(await held).toBe('team_waiting_user')
+        expect(keys(t.calls)).toEqual(['key a1 Escape'])
+      } finally { vi.useRealTimers() }
+    })
+    it('does not press Escape when the question was answered before the lock', async () => {
+      const { t, session } = asking(QUESTION, READY_PANE)
+      // The writer lock is busy while the question is answered elsewhere: the pane is clear by the time it is ours.
+      const late: Pick<AutonomousDeviceInput, 'legacyWrite'> = { legacyWrite: async (_id, write) => { t.setPane(READY_PANE); return write() } }
+      const wiredLate = sessionInputDeps(t.deps, () => late)
+      expect(await wiredLate.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
+      expect(keys(t.calls)).toEqual([])
+    })
+    it('does not press Escape for another question than the one first read', async () => {
+      const { t, session } = asking(QUESTION, READY_PANE)
+      const late: Pick<AutonomousDeviceInput, 'legacyWrite'> = { legacyWrite: async (_id, write) => { t.setPane(OTHER_QUESTION); return write() } }
+      expect(await sessionInputDeps(t.deps, () => late).beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
+      expect(keys(t.calls)).toEqual([])
+    })
+    it('does not press Escape without a pending AskUserQuestion record', async () => {
+      const { t, wired, session } = asking(QUESTION, READY_PANE, { pending: null })
+      expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
+      expect(keys(t.calls)).toEqual([])
+    })
+    it('does not press Escape while an answer holds the terminal', async () => {
+      const { t, wired, session } = asking(QUESTION, READY_PANE, { held: true })
+      expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
+      expect(keys(t.calls)).toEqual([])
+    })
+    it('does not press Escape for a delivery the core may no longer write', async () => {
+      const { t, wired, session } = asking(QUESTION, READY_PANE)
+      t.deps.deliveries.canWrite = () => false
+      expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
+      expect(keys(t.calls)).toEqual([])
+    })
+    it.each([
+      ['before the question opened', { writtenAt: 500 }],
+      ['at an unknown time', {}],
+    ])('does not press Escape for a message written %s', async (_, answers) => {
+      const { t, wired, session } = asking(QUESTION, READY_PANE, { answers })
+      expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
+      expect(keys(t.calls)).toEqual([])
+    })
+    it('waits for the redraw after Escape and delivers once the question is gone', async () => {
+      vi.useFakeTimers()
+      try {
+        const { t, wired, session } = asking(QUESTION, QUESTION)
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        let reads = 0
+        vi.mocked(t.deps.terminal.captureTerminal).mockImplementation(async () => (++reads > 4 ? READY_PANE : QUESTION))
+        const result = wired.beforeTeamWrite!(session, ID)
+        await vi.advanceTimersByTimeAsync(3000)
+        expect(await result).toBeNull()
+        expect(keys(t.calls)).toEqual(['key a1 Escape'])
+        expect(warn.mock.calls.some(([line]) => String(line).includes('question closed for a person\'s message'))).toBe(true)
+      } finally { vi.useRealTimers() }
+    })
+  })
+
   it('tells the device of a delivery first, then its caller; its caller alone without a device', () => {
     const one = deps()
     sessionInputDeps(one.deps, () => lock([])).onDelivery!(delivery('d1'))
@@ -486,6 +617,17 @@ describe('createInput', () => {
     expect(acquire).toHaveBeenCalledWith('a1', { forAnswer: true })
     expect(release).toBeTypeOf('function')
     release!()
+  })
+
+  it('presses no Escape while a question is being answered through the controller', async () => {
+    const run = deps({ answersQuestion: () => ({ writtenAt: 2000 }), pendingQuestion: () => ({ openedAt: 1000, text: 'q' }) })
+    run.setPane(fixture('question-tabs.txt'))
+    const inputs = createInput(run.deps)
+    const release = inputs.acquireTerminalControl('a1', { forAnswer: true })!
+    const given = (controller: object) => (controller as unknown as { deps: Record<string, (...args: unknown[]) => unknown> }).deps
+    expect(await given(inputs.input).beforeTeamWrite(agents.get('a1'), 'team:service:superTabs:x')).toBe('team_waiting_user')
+    expect(run.calls.filter((c) => c.startsWith('key '))).toEqual([])
+    release()
   })
 
   it('takes control of a pane only when both the queue and the terminal grant it, and gives both back', () => {
