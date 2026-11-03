@@ -19,9 +19,13 @@ class SuperTabSectionHeading extends StatelessWidget {
     this.collapsed,
     this.onToggleCollapsed,
     this.titleTooltip,
+    this.titleStyle,
   });
 
   final String title;
+
+  /// The title's style, where a screen sets its own: the Swarm sidebar's are Slack's ([SwarmType.sidebar]).
+  final TextStyle? titleStyle;
   final VoidCallback? onAdd;
   final String? addTooltip;
 
@@ -89,9 +93,9 @@ class SuperTabSectionHeading extends StatelessWidget {
         constraints: const BoxConstraints(minHeight: 32),
         child: LayoutBuilder(
           builder: (context, constraints) {
-            final titleStyle = DesktopChrome.metadata().copyWith(
-              fontWeight: FontWeight.w600,
-            );
+            final titleStyle =
+                this.titleStyle ??
+                DesktopChrome.metadata().copyWith(fontWeight: FontWeight.w600);
             final titleMeasure = TextPainter(
               text: TextSpan(text: title, style: titleStyle),
               textDirection: Directionality.of(context),

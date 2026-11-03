@@ -92,6 +92,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('super-jump-unread')), findsNothing);
       await shot('read-on');
+      // Reading to the end saves the read mark a moment later (controller.dart `_saveSoon`).
+      await tester.pump(const Duration(milliseconds: 300));
     });
   }
 }

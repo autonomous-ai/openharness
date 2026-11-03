@@ -91,7 +91,7 @@ describe('harness team', () => {
   it('prints its help, and refuses an unknown verb', async () => {
     const f = fake()
     expect(await teamCommand([], f.deps)).toBe(0)
-    expect(f.out[0]).toContain('Usage: harness team <setup | status | remove | on | off>')
+    expect(f.out[0]).toContain('Usage: harness team <setup | status | model | remove | on | off>')
     expect(await teamCommand(['frobnicate'], f.deps)).toBe(2)
   })
 })

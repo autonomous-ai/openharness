@@ -39,6 +39,18 @@ const waiting = (sessionId: string, agentId = sessionId) => ({
 describe('questions', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  it('knows the AskUserQuestion open for a session, and since when; not a permission prompt, not one answered', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1234)
+    const { asking } = setup()
+    const watcher = given(asking.questionWatcher)
+    watcher.onQuestion('s1', 'r1', [{ q: 'Ship it?', options: [] }])
+    expect(asking.pendingQuestion('s1')).toEqual({ openedAt: 1234, text: 'Ship it?' })
+    watcher.onQuestionGone('s1', 'r1')
+    expect(asking.pendingQuestion('s1')).toBeNull()
+    watcher.onQuestion('s1', 'r2', [], { permission: {}, dialog: 'Run printf hi?' })
+    expect(asking.pendingQuestion('s1')).toBeNull()
+  })
+
   it('drives the pane through the terminal it was given, holding it for the whole answer', () => {
     const { deps, asking } = setup()
     const controller = given(asking.questions)

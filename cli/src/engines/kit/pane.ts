@@ -213,7 +213,8 @@ function promptMarker(engine: AgentEngine): RegExp {
   return /[›❯]/u
 }
 
-const COMPOSER_RULE = /^[─━]{3,}(?:.*[─━]{3,})?\s*$/
+/** One `─` may end it: Claude Code's top rule after `/rename` is `───…─── name ─` (claude/composer.ts, task #2428). */
+const COMPOSER_RULE = /^[─━]{3,}(?:.*[─━])?\s*$/
 /** A row only Claude Code's own footer draws: its shortcut hint, or its permission mode with the key that cycles it. Claude
  *  Code cuts the row at the pane's width, so its start is enough: a mode's `⏵⏵`/`⏸`, or `? for sh…`. A 42-column pane on
  *  DESKTOP-0TFH0OJ (2026-10-26) showed `⏵⏵ bypass permissions on (shift+tab to`, its composer read as absent, and every

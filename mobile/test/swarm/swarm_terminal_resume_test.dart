@@ -8,6 +8,7 @@ import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
+import 'package:harness_mobile/swarm/swarm_project_details.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
@@ -20,10 +21,11 @@ import 'swarm_fixture.dart';
 
 /// Resume a stopped agent from Swarm (task 36): the desktop's Resume on a
 /// Swarm agent's stopped pane, from the Open terminal rows of the Buddy chat's
-/// ⋮ and the project's ⋮. Stopped work the person's own machine can bring
-/// back says "Stopped" and is not dimmed; the tap asks first, names the
-/// machine, resumes it, then opens its terminal. Anything else stopped stays
-/// dimmed, and nothing resumes on a machine this phone does not open.
+/// ⋮, the project's ⋮ and the project's details. Stopped work the person's
+/// own machine can bring back says "Stopped" and is not dimmed; the tap asks
+/// first, names the machine, resumes it, then opens its terminal. Anything
+/// else stopped stays dimmed, and nothing resumes on a machine this phone
+/// does not open.
 void main() {
   const buddyChat = 'buddy-me';
   const changesPath = '/api/super-tabs/$tab/changes';
@@ -600,6 +602,80 @@ void main() {
       };
       await host.session!.inbox.reader(tab)!.refresh();
       await tester.pumpAndSettle();
+      expect(question, findsNothing);
+      expect(resumed, isEmpty);
+      expect(opened, isEmpty);
+    });
+  });
+
+  // The project's details (a tap on its #name), whose Open terminal is the
+  // menu's row: the same resume, asked once the details are gone.
+  group('project details', () {
+    Finder terminal() => key('swarm-project-details-terminal');
+    bool detailsOpen() =>
+        find.byType(SwarmProjectDetailsSheet).evaluate().isNotEmpty;
+
+    Future<void> openDetails(WidgetTester tester) async {
+      await tester.tap(key('swarm-title-button'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets("the PM's stopped work: heard Stopped, not greyed; the tap "
+        'closes the details, asks, resumes it, then opens it', (tester) async {
+      final semantics = tester.ensureSemantics();
+      stoppedOn[river] = true;
+      await pumpProject(tester, projectBackend());
+      await openDetails(tester);
+      expect(
+        tester.getSemantics(terminal()),
+        isSemantics(
+          label: 'Open terminal, Stopped',
+          isButton: true,
+          hasEnabledState: true,
+          isEnabled: true,
+        ),
+      );
+
+      await tester.tap(terminal());
+      await tester.pumpAndSettle();
+      expect(detailsOpen(), isFalse);
+      expect(find.text('Resume River?'), findsOneWidget);
+      expect(
+        find.text('This agent is stopped on Tonys-MacBook-Pro.'),
+        findsOneWidget,
+      );
+      expect(resumed, isEmpty);
+
+      await confirm(tester);
+      expect(resumed, [river]);
+      expect(question, findsNothing);
+      expect(opened, [river]);
+      semantics.dispose();
+    });
+
+    testWidgets('Cancel resumes nothing and opens nothing', (tester) async {
+      stoppedOn[river] = true;
+      await pumpProject(tester, projectBackend());
+      await openDetails(tester);
+      await tester.tap(terminal());
+      await tester.pumpAndSettle();
+
+      await tester.tap(key('swarm-resume-cancel'));
+      await tester.pumpAndSettle();
+      expect(question, findsNothing);
+      expect(resumed, isEmpty);
+      expect(opened, isEmpty);
+    });
+
+    testWidgets('stopped work its machine cannot bring back: greyed, and the '
+        'tap asks nothing', (tester) async {
+      stoppedOn[river] = false;
+      await pumpProject(tester, projectBackend());
+      await openDetails(tester);
+
+      await tester.tap(terminal());
+      await tester.pumpAndSettle();
+      expect(detailsOpen(), isTrue);
       expect(question, findsNothing);
       expect(resumed, isEmpty);
       expect(opened, isEmpty);

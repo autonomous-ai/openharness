@@ -143,7 +143,7 @@ class _SwarmMachinesSectionState extends State<SwarmMachinesSection> {
           const SizedBox(width: AppSpace.s),
           SwarmAvatar(
             id: owner.id,
-            name: owner.username,
+            name: owner.shownName,
             picture: owner.avatar,
             size: AppIconSize.standalone,
           ),
@@ -270,7 +270,7 @@ class SwarmMachineSheet extends StatelessWidget {
               ),
               _detail('Status', view.status),
               if (view.owner case final owner?)
-                _detail('Owner', owner.username),
+                _detail('Owner', owner.shownName),
               _heading('Hardware'),
               if (view.dim)
                 _detail('Readings', 'Current readings unavailable')

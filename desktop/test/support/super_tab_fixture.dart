@@ -503,6 +503,12 @@ class ConversationServer {
   /// refuses a machine that cannot take the Product Manager (leadStart.ts).
   Map<String, String>? leadRefusal;
   final receipts = <String, Map<String, dynamic>>{};
+
+  /// As the backend (store.ts): a request id used again for another command is
+  /// refused with OPERATION_REUSED instead of answered from its receipt. Off by
+  /// default, as most tests resend one request id freely.
+  bool refuseReusedOperations = false;
+  final receiptCommands = <String, String>{};
   final messages = <Map<String, dynamic>>[];
   // Route decisions by id, answered by GET .../route-decisions/:id.
   final routeDecisions = <String, Map<String, dynamic>>{};
@@ -615,6 +621,8 @@ class ConversationServer {
     String text, {
     String conversationId = 'lead',
     List<Map<String, dynamic>> attachments = const [],
+    // An agent's message: it moves no lastPersonSequence (backend parts/commit.ts, #2427).
+    bool agent = false,
   }) {
     revision++;
     messages.add({
@@ -627,12 +635,16 @@ class ConversationServer {
       'text': text,
       'attachments': attachments,
       'createdAt': '2026-10-18T00:00:00Z',
-      'author': {'kind': 'person', 'id': 'owner', 'name': 'owner@example.com'},
+      'author': agent
+          ? {'kind': 'agent', 'id': 'lead', 'name': 'Lead'}
+          : {'kind': 'person', 'id': 'owner', 'name': 'owner@example.com'},
       'deliveries': <dynamic>[],
     });
-    (state['conversations'] as List).cast<Map<String, dynamic>>().firstWhere(
-      (g) => g['id'] == conversationId,
-    )['lastMessageSequence'] = revision;
+    final group = (state['conversations'] as List)
+        .cast<Map<String, dynamic>>()
+        .firstWhere((g) => g['id'] == conversationId);
+    group['lastMessageSequence'] = revision;
+    if (!agent) group['lastPersonSequence'] = revision;
   }
 
   /// The read marks this device sent, in order: {conversationId, sequence}.
@@ -846,6 +858,11 @@ class ConversationServer {
               'status': command['status']
             else if (command['type'] == 'member.username')
               'username': (command['username'] as String?)?.toLowerCase()
+            else if (command['type'] == 'member.name')
+              'name': (command['name'] as String?)?.replaceAll(
+                RegExp(r'\s+'),
+                ' ',
+              )
             else
               'avatar': command['avatar'] == null
                   ? null
@@ -1029,6 +1046,16 @@ class ConversationServer {
         );
       }
       final operationId = body['operationId'] as String;
+      final earlier = refuseReusedOperations
+          ? receiptCommands[operationId]
+          : null;
+      if (earlier != null && earlier != jsonEncode(body['command'])) {
+        throw const SuperTabFailure(
+          'OPERATION_REUSED',
+          'Use a new operation ID for a different request.',
+          statusCode: 400,
+        );
+      }
       if (receipts[operationId] case final receipt?) {
         if (loseResentReplies > 0) {
           loseResentReplies--;
@@ -1091,6 +1118,7 @@ class ConversationServer {
         }
       } else if (command['type'] == 'member.status' ||
           command['type'] == 'member.username' ||
+          command['type'] == 'member.name' ||
           command['type'] == 'member.avatar' ||
           command['type'] == 'agent.avatar') {
         _profile(command, reader ?? 'owner');
@@ -1461,6 +1489,7 @@ class ConversationServer {
         'lastChangedAt': parts.clock,
       };
       receipts[operationId] = result;
+      receiptCommands[operationId] = jsonEncode(body['command']);
       if (loseReply) {
         loseReply = false;
         throw StateError('Connection lost after commit');

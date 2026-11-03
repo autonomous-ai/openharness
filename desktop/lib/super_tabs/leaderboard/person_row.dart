@@ -27,10 +27,11 @@ TextStyle leaderboardPointsStyle() => grid.AppType.label(
   fontFeatures: grid.AppFont.tabularFigures,
 );
 
-/// A person as the leaderboard names them: their username, as everywhere in
-/// the Swarm (the board's account display name was a long one).
+/// A person as the leaderboard names them: as everywhere in the Swarm, the
+/// name they set, else their username (the board's account display name was
+/// a long one).
 String leaderboardName(SuperTabPerson person, SuperTabPersonScore? score) =>
-    person.username;
+    person.shownName;
 
 /// Whether a person wears the crown: first on the board, with points. At the
 /// start of a week everyone ties at 0, and no one has taken #1 yet.
@@ -150,6 +151,7 @@ class LeaderboardPersonRow extends StatelessWidget {
     builder: (context) => Tooltip(
       message: [
         leaderboardName(person, score),
+        if (person.name != null) '@${person.username}',
         person.email,
         ?person.statusAt(clock.now())?.text,
       ].join('\n'),
@@ -369,6 +371,9 @@ class _LeaderboardPersonDetails extends StatefulWidget {
       _LeaderboardPersonDetailsState();
 }
 
+/// How Brought names a subscription's engine, as the Swarm's other lines do.
+const _engineNames = {'claude': 'Claude', 'codex': 'Codex'};
+
 class _LeaderboardPersonDetailsState extends State<_LeaderboardPersonDetails> {
   /// The newest a list shows before Show all.
   static const _shown = 5;
@@ -493,13 +498,57 @@ class _LeaderboardPersonDetailsState extends State<_LeaderboardPersonDetails> {
               'waited ${leaderboardDuration(unblocked.waitedMinutes * 60000)}',
             ),
         ]),
-        section('Lent', 'No machines lent yet', [
-          for (final lent in details.lent)
-            item(
-              line(superTabMachineName(lent.machineName)),
-              '${leaderboardDuration((lent.busyHours * 3600000).round())} busy',
-            ),
-        ]),
+        // What each machine the person brought did (contributor view, #2444);
+        // a server before it says only Lent.
+        if (details.brought case final brought?)
+          section('Brought', 'No machines brought yet', [
+            for (final machine in brought)
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  item(
+                    line(superTabMachineName(machine.machineName)),
+                    '${machine.shipped} shipped · '
+                    '${broughtHours(machine.busyHours)} for others',
+                  ),
+                  for (final sub in machine.subscriptions)
+                    Padding(
+                      padding: const EdgeInsetsDirectional.only(
+                        start: _gap * 2,
+                      ),
+                      child: item(
+                        line(
+                          _engineNames[sub.engine] ?? capitalized(sub.engine),
+                          style: quiet,
+                        ),
+                        switch (sub) {
+                          (
+                            usedPercent: final used?,
+                            resetsAt: final at?,
+                            engine: _,
+                          ) =>
+                            '$used% used · resets in ${resetsIn(DateTime.fromMillisecondsSinceEpoch(at), clock.now())}',
+                          (
+                            usedPercent: final used?,
+                            resetsAt: null,
+                            engine: _,
+                          ) =>
+                            '$used% used',
+                          _ => 'not read yet',
+                        },
+                      ),
+                    ),
+                ],
+              ),
+          ])
+        else
+          section('Lent', 'No machines lent yet', [
+            for (final lent in details.lent)
+              item(
+                line(superTabMachineName(lent.machineName)),
+                '${leaderboardDuration((lent.busyHours * 3600000).round())} busy',
+              ),
+          ]),
       ],
     );
   }

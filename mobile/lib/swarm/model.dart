@@ -51,9 +51,14 @@ class SuperTabPerson {
       email = _text(row, 'email'),
       role = _text(row, 'role'),
       generation = row['generation'] as String?,
+      joinedVia = row['joinedVia'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       status = SuperTabPersonStatus.fromJson(row['status']),
       chosenUsername = row['username'] as String?,
+      name = switch (row['name']) {
+        final String name when name.trim().isNotEmpty => name,
+        _ => null,
+      },
       username =
           row['username'] as String? ??
           superTabDefaultUsername(_text(row, 'email'));
@@ -62,9 +67,11 @@ class SuperTabPerson {
       email = person.email,
       role = person.role,
       generation = person.generation,
+      joinedVia = person.joinedVia,
       avatar = person.avatar,
       status = person.status,
-      chosenUsername = person.chosenUsername;
+      chosenUsername = person.chosenUsername,
+      name = person.name;
   final String id, email, role;
   final SuperTabAvatarPicture? avatar;
   final SuperTabPersonStatus? status;
@@ -76,6 +83,14 @@ class SuperTabPerson {
   /// The name the server sent; null from a server without usernames.
   final String? chosenUsername;
 
+  /// The name they set for the Swarm to show (`member.name`, "Minh Nguyen");
+  /// null until they set one, and from an older server.
+  final String? name;
+
+  /// How the Swarm shows them: their [name], else their [username]. A tag
+  /// still types and matches the [username].
+  String get shownName => name ?? username;
+
   /// Their status while it lasts.
   SuperTabPersonStatus? statusAt(DateTime now) =>
       status?.shownAt(now) == true ? status : null;
@@ -83,6 +98,11 @@ class SuperTabPerson {
   /// This membership: a new one each time the person joins the Swarm. Null
   /// from a backend that does not send it.
   final String? generation;
+
+  /// How they joined: `domain` when they were added automatically for their
+  /// email's domain. Null otherwise and from an older server. Read as the
+  /// desktop's model reads it; the phone does not show it yet.
+  final String? joinedVia;
   bool get canWrite => role == 'owner' || role == 'collaborator';
 }
 
@@ -157,6 +177,15 @@ class SuperTabAgent {
       switchRequest = row['switchRequest'] is Map
           ? Map.unmodifiable(superTabMap(row['switchRequest']))
           : null,
+      gridModel = row['gridModel'] as String?,
+      modelRequest = switch (row['modelRequest']) {
+        {'id': final String id} && final Map request => (
+          id: id,
+          gridModel: request['gridModel'] as String?,
+          name: request['name'] as String?,
+        ),
+        _ => null,
+      },
       profileId = row['profileId'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
@@ -191,6 +220,16 @@ class SuperTabAgent {
   /// and not yet done (backend `switchRequest`), as the desktop's model reads
   /// it; null otherwise. Not drawn on the phone yet.
   final Map<String, dynamic>? switchRequest;
+
+  /// The model on the Swarm's grid it runs on; null on its own subscription
+  /// (backend Agent.gridModel), as the desktop's model reads it. The phone
+  /// draws no model picker yet (task #2354 is Desktop and web first).
+  final String? gridModel;
+
+  /// A person's switch of their Buddy's model that is asked for and not yet
+  /// done (backend buddyModel.ts `modelRequest`); null otherwise. A null
+  /// [gridModel] there is the way back to their subscription.
+  final ({String id, String? gridModel, String? name})? modelRequest;
 
   /// The account on its machine it runs in; `default` when none is chosen.
   /// Null until the backend reports it: the engine's default account. As the
@@ -346,6 +385,7 @@ class SuperTabConversation {
             )
           : null,
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
+      lastPersonSequence = (row['lastPersonSequence'] as num?)?.toInt() ?? 0,
       reactionSeq = (row['reactionSeq'] as num?)?.toInt() ?? 0,
       changedAt = row['changedAt'] is num
           ? DateTime.fromMillisecondsSinceEpoch(
@@ -435,6 +475,12 @@ class SuperTabConversation {
   /// conversation's first message since.
   final int? lastMainSequence;
 
+  /// Its newest main-stream message from a person, not a system row (backend
+  /// parts/commit.ts): what the desktop's sidebar bolds a row by (#2427). The
+  /// phone reads it as the desktop does; its own unread rule is unchanged. 0
+  /// before a person's first message since that backend.
+  final int lastPersonSequence;
+
   /// The newest message that makes it unread, as the desktop's
   /// `SuperTabController.unread` counts it: a reply only in its thread does
   /// not, as it is not in the chat.
@@ -473,6 +519,7 @@ class SuperTabProject {
       instructionsRevision =
           (row['instructionsRevision'] as num?)?.toInt() ?? 0,
       notesRevision = (row['notesRevision'] as num?)?.toInt() ?? 0,
+      githubRevision = (row['githubRevision'] as num?)?.toInt() ?? 0,
       isPrivate = row['visibility'] == 'private',
       memberIds = [
         for (final member in row['members'] as List? ?? const [])
@@ -496,6 +543,12 @@ class SuperTabProject {
   /// What this project calls its coordinator; null from a backend before project instructions.
   final String? coordinatorName;
   final int instructionsRevision, notesRevision;
+
+  /// Moves when its repository's GitHub access may have changed (someone
+  /// allowed it, or the app was installed); 0 from a backend before it (task
+  /// #2316). Read as the desktop's model reads it; the phone reads no GitHub
+  /// access.
+  final int githubRevision;
 
   /// Whether the backend keeps an instruction document for it.
   bool get hasInstructions => coordinatorName != null;
@@ -573,6 +626,15 @@ class SuperTabSnapshot {
         row['invitations'],
         (row) => Map<String, dynamic>.unmodifiable(row),
       ),
+      _starts = Map.unmodifiable({
+        for (final start
+            in row['starts'] is List ? row['starts'] as List : const [])
+          if (start case {'id': final String id})
+            id: (
+              harnessId: start['harnessId'] as String?,
+              error: start['error'] as String?,
+            ),
+      }),
       startEfforts = Map.unmodifiable({
         for (final start
             in row['starts'] is List ? row['starts'] as List : const [])
@@ -590,6 +652,7 @@ class SuperTabSnapshot {
       threadSessions = row['threadSessions'] == true,
       sessionsFromChat = row['sessionsFromChat'] == true,
       swarmBuddy = row['swarmBuddy'] == true,
+      autoJoin = row['autoJoin'] == true,
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
@@ -660,6 +723,12 @@ class SuperTabSnapshot {
   late final List<SuperTabProject> projects;
   final List<Map<String, dynamic>> invitations;
 
+  /// Each agent start's outcome so far, by its id: the harness it made, or
+  /// why it failed (backend AgentStart); null for a start this read does not
+  /// hold. Read as the desktop reads it (desktop_parity_test.dart).
+  ({String? harnessId, String? error})? startOf(String id) => _starts[id];
+  final Map<String, ({String? harnessId, String? error})> _starts;
+
   /// The effort each started agent's start asked for, by harness id. Empty where the starts are not read (a view
   /// kept on this device leaves them out).
   final Map<String, String> startEfforts;
@@ -685,6 +754,12 @@ class SuperTabSnapshot {
   /// One Buddy per person for the whole Swarm (backend one-Buddy stack), as the desktop's model reads it; the phone
   /// does not draw it yet.
   final bool swarmBuddy;
+
+  /// People at the owner's email domain are added automatically (head
+  /// `autoJoin`, every member reads it): someone who leaves is not added
+  /// back. Read as the desktop's model reads it; the phone does not show it
+  /// yet.
+  final bool autoJoin;
 
   /// The reader's tags still waiting for them, Swarm-wide; 0 from a backend
   /// before tags (spec 2026-10-24-lead-mentions.md).
@@ -846,7 +921,7 @@ class SuperTabSnapshot {
   // Recorded labels remain the fallback when a person or agent has left.
   String authorName(SuperTabMessage message) => message.fromAgent
       ? agentName(message.authorId, fallback: message.authorName)
-      : people.where((p) => p.id == message.authorId).firstOrNull?.username ??
+      : people.where((p) => p.id == message.authorId).firstOrNull?.shownName ??
             superTabPersonName(message.authorName);
 }
 
@@ -1268,10 +1343,11 @@ class SuperTabMessage {
   SuperTabRoute? get route => SuperTabRoute.fromSource(source);
   bool get routeOverride => source['kind'] == 'route-override';
 
-  /// The person a Buddy's proposal speaks for, from the tag the server writes
-  /// on it; null for every other message, whatever its text says.
-  String? get proposalOwnerId =>
-      source['kind'] == 'buddy-proposal' ? source['personId'] as String? : null;
+  /// A "Let's build" root the server posted in its person's name (plain chat,
+  /// #2294): theirs to read, not their own writing, so it reads nothing
+  /// before it and is unread for them as anyone else's message is.
+  bool get postedForAuthor =>
+      source['kind'] == 'task-line' || source['kind'] == 'buddy-proposal';
 
   /// The agent a "waiting at a prompt" note is about; null for any other row.
   String? get promptAlertAgentId =>

@@ -19,8 +19,8 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
-/// The composer card (Tony, 11-01): the X that clears the text, the @ Tag
-/// chip, and the card's layout on the chat and in a thread — with the
+/// The composer card (Tony, 11-01): the X that clears the text, the @
+/// button, and the card's layout on the chat and in a thread — with the
 /// keyboard up, on a 320pt phone, with files and a reply.
 void main() {
   const messages = '/api/super-tabs/$tab/conversations/g1/messages';
@@ -377,7 +377,7 @@ void main() {
     });
   });
 
-  group('@ Tag on the chat', () {
+  group('@ on the chat', () {
     testWidgets('on an empty box: an @ that opens the picker, focus in the '
         'field; a second tap takes it back and closes it', (tester) async {
       await pump(tester, backend([message('m1', 1)]));
@@ -486,6 +486,53 @@ void main() {
       expect(key('swarm-mention-picker'), findsNothing);
     });
 
+    testWidgets('the sign alone, no word (Tony, 11-03): a round 36pt face '
+        'in a 44pt target, as + is', (tester) async {
+      await pump(tester, backend([message('m1', 1)]));
+
+      expect(find.text('Tag'), findsNothing);
+      // Still a button a screen reader can press, as the chip was; + and
+      // Send too.
+      for (final (button, label) in [
+        ('swarm-tag', 'Tag a member or agent'),
+        ('swarm-attach', 'Attach files'),
+      ]) {
+        expect(
+          tester.getSemantics(key(button)),
+          matchesSemantics(
+            label: label,
+            isButton: true,
+            hasEnabledState: true,
+            isEnabled: true,
+            hasTapAction: true,
+          ),
+          reason: button,
+        );
+      }
+      await type(tester, 'hi');
+      expect(
+        tester.getSemantics(key('swarm-send')),
+        matchesSemantics(
+          label: 'Send',
+          isButton: true,
+          hasEnabledState: true,
+          isEnabled: true,
+          hasTapAction: true,
+        ),
+      );
+      expect(tester.getSize(key('swarm-tag')), const Size(44, 44));
+      final tag = tester.widget<SwarmRoundButton>(key('swarm-tag'));
+      final attach = tester.widget<SwarmRoundButton>(
+        find.descendant(
+          of: key('swarm-attach'),
+          matching: find.byType(SwarmRoundButton),
+        ),
+      );
+      expect(tag.face, 36);
+      expect(tag.face, attach.face);
+      expect(tag.fill, attach.fill);
+    });
+
     testWidgets('no chip when nobody can be tagged', (tester) async {
       await pump(tester, backend([message('m1', 1)], agentIds: const []));
 
@@ -514,7 +561,7 @@ void main() {
 
   group('card layout', () {
     testWidgets('one line is a 98pt composer: an 86pt card, text over '
-        '+, Tag, the mic and Send, all 44pt targets with 36pt faces', (
+        '+, @, the mic and Send, all 44pt targets with 36pt faces', (
       tester,
     ) async {
       phone(tester);
@@ -522,15 +569,14 @@ void main() {
 
       expect(tester.getSize(key('swarm-composer-card')).height, 86);
       expect(tester.getSize(key('swarm-field')).height, 36);
-      for (final button in ['swarm-attach', 'swarm-send']) {
+      for (final button in ['swarm-attach', 'swarm-tag', 'swarm-send']) {
         expect(tester.getSize(key(button)), const Size(44, 44));
       }
-      expect(tester.getSize(key('swarm-tag')).height, 44);
       final card = tester.getRect(key('swarm-composer-card'));
       final send = tester.getRect(key('swarm-send'));
       final attach = tester.getRect(key('swarm-attach'));
       final tag = tester.getRect(key('swarm-tag'));
-      // The toolbar: + then Tag at the left, Send at the right, 4 from the foot.
+      // The toolbar: + then @ at the left, Send at the right, 4 from the foot.
       expect(attach.left - card.left, 1 + 6);
       expect(tag.left, attach.right);
       expect(card.right - send.right, 1 + 6);
