@@ -707,6 +707,8 @@ export class ContributedMachines {
                   if (cancelled.creationId === result.creationId && cancelled.state === 'cancelled') {
                     await local.request('super_tabs', { action: 'observeCapacity', creationId: result.creationId }, 10_000).catch(() => {})
                     this.preparing.delete(String(start.id))
+                    // Its creation was cancelled here: nothing it launched is left to stop as abandoned.
+                    this.forget(String(start.id))
                     await scoped({ action: 'command', operationId: `held-${start.id}`, command: { type: 'agent.startFailed', startId: start.id,
                       error: `This machine held the agent's launch for ${START_HELD_MS / 60_000} minutes and stopped it: ${held.detail}` } })
                     continue
