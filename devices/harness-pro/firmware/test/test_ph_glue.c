@@ -2322,19 +2322,19 @@ static void pill_tap_sends_side(void) {
     o = tap_(285, 38, 5000);   // PM
     CHECK(o.fx == POD_FX_NONE && take() == 1 && !strcmp(Q[0].t, "supertab.side") && !strcmp(Q[0].side, "pm"));
 }
-static void pill_tap_never_talks(void) {
+static void pill_tap_never_talks(void) {   // the PM segment, as in part 2 (where a Buddy press shows the Buddy side, which did not talk)
     buddy_lead_open();
-    t_(true, 435, 38, 4000);
+    t_(true, 285, 38, 4000);
     CHECK(!U.talk_armed);
-    pod_out_t o = t_(false, 435, 38, 4050);
+    pod_out_t o = t_(false, 285, 38, 4050);
     CHECK(o.fx == POD_FX_NONE && top()->view == POD_V_LEAD && !U.hands_free);
     take();
     render(4200);
     t_(true, MID_X, MID_Y, 5000);   // an armed talk on the body ...
     CHECK(U.talk_armed);
-    t_(true, 435, 38, 5100);   // ... is dropped when the finger leaves for the pill
+    t_(true, 285, 38, 5100);   // ... is dropped when the finger leaves for the pill
     CHECK(!U.talk_armed);
-    o = t_(false, 435, 38, 5150);
+    o = t_(false, 285, 38, 5150);
     CHECK(o.fx == POD_FX_NONE && top()->view == POD_V_LEAD && !U.hands_free);
     // and the body still talks
     take();
@@ -2578,6 +2578,24 @@ static void nobuddy_screen_never_talks(void) {
     o = tap_(MID_X, MID_Y, 7000);
     CHECK(o.fx == POD_FX_VOICE_BEGIN && !strcmp(o.agent, "a1"));
 }
+// Review of #2299 (Heron): part 2 kept the Buddy screen from talking, since a Pro's words posted in the Lead's shared chat. In this part the
+// Lead view's talk is a Swarm talk: voice.begin says face (pro_app) and the daemon posts in the face chat the side holds, the Buddy chat here.
+static void buddy_screen_talks_to_its_chat(void) {
+    pod_out_t o;
+    buddy_lead_open();
+    buddy_swarm()->side = POD_SIDE_BUDDY;   // the Buddy side, with a Buddy: avatar and lilac name
+    render(3400);
+    take();
+    o = tap_(MID_X, MID_Y, 6000);
+    CHECK(o.fx == POD_FX_VOICE_BEGIN && !strcmp(o.agent, "a1") && pod_ui_talking_to_swarm(&U));   // a face talk, never the terminal's
+    pod_ui_talk_over(&U);
+    buddy_swarm()->side = POD_SIDE_PM;
+    buddy_swarm()->leads[1].chat = POD_CHAT_BUDDY;   // the desktop has the Buddy chat open: still a face talk
+    render(6100);
+    take();
+    o = tap_(MID_X, MID_Y, 7000);
+    CHECK(o.fx == POD_FX_VOICE_BEGIN && pod_ui_talking_to_swarm(&U));
+}
 // A tapped segment that no frame answers goes back to the Swarm's own side after POD_SUPERTAB_RETRY_MS, and the view wakes to draw it.
 static void pressed_side_expires(void) {
     buddy_lead_open();
@@ -2637,6 +2655,7 @@ int main(void) {
     relink_clears_buddy_dot();
     side_kept_across_swipe();
     nobuddy_screen_never_talks();
+    buddy_screen_talks_to_its_chat();
     pressed_side_expires();
     pressed_side_cleared_when_send_fails();
     buddy_dot_clears_when_buddy_face_shown();
