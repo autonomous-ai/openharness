@@ -13,7 +13,6 @@ import 'package:harness_mobile/swarm/swarm_asks.dart';
 import 'package:harness_mobile/swarm/swarm_conversation.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
-import 'package:harness_mobile/ws/ws_conn.dart';
 
 import '../viewer_app_fixture.dart';
 import '../voice_fakes.dart' show MemoryKeyValueStore;
@@ -172,11 +171,12 @@ void main() {
         final p = await phone();
         var lost = true;
         p.backend.onWrite = (options) {
-          if (lost)
+          if (lost) {
             throw DioException.connectionError(
               requestOptions: options,
               reason: 'reply lost',
             );
+          }
           return (
             status: 200,
             body: {
@@ -223,11 +223,12 @@ void main() {
       () async {
         final p = await phone(online: true);
         p.backend.onWrite = (options) {
-          if (status == 0)
+          if (status == 0) {
             throw DioException.connectionError(
               requestOptions: options,
               reason: 'offline',
             );
+          }
           return (
             status: status,
             body: {
