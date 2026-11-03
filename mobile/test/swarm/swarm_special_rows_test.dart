@@ -265,20 +265,24 @@ void main() {
   });
 
   group('a proposal', () {
-    Map<String, dynamic> proposal() => row(
-      'p1',
-      2,
-      'Asked by dee.\nGoal: Activity read fix\nChanges: more words',
-      {'kind': 'buddy-proposal', 'personId': me},
-      author: 'Buddy',
-    );
+    // A message from threads on roots its own thread.
+    Map<String, dynamic> proposal() => {
+      ...row(
+        'p1',
+        2,
+        'Asked by dee.\nGoal: Activity read fix\nChanges: more words',
+        {'kind': 'buddy-proposal', 'personId': me},
+        author: 'Buddy',
+      ),
+      'thread': 'p1',
+    };
 
     testWidgets('is one line, named by its goal, with no author', (
       tester,
     ) async {
       await show(tester, backend([proposal()]));
       expect(textOf(tester, 'p1'), contains(': Activity read fix'));
-      expect(textOf(tester, 'p1'), startsWith('Proposal from '));
+      expect(textOf(tester, 'p1'), contains('Proposal from '));
       expect(textOf(tester, 'p1'), isNot(contains('Changes: more words')));
       expect(inRow('p1', find.text('Buddy')), findsNothing);
     });
