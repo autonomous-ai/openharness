@@ -600,6 +600,30 @@ void main() {
       expect(attention.mentionsIn('offline'), 0);
     });
 
+    test(
+      'an open decision stays on the sidebar count until answered',
+      () async {
+        final server = projectServer();
+        server.ask(['Ship it?'], conversationId: 'lead');
+        final c = await open(server);
+        final attention = SuperTabAttention.of(c);
+        final activity = SuperTabActivity.of(c);
+        await attention.decisions.load();
+        expect(activity.needsYou, hasLength(1));
+        // Reading the chat does not answer the question.
+        c.markRead('lead');
+        expect(attention.mentionsIn('lead'), 1);
+        expect(attention.decisionsIn('lead'), 1);
+        expect(
+          await attention.decisions.answer(attention.decisions.open.single, 0),
+          isTrue,
+        );
+        await attention.decisions.load();
+        expect(attention.mentionsIn('lead'), 0);
+        expect(activity.needsYou, isEmpty);
+      },
+    );
+
     test('a tag stops counting once the reader has read past it, answered '
         'or not; a decision once its chat is read', () async {
       final server = projectServer();
