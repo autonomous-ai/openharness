@@ -835,6 +835,11 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   else delete visible.removedMachines
   // Rows by day and project that only the leaderboard read uses, and it takes them from the Swarm itself.
   for (const pool of visible.machines ?? []) delete pool.lentDays
+  // A machine kept for some projects names to each reader only those they may read (machines.ts projects): a private
+  // project's id is not another member's to see.
+  for (const pool of visible.machines ?? []) {
+    if (pool.projects) pool.projects = pool.projects.filter(id => projectsOf(state).some(p => p.id === id && canReadProject(state, actor, p)))
+  }
   // Nor its id, which a Buddy's row carries (machineHiddenFrom).
   visible.agents = visible.agents.map(a => machineHiddenFrom(state, actor, a) ? agentWithoutMachine(a) : a)
   // The removed Leads conversation reaches nobody (leadsRemoved), its id included.
