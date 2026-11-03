@@ -79,7 +79,12 @@ The test flavor signs in as a test account, never as the person whose Mac it is.
 
 It never stops anything by name or pattern. The test sign-in and the test computer id (`~/.harness-test/computer-id`,
 set as `ADAPTER_COMPUTER_ID_FILE`) stay for the next run, so each Mac is one machine in the test account however often
-it tests. `forget` removes them and that machine.
+it tests. `forget` signs the test account out on that Mac and removes them. The Mac's one test machine stays in the test
+account until someone removes it from that account's Machines list.
+
+**Known limit.** The guard runs when `start` signs in. If a Tester signs the test copy out and back in with its own
+Sign in button, the browser may hold the person's session. `status` checks the account again and warns. A Tester
+signs in again through `stop` and `start`, never through the copy's button.
 
 ## What stops it from signing out the real CLI
 

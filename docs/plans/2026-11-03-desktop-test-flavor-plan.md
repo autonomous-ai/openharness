@@ -156,16 +156,22 @@ PR's own CLI bundle (`cli/build-bundle.mjs`, `BUNDLE_OUT_DIR`), PlistBuddy and c
 
 **Interfaces:**
 - Consumes: tasks 2–4.
-- Produces: `main(argv: list[str]) -> int` with subcommands `start [--dry-run]`, `status`, `stop` and `forget`, plus a
-  run state `{testHome, port, appPid, app}` in `desktop/build/test-flavor/state.json`.
+- Produces: `main(argv: list[str], runner: Runner | None = None, paths: Paths | None = None,
+  installer=install_cli) -> int` with subcommands `start`, `status`, `stop` and `forget` (no `--dry-run`: a Tester
+  never needs one, and tests inject `runner`, ENGINEERING.md §1), plus a run state `{testHome, port, appPid, app}` in
+  `desktop/build/test-flavor/state.json`. `Runner` has `run(argv, env=None, interactive=False, check=True)`,
+  `launch(argv, env) -> int`, `alive(pid) -> bool`, `terminate(pid)` and `port_free(port) -> bool`. `Paths` holds
+  `repo`, `shared` (`~/.harness-test`) and `person_home` (`~`).
   - `start`:
     1. refuses if a state file exists ("A test copy is already running; run stop first");
     2. picks a free port;
     3. builds the CLI into a new test home (`install_cli`);
-    4. runs `desktop/scripts/build-macos-debug.sh --dart-define=HARNESS_DAEMON_PORT=<port>`;
-    5. copies the app to `desktop/build/test-flavor/Harness Test.app`, applies `patch_info`, and re-signs;
-    6. signs in with `login --code` when `~/.harness-test/auth` has no session;
-    7. runs `check_not_owner`;
+    4. signs in with `login --code` when `~/.harness-test/auth` has no session (before the build, so a wrong
+       account fails fast);
+    5. runs `check_not_owner`; on refusal it signs the test session out and removes `~/.harness-test/auth`;
+    6. runs `desktop/scripts/build-macos-debug.sh --no-pub --dart-define=HARNESS_DAEMON_PORT=<port>`;
+    7. copies the app to `desktop/build/test-flavor/Harness Test.app`, applies `patch_info`, renames the
+       executable, and re-signs;
     8. launches `Contents/MacOS/Harness Test` with `flavor_env`;
     9. writes the state.
   - `stop`:
@@ -175,18 +181,22 @@ PR's own CLI bundle (`cli/build-bundle.mjs`, `BUNDLE_OUT_DIR`), PlistBuddy and c
     4. removes the test home, the app copy and the state file;
     5. reports each step that failed.
 
-- [ ] **Step 1: Write the failing tests.** `start --dry-run` and `stop` run with an injected command runner that
-  records commands:
+- [ ] **Step 1: Write the failing tests.** `start`, `status` and `stop` run with an injected `Runner` that records
+  commands:
   - the build command carries `--dart-define=HARNESS_DAEMON_PORT=<port>`, not 18473;
   - the launch environment equals `flavor_env`;
   - a second `start` with a state file refuses;
   - `stop` on a crashed run's state (pid not alive) still removes the home and state and exits 0;
   - a port taken after it was chosen fails `start` with "Port <p> was taken; run start again", and the new home is
     removed;
-  - `stop` never kills anything but the recorded pid.
+  - `stop` never kills anything but the recorded pid;
+  - the same account at sign-in refuses, removes the test sign-in and launches nothing;
+  - `status` warns when the test session is now the person's account (Desktop's own sign-in button can sign it
+    in again).
 - [ ] **Step 2: Run** → FAIL.
 - [ ] **Step 3: Implement** `main` and the subcommands; `forget` signs the test account out in a throwaway test home and
-  removes `~/.harness-test`.
+  removes `~/.harness-test`. That Mac's one test machine stays in the test account until removed in its Machines
+  list.
 - [ ] **Step 4: Run** all tool tests → PASS; run `python3 scripts/check-ui-style.py --only desktop/lib/super_tabs`.
 - [ ] **Step 5: Commit.**
 

@@ -149,5 +149,170 @@ class SameAccountGuardTest(unittest.TestCase):
         test_flavor.check_not_owner(None, 'acct-test')
 
 
+class FakeRunner:
+    """Records commands; plays the build, copy and sign-in steps on disk where `start` reads their results."""
+
+    def __init__(self, built_app, shared, account='acct-test'):
+        self.built_app = built_app
+        self.shared = shared
+        self.account = account
+        self.commands = []
+        self.launched = []
+        self.terminated = []
+        self.alive_pids = set()
+        self.taken_ports = set()
+
+    def run(self, argv, env=None, interactive=False, check=True):
+        argv = [str(a) for a in argv]
+        self.commands.append((argv, env))
+        if argv[0] == 'ditto':
+            __import__('shutil').copytree(argv[1], argv[2])
+        elif 'login' in argv:
+            auth = self.shared / 'auth'
+            auth.mkdir(parents=True, exist_ok=True)
+            (auth / 'session.json').write_text(__import__('json').dumps(
+                {'version': 1, 'accessToken': 'a.b.c', 'signInAcct': self.account}))
+        return __import__('subprocess').CompletedProcess(argv, 0, '', '')
+
+    def launch(self, argv, env):
+        self.launched.append(([str(a) for a in argv], env))
+        self.alive_pids.add(4242)
+        return 4242
+
+    def alive(self, pid):
+        return pid in self.alive_pids
+
+    def terminate(self, pid):
+        self.terminated.append(pid)
+        self.alive_pids.discard(pid)
+
+    def port_free(self, port):
+        return port not in self.taken_ports
+
+
+class CommandsTest(unittest.TestCase):
+    def setUp(self):
+        import json
+        import tempfile
+        self.json = json
+        self.root = Path(tempfile.mkdtemp(prefix='harness-test-flavor-cmds.'))
+        self.addCleanup(__import__('shutil').rmtree, self.root, ignore_errors=True)
+        self.repo = self.root / 'repo'
+        built = self.repo / 'desktop/build/macos/Build/Products/Debug/Harness.app/Contents'
+        (built / 'MacOS').mkdir(parents=True)
+        (built / 'MacOS/Harness').write_text('binary')
+        with (built / 'Info.plist').open('wb') as out:
+            plistlib.dump({'CFBundleIdentifier': 'ai.autonomous.harness', 'CFBundleExecutable': 'Harness',
+                           'CFBundleName': 'Harness', 'CFBundleURLTypes': [{'CFBundleURLSchemes': ['harness']}]}, out)
+        self.person_home = self.root / 'person'
+        (self.person_home / '.harness/auth').mkdir(parents=True)
+        (self.person_home / '.harness/auth/session.json').write_text(
+            json.dumps({'version': 1, 'accessToken': 'a.b.c', 'signInAcct': 'acct-owner'}))
+        self.shared = self.person_home / '.harness-test'
+        self.paths = test_flavor.Paths(repo=self.repo, shared=self.shared, person_home=self.person_home)
+        self.runner = FakeRunner(built.parent, self.shared)
+        self.homes = []
+
+        def installer(cli_dir, test_home, node):
+            self.homes.append(test_home)
+            (test_home / '.harness/cli').mkdir(parents=True)
+            (test_home / '.harness/cli/cli.js').write_text('')
+            return test_home / '.harness/cli/cli.js'
+        self.installer = installer
+
+    def main(self, *argv):
+        return test_flavor.main(list(argv), runner=self.runner, paths=self.paths, installer=self.installer)
+
+    def state(self):
+        path = self.repo / 'desktop/build/test-flavor/state.json'
+        return self.json.loads(path.read_text()) if path.exists() else None
+
+    def test_start_builds_for_its_own_port_and_launches_the_copy_in_the_test_environment(self):
+        self.assertEqual(self.main('start'), 0)
+        state = self.state()
+        port = state['port']
+        self.assertNotEqual(port, 18473)
+        builds = [argv for argv, _ in self.runner.commands if any('build-macos-debug.sh' in a for a in argv)]
+        self.assertEqual(len(builds), 1)
+        self.assertIn(f'--dart-define=HARNESS_DAEMON_PORT={port}', builds[0])
+        [(argv, env)] = self.runner.launched
+        app = self.repo / 'desktop/build/test-flavor/Harness Test.app'
+        self.assertEqual(argv, [str(app / 'Contents/MacOS/Harness Test')])
+        self.assertTrue((app / 'Contents/MacOS/Harness Test').exists())
+        self.assertEqual(env, test_flavor.flavor_env(dict(__import__('os').environ), Path(state['testHome']),
+                                                     self.shared, port))
+        with (app / 'Contents/Info.plist').open('rb') as source:
+            info = plistlib.load(source)
+        self.assertEqual(info['CFBundleIdentifier'], 'ai.autonomous.harness.test')
+        self.assertNotIn('CFBundleURLTypes', info)
+        self.assertEqual(state['appPid'], 4242)
+
+    def test_signs_in_once_before_the_build_and_reuses_it(self):
+        self.assertEqual(self.main('start'), 0)
+        names = [' '.join(argv) for argv, _ in self.runner.commands]
+        login = next(i for i, c in enumerate(names) if ' login --code' in c)
+        build = next(i for i, c in enumerate(names) if 'build-macos-debug.sh' in c)
+        self.assertLess(login, build)
+        self.assertEqual(self.main('stop'), 0)
+        self.runner.commands.clear()
+        self.assertEqual(self.main('start'), 0)
+        self.assertFalse(any(' login ' in ' '.join(argv) for argv, _ in self.runner.commands))
+
+    def test_a_second_start_refuses_while_one_runs(self):
+        self.assertEqual(self.main('start'), 0)
+        with self.assertRaises(test_flavor.Refused) as refused:
+            self.main('start')
+        self.assertEqual(str(refused.exception), 'A test copy is already running; run stop first.')
+        self.assertEqual(len(self.runner.launched), 1)
+
+    def test_the_owner_s_account_is_refused_and_nothing_launches(self):
+        self.runner.account = 'acct-owner'
+        with self.assertRaises(test_flavor.SameAccount):
+            self.main('start')
+        self.assertEqual(self.runner.launched, [])
+        self.assertFalse((self.shared / 'auth').exists(), 'the refused sign-in is removed')
+        self.assertIsNone(self.state())
+        self.assertFalse(self.homes[0].exists(), 'the new test home is removed')
+
+    def test_a_port_taken_before_launch_fails_plainly_and_cleans_up(self):
+        real_free = self.runner.port_free
+        self.runner.port_free = lambda port: False if self.runner.commands else real_free(port)
+        with self.assertRaises(test_flavor.Refused) as refused:
+            self.main('start')
+        self.assertRegex(str(refused.exception), r'^Port \d+ was taken; run start again\.$')
+        self.assertEqual(self.runner.launched, [])
+        self.assertIsNone(self.state())
+        self.assertFalse(self.homes[0].exists())
+
+    def test_stop_ends_only_the_recorded_app_and_removes_everything(self):
+        self.assertEqual(self.main('start'), 0)
+        home = Path(self.state()['testHome'])
+        self.assertEqual(self.main('stop'), 0)
+        self.assertEqual(self.runner.terminated, [4242])
+        self.assertFalse(home.exists())
+        self.assertFalse((self.repo / 'desktop/build/test-flavor/Harness Test.app').exists())
+        self.assertIsNone(self.state())
+        stops = [argv for argv, env in self.runner.commands if argv[-1] == 'stop']
+        self.assertEqual(len(stops), 1, 'the test daemon is stopped through its own CLI')
+
+    def test_stop_after_a_crash_still_cleans_up(self):
+        self.assertEqual(self.main('start'), 0)
+        home = Path(self.state()['testHome'])
+        self.runner.alive_pids.clear()
+        self.assertEqual(self.main('stop'), 0)
+        self.assertEqual(self.runner.terminated, [])
+        self.assertFalse(home.exists())
+        self.assertIsNone(self.state())
+
+    def test_status_warns_when_the_test_copy_is_now_the_owner_s_account(self):
+        self.assertEqual(self.main('start'), 0)
+        (self.shared / 'auth/session.json').write_text(
+            self.json.dumps({'version': 1, 'accessToken': 'a.b.c', 'signInAcct': 'acct-owner'}))
+        out = __import__('io').StringIO()
+        with __import__('contextlib').redirect_stdout(out):
+            self.assertEqual(self.main('status'), 1)
+        self.assertIn(test_flavor.SAME_ACCOUNT, out.getvalue())
+
+
 if __name__ == '__main__':
     unittest.main()
