@@ -140,6 +140,13 @@ class _Words {
 
   static const _computerLead =
       'This computer joined a Swarm, so it needs Harness Team before you go on.';
+
+  /// Once Remove was refused: Not now is the way on, and it says so instead
+  /// of asking for Remove again.
+  String get notNowWhy =>
+      'Choose Not now to go on without it. You can set up Harness Team on '
+      '$here later from Machines.';
+
   static const _computerRemoveOnly =
       'To go on, remove this computer from the Swarm. You can add it again from Machines.';
   static const _computerRemove = 'Remove this computer from the Swarm';
@@ -639,6 +646,15 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
                       words.confirmRemove(_confirmSwarms),
                       key: const Key('team-account-lock-confirm'),
                       style: body,
+                    ),
+                  ] else if (removeError != null &&
+                      (_step == _LockStep.cancelled ||
+                          _step == _LockStep.cannot)) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      words.notNowWhy,
+                      key: const Key('team-account-lock-not-now-why'),
+                      style: muted,
                     ),
                   ] else if (_step == _LockStep.cancelled) ...[
                     const SizedBox(height: 12),
