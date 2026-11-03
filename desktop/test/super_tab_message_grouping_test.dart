@@ -237,11 +237,29 @@ void main() {
       final at = DateTime.parse(server.messages[2]['createdAt'] as String)
           .toLocal();
       final context = tester.element(body);
+      // Slack's short time, so every time fits the gutter on one line
+      // (Merlin's test: "10:01 AM" lost its AM there); the full time and
+      // date are on its tooltip and in the row's label.
+      final l10n = MaterialLocalizations.of(context);
+      final local = TimeOfDay.fromDateTime(at);
       expect(
         tester.widget<Text>(time).data,
-        TimeOfDay.fromDateTime(at).format(context),
+        '${l10n.formatHour(local)}:${l10n.formatMinute(local)}',
       );
+      expect(tester.widget<Text>(time).softWrap, isFalse);
       expect(tester.getRect(time).right, lessThan(tester.getRect(body).left));
+    });
+
+    testWidgets('a grouped message reads its sender and time, as a header '
+        'does', (tester) async {
+      final semantics = tester.ensureSemantics();
+      final server = await show(tester);
+      final at = DateTime.parse(server.messages[2]['createdAt'] as String)
+          .toLocal();
+      final time = TimeOfDay.fromDateTime(at)
+          .format(tester.element(find.text('Shall I merge it?')));
+      expect(find.bySemanticsLabel(RegExp('^River, $time')), findsOneWidget);
+      semantics.dispose();
     });
 
     testWidgets('the thread view groups replies by the same rule', (
