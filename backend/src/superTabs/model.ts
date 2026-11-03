@@ -334,6 +334,9 @@ export interface Conversation {
   /** The sequence of its newest message in the main stream: a reply only in its thread leaves it (threads.ts). Absent until
    *  this conversation's first message after threads; readers fall back to lastMessageSequence. */
   lastMainSequence?: number
+  /** The sequence of its newest main-stream message from a person, not a system row (parts/commit.ts): what makes a task's
+   *  sidebar row bold (Huy, 11-03, #2427). Absent until a person's first message after this was added; readers read 0. */
+  lastPersonSequence?: number
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
   /** Its messages drawn as live cards: its task and each linked pull request (cards.ts). Absent until its first card. */
