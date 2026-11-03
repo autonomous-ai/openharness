@@ -148,7 +148,7 @@ void main() {
     (conversations[1] as Map)
       ..['projectId'] = 'lead'
       ..['number'] = 3;
-    conversations.addAll([
+    conversations.addAll(<Map<String, dynamic>>[
       {...conversationFixture('api-chat', 'api'), 'projectId': 'api'},
       {
         ...conversationFixture('api-task', 'Rate limits'),
