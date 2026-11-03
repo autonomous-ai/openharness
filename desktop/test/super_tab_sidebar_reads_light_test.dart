@@ -375,4 +375,28 @@ void main() {
       await close(tester, controller);
     },
   );
+
+  // Review of #2790 (Sedge): the Unread filter counted any message, so it
+  // kept rows the bold rule now leaves grey. Both read one rule.
+  testWidgets(
+    'the Unread filter keeps what is bold, and hides agents\' progress alone',
+    (tester) async {
+      final server = humansSwarm();
+      addNumberedWorkgroups(server, 2);
+      final controller = await show(tester, server);
+      final g2 = find.byKey(const ValueKey('super-group-g2'));
+      server.append(
+        'Pushed the next commit.',
+        conversationId: 'g1',
+        agent: true,
+      );
+      server.append('Can you check this?', conversationId: 'g2');
+      await news(tester, controller);
+      controller.toggleUnreadOnly();
+      await tester.pumpAndSettle();
+      expect(g1, findsNothing);
+      expect(g2, findsOneWidget);
+      await close(tester, controller);
+    },
+  );
 }
