@@ -4776,6 +4776,26 @@ describe('lead.switch', () => {
     expect(s.f.state.agents.find(a => a.id === s.pm)!.switchLanded).toMatchObject({ id: switchId, candidateAgentId: candidateId })
   })
 
+  it('keeps the source lead and posts one safe line when the destination candidate fails', () => {
+    const s = setup()
+    const destination = structuredClone(s.f.state.machines![0]!)
+    destination.machineId = 'destination'
+    destination.generation = 'g2'
+    destination.observation!.generation = 'g2'
+    destination.observation!.capabilities = ['leadSwitch', 'leadStart']
+    s.f.state.machines!.push(destination)
+    s.f.run({ ...s.request, machineId: 'destination', model: 'gpt-5.1' })
+    const startId = s.f.state.starts!.find(candidate => candidate.request.leadFor?.switchId === s.sid())!.id
+
+    const failed = s.f.run({ type: 'agent.startFailed', startId, error: '/private/path: sign in failed' }, owner)
+
+    expect(s.f.state.conversations.find(c => c.id === 'lead')!.leadId).toBe(s.pm)
+    expect(s.agent().switchRequest).toBeUndefined()
+    expect(failed.messages).toHaveLength(1)
+    expect(failed.messages[0]!.text).toBe("Couldn't switch the PM: its machine could not prepare or launch it. It is back on Claude.")
+    expect(s.f.run({ type: 'agent.startFailed', startId, error: '/private/path: sign in failed' }, owner).messages).toEqual([])
+  })
+
   it('lets only the PM itself claim, with a 15 minute lease', () => {
     const s = setup()
     s.f.run(s.request)
