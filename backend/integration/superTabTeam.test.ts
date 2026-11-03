@@ -298,7 +298,7 @@ describe('a team session speaking in a Swarm', () => {
   })
 
   // Tasks #2178 and #2215 (11-02): a Team Engineer could not assign its review step to a Reviewer on another Team machine,
-  // and the PM had to. Assigning or adding an agent that also runs in a Team account crosses no account; typing into its
+  // and the PM had to. Assigning or adding an agent that also runs in a Team account never reaches a main account; typing into its
   // terminal or reading it still would cross a machine, and anything in the main account stays out of reach.
   it('assigns and adds an agent in another machine\'s Team account, and still reaches nothing in a main account', async () => {
     const f = await fixture()

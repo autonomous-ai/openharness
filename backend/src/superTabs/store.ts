@@ -616,8 +616,10 @@ export class SuperTabStore {
   /**
    * What a team session's agent may command beyond the Swarm's own rules for that agent: a machine is the person's to
    * contribute, pause or remove, and nothing may start, add, move or drive an agent on another machine. It may assign or
-   * add an agent that runs in a Team account too, on any machine: that crosses no account, and a Team Engineer handing its
-   * review step to a Reviewer on another Team machine had to ask the PM instead (tasks #2178 and #2215, 11-02). Typing into
+   * add an agent that runs in a Team account too, on any machine: a Team Engineer handing its review step to a Reviewer on
+   * another Team machine had to ask the PM instead (tasks #2178 and #2215, 11-02). That other Team account is another account
+   * (projects.ts accountOf), so its agent reads the brief marked as another account's text (audit M3), as a message from it
+   * would be; the main account stays out of reach. Typing into
    * or reading another machine's terminal stays refused, whatever account it runs in. Messages and work reports go to the
    * Swarm as from any agent. An agent that is gone is left to the command's own answer.
    */
