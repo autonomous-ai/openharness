@@ -8,6 +8,7 @@ import 'package:harness_mobile/api/access_token_source.dart';
 import 'package:harness_mobile/api/api_client.dart';
 import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
+import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/swarm/swarm_asks.dart';
 import 'package:harness_mobile/swarm/swarm_conversation.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
@@ -60,11 +61,11 @@ class _Backend implements HttpClientAdapter {
       data = {
         'result': {'messageId': 'posted-1'},
       };
-    } else if (options.path.endsWith('/parts')) {
+    } else if (options.uri.path.endsWith('/parts')) {
       data = firstLoad(groups: [groupData('g1')]);
-    } else if (options.path.endsWith('/changes')) {
-      data = changes();
-    } else if (options.path.endsWith('/messages')) {
+    } else if (options.uri.path.endsWith('/changes')) {
+      data = changes(cursor: 'c2');
+    } else if (options.uri.path.endsWith('/messages')) {
       data = {'messages': <Object>[], 'next': null};
     } else {
       data = <String, Object?>{};
