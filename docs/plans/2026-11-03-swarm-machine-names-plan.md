@@ -105,3 +105,13 @@ renames the pool and its Mac's Harness Team account pools; the next reading is f
   evidence for the fix is Tasks 1–2.
 - [ ] **Step 2: Run** `flutter test test/super_tab_launch_test.dart --plain-name 'renamed machine'`; PASS.
 - [ ] **Step 3: Commit.**
+
+### Task 4 (review of #2717): a rename in Machines reaches the Swarms at once, and the Team rows
+
+**Files:**
+- Create: `backend/src/superTabs/machineRenames.ts` (`onMachineRenamed`, `machineRenamed(rename: MachineRename): Promise<void>`)
+- Modify: `backend/src/services/MachineService.ts` `rename`; `backend/src/superTabs/store.ts` (`machineRenamed`); `backend/src/routes/superTabs.ts` (wires the store)
+- Test: `backend/src/services/MachineService.rename.test.ts`, `backend/integration/superTabMachineNames.test.ts`
+
+- [x] Failing tests: an offline machine's rename shows in every Swarm with no reading, its Team pool too, members pushed; a cleared name keeps the Swarm's; another person's call changes nothing; the Mac's Team rows become "<name> · Team" (a 40-character name kept whole: the suffix runs past it, as the CLI's does after a 60-character hostname); a cleared name leaves them; a Swarm that cannot be told is logged and the rename still succeeds.
+- [x] Implement: the store reads the owner's row itself (never a name passed in) and renames by `followAccountName`; the heartbeat stays the backstop.
