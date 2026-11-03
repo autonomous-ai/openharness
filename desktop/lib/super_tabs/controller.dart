@@ -864,9 +864,10 @@ class SuperTabController extends ChangeNotifier {
   /// A thread restored open, whose replies its first read of the Swarm brings.
   bool _reopenThread = false;
 
-  /// A thread restored open whose pane has not been on screen: the read mark
-  /// is the account's on every device, and this controller may be open with
-  /// nothing shown, so nothing counts as read until [threadPaneShown].
+  /// The open thread's pane is not on screen: restored open and not yet seen,
+  /// or hidden since ([threadPaneHidden]). The read mark is the account's on
+  /// every device, and this controller keeps reading with nothing shown, so
+  /// nothing counts as read until [threadPaneShown].
   bool _threadUnshown = false;
 
   /// The pane of the open thread is on screen.
@@ -876,6 +877,16 @@ class SuperTabController extends ChangeNotifier {
     if (openedThread case final open?) _seeThread(open.root);
     // The round dial follows a thread whose pane is on screen.
     _changed();
+  }
+
+  /// The pane of the open thread left the screen: the app went to the
+  /// background, another Swarm came to the front, or something covers it.
+  /// Called from a build or a dispose, so the round dial, which follows a
+  /// thread only while its pane is on screen, is told after it.
+  void threadPaneHidden() {
+    if (_threadUnshown) return;
+    _threadUnshown = true;
+    if (openedThread != null) scheduleMicrotask(_changed);
   }
 
   /// The root of the thread open beside the selected conversation while its
