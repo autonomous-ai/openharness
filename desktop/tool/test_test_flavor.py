@@ -44,6 +44,21 @@ class FlavorEnvTest(unittest.TestCase):
         self.assertEqual(self.env['PATH'], '/usr/bin:/bin')
         self.assertEqual(self.base['PORT'], '3000', 'the base environment is not changed')
 
+    def test_drops_what_an_agent_pane_inherits_from_the_person_s_daemon(self):
+        # A Tester is usually a Harness agent: its pane carries the real daemon's folders and tmux server.
+        inherited = {
+            'ADAPTER_DATA_DIR': '/Users/person/.harness/cli/data',
+            'ADAPTER_CLI_DIR': '/Users/person/.harness/cli',
+            'HARNESS_HOOK_ROUTES_DIR': '/Users/person/.harness/hook-routes',
+            'HARNESS_ENV_FILE': '/Users/person/.harness/env',
+            'HARNESSD_PLATFORM': 'launchd',
+            'TMUX': '/private/tmp/tmux-501/default,123,0',
+            'TMUX_PANE': '%3',
+        }
+        env = test_flavor.flavor_env({**self.base, **inherited}, self.test_home, self.shared, 18990)
+        for key in inherited:
+            self.assertNotIn(key, env, key)
+
     def test_no_path_reaches_the_person_s_harness_folder(self):
         real_harness = self.real_home / '.harness'
         for key, value in self.env.items():

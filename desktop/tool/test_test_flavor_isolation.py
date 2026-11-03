@@ -82,6 +82,10 @@ class IsolationProofTest(unittest.TestCase):
             'TMPDIR': str(self.root / 'tmp'),
             # No backend: the proof is about this Mac, and a closed port answers at once.
             'BACKEND_WS_URL': 'ws://127.0.0.1:1',
+            # What a Tester's agent pane inherits from the person's daemon.
+            'ADAPTER_DATA_DIR': str(self.real_home / '.harness/cli/data'),
+            'HARNESS_HOOK_ROUTES_DIR': str(self.real_home / '.harness/hook-routes'),
+            'TMUX': f'/private/tmp/tmux-{os.getuid()}/default,1,0',
         }
         (self.root / 'tmp').mkdir()
         self.env = test_flavor.flavor_env(base, self.test_home, self.shared, self.port)
