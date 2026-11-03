@@ -10,7 +10,7 @@ import { BuddyModelRequests, type BuddyModelRow } from './buddyModel.js'
 const GRID = 'swarm-0123456789ab'
 const request = (over: Record<string, unknown> = {}) => ({ id: 'req1', gridModel: 'deepseek-4.1-flash', gridName: GRID, name: 'DeepSeek 4.1 Flash',
   servedBy: ['Mac Studio'], contextWindow: 131072, requestedBy: 'peer', at: '2026-11-03T10:00:00.000Z', ...over })
-const main = (modelRequest: Record<string, unknown> | undefined = request()): BuddyModelRow => ({ tabId: 'tab', agent: { id: 'buddy', harnessId: 'h-main',
+const main = (modelRequest: Record<string, unknown> | null = request()): BuddyModelRow => ({ tabId: 'tab', agent: { id: 'buddy', harnessId: 'h-main',
   buddyOf: { personId: 'peer', generation: 'first' }, ...(modelRequest ? { modelRequest } : {}) } })
 const thread = (harnessId: string): BuddyModelRow => ({ tabId: 'tab', agent: { id: `s-${harnessId}`, harnessId,
   buddyOf: { personId: 'peer', generation: 'first' }, buddySession: { thread: 't', from: 0 } } })
@@ -112,7 +112,7 @@ describe('carrying out a Buddy\'s model request', () => {
 
   it('does nothing for a Buddy with no request', async () => {
     const f = fixture()
-    await f.runner.serve(main(undefined), [])
+    await f.runner.serve(main(null), [])
     expect([f.frames, f.posts]).toEqual([[], []])
   })
 })
