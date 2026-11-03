@@ -46,6 +46,7 @@ per-user resources below. The test flavor runs with its own `HOME`, and each of 
 | Claude Code's Keychain item | `Claude Code-credentials` | `Claude Code-credentials-<sha(test claude dir)>`, so the CLI never reads or rewrites the person's item | `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` set to `<test home>/.claude` (the CLI's write reads only the second) |
 | Codex sign-in | `~/.codex` | `<test home>/.codex` | `CODEX_HOME` |
 | Self-update | the installed copy updates | the PR's CLI is never replaced | `ADAPTER_UPDATE_DISABLE=1`; Desktop's updater runs only in release builds |
+| What a Tester's agent pane inherits | the person's daemon's `ADAPTER_*`/`HARNESS*` folders, `TMUX` (its tmux server), the agent's `CLAUDE*`/`CODEX*` | none of them | dropped before the test environment is set |
 
 The test home is a `mktemp -d` folder. Its path, the port and the pids `start` started are written to
 `<checkout>/desktop/build/test-flavor/state.json`, and `stop` acts only on those.
@@ -93,6 +94,9 @@ signs in again through `stop` and `start`, never through the copy's button.
 - The test daemon is on its own port, socket and pid file, so Desktop's daemon-owner guard
   (`DaemonOwnerGuard`, which restarts a daemon Desktop did not launch) sees only the test daemon.
 - launchd is never asked (see the table).
+- Where the CLI asks the account database rather than `HOME` (`cli/src/superTabs/callerPane.ts` finds a tmux binary
+  to run in the account's `~/.harness/runtime`), it only reads; `cli/src/config/startHome.ts` already keeps start, stop,
+  login and logout under another `HOME` on that home's data folder.
 - The proof is a test (plan task 3): with a fake "real" home holding a session, settings and a LaunchAgents
   definition, and a fake `launchctl` and `security` on PATH that record every call, it runs the PR's real CLI in the test
   environment through start, sign-in status, sign-out and stop. It then checks that the fake real home's files are
