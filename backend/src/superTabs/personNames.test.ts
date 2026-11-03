@@ -141,6 +141,10 @@ describe('member.name', () => {
       'Everyone', 'Swarm', 'You', 'Someone']) {
       expect(() => f.setName(name), name).toThrow(expect.objectContaining({ code: 'NAME_RESERVED', status: 400 }))
     }
+    // Width variants too, as every name compare reads them (review 2 of #2794).
+    for (const name of ['ＰＭ', 'Ｌｅａｄ', 'ｓｙｓｔｅｍ']) {
+      expect(() => f.setName(name), name).toThrow(expect.objectContaining({ code: 'NAME_RESERVED' }))
+    }
     f.setName('Leading Light')
     expect(f.name('relay')).toBe('Leading Light')
   })
@@ -153,6 +157,13 @@ describe('member.name', () => {
     // One's own name never moves one's own default.
     f.setName('WKPNJJHBNM')
     expect(usernameOf(f.state, 'relay')).toBe('wkpnjjhbnm')
+  })
+
+  it('refuses a web address as a name, which server lines would show as a link (review 2 of #2794)', () => {
+    const f = fixture()
+    for (const name of ['https://ev.il/x', 'ev.il://x', 'www.ev.il', 'WWW.EV.IL']) {
+      expect(() => f.setName(name), name).toThrow(expect.objectContaining({ code: 'INVALID_NAME' }))
+    }
   })
 
   it('writes a name into server-written text as plain words, never Markdown (review 1 of #2794)', () => {
