@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -156,6 +157,17 @@ void main() {
       });
 
       await shot('chat');
+      // The reply bar under the pointer (Huy, 2026-11-03, #2315).
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: Offset.zero);
+      await mouse.moveTo(
+        tester.getCenter(
+          find.byKey(const ValueKey('super-thread-bar-message-1')),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await shot('hover');
+      await mouse.removePointer();
       await tester.tap(
         find.byKey(const ValueKey('super-thread-line-message-1')),
       );

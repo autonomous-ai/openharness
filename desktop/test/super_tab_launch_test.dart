@@ -1138,6 +1138,65 @@ void main() {
     expect(find.textContaining('.local'), findsNothing);
   });
 
+  // #2308: Dee renamed his Mac Studio 2 to 'Mac 3' in Machines and New
+  // Project still listed it by its computer name. The Swarm's machine record
+  // carries the name its owner gave it (backend machines.ts
+  // accountMachineName); the menu shows that, never the computer's own name.
+  testWidgets('New Project lists a renamed machine by the name its owner '
+      'gave it, not its computer name', (tester) async {
+    final f = SuperTabLaunchFixture();
+    f.connection.server.state['machines'] = [
+      machineRow('studio-2', 'Mac 3', contributor: 'owner', lead: true),
+    ];
+    // This computer knows the machine by its hostname too.
+    const studio = Machine(
+      machineId: 'studio-2',
+      authMode: MachineAuthMode.remote,
+      name: 'Macs-Mac-Studio-2.local',
+    );
+    f.app.machines = [...f.app.machines, studio];
+    f.app.machineStates['studio-2'] = MachineState(studio)
+      ..nodeOnline = true
+      ..connectionStatus = ConnectionStatus.connected
+      ..agentLoadStatus = AgentLoadStatus.loaded
+      ..agents = [];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = (await tester.runAsync(() => f.box(newProject: true)))!;
+    expect(
+      box.integration!.leadMachines!.singleWhere((m) => m.id == 'studio-2'),
+      isA<LeadMachine>()
+          .having((m) => m.name, 'name', 'Mac 3')
+          .having((m) => m.inSwarm, 'inSwarm', isTrue),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 1200,
+            height: 800,
+            child: NewHarnessForm(
+              controller: box,
+              desktop: true,
+              onClose: () {},
+              onCreated: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('new-harness-field-machine')));
+    await tester.pump();
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('new-harness-lead-machine-studio-2')),
+        matching: find.text('Mac 3'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Macs-Mac-Studio-2'), findsNothing);
+  });
+
   // Security reviews 1 and 2 of #2228: the server decides where a teammate's
   // Mac runs the PM, by engine (backend leadStart.ts leadChoices), and New
   // Project shows that rather than working it out from the readings.
