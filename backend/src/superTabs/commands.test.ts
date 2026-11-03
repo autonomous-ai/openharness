@@ -4790,7 +4790,7 @@ describe('lead.switch', () => {
     s.f.run({ type: 'agent.switchHandoff', agentId: s.pm, switchId, handoffChangeId: 'f'.repeat(32), note: 'Prior work summary.' }, s.as)
 
     expect(s.f.state.starts!.find(candidate => candidate.request.leadFor?.switchId === switchId)!.request)
-      .toMatchObject({ handoffChangeId: 'f'.repeat(32), handoffSourceAgentId: s.pm, handoffNote: 'Prior work summary.' })
+      .toMatchObject({ handoffChangeId: 'f'.repeat(32), handoffSourceAgentId: s.agent().harnessId, handoffNote: 'Prior work summary.' })
   })
 
   it('requires the source claim before dispatch and keeps the handoff out of ordinary reads', () => {

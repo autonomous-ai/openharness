@@ -60,7 +60,8 @@ function setup(options: { claim?: boolean; home?: string | null; team?: boolean;
     agents: { byAgent: vi.fn((id: string) => id === 'h1' && live ? { ...PM, ...options.old } as never : undefined) } })
   const profiles = vi.fn(() => options.home === undefined ? '/home/p1' : options.home)
   const switches = new LeadSwitchRequests(core, 'm1', { now: () => clock.now, home: () => home, signedIn: async () => options.signedIn !== false,
-    open: async () => daemon, profiles: profiles as never, team: () => options.team === true })
+    open: async () => daemon, profiles: profiles as never, team: () => options.team === true,
+    readHandoff: () => 'Earlier project state.' })
   return { switches, calls, posted, daemon, profiles, operationIds, home, dataDir, clock, reopen: () => { live = true } }
 }
 
@@ -301,6 +302,22 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     await t.switches.serve(row())
     expect(t.posted.map(c => c.type)).toEqual(['agent.switchClaim'])
     expect(t.calls).toEqual([])
+  })
+
+  it('publishes a handoff for the destination, keeps the source alive, then stops only that source after promotion', async () => {
+    const t = setup()
+    const cross = row({ switchRequest: { ...request, targetMachineId: 'm2' } })
+    await t.switches.serve(cross)
+    const changeId = switchChangeId('sw1')
+    expect(t.posted.map(c => c.type)).toEqual(['agent.switchClaim', 'agent.switchHandoff'])
+    expect(t.posted.at(-1)).toMatchObject({ agentId: 'h1', switchId: 'sw1', handoffChangeId: changeId, note: 'Earlier project state.' })
+    expect(t.calls.map(c => c[0])).toEqual(['agent_handoff_prepare'])
+    expect(t.calls.some(c => c[0] === 'agent_close' || c[0] === 'agent_create')).toBe(false)
+
+    await t.switches.serve(row({ switchRequest: undefined, switchLanded: { id: 'sw1', candidateAgentId: 'm2-h2' } }))
+    expect(t.calls.map(c => c[0])).toEqual(['agent_handoff_prepare', 'agent_close'])
+    expect(t.calls.at(-1)![1]).toEqual({ agentId: 'h1', mode: 'now', changeId })
+    expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: true })
   })
 
   it('treats a result the Swarm already settled as done', async () => {
