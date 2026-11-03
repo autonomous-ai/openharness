@@ -4,10 +4,8 @@ Where Harness is going, why, and the bar it must meet. Written 2026-11-03. It re
 [September thesis](docs/product-direction.md), [what we're building](docs/strategy/2026-09-26-what-we-are-building.md) and
 the audience in [who we're building for](docs/ideal-users.md).
 
-This document leads; the code follows. Where the product today falls short of it, that is work to do, not a reason to
-change the direction. The project's Product Manager owns the product by this document: every request is weighed against
-it, and every "no" or "later" names the section it rests on. Who decides what, and how this document changes, is in
-the project's Instructions.
+It describes the product we are heading for, not the product as it is today. How code meets its targets is in
+[ENGINEERING.md](ENGINEERING.md).
 
 **Milestone: December 31, 2026.** Every target below is due then.
 
@@ -52,8 +50,6 @@ If a lab or GitHub ships real cross-vendor capacity and verification, this posit
 
 ## What we are not doing
 
-A request that falls here gets "no" or "later", with this section named.
-
 - **Our own agent or model.** The labs out-build us every month. We run theirs.
 - **What a single lab already gives away** for its own agents, unless ours works across vendors, machines or accounts.
 - **Chat for people talking to people.** The project chat is where people direct agents. A chat feature belongs only
@@ -61,12 +57,9 @@ A request that falls here gets "no" or "later", with this section named.
   reactions do not). Work is reported outward to GitHub, and later Linear or Slack.
 - **Beyond code, for now.** CAD, music, games, new viewers and a growing Store catalog are paused. What exists keeps
   working; it is not extended.
-- **Anything that settles what is not decided yet:** pricing, capacity we host for customers, encrypting Swarm chat and
-  files end to end, the Autonomous Computer as a product, the next integration after GitHub, and the name "Swarm".
-  Work does not build toward one answer until this document gives it.
 - **New surfaces or hardware form factors.** The phone, the Harness device and the Autonomous Computer serve the Swarm:
   answering agents, seeing status, running agents. The terminal interface is maintenance only. Windows is supported;
-  Windows-only work is done when a named person in a Swarm is blocked by it.
+  Windows-only work is for people it blocks.
 
 ### Anti-goals: failures even when the feature works
 
@@ -85,9 +78,9 @@ A request that falls here gets "no" or "later", with this section named.
 | Verification is the moat | Problems are caught before merge, not after | Fixes after merge stay under target |
 | One pool of capacity | No work waits for capacity while any machine or subscription in the Swarm has some left | Work waiting for capacity, cost per shipped task |
 
-## Priority order
+## What matters most
 
-When two pieces of work compete, the higher one goes first:
+In order:
 
 1. Production down, or a security problem.
 2. Data loss; a broken Swarm loop (work that cannot reach an agent, be reviewed, merge or ship); a missed tech target
@@ -138,27 +131,14 @@ numbers in older documents describe the build they measured.
 | CI | `ci/required` ≤ 15 min | The crew is never waiting on CI |
 | Headroom | Every resource stays at least 10x below its limit; less than that triggers a design review | Rule 2 of the feature design rules |
 
-How the work meets them:
+## Tech stack
 
-- **A missed target that got worse is a regression**, priority 2 above any new feature.
-- **Optimizations need numbers:** profile first, change, then before and after on the same workload. A claimed win
-  with no measurement does not merge.
-- **Every feature that stores, syncs or exposes data** answers the [feature design rules](docs/feature-design-rules.md)
-  before it is built.
+- **One Flutter codebase for every screen**: desktop, web and phone, so a screen is built once.
+- **TypeScript for the backend and the daemon**: one language across the server, the daemon and the tools agents use.
+- **Rust on the terminal's hot path** (terminal interface, PTY), where latency and memory matter most.
+- **The labs' real CLIs, under each person's own login**, so a lab's new feature works the day it ships.
 
-## Tech choices
+## Not decided yet
 
-Chosen on purpose; changing one is a change to this document.
-
-- **One Flutter codebase for every screen**: desktop, web and phone. A screen is built once.
-- **TypeScript for the backend and the daemon.** One language across the server, the daemon and the tools agents use.
-- **Rust only on the terminal's hot path** (terminal interface, PTY), where latency and memory matter most.
-- **Run the labs' real CLIs under the person's own login.** Never wrap a lab's API to imitate its CLI, and never run one
-  person's work under another person's login.
-- **Execution outlives views.** The daemon that owns the work is the truth; every client can disconnect and rebuild.
-- **The daemon's core stays small.** Features live in services around it.
-- **Terminal traffic is end-to-end encrypted, with no switch.**
-- **The backend speaks a change before clients use it, and older clients keep working.**
-- **No new language, framework, datastore or hosted service** unless this document adds it.
-- Names follow the [Naming System](docs/naming-system.md); validation and release follow
-  [validation and release](docs/validation-and-release.md).
+Pricing; capacity we host for customers; whether Swarm chat and files are end-to-end encrypted; the Autonomous Computer
+as a product; the next integration after GitHub; the name "Swarm".
