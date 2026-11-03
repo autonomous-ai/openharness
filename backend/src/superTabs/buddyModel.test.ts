@@ -146,7 +146,7 @@ describe('the Buddy\'s machine reporting the switch', () => {
     const f = setup()
     f.run({ type: 'buddy.model', gridModel: 'gpt-6.1-sol' })
     const effects = f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId: f.agent().modelRequest!.id, ok: true }, f.buddy())
-    expect(effects.messages.map(m => m.text)).toEqual(["Your Buddy now runs on gpt-6.1-sol, owner@example.com's saved API."])
+    expect(effects.messages.map(m => m.text)).toEqual(["Your Buddy now runs on gpt-6.1-sol, owner's saved API."])
   })
 
   it('brings the Buddy back to the subscription', () => {

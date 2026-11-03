@@ -73,6 +73,10 @@ export interface Agent {
    *  it still tells the machine owner who asked. */
   switchLanded?: { id: string; requestedBy: string }
   switchRequest?: { id: string; engine: string; profileId: string; model?: string; effort?: string; requestedBy: string; at: string; claimedUntil?: string }
+  /** A Buddy's owner asked its machine to move it onto a model on the Swarm's grid, or back to their subscription (null)
+   *  (buddyModel.ts). What they were shown is kept for the line the result writes: the model's name, who serves it and its
+   *  window, the smallest any serving machine reported. One at a time; the result or the liveness sweep's lease drops it. */
+  modelRequest?: { id: string; gridModel: string | null; name?: string; servedBy?: string[]; contextWindow?: number; requestedBy: string; at: string }
   /** The account it runs in on its machine once a switch moved it; absent for the machine's default account. */
   profileId?: string
   /** Captured from the original Swarm launch, never inferred from a later live session with the same id. */
