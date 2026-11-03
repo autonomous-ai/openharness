@@ -587,7 +587,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
             ),
             swarm: (_) => SwarmTabsPage(
               onSettings: (context) =>
-                  openPhoneSettings(context, widget.notifier),
+                  openPhoneSettings(context, widget.notifier, swarm: true),
             ),
           ),
         ),
