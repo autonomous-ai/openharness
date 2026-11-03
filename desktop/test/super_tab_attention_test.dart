@@ -247,6 +247,41 @@ void main() {
         await close(tester, c);
       });
 
+      testWidgets('the project badge explains its count and clears with '
+          'Needs you', (tester) async {
+        final server = projectServer();
+        server.followedThreads = {
+          'unread': [],
+          'read': [readThread('message-1', 2, conversationId: 'lead')],
+          'more': false,
+        };
+        server.tag('message-1', threadId: 'message-1', messageSequence: 2);
+        server.ask(['Ship it?'], conversationId: 'lead');
+        final (c, attention) = await opened(server);
+        final activity = SuperTabActivity.of(c);
+        await activity.mentions.load();
+        await pumpSidebar(tester, c, attention);
+        final projectBadge = find.byKey(const ValueKey('super-mentions-lead'));
+        expect(
+          find.descendant(of: projectBadge, matching: find.text('2')),
+          findsOneWidget,
+        );
+        expect(attention.mentionsIn('lead'), activity.needsYou.length);
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(location: tester.getCenter(projectBadge));
+        await mouse.moveTo(tester.getCenter(projectBadge));
+        await tester.pump(const Duration(seconds: 1));
+        expect(find.text('1 tag, 1 decision waiting for you'), findsOneWidget);
+        c.markThreadRead('lead', 'message-1', 2);
+        await attention.decisions.answer(attention.decisions.open.single, 0);
+        await tester.pumpAndSettle();
+        expect(attention.mentionsIn('lead'), 0);
+        expect(activity.needsYou, isEmpty);
+        expect(find.byType(SuperTabCountBadge), findsNothing);
+        await c.flush();
+        await close(tester, c);
+      });
+
       testWidgets('a tag in a reply that lives only in a thread counts on '
           'its thread, not on the project row', (tester) async {
         final server = projectServer();
