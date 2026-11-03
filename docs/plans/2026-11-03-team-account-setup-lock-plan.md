@@ -131,8 +131,10 @@ Window states and copy (Mac words; Linux and Windows use the existing "this comp
     (sends `machine.remove`).
   - `unlocked, it is not there` (the child is reachable).
 - [ ] Step 2: run; expect FAIL (no `TeamAccountSetupLock`).
-- [ ] Step 3: implement. A `Stack`: the child in `ExcludeFocus`, `IgnorePointer` and `ExcludeSemantics` while
-  locked; a non-dismissible `ModalBarrier`; the panel in a `FocusScope` with autofocus. The panel has no `Tooltip`
+- [ ] Step 3: implement. A `Stack`: the child in `ExcludeFocus` while locked; a non-dismissible `ModalBarrier`, which
+  itself takes every pointer event and hides the app from a screen reader (an `IgnorePointer` and `ExcludeSemantics`
+  around the child added nothing a test could see, so they were left out); the panel in a `FocusScope` with
+  autofocus. The panel has no `Tooltip`
   (there is no Overlay above the Navigator). In app_shell.dart, `builder` wraps `framed` in the lock, reading the app
   through `Consumer`.
 - [ ] Step 4: run the lock file and team_account_offer_test.dart; expect PASS.
@@ -152,6 +154,16 @@ Window states and copy (Mac words; Linux and Windows use the existing "this comp
   locked.
 - [ ] Step 4: run; expect PASS.
 - [ ] Step 5: commit.
+
+### Task 3b (review of #2779): the menu bar, the tab row, and Swarms that let this Mac go
+
+- The lock is a `modal` titlebar cover in swarm_screen.dart (menus, key equivalents and the tab row grey out);
+  `_onNative` and app_shell.dart's `runAppMenuAction` drop what arrives anyway. Tests: native_toolbar_sync_test.dart
+  and the app-menu half of the lock test's shell case.
+- On restore and before each Remove, a Swarm that no longer lists this Mac, is already removing it, or can no longer
+  be opened is let go (`_swarmHolds`); one that cannot be read now keeps the lock. Tests: team_account_offer_test.dart.
+- One headless walk of the Done when: join, the window at once, Tab, arrows, Escape and a click held, a wrong password,
+  Try again, success, and Machines opened again without the paused line.
 
 ### Task 4: screenshots and the suite
 
