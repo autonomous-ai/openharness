@@ -78,6 +78,8 @@ group, all in one transaction, so a retry or a second worker pass posts nothing 
   `$limit` (Equality, Sort, Range; the sort comes from the index). `data.*` and `deleted` filter the fetched documents.
   A plan test pins IXSCAN and the documents examined (`integration/workerIndexPlans.test.ts`). No new index. Keys
   stored: at most 50 per linked pull request, on the group, gone with it.
+- **MongoDB schema design:** the keys are embedded in the group's data, as the skill's rule for a bounded array read and
+  written with its parent: the store write already loads the group, and an event and its key change in one write.
 - **6, failures are seen.** A pull request GitHub cannot read is counted, and each pass that could not read one, or
   posted something, logs one `[swarm-pr-events] pass` line with `groups`, `pulls`, `unreadable` and `posted`. Every
   GitHub call has the app's request timeout. A write runs once per event, however often it is retried.
