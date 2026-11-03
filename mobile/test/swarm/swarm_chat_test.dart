@@ -454,25 +454,27 @@ void main() {
           'm1',
           1,
           text: 'Here is the plan',
+          // A file the app does not read itself opens in the browser; a text
+          // file opens in the app (swarm_file_viewer_test.dart).
           attachments: [
             {
               'id': 'f1',
-              'name': 'plan.md',
-              'mime': 'text/markdown',
+              'name': 'plan.pdf',
+              'mime': 'application/pdf',
               'size': 2048,
-              'url': 'https://cdn.harness.autonomous.ai/f1/plan.md',
+              'url': 'https://cdn.harness.autonomous.ai/f1/plan.pdf',
             },
           ],
         ),
       ]),
     );
 
-    expect(find.textContaining('plan.md'), findsOneWidget);
+    expect(find.textContaining('plan.pdf'), findsOneWidget);
 
-    await tester.tap(find.textContaining('plan.md'));
+    await tester.tap(find.textContaining('plan.pdf'));
     await tester.pump();
 
-    expect(opened, ['https://cdn.harness.autonomous.ai/f1/plan.md']);
+    expect(opened, ['https://cdn.harness.autonomous.ai/f1/plan.pdf']);
   });
 
   testWidgets('a numbered task message opens that task conversation', (

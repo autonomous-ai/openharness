@@ -35,9 +35,6 @@ class SwarmMessageText extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final tty = Tty.of(context);
-    final body = swarmChatText(16, height: 1.42);
-    final heading = body.copyWith(fontWeight: FontWeight.w600);
     final names = [...mentionNames, ...tagged];
     return Semantics(
       button: onTap != null,
@@ -64,45 +61,7 @@ class SwarmMessageText extends StatelessWidget {
               _SwarmMention(names, addresses),
             ],
             builders: {'mention': _SwarmMentionBuilder()},
-            styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
-                .copyWith(
-                  p: body,
-                  a: TextStyle(
-                    color: AppPalette.accentOnSurface,
-                    decoration: TextDecoration.underline,
-                  ),
-                  h1: AppType.title(),
-                  h2: AppType.heading(),
-                  h3: heading,
-                  h4: heading,
-                  h5: heading,
-                  h6: heading,
-                  strong: const TextStyle(fontWeight: FontWeight.w600),
-                  code: tty
-                      .style(size: 14)
-                      .copyWith(backgroundColor: swarmChatCard(tty)),
-                  blockSpacing: 8,
-                  listIndent: 20,
-                  listBullet: body,
-                  blockquote: body.copyWith(color: AppPalette.textSecondary),
-                  blockquotePadding: const EdgeInsets.symmetric(
-                    horizontal: AppSpace.m,
-                    vertical: AppSpace.xs,
-                  ),
-                  blockquoteDecoration: BoxDecoration(
-                    border: Border(
-                      left: BorderSide(color: AppPalette.divider, width: 2),
-                    ),
-                  ),
-                  tableHead: heading,
-                  tableColumnWidth: const FlexColumnWidth(),
-                  tableBody: body,
-                  tableBorder: TableBorder.all(color: AppPalette.divider),
-                  tableCellsPadding: const EdgeInsets.symmetric(
-                    horizontal: AppSpace.s,
-                    vertical: AppSpace.xs,
-                  ),
-                ),
+            styleSheet: swarmMarkdownStyle(context),
             imageBuilder: (uri, title, alt) => Text(
               alt?.isNotEmpty == true ? 'Image: $alt' : 'Image',
               style: AppType.caption(color: AppPalette.textSecondary),
@@ -116,7 +75,7 @@ class SwarmMessageText extends StatelessWidget {
                 onOpenConversation?.call(conversation);
                 return;
               }
-              final uri = _webLink(href);
+              final uri = swarmWebLink(href);
               if (uri != null) {
                 unawaited(launchUrl(uri, mode: LaunchMode.inAppBrowserView));
               }
@@ -128,7 +87,51 @@ class SwarmMessageText extends StatelessWidget {
   }
 }
 
-Uri? _webLink(String? href) {
+/// The chat's Markdown look, for a message and a Markdown file read in the
+/// app (`SwarmFileViewer`) alike.
+MarkdownStyleSheet swarmMarkdownStyle(BuildContext context) {
+  final tty = Tty.of(context);
+  final body = swarmChatText(16, height: 1.42);
+  final heading = body.copyWith(fontWeight: FontWeight.w600);
+  return MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+    p: body,
+    a: TextStyle(
+      color: AppPalette.accentOnSurface,
+      decoration: TextDecoration.underline,
+    ),
+    h1: AppType.title(),
+    h2: AppType.heading(),
+    h3: heading,
+    h4: heading,
+    h5: heading,
+    h6: heading,
+    strong: const TextStyle(fontWeight: FontWeight.w600),
+    code: tty.style(size: 14).copyWith(backgroundColor: swarmChatCard(tty)),
+    blockSpacing: 8,
+    listIndent: 20,
+    listBullet: body,
+    blockquote: body.copyWith(color: AppPalette.textSecondary),
+    blockquotePadding: const EdgeInsets.symmetric(
+      horizontal: AppSpace.m,
+      vertical: AppSpace.xs,
+    ),
+    blockquoteDecoration: BoxDecoration(
+      border: Border(left: BorderSide(color: AppPalette.divider, width: 2)),
+    ),
+    tableHead: heading,
+    tableColumnWidth: const FlexColumnWidth(),
+    tableBody: body,
+    tableBorder: TableBorder.all(color: AppPalette.divider),
+    tableCellsPadding: const EdgeInsets.symmetric(
+      horizontal: AppSpace.s,
+      vertical: AppSpace.xs,
+    ),
+  );
+}
+
+/// [href] as a web link to open, or null unless it is http or https with a
+/// host.
+Uri? swarmWebLink(String? href) {
   final uri = href == null ? null : Uri.tryParse(href);
   return uri != null &&
           (uri.scheme == 'https' || uri.scheme == 'http') &&
@@ -152,7 +155,7 @@ class _WebAutolink extends md.AutolinkExtensionSyntax {
     final anchor = nodes.firstOrNull;
     if (anchor is! md.Element ||
         anchor.tag != 'a' ||
-        _webLink(anchor.textContent) == null) {
+        swarmWebLink(anchor.textContent) == null) {
       return super.onMatch(parser, match);
     }
     anchor.attributes['href'] = anchor.textContent;
