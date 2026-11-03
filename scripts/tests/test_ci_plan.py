@@ -985,6 +985,14 @@ class GitHubEvidenceTests(unittest.TestCase):
         receipt["results"]["backend-new-shards"] = "failure"
         with self.assertRaisesRegex(ValueError, "inconsistent"):
             self.evidence.passed_gate(self.head)
+        # A duplicate or unsorted list is refused: the subset check alone would let one through (review of #2817).
+        for index, edit in enumerate([lambda jobs: sorted(jobs + [jobs[0]]), lambda jobs: list(reversed(jobs))]):
+            with self.subTest(index=index):
+                self.github.add_run(14 + index, self.head, self.tree, ["mobile", "backend"])
+                receipt = self.github.receipts[14 + index]
+                receipt["required_jobs"] = edit(receipt["required_jobs"])
+                with self.assertRaisesRegex(ValueError, "does not run every suite"):
+                    self.evidence.passed_gate(self.head)
 
     def test_a_failed_latest_check_is_not_rescued_by_an_older_pass(self):
         self.github.add_run(12, self.head, self.tree, ["mobile"], conclusion="failure")
