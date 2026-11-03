@@ -132,6 +132,18 @@ describe('reading clears tags', () => {
     expect((await tagFor(tag, peer)).resolvedBy).toBe('read')
   })
 
+  // ENGINEERING §4: a read mark is on the request path. The tags it passes are resolved in one write, never one per tag.
+  it('a mark past thirty tags resolves them in one write', async () => {
+    const s = await scene()
+    const tags: string[] = []
+    for (let i = 0; i < 30; i++) tags.push(await say(s.tabId, s.web, agentAuthor(s.pm), { tags: [peer] }))
+    const newest = await sequenceOf(tags.at(-1)!)
+    const entries = await profiled(db, () => markChat(s, newest, peer))
+    expect(await listed(s.tabId, peer)).toEqual([])
+    expect(await Promise.all(tags.map(async tag => (await tagFor(tag, peer)).resolvedBy))).toEqual(tags.map(() => 'read'))
+    expect(entries.filter(e => e.ns.endsWith('.SuperTabMention') && e.op === 'update')).toHaveLength(1)
+  })
+
   it('a mark before the tag leaves it waiting', async () => {
     const s = await scene()
     await say(s.tabId, s.web, personAuthor(owner))
@@ -211,8 +223,9 @@ describe('answering clears tags', () => {
     expect(after.filter(row => row.resolvedBy === 'answer').map(row => row.id).sort()).toEqual(expected)
     expect(after.filter(row => row.resolvedBy === 'read')).toHaveLength(50)
     expect(after.filter(row => !row.resolvedBy)).toHaveLength(150 - expected.length)
-    // Each of the person's tags once, then each resolved tag by its id: Prisma's updateMany reads its row, then writes it.
-    expect(examined, `examined ${examined} for ${tags.length} tags, ${expected.length} resolved: ${JSON.stringify(plan(ops).slice(0, 3))}`).toBeLessThanOrEqual(tags.length + 2 * expected.length)
+    // Each of the person's tags once, then the resolved ones in one write by their ids.
+    expect(examined, `examined ${examined} for ${tags.length} tags, ${expected.length} resolved: ${JSON.stringify(plan(ops).slice(0, 3))}`).toBeLessThanOrEqual(tags.length + expected.length)
+    expect(ops.filter(e => e.op === 'update')).toHaveLength(1)
   })
 
   it('a tag by another agent stays', async () => {
