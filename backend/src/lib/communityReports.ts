@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client'
 import { env } from '../config/env.js'
 import { logger } from '../utils/logger.js'
 import { prisma } from './prisma.js'
@@ -9,6 +10,10 @@ export type ReportTarget = typeof communityReportTargets[number]
 /** Reports from this many readers hide a publication or comment from everyone until a review. */
 export const hideAfterReports = 3
 
+/** Hidden and not restored since. Rows hidden before #2299 have no `restoredAt` at all, and on Mongo
+ *  `restoredAt: null` matches only an explicit null (lib/prisma.ts), so the filter accepts both. */
+const notRestored: Prisma.CommunityHiddenWhereInput = { OR: [{ restoredAt: null }, { restoredAt: { isSet: false } }] }
+
 /**
  * The ids of [targetType] a reader is not shown: whatever reports have hidden from everyone, and
  * whatever they reported themselves (hidden from them at once). [harnessId] narrows to one harness's.
@@ -16,7 +21,7 @@ export const hideAfterReports = 3
 export async function hiddenFrom(autonomousEnv: string, targetType: ReportTarget, userId?: string, harnessId?: string): Promise<string[]> {
   const scope = { autonomousEnv, targetType, ...(harnessId ? { harnessId } : {}) }
   const [hidden, reported] = await Promise.all([
-    prisma.communityHidden.findMany({ where: { ...scope, restoredAt: null }, select: { targetId: true } }),
+    prisma.communityHidden.findMany({ where: { ...scope, ...notRestored }, select: { targetId: true } }),
     userId ? prisma.communityReport.findMany({ where: { ...scope, userId }, select: { targetId: true } }) : [],
   ])
   return [...new Set([...hidden, ...reported].map(row => row.targetId))]
@@ -25,7 +30,7 @@ export async function hiddenFrom(autonomousEnv: string, targetType: ReportTarget
 /** Whether one publication or comment is hidden from this reader. */
 export async function isHiddenFrom(autonomousEnv: string, targetType: ReportTarget, targetId: string, userId?: string): Promise<boolean> {
   const [hidden, reported] = await Promise.all([
-    prisma.communityHidden.findFirst({ where: { autonomousEnv, targetType, targetId, restoredAt: null }, select: { id: true } }),
+    prisma.communityHidden.findFirst({ where: { autonomousEnv, targetType, targetId, ...notRestored }, select: { id: true } }),
     userId ? prisma.communityReport.findFirst({ where: { autonomousEnv, targetType, targetId, userId }, select: { id: true } }) : null,
   ])
   return !!hidden || !!reported
@@ -63,7 +68,7 @@ export async function fileReport(report: Report): Promise<void> {
   if (reviewed && !reviewed.restoredAt) return
   const since = reviewed?.restoredAt ? { createdAt: { gt: reviewed.restoredAt } } : {}
   if (await prisma.communityReport.count({ where: { ...key, ...since } }) < hideAfterReports) return
-  await prisma.communityHidden.upsert({ where: { autonomousEnv_targetType_targetId: key }, create: { ...key, harnessId }, update: { restoredAt: null, createdAt: new Date() } })
+  await prisma.communityHidden.upsert({ where: { autonomousEnv_targetType_targetId: key }, create: { ...key, harnessId, restoredAt: null }, update: { restoredAt: null, createdAt: new Date() } })
   logger.info('community target hidden after reports', key)
   await tellReviewers(targetType, targetId)
 }
