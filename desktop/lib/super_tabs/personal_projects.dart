@@ -5,6 +5,7 @@ import 'package:clock/clock.dart';
 import 'package:cryptography/dart.dart' show DartSha256;
 import 'package:flutter/foundation.dart';
 
+import '../logging/app_log.dart';
 import '../state/app_state.dart';
 import '../state/swarm.dart';
 import '../state/terminal_pane.dart';
@@ -414,17 +415,28 @@ class PersonalProjects extends ChangeNotifier {
           eligible(c)) {
         return (id: null);
       }
-      _failed(key);
-    } catch (_) {
-      _failed(key);
+      _failed(key, 'create', failure);
+    } catch (error) {
+      _failed(key, 'create', error);
     }
     return null;
   }
 
-  void _failed(String key) {
+  /// What a failure is called in the log: its code, or its kind.
+  static String _codeOf(Object error) =>
+      error is SuperTabFailure ? error.code : '${error.runtimeType}';
+
+  /// Waits before [key] is asked again, and says why in the log: the
+  /// failure's code, never the repo's or the tab's name (ENGINEERING.md 6, 7).
+  void _failed(String key, String what, Object error) {
     final count = _failures[key] = (_failures[key] ?? 0) + 1;
     final wait = Duration(seconds: 5 << count.clamp(1, 6));
-    _retryAt[key] = clock.now().add(wait < maxRetryWait ? wait : maxRetryWait);
+    final next = wait < maxRetryWait ? wait : maxRetryWait;
+    _retryAt[key] = clock.now().add(next);
+    appLog.warn(
+      'super-tabs',
+      'Personal project $what refused (${_codeOf(error)}); asked again in ${next.inSeconds} s',
+    );
   }
 
   /// A tab's project still under the name every computer makes it with takes
@@ -457,8 +469,8 @@ class PersonalProjects extends ChangeNotifier {
             },
           },
         );
-      } catch (_) {
-        _failed(key);
+      } catch (error) {
+        _failed(key, 'rename', error);
         continue;
       }
       _failures.remove(key);
@@ -500,7 +512,12 @@ class PersonalProjects extends ChangeNotifier {
               },
             },
           );
-        } catch (_) {
+        } catch (error) {
+          // Asked again on the next sync; said in the log by its code alone.
+          appLog.warn(
+            'super-tabs',
+            'Personal project rename refused (${_codeOf(error)})',
+          );
           continue;
         }
         if (!eligible(c)) return changed;
