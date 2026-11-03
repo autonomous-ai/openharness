@@ -182,6 +182,24 @@ describe('the session input controller\'s dependencies', () => {
       expect(keys(t.calls)).toEqual(['key a1 Escape'])
       expect(t.calls).toContain('lock a1')
     })
+    // An answer typed at the terminal replaces the free-text row's placeholder: Escape would end the question and lose it.
+    describe.each([
+      ['a single-select question', fixture('question-single.txt'), 'Type something.', 'Iced tea, no sugar'],
+      ['a multi-select question', QUESTION, '[ ] Type something', '[ ] Teal, please'],
+    ])('in %s', (_, empty, placeholder, answer) => {
+      it('presses Escape while its free-text row is empty', async () => {
+        const { t, wired, session } = asking(empty, READY_PANE)
+        expect(await wired.beforeTeamWrite!(session, ID)).toBeNull()
+        expect(keys(t.calls)).toEqual(['key a1 Escape'])
+      })
+      it('holds, pressing no Escape, while its free-text row holds a typed answer', async () => {
+        const typed = empty.replace(placeholder, answer)
+        expect(typed).not.toBe(empty)
+        const { t, wired, session } = asking(typed, READY_PANE)
+        expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
+        expect(keys(t.calls)).toEqual([])
+      })
+    })
     it('never presses Escape on a permission prompt', async () => {
       const { t, wired, session } = asking(CLAUDE_PERMISSION, READY_PANE)
       expect(await wired.beforeTeamWrite!(session, ID)).toBe('team_waiting_user')
