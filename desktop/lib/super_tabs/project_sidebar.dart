@@ -896,7 +896,15 @@ class ProjectSidebar extends StatelessWidget {
             children: [
               _row(read.lead!, reading: read),
               if (controller.expandedProjects.contains(project.id)) ...[
-                ..._workgroups(read),
+                // Built when the list lays the project out, not on every
+                // rebuild: an expanded project off screen costs nothing, as
+                // the 8 newest did behind "… N more" (#2309).
+                Builder(
+                  builder: (_) => Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: _workgroups(read),
+                  ),
+                ),
                 ..._closed(read),
               ],
             ],
