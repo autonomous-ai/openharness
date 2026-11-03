@@ -676,7 +676,12 @@ void main() {
     final (f, c) = await openChats();
     f.app.dialThreadWaitForTest = const Duration(milliseconds: 20);
     await threadOnly(f, 'design-lead', 'message-never');
-    await Future<void>.delayed(const Duration(milliseconds: 60));
+    // Waits for the give-up's log line itself, never a fixed time (ENGINEERING.md §3).
+    final given = DateTime.now().add(const Duration(seconds: 5));
+    while (!lines.any((l) => l.contains('thread')) &&
+        DateTime.now().isBefore(given)) {
+      await settle();
+    }
     expect(c.openedThread, isNull);
     expect(lines.where((l) => l.contains('thread')), hasLength(1));
     expect(lines.join('\n'), isNot(contains('message-never')));
