@@ -120,8 +120,6 @@ void main() {
     await mount(
       tester,
       chrome: (app) => WorkspaceChrome(
-        leadingWidth: (_) => 0,
-        leading: (_, _) => const SizedBox.shrink(),
         compactTabs: (context, commands) =>
             WebTabSwitcher(app: app, commands: commands),
         compactFooter: (context, footer) => WebFooterBar(footer: footer),

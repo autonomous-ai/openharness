@@ -9,6 +9,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import 'box_chrome.dart';
+import 'transient_menus.dart';
 import 'search_result_text.dart';
 import 'swarm_search_input.dart';
 import 'swarm_switcher.dart' show SwarmSearchActionLabel, swarmSearchRowHeight;
@@ -132,6 +133,7 @@ class _AgentPickerState extends State<AgentPicker> {
   String get _hint =>
       widget.label == 'Agent' ? AgentPicker.hint : 'Search harnesses';
   final _portal = OverlayPortalController();
+  VoidCallback? _unregisterMenu;
   final _query = TextEditingController();
   final _inputFocus = FocusNode(debugLabel: 'Agent search input');
   final _ownBarFocus = FocusNode(debugLabel: 'Agent search');
@@ -178,6 +180,7 @@ class _AgentPickerState extends State<AgentPicker> {
 
   @override
   void dispose() {
+    _unregisterMenu?.call();
     _inputFocus.removeListener(_inputFocusChanged);
     _barFocus.removeListener(_barFocusChanged);
     _query.dispose();
@@ -266,6 +269,7 @@ class _AgentPickerState extends State<AgentPicker> {
     _cursor = 0;
     if (_scroll.hasClients) _scroll.jumpTo(0);
     _portal.show();
+    _unregisterMenu ??= registerTransientMenu(() => _close(refocus: false));
     setState(() {});
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && _open) _inputFocus.requestFocus();
@@ -275,6 +279,8 @@ class _AgentPickerState extends State<AgentPicker> {
   void _close({bool refocus = true}) {
     if (!_open) return;
     _portal.hide();
+    _unregisterMenu?.call();
+    _unregisterMenu = null;
     _query.clear();
     setState(() {});
     if (refocus) _barFocus.requestFocus();

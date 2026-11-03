@@ -1,8 +1,11 @@
 /**
- * The leaderboard read's response (`GET /api/super-tabs/:tabId/leaderboard?projectId=&week=`), the `data` of the usual
- * envelope. Desktop/web (`desktop/lib/super_tabs/leaderboard`) mirror it by hand. Times are epoch milliseconds; people are
+ * The leaderboard read's response (`GET /api/super-tabs/:tabId/leaderboard?projectId=&week=` or `&period=`), the `data` of
+ * the usual envelope. Asked for a period (rolling.ts), "week" below means that period and "last week" the one of the same
+ * length before it. Desktop/web (`desktop/lib/super_tabs/leaderboard`) mirror it by hand. Times are epoch milliseconds; people are
  * member ids. The only conversation text in it is the titles of conversations the reader may read (details); no message text.
  */
+import type { PeriodName } from './rolling.js'
+
 export type Medal = 'gold' | 'silver' | 'bronze'
 export type UnblockKind = 'decision' | 'approval' | 'needs_human' | 'tag_reply'
 
@@ -20,8 +23,8 @@ export interface PersonScore {
   /** Their profile name, else their email's local part. */
   displayName: string
   points: number
-  /** The same scoring for the week before, for the arrow against last week. */
-  prevWeekPoints: number
+  /** The same scoring for the week before, for the arrow against last week. Null for Last 30d, which has no comparison. */
+  prevWeekPoints: number | null
   /** 1 for the most points; people with the same points share a rank. */
   rank: number
   /** For the top three ranks with points; null otherwise. */
@@ -79,19 +82,37 @@ export interface ModelScore {
   reviews: number
 }
 
+/** A model's tasks over the 7 days up to the read, whichever week the board shows: the sidebar's Models (Dee, 2026-10-30: "this
+ *  week is very confusing"). One row per engine and model as its agents reported it, every effort as one; `model` null for
+ *  attempts whose agent had reported none. */
+export interface RecentModel {
+  engine: string
+  model: string | null
+  /** Attempts at requests, never reviews, started in the 7 days. */
+  attempts: number
+  /** Those with a first review on record, and how many passed it. */
+  firstReview: { reviewed: number; passed: number }
+}
+
 export interface Leaderboard {
   projectId: string
   week: number
+  /** The rolling period this sums, when one was asked for; `end` is the read's time. Absent from a week's answer. */
+  period?: { name: PeriodName; start: number; end: number }
+  /** Sums every project the reader may read, and lists everyone in the Swarm: the roster's All projects. Absent otherwise. */
+  allProjects?: true
   /** The team's goal: everyone's points count toward it. */
-  goal: { openRequests: number; thisWeek: WeekGoal; lastWeek: WeekGoal }
+  goal: { openRequests: number; thisWeek: WeekGoal; lastWeek: WeekGoal | null }
   /** Every person who reads the project, most points first. */
   people: PersonScore[]
   /** Agents waiting on a person now: how many per person, in name order. Never ranked, never in the points. */
   waiting: { total: number; people: Array<{ personId: string; count: number; conversationIds: string[] }> }
   /** Absent from a backend before it. */
-  models: { thisWeek: ModelShare; lastWeek: ModelShare }
+  models: { thisWeek: ModelShare; lastWeek: ModelShare | null }
   /** The project's PM and Buddies, most points first. Absent from a backend before them. */
   agents: AgentScore[]
   /** Every model that worked this week, most points first. Absent from a backend before it. */
   byModel: ModelScore[]
+  /** The models of the 7 days up to now, most attempts first. Absent from a backend before it. */
+  recentModels: RecentModel[]
 }

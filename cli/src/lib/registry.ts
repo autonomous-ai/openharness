@@ -182,6 +182,12 @@ export interface RegisteredSession {
    */
   codexHome?: string | null
   /**
+   * The CLAUDE_CONFIG_DIR folder (a Claude profile) this agent was launched against, if one was chosen instead of
+   * `~/.claude`. Claude only. Chosen once at creation like `codexHome`; the row is the relaunch source, so restart and
+   * resume come back in the same account.
+   */
+  claudeHome?: string | null
+  /**
    * The Hermes home this session's history lives in — `~/.hermes/profiles/<name>` for an agent started
    * with `hermes -p <name>`, null for this machine's default home.
    *
@@ -658,14 +664,18 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // Taken out of the spread and put back only when it is a real moment: the spread would otherwise
   // carry a hand-edited string or a negative number straight into the frame's `toISOString()`.
   // `forkedFrom` is out too, so an invalid one is dropped rather than spread back in as-is.
-  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, ...rest } = row
+  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, ...rest } = row
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   // Out of the spread for the same reason: a half-formed record is dropped, never relaunched with.
   const scmLaunch = parseScmLaunchRecord(rawScmLaunch)
+  // Read as load() reads it: a stopped harness an older CLI saved names its Swarm role in the wire's values (lead, dev,
+  // review), and is kept as this release keeps it (project instructions, phase 4).
+  const swarmSkill = parseSwarmSkill(rawSwarmSkill)
   return {
     ...rest,
     ...(externalResume ? { externalResume } : {}),
     ...(scmLaunch ? { scmLaunch } : {}),
+    ...(swarmSkill ? { swarmSkill } : {}),
     ...(normalizedClosePlan(rawClosePlan) ? { closePlan: normalizedClosePlan(rawClosePlan)! } : {}),
     schemaVersion: 2,
     active,
@@ -1340,6 +1350,7 @@ class Registry {
           gateway: raw.gateway === 'ori' ? 'ori' : null,
           grid: normalizedGridAssignment(raw.grid),
           codexHome: typeof rawCodexHome === 'string' && rawCodexHome ? rawCodexHome : null,
+          claudeHome: typeof raw?.claudeHome === 'string' && raw.claudeHome ? raw.claudeHome : null,
           hermesHome: typeof raw?.hermesHome === 'string' && raw.hermesHome ? raw.hermesHome : null,
           ...normalizedForkedFrom((raw as { forkedFrom?: unknown }).forkedFrom),
           dsh: normalizedDshId((raw as { dsh?: unknown }).dsh),
@@ -1505,6 +1516,7 @@ class Registry {
     codexHome?: string | null
     /** The Hermes home this session's store lives in, if it is not the default. Fill-only. */
     hermesHome?: string | null
+    claudeHome?: string | null
     /** The DSH read off the process's `HARNESS_DSH`, if any. Fill-only, like `codexHome`. */
     dsh?: string | null
   }):
@@ -1569,6 +1581,7 @@ class Registry {
       if (input.gateway !== undefined) existing.gateway = input.gateway
       if (input.grid !== undefined) existing.grid = input.grid
       if (input.codexHome && !existing.codexHome) existing.codexHome = input.codexHome
+      if (input.claudeHome && !existing.claudeHome) existing.claudeHome = input.claudeHome
       if (input.hermesHome && !existing.hermesHome) existing.hermesHome = input.hermesHome
       if (input.dsh && !existing.dsh) existing.dsh = input.dsh
       if (rowFingerprint(persistedRow(existing)) !== before) existing.touchedAt = Date.now()
@@ -1614,6 +1627,7 @@ class Registry {
       gridWebSearch: null,
       codexHome: input.codexHome ?? null,
       hermesHome: input.hermesHome ?? null,
+      claudeHome: input.claudeHome ?? null,
       dsh: input.dsh ?? null,
       // A discovered pane's named agent is only visible in its argv; nothing here reads it, so the
       // row cannot relaunch it as one. Fill-only, like `dsh`.
@@ -1653,6 +1667,7 @@ class Registry {
     /** What the prepared workspace's SCM needs on every relaunch — see RegisteredSession.scmLaunch. */
     scmLaunchRecord?: ScmLaunchRecord | null
     codexHome?: string | null
+    claudeHome?: string | null
     dsh?: string | null
     dshRuntime?: string | null
     swarmSkill?: SwarmSkill
@@ -1699,6 +1714,7 @@ class Registry {
       gridWebSearch: input.gridLaunchRecord?.webSearch ?? null,
       ...(input.scmLaunchRecord ? { scmLaunch: input.scmLaunchRecord } : {}),
       codexHome: input.codexHome ?? null,
+      claudeHome: input.claudeHome ?? null,
       // A pane Harness opens starts in the default home; `hermes -p` is the person's own doing, and
       // the row learns it from the session that lands in it. See RegisteredSession.hermesHome.
       hermesHome: null,
@@ -2048,6 +2064,7 @@ class Registry {
       // re-reads off the live process on every discovery) — a hook-triggered bind must carry it
       // forward or the very first SessionStart hook would silently wipe the agent's chosen profile.
       codexHome: existing?.codexHome ?? null,
+      claudeHome: existing?.claudeHome ?? null,
       // The home the gate looked this session up in, or whatever the row already knew. Carried
       // forward like every field here: a bind REBUILDS the row, and a home dropped at the first hook
       // would send the mirror back to the default store (openharness#191).

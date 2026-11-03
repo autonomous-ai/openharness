@@ -86,7 +86,9 @@ export async function prepareProcessImageHelper(
     await privateDirectory(directory)
     const target = join(directory, artifact.sha256)
     if (await verifyFile(target, artifact)) return target
-    try { await lstat(target); return null }
+    // Another daemon may link a complete helper after the check above (#2358 on Linux CI).
+    // An existing target is only ever verified again, never replaced.
+    try { await lstat(target); return await verifyFile(target, artifact) ? target : null }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     // A bad existing target stays untouched and cannot be executed. link()
     // below is create-only, so concurrent writers cannot replace one another.

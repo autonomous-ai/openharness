@@ -23,11 +23,7 @@ const _buttons = {
 };
 
 /// What the web chrome sets, and nothing else.
-final _web = WorkspaceChrome(
-  leadingWidth: (_) => 0,
-  leading: (_, _) => const SizedBox.shrink(),
-  showsKeyHints: false,
-);
+final _web = WorkspaceChrome(showsKeyHints: false);
 
 class _Account extends AppNotifier {
   _Account()

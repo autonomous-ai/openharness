@@ -186,12 +186,13 @@ class SwarmOutgoingChips extends StatelessWidget {
   Widget build(BuildContext context) {
     final files = box.files.files;
     if (files.isEmpty) return const SizedBox.shrink();
+    // Inside the composer's card, which spaces it ([SwarmComposerCard]).
     return SizedBox(
-      height: _chipHeight + AppSpace.s,
+      height: _chipHeight,
       child: ListView.separated(
         key: const ValueKey('swarm-outgoing'),
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.only(bottom: AppSpace.s),
+        padding: EdgeInsets.zero,
         itemCount: files.length,
         separatorBuilder: (_, _) => const SizedBox(width: AppSpace.s),
         itemBuilder: (context, i) => _Chip(
@@ -227,7 +228,11 @@ class _Chip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
-    final picture = swarmMimeForName(file.name).startsWith('image/');
+    // A picture past what goes as a form is a file mark: no thumbnail is decoded from a file of
+    // hundreds of megabytes, as a message shows it ([SwarmAttachment]).
+    final picture =
+        swarmMimeForName(file.name).startsWith('image/') &&
+        file.size <= swarmFormAttachmentMaxBytes;
     final mark = Icon(
       picture ? LucideIcons.image : LucideIcons.file,
       size: AppIconSize.besideText,
@@ -254,17 +259,19 @@ class _Chip extends StatelessWidget {
             borderRadius: BorderRadius.circular(AppCard.insetRadius),
             child: SizedBox.square(
               dimension: _thumbnail,
-              child: picture
-                  ? Image.memory(
-                      file.bytes,
-                      fit: BoxFit.cover,
-                      // Decoded small: a thumbnail, not the photo — three
-                      // pixels a point, a phone's sharpest.
-                      cacheWidth: (_thumbnail * 3).round(),
-                      gaplessPlayback: true,
-                      errorBuilder: (_, _, _) => Center(child: mark),
-                    )
-                  : Center(child: mark),
+              child: switch ((picture, file.bytes)) {
+                // Decoded small: a thumbnail, not the photo — three pixels a
+                // point, a phone's sharpest. Only from memory: a file read
+                // from disk as it goes up is never decoded to show.
+                (true, final bytes?) => Image.memory(
+                  bytes,
+                  fit: BoxFit.cover,
+                  cacheWidth: (_thumbnail * 3).round(),
+                  gaplessPlayback: true,
+                  errorBuilder: (_, _, _) => Center(child: mark),
+                ),
+                _ => Center(child: mark),
+              },
             ),
           ),
           const SizedBox(width: AppSpace.s),
@@ -281,7 +288,7 @@ class _Chip extends StatelessWidget {
                 ),
                 if (going == null)
                   Text(
-                    swarmFileSize(file.bytes.length),
+                    swarmFileSize(file.size),
                     style: AppType.caption(
                       color: AppPalette.textFaint,
                       fontFeatures: const [FontFeature.tabularFigures()],

@@ -1,10 +1,12 @@
 import 'dart:io';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -16,7 +18,8 @@ class ReceiptFixture {
   final WidgetTester tester;
   final String? status;
   final server = ConversationServer();
-  final now = DateTime.now();
+  // The receipt reads the package clock, which a test moves; real time would drift from it.
+  final now = clock.now();
   late final SuperTabController controller;
   String? opened;
   bool addedLead = false;
@@ -131,11 +134,9 @@ void main() {
               f.message['createdAt'] = DateTime.now().toIso8601String(),
         );
         expect(find.text('Sending…'), findsOneWidget);
-        f.message['createdAt'] = f.now
-            .subtract(const Duration(seconds: 8))
-            .toIso8601String();
-        await f.controller.refresh();
-        await tester.pump();
+        // The message ages on screen: no read of it again, which a state
+        // with the same counters no longer makes (spec 2026-11-02-poll-cost).
+        await tester.pump(const Duration(seconds: 8));
         f.expectQuiet();
         await f.close();
       },
@@ -377,4 +378,250 @@ void main() {
       await f.close();
     },
   );
+
+  // Not delivered yet: prod 10-30 (v1.3.71), claims failed for two hours while
+  // every queued message looked delivered.
+  const couldntTake =
+      "Team Mac is online but couldn't take this message yet. Harness keeps trying, and it goes in as soon as it can.";
+  const notPickedUp =
+      "Team Mac is online but hasn't picked this message up yet. Harness keeps trying, and it goes in as soon as it can.";
+
+  testWidgets(
+    'receipt: a queued message whose claims fail for a minute reads Not delivered yet',
+    (tester) async {
+      final f = ReceiptFixture(tester, status: 'queued');
+      await f.show(
+        prepare: () => f.delivery['claimFailingSince'] = f.now
+            .subtract(const Duration(seconds: 61))
+            .toIso8601String(),
+      );
+      expect(find.text('Not delivered yet'), findsOneWidget);
+      expect(find.text(couldntTake), findsOneWidget);
+      expect(find.text('Send again'), findsNothing);
+      await f.close();
+    },
+  );
+
+  testWidgets(
+    'receipt: a queued message no computer picked up for 2 minutes reads Not delivered yet',
+    (tester) async {
+      final f = ReceiptFixture(tester, status: 'queued');
+      await f.show(
+        prepare: () => f.message['createdAt'] = f.now
+            .subtract(const Duration(minutes: 2, seconds: 1))
+            .toIso8601String(),
+      );
+      expect(find.text('Not delivered yet'), findsOneWidget);
+      expect(find.text(notPickedUp), findsOneWidget);
+      await f.close();
+    },
+  );
+
+  testWidgets('receipt: offline still wins over Not delivered yet', (
+    tester,
+  ) async {
+    final f = ReceiptFixture(tester, status: 'queued');
+    await f.show(
+      prepare: () {
+        f.delivery['claimFailingSince'] = f.now
+            .subtract(const Duration(minutes: 5))
+            .toIso8601String();
+        (f.server.state['machines'] as List)
+            .first['observation']['receivedAt'] = f.now
+            .subtract(const Duration(minutes: 3))
+            .millisecondsSinceEpoch;
+      },
+    );
+    expect(find.text("Lead's computer is offline"), findsOneWidget);
+    expect(find.text('Not delivered yet'), findsNothing);
+    await f.close();
+  });
+
+  testWidgets(
+    'receipt: a stopped recipient that has been queued for minutes shows neither case',
+    (tester) async {
+      final f = ReceiptFixture(tester, status: 'queued');
+      await f.show(
+        prepare: () {
+          (f.server.state['agents'] as List).first['downSince'] = f.now
+              .subtract(const Duration(minutes: 10))
+              .toIso8601String();
+          f.message['createdAt'] = f.now
+              .subtract(const Duration(minutes: 3))
+              .toIso8601String();
+        },
+      );
+      expect(find.text('Not delivered yet'), findsNothing);
+      await f.close();
+    },
+  );
+
+  testWidgets(
+    'receipt: a stopped recipient with failing claims shows no Not delivered yet',
+    (tester) async {
+      final f = ReceiptFixture(tester, status: 'queued');
+      await f.show(
+        prepare: () {
+          (f.server.state['agents'] as List).first['downSince'] = f.now
+              .subtract(const Duration(minutes: 10))
+              .toIso8601String();
+          f.delivery['claimFailingSince'] = f.now
+              .subtract(const Duration(minutes: 5))
+              .toIso8601String();
+        },
+      );
+      expect(find.text('Not delivered yet'), findsNothing);
+      await f.close();
+    },
+  );
+
+  testWidgets(
+    'receipt: a delivery to an agent not in the Swarm shows nothing and does not throw',
+    (tester) async {
+      final f = ReceiptFixture(tester, status: 'queued');
+      await f.show(
+        prepare: () {
+          f.delivery['agentId'] = 'ghost-agent';
+          f.message['createdAt'] = f.now
+              .subtract(const Duration(minutes: 3))
+              .toIso8601String();
+        },
+      );
+      expect(find.text('Not delivered yet'), findsNothing);
+      await f.close();
+    },
+  );
+
+  testWidgets(
+    'receipt: a message queued for minutes keeps its line when the first claim failure arrives',
+    (tester) async {
+      final f = ReceiptFixture(tester, status: 'queued');
+      await f.show(
+        prepare: () {
+          f.message['createdAt'] = f.now
+              .subtract(const Duration(minutes: 5))
+              .toIso8601String();
+          f.delivery['claimFailingSince'] = f.now
+              .subtract(const Duration(seconds: 10))
+              .toIso8601String();
+        },
+      );
+      expect(find.text('Not delivered yet'), findsOneWidget);
+      expect(find.text(couldntTake), findsOneWidget);
+      await f.close();
+    },
+  );
+
+  testWidgets(
+    'receipt: a claimed message with leftover claim fields stays quiet',
+    (tester) async {
+      final f = ReceiptFixture(tester);
+      await f.show(
+        prepare: () => f.delivery['claimFailingSince'] = f.now
+            .subtract(const Duration(minutes: 5))
+            .toIso8601String(),
+      );
+      f.expectQuiet();
+      expect(find.text('Not delivered yet'), findsNothing);
+      await f.close();
+    },
+  );
+
+  testWidgets(
+    'receipt: below both thresholds nothing shows, and the line comes by the receipt\'s own clock',
+    (tester) async {
+      final f = ReceiptFixture(tester, status: 'queued');
+      await f.show(
+        prepare: () => f.message['createdAt'] = clock
+            .now()
+            .subtract(const Duration(minutes: 1, seconds: 58))
+            .toIso8601String(),
+      );
+      expect(find.text('Not delivered yet'), findsNothing);
+      await tester.pump(const Duration(seconds: 3));
+      expect(find.text('Not delivered yet'), findsOneWidget);
+      await f.close();
+    },
+  );
+
+  // A message tagging several agents: one agent's cancelled copy said Not sent
+  // under it though the Lead's copy arrived, and people sent it again (10-30).
+  // Not sent shows only when no recipient got it; one still waiting keeps its
+  // own line, so the receipt never promises arrival while another waits.
+  group('receipt: several recipients', () {
+    Map<String, dynamic> row(String agentId, String status) => {
+      'id': 'delivery-$agentId',
+      'agentId': agentId,
+      'status': status,
+    };
+    String? receipt(List<Map<String, dynamic>> deliveries) =>
+        SuperTabMessage.fromJson({
+          'id': 'm1',
+          'conversationId': 'lead',
+          'text': '@Lead @Builder please start',
+          'sequence': 1,
+          'author': {'kind': 'person', 'id': 'owner', 'name': 'Owner'},
+          'deliveries': deliveries,
+        }).receiptDelivery?.status;
+
+    test('one copy cancelled while another arrived is not the receipt', () {
+      for (final arrived in ['delivered', 'confirmed', 'answered']) {
+        final rows = [row('lead-agent', arrived), row('builder', 'cancelled')];
+        expect(receipt(rows), arrived);
+        expect(receipt(rows.reversed.toList()), arrived);
+      }
+      expect(receipt([row('builder', 'cancelled')]), 'cancelled');
+      expect(
+        receipt([row('lead-agent', 'queued'), row('builder', 'cancelled')]),
+        'queued',
+      );
+      expect(
+        receipt([row('builder', 'cancelled'), row('lead-agent', 'claimed')]),
+        'claimed',
+      );
+      expect(
+        receipt([row('lead-agent', 'answered'), row('builder', 'uncertain')]),
+        'uncertain',
+      );
+    });
+
+    testWidgets(
+      'the Lead got it and the Builder\'s copy was cancelled: no Not sent',
+      (tester) async {
+        final f = ReceiptFixture(tester, status: null);
+        await f.show(
+          prepare: () => f.message['deliveries'] = [
+            row('builder', 'cancelled'),
+            row('lead-agent', 'delivered'),
+          ],
+        );
+        f.expectQuiet();
+        await f.close();
+      },
+    );
+
+    testWidgets('every copy cancelled still reads Not sent', (tester) async {
+      final f = ReceiptFixture(tester, status: null);
+      await f.show(
+        prepare: () => f.message['deliveries'] = [row('builder', 'cancelled')],
+      );
+      expect(find.text('Not sent'), findsOneWidget);
+      await f.close();
+    });
+
+    testWidgets('the Lead\'s copy still waiting keeps its line, not Not sent', (
+      tester,
+    ) async {
+      final f = ReceiptFixture(tester, status: null);
+      await f.show(
+        prepare: () => f.message['deliveries'] = [
+          row('builder', 'cancelled'),
+          row('lead-agent', 'queued'),
+        ],
+      );
+      expect(find.text('Not sent'), findsNothing);
+      expect(find.text('Not delivered yet'), findsOneWidget);
+      await f.close();
+    });
+  });
 }

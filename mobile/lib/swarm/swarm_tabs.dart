@@ -9,7 +9,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 
 import 'swarm_activity_page.dart';
-import 'swarm_buddies_page.dart';
+import 'swarm_buddy_tab.dart';
 import 'swarm_page.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
@@ -21,8 +21,8 @@ enum SwarmTab {
   /// Swarm Home: the Swarms' projects, and what moved in them.
   home,
 
-  /// The person's Buddy in each project.
-  buddies,
+  /// The person's one Buddy: its chat, in the Swarm they last used.
+  buddy,
 
   /// What needs the person, and what came for them.
   activity,
@@ -44,6 +44,7 @@ class SwarmTabEntry {
     required this.icon,
     required this.screen,
     this.badge,
+    this.mark,
   });
 
   final SwarmTab tab;
@@ -57,11 +58,15 @@ class SwarmTabEntry {
   /// The count on the glyph, from the account's Swarm, read again whenever
   /// the Swarm changes; none for null or 0.
   final SwarmTabBadge? Function(SwarmSession session)? badge;
+
+  /// A dot on the glyph saying how what the tab shows stands, and that in
+  /// words for a screen reader; none for null. Read as the count is.
+  final SwarmBuddyMark? Function(SwarmSession session)? mark;
 }
 
 /// Swarm's tabs, in the bar's order: each part of Swarm plugs its screen in
-/// here, one entry each: Home; Buddies ([SwarmBuddiesView]) with the Buddy
-/// chats that have something unread counted; Activity ([SwarmActivityView])
+/// here, one entry each: Home; Buddy ([SwarmBuddyTabView]) with the Swarms whose
+/// Buddy chat has something unread counted, lit while the Buddy runs; Activity ([SwarmActivityView])
 /// with what waits on the person counted; and You ([SwarmYouPage]).
 /// [onSettings] opens the phone's Settings over the tabs, from You.
 List<SwarmTabEntry> swarmTabs({
@@ -74,11 +79,12 @@ List<SwarmTabEntry> swarmTabs({
     screen: (_) => const SwarmPage(),
   ),
   SwarmTabEntry(
-    tab: SwarmTab.buddies,
-    label: 'Buddies',
+    tab: SwarmTab.buddy,
+    label: 'Buddy',
     icon: LucideIcons.messageCircle300,
-    screen: (_) => const SwarmBuddiesView(),
-    badge: (session) => (count: session.buddyList.badge, warn: false),
+    screen: (_) => const SwarmBuddyTabView(),
+    badge: (session) => (count: swarmBuddyTabBadge(session), warn: false),
+    mark: swarmBuddyTabMark,
   ),
   SwarmTabEntry(
     tab: SwarmTab.activity,
@@ -134,6 +140,25 @@ class _SwarmTabsPageState extends State<SwarmTabsPage> {
   /// Each screen as it was first made, by its tab: handed back unchanged
   /// after, so opening a tab builds nothing under the others.
   final _screens = <SwarmTab, Widget>{};
+
+  SwarmSession? _session;
+
+  void _showBuddy() => _show(SwarmTab.buddy);
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final session = SwarmScope.of(context);
+    if (identical(session, _session)) return;
+    _session?.showBuddyTab = null;
+    _session = session?..showBuddyTab = _showBuddy;
+  }
+
+  @override
+  void dispose() {
+    _session?.showBuddyTab = null;
+    super.dispose();
+  }
 
   void _show(SwarmTab tab) {
     if (tab == _open || !_tabs.any((entry) => entry.tab == tab)) return;
@@ -226,6 +251,7 @@ class SwarmTabBar extends StatelessWidget {
                   entry: entry,
                   open: entry.tab == open,
                   badge: session == null ? null : entry.badge?.call(session),
+                  mark: session == null ? null : entry.mark?.call(session),
                   onTap: () => onOpen(entry.tab),
                 ),
               ),
@@ -249,12 +275,14 @@ class _TabButton extends StatelessWidget {
     required this.entry,
     required this.open,
     required this.badge,
+    required this.mark,
     required this.onTap,
   });
 
   final SwarmTabEntry entry;
   final bool open;
   final SwarmTabBadge? badge;
+  final SwarmBuddyMark? mark;
   final VoidCallback onTap;
 
   @override
@@ -271,7 +299,7 @@ class _TabButton extends StatelessWidget {
       key: ValueKey('swarm-tab-$name'),
       button: true,
       selected: open,
-      label: count > 0 ? '${entry.label}, $count' : entry.label,
+      label: [entry.label, ?mark?.label, if (count > 0) '$count'].join(', '),
       onTap: tap,
       excludeSemantics: true,
       child: GestureDetector(
@@ -292,6 +320,16 @@ class _TabButton extends StatelessWidget {
                   clipBehavior: Clip.none,
                   children: [
                     Icon(entry.icon, size: 26, color: ink),
+                    if (mark case final mark?)
+                      Positioned(
+                        right: -2,
+                        bottom: -1,
+                        child: SwarmBuddyDot(
+                          mark,
+                          key: ValueKey('swarm-tab-mark-$name'),
+                          ring: Tty.of(context).ground,
+                        ),
+                      ),
                     if (count > 0)
                       Positioned(
                         left: 15,

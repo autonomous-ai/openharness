@@ -10,7 +10,6 @@ import 'sections/debug_section.dart';
 import 'sections/experimental_section.dart';
 import 'sections/notifications_section.dart';
 import 'sections/privacy_section.dart';
-import 'sections/routing_section.dart';
 import 'sections/shortcuts_section.dart';
 import 'sections/tab_invites_section.dart';
 import 'sections/usage_section.dart';
@@ -48,7 +47,6 @@ class SettingsBody extends StatelessWidget {
         notifier: notifier,
         store: experimentalFeatures ?? notifier.experimentalFeatures,
       ),
-      SettingsSection.routing => RoutingSection(notifier: notifier),
       SettingsSection.tabInvites => TabInvitesSection(notifier: notifier),
       SettingsSection.shortcuts => const ShortcutsSection(),
       SettingsSection.debug => const DebugSection(),

@@ -25,8 +25,11 @@ export async function relaySwarmDeliveries(machineId: string, send: (frame: unkn
   let unsubscribe: () => void
   try {
     unsubscribe = await subscribeSwarmDeliveries(machineId, msg => {
-      const { tabId, agentId } = (msg && typeof msg === 'object' ? msg : {}) as Record<string, unknown>
-      if (typeof tabId === 'string' && typeof agentId === 'string') tell({ tabId, agentId })
+      const { tabId, agentId, terminal } = (msg && typeof msg === 'object' ? msg : {}) as Record<string, unknown>
+      if (typeof tabId !== 'string' || typeof agentId !== 'string') return
+      // A terminal request waiting for this machine (announceSwarmTerminal): a `__` control frame, which an older daemon drops.
+      if (terminal === true) send({ t: 'down', connId: '', frame: { type: '__terminal_waiting', payload: { tabId, agentId } } })
+      else tell({ tabId, agentId })
     })
   } catch (error) {
     // Not told that the server pushes, the host keeps reading each second: nothing waits longer, only the saving is lost.
@@ -45,4 +48,11 @@ export async function relaySwarmDeliveries(machineId: string, send: (frame: unkn
  *  holding the machine's socket tells it. Dropped when Redis is away; the host's 30 s read still finds the delivery. */
 export function announceSwarmDeliveries({ machineId, tabId, agentId }: DeliveriesWaiting): void {
   void publishSwarmDeliveries(machineId, { tabId, agentId })
+}
+
+/** The store's `terminalWaiting`: a terminal request for one of this machine's agents, on the same channel as deliveries, so
+ *  the daemon picks it up at once rather than on its next poll (spec 2026-11-02 poll cost, Part 4.2). Dropped when Redis is
+ *  away; the daemon's fallback poll still finds it within the 10 s pickup deadline. */
+export function announceSwarmTerminal({ machineId, tabId, agentId }: DeliveriesWaiting): void {
+  void publishSwarmDeliveries(machineId, { tabId, agentId, terminal: true })
 }

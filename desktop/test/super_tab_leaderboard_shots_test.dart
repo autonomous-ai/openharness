@@ -98,4 +98,51 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     }
   }, skip: shots == null);
+
+  testWidgets('sidebar Models screenshots, expanded and collapsed', (
+    tester,
+  ) async {
+    for (final (brightness, name) in [
+      (Brightness.light, 'light'),
+      (Brightness.dark, 'dark'),
+    ]) {
+      await showHumans(
+        tester,
+        brightness,
+        swarm: modelsSwarm,
+        size: const Size(1300, 1000),
+      );
+      await tester.runAsync(
+        () => precacheImage(
+          const AssetImage('assets/engine-icons/codex.png'),
+          tester.element(find.byKey(const ValueKey('super-models-heading'))),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await captureWindow(tester, shots, 'sidebar-models-$name');
+      // The heading's hover line.
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: Offset.zero);
+      await mouse.moveTo(
+        tester.getCenter(
+          find.descendant(
+            of: find.byKey(const ValueKey('super-models-heading')),
+            matching: find.text('Models'),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle(const Duration(seconds: 2));
+      await captureWindow(tester, shots, 'sidebar-models-hover-$name');
+      await mouse.removePointer();
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const ValueKey('super-models-heading')),
+          matching: find.text('Models'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await captureWindow(tester, shots, 'sidebar-models-collapsed-$name');
+      await tester.pumpWidget(const SizedBox());
+    }
+  }, skip: shots == null);
 }

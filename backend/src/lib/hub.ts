@@ -10,12 +10,15 @@ import { WebSocket } from 'ws'
 import { randomUUID } from 'crypto'
 import {
   bumpCommanderJoinGeneration,
+  forgetConnOwner,
   getAgentClientState,
   publishDown,
   publishTerminalDown,
   publishUp,
   setAgentClientCount,
   setAgentClientCountsBatch,
+  recordConnOwners,
+  subscribePod,
   subscribeUp,
   subscribeTerminalUp,
 } from './bus.js'
@@ -25,6 +28,7 @@ import type { ClientKind } from './registry.js'
 import type { Frame, UpBusMsg } from './tunnel.js'
 import { routeDown } from './providerLink.js'
 import { logger } from '../utils/logger.js'
+import { env } from '../config/env.js'
 import { decodeTerminalHop, encodeTerminalHop, TerminalHopDirection } from './terminalBinary.js'
 import { guardedSend, guardedSendJson } from './wsSend.js'
 
@@ -150,10 +154,17 @@ async function sendClientsControlNow(machineId: string, commanderJoined: boolean
 /** B_m-only: read the cross-instance total and emit `__clients` down the local manager control socket
  *  (single in-order writer → the node's last frame is always the true global state). */
 export async function recomputeAndSendClients(machineId: string): Promise<void> {
-  const { totals: { ui, commander, commanderActive }, commanderJoinGeneration } = await getAgentClientState(machineId)
+  const { totals: { ui, commander, commanderActive }, commanderJoinGeneration, failed } = await getAgentClientState(machineId)
   const frame = {
     type: CLIENTS_FRAME,
-    payload: { ui, commander, commanderActive, ...(commanderJoinGeneration != null ? { commanderJoinGeneration } : {}) },
+    // `uiGate` lets the daemon hold live events while `ui` is 0; without it the daemon sends everything, so
+    // RELAY_UI_GATE=off undoes the gate from here alone (spec 2026-11-02-swarm-cache-delta-design, Part 4).
+    payload: {
+      ui, commander, commanderActive,
+      ...(commanderJoinGeneration != null ? { commanderJoinGeneration } : {}),
+      // Never on a count that could not be read: its zero would tell the daemon nobody is viewing (final review, Critical 1).
+      ...(env.RELAY_UI_GATE !== 'off' && !failed ? { uiGate: true } : {}),
+    },
   }
   const local = registry.controlSocketFor(machineId)
   if (local && local.readyState === WebSocket.OPEN) {
@@ -309,6 +320,8 @@ function clientHeartbeatTick(): void {
   // for every local agent, not 2 round trips each.
   const rows = registry.localAgentIds().map((machineId) => ({ machineId, ...registry.clientCounts(machineId) }))
   void setAgentClientCountsBatch(INSTANCE_ID, rows)
+  // Each viewer's record (CONN_OWNER_TTL_MS, 60 s) outlives two missed beats; a crashed process's records expire.
+  if (podRoutes) void recordConnOwners(registry.allClients().map(c => c.connId), registry.PROCESS_ID)
   // B_m periodic resync: re-emit the summed `__clients` for every agent whose control socket lives
   // here. Field EXPIRY (a client-holding instance crashed — its fields age out of the hash after 45s)
   // has no attach/detach event to poke a recompute, so without this the node keeps the ghost count
@@ -326,6 +339,20 @@ setTimeout(() => {
   setInterval(clientHeartbeatTick, CLIENT_HEARTBEAT_MS).unref?.()
 }, Math.floor(Math.random() * 5_000)).unref?.()
 
+/** Whether this process takes frames addressed to its viewers on its own channels (lib/terminalRoute.ts): set once by
+ *  startPodRoutes, with TERMINAL_POD_ROUTES on. Off, no viewer is recorded and adapters publish as before. */
+let podRoutes = false
+export const podRoutesOn = (): boolean => podRoutes
+
+/** Records every viewer this process holds, subscribes to its own channels, and keeps both up to date (attach, detach,
+ *  the client heartbeat). Called once by server.ts. Returns its stop. */
+export async function startPodRoutes(): Promise<() => void> {
+  const unsubscribe = await subscribePod(registry.PROCESS_ID, { hop: deliverTerminalUpLocal, json: deliverUpLocal })
+  podRoutes = true
+  void recordConnOwners(registry.allClients().map(c => c.connId), registry.PROCESS_ID)
+  return () => { podRoutes = false; unsubscribe() }
+}
+
 /** Register a client socket into the hub. The caller still owns the socket's 'message' handler. */
 export function attachHubClient(socket: WebSocket, machineId: string, kind: ClientKind, opts: { guest?: boolean } = {}): HubClient {
   const connId = randomUUID()
@@ -334,6 +361,7 @@ export function attachHubClient(socket: WebSocket, machineId: string, kind: Clie
   // touch __hubDeadlineMs: a device sets its own (shorter) deadline before any machine attaches.
   wireLiveness(socket)
   const first = registry.addClient({ connId, machineId, kind, socket, ...(opts.guest ? { guest: true } : {}) })
+  if (podRoutes) void recordConnOwners([connId], registry.PROCESS_ID)
 
   if (first) {
     void subscribeUp(machineId, (msg) => {
@@ -412,6 +440,7 @@ export function attachHubClient(socket: WebSocket, machineId: string, kind: Clie
  *  than inside the HubClient closure. */
 function detachConn(machineId: string, connId: string): void {
   const last = registry.removeClient(machineId, connId)
+  if (podRoutes) void forgetConnOwner(connId)
   if (last) {
     const unsub = upSubs.get(machineId)
     if (unsub) { unsub(); upSubs.delete(machineId) }

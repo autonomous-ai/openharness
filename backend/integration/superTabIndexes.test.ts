@@ -11,6 +11,7 @@ import { costRows } from '../src/superTabs/costs/read.js'
 import { readEvidence } from '../src/superTabs/evidence/store.js'
 import { recentDecisions } from '../src/superTabs/routeDecisions.js'
 import { settleStuckDeliveries } from '../src/superTabs/deliverySettle.js'
+import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
 import { revokeNativeContexts } from '../src/superTabs/native.js'
 import { outsider, owner, peer, richSwarm, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { threadSummaries } from '../src/superTabs/threads.js'
@@ -178,19 +179,20 @@ describe('message page reads', () => {
     const rows = await pageDeliveries(db, 'A', ['A-m150'])
     expect(rows.find(row => row.id === 'A-150-3')).toEqual({ id: 'A-150-3', messageId: 'A-m150', agentId: 'agent-3', status: 'delivered',
       receipt: 'typed', holdReason: 'busy', holdSince: new Date(T0 + 7000), deliveredAt: new Date(T0 + 8000), answeredAt: new Date(T0 + 9000),
-      createdAt: new Date(T0 + 150_000), updatedAt: expect.any(Date) })
+      createdAt: new Date(T0 + 150_000), updatedAt: expect.any(Date), claimFailingSince: null, claimFailures: null })
     expect(rows.find(row => row.id === 'A-150-old')).toEqual({ id: 'A-150-old', messageId: 'A-m150', agentId: 'agent-old', status: 'answered',
-      receipt: null, holdReason: null, holdSince: null, deliveredAt: null, answeredAt: null, createdAt: new Date(T0), updatedAt: new Date(T0 + 1) })
+      receipt: null, holdReason: null, holdSince: null, deliveredAt: null, answeredAt: null, createdAt: new Date(T0), updatedAt: new Date(T0 + 1), claimFailingSince: null, claimFailures: null })
     expect(rows.find(row => row.id === 'A-150-4')).toEqual({ id: 'A-150-4', messageId: 'A-m150', agentId: 'agent-4', status: 'answered',
       receipt: null, holdReason: null, holdSince: null, deliveredAt: null, answeredAt: null,
-      createdAt: new Date(T0 + 150_000), updatedAt: new Date(T0 + 150_500) })
+      createdAt: new Date(T0 + 150_000), updatedAt: new Date(T0 + 150_500), claimFailingSince: null, claimFailures: null })
   })
 
   // The delivery read never had an order (no orderBy: it followed whichever index the planner took), so it is compared by id.
   // Reactions keep the tabId+messageId index order, which their counts' `by` lists show.
   it('returns the same rows as the Prisma reads it replaces', async () => {
     const select = { id: true, messageId: true, agentId: true, status: true, receipt: true,
-      holdReason: true, holdSince: true, deliveredAt: true, answeredAt: true, createdAt: true, updatedAt: true }
+      holdReason: true, holdSince: true, deliveredAt: true, answeredAt: true, createdAt: true, updatedAt: true,
+      claimFailingSince: true, claimFailures: true }
     const byId = (rows: Array<{ id: string }>) => [...rows].sort((a, b) => a.id.localeCompare(b.id))
     expect(byId(await pageDeliveries(db, 'A', PAGE))).toEqual(byId(await db.superTabDelivery.findMany({ where: { tabId: 'A', messageId: { in: PAGE } }, select })))
     expect(await pageReactions(db, 'A', PAGE)).toEqual(await db.superTabReaction.findMany({ where: { tabId: 'A', messageId: { in: PAGE } },
@@ -230,21 +232,24 @@ describe('the delivery poll order', () => {
 
 describe('the delivery pass', () => {
   it('reads the open deliveries through the status index, examining only those it judges, with their dates as Dates', async () => {
-    const open = ['queued', 'claimed', 'uncertain'].map((status, i) => ({ _id: `A-open-${i}`, tabId: 'A', conversationId: 'g1', messageId: 'A-m900',
+    const open = ['queued', 'claimed', 'uncertain', 'gathered'].map((status, i) => ({ _id: `A-open-${i}`, tabId: 'A', conversationId: 'g1', messageId: 'A-m900',
       agentId: `agent-${i}`, machineId: 'host', membershipGeneration: 'gen', authorKind: 'person', authorId: 'owner', authorGeneration: 'gen', status,
       ...status === 'claimed' ? { claimId: 'claim', holdReason: 'team_waiting_user', holdSince: { $date: new Date(T0 + 1000).toISOString() } } : {},
       createdAt: { $date: new Date(T0).toISOString() }, updatedAt: { $date: new Date(T0 + 2000).toISOString() } }))
     await db.$runCommandRaw({ insert: 'SuperTabDelivery', documents: open })
     const judged: Array<{ tabId: string; rows: unknown[] }> = []
     const store = { settleDeliveries: async (tabId: string, rows: unknown[]) => { judged.push({ tabId, rows }); return 0 } }
+    // As the worker has at startup: its plan is named, or a fourth status plans it on `compaction` and sorts.
+    await listNamedIndexes(db)
     const [, profile] = await profiled('SuperTabDelivery', () => settleStuckDeliveries(db, store, T0))
     await db.superTabDelivery.deleteMany({ where: { messageId: 'A-m900' } })
-    // One scan of the index per open status, merged in id order.
-    expect(profile).toEqual({ plans: [Array(3).fill('IXSCAN { status: 1, _id: 1 }').join(', ')], docsExamined: 3, returned: 3 })
+    // One scan of the index per unfinished status, merged in id order.
+    expect(profile).toEqual({ plans: [Array(4).fill('IXSCAN { status: 1, _id: 1 }').join(', ')], docsExamined: 4, returned: 4 })
     expect(judged).toEqual([{ tabId: 'A', rows: [
       expect.objectContaining({ id: 'A-open-0', status: 'queued', holdSince: null, createdAt: new Date(T0), updatedAt: new Date(T0 + 2000) }),
       expect.objectContaining({ id: 'A-open-1', status: 'claimed', holdReason: 'team_waiting_user', holdSince: new Date(T0 + 1000) }),
       expect.objectContaining({ id: 'A-open-2', status: 'uncertain', conversationId: 'g1', agentId: 'agent-2' }),
+      expect.objectContaining({ id: 'A-open-3', status: 'gathered' }),
     ] }])
   })
 })

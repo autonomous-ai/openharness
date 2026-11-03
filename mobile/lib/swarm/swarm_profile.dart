@@ -76,6 +76,20 @@ class SwarmProfile {
           },
   });
 
+  /// Any member changes their own username, a viewer too (the server's
+  /// `member.username`), while this Swarm is still theirs to read.
+  bool get canRename =>
+      !reader.accessRevoked &&
+      reader.snapshot?.person(reader.accountId) != null;
+
+  /// The reader's own username, trimmed (the server lowercases it), or back
+  /// to their default when null. A refused or taken name comes back in the
+  /// server's words, as on the desktop (`profile_actions.dart`).
+  Future<String?> setUsername(String? username) => _send({
+    'type': 'member.username',
+    'username': username?.trim(),
+  }, viewer: true);
+
   /// [preset], or back to the initial when null.
   Future<String?> setAvatar(SuperTabPresetAvatar? preset) => _send({
     'type': 'member.avatar',
@@ -106,8 +120,11 @@ class SwarmProfile {
     }
   }
 
-  Future<String?> _send(Map<String, dynamic> command) async {
-    if (!canEdit) return _readOnly;
+  Future<String?> _send(
+    Map<String, dynamic> command, {
+    bool viewer = false,
+  }) async {
+    if (!(viewer ? canRename : canEdit)) return _readOnly;
     try {
       await reader.request(
         'POST',
@@ -116,6 +133,10 @@ class SwarmProfile {
       );
     } on SuperTabFailure catch (failure) {
       return failure.message;
+    } catch (_) {
+      // A call lost on the way (a timeout, a socket dropped) is no answer:
+      // say so, rather than leave the sheet saving.
+      return _notSent;
     }
     await reader.refresh();
     return null;
@@ -123,6 +144,7 @@ class SwarmProfile {
 }
 
 const _readOnly = 'You have read-only access to this Swarm.';
+const _notSent = 'Could not reach this Swarm. Try again.';
 
 /// [picked] cropped to its middle square and drawn at [kSwarmAvatarPixels],
 /// as a PNG: what any picture a person picks becomes before it leaves the

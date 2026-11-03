@@ -7,6 +7,7 @@ import '../daemons/daemon_brain.dart';
 import '../daemons/daemon_face.dart';
 import '../daemons/illustrated_art.dart';
 import 'daemon_illustration.dart';
+import 'finger_target.dart';
 import '../daemons/individuals.dart';
 import '../daemons/plates.dart';
 import '../daemons/render.dart' show cardWidth;
@@ -287,8 +288,12 @@ class DaemonSlotButton extends StatefulWidget {
     this.tooltip,
     this.onHover,
     this.enabled = true,
+    this.phoneBar = false,
   });
   final bool enabled;
+
+  /// On the phone's top bar: one of its even squares, drawn at its one icon size.
+  final bool phoneBar;
   final DaemonFace face;
   final VoidCallback onPressed;
   final bool selected;
@@ -327,7 +332,7 @@ class _DaemonSlotButtonState extends State<DaemonSlotButton> {
         if (!face.visible) return const SizedBox.shrink();
         final theme = currentTerminalTheme();
         final art = IllustratedArt.forFace(face);
-        return MouseRegion(
+        final control = MouseRegion(
           onEnter: (_) {
             if (!widget.enabled ||
                 face.revealing ||
@@ -368,18 +373,22 @@ class _DaemonSlotButtonState extends State<DaemonSlotButton> {
                           key: const ValueKey('daemon-slot-art'),
                           art: art,
                           frame: IllustratedArt.frameForFace(face),
-                          size: 32,
+                          size: widget.phoneBar ? kPhoneBarIcon : 32,
                         )
-                      : FittedBox(
-                          fit: BoxFit.scaleDown,
-                          child: Text(
-                            face.cell,
-                            key: const ValueKey('daemon-slot-glyph'),
-                            maxLines: 1,
-                            style: workspaceBarTextStyle(
-                              color: daemonSlotInk(face, theme),
-                              emphasized: emphasized,
-                            ).copyWith(fontFeatures: daemonTextFeatures),
+                      : SizedBox(
+                          width: widget.phoneBar ? kPhoneBarIcon : null,
+                          height: widget.phoneBar ? kPhoneBarIcon : null,
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              face.cell,
+                              key: const ValueKey('daemon-slot-glyph'),
+                              maxLines: 1,
+                              style: workspaceBarTextStyle(
+                                color: daemonSlotInk(face, theme),
+                                emphasized: emphasized,
+                              ).copyWith(fontFeatures: daemonTextFeatures),
+                            ),
                           ),
                         ),
                 ),
@@ -387,6 +396,9 @@ class _DaemonSlotButtonState extends State<DaemonSlotButton> {
             ),
           ),
         );
+        // Here, not around the button: with no face shown there is no square,
+        // and the icons either side stay evenly spaced.
+        return widget.phoneBar ? phoneBarCell(control) : control;
       },
     );
   }
@@ -553,7 +565,11 @@ class DaemonKeys extends StatelessWidget {
               key: ValueKey('$idPrefix-$key'),
               label: action.label,
               tooltip: chord
-                  ? '${action.label} ${linuxKeyLabels ? 'Alt+Super+' : windowsKeyLabels ? 'Alt+Win+' : '⌘⌥'}${key.toUpperCase()}'
+                  ? '${action.label} ${linuxKeyLabels
+                        ? 'Alt+Super+'
+                        : windowsKeyLabels
+                        ? 'Alt+Win+'
+                        : '⌘⌥'}${key.toUpperCase()}'
                   : action.label,
               onPressed: () => onAnswer!(key),
               builder: (context, emphasized) => SizedBox(

@@ -326,6 +326,67 @@ Widget _bar(
 void main() {
   setUpAll(_fonts);
 
+  // Huy, 2026-11-02: the phone bar's icons are one size, in even squares.
+  group('the slot on the phone bar', () {
+    final cell = find.byKey(const ValueKey('daemon-slot'));
+    final art = find.byKey(const ValueKey('daemon-slot-art'));
+    final glyph = find.byKey(const ValueKey('daemon-slot-glyph'));
+
+    Future<void> slot(WidgetTester tester, DaemonFace face, bool phone) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Center(
+            child: DaemonSlotButton(
+              face: face,
+              onPressed: () {},
+              phoneBar: phone,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+    }
+
+    testWidgets('draws its art at the bar\'s icon size in a finger\'s square', (
+      tester,
+    ) async {
+      final face = await _face(tester, _paired('tim', version: '0.1'));
+      await slot(tester, face, true);
+      expect(tester.getSize(cell), const Size(44, 44));
+      expect(tester.getSize(art), const Size(20, 20));
+      // Anywhere else, as it was.
+      await slot(tester, face, false);
+      expect(tester.getSize(art).width, 32);
+    });
+
+    testWidgets('draws its glyph no bigger than the bar\'s icon size', (
+      tester,
+    ) async {
+      // A daemon with no illustration draws its text cell.
+      final face = await _face(tester, _paired('vim', version: '0.1'));
+      await slot(tester, face, true);
+      expect(art, findsNothing);
+      expect(tester.getSize(cell), const Size(44, 44));
+      final drawn = tester.getRect(glyph);
+      final box = find.ancestor(of: glyph, matching: find.byType(FittedBox));
+      expect(tester.getSize(box.first).width, lessThanOrEqualTo(20));
+      expect(tester.getSize(box.first).height, lessThanOrEqualTo(20));
+      expect(drawn.center, tester.getCenter(cell));
+    });
+
+    testWidgets('takes no room at all while the face is not shown', (
+      tester,
+    ) async {
+      final face = await _face(tester, const Zoo());
+      face.zoo.bind(null);
+      await tester.pump();
+      expect(face.visible, isFalse);
+      await slot(tester, face, true);
+      expect(cell, findsNothing);
+      expect(tester.getSize(find.byType(DaemonSlotButton)), Size.zero);
+    });
+  });
+
   for (final brightness in [Brightness.dark, Brightness.light]) {
     for (final species in IllustratedArt.species) {
       testWidgets('artwork gallery: $species ${brightness.name}', (

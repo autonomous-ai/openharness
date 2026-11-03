@@ -3,16 +3,24 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart' show CancelToken;
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:harness_mobile/swarm/swarm_home_cache.dart';
+import 'package:harness_mobile/swarm/swarm_outbox.dart' show superTabMessageId;
 import 'package:harness_mobile/swarm/swarm_request.dart';
+import 'package:harness_mobile/swarm/swarm_outgoing_files.dart';
 
 /// Swarm answers as the backend sends them (docs/design/2026-10-26-swarm-state-parts.md, section 4), built by hand so a
 /// test reads like the wire. Nothing here reaches a machine or the backend.
 
 const me = 'person-me';
 const tab = 'tab-1';
+
+/// The id the backend gives the message [me] sends in [tab] with receipt
+/// [operationId] (commands.ts `message.send`): never the receipt itself.
+String sentId(String operationId) =>
+    superTabMessageId(tabId: tab, accountId: me, operationId: operationId);
 const project = 'project-1';
 const leadChat = 'group-lead';
 
@@ -276,14 +284,15 @@ class FakeUpload {
   FakeUpload(
     this.name,
     this.mime,
-    this.bytes,
+    this.file,
     this.conversationId,
     this.tabId,
     this.cancel,
     this.onProgress,
   );
   final String name, mime, conversationId, tabId;
-  final Uint8List bytes;
+  final SwarmOutgoingFile file;
+  Uint8List? get bytes => file.bytes;
   final CancelToken cancel;
   final void Function(double sent) onProgress;
   final answer = Completer<Map<String, dynamic>>();
@@ -307,14 +316,14 @@ class FakeUploads {
         required conversationId,
         required name,
         required mime,
-        required bytes,
+        required file,
         required cancel,
         required onProgress,
       }) {
         final u = FakeUpload(
           name,
           mime,
-          bytes,
+          file,
           conversationId,
           tabId,
           cancel,
@@ -369,6 +378,14 @@ class MemorySwarmHomeKey implements SwarmHomeKey {
   }
 }
 
+/// Waits until every save [cache] has under way is done: an inbox keeps its
+/// Home in the background (a temp file, then a rename), so a test that ends
+/// right after a read would have its folder deleted mid-save. The cache does
+/// one thing at a time, so a read of [account]'s Home answers after them.
+/// Real time only: under a widget test's fake clock it would never answer.
+Future<void> homeSaved(SwarmHomeCache cache, {String account = me}) =>
+    cache.read(account);
+
 /// A kept Home in a folder of its own, gone after the test.
 SwarmHomeCache memoryHomeCache() {
   final dir = Directory.systemTemp.createTempSync('swarm-home');
@@ -376,6 +393,27 @@ SwarmHomeCache memoryHomeCache() {
   return SwarmHomeCache(
     key: MemorySwarmHomeKey(),
     file: File('${dir.path}/home.bin'),
+  );
+}
+
+/// Swarm Home C's project screen is up for the project named [name]: its
+/// #name and ☰, and no tab bar: none of direction B's tabs (Buddy, Tasks,
+/// Leaderboard), nor B's team button.
+void expectHomeCProject(String name) {
+  Finder tab(String t) => find.byKey(ValueKey('swarm-project-tab-$t'));
+  expect(find.text('#$name'), findsOneWidget, reason: 'its #name');
+  expect(
+    find.byKey(const ValueKey('swarm-project-menu')),
+    findsOneWidget,
+    reason: '☰',
+  );
+  for (final b in ['chat', 'buddy', 'tasks', 'leaderboard']) {
+    expect(tab(b), findsNothing, reason: "B's $b tab");
+  }
+  expect(
+    find.byKey(const ValueKey('swarm-project-team')),
+    findsNothing,
+    reason: "B's team button",
   );
 }
 

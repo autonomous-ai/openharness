@@ -2679,6 +2679,21 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
+  it('sends apps away from this desk a slim transcript event, and the windows here the whole one', async () => {
+    const socket = relaySocket('token')
+    const broadcast = vi.spyOn(gatewayOf(socket), 'broadcast')
+    const frames: Record<string, unknown>[] = []
+    socket.registerLocalClient('local:window', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    const ended = { type: 'tool_end', agentId: 'a1', dbSessionId: 's1', payload: { id: 'u1', tool: 'Bash', output: 'the whole output',
+      isError: false, summary: 'ok', agentId: 'a1', sessionId: 's1' } }
+    const whole = structuredClone(ended)
+    socket.send(ended)
+    expect(frames.filter((frame) => frame.type === 'tool_end')).toEqual([whole])
+    expect(broadcast).toHaveBeenCalledExactlyOnceWith({ ...ended, payload: { id: 'u1', tool: 'Bash', isError: false, agentId: 'a1', sessionId: 's1' } }, undefined)
+    await socket.unregisterLocalClient('local:window')
+    await socket.stop()
+  })
+
   it('says whether an app away from this desk holds a session: a web one, never a device', async () => {
     const socket = relaySocket('token')
     expect(socket.hasRemoteApp()).toBe(false)
@@ -2856,6 +2871,30 @@ describe('desk_changed relay', () => {
     await new Promise((r) => setTimeout(r, 20))
     expect(heard).toHaveLength(2)
     expect(frames.filter((f) => f.type === 'super_tab_deliveries')).toEqual([])
+    await socket.unregisterLocalClient('local:swarm')
+    await socket.stop()
+  })
+
+  // Spec 2026-11-02-poll-cost Part 4.2: the server says a Lead's terminal request waits for this machine.
+  it('hands the backend\'s __terminal_waiting to the Swarm host, never to the windows, and only the backend\'s', async () => {
+    const socket = relaySocket('token')
+    const heard: unknown[] = []
+    const frames: Array<Record<string, unknown>> = []
+    socket.onAccountNotice = (notice) => { heard.push(notice) }
+    socket.registerLocalClient('local:swarm', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    ws.message({ t: 'down', connId: '', frame: { type: '__terminal_waiting', payload: { tabId: 'tab-1', agentId: 'agent-1' } } })
+    // One that names no agent is no request.
+    ws.message({ t: 'down', connId: '', frame: { type: '__terminal_waiting', payload: { tabId: 'tab-1' } } })
+    await vi.waitFor(() => expect(heard).toEqual([{ type: '__terminal_waiting', tabId: 'tab-1', agentId: 'agent-1' }]))
+    // A client relayed with its own connId, or a local one, is not the backend.
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: '__terminal_waiting', payload: { tabId: 'tab-1', agentId: 'agent-2' } } })
+    socket.handleLocalFrame('local:swarm', { type: '__terminal_waiting', payload: { tabId: 'tab-1', agentId: 'agent-3' } })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(heard).toHaveLength(1)
+    expect(frames.filter((f) => f.type === '__terminal_waiting')).toEqual([])
     await socket.unregisterLocalClient('local:swarm')
     await socket.stop()
   })

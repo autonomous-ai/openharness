@@ -16,6 +16,7 @@ import 'package:xterm/xterm.dart';
 import 'window_chrome.dart';
 
 import '../clipboard/image_bytes.dart';
+import '../core/runtime_platform.dart';
 import '../core/dsh_catalog.dart' show DshEntry;
 import '../core/models.dart' show Agent, ConnectionStatus, kUntitledPane;
 import '../clipboard/native_clipboard.dart';
@@ -47,6 +48,7 @@ import 'restart_agent_action.dart';
 import 'terminal_panel.dart';
 import 'harness_activity_mark.dart';
 import 'web_pane_panel.dart';
+import 'transient_menus.dart';
 import 'pane_resize_handle.dart';
 import 'pane_split_edges.dart';
 import '../agent_messages/pane_shared_chips.dart';
@@ -312,6 +314,14 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
   late Object _lastInputDestination;
   final _resizeFocus = FocusNode(debugLabel: 'Resize focused harness');
   final _resizeHelp = OverlayPortalController();
+  VoidCallback? _unregisterResizeHelp;
+
+  void _hideResizeHelp() {
+    if (_resizeHelp.isShowing) _resizeHelp.hide();
+    _unregisterResizeHelp?.call();
+    _unregisterResizeHelp = null;
+  }
+
   late int _resizeRequest;
   late String _activeId;
   late int _focusRequest;
@@ -371,9 +381,10 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
       _resizeRequest = app.paneResizeRequest;
       _resizeFocus.requestFocus();
       _resizeHelp.show();
+      _unregisterResizeHelp ??= registerTransientMenu(_hideResizeHelp);
     }
     if (_activeId != app.activeSwarmId) {
-      if (_resizeHelp.isShowing) _resizeHelp.hide();
+      _hideResizeHelp();
       _offsets[_activeId] = Offset(
         _horizontalScroll.hasClients ? _horizontalScroll.offset : 0,
         _scroll.hasClients ? _scroll.offset : 0,
@@ -482,6 +493,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
   @override
   void dispose() {
     widget.notifier.removeListener(_onAppChanged);
+    _unregisterResizeHelp?.call();
     terminalFontStore.removeListener(_onFontChanged);
     _resizeFocus.dispose();
     _idleFocus.dispose();
@@ -769,7 +781,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
       ),
       child: FocusScope(
         onFocusChange: (focused) {
-          if (!focused && _resizeHelp.isShowing) _resizeHelp.hide();
+          if (!focused) _hideResizeHelp();
         },
         child: Stack(
           children: [
@@ -1432,6 +1444,18 @@ class _PaneCell extends StatelessWidget {
     );
   }
 
+  Widget _clipContent({required Widget child}) {
+    // GTK overlays cannot render under a rounded Flutter clip.
+    if (RuntimePlatform.isLinux && pane.isWeb) {
+      return ClipRect(child: child);
+    }
+    // Keep terminal backgrounds inside the pane rim.
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(_paneRadius - 1),
+      child: child,
+    );
+  }
+
   Widget _frame(
     AppearancePrefs prefs, {
     required bool focused,
@@ -1478,18 +1502,7 @@ class _PaneCell extends StatelessWidget {
         // Keeps a terminal's constant repainting inside its own layer instead
         // of dirtying the whole grid. No key: nothing reads this boundary, it
         // only has to exist.
-        child: ClipRRect(
-          // Clipped HERE rather than through Container's own clipBehavior.
-          //
-          // Both clip, but they clip to different shapes: Container's is the
-          // decoration's OUTER edge, so the child fills the full radius and
-          // paints under the rim, leaving a square-shouldered corner peeking
-          // through the 1px the rim occupies. This one takes the rim's pixel
-          // off the radius, so the fill stops exactly where the rim starts.
-          //
-          // TerminalPanel opens with a ColoredBox across its whole box, and
-          // that is what was reaching the corners.
-          borderRadius: BorderRadius.circular(_paneRadius - 1),
+        child: _clipContent(
           child: RepaintBoundary(
             child: _FileDropZone(
               notifier: notifier,

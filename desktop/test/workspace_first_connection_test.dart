@@ -81,8 +81,6 @@ void main() {
           notifier: app,
           chrome: connectPage
               ? WorkspaceChrome(
-                  leadingWidth: (_) => 0,
-                  leading: (_, _) => const SizedBox(),
                   firstMachine: (_) => const SizedBox(key: _connectPage),
                 )
               : null,

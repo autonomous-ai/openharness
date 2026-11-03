@@ -496,8 +496,45 @@ describe('Super Tab attachment pass-through', () => {
     expect(await r.json()).toEqual({ path: '/api/super-tabs/tab-1/avatars', bytes: 7 })
   })
 
+  // Files over 10 MB go straight to storage (contract of group 1604): the daemon asks the backend for the link and says the
+  // upload is complete, with the account's token; the bytes never pass through it.
+  it('passes a direct upload\'s link request and completion on, guarded like the other writes', async () => {
+    const forward = vi.fn(async (path: string, body: unknown) => ({ status: 200, body: { success: true, data: { path, body } } }))
+    const { base } = await start({ onSuperTabAttachmentUpload: forward })
+    const headers = { 'x-adapter-local': '1', 'content-type': 'application/json' }
+    const ask = { conversationId: 'c1', name: 'AC4 - 26 Oct v2.step', mime: 'application/octet-stream', size: 123456789 }
+    const link = `${base}/api/super-tabs/tab-1/attachments/uploads`, complete = `${link}/0123456789abcdef01234567/complete`
+    for (const url of [link, complete]) {
+      for (const h of [{ 'content-type': 'application/json' }, { ...headers, origin: 'https://untrusted.example' }]) {
+        expect((await fetch(url, { method: 'POST', headers: h, body: JSON.stringify(ask) })).status).toBe(403)
+      }
+    }
+    // Only the two upload paths: no other path, encoded or not, reaches the backend with this account's token.
+    for (const url of [`${base}/api/super-tabs/../attachments/uploads`, `${link}/../x/complete`, `${link}/u1`, `${link}/u1/complete/x`,
+      `${link}/u1%2F..%2F..%2Fcommands/complete`, `${base}/api/super-tabs/tab-1%2Fcommands%3F/attachments/uploads`, `${link}/%2e%2e/complete`,
+      `${base}/api/super-tabs/tab-1/commands`, `${base}/api/super-tabs/tab-1/attachments/uploads/u1/complete/../../../commands`]) {
+      expect((await fetch(url, { method: 'POST', headers, body: '{}' })).status).toBe(404)
+    }
+    expect((await fetch(link, { method: 'POST', headers, body: 'not json' })).status).toBe(400)
+    expect((await fetch(link, { method: 'POST', headers, body: '[1]' })).status).toBe(400)
+    expect(forward).not.toHaveBeenCalled()
+    const asked = await fetch(`${link}?asAgentId=agent-1&other=x`, { method: 'POST', headers, body: JSON.stringify({ ...ask, command: { type: 'member.remove' } }) })
+    expect(asked.status).toBe(200)
+    expect(await asked.json()).toEqual({ success: true, data: { path: '/api/super-tabs/tab-1/attachments/uploads?asAgentId=agent-1', body: ask } })
+    // Completion's body is {}, and an empty one is read as that.
+    const done = await fetch(`${complete}?asAgentId=../x`, { method: 'POST', headers })
+    expect(await done.json()).toEqual({ success: true, data: { path: '/api/super-tabs/tab-1/attachments/uploads/0123456789abcdef01234567/complete', body: {} } })
+    // The backend's refusal, as it said it.
+    forward.mockResolvedValueOnce({ status: 413, body: { success: false, error: { code: 'ATTACHMENT_TOO_LARGE', message: 'Files can be up to 256 MB.' } } } as never)
+    const refused = await fetch(link, { method: 'POST', headers, body: JSON.stringify({ ...ask, size: 256 * 1024 * 1024 + 1 }) })
+    expect(refused.status).toBe(413)
+    expect(await refused.json()).toEqual({ success: false, error: { code: 'ATTACHMENT_TOO_LARGE', message: 'Files can be up to 256 MB.' } })
+  })
+
   it('is unavailable on a daemon without it', async () => {
     const { base } = await start({})
+    expect((await fetch(`${base}/api/super-tabs/tab-1/attachments/uploads`, { method: 'POST',
+      headers: { 'x-adapter-local': '1', 'content-type': 'application/json' }, body: '{}' })).status).toBe(503)
     expect((await fetch(`${base}/api/super-tabs/tab-1/attachments`, { method: 'POST',
       headers: { 'x-adapter-local': '1', 'content-type': 'multipart/form-data; boundary=x' }, body: 'x' })).status).toBe(503)
   })
@@ -1110,6 +1147,83 @@ it.each(['/api/hook/session-end', '/api/hook/turn-start', '/api/hook/tool-start'
     expect(mutation).not.toHaveBeenCalled()
   },
 )
+
+describe('audit H1: what a secret heard on the daemon\'s port can do', () => {
+  const call = (port: number, path: string, headers: Record<string, string>, method = 'GET') =>
+    fetch(`http://127.0.0.1:${port}${path}`, { method, headers, ...(method === 'POST' ? { body: '{}' } : {}) })
+
+  const serve = async (peerAccount: () => Promise<boolean>) => {
+    const started = await startHookServer(0, {
+      onRegistered: vi.fn(), onSessionEnd: vi.fn(), onStatus: async () => ({ supported: true, secretDetail: 'x' }),
+      onAutonomousDeviceRequest: async () => ({ status: 200, body: { ok: true } }),
+    }, { peerAccount })
+    return { port: started.port, close: () => new Promise<void>((resolve) => { started.server.closeAllConnections(); started.server.close(() => resolve()) }) }
+  }
+  const credential = () => readFileSync(join(env.ADAPTER_DATA_DIR, 'hook-credential'), 'utf8').trim()
+  const hookToken = () => readFileSync(join(env.ADAPTER_DATA_DIR, 'hook-token'), 'utf8').trim()
+
+  it('the credential opens nothing for a caller of another account', async () => {
+    const asked = vi.fn(async () => false)
+    const { port, close } = await serve(asked)
+    try {
+      const secret = credential()
+      expect((await call(port, '/api/machines', { 'X-Harness-Local': secret })).status).toBe(401)
+      expect((await call(port, '/api/machines', { Authorization: `Bearer ${secret}` })).status).toBe(401)
+      expect(await (await call(port, '/api/status', { 'X-Harness-Local': secret })).json()).not.toHaveProperty('secretDetail')
+      expect((await call(port, '/api/autonomous-device/status', { Authorization: `Bearer ${secret}` })).status).toBe(403)
+      expect(asked).toHaveBeenCalled()
+    } finally { await close() }
+  })
+
+  it('the credential works for a caller of this account', async () => {
+    const { port, close } = await serve(async () => true)
+    try {
+      expect(await (await call(port, '/api/status', { 'X-Harness-Local': credential() })).json()).toHaveProperty('secretDetail')
+      expect((await call(port, '/api/autonomous-device/status', { Authorization: `Bearer ${credential()}` })).status).toBe(200)
+    } finally { await close() }
+  })
+
+  it('a wrong credential never makes the daemon ask who is calling', async () => {
+    const asked = vi.fn(async () => true)
+    const { port, close } = await serve(asked)
+    try {
+      expect((await call(port, '/api/machines', { 'X-Harness-Local': 'w'.repeat(43) })).status).toBe(401)
+      expect(asked).not.toHaveBeenCalled()
+    } finally { await close() }
+  })
+
+  it('the hook token opens the hook routes and nothing else', async () => {
+    const { port, close } = await serve(async () => true)
+    try {
+      const token = hookToken()
+      expect(token).not.toBe(credential())
+      expect((await call(port, '/api/hook/session-start', { 'x-harness-hook-token': token }, 'POST')).status).not.toBe(401)
+      const shown: Array<Record<string, string>> = [{ 'X-Harness-Local': token }, { Authorization: `Bearer ${token}` }, { 'x-harness-hook-token': token }]
+      for (const headers of shown) {
+        expect((await call(port, '/api/machines', headers)).status).toBe(401)
+        expect(await (await call(port, '/api/status', headers)).json()).not.toHaveProperty('secretDetail')
+        expect((await call(port, '/api/autonomous-device/status', headers)).status).toBe(403)
+      }
+    } finally { await close() }
+  })
+
+  it('a hook token or credential opens no hook route for a caller of another account', async () => {
+    const { port, close } = await serve(async () => false)
+    try {
+      for (const secret of [hookToken(), credential()]) {
+        expect((await call(port, '/api/hook/session-start', { 'x-harness-hook-token': secret }, 'POST')).status).toBe(401)
+        expect((await call(port, '/api/hook/session-end', { 'x-harness-hook-token': secret }, 'POST')).status).toBe(401)
+      }
+    } finally { await close() }
+  })
+
+  it('an engine plugin loaded before the hook token keeps reporting with the credential', async () => {
+    const { port, close } = await serve(async () => true)
+    try {
+      expect((await call(port, '/api/hook/session-start', { 'x-harness-hook-token': credential() }, 'POST')).status).not.toBe(401)
+    } finally { await close() }
+  })
+})
 
 describe('the loopback port wants this OS user\'s local credential', () => {
   // Another OS user's process reaches 127.0.0.1 too — a guest's harness running as its own user

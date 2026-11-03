@@ -2,6 +2,7 @@ import { join as hookPath } from 'node:path'
 import { env as hookEnvironment } from '../../config/env.js'
 /** Pi's folder is lossy. Only its complete first entry establishes the session id and cwd. */
 import type { SessionFolder, SessionHeader } from '../kit/sessionIdentity.js'
+import { PLUGIN_FETCH } from '../kit/pluginFetch.js'
 
 // Pi accepts custom ids. A .jsonl suffix makes --session interpret the value as a file instead.
 export const PI_SESSION_ID = /^(?!.*\.jsonl$)[A-Za-z0-9][A-Za-z0-9._-]{0,126}[A-Za-z0-9]$/
@@ -29,7 +30,9 @@ export const PI_EXTENSION = {
 import { existsSync, readFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-export default function (pi: ExtensionAPI) {
+`,
+...PLUGIN_FETCH,
+`export default function (pi: ExtensionAPI) {
   let announced = false;   // posted at least once (the transcript may not exist yet)
   let registered = false;  // posted with a real, on-disk transcript — nothing left to do
 
@@ -50,7 +53,7 @@ export default function (pi: ExtensionAPI) {
     const sessionId = ctx?.sessionManager?.getSessionId?.();
     if (!sessionId) return;
     try {
-      const res = await fetch("http://127.0.0.1:`,
+      const res = await harnessFetch("http://127.0.0.1:`,
 { argument: 'port' },
 `/api/hook/session-start", {
         method: "POST",

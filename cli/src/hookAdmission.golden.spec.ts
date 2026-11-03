@@ -82,7 +82,8 @@ it.each(['linux', 'darwin'])('preserves healthy native hook admission on %s', as
       onTurnStop: value => { turns.push({ stop: value }) },
       onToolStart: value => { turns.push({ tool: value }) },
       onSessionEnd: (sessionId, reason) => { ends.push({ sessionId, reason }) },
-    })
+    // This spec fakes the platform and child_process, so the real lookup of who is calling cannot run (lib/peerAccount.spec.ts tests it).
+    }, { peerAccount: async () => true })
     server = started.server
     const send = async (endpoint: string, body: Record<string, unknown>, authorized = true) => {
       const response = await fetch(`http://127.0.0.1:${started.port}/api/hook/${endpoint}`, {

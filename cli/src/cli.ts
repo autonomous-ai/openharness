@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import './lib/connectWait.js'
+import './config/startHome.js'
 import './config/loadEnv.js'
 import { runDevicesCommand } from './devices/client.js'
 import { fingerprint as e2eeCoreFingerprint, b64d as e2eeCoreDecode } from './lib/e2ee/core.js'
@@ -49,8 +51,9 @@ import { infoBlockFooter } from './lib/infoBlockFooter.js'
 import { flashCommand } from './lib/flash.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
 import { ancestorsOnce, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
-import { AUTH_DIR, AuthSessionError, AuthSessionManager, harnessSessionRequest, knownSsoClientId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
+import { AUTH_DIR, AuthSessionError, AuthSessionManager, harnessSessionRequest, knownSsoClientId, recordMachineId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
 import { revokeHarnessRefresh } from './team/handoff.js'
+import { TEAM_RELAY_GRANT_FILE } from './team/relay.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { claimTicket, qrSignIn, type QrSignInTokens } from './lib/qrSignIn.js'
 import { pickSignInMethod, signInMethodFlag, signInProviderName, withSignInProvider, type SignInMethod, type SignInProvider } from './lib/signInMethodPicker.js'
@@ -70,13 +73,12 @@ import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { machineChoices, newCommand, type MachineRow, type NewMachine } from './lib/newCommand.js'
 import { gridSetupCommand } from './lib/gridSetupCommand.js'
-import { localCredentialHeaders } from './lib/localCredential.js'
 import { WebSocket as NewCommandSocket } from 'ws'
 import { describeMasterStatus, readStatusFile } from './harnessd/master.js'
 import { namedNode } from './harnessd/processName.js'
 import { probeThisMaster, startMaster, startMasterInForeground } from './masterProcess.js'
 import { startServiceProcess } from './serviceProcess.js'
-import { askDataFolderServer, isLocalSocketName, localSocketPath, refuseServedDataFolder, servedFolderDeps } from './lib/localSocket.js'
+import { askDataFolderServer, isLocalSocketName, localSocketPath, refuseServedDataFolder, shortSocketFolder, servedFolderDeps } from './lib/localSocket.js'
 import { legacyDaemonStatus, localDaemonCall, localDaemonStatus } from './lib/daemonEndpoint.js'
 import { PipeUnproven } from './lib/windows/pipeClient.js'
 import { ptyManifestUrl, ptyPlatformKey, type PtyEntry } from './lib/windows/ptyPayload.js'
@@ -107,6 +109,24 @@ import { privacyCommand } from './lib/privacyCommand.js'
 // Daemon stdout/stderr. Capped at LOG_MAX_BYTES — see prepareLogFile/trimLogFile in lib/log.ts.
 const LOG_FILE = DAEMON_LOG_FILE
 
+
+/** `harness start --help`: the start options alone (`harness --help` lists them among the rest). */
+const START_HELP = `harness start — start the Harness daemon on this computer, using the saved sign-in
+
+Usage: harness start [options]
+
+  -f, --foreground       run the daemon in the FOREGROUND (for a supervisor; logs to stdout)
+  --repair               also re-verify the managed Node runtime and repoint the launcher at it
+  --if-down              start only if it is not running and \`harness stop\` has not stopped it
+                         (what Windows's scheduled task runs; quiet otherwise)
+  --at-logon             with --if-down: the sign-in task's start, first forgets a \`harness stop\`
+  --restart              stop the daemon that is running for this data folder and start it over
+                         (without it, a running daemon is never replaced by a start that has no
+                         sign-in of its own)
+  --device-dump[=<file>] record every frame to/from the paired Autonomous device, decrypted
+  -h, --help             print this and exit; nothing is started
+
+The data folder is ~/.harness/cli/data under the HOME this runs with (or ADAPTER_DATA_DIR).`
 
 function usage(exitCode = 0): never {
   // An agent is pointed to its own help first (agentClient/help.ts); one that asks gets it before the rest.
@@ -143,6 +163,9 @@ Machine:
   harness start --repair       also re-verify the managed Node runtime and repoint the launcher at it
                                (normally done once by the installer; use this if a start fails because
                                the launcher points at a Node that no longer runs)
+  harness start --restart      stop the daemon that is running and start it over (a start with no sign-in of its own
+                               never replaces a running daemon without it)
+  harness start --help         the start options; starts nothing
   harness start --if-down      start the daemon only if it is not running and \`harness stop\` has not stopped it
                                since the computer started (what Windows's scheduled task runs; quiet otherwise).
                                --at-logon (the sign-in task's start) first forgets a \`harness stop\`
@@ -194,6 +217,14 @@ Machine:
                                neither touches a local install-cli.sh build without --force)
   harness flash [flags]        re-flash a plugged-in circle device over USB. Flags go straight to the
                                flasher: --detect-only, --port, --version, --yes, --erase-nvs
+
+Team account (the separate "harnessteam" user that runs Swarm work on this computer):
+  harness team setup           make the account, its daemon and its engines, so teammates' agents cannot read
+                               your files; run again to repair (--sign-in-again: a new sign-in)
+  harness team status          whether it exists and runs, its sign-in, privacy check and engines
+  harness team on | off        a computer used only for agents runs Swarm work only (on), or signs back in as
+                               your own computer (off)
+  harness team remove          delete the account, its home folder and its daemon
 
 Grid (the fleet of AI engines the \`grid\` CLI serves — needs \`grid\` on PATH):
   harness grid login           sign in to your grid reusing THIS computer's Autonomous account —
@@ -297,8 +328,8 @@ async function resolveComputerMachine(signal?: AbortSignal): Promise<AuthSession
   if (!machineId) throw new Error('Backend did not return a machine id for this computer')
   // Refresh can atomically replace the session while this request is in flight. Always merge the
   // machine id into the newest file, under the lock, so a stale caller never rolls its rotated refresh
-  // token back nor writes over a signed-out mark.
-  const next = await updateAuthSession((latest) => latest.machineId === machineId ? null : { ...latest, machineId, updatedAt: Date.now() })
+  // token back nor writes over a signed-out mark; and only into the sign-in it was asked for.
+  const next = await recordMachineId(machineId, current.signInEpoch)
   if (!next) throw new Error('SSO session disappeared while resolving this computer')
   return next
 }
@@ -1099,7 +1130,7 @@ async function runningDaemonPid(underLock: boolean = false): Promise<number | nu
  * the very value the backend binds a machine to at login) — so a later sign-in ADOPTS this machine
  * rather than replacing it.
  */
-async function startCommand(foreground: boolean, repair: boolean = false, ifDown: boolean = false, atLogon: boolean = false): Promise<void> {
+async function startCommand(foreground: boolean, repair: boolean = false, ifDown: boolean = false, atLogon: boolean = false, restart: boolean = false): Promise<void> {
   // The scheduled task's start (Windows, lib/startIfDown.ts): nothing to do is the usual answer, and it is quiet. The
   // logon task's (`--at-logon`) forgets a `harness stop` first; the five-minute task's honours it.
   if (ifDown) {
@@ -1134,9 +1165,13 @@ async function startCommand(foreground: boolean, repair: boolean = false, ifDown
       // there, with `auth status` naming the new machine and the socket serving the old one. Asked
       // of the daemon itself; one that cannot answer (still booting, mid-update) is trusted as before.
       const serving = (await runningDaemonStatus())?.machineId
+      // `--restart` is the person asking for it: stopped whatever it serves, and started over below.
+      if (restart) {
+        console.log(`machine running (pid ${running}) — restarting it (--restart)`)
+        await stopDaemonOrExit()
       // Signed out, the daemon serves this computer under its own id and there is no account to be on
       // the wrong one of — `wantedDaemonIdentity` is the same answer `restartDaemonForIdentity` uses.
-      if (!serving || serving === wantedDaemonIdentity()) {
+      } else if (!serving || serving === wantedDaemonIdentity()) {
         // `--repair` still does its provisioning here: it touches the managed runtimes, never the
         // bundle, and the live daemon picks a grid laid down now up on its next resolve (see
         // repairManagedRuntimes). Without this, a new pin could only be followed by a restart.
@@ -1144,9 +1179,16 @@ async function startCommand(foreground: boolean, repair: boolean = false, ifDown
         console.log(`machine already running (pid ${running}) — it auto-reconnects.`)
         console.log('  check: harness status   ·   stop: harness stop   ·   update now: harness update')
         process.exit(0)
+      } else if (!session) {
+        // Nothing on disk says this daemon is on the wrong account: this start has only its own computer id, which a
+        // run under another HOME always differs from. A daemon is never replaced on that evidence.
+        console.error(`machine already running (pid ${running}) as another account — not replacing it: this start has no sign-in of its own.`)
+        console.error('  check: harness status   ·   replace it: harness start --restart')
+        process.exit(1)
+      } else {
+        console.log(`machine running (pid ${running}) as another account — restarting it on this sign-in`)
+        await stopDaemonOrExit()
       }
-      console.log(`machine running (pid ${running}) as another account — restarting it on this sign-in`)
-      await stopDaemonOrExit()
     }
     // Windows, the task registered: it starts the master, as the task would at logon; not under the spawn lock,
     // which its own `harness start --if-down` takes (lib/platformDaemon.ts startThroughTask).
@@ -1767,6 +1809,8 @@ function clearAdapterState(): void {
       'summaries.json',
       'summary-scratch',
       'e2e',
+      // The Team account's kept relay grant (team/relay.ts): a reset starts its token over.
+      TEAM_RELAY_GRANT_FILE,
       // The session search index (lib/sessionSearch/): rebuilt from the transcripts on the next start.
       SESSION_SEARCH_FILE,
       `${SESSION_SEARCH_FILE}-wal`,
@@ -1780,6 +1824,8 @@ function clearAdapterState(): void {
         if (isLocalSocketName(name) || /^daemon-\d+\.json$/.test(name)) rmSync(join(dir, name), { force: true })
       }
     } catch { /* no such directory */ }
+    // A folder too long for a socket keeps its sockets here.
+    rmSync(shortSocketFolder(dir), { recursive: true, force: true })
   }
   if (dataDir === cliDir) rmStateFiles(dataDir)
   else rmSync(dataDir, { recursive: true, force: true })
@@ -2831,6 +2877,10 @@ switch (cmd) {
   case 'super-tab':
     swarmCommands().then(({ superTabCommand }) => superTabCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
     break
+  case 'buddy-read':
+    // A Buddy's read-only recipes (lib/buddyRecipes.ts), which its guard lets it run once its person approved them.
+    import('./lib/buddyRecipes.js').then(({ buddyReadCommand }) => buddyReadCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
+    break
   case 'git-credential':
     // git's credential helper in a Swarm agent's session (docs/swarm-github-app.md); git runs it, people do not.
     import('./superTabs/gitCredential.js').then(({ gitCredentialCommand }) => gitCredentialCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
@@ -2858,11 +2908,13 @@ switch (cmd) {
     logout().catch(onError)
     break
   case 'start': {
+    // Reading the options never starts, stops or touches anything.
+    if (flags.includes('--help') || flags.includes('-h')) { console.log(START_HELP); process.exit(0) }
     // `--device-dump[=<file>]`: the daemon (this process with -f, else the detached child, which inherits
     // the environment) records every frame to/from a paired Autonomous device — see lib/autonomous-device/dump.ts.
     const dump = flags.find((f) => f === '--device-dump' || f.startsWith('--device-dump='))
     if (dump) process.env.HARNESS_DEVICE_DUMP = dump === '--device-dump' ? '1' : resolve(dump.slice('--device-dump='.length))
-    startCommand(foreground, repair, flags.includes('--if-down'), flags.includes(AT_LOGON_FLAG)).catch(onError)
+    startCommand(foreground, repair, flags.includes('--if-down'), flags.includes(AT_LOGON_FLAG), flags.includes('--restart')).catch(onError)
     break
   }
   case 'join':
@@ -2911,7 +2963,7 @@ switch (cmd) {
         port: daemonPort(),
         localMachineId: wantedDaemonIdentity(),
         daemonRunning: isDaemonRunning, unreachable: () => daemonUnreachableText(),
-        connect: (url) => new NewCommandSocket(url, { headers: localCredentialHeaders(env.ADAPTER_DATA_DIR) }),
+        connect: (url, headers) => new NewCommandSocket(url, { headers }),
         output: (line) => console.log(line),
         error: (line) => console.error(line),
       }).then((code) => { process.exitCode = code }).catch(onError)
@@ -2946,7 +2998,7 @@ switch (cmd) {
       localMachineId: wantedDaemonIdentity(),
       daemonRunning: isDaemonRunning, unreachable: () => daemonUnreachableText(),
       listMachines: usableMachines,
-      connect: (url) => new NewCommandSocket(url, { headers: localCredentialHeaders(env.ADAPTER_DATA_DIR) }),
+      connect: (url, headers) => new NewCommandSocket(url, { headers }),
       output: (line) => console.log(line),
       error: (line) => console.error(line),
       origin: () => agentOrigin(),

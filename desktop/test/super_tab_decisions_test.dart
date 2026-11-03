@@ -91,8 +91,7 @@ Future<SuperTabController> showView(
   return c;
 }
 
-Finder notificationsEntry() =>
-    find.byKey(const ValueKey('super-notifications'));
+Finder notificationsEntry() => find.byKey(const ValueKey('super-activity'));
 Finder option(String id, int index) =>
     find.byKey(ValueKey('super-decision-$id-$index'));
 Finder letPmDecide(String id) =>
@@ -231,7 +230,7 @@ void main() {
 
   group('the Decisions list', () {
     testWidgets(
-      'lists one batch per ask, marks the recommendation, and answers with one tap',
+      'lists each question as one row, opens its card with the recommendation, and answers with one tap',
       (tester) async {
         final server = swarm()..ask(['Ship how?', 'Name it?']);
         await showView(tester, server);
@@ -241,13 +240,16 @@ void main() {
         );
         await tester.tap(notificationsEntry());
         await tester.pumpAndSettle();
-        expect(find.text('Decisions'), findsOneWidget);
-        expect(
-          find.text('Wren asked 2 questions · web-project · Lead'),
-          findsOneWidget,
+        expect(find.text('Needs you'), findsOneWidget);
+        expect(find.text('Answer'), findsNWidgets(2));
+        expect(find.text('Behind a flag · Recommended'), findsNothing);
+
+        await tester.tap(
+          find.byKey(const ValueKey('super-activity-row-decision:decision-2')),
         );
-        expect(find.text('Behind a flag · Recommended'), findsNWidgets(2));
-        expect(find.text('Unblocks: The release'), findsNWidgets(2));
+        await tester.pumpAndSettle();
+        expect(find.text('Behind a flag · Recommended'), findsOneWidget);
+        expect(find.text('Unblocks: The release'), findsOneWidget);
 
         await tester.tap(option('decision-2', 1));
         await tester.pumpAndSettle();
@@ -257,9 +259,14 @@ void main() {
           'decisionId': 'decision-2',
           'choice': 1,
         });
-        expect(find.text('You chose: To everyone'), findsOneWidget);
+        // Answered, it leaves Needs you and the number.
         expect(
-          find.text('Wren asked 1 question · web-project · Lead'),
+          find.byKey(const ValueKey('super-activity-row-decision:decision-2')),
+          findsNothing,
+        );
+        expect(find.text('Ship how?'), findsOneWidget);
+        expect(
+          find.descendant(of: notificationsEntry(), matching: find.text('1')),
           findsOneWidget,
         );
       },
@@ -308,7 +315,7 @@ void main() {
       await showView(tester, swarm());
       await tester.tap(notificationsEntry());
       await tester.pumpAndSettle();
-      expect(find.text('No decisions waiting for you.'), findsOneWidget);
+      expect(find.text("You're all caught up."), findsOneWidget);
     });
   });
 
@@ -332,16 +339,6 @@ void main() {
           find.descendant(of: panel, matching: find.text('Elsewhere?')),
           findsNothing,
         );
-        // The list names where each was asked: the project chat, for both.
-        await tester.tap(notificationsEntry());
-        await tester.pumpAndSettle();
-        expect(
-          find.text('Wren asked 1 question · web-project · Lead'),
-          findsNWidgets(2),
-        );
-        await tester.tap(find.byKey(const ValueKey('super-buddy-lead')));
-        await tester.pumpAndSettle();
-
         await tester.tap(option('decision-1', 0));
         await tester.pumpAndSettle();
         expect(panel, findsNothing);
@@ -350,7 +347,7 @@ void main() {
   });
 
   group('a decision the reader does not want to answer', () {
-    test('Let PM decide sends a delegated answer, and the answer reads as the PM\'s', () async {
+    test('Let the coordinator decide sends a delegated answer, and the answer reads as theirs', () async {
       final server = swarm()..ask(['Ship how?'], recommended: 1);
       final controller = server.controller(account: 'peer');
       addTearDown(controller.dispose);
@@ -371,7 +368,7 @@ void main() {
     });
 
     testWidgets(
-      'the Buddy chat offers Let PM decide and Not now on each card, and no Let PM decide without a recommended option',
+      'the Buddy chat offers Let Product Manager decide and Not now on each card, and none without a recommended option',
       (tester) async {
         final server = swarm()
           ..ask(['Ship how?'])
@@ -394,13 +391,33 @@ void main() {
           'delegate': true,
         });
         expect(inPanel('Ship how?'), findsNothing);
-        // The answered list says the PM decided, never that the reader chose.
-        await tester.tap(notificationsEntry());
-        await tester.pumpAndSettle();
-        expect(find.text('PM decided: Behind a flag'), findsOneWidget);
-        expect(find.text('You chose: Behind a flag'), findsNothing);
       },
     );
+
+    testWidgets('the coordinator is called what its project calls it', (
+      tester,
+    ) async {
+      final server = swarm()..ask(['Ship how?']);
+      (server.state['projects'] as List).first['coordinatorName'] =
+          'Coordinator';
+      await showView(tester, server);
+      await openPmChat(tester);
+      expect(
+        find.descendant(
+          of: letPmDecide('decision-1'),
+          matching: find.text('Let Coordinator decide'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(letPmDecide('decision-1'));
+      await tester.pumpAndSettle();
+      expect(server.posts.last['command'], {
+        'type': 'decision.answer',
+        'decisionId': 'decision-1',
+        'delegate': true,
+      });
+      expect(find.textContaining('PM decide'), findsNothing);
+    });
 
     testWidgets(
       'Not now folds the card into one line, still folded after a restart, until a new decision arrives',
@@ -595,6 +612,10 @@ void main() {
         final server = swarm()..ask(['Ship how?']);
         await showView(tester, server);
         await tester.tap(notificationsEntry());
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byKey(const ValueKey('super-activity-row-decision:decision-1')),
+        );
         await tester.pumpAndSettle();
         server.refuse = {'code': 'DECISION_ANSWERED', 'message': 'Answered.'};
 

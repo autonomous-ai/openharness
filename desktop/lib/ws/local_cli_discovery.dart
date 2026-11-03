@@ -520,9 +520,9 @@ class LocalCliDiscovery {
       return const LocalCliProbe.down('computer id mismatch');
     }
     final base = Uri.parse(config.localCliBaseUrl);
-    // The socket first: only this user can have opened it. A daemon that
-    // answers there — ready or not — is the daemon; one that does not may
-    // predate the socket, so the port is asked next.
+    // The socket: only this user can have opened it. A daemon that answers
+    // there — ready or not — is the daemon. One that does not is down: the port
+    // is another matter, as any account may hold it (audit H1).
     final socket = transport.candidate;
     if (socket != null && transport.socketPresent) {
       final viaSocket = await _probeStatus(
@@ -538,6 +538,9 @@ class LocalCliDiscovery {
       }
     }
     transport.useTcp();
+    if (!transport.portAllowed) {
+      return const LocalCliProbe.down('the daemon socket did not answer');
+    }
     if (base.host != '127.0.0.1' && base.host != 'localhost') {
       return const LocalCliProbe.down('the local CLI address is not loopback');
     }

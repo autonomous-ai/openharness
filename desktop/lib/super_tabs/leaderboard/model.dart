@@ -14,21 +14,60 @@ List<Map<String, dynamic>> _list(Object? value) =>
 String? _text(Object? value) =>
     value is String && value.isNotEmpty ? value : null;
 
+/// The rolling periods the board offers, the default in the middle (Dee,
+/// 2026-11-02).
+const leaderboardPeriods = ['24h', '7d', '30d'];
+const leaderboardDefaultPeriod = '7d';
+
+/// "Last 7d": a period in the menu.
+String leaderboardPeriodLabel(String period) => 'Last $period';
+
+String _periodLength(String period) => switch (period) {
+  '24h' => '24 hours',
+  '30d' => '30 days',
+  _ => '7 days',
+};
+
 class SuperTabLeaderboard {
   SuperTabLeaderboard.fromJson(Map<String, dynamic> json)
     : projectId = json['projectId'] as String? ?? '',
       week = _int(json['week']),
-      people = _list(json['people']).map(SuperTabPersonScore.fromJson).toList(),
+      period = _text(_map(json['period'])['name']),
+      allProjects = json['allProjects'] == true,
+      people = _list(json['people'])
+          .map(
+            (row) => SuperTabPersonScore.fromJson(
+              row,
+              period: _text(_map(json['period'])['name']),
+            ),
+          )
+          .toList(),
       waiting = SuperTabWaiting.fromJson(_map(json['waiting'])),
       agents = _list(json['agents']).map(SuperTabAgentScore.fromJson).toList(),
       byModel = _list(json['byModel'])
           .map(SuperTabModelScore.fromJson)
-          .toList();
+          .toList(),
+      recentModels = json['recentModels'] is List
+          ? _list(json['recentModels'])
+                .map(SuperTabModelScore.fromJson)
+                .toList()
+          : null;
 
   final String projectId;
 
   /// The week's Monday 00:00 UTC, in epoch milliseconds.
   final int week;
+
+  /// The rolling period this sums; null from a server that sums weeks.
+  final String? period;
+
+  /// Sums every project the reader may read, not only [projectId], and lists
+  /// everyone in the Swarm: the roster's All projects.
+  final bool allProjects;
+
+  /// "in the last 7 days"; null for a week, which goes by its own name.
+  String? get spanName =>
+      period == null ? null : 'in the last ${_periodLength(period!)}';
 
   /// Most points first.
   final List<SuperTabPersonScore> people;
@@ -41,6 +80,11 @@ class SuperTabLeaderboard {
   /// Every model that worked the week, most points first; empty from a
   /// server before them.
   final List<SuperTabModelScore> byModel;
+
+  /// Each model's tasks of the 7 days up to the read, whichever [week] this
+  /// is: engine, model, tasks and first reviews, no effort or points. Null
+  /// from a server before it.
+  final List<SuperTabModelScore>? recentModels;
 }
 
 /// A permanent agent, the PM or a Buddy, scored by name like a person
@@ -115,8 +159,14 @@ class SuperTabModelScore {
 }
 
 class SuperTabPersonScore {
-  SuperTabPersonScore.fromJson(Map<String, dynamic> json)
-    : personId = json['personId'] as String? ?? '',
+  SuperTabPersonScore.fromJson(Map<String, dynamic> json, {String? period})
+    : spanName = period == null
+          ? 'this week'
+          : 'in the last ${_periodLength(period)}',
+      earlierName = period == null
+          ? 'last week'
+          : 'the ${_periodLength(period)} before',
+      personId = json['personId'] as String? ?? '',
       points = _int(json['points']),
       rank = _int(json['rank']),
       medal = SuperTabMedal.values.asNameMap()[json['medal']],
@@ -134,6 +184,10 @@ class SuperTabPersonScore {
           ? SuperTabPersonDetails.fromJson(_map(json['details']))
           : null;
 
+  /// What [points] covers and what [prevWeekPoints] covers, as a sentence
+  /// says them: "in the last 7 days", "the 7 days before".
+  final String spanName, earlierName;
+
   final String personId;
   final int points, rank;
   final SuperTabMedal? medal;
@@ -146,7 +200,8 @@ class SuperTabPersonScore {
   /// The profile name, else the email's local part; null from a server before names.
   final String? displayName;
 
-  /// The same scoring for the week before; null from a server before it.
+  /// The same scoring for the time before; null from a server before it, and
+  /// for Last 30d, which has no comparison.
   final int? prevWeekPoints;
 
   /// What the numbers are made of; null from a server before details.

@@ -38,6 +38,7 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
     gridLaunchRecord?: GridLaunchRecord | null
     scmLaunchRecord?: ScmLaunchRecord | null
     codexHome?: string | null
+    claudeHome?: string | null
     dsh?: string | null
     swarmSkill?: SwarmSkill
     dshRuntime?: string | null
@@ -80,6 +81,8 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
   scmLaunchRecord?: ScmLaunchRecord | null
   /** The CODEX_HOME folder this agent was launched against, if the caller chose one; codex only. */
   codexHome?: string | null
+  /** The CLAUDE_CONFIG_DIR folder (a Claude profile) this agent was launched against, if the caller chose one; claude only. */
+  claudeHome?: string | null
   /** The domain-specific harness this agent is created as, if any. */
   dsh?: string | null
   swarmSkill?: SwarmSkill
@@ -141,6 +144,7 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
       gridLaunchRecord: deps.gridLaunchRecord,
       scmLaunchRecord: deps.scmLaunchRecord,
       codexHome: deps.codexHome,
+      claudeHome: deps.claudeHome,
       dsh: deps.dsh,
       dshRuntime: deps.dshRuntime,
       ...(deps.swarmSkill ? { swarmSkill: deps.swarmSkill } : {}),

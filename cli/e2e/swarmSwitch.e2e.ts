@@ -130,6 +130,45 @@ describe('the Swarm switch', () => {
     expect(loaded.some((url) => url.includes('/src/services/superTabsProcess.ts'))).toBe(true)
   }, 240_000)
 
+  // Dee, 11-01: a Product Manager's engine is switched from its pane, as any pane's (Change agent). Its machine lets its stop
+  // through only as that switch, which its owner prepared moments before; every other close, and a second switch while it
+  // runs, is refused, and the switch is kept on disk so its host holds off reopening it (superTabs/leadSwitch.ts).
+  it('on, a Lead stops only for the engine switch its owner prepared, once, and its switch is kept for its host', async () => {
+    const { d, client } = await fresh({ HARNESS_SWARM: '' })
+    const agent = await create(d, client, 'swarm-lead-switch')
+    await turn(client, agent.id, 'a Product Manager plans the work')
+    await until('the Swarm\'s process, woken by its saved state', () => swarmStarts(d) > 0 || null, 60_000, 200)
+    swarmState(d, agent.id)
+    const CHANGE = '0123456789abcdef0123456789abcdef', OTHER = 'fedcba9876543210fedcba9876543210'
+    const named = (changeId: string) => client.request('agent_close', { agentId: agent.id, sessionId: agent.sessionId, createdAt: agent.createdAt,
+      mode: 'now', changeId }, 60_000)
+    const refused = { error: 'LEAD_PROTECTED', detail: 'This harness is the Product Manager of a Swarm project. Delete its project first to stop it.' }
+    // Not a switch, or one nobody prepared: refused as before.
+    expect(await close(client, agent)).toMatchObject(refused)
+    expect(await named(CHANGE)).toMatchObject(refused)
+    const prepared = await client.request('agent_handoff_prepare', { agentId: agent.id, changeId: CHANGE, targetEngine: 'codex' }, 30_000)
+    expect(prepared.error, JSON.stringify(prepared)).toBeUndefined()
+    // Prepared, but a plain close or another switch's close still is not it.
+    expect(await close(client, agent)).toMatchObject(refused)
+    expect(await named(OTHER)).toMatchObject(refused)
+    expect((await row(client, agent.id))?.status).toBe('active')
+    expect(await named(CHANGE)).toMatchObject({ closed: true })
+    await until('the switch to stop the Product Manager', async () => ((await row(client, agent.id))?.status ?? 'stopped') !== 'active' || null, 60_000, 500)
+    // A second switch while this one runs is refused.
+    expect(await named(OTHER)).toMatchObject({ error: 'LEAD_SWITCHING' })
+    expect(readdirSync(join(d.dataDir, 'super-tabs', 'lead-switch'))).toHaveLength(1)
+    // Security reviews 1 and 2 of #2493: nothing else gets through in the moments after, whoever asks. Stop Harness and the
+    // deletion of its saved conversation, which its host reopens, are refused with today's words. A script's close of it is
+    // answered as for any session closed already, and changes nothing: its saved conversation stays for its host to reopen.
+    expect(await client.request('agent_delete', { agentId: agent.id }, 60_000)).toMatchObject(refused)
+    const createdAt = Date.parse(agent.createdAt)
+    const review = await client.request('agent_purge', { agentId: agent.id, sessionId: agent.sessionId, createdAt, mode: 'inspect' }, 60_000)
+    expect(await client.request('agent_purge', { agentId: agent.id, sessionId: agent.sessionId, createdAt, mode: 'delete', reviewId: review.reviewId }, 60_000))
+      .toMatchObject(refused)
+    expect(await close(client, agent)).toMatchObject({ closed: true })
+    expect(await row(client, agent.id)).toMatchObject({ sessionId: agent.sessionId, status: expect.not.stringMatching(/^active$/) })
+  }, 240_000)
+
   // Diego's Buddy, 10-30: closing the tab that showed it stopped it. A close (a window's, `harness close`, the cleanup) never
   // stops a Buddy the host keeps, and says it kept running; Stop Harness, the machine owner's own action, still stops it
   // (the Product Manager, 10-30).

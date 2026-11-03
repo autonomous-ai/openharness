@@ -18,12 +18,27 @@ import 'new_harness_attachment_chip.dart';
 Future<String?> _attach(
   HarnessAttachments attachments,
   Iterable<XFile> files,
+) async => attachments.add(await attachmentsOf(attachments, files));
+
+/// [files] as [attachments] holds them, weighed before any is read: one over
+/// its [HarnessAttachments.readUpTo] stays on disk and is read as it is sent,
+/// and one over its [HarnessAttachments.limitBytes] is never read at all, as
+/// [HarnessAttachments.add] refuses it by its size.
+@visibleForTesting
+Future<List<HarnessAttachment>> attachmentsOf(
+  HarnessAttachments attachments,
+  Iterable<XFile> files,
 ) async {
-  final read = [
-    for (final file in files)
-      HarnessAttachment(file.name, await file.readAsBytes()),
-  ];
-  return attachments.add(read);
+  final weighed = <HarnessAttachment>[];
+  for (final file in files) {
+    final size = await file.length();
+    weighed.add(
+      size > attachments.readUpTo
+          ? HarnessAttachment.onDisk(file.name, file, size)
+          : HarnessAttachment(file.name, await file.readAsBytes()),
+    );
+  }
+  return weighed;
 }
 
 /// Attaches the dropped files and hands [onFolders] the dropped folders'

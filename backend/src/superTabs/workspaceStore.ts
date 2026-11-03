@@ -3,6 +3,7 @@ import type { AuthUser } from '../lib/ssoAuth.js'
 import { fail, stableId, type SuperTabState } from './model.js'
 import { mayAssignRole, mayManageMember, WORKSPACE_LABEL, workspaceCan, type WorkspaceAction, type WorkspaceRole } from './workspaces.js'
 import { memberSwarms } from './swarmRows.js'
+import { readBy } from './parts/indexed.js'
 import { logger } from '../utils/logger.js'
 
 type Transaction = Prisma.TransactionClient
@@ -67,6 +68,8 @@ export async function addMember(tx: Transaction, workspaceId: string, person: { 
   checked.get(tx)?.delete(id)
   const prior = await tx.swarmWorkspaceMember.findUnique({ where: { id } })
   if (prior && !prior.removedAt) return prior
+  // Added back: by an invitation, a link or an open Swarm, never by auto-join, which refuses anyone declined here first.
+  await clearAutoJoinDecline(tx, workspaceId, person.id)
   if (await tx.swarmWorkspaceRemoval.count({ where: { workspaceId, userId: person.id, finishedAt: null } })) {
     fail('REMOVAL_PENDING', `An earlier removal from this ${WORKSPACE_LABEL} is still taking them out of its Swarms. Try again in a few minutes.`, 409)
   }
@@ -74,6 +77,19 @@ export async function addMember(tx: Transaction, workspaceId: string, person: { 
   return prior
     ? tx.swarmWorkspaceMember.update({ where: { id }, data: { ...data, version: { increment: 1 } } })
     : tx.swarmWorkspaceMember.create({ data: { id, workspaceId, userId: person.id, ...data } })
+}
+
+/** Whether this Workspace removed `userId`: auto-join never adds them to its Swarms. Unlike the member row, never purged. */
+export async function autoJoinDeclinedBy(tx: Transaction, workspaceId: string, userId: string): Promise<boolean> {
+  const workspace = await tx.swarmWorkspace.findUnique({ where: { id: workspaceId }, select: { autoJoinDeclined: true } })
+  return !!workspace?.autoJoinDeclined.includes(userId)
+}
+
+async function clearAutoJoinDecline(tx: Transaction, workspaceId: string, userId: string): Promise<void> {
+  const workspace = await tx.swarmWorkspace.findUnique({ where: { id: workspaceId }, select: { autoJoinDeclined: true } })
+  if (workspace?.autoJoinDeclined.includes(userId)) {
+    await tx.swarmWorkspace.update({ where: { id: workspaceId }, data: { autoJoinDeclined: workspace.autoJoinDeclined.filter(id => id !== userId) } })
+  }
 }
 
 /** The Workspace a Swarm is created in: the one named, where the person may create Swarms, or else their own, made now. */
@@ -108,8 +124,9 @@ export async function listWorkspaces(db: PrismaClient, user: AuthUser): Promise<
   if (!memberships.length) return []
   // Filtered here, not in the query: Prisma's `null` on Mongo misses a field that was never written.
   const workspaces = (await db.swarmWorkspace.findMany({ where: { id: { in: memberships.map(m => m.workspaceId) }, autonomousEnv: user.autonomousEnv } })).filter(o => !o.deletedAt)
-  const rows = workspaces.length ? await db.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, workspaceId: { in: workspaces.map(o => o.id) } },
-    select: { id: true, workspaceId: true, memberIds: true, format: true } }) : []
+  // A deleted Swarm (deletion.ts) is listed to nobody, its owner and the Workspace's admins included.
+  const rows = (workspaces.length ? await db.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, workspaceId: { in: workspaces.map(o => o.id) } },
+    select: { id: true, workspaceId: true, memberIds: true, format: true, deletedAt: true } }) : []).filter(row => !row.deletedAt)
   const split = rows.filter(r => r.format === 2).map(r => `${r.id}:head`)
   const heads = split.length ? await db.swarmHead.findMany({ where: { id: { in: split } }, select: { tabId: true, data: true } }) : []
   const headOf = new Map(heads.map(h => [h.tabId, h.data as { name?: string; workspaceVisibility?: 'invite-only' | 'workspace' }]))
@@ -234,7 +251,8 @@ export class SwarmWorkspaces {
 
   /** Someone who owns one of the Workspace's Swarms stays at least a member, and cannot be removed until it moves. */
   private async ownsWorkspaceSwarm(tx: Transaction, workspaceId: string, userId: string): Promise<boolean> {
-    return !!await tx.superTab.findFirst({ where: { workspaceId, ownerId: userId }, select: { id: true } })
+    // A deleted one does not count (deletion.ts): restoring it needs its owner in the Workspace again.
+    return (await tx.superTab.findMany({ where: { workspaceId, ownerId: userId }, select: { deletedAt: true }, take: 1000 })).some(row => !row.deletedAt)
   }
 
   async setRole(user: AuthUser, workspaceId: string, userId: string, role: WorkspaceRole) {
@@ -283,6 +301,9 @@ export class SwarmWorkspaces {
       const now = new Date(this.deps.now())
       await tx.swarmWorkspaceMember.update({ where: { id: target.id }, data: { removedAt: now, removedBy: user.sub,
         purgeAt: new Date(now.getTime() + WORKSPACE_PURGE_MS), version: { increment: 1 } } })
+      // Swarm auto-join never adds them back, even after this row is purged (spec 2026-11-03; security review 2 of #2714).
+      const declined = (await tx.swarmWorkspace.findUnique({ where: { id: workspaceId }, select: { autoJoinDeclined: true } }))?.autoJoinDeclined ?? []
+      if (!declined.includes(userId)) await tx.swarmWorkspace.update({ where: { id: workspaceId }, data: { autoJoinDeclined: [...declined, userId].sort() } })
       // The removal stays open until the person has left every Swarm of the Workspace, whatever happens to their row after.
       return tx.swarmWorkspaceRemoval.create({ data: { id: `${target.id}:${target.generation}`, workspaceId, userId, email: target.email,
         generation: target.generation, autonomousEnv: workspace.autonomousEnv, removedAt: now, removedBy: user.sub, finishedAt: null, purgeAt: null } })
@@ -294,7 +315,15 @@ export class SwarmWorkspaces {
    *  many Swarms could not be left now. */
   private async finish(removal: SwarmWorkspaceRemoval): Promise<number> {
     // Every Swarm of theirs in the Workspace: no page limit, as before; a person is in few Swarms.
-    const rows = await memberSwarms(this.db, removal.autonomousEnv, removal.userId, { workspaceId: removal.workspaceId })
+    const rows: Array<{ id: string }> = await memberSwarms(this.db, removal.autonomousEnv, removal.userId, { workspaceId: removal.workspaceId })
+    // And the deleted ones they are in (deletion.ts): those list nobody, yet a restore would bring the person back with them.
+    // Only the deleted ones, by the Workspace index (re-check 2 of #2457: not every Swarm of the Workspace).
+    for (const row of await readBy(this.db, 'SuperTab', 'workspace', [{ $match: { autonomousEnv: removal.autonomousEnv, workspaceId: removal.workspaceId,
+      deletedAt: { $ne: null } } }, { $project: { _id: 1 } }])) {
+      const id = row._id as string
+      const member = await this.db.swarmMember.findUnique({ where: { id: `${id}:${removal.userId}` }, select: { deleted: true } })
+      if (member && !member.deleted) rows.push({ id })
+    }
     let pending = 0
     for (const row of rows) {
       try { await this.deps.leave(personOf(removal, removal.autonomousEnv), row.id, stableId('workspace-removal', removal.id)) } catch (error) {

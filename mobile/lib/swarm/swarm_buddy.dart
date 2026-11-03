@@ -1,10 +1,14 @@
 import 'package:flutter/foundation.dart';
 
-import 'identity.dart';
 import 'model.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
 import 'swarm_start.dart';
+
+/// The key the person's one Buddy for the whole Swarm goes by among the
+/// project ids here: its chat and agent belong to no project (the desktop's
+/// `SuperTabController.kSwarmBuddyKey`).
+const swarmBuddyKey = '';
 
 /// What the phone knows of Buddies (spec: Buddies, 10-28; in every Swarm
 /// since #2090, where they replaced Chat with PM): each person's Buddy chat in
@@ -37,14 +41,20 @@ class SwarmBuddies {
     final chatOwners = <String, String>{};
     final ownChats = <String, String>{};
     for (final row in _rows(state['conversations'])) {
-      if (row case {
-        'kind': 'buddy',
-        'id': final String id,
-        'buddyOwnerId': final String owner,
-      }) {
+      if (row
+          case {
+            'kind': final String kind,
+            'id': final String id,
+            'buddyOwnerId': final String owner,
+          }
+          when kind == 'buddy' || kind == 'swarm-buddy') {
         chatOwners[id] = owner;
         if (owner == accountId) {
-          ownChats.putIfAbsent(row['projectId'] as String? ?? 'lead', () => id);
+          ownChats.putIfAbsent(
+            row['projectId'] as String? ??
+                (kind == 'swarm-buddy' ? swarmBuddyKey : 'lead'),
+            () => id,
+          );
         }
       }
     }
@@ -56,9 +66,12 @@ class SwarmBuddies {
         'buddyOf': {'personId': final String person},
       }) {
         buddyOwners[id] = person;
-        if (person == accountId) {
+        // A thread's own session is never the Buddy (the desktop's
+        // `isMainBuddy`), and it stays listed above, out of the team.
+        if (person == accountId && row['buddySession'] == null) {
           ownBuddies.putIfAbsent(
-            row['projectId'] as String? ?? 'lead',
+            row['projectId'] as String? ??
+                (row['buddyScope'] == 'swarm' ? swarmBuddyKey : 'lead'),
             () => id,
           );
         }
@@ -86,10 +99,12 @@ class SwarmBuddies {
   /// Every Buddy the read holds, anyone's, with the person it belongs to.
   final Map<String, String> buddyOwners;
 
-  /// The reader's own Buddy chat in each project, by project id.
+  /// The reader's own Buddy chat in each project, by project id; their one
+  /// chat for the Swarm under [swarmBuddyKey].
   final Map<String, String> ownChats;
 
-  /// The reader's own Buddy in each project, its agent id by project id.
+  /// The reader's own Buddy in each project, its agent id by project id; their
+  /// one Buddy for the Swarm under [swarmBuddyKey]. Never a thread's session.
   final Map<String, String> ownBuddies;
 
   /// The starts of the reader's own Buddies, oldest first: one is under way
@@ -148,6 +163,42 @@ bool swarmIsBuddyChat(SwarmReader reader, String conversationId) =>
 bool swarmIsOwnBuddyChat(SwarmReader reader, String conversationId) =>
     reader.buddies.chatOwners[conversationId] == reader.accountId;
 
+/// Whether [conversationId] is the person's older Buddy chat in a project,
+/// where the Swarm gives one Buddy for the whole Swarm: its history reads, and
+/// nothing is written there (the desktop's `isEarlierBuddyChat`). The server
+/// still takes a post from an app that does not say it knows this.
+bool swarmIsOldBuddyChat(SwarmReader reader, String conversationId) {
+  final snapshot = reader.snapshot;
+  final group = snapshot?.conversation(conversationId);
+  return snapshot?.swarmBuddy == true &&
+      group != null &&
+      group.isBuddyChat &&
+      !group.isSwarmBuddyChat;
+}
+
+/// The person's older Buddy chats with something in them, newest first, each
+/// with its project: only in projects they read now, so one they lost drops
+/// off, and none where the Swarm has no one Buddy (the desktop's Buddy menu).
+List<({SuperTabProject project, SuperTabConversation chat})> swarmOldBuddyChats(
+  SwarmReader reader,
+) {
+  final snapshot = reader.snapshot;
+  if (snapshot == null || !snapshot.swarmBuddy || reader.accessRevoked) {
+    return const [];
+  }
+  final chats = [
+    for (final project in snapshot.projects)
+      if (swarmBuddyChat(reader, project.id) case final chat?
+          when chat.lastMessageSequence > 0 && !chat.isSwarmBuddyChat)
+        (project: project, chat: chat),
+  ];
+  final never = DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+  chats.sort(
+    (a, b) => (b.chat.changedAt ?? never).compareTo(a.chat.changedAt ?? never),
+  );
+  return chats;
+}
+
 /// Whether [message] is one of the PM's private lines to the person: its
 /// project's Lead writing in the person's own Buddy chat, where it writes but
 /// cannot read (#2090; the desktop's `_shownAuthor`).
@@ -170,8 +221,12 @@ Map<String, dynamic>? swarmBuddyStart(SwarmReader reader, String projectId) {
   final chat = reader.buddies.ownChats[projectId];
   for (final start in reader.buddies.ownStarts.reversed) {
     final request = start['request'] as Map;
+    // A thread session's start is its thread's, never the Buddy's own.
+    if (request['buddySession'] != null) continue;
     if (request['projectId'] == projectId ||
-        (chat != null && request['conversationId'] == chat)) {
+        (chat != null && request['conversationId'] == chat) ||
+        // The one Buddy's start, before its chat is read here.
+        (projectId == swarmBuddyKey && request['buddyScope'] == 'swarm')) {
       return start;
     }
   }
@@ -241,8 +296,15 @@ bool swarmCanWrite(SwarmReader reader) =>
 /// A machine a Buddy may start on, as Start your Buddy lists it: one of the
 /// person's own. One outside the Swarm ([inSwarm] false) stays theirs: the
 /// server records it for their Buddies alone and never adds it to the Swarm
-/// (Dee, 10-29). An [away] one is listed but cannot be picked.
-typedef SwarmBuddyMachine = ({String id, String name, bool inSwarm, bool away});
+/// (Dee, 10-29). An [away] one, or one [paused] in the Swarm, is listed but
+/// cannot be picked: the server refuses new work there.
+typedef SwarmBuddyMachine = ({
+  String id,
+  String name,
+  bool inSwarm,
+  bool away,
+  bool paused,
+});
 
 /// The menu's group of the person's own machines: the picker has only its
 /// heading, machine names and 'offline' (Dee, 10-29).
@@ -250,16 +312,27 @@ const swarmBuddyOwnMachines = 'Your machines';
 
 /// Why a row cannot be picked, as the sidebar says a Buddy is 'not started'.
 const swarmBuddyMachineOffline = 'offline';
+const swarmBuddyMachinePaused = 'paused';
+
+/// Why [m] cannot be picked in words, or null when it can.
+String? swarmBuddyMachineBlock(SwarmBuddyMachine m) => m.away
+    ? swarmBuddyMachineOffline
+    : m.paused
+    ? swarmBuddyMachinePaused
+    : null;
 
 /// What Start your Buddy says when none of the person's machines can take a
-/// Buddy now: none is signed in to their account, or all are offline (the
-/// desktop's words).
+/// Buddy now: none is signed in to their account, all are offline, or new work
+/// is paused on those that are not (the desktop's words).
 const swarmBuddyNoMachine =
     'Your Buddy runs on one of your own computers. Open Harness on one, '
     'signed in to your account.';
 const swarmBuddyAllOffline =
     'Your machines are offline. Open Harness on one of them to start your '
     'Buddy there.';
+const swarmBuddyAllPaused =
+    'New work is paused on your machines. Choose Resume new work in Machines '
+    'to start your Buddy.';
 
 /// The person's own machines a Buddy may run on, like a Lead, whatever its
 /// engine (Ken, 10-28): those of their account ([computers]), in the Swarm or
@@ -269,7 +342,7 @@ const swarmBuddyAllOffline =
 ///
 /// A phone has no "this computer" (Lead's ruling on #2240): online machines
 /// come first, the one the person last started a Buddy on before the rest,
-/// which go by name; offline ones last. A Swarm row no account record
+/// which go by name; then paused ones; offline ones last. A Swarm row no account record
 /// confirms is online only while its own reading is fresh, so before the
 /// account's list answers nothing unconfirmed is offered as up.
 List<SwarmBuddyMachine> swarmBuddyMachines(
@@ -291,6 +364,7 @@ List<SwarmBuddyMachine> swarmBuddyMachines(
       name: _machineName(m['name']),
       inSwarm: true,
       away: !_reporting(m, at),
+      paused: m['paused'] == true,
     );
   }
   for (final c in computers) {
@@ -300,18 +374,22 @@ List<SwarmBuddyMachine> swarmBuddyMachines(
       name: _machineName(c.name.isEmpty ? listed?.name : c.name),
       inSwarm: listed != null,
       away: c.away,
+      paused: listed?.paused ?? false,
     );
   }
   final last = _lastBuddyMachine(reader);
   int byName(SwarmBuddyMachine a, SwarmBuddyMachine b) =>
       a.name.toLowerCase().compareTo(b.name.toLowerCase());
-  final online = byId.values.where((m) => !m.away).toList()
-    ..sort((a, b) {
-      if ((a.id == last) != (b.id == last)) return a.id == last ? -1 : 1;
-      return byName(a, b);
-    });
+  final open =
+      byId.values.where((m) => swarmBuddyMachineBlock(m) == null).toList()
+        ..sort((a, b) {
+          if ((a.id == last) != (b.id == last)) return a.id == last ? -1 : 1;
+          return byName(a, b);
+        });
+  final paused = byId.values.where((m) => !m.away && m.paused).toList()
+    ..sort(byName);
   final away = byId.values.where((m) => m.away).toList()..sort(byName);
-  return [...online, ...away];
+  return [...open, ...paused, ...away];
 }
 
 /// Whether [pool]'s own reading is fresh (backend `MACHINE_FRESH_MS`, as the
@@ -420,17 +498,14 @@ String _machineName(Object? name, {String fallback = 'Your machine'}) {
       : name;
 }
 
-/// A person of [reader]'s Swarm by the name it shows them by: their address
-/// before the @; "its owner" while the Swarm does not list them (the
+/// A person of [reader]'s Swarm by the name it shows them by: their username;
+/// "its owner" while the Swarm does not list them (the
 /// desktop's `buddyPersonName`).
 String swarmBuddyPersonName(SwarmReader reader, String personId) {
-  final email = reader.snapshot?.people
+  final person = reader.snapshot?.people
       .where((p) => p.id == personId)
-      .firstOrNull
-      ?.email;
-  return email == null || email.isEmpty
-      ? 'its owner'
-      : superTabPersonName(email);
+      .firstOrNull;
+  return person == null || person.email.isEmpty ? 'its owner' : person.username;
 }
 
 /// Opens the person's Buddy chat in [projectId], on the server first when
@@ -452,7 +527,7 @@ Future<String?> openSwarmBuddyChat(SwarmReader reader, String projectId) async {
   if (operation.length > 160) operation = operation.substring(0, 160);
   final result = await _command(reader, {
     'type': 'buddy.chat',
-    'projectId': projectId,
+    if (projectId != swarmBuddyKey) 'projectId': projectId,
   }, operation: operation);
   return result['conversationId'] as String?;
 }
@@ -469,7 +544,7 @@ Future<String?> startSwarmBuddy(
 }) async {
   final result = await _command(reader, {
     'type': 'buddy.create',
-    'projectId': projectId,
+    if (projectId != swarmBuddyKey) 'projectId': projectId,
     'machineId': machineId,
     'engine': engine,
     'setup': ?setup,
@@ -481,12 +556,48 @@ Future<String?> startSwarmBuddy(
 /// Removes the person's Buddy in [projectId]: its session stops and its chat
 /// stays. Reads the Swarm again; a refusal throws.
 Future<void> removeSwarmBuddy(SwarmReader reader, String projectId) async {
-  await _command(reader, {'type': 'buddy.remove', 'projectId': projectId});
+  await _command(reader, {
+    'type': 'buddy.remove',
+    if (projectId != swarmBuddyKey) 'projectId': projectId,
+  });
+  await reader.refresh();
+}
+
+/// What the person's Buddy is called until they name it, as the backend
+/// names it (`defaultBuddyName`): "tony's Buddy".
+String swarmBuddyDefaultName(SwarmReader reader) {
+  final email = reader.snapshot?.people
+      .where((p) => p.id == reader.accountId)
+      .firstOrNull
+      ?.email;
+  return "${(email ?? '').split('@').first}'s Buddy";
+}
+
+/// The name the person chose for the Buddy of their chat [chatId]; null for
+/// the default.
+String? swarmBuddyChosenName(SwarmReader reader, String chatId) =>
+    reader.snapshot?.conversation(chatId)?.buddyName;
+
+/// Names the person's Buddy from its chat [chatId] (backend buddy.rename, the
+/// desktop's `renameBuddy`), or back to the default when [name] is empty:
+/// everyone in the Swarm sees it. By the chat, never the project, so it holds
+/// for one Buddy per Swarm too. Reads the Swarm again; a refusal throws.
+Future<void> renameSwarmBuddy(
+  SwarmReader reader,
+  String chatId,
+  String name,
+) async {
+  final trimmed = name.trim();
+  await _command(reader, {
+    'type': 'buddy.rename',
+    'conversationId': chatId,
+    'name': trimmed.isEmpty ? null : trimmed,
+  });
   await reader.refresh();
 }
 
 /// What the person does to their Buddy in one project from its chat: start
-/// it, start it again, remove it. One at a time — a second tap while one is
+/// it, start it again, rename it, remove it. One at a time — a second tap while one is
 /// under way does nothing — and what went wrong with the last, as a sentence
 /// to show; it lasts until the next.
 class SwarmBuddyActions extends ChangeNotifier {
@@ -550,6 +661,38 @@ class SwarmBuddyActions extends ChangeNotifier {
     () => removeSwarmBuddy(reader, projectId),
     "Couldn't remove your Buddy. Try again.",
   );
+
+  /// Names the Buddy of chat [chatId] ([renameSwarmBuddy]): whether it was
+  /// renamed, and the refusal for the rename's own dialog to say, never kept
+  /// in [error]. While another action is under way it does nothing; a
+  /// refusal that comes once the Swarm was let go says nothing.
+  Future<({bool renamed, String? error})> rename(
+    String chatId,
+    String name,
+  ) async {
+    if (_busy || _disposed) return (renamed: false, error: null);
+    final generation = reader.generation;
+    _busy = true;
+    notifyListeners();
+    String? error;
+    try {
+      await renameSwarmBuddy(reader, chatId, name);
+    } on SuperTabFailure catch (failure) {
+      error = failure.message;
+    } catch (_) {
+      error = "Couldn't rename your Buddy. Try again.";
+    }
+    if (_disposed) return (renamed: false, error: null);
+    _busy = false;
+    notifyListeners();
+    // Access lost, or the Swarm read anew from nothing: the refusal is for a
+    // chat no longer shown.
+    if (error != null &&
+        (reader.accessRevoked || generation != reader.generation)) {
+      return (renamed: false, error: null);
+    }
+    return (renamed: error == null, error: error);
+  }
 
   Future<void> _run(Future<Object?> Function() act, String fallback) async {
     if (_busy || _disposed) return;

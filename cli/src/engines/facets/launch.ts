@@ -284,6 +284,9 @@ export interface EngineLaunch {
   envArgs?: EnvArgsTemplate
   sharedServer?: SharedServerContract
   ownProvider?: OwnProviderContract
+  /** A conversation stays on the provider it was started on: the engine refuses to resume it on another, so a move
+   *  between a grid and the engine's own login continues it in a fork (`forkArgs`) instead (core/agents/retarget.ts). */
+  providerBoundConversations?: true
   startup?: StartupContract
   /** The screen the engine's TUI runs on, where Harness chooses it; applied to every launch (kit/launchScreen.ts). */
   screen?: ScreenContract

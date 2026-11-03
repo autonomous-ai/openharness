@@ -2,7 +2,8 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import { ProjectFolderError, RepositoryAccessError } from '../lib/projectFolder.js'
-import { prepareSwarmProject, prepareSwarmStart, startGitHub } from './projectFolder.js'
+import { PrepareRetryError, prepareSwarmProject, prepareSwarmStart, startGitHub } from './projectFolder.js'
+import { SuperTabHostError } from './wire.js'
 
 function fixture() {
   const core = fakeCore({ dataDir: '/isolated-project-fixture' })
@@ -33,6 +34,16 @@ describe('per-project checkouts on a contributed swarm machine', () => {
     f.start.request.cwd = f.repository.cwd
     await f.run()
     expect(f.prepare).not.toHaveBeenCalled()
+  })
+  it('finds a project session of a person\'s one Buddy chat by the project it names, as that chat is in no project\'s list', async () => {
+    const f = fixture()
+    Object.assign(f.start.request, { conversationId: 'swarm-buddy-chat', buddySession: { thread: 'root', projectId: 'project-a' } })
+    await f.run()
+    expect(f.prepare).toHaveBeenCalledOnce()
+    // Its project alone: a session naming a project this machine was not told of prepares nothing, whatever its chat.
+    Object.assign(f.start.request, { conversationId: 'work', buddySession: { thread: 'root', projectId: 'project-b' } })
+    await expect(f.run()).rejects.toThrow('no authorized project')
+    expect(f.prepare).toHaveBeenCalledOnce()
   })
   it('does not widen a legacy contribution or substitute a different filesystem path', async () => {
     const f = fixture()
@@ -146,6 +157,20 @@ describe('preparing another person\'s start with the Harness GitHub App', () => 
     expect(noApp.backend).not.toHaveBeenCalled()
   })
 
+  it('prepares nothing for a person\'s one Buddy, which has no project: no token, no clone, no fetch', async () => {
+    // 2026-11-02: the token call was refused with "This start has no project folder to prepare", which failed the start.
+    const app = hosted(new SuperTabHostError('NOT_FOUND', 'This start has no project folder to prepare.', 404))
+    Object.assign(app.start.request, { buddyScope: 'swarm', buddyOf: { personId: 'owner', generation: 'g' } })
+    expect(await app.ready()).toBeNull()
+    expect(app.backend).not.toHaveBeenCalled()
+    expect(app.prepare).not.toHaveBeenCalled()
+    expect(app.fetch).not.toHaveBeenCalled()
+    // Without the app it failed too, as a start of no project this machine was authorized for.
+    delete (app.row as { githubApp?: boolean }).githubApp
+    expect(await app.ready()).toBeNull()
+    expect(app.prepare).not.toHaveBeenCalled()
+  })
+
   it('in a team account, always asks for a token, and fails without one rather than using any other login', async () => {
     const team = hosted()
     expect(await team.ready(true)).toEqual({ requester: 'olive@example.com' })
@@ -158,7 +183,7 @@ describe('preparing another person\'s start with the Harness GitHub App', () => 
   })
 
   it('fails the start when the backend refuses a token, and never prepares it with the owner\'s login instead', async () => {
-    for (const answer of [new Error('The Harness GitHub App is not installed on example/project.'), { github: true }, { github: true, token: TOKEN, repository: 'x', requestedBy: {} }, 'nonsense']) {
+    for (const answer of [new SuperTabHostError('GITHUB_APP_NOT_INSTALLED', 'The Harness GitHub App is not installed on example/project.', 409), { github: true }, { github: true, token: TOKEN, repository: 'x', requestedBy: {} }, 'nonsense']) {
       const f = hosted(answer)
       await expect(f.ready()).rejects.toThrow(answer instanceof Error ? answer.message : 'answered without a GitHub token')
       expect(f.prepare).not.toHaveBeenCalled()
@@ -167,6 +192,62 @@ describe('preparing another person\'s start with the Harness GitHub App', () => 
     const noIds = hosted()
     ;(noIds.start as { id?: string }).id = undefined
     await expect(noIds.ready()).rejects.toThrow('cannot be prepared')
+  })
+
+  // Diego's Mac, 2026-10-30: a backend timeout on the token call failed the start at once. Only an answer the backend decided
+  // (a 4xx, or no app on the server: github.ts `decided`) is a refusal; anything else is for the host to try again.
+  it('tells a token call the backend decided from one that got no answer, which is tried again, and prepares nothing', async () => {
+    const retried = [new SuperTabHostError('BACKEND_TIMEOUT', 'The Harness server did not answer in time.', 504), new SuperTabHostError('BACKEND_UNAVAILABLE', 'Bad gateway.', 502),
+      new Error('fetch failed')]
+    for (const error of retried) {
+      const f = hosted(error)
+      const thrown = await f.ready(true).catch(caught => caught)
+      expect([thrown instanceof PrepareRetryError, thrown.message]).toEqual([true,
+        `This machine could not get a Harness GitHub App token for this project, so it was not prepared with its owner's own GitHub login either: ${error.message}${error instanceof SuperTabHostError ? ` (${error.code})` : ''}`])
+      expect([f.prepare.mock.calls.length, f.fetch.mock.calls.length, f.revoke.mock.calls.length]).toEqual([0, 0, 0])
+    }
+    for (const error of [new SuperTabHostError('FORBIDDEN', 'Not this machine\'s start.', 403), new SuperTabHostError('UPDATE_REQUIRED', 'Update Harness.', 426),
+      new SuperTabHostError('GITHUB_APP_NOT_CONFIGURED', 'No GitHub App.', 503), new SuperTabHostError('GITHUB_APP_MISCONFIGURED', 'GitHub refused the app.', 503)]) {
+      const thrown = await hosted(error).ready(true).catch(caught => caught)
+      expect([thrown instanceof PrepareRetryError, thrown.message]).toEqual([false,
+        `This machine could not get a Harness GitHub App token for this project, so it was not prepared with its owner's own GitHub login either: ${error.message}`])
+    }
+  })
+
+  // Security review of #2390: an answer with a token but no repository or requester failed the start and left the token good
+  // for its hour. A token in an answer that is not used is revoked, never logged, and the start still fails.
+  it('revokes a token the server sent in an answer it cannot use, and still fails the start', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    for (const answer of [{ github: true, token: TOKEN, repository: 'example/project', requestedBy: {} }, { github: true, token: TOKEN, requestedBy: { email: 'olive@example.com' } },
+      { github: 'yes', token: TOKEN, repository: 'example/project', requestedBy: { email: 'olive@example.com' } }]) {
+      const f = hosted(answer)
+      await expect(f.ready(true)).rejects.toThrow('answered without a GitHub token')
+      expect([f.revoke.mock.calls, f.prepare.mock.calls.length, f.fetch.mock.calls.length]).toEqual([[[TOKEN]], 0, 0])
+    }
+    // The owner's own project with a token beside its answer: prepared with the owner's login, the token revoked.
+    const own = hosted({ github: false, token: TOKEN })
+    expect(await own.ready()).toBeNull()
+    expect(own.revoke.mock.calls).toEqual([[TOKEN]])
+    // A revocation GitHub refuses still fails the start for its answer, and says so without the token.
+    const refused = hosted({ github: true, token: TOKEN })
+    refused.revoke.mockRejectedValueOnce(new Error('GitHub answered 500 to revoking the token'))
+    await expect(refused.ready(true)).rejects.toThrow('answered without a GitHub token')
+    expect(warn.mock.calls.map(([line]) => String(line))).toEqual(['[super-tabs] could not revoke the clone token: GitHub answered 500 to revoking the token'])
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(TOKEN)
+    // No token in it: nothing to revoke.
+    const none = hosted({ github: true })
+    await expect(none.ready(true)).rejects.toThrow('answered without a GitHub token')
+    expect(none.revoke).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  // Kept out of this change by its Lead (10-30): a default branch that could not be fetched never fails or holds a start; the
+  // worktree starts from what the checkout has, as before.
+  it('starts from what the checkout has when the default branch could not be fetched', async () => {
+    const f = hosted()
+    f.fetch.mockResolvedValueOnce(false)
+    expect(await f.ready(true)).toEqual({ requester: 'olive@example.com' })
+    expect(f.revoke.mock.calls).toEqual([[TOKEN]])
   })
 
   it('a clone the token cannot make says so, and is not tried again another way', async () => {

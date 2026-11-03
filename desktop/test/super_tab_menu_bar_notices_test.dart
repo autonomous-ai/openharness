@@ -8,6 +8,7 @@ import 'package:harness/notify/system_notifications.dart';
 import 'package:harness/state/status_menu.dart';
 import 'package:harness/super_tabs/controller.dart' show SuperTabFailure;
 import 'package:harness/super_tabs/decisions.dart';
+import 'package:harness/super_tabs/activity_view.dart';
 import 'package:harness/super_tabs/notifications.dart';
 import 'package:harness/super_tabs/view.dart';
 
@@ -363,7 +364,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(c.selectedId, 'lead');
       expect(c.noticeRequest, isNull);
-      expect(find.byType(SuperTabNotifications), findsNothing);
+      expect(find.byType(SuperTabActivityView), findsNothing);
       expect(find.text('Please confirm the release.'), findsWidgets);
       await close(tester, view);
     });
@@ -375,7 +376,7 @@ void main() {
       final c = view.controller;
       c.openNotice('decision', 'decision-1');
       await tester.pumpAndSettle();
-      expect(find.byType(SuperTabNotifications), findsOneWidget);
+      expect(find.byType(SuperTabActivityView), findsOneWidget);
       expect(find.text('Ship it behind a flag?'), findsOneWidget);
       expect(c.noticeRequest, isNull);
       await close(tester, view);

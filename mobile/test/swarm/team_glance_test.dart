@@ -69,7 +69,7 @@ void main() {
     );
 
     expect(stateOf(glance, 'a-work'), 'Working');
-    expect(stateOf(glance, 'a-review'), 'In review');
+    expect(stateOf(glance, 'a-review'), 'Waiting on others');
     expect(stateOf(glance, 'a-check'), 'Checking');
     expect(stateOf(glance, 'a-wait'), 'Waiting');
     expect(stateOf(glance, 'a-stuck'), 'Stuck');
@@ -144,6 +144,43 @@ void main() {
       'All idle',
     );
     expect(swarmTeamGlance(swarm(agents: []), now: now).line, 'No agents yet');
+  });
+
+  test('running counts the agents working, in words', () {
+    String? running(
+      List<Map<String, dynamic>> agents, [
+      List<Map<String, dynamic>> groups = const [],
+    ]) =>
+        swarmTeamGlance(swarm(agents: agents, groups: groups), now: now).running;
+
+    expect(running([]), isNull, reason: 'no agents');
+    expect(running([agent('a1')]), isNull, reason: 'idle');
+    expect(
+      running([agent('a1')], [working('a1', 'working')]),
+      '1 agent running',
+    );
+    expect(
+      running(
+        [agent('a1'), agent('a2'), agent('a3'), agent('a4')],
+        [
+          working('a1', 'working'),
+          working('a2', 'review'),
+          working('a3', 'needs_human'),
+        ],
+      ),
+      '2 agents running',
+      reason: 'who waits on a person is not running',
+    );
+    expect(
+      running(
+        [
+          {...agent('a1'), 'downSince': '2026-10-27T01:00:00.000Z'},
+        ],
+        [working('a1', 'working')],
+      ),
+      isNull,
+      reason: 'who is down is not running, whatever work it holds',
+    );
   });
 
   test('who needs a person comes first, then who is down, then the rest', () {

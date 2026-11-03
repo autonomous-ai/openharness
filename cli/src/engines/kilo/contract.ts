@@ -1,5 +1,6 @@
 import { join as hookPath } from 'node:path'
 import { env as hookEnvironment } from '../../config/env.js'
+import { PLUGIN_FETCH } from '../kit/pluginFetch.js'
 /**
  * What the core knows of Kilo without loading its code: declared data, read by the kit
  * (docs/design/2026-10-08-other-engines-out-of-core.md). It imports nothing.
@@ -24,7 +25,9 @@ import { readFileSync } from "node:fs"
 const hookToken = () => { try { return readFileSync(`,
 { argument: 'credential' },
 `, "utf8").trim() } catch { return "" } }
-export const MachineRegister = async ({ directory, worktree, project, client }) => {
+`,
+...PLUGIN_FETCH,
+`export const MachineRegister = async ({ directory, worktree, project, client }) => {
   const seen = new Set()
   const post = async (sessionID) => {
     const pane = process.env.TMUX_PANE
@@ -34,7 +37,7 @@ export const MachineRegister = async ({ directory, worktree, project, client }) 
     if ((!pane && !ptyPane) || !token || !sessionID || seen.has(sessionID)) return
     seen.add(sessionID)
     try {
-      await fetch("http://127.0.0.1:`,
+      await harnessFetch("http://127.0.0.1:`,
 { argument: 'port' },
 `/api/hook/session-start", {
         method: "POST",

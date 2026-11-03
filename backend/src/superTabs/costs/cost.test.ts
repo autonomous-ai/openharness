@@ -34,6 +34,11 @@ describe('an attempt’s cost', () => {
     expect(cost).toMatchObject({ spend: 0, priced: 'list' })
   })
 
+  it('prices GPT-6-Astra at OpenAI\'s list rate, five times Sol\'s', () => {
+    // 1M input $10, 1M output $50, 1M cache reads $1, 1M cache writes $12.50 (30-minute rate).
+    expect(attemptCost(run({ billing: 'api', end: { 'gpt-6-astra': tokens(1e6, 1e6, 1e6, 1e6) } }), true)).toEqual({ apiCost: 73.5, spend: 73.5, priced: 'list' })
+  })
+
   it('is money spent when the attempt paid per token', () => {
     expect(attemptCost(run({ billing: 'api', end: { 'gpt-6.1-sol': tokens(1e6, 1e6, 1e6) } }), true)).toEqual({ apiCost: 12.1, spend: 12.1, priced: 'list' })
   })

@@ -181,6 +181,28 @@ void main() {
       expect((back.people.single.avatar! as SuperTabPresetAvatar).key, 'fox');
     });
 
+    test('a username is kept so a kept face has its initial; an email never '
+        'is', () {
+      SuperTabSnapshot named(Map<String, dynamic> me_) {
+        final load = firstLoad()..['members'] = [part(me, 1, me_)];
+        return SuperTabSnapshot.fromJson(SuperTabParts.firstLoad(load).state);
+      }
+
+      final kept = swarmHomeSwarm(
+        named({...person(me), 'username': 'river'}),
+        const {},
+      ).state;
+      expect(jsonEncode(kept), isNot(contains('$me@example.com')));
+      expect(SuperTabSnapshot.fromJson(kept).people.single.username, 'river');
+
+      final older = swarmHomeSwarm(named(person(me)), const {}).state;
+      expect(
+        (older['people'] as List).single as Map,
+        isNot(contains('username')),
+        reason: "a server without usernames: never the email's prefix",
+      );
+    });
+
     test('a photo, its link and a status are never kept', () {
       final snapshot = faces();
       expect(

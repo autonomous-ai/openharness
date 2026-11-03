@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client'
 import { agentOnly, conversation, fail, isLeads, type AgentStart, type MessageDraft, type SuperTabState } from '../model.js'
+import { autoJoinOn } from '../autoJoinDomain.js'
 import { split } from './shape.js'
 import { guardedWrite, PartConflict, type HeadColumns, type HostColumns, type PartWrite } from './write.js'
 import type { GroupData, MachineData, Part, PartKind, SwarmParts } from './types.js'
@@ -73,12 +74,18 @@ export function visibilityChanged(before: SuperTabState, after: SuperTabState): 
 
 /** The Swarm's index row (SuperTab): what hosts, invitations and member lists are looked up by (design section 2.3). */
 export function indexesOf(state: SuperTabState) {
+  // A deleted Swarm (deletion.ts) lists nobody and is invited to by nobody, so it leaves every person's lists in this write; its
+  // machines stay indexed until their hosts have closed its sessions and cleaned up.
+  const deletion = state.deletion
   return {
-    memberIds: state.people.map(p => p.id), invitedEmails: state.invitations.map(i => i.email),
+    memberIds: deletion ? [] : state.people.map(p => p.id), invitedEmails: deletion ? [] : state.invitations.map(i => i.email),
+    deletedAt: deletion ? new Date(deletion.at) : null, purgeAt: deletion ? new Date(deletion.purgeAt) : null,
     machineIds: [...new Set([...state.agents.map(a => a.machineId), ...(state.machines ?? []).map(m => m.machineId),
       ...(state.closingSessions ?? []).map(c => c.machineId), ...(state.machineCleanups ?? []).map(c => c.machineId)])],
     cleanupMachineIds: [...new Set([...(state.machines ?? []).flatMap(m => m.removal ? [m.machineId] : []),
       ...(state.machineCleanups ?? []).map(c => c.machineId)])],
+    // Who joins by domain (autoJoin.ts): a deleted Swarm, or one whose owner turned it off, is found by nobody.
+    autoJoinDomain: autoJoinOn(state), autoJoinDeclined: state.autoJoinDeclined ?? [],
   }
 }
 
@@ -128,7 +135,7 @@ export function capReleased(state: SuperTabState): void {
  *  that machine's host needs to hear about. */
 const withoutReading = (data: unknown) => {
   const machine = data as MachineData | undefined
-  return machine && { ...machine, contribution: machine.contribution && { ...machine.contribution, observation: undefined, lent: undefined } }
+  return machine && { ...machine, contribution: machine.contribution && { ...machine.contribution, observation: undefined, lent: undefined, lentDays: undefined } }
 }
 
 /**

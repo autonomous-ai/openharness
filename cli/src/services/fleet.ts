@@ -61,8 +61,9 @@ export interface FleetRouting {
   forkAgent(agentId: string): Promise<ForkOutcome>
   /** Whether a lane to the other machines exists: signed in, with the fleet's own fleet. */
   hasLane(): boolean
-  /** Hold the lane for a dial, attached to no machine. Resolves with how it went; never rejects. */
-  online(): Promise<{ ok: true } | { ok: false; message: string }>
+  /** Hold the lane for a dial, attached to no machine. Resolves with how it went, and why when the lane said
+   *  (cable/machineFleet.ts LANE_*); never rejects. */
+  online(): Promise<{ ok: true } | { ok: false; message: string; code?: string }>
   select(machineId: string): Promise<SelectResult>
   release(immediate?: boolean): void
 }
@@ -107,8 +108,12 @@ export const FLEET_FALLBACKS: PortFallbacks<Fleet> = {
 const ROUTE_MAX_CANDIDATES = 15
 /** What ⌘K gives the classifier before the name matcher answers instead. */
 const ROUTE_CLASSIFY_APP_MS = 20_000
-/** How often the machine list is read again: the wheel's dots and the agent lists follow it. */
-const MACHINE_LIST_REFRESH_MS = 60_000
+/** How often the machine list is read again: the wheel's dots and the agent lists follow it. Every minute until spec
+ *  2026-11-02-poll-cost Part 4.4: a change to the account's machines is told (`machines_changed`) and read at once, live
+ *  presence comes on the socket (`MachineListCache.applyLive`), and this is the net for a lost push. */
+const MACHINE_LIST_REFRESH_MS = 5 * 60_000
+/** A list read this recently (by this refresh, or one a notice asked for) is not read again by the timer. */
+const MACHINE_LIST_MAX_AGE_MS = 45_000
 
 /** What the fleet needs that is not the core's to give. */
 export interface FleetDeps {
@@ -130,10 +135,14 @@ export function startFleet(core: CoreApi, deps: FleetDeps): { fleet: Fleet; rout
   //
   // Signed out there is nothing to fetch and a fetch would only earn a 401 that empties the wheel, so the
   // core answers with the one row this daemon can speak for (`account.machines`).
-  const refreshMachineList = (): void => { void deps.machines.refresh() }
+  const refreshMachineList = (): void => { void deps.machines.refresh({ maxAgeMs: MACHINE_LIST_MAX_AGE_MS }) }
   refreshMachineList()
   const machineListTimer = setInterval(refreshMachineList, MACHINE_LIST_REFRESH_MS)
   machineListTimer.unref?.()
+  // A machine added, renamed or removed: read now. Who uses a harness here (`harness_shares`) is not the list.
+  const stopNotices = core.account.onNotice((notice) => {
+    if (notice.type === 'machines_changed' && notice.reason !== 'harness_shares') void deps.machines.refresh({ maxAgeMs: 0 })
+  })
 
   const peers = new MachinePeerStore()
   const link = new DeviceLink({
@@ -220,6 +229,7 @@ export function startFleet(core: CoreApi, deps: FleetDeps): { fleet: Fleet; rout
     onEvent: (listener) => devices.onEvent(listener),
     stop: () => {
       clearInterval(machineListTimer)
+      stopNotices()
       link.stop()
     },
   }

@@ -24,6 +24,7 @@ class SuperTabPartsChange {
     this.removedGroups = const {},
     this.dormantGroups = const {},
     this.readMarksOnly = false,
+    this.machinesOnly = false,
   });
 
   /// Some part or a derived value is new: what the screens draw may differ.
@@ -37,6 +38,10 @@ class SuperTabPartsChange {
 
   /// Only the reader's read marks moved: the page around the view, not what a saved view holds.
   final bool readMarksOnly;
+
+  /// Only what a machine reports moved (its reading, its Lent, its worked-out
+  /// values): what shows machines may differ, nothing else.
+  final bool machinesOnly;
 }
 
 /// The parts of one Swarm as this reader last saw them (section 5.1): every part by kind and key at the newest
@@ -60,6 +65,8 @@ class SuperTabParts {
     // Read marks are held apart from the other derived values (_readMarks).
     final derived = Map.of(superTabMap(answer['derived'] ?? const {}));
     final marks = derived.remove('readMarks');
+    final threadMarks = derived.remove('threadMarks');
+    final chatSettings = derived.remove('chatSettings');
     final parts = SuperTabParts._(
       _envelope(answer['head'], live: true),
       derived,
@@ -79,6 +86,8 @@ class SuperTabParts {
       }
     }
     parts._takeReadMarks(marks);
+    parts._takeThreadMarks(threadMarks);
+    parts._takeChatSettings(chatSettings);
     return parts;
   }
 
@@ -101,6 +110,8 @@ class SuperTabParts {
       }
     }
     parts._takeReadMarks(json['readMarks']);
+    parts._takeThreadMarks(json['threadMarks']);
+    parts._takeChatSettings(json['chatSettings']);
     return parts;
   }
 
@@ -145,6 +156,46 @@ class SuperTabParts {
     return moved;
   }
 
+  /// The reader's own thread marks (backend readMarks.ts): by conversation, the newest message sequence read in each
+  /// thread, by its root. Kept as read marks are: the higher of each, and gone with their conversation.
+  final _threadMarks = <String, Map<String, int>>{};
+
+  /// Keeps the higher of each thread mark in [marks] and the one held; whether any moved.
+  bool _takeThreadMarks(Object? marks) {
+    var moved = false;
+    if (marks is! Map) return moved;
+    for (final MapEntry(key: id, value: threads) in marks.entries) {
+      if (id is! String || threads is! Map) continue;
+      for (final MapEntry(key: root, value: sequence) in threads.entries) {
+        if (root is! String || sequence is! num) continue;
+        final held = _threadMarks[id] ??= {};
+        if ((held[root] ?? 0) >= sequence) continue;
+        held[root] = sequence.toInt();
+        moved = true;
+      }
+    }
+    return moved;
+  }
+
+  /// The reader's own notification setting by conversation (backend chatSettings.ts): `all`, `mentions` or `muted`.
+  /// A first load sends every one, a change read those moved since its cursor; the newest wins, and a setting goes
+  /// with its conversation.
+  final _chatSettings = <String, String>{};
+
+  /// Keeps each setting in [settings] the server knows; whether any moved.
+  bool _takeChatSettings(Object? settings) {
+    var moved = false;
+    if (settings is! Map) return moved;
+    for (final MapEntry(:key, :value) in settings.entries) {
+      if (key is! String || value is! String) continue;
+      if (!const {'all', 'mentions', 'muted'}.contains(value)) continue;
+      if (_chatSettings[key] == value) continue;
+      _chatSettings[key] = value;
+      moved = true;
+    }
+    return moved;
+  }
+
   /// Dormant groups held with their data from before a stub closed them: a read by id at the stub's version is
   /// their current data.
   final _stale = <String>{};
@@ -178,12 +229,14 @@ class SuperTabParts {
   /// the group out of the active ones, `derived` is replaced, and the cursor moves. A reload answer is the caller's.
   SuperTabPartsChange apply(Map<String, dynamic> changes) {
     var changed = false;
+    // Anything but a machine's own report moved.
+    var beyondMachines = false;
     final removed = <String>{}, dormant = <String>{};
     if (changes['head'] != null) {
       final head = _envelope(changes['head'], live: true);
       if (_newer('head', head)) {
         _head = head;
-        changed = true;
+        changed = beyondMachines = true;
       }
     }
     for (final kind in _lists) {
@@ -193,12 +246,17 @@ class SuperTabParts {
         final key = part['key'] as String;
         if (!_newer('$kind:$key', part)) continue;
         changed = true;
+        if (kind != 'machines' || !_reportOnly(held[key], part)) {
+          beyondMachines = true;
+        }
         if (part['deleted'] == true) {
           held.remove(key);
           if (kind == 'groups') {
             _dormant.remove(key);
             _stale.remove(key);
             _readMarks.remove(key);
+            _threadMarks.remove(key);
+            _chatSettings.remove(key);
             removed.add(key);
           }
         } else if (kind == 'groups' && part['dormant'] == true) {
@@ -226,8 +284,14 @@ class SuperTabParts {
       }
     }
     final derived = Map.of(superTabMap(changes['derived'] ?? const {}));
-    final marksMoved = _takeReadMarks(derived.remove('readMarks'));
+    final readMarksMoved = _takeReadMarks(derived.remove('readMarks'));
+    // Both run: one moving never skips the other.
+    final marksMoved =
+        _takeThreadMarks(derived.remove('threadMarks')) |
+        _takeChatSettings(derived.remove('chatSettings')) |
+        readMarksMoved;
     if (!const DeepCollectionEquality().equals(derived, _derived)) {
+      if (!_sameBeyondMachines(derived, _derived)) beyondMachines = true;
       _derived = derived;
       changed = true;
     }
@@ -239,7 +303,43 @@ class SuperTabParts {
       removedGroups: removed,
       dormantGroups: dormant,
       readMarksOnly: marksMoved && !changed,
+      machinesOnly: changed && !beyondMachines && !marksMoved,
     );
+  }
+
+  /// Whether [next] says of a held machine only what its reports write: a
+  /// heartbeat. A new machine, a removed one, or one renamed or paused is news
+  /// to more than the machines list.
+  static bool _reportOnly(
+    Map<String, dynamic>? held,
+    Map<String, dynamic> next,
+  ) {
+    if (held == null || next['deleted'] == true || next['data'] == null) {
+      return false;
+    }
+    Map<String, dynamic> rest(Map<String, dynamic> part) =>
+        Map.of(superTabMap(part['data']))
+          ..remove('observation')
+          ..remove('lent')
+          ..remove('lentDays');
+    return const DeepCollectionEquality().equals(rest(held), rest(next));
+  }
+
+  static bool _sameBeyondMachines(
+    Map<String, dynamic> a,
+    Map<String, dynamic> b,
+  ) => const DeepCollectionEquality().equals(
+    Map.of(a)..remove('machines'),
+    Map.of(b)..remove('machines'),
+  );
+
+  /// The machines as [state] lists them, with what the server worked out.
+  List<Map<String, dynamic>> get machines {
+    final worked = _derivedMap('machines');
+    return [
+      for (final machine in _data('machines'))
+        _overlay(machine, worked[machine['machineId']]),
+    ];
   }
 
   /// Takes dormant groups read on demand (section 4.5): a page of the dormant list, or one group by id. Each is kept
@@ -270,7 +370,6 @@ class SuperTabParts {
   /// groups come first in the order they were read, then the dormant groups held.
   Map<String, dynamic> get state {
     final agentsDerived = _derivedMap('agents');
-    final machinesDerived = _derivedMap('machines');
     final avatars = _derivedMap('avatars');
     final state = <String, dynamic>{
       ...superTabMap(_head['data']),
@@ -294,10 +393,7 @@ class SuperTabParts {
         ..._data('groups'),
         for (final part in _dormant.values) superTabMap(part['data']),
       ],
-      'machines': [
-        for (final machine in _data('machines'))
-          _overlay(machine, machinesDerived[machine['machineId']]),
-      ],
+      'machines': machines,
       'starts': [for (final start in _data('starts')) start],
       'githubApp': githubApp,
     };
@@ -316,9 +412,27 @@ class SuperTabParts {
     if (_derived['decisionsDigest'] case final String digest) {
       state['decisionsDigest'] = digest;
     }
+    if (_derived['activityDigest'] case final String digest) {
+      state['activityDigest'] = digest;
+    }
     // Sent only where the server does not try Harness Team accounts yet.
     if (_derived['teamAccounts'] == false) state['teamAccounts'] = false;
+    // Sent by a server that takes a thread reply's New session.
+    if (_derived['threadSessions'] == true) state['threadSessions'] = true;
+    // And one that also takes it on a top-level message in a Buddy chat.
+    if (_derived['sessionsFromChat'] == true) state['sessionsFromChat'] = true;
+    // And one that gives each person one Buddy for the whole Swarm.
+    if (_derived['swarmBuddy'] == true) state['swarmBuddy'] = true;
     if (_readMarks.isNotEmpty) state['readMarks'] = Map.of(_readMarks);
+    if (_chatSettings.isNotEmpty) {
+      state['chatSettings'] = Map.of(_chatSettings);
+    }
+    if (_threadMarks.isNotEmpty) {
+      state['threadMarks'] = {
+        for (final MapEntry(:key, :value) in _threadMarks.entries)
+          key: Map<String, int>.of(value),
+      };
+    }
     return state;
   }
 
@@ -339,6 +453,11 @@ class SuperTabParts {
     'seen': Map<String, int>.of(_seen),
     'stale': _stale.toList(),
     'readMarks': Map<String, int>.of(_readMarks),
+    'chatSettings': Map<String, String>.of(_chatSettings),
+    'threadMarks': {
+      for (final MapEntry(:key, :value) in _threadMarks.entries)
+        key: Map<String, int>.of(value),
+    },
   };
 
   /// [json] (from [toJson]) without what the screens never draw: agent starts carry their tasks, and project

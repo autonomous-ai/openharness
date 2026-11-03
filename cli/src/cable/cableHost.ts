@@ -35,7 +35,7 @@ import type { SelectionCommand, SelectionResult } from './windowSelection.js'
 import type { VisitCommand, VisitResult } from './windowVisit.js'
 import type { FormCommand, FormResult } from './windowForm.js'
 import type { PetStore } from './pets/store.js'
-import type { MachineFleet } from './machineFleet.js'
+import { LANE_SESSION_OVER, LANE_TOKEN_UNAVAILABLE, type MachineFleet } from './machineFleet.js'
 import type { ReviewedAnswer, AnswerReceipt } from './questionInbox.js'
 import { isTier, type Tier } from '../lib/notifyTier.js'
 
@@ -150,6 +150,22 @@ function isPlaceholder(id: string): boolean {
 
 /** How long a keepalive may be answered from the last manifest read — see firmwareFor. */
 const RELEASE_KEEP_MS = 30 * 60_000
+/**
+ * The wait before trying the plug-in's lane again, doubling to the cap: the same backoff as the lane's own reconnect
+ * (deviceLink.ts reconnectLater). Diego, 11-01: a first open lost to a refresh that failed in a network blip was
+ * never tried again, and the wheel had no other Mac until the dial was replugged.
+ */
+const LANE_RETRY_MS = 1_000
+const LANE_RETRY_MAX_MS = 30_000
+
+/** How a pick of a machine ended: `code` is the daemon's, `message` is shown to a person (CableHost.selectMachine). */
+type MachinePick = { ok: true } | { ok: false; code: string; message: string }
+
+/** A pick on its way; `replaced` when it took over from another still running. */
+interface PendingPick { machineId: string; replaced: boolean; done: Promise<MachinePick> }
+
+/** A pick's end that says no about that machine and nothing about the lane (deviceFleet.ts select and codeFor). */
+const REFUSALS = new Set(['NEEDS_LINK', 'UNKNOWN_MACHINE', 'NOT_YOURS', 'BILLING'])
 
 export class DaemonCableHost implements CableHost {
   /**
@@ -167,6 +183,20 @@ export class DaemonCableHost implements CableHost {
    * remember across a daemon restart either — that is when the registry reloads anyway.
    */
   private selected = ''
+  /**
+   * The newest pick still on its way to a remote machine, until it settles. Only it may move `selected`: a pick waiting on
+   * a slow machine lands up to 15 s later, by when the person may be elsewhere (Diego's Buddy, 11-02). Which pick it is, not
+   * just which machine: going away and back to one machine looks the same by name, and the first landing says nothing of
+   * the last. The announce on plug-in names it rather than `selected`: announcing the older machine would replace the newer
+   * choice at the lane (deviceLink.ts select).
+   */
+  private pending: PendingPick | null = null
+
+  /** Counts plug-ins: a lane open that lands after an unplug or a replug belongs to an older one and does nothing. */
+  private plugIn = 0
+  /** The next try at the lane for this plug-in, after an open that failed; cleared by an unplug or a replug. */
+  private laneRetry: NodeJS.Timeout | null = null
+  private laneTries = 0
 
   /** The last good manifest read per OTA key, for keepalives — see firmwareFor. */
   private readonly releases = new Map<string, { release: FirmwareRelease; at: number }>()
@@ -230,9 +260,15 @@ export class DaemonCableHost implements CableHost {
     return this.viaFleet((r) => r.listMachines())
   }
 
-  async selectMachine(machineId: string): Promise<{ ok: true } | { ok: false; code: string; message: string }> {
+  /** The machine the newest pick is still on its way to, or '' when none is. */
+  pendingPick(): string {
+    return this.pending?.machineId ?? ''
+  }
+
+  async selectMachine(machineId: string): Promise<MachinePick> {
     if (machineId === this.localId()) {
       this.selected = machineId
+      this.pending = null
       // Let go of the REMOTE machine after a linger, keeping the socket — then announce where the dial
       // actually is. `activeMachineId` on the account is then true for this machine too, instead of
       // silently going stale on whatever was selected last.
@@ -243,8 +279,44 @@ export class DaemonCableHost implements CableHost {
     if (!this.viaFleet((r) => r.hasLane())) {
       return { ok: false, code: 'UNAVAILABLE', message: 'Sign in on this computer to reach other machines' }
     }
-    const selected = await this.viaFleet((r) => r.select(machineId))
-    if (!selected.ok) return selected
+    // A second pick of the machine already on its way shares its one answer, as the lane's select does. Each caller may be
+    // the only one left to tell the dial: an app follow's answer is dropped once a newer focus arrives (reviews of #2504).
+    if (this.pending?.machineId === machineId) return this.pending.done
+    // Set before the select starts, so a fleet call that fails at once still finds it and clears it.
+    const entry: PendingPick = { machineId, replaced: this.pending !== null, done: null as unknown as Promise<MachinePick> }
+    this.pending = entry
+    entry.done = this.pickMachine(entry)
+    return entry.done
+  }
+
+  private async pickMachine(entry: PendingPick): Promise<MachinePick> {
+    const { machineId } = entry
+    let selected: Awaited<ReturnType<FleetRouting['select']>>
+    let newest = false
+    try {
+      selected = await this.viaFleet((r) => r.select(machineId))
+    } finally {
+      newest = this.pending === entry
+      if (newest) this.pending = null
+    }
+    if (!newest) {
+      // Replaced, however it ended: a machine the person left failing late is no news to them. A newer pick of this same
+      // machine (away and back) speaks for this one too: the dial waits on that machine, and an error would end its wait.
+      if (this.pending?.machineId === machineId) return this.pending.done
+      if (this.selected === machineId) return { ok: true }
+      return { ok: false, code: 'SUPERSEDED', message: 'Another machine was chosen' }
+    }
+    if (!selected.ok) {
+      // The lane may still be where the pick this one replaced took it: the fleet refuses an unlinked machine before asking
+      // the lane, so the dial stayed here while the backend and any reconnect stayed on the machine the person left (reviews
+      // of #2504). Said again now, as picking this machine again would not: it is already selected. Only for a refusal, and
+      // only with a pick replaced: that one was still running, so the lane is up. Any other failure may be the lane's end (a
+      // revoke, a 4403, an unplug), and telling it anything would dial straight back past what it decided.
+      if (entry.replaced && REFUSALS.has(selected.code)) {
+        void this.announceSelection().catch((err) => this.wiring.log(`cable: could not announce (${(err as Error).message})`))
+      }
+      return selected
+    }
     this.selected = machineId
     return { ok: true }
   }
@@ -259,22 +331,64 @@ export class DaemonCableHost implements CableHost {
    */
   onDialAttached(): void {
     this.wiring.watching?.(true)
+    this.stopLaneRetry()
+    this.laneTries = 0
+    this.openLane(++this.plugIn, 'cable: dial on the wire — opening the cloud lane')
+  }
+
+  private openLane(plugIn: number, line: string): void {
     if (!this.viaFleet((r) => r.hasLane())) return
     // Signed out there is no lane to open: the socket is authenticated, so dialling it would fail once
     // per plug-in and log a failure for something nobody asked for. The dial still works — it is on the
-    // cable, and everything it shows on this computer is served in-process.
+    // cable, and everything it shows on this computer is served in-process. A retry stops here too.
     if (this.wiring.signedIn?.() === false) {
       this.wiring.log('cable: dial on the wire — this computer only (not signed in)')
       return
     }
-    this.wiring.log('cable: dial on the wire — opening the cloud lane')
+    this.wiring.log(line)
     void (async () => {
       // The socket first, and unconditionally: it is what makes the machine wheel's dots live, and it is
       // held for as long as the dial is plugged in whether or not anything is selected.
-      const online = await this.viaFleet((r) => r.online())
-      if (!online.ok) throw new Error(online.message)
+      let online: { ok: true } | { ok: false; message: string; code?: string }
+      try {
+        online = await this.viaFleet((r) => r.online())
+      } catch (err) {
+        online = { ok: false, message: (err as Error).message }
+      }
+      if (!online.ok) {
+        // A session that is over is not tried again: each try would be a refused refresh and two log lines every 30 s
+        // until someone signs in (security review 2 on #2483). The next sign-in and plug-in open it.
+        if (online.code === LANE_SESSION_OVER) {
+          this.wiring.log(`cable: could not open the lane (${online.message}) — other machines are unavailable until the next sign-in`)
+          return
+        }
+        this.wiring.log(`cable: could not open the lane (${online.message})`)
+        // Only a token that could not be read is tried again from here: it left the lane no socket, so nothing else
+        // would (deviceLink.ts readToken). A socket that failed is the lane's own reconnect's, and trying it here too
+        // ran two backoffs against a backend that is down (security review 2 on #2483).
+        if (online.code === LANE_TOKEN_UNAVAILABLE) this.retryLane(plugIn)
+        return
+      }
+      // Unplugged or replugged while it opened: the newer plug-in announces for itself, and an unplugged dial is
+      // nowhere to announce.
+      if (plugIn !== this.plugIn) return
+      this.laneTries = 0
       await this.announceSelection()
     })().catch((err) => this.wiring.log(`cable: could not open the lane (${(err as Error).message})`))
+  }
+
+  private retryLane(plugIn: number): void {
+    if (plugIn !== this.plugIn) return
+    this.stopLaneRetry()
+    const delay = Math.min(LANE_RETRY_MAX_MS, LANE_RETRY_MS * 2 ** Math.min(this.laneTries++, 5))
+    this.laneRetry = setTimeout(() => {
+      this.laneRetry = null
+      if (plugIn === this.plugIn) this.openLane(plugIn, 'cable: trying the cloud lane again')
+    }, delay)
+  }
+
+  private stopLaneRetry(): void {
+    if (this.laneRetry) { clearTimeout(this.laneRetry); this.laneRetry = null }
   }
 
   /**
@@ -288,12 +402,13 @@ export class DaemonCableHost implements CableHost {
    */
   private async announceSelection(): Promise<void> {
     if (!this.viaFleet((r) => r.hasLane())) return
-    const machineId = this.selectedMachine()
+    const machineId = this.pendingPick() || this.selectedMachine()
     if (isPlaceholder(machineId)) return
     const selected = await this.viaFleet((r) => r.select(machineId))
     // Never fatal. The local machine in particular must stay usable with no backend at all — it is the
-    // one machine the cable can vouch for on its own.
-    if (!selected.ok) this.wiring.log(`cable: could not announce ${machineId} (${selected.message})`)
+    // one machine the cable can vouch for on its own. Replaced by a newer select is not a failure: that
+    // one tells the backend where the dial is.
+    if (!selected.ok && selected.code !== 'SUPERSEDED') this.wiring.log(`cable: could not announce ${machineId} (${selected.message})`)
   }
 
   /**
@@ -305,6 +420,8 @@ export class DaemonCableHost implements CableHost {
    * a screen that is not there.
    */
   onDialGone(): void {
+    this.plugIn++
+    this.stopLaneRetry()
     this.wiring.watching?.(false)
     this.wiring.clearSelection?.()
     this.wiring.clearVisit?.()

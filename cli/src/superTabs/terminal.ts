@@ -19,7 +19,11 @@ type Json = Record<string, unknown>
 interface Own { tabId: string; agentId: string; harnessId: string }
 
 /** Every host of every Swarm asks, so not every second (Lead, 2026-10-23); the backend gives up on a pickup after 10 s. */
-const SERVE_EVERY_MS = 3_000
+export const SERVE_EVERY_MS = 3_000
+/** While the server pushes deliveries (the host's push lease), it also says when a request waits for this machine
+ *  (`__terminal_waiting`, spec 2026-11-02-poll-cost Part 4.2): this poll is then only the net for a lost push, still inside the
+ *  backend's 10 s. Prod 2026-11-02: 305 empty pickups a minute, each a transaction. */
+export const SERVE_PUSHED_EVERY_MS = 8_000
 /** A screen read per agent; the 3-minute prompt wait does not need it finer. */
 const WATCH_EVERY_MS = 15_000
 const PROMPT_WAIT_MS = 3 * 60_000
@@ -73,8 +77,10 @@ const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', '
 /** An engine retrying a model that does not answer: Claude Code's "Waiting for API response · will retry in 2m 38s · check
  *  your network" and its "API Error: 503 …", "Request timed out" or "Connection error", and Codex's "stream disconnected -
  *  retrying" and "Reconnecting…". 2026-10-24: a Builder on a small local model retried for an hour, the relay giving up on
- *  every answer, while its Lead waited on it. Only near the prompt, as a limit is. */
-const MODEL_LINE = /waiting for api response|api error:\s*(?:5\d\d|overloaded|request timed out|connection)|stream (?:error|disconnected)[^\n]*retrying|^\W*reconnecting\b/i
+ *  every answer, while its Lead waited on it. Only near the prompt, as a limit is. Claude Code 2.1 names a connection's
+ *  failure instead ("Unable to connect to API (ECONNREFUSED)", "No internet route — …"), and Codex says "Connection
+ *  failed: error sending request" under its reconnect: Team agents whose relay was gone after an update (2026-11-03). */
+const MODEL_LINE = /waiting for api response|api error:\s*(?:5\d\d|overloaded|request timed out|connection)|unable to connect to api\b|no internet route\b|connection failed: error sending request|stream (?:error|disconnected)[^\n]*retrying|^\W*reconnecting\b/i
 /** Retries come and go on a busy model; ten minutes of them is a model the work cannot get answers from. */
 const MODEL_WAIT_MS = 10 * 60_000
 /** How long a screen must stay clear of retries before its model counts as answering again. Between retries the engine
@@ -87,11 +93,33 @@ export function modelFailing(text: string): boolean {
   return text.split('\n').slice(-LIMIT_NEAR_LINES).some(line => MODEL_LINE.test(line))
 }
 
+/** Claude Code's tool call, whose output it draws under it: "⏺ Bash(…)", "⏺ Read(…)", "⏺ mcp__github__get_pr(…)". */
+const TOOL_CALL = /^⏺\s+[\w.-]+\(/
+
+/** Whether line [at] of [lines] is where an engine draws its own notice, not text the agent printed (Ken, 11-03: River
+ *  was listed limited while working, as it had just printed another agent's screen showing Codex's limit line). An engine
+ *  draws its notice at the margin: Claude Code's status line and the border of its limit dialog, Codex's "■" line. Or, in
+ *  Claude Code, as a row of its own at its two-space "  ⎿  ": under its reply ("⏺ All green." then the notice), or after
+ *  a blank line, as it comes mid-turn after a tool's output (review of #2712). A tool's output starts right under its call
+ *  ("⏺ Bash(…)", no blank line between), and the rest is indented deeper, as is any screen a tool printed. */
+function ownNotice(lines: string[], at: number): boolean {
+  const line = lines[at]!
+  if (/^\S/.test(line)) return true
+  if (!/^ {2}⎿\s/.test(line)) return false
+  for (let above = at - 1; above >= 0; above--) {
+    const before = lines[above]!
+    if (!before.trim()) return true
+    if (/^\S/.test(before)) return !TOOL_CALL.test(before)
+  }
+  return true
+}
+
 /** A usage limit on screen, with when it resets if the screen says; null for none. */
 export function limitOf(text: string, now: number): { resetAt?: string } | null {
   const lines = text.split('\n')
-  const tail = lines.slice(-LIMIT_NEAR_LINES)
-  const at = tail.findIndex(line => LIMIT_LINE.test(line))
+  const from = Math.max(0, lines.length - LIMIT_NEAR_LINES)
+  const tail = lines.slice(from)
+  const at = tail.findIndex((line, i) => LIMIT_LINE.test(line) && ownNotice(lines, from + i))
   if (at < 0) return null
   const said = tail.slice(at, at + 3).join(' ')
   const reset = resetOf(said, now)
@@ -138,37 +166,61 @@ type Episode = { since: number; alerted: boolean } | null
 interface Watched { prompt: Episode; limit: Episode; model: Episode; retried?: number; skips?: number }
 
 export class TerminalHost {
-  private nextServeAt = 0
+  /** When the last pickup started: the next is due after the interval the push lease allows now, so a lapsed lease is
+   *  back to every 3 s at once. */
+  private servedAt = -Infinity
   private nextWatchAt = 0
   private serving: Promise<void> | null = null
+  /** A push heard during a pickup: one more runs after it, since that one may have read before the request was written. */
+  private servingAgain = false
+  /** This machine's agents as the last roster named them: what a pickup a push starts answers for. */
+  private here: Array<Own & { running: boolean }> = []
   private watching: Promise<void> | null = null
   private readonly watched = new Map<string, Watched>()
   /** Per running harness here, its last screen's digest and when that last changed. */
   private readonly progress = new Map<string, { digest: string; at: number }>()
   private readonly now: () => number
   private readonly log: (message: string) => void
+  /** Whether the server is known to push now (the host's delivery push lease). */
+  private readonly pushes: () => boolean
 
-  constructor(private readonly core: CoreApi, private readonly machineId: string, options: { now?: () => number; log?: (message: string) => void } = {}) {
+  constructor(private readonly core: CoreApi, private readonly machineId: string,
+    options: { now?: () => number; log?: (message: string) => void; pushes?: () => boolean } = {}) {
     this.now = options.now ?? Date.now
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
+    this.pushes = options.pushes ?? (() => false)
   }
 
   /** Each host roster read. Serving and watching run on their own cadence, and the returned promise is only for specs:
    *  the host never waits on it, so a slow screen read never delays deliveries. */
   tick(rows: unknown[]): Promise<void> {
-    const here = this.here(rows)
+    const here = this.here = this.agentsHere(rows)
     if (!here.length) { this.watched.clear(); this.progress.clear(); return Promise.resolve() }
     const own = here.filter(agent => agent.running)
     const now = this.now()
-    if (!this.serving && now >= this.nextServeAt) {
-      this.nextServeAt = now + SERVE_EVERY_MS
-      this.serving = this.serve(here).catch(error => this.log(error instanceof Error ? error.message : String(error))).finally(() => { this.serving = null })
-    }
+    if (!this.serving && now - this.servedAt >= (this.pushes() ? SERVE_PUSHED_EVERY_MS : SERVE_EVERY_MS)) this.startServing()
     if (!this.watching && now >= this.nextWatchAt) {
       this.nextWatchAt = now + WATCH_EVERY_MS
       this.watching = this.watch(own).catch(error => this.log(error instanceof Error ? error.message : String(error))).finally(() => { this.watching = null })
     }
     return Promise.all([this.serving, this.watching]).then(() => {})
+  }
+
+  /** The server says a terminal request waits for this machine: picked up now, not at the next poll. The promise is only
+   *  for specs. Nothing before the first roster names an agent here, as the poll does. */
+  waiting(): Promise<void> {
+    if (!this.here.length) return Promise.resolve()
+    if (this.serving) { this.servingAgain = true; return this.serving }
+    return this.startServing()
+  }
+
+  private startServing(): Promise<void> {
+    this.servedAt = this.now()
+    const serving = this.serve(this.here).catch(error => this.log(error instanceof Error ? error.message : String(error))).finally(() => {
+      this.serving = null
+      if (this.servingAgain) { this.servingAgain = false; void this.waiting() }
+    })
+    return this.serving = serving
   }
 
   /** When each of these harnesses' screens last changed, epoch ms, for those running here that the watch has read. An
@@ -182,7 +234,7 @@ export class TerminalHost {
 
   /** This machine's Swarm agents, as the roster names them, and whether each runs here: a stopping one, or one whose
    *  session is gone, is no longer anyone's to drive, but its requests are still this host's to answer. */
-  private here(rows: unknown[]): Array<Own & { running: boolean }> {
+  private agentsHere(rows: unknown[]): Array<Own & { running: boolean }> {
     return rows.map(object).flatMap(row => {
       const agent = object(row.agent)
       return identifier(row.tabId) && identifier(agent.id) && identifier(agent.harnessId) && agent.machineId === this.machineId

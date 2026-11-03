@@ -43,8 +43,7 @@ enum SwarmStart {
 /// read. Null when there is a Swarm to show, or nothing is known yet.
 ///
 /// No computer answering shows no start screen: Home draws what it has —
-/// what was read or kept, or rows on their way — with a card about the
-/// computers (`SwarmConnectionNotice`), and the reads retry quietly
+/// what was read or kept, or rows on their way — and the reads retry quietly
 /// (`swarmRequest`). A screen in Home's place once flashed "Connect one of
 /// your computers" for 10 to 25 seconds at a time with the computer connected
 /// all along (owner's iPhone, 2026-10-27), and "No computer online" stayed

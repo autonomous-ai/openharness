@@ -11,6 +11,7 @@
  * under `~/.harness/runtime` would send a spec's calls to this machine's managed binary instead of the
  * fake the spec put on PATH. `src/config/envIsolation.spec.ts` pins both.
  */
+import { vi } from 'vitest'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -60,3 +61,19 @@ process.env.HARNESS_HOOK_ROUTES_DIR = join(process.env.ADAPTER_DATA_DIR, 'hook-r
 process.env.HARNESS_STORE_CATALOG_URL ??= 'http://127.0.0.1:9/catalog.json'
 // Last: everything above is in place, so `config/testIsolation.ts` may let `env.ts` load.
 process.env.HARNESS_TEST_ISOLATED = '1'
+
+// The Mac running these may have a real Harness Team account, whose root-owned config says the owner's agents get a private
+// temporary folder (lib/agentTmp.ts): on such a Mac every launch's environment would differ from a spec's. A spec that passes
+// its own deps tests the real thing, and one that wires it in sets what this answers.
+vi.mock('./src/lib/agentTmp.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./src/lib/agentTmp.js')>()
+  return {
+    ...real,
+    agentTmpEnv: vi.fn((engine: Parameters<typeof real.agentTmpEnv>[0], role: string | undefined, deps?: Parameters<typeof real.agentTmpEnv>[2]) =>
+      deps ? real.agentTmpEnv(engine, role, deps) : {}),
+    agentTmpRoot: vi.fn((deps?: Parameters<typeof real.agentTmpRoot>[0]) => deps ? real.agentTmpRoot(deps) : null),
+    buddyTmpEnv: vi.fn((engine: Parameters<typeof real.buddyTmpEnv>[0], root: string, deps?: Parameters<typeof real.buddyTmpEnv>[2]) =>
+      deps ? real.buddyTmpEnv(engine, root, deps) : {}),
+    buddyTmpOf: vi.fn((root: string, deps?: Parameters<typeof real.buddyTmpOf>[1]) => deps ? real.buddyTmpOf(root, deps) : null),
+  }
+})

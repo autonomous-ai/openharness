@@ -1080,7 +1080,7 @@ fn quota_remaining<'a>(readings: impl Iterator<Item = (&'a str, &'a crate::fleet
     }).collect::<Vec<_>>().join("  ")
 }
 
-/// A subscription's provider as its engine's icon, in the engine's colour (`✳` Claude, `◎`
+/// A subscription's provider as its engine's icon, in the engine's colour (`✳` Claude, `☁`
 /// Codex/OpenAI…); a provider with no engine of its own, its name.
 fn quota_icon(provider: &str) -> String {
     let engine = match provider.to_ascii_lowercase().as_str() { "anthropic" | "claude" => "claude", "openai" | "chatgpt" | "codex" => "codex", _ => return quota_provider(provider) };
@@ -1454,7 +1454,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "usage_remaining" | "usage_remaining_mark" => quota_remaining(
             app.usage.iter().flat_map(|(machine, readings)| readings.iter().map(move |u| (machine.as_str(), u))),
             &app.fleet.local_id, |id| app.fleet.machine_name(id), name == "usage_remaining_mark", false),
-        // The same, each subscription by its engine's icon (`✳ 43%  ◎ 80%`): the side bar's.
+        // The same, each subscription by its engine's icon (`✳ 43%  ☁ 80%`): the side bar's.
         "usage_remaining_icons" => quota_remaining(
             app.usage.iter().flat_map(|(machine, readings)| readings.iter().map(move |u| (machine.as_str(), u))),
             &app.fleet.local_id, |id| app.fleet.machine_name(id), true, true),

@@ -8,7 +8,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, w
 import { delimiter, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parsePlanRequest, planSetup } from './planInput.js'
-import type { Policy } from './route.js'
+import { catalogFrom } from './route.js'
+import { CATALOG_UNREADABLE } from './routeCommand.js'
 import type { ScopedRequest } from './start.js'
 import { object } from './wire.js'
 
@@ -95,28 +96,32 @@ export async function planWork(input: { request: unknown }, scoped: ScopedReques
   if (context.error || context.ok !== true) return context
   const value = object(context.value), tab = object(value.tab)
   const now = (deps.now ?? Date.now)()
-  const setup = planSetup({ state: object(tab.state), policy: object(value.policy).policy as Policy, leadId: String(value.agentId),
+  const catalog = catalogFrom(object(value.policy))
+  const setup = planSetup({ state: object(tab.state), catalog, leadId: String(value.agentId),
     request, githubApp: tab.githubApp === true, now })
   if (!setup.instance.tasks.length) return { ok: true, plan: [], note: 'No open groups to plan.' }
+  // What the plan could not follow, said with the plan or with why there is none (final review).
+  const notes = [...(catalog.models.length ? [] : [CATALOG_UNREADABLE]),
+    ...setup.understrength.map(id => `No model that can run ${setup.titles[id]} is as strong as its difficulty asks: it is planned on the strongest that can.`)]
   const solved = await (deps.run ?? (instance => runSolver(instance, { dataDir: deps.dataDir, python: deps.python })))(setup.instance)
   if ('error' in solved) return { error: solved.error, detail: `${solved.detail} Route each group as usual meanwhile.` }
   const answer = solved.value
   if (answer.status !== 'OPTIMAL' && answer.status !== 'FEASIBLE') {
-    return { error: 'NO_PLAN', detail: `The scheduler found no plan: ${String(answer.reason || answer.status)}. Route each group as usual.` }
+    return { error: 'NO_PLAN', detail: `The scheduler found no plan: ${String(answer.reason || answer.status)}. Route each group as usual.`, ...(notes.length ? { notes } : {}) }
   }
   const route = object(answer.route)
   const plan = list(answer.plan).map(row => {
     const group = String(row.task), machineId = String(row.machine), modelId = String(row.model), pick = setup.rows[modelId]!
     // A model on the grid is started by its gridModel and gridName, never a model or effort (route.ts).
     const runs = pick.gridModel ? { engine: pick.engine, gridModel: pick.gridModel, gridName: pick.gridName }
-      : { engine: pick.engine, model: pick.model, effort: setup.effortFor(group, modelId) }
+      : { engine: pick.engine, model: pick.model, effort: pick.effort }
     return { order: Number(row.order), groupId: group, group: setup.titles[group], machineId, machine: setup.machineNames[machineId], ...runs,
       startsInMinutes: Number(row.start), finishesInMinutes: Number(row.end), finishAt: new Date(now + Number(row.end) * 60_000).toISOString() }
   })
   return {
     ok: true, status: answer.status, makespanMinutes: answer.makespan, cost: answer.cost,
     route: { makespanMinutes: route.makespan, cost: route.cost }, plan,
-    estimates: setup.estimates.map(id => setup.titles[id]), leftOut: setup.leftOut, ignored: setup.ignored,
+    estimates: setup.estimates.map(id => setup.titles[id]), leftOut: setup.leftOut, ignored: setup.ignored, ...(notes.length ? { notes } : {}),
     next: 'Follow the plan in order. For each group: route it as usual, then start (or assign) the plan\'s pick with the route\'s routeDecisionId '
       + 'and overrideReason "scheduler plan" when it differs from the route\'s. Groups marked as estimates were planned at medium; '
       + 'pass {"groups":{"GROUP":{"difficulty":…,"risk":…,"size":…}}} to plan them as assessed.',

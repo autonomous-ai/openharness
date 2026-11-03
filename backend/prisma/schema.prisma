@@ -1032,6 +1032,11 @@ model SuperTab {
   autonomousEnv  String
   memberIds      String[]
   invitedEmails  String[]
+  /// The domain whose people join this Swarm by themselves while its owner has auto-join on (superTabs/autoJoin.ts); absent
+  /// otherwise. Derived from the head's sharing in every commit (parts/commit.ts indexesOf).
+  autoJoinDomain String?
+  /// People who left or were removed: auto-join never adds them again. Cleared by an invitation accepted or a link join.
+  autoJoinDeclined String[]
   machineIds     String[]
   /// Machines whose host still has to clean up after their removal: read apart from the 100-Swarm host poll.
   cleanupMachineIds String[] @default([])
@@ -1044,9 +1049,17 @@ model SuperTab {
   legacyState    Json?
   /// The Workspace (SwarmWorkspace) it belongs to, also on its head part. Null only on a Swarm from before Workspaces, until migrated.
   workspaceId          String?
+  /// When its owner deleted it (superTabs/deletion.ts): from then every read and write answers as for a Swarm that does not
+  /// exist, and its owner can restore it until `purgeAt`, when the sweep removes its records and files. Absent on a live Swarm.
+  deletedAt      DateTime?
+  purgeAt        DateTime?
+  /// When the purge may try a deleted Swarm again after a pass could not finish it: newly due ones go first (purge.ts).
+  purgeRetryAt   DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
+  /// Deleted Swarms whose grace is over, oldest first: the purge sweep's read (superTabs/deletion.ts).
+  @@index([purgeAt], map: "swarm_deleted_purge")
   @@index([autonomousEnv, workspaceId])
   /// An owner's Swarms in id order: the grid poll names it (superTabs/parts/indexed.ts NAMED_INDEX.SuperTab.owner).
   @@index([autonomousEnv, ownerId, id])
@@ -1058,6 +1071,8 @@ model SuperTab {
   /// A machine's Swarms, newest first: the host poll's lookup, once a second per host (superTabs/swarmRows.ts machineSwarms).
   @@index([autonomousEnv, machineIds, updatedAt])
   @@index([autonomousEnv, cleanupMachineIds, updatedAt])
+  /// The Swarms a person at a domain joins by themselves: one read per person at most every 2 minutes (superTabs/autoJoin.ts).
+  @@index([autonomousEnv, autoJoinDomain])
 }
 
 // A terminal retains its history when removed from a roster. These bindings
@@ -1100,6 +1115,11 @@ model SuperTabMessage {
   thread          String?
   /// A thread reply also shown in the conversation's main stream.
   alsoInChat      Boolean?
+  /// A reply in a Buddy thread session's thread (superTabs/buddySessions.ts): the main Buddy never reads it.
+  buddySession    Boolean?
+  /// The project a row of a person's one Buddy chat belongs to (superTabs/buddySessions.ts lostProjectRow): a project
+  /// session's thread and a PM's private line. Hidden once its person no longer reads that project.
+  buddyProject    String?
   createdAt       DateTime @default(now())
 
   /// Pages read by (sequence, id): older rows of one command share a sequence.
@@ -1150,6 +1170,54 @@ model SuperTabReaction {
 /// How far one person has read one conversation (superTabs/readMarks.ts): the newest message sequence they have seen there.
 /// Kept out of the tab state so a read never wakes other readers, and read only by that person's own clients. The id is
 /// derived from all three, so one row per person and conversation; it only ever moves forward.
+/// A person's Activity row (superTabs/activity.ts): a reply to their message or a reaction to it, for them alone.
+model SuperTabActivity {
+  id             String    @id @map("_id")
+  tabId          String
+  /// Whom the row is for: the author of the message replied or reacted to.
+  personId       String
+  /// reply | reaction
+  kind           String
+  conversationId String
+  /// The reply, or the message reacted to.
+  messageId      String
+  /// The reply's thread root, or the reacted message's thread.
+  threadId       String?
+  /// person | agent
+  actorKind      String
+  actorId        String
+  emoji          String?
+  createdAt      DateTime
+  /// When the person saw it, on any device; unset while unread.
+  readAt         DateTime?
+  /// A reply's message sequence in its chat, so reading its thread or chat past it marks the row read (activity.ts); unset on a
+  /// reaction and on a row written before it was kept, which only opening Activity reads.
+  sequence       Int?
+  /// A reply also shown in the chat's main stream: the chat mark reads it, as well as its thread's.
+  alsoInChat     Boolean?
+
+  /// A person's rows, newest first: the list and the digest.
+  @@index([tabId, personId, createdAt])
+  /// One thread's or chat's rows of a person, for the read marks that clear them (activity.ts markActivityThreadRead).
+  @@index([tabId, personId, conversationId, threadId])
+  /// The sweep's rows past their expiry (activity.ts sweepActivity); no TTL option, which the app user cannot set (#2238).
+  @@index([createdAt])
+}
+/// A person's notification setting for one chat (superTabs/chatSettings.ts): all | mentions | muted. Their own, never shown to others.
+model SuperTabChatSetting {
+  id             String   @id @map("_id")
+  tabId          String
+  personId       String
+  conversationId String
+  /// all | mentions | muted; mentions is the default, kept a week so other devices learn of the change.
+  notify         String
+  updatedAt      DateTime
+
+  /// A person's settings: every one (a first load) or those moved since a change read's cursor; the cap's count.
+  @@index([tabId, personId, updatedAt])
+  /// The sweep's default rows untouched for a week (chatSettings.ts sweepChatSettings).
+  @@index([updatedAt])
+}
 model SuperTabReadMark {
   id             String   @id @map("_id")
   tabId          String
@@ -1161,6 +1229,61 @@ model SuperTabReadMark {
   @@index([tabId, personId, updatedAt])
   /// A mark untouched this long goes (superTabs/readMarks.ts ensureReadMarkExpiry). Declared so db push keeps the index.
   @@index([updatedAt], map: "read_mark_expiry")
+}
+
+/// How far a person has read one thread: the newest reply sequence they saw there (superTabs/readMarks.ts). Apart from
+/// SuperTabReadMark so a backend without thread marks never reads one as a conversation's mark. At most THREAD_MARK_CAP per
+/// person and Swarm; the worker's hourly sweep deletes those untouched for 180 days and those of Swarms and people gone.
+model SuperTabThreadMark {
+  id             String   @id @map("_id")
+  tabId          String
+  personId       String
+  conversationId String
+  /// The thread's root message id.
+  threadId       String
+  /// 0 on a row a Follow or Unfollow created before the person read the thread anywhere.
+  sequence       Int
+  /// The person's own choice for the thread (readMarks.ts writeThreadFollow): true Follow, false Unfollow; unset or null
+  /// leaves it to whether they started it, replied in it or were tagged in it. Never cleared by a read mark.
+  follow         Boolean?
+  updatedAt      DateTime
+
+  /// A person's marks: every one (a first load, the inbox, the cap's count and oldest) or those moved since a change read's
+  /// cursor, and each Swarm's people with marks (the sweep) (parts/indexed.ts NAMED_INDEX).
+  @@index([tabId, personId, updatedAt])
+  /// The sweep's marks untouched for 180 days (readMarks.ts sweepThreadMarks); no TTL option, which the app user cannot set.
+  @@index([updatedAt])
+}
+
+/// One thread with at least one reply, summed up as pageThreads' $facet gives it (pageReads.ts refreshThreads): rewritten in the
+/// transaction that inserts each reply, and read by root id instead of the $facet once its Swarm is backfilled
+/// (SuperTabThreadBackfill). No text; never returned as is. Kept with its messages.
+model SuperTabThread {
+  /// The root message's id.
+  id             String   @id @map("_id")
+  tabId          String
+  conversationId String
+  /// The $facet's `parts` and `mentions` for this thread (pageReads.ts ThreadFacet).
+  parts          Json
+  mentions       Json
+  updatedAt      DateTime
+
+  @@index([tabId, conversationId])
+}
+
+/// A Swarm whose thread summaries hold every reply created before `through` (threadBackfill.ts); its pages read them. Written
+/// by the singleton worker alone; id = the Swarm's id.
+model SuperTabThreadBackfill {
+  id      String   @id @map("_id")
+  through DateTime
+}
+
+/// Where a Swarm sweep reads on from between passes and releases, one row per sweep (readMarks.ts sweepThreadMarks: id
+/// "thread-marks", the last Swarm whose people check finished). Written by the singleton worker alone.
+model SuperTabSweepCursor {
+  id        String   @id @map("_id")
+  after     String
+  updatedAt DateTime
 }
 
 /// A question to one person, with options and a recommendation (backend/src/superTabs/decisions.ts). Kept out of the tab
@@ -1186,11 +1309,18 @@ model SuperTabDecision {
   note           String?
   /// The person asked left it to the PM, who took the recommended option: never shown as their own choice.
   delegated      Boolean?
+  /// "routing-reflection" for a proposal of the nightly routing reflection (costs/reflection.ts): never a Buddy's to read,
+  /// and an approved one is kept past the ledger's weeks. Absent on every other decision.
+  kind           String?
+  /// Closed unanswered because the work it was asked about is over: its task done or cancelled, or its group archived
+  /// (decisions.ts withdrawIn; Dee, 10-31). Set with answeredAt and no choice, so it waits no more, is in no list and goes
+  /// with the answered ones after the ledger's weeks. Absent on every other decision.
+  withdrawn      Boolean?
 
   @@index([tabId, personId, createdAt])
   @@index([tabId, askerAgentId, createdAt])
   @@index([tabId, projectId, createdAt])
-  /// Whether a decision waits in a conversation (decisions.ts waitingIn).
+  /// The decisions waiting in a conversation whose work ended (decisions.ts withdrawIn).
   @@index([tabId, conversationId])
 }
 
@@ -1213,6 +1343,16 @@ model SuperTabAttachment {
   createdAt      DateTime @default(now())
 
   @@index([tabId, actorKey, createdAt])
+  /// Unfinished uploads by age, for the pending-upload sweep (lib/pendingUploadSweep.ts).
+  @@index([purpose, createdAt])
+}
+
+/// One per sender per Swarm while it asks for upload links (superTabs/store.ts uploadLink): each link request writes it in the
+/// transaction that counts the sender's last hour and adds the pending upload, so two requests at once conflict and one retries,
+/// and the hourly limits hold. The pending-upload sweep (lib/pendingUploadSweep.ts) removes it an hour after its last use.
+model SuperTabUploadAllowance {
+  id String   @id @map("_id")
+  at DateTime
 }
 
 model SuperTabOperation {
@@ -1266,6 +1406,12 @@ model SuperTabDelivery {
   // Optional on older records: backend first, then Desktop's inline receipt.
   holdReason            String?
   holdSince             DateTime?
+  // A queued delivery whose claims keep answering SWARM_BUSY (prod 10-30, v1.3.71): written outside the failed claim, unset by
+  // the claim that gets in. The settle pass alarms on them and page reads show the sender (store.ts recordFailedClaim).
+  claimFailingSince     DateTime?
+  claimFailedAt         DateTime?
+  claimFailures         Int?
+  claimFailure          String?
   deliveredAt           DateTime?
   answeredAt            DateTime?
   createdAt             DateTime @default(now())
@@ -1282,6 +1428,23 @@ model SuperTabDelivery {
   /// An ended task's open deliveries, cancelled with it (store.ts releaseRuns and stopped): by [tabId, status] alone the
   /// planner sometimes walked every delivery of the Swarm (180 read for 1 in the benchmark).
   @@index([tabId, assignmentId])
+  /// Finished deliveries by their last change: the hourly compaction reads only those past 14 days (deliveryCompaction.ts).
+  @@index([status, updatedAt])
+}
+
+// One message's finished deliveries, moved here 14 days after their last change (superTabs/deliveryCompaction.ts): message
+// history and its receipts are kept forever, while delivery rows hold only the recent and open ones. Never on the message
+// row, never returned whole: a page reads each receipt as a delivery and filters it per reader (pageReads.ts pageDeliveries).
+model SuperTabReceipt {
+  id             String   @id @map("_id") // the message id
+  tabId          String
+  conversationId String
+  /// By agent id: the delivery row as it was, but for the fields above (pageReads.ts receiptFields).
+  receipts       Json
+  /// The compacted deliveries' ids, so a host's receipt read finds one by its id (pageReads.ts compactedDelivery).
+  deliveryIds    String[]
+
+  @@index([tabId, deliveryIds])
 }
 
 // One independent harness owns at most one active assignment across all Super Tabs.
@@ -1422,6 +1585,55 @@ model SuperTabRoleText {
   @@index([tabId, projectId])
 }
 
+// A project's instructions (superTabs/instructions.ts): one Markdown document outside the tab snapshot, as role texts are. The
+// snapshot keeps only the project's revision and hash, so reads stay light; hosts and the Instructions panel read the text
+// when the revision changes. id = stableId(tabId, projectId). Deleted with the project (store.ts project.delete).
+model SuperTabInstructions {
+  id        String   @id @map("_id")
+  tabId     String
+  projectId String
+  revision  Int
+  hash      String
+  text      String
+  updatedAt DateTime
+
+  @@index([tabId, projectId])
+}
+
+// Every save of a project's instructions, the current one included: its last 50 (instructions.ts MAX_REVISIONS); the save
+// that writes the 51st deletes the oldest. `writtenBy` is a person's or the coordinator's id (`writtenByKind`), `askedBy` the
+// member whose words it carries. id = stableId(tabId, projectId, revision).
+model SuperTabInstructionsRevision {
+  id            String   @id @map("_id")
+  tabId         String
+  projectId     String
+  revision      Int
+  hash          String
+  text          String
+  summary       String
+  writtenByKind String
+  writtenBy     String
+  askedBy       String?
+  at            DateTime
+
+  @@index([tabId, projectId, revision])
+}
+
+// The small things a member tells a project's coordinator, kept beside its instructions so they survive a restart or a move
+// (instructions.ts): at most 100 live per project, each up to 300 characters. An expired one is never read and is deleted
+// by the next note write of its project; all go with the project.
+model SuperTabPmNote {
+  id        String    @id @map("_id")
+  tabId     String
+  projectId String
+  text      String
+  askedBy   String
+  at        DateTime
+  expiresAt DateTime?
+
+  @@index([tabId, projectId])
+}
+
 // Configuration observations stay outside the tab snapshot so a long-running
 // assignment keeps its complete history without making every tab read grow.
 model SuperTabConfiguration {
@@ -1483,6 +1695,9 @@ model SwarmWorkspace {
   createdAt     DateTime  @default(now())
   deletedAt     DateTime?
   purgeAt       DateTime?
+  /// People this Workspace removed, whom Swarm auto-join never adds again (superTabs/autoJoin.ts). Kept past the purge of their
+  /// member row; cleared when they are added back on purpose (workspaceStore.ts addMember).
+  autoJoinDeclined String[]
 
   /// Removed rows go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
   @@index([purgeAt], map: "workspace_purge")
@@ -1995,5 +2210,25 @@ model GitHubRepositoryApproval {
   createdAt     DateTime @default(now())
 
   @@unique([autonomousEnv, tabId, repository, projectId])
+  @@index([tabId])
+  /// Whether the reader allowed a repository before, in any Swarm (github/approvals.ts `reader`).
+  @@index([autonomousEnv, approvedBy, repository])
+}
+
+/// A person GitHub said cannot push to a project's repository when they tried to allow it (github/approvals.ts): the app
+/// then asks them to send it to someone who can, instead of offering the same sign-in again. One per person, project and
+/// repository; removed when the repository is allowed for the project.
+model GitHubApprovalRefusal {
+  id            String   @id @map("_id")
+  autonomousEnv String
+  tabId         String
+  projectId     String
+  /// owner/name, lower case, as the project names it.
+  repository    String
+  userId        String
+  githubLogin   String
+  createdAt     DateTime @default(now())
+
+  @@unique([autonomousEnv, tabId, repository, projectId, userId])
   @@index([tabId])
 }

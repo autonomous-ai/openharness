@@ -7,7 +7,10 @@ import 'local_key_value_store.dart';
 /// Sign-in, machine identity, links, and preferences persist on this origin.
 /// OAuth transactions stay tab-local in DirectLogin. Storage failures propagate.
 class HarnessFileStore
-    implements BatchLocalKeyValueStore, SynchronizedLocalKeyValueStore {
+    implements
+        BatchLocalKeyValueStore,
+        SynchronizedLocalKeyValueStore,
+        KeyListingLocalKeyValueStore {
   static final HarnessFileStore shared = HarnessFileStore();
   static const _prefix = 'harness.web.v1.';
   static const _migrated = '${_prefix}persistent_credentials';
@@ -53,6 +56,17 @@ class HarnessFileStore
       for (final key in keys)
         key: web.window.localStorage.getItem('$_prefix$key'),
     };
+  }
+
+  @override
+  Future<List<String>> keys() async {
+    await _ready();
+    final local = web.window.localStorage;
+    return [
+      for (var i = 0; i < local.length; i++)
+        if (local.key(i) case final key? when key.startsWith(_prefix))
+          key.substring(_prefix.length),
+    ];
   }
 
   @override

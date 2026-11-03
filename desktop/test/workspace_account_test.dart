@@ -11,6 +11,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/widgets/setting_row.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/widgets/account_menu.dart';
+import 'package:harness/widgets/desktop_workspace_tab.dart';
 import 'package:harness/widgets/workspace_account_button.dart';
 
 import 'support/capture.dart';
@@ -92,20 +93,20 @@ void main() {
     // Where this app draws the row it carries the bell too; on a Mac that is
     // in the menu bar.
     final order = [
-      for (final control in [_search, _bell, _phone, _devices, _store, _signIn])
+      for (final control in [_search, _bell, _signIn])
         tester.getCenter(control).dx,
     ];
-    expect(
-      order,
-      [...order]..sort(),
-      reason: 'Search, Add Phone, Devices, Store, Sign in',
-    );
+    expect(order, [...order]..sort(), reason: 'Search, Notifications, Sign in');
     // The only control in the row with a word on it.
     expect(
       find.descendant(of: _signIn, matching: find.text('Sign in')),
       findsOneWidget,
     );
-    for (final icon in [_search, _phone, _devices, _store]) {
+    // They moved into the avatar menu (Quiet Swarm, screen 0).
+    for (final moved in [_phone, _devices, _store]) {
+      expect(moved, findsNothing);
+    }
+    for (final icon in [_search]) {
       expect(
         find.descendant(of: icon, matching: find.byType(Text)),
         findsNothing,
@@ -113,11 +114,8 @@ void main() {
     }
     // Icons sit side by side; nothing is drawn between them and Sign in.
     expect(tester.getRect(_search).right, tester.getRect(_bell).left);
-    expect(tester.getRect(_bell).right, tester.getRect(_phone).left);
-    expect(tester.getRect(_phone).right, tester.getRect(_devices).left);
-    expect(tester.getRect(_devices).right, tester.getRect(_store).left);
     expect(
-      tester.getRect(_signIn).left - tester.getRect(_store).right,
+      tester.getRect(_signIn).left - tester.getRect(_bell).right,
       grid.AppDesktop.controlGap,
     );
     expect(
@@ -125,7 +123,6 @@ void main() {
       1280 - grid.AppDesktop.tabBarTrailingInset,
     );
     expect(find.byTooltip('Sign in to Harness'), findsOneWidget);
-    expect(find.byTooltip('Explore Harness Store · ⌃⌘S'), findsOneWidget);
     await _capture(tester, 'tab-row-sign-in');
   }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 
@@ -141,23 +138,15 @@ void main() {
       await tester.pump();
       expect(find.byType(SignInStep), findsOneWidget);
       expect(find.text('Continue with Google'), findsOneWidget);
-      // The quiet way in is on this sign-in too — as words, not as one more
-      // button the width of the two above it.
+      // Email, GitHub and passkey are on this sign-in too, as a button of the
+      // same width as the two above it (Scholes's test, 2026-10-31: small print
+      // hid that it leads to GitHub and passkey too).
       final email = find.byKey(const Key('sign-in-step-email'));
       expect(email, findsOneWidget);
-      expect(
-        find.ancestor(
-          of: find.text('Continue with email'),
-          matching: find.byType(TextButton),
-        ),
-        findsNothing,
-      );
+      expect(find.text('Email, GitHub or passkey'), findsOneWidget);
       expect(
         tester.getSize(email).width,
-        lessThan(
-          tester.getSize(find.byKey(const Key('login-continue-google'))).width *
-              .8,
-        ),
+        tester.getSize(find.byKey(const Key('login-continue-google'))).width,
       );
 
       expect(find.byKey(const Key('login-close-button')), findsNothing);
@@ -191,7 +180,7 @@ void main() {
       1280 - grid.AppDesktop.tabBarTrailingInset,
     );
     expect(
-      tester.getRect(_avatar).left - tester.getRect(_store).right,
+      tester.getRect(_avatar).left - tester.getRect(_bell).right,
       grid.AppDesktop.controlGap,
     );
 
@@ -358,12 +347,14 @@ void main() {
     expect(_menu, findsOneWidget);
   });
 
-  testWidgets('the menu: who, then five rows, no ellipses', (tester) async {
+  testWidgets('the menu: who, then its rows, no ellipses', (tester) async {
     await _mountMenu(tester);
     expect(find.text('Dee Example'), findsOneWidget);
     expect(find.text('dee@example.com'), findsOneWidget);
     final rows = [
       'Add Phone',
+      'Devices',
+      'Store',
       'Appearance',
       'Notifications',
       'Settings',
@@ -441,7 +432,7 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
     await tester.pump();
-    expect(chosen, AccountMenuChoice.customize);
+    expect(chosen, AccountMenuChoice.devices);
 
     await _mountMenu(tester, onChoice: answer);
     await tester.tapAt(const Offset(40, 700));
@@ -471,6 +462,41 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(chosen, AccountMenuChoice.addPhone);
+  });
+
+  testWidgets('a tab that needs you is bold, with no count', (tester) async {
+    Future<TextStyle?> styleOf({required bool attention}) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: SizedBox(
+              width: 200,
+              height: 40,
+              child: DesktopWorkspaceTab(
+                id: 't',
+                label: 'lampOS',
+                selected: false,
+                attention: attention,
+                showShortcuts: ValueNotifier(false),
+                onSelect: () {},
+                onClose: () {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      return tester
+          .widget<Text>(find.byKey(const ValueKey('tab-label:t')))
+          .style;
+    }
+
+    final rest = await styleOf(attention: false);
+    final bold = await styleOf(attention: true);
+    expect(bold!.fontWeight, grid.AppFont.semibold);
+    expect(rest!.fontWeight, isNot(grid.AppFont.semibold));
+    expect(find.byType(Text), findsOneWidget);
   });
 
   test('the one letter an account wears', () {

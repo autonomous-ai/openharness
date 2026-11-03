@@ -1763,12 +1763,6 @@ int main(void) {
         CHECK(text_run("now") && !text_run("asks") && !text_run("needs you") && !text_run("stuck"));
         { int edge = 0, badge = 0; for (int i = 0; i < S.count; i++) { edge += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].w == 470 && S.runs[i].x == 190 && S.runs[i].fg != ht_rgb(PH_LETTER); badge += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].fg == ht_rgb(0x3B2E55); } CHECK(!edge && !badge); }
         CHECK(hits_of(POD_A_OPEN_NOTIF) == 1 && !strcmp(nth_hit(POD_A_OPEN_NOTIF, 0)->id, "l1"));
-        pod_model_supertab_ids(&M, ids, 0);   // the Swarm is gone from the model: the row keeps its project and draws no tag
-        fresh();
-        ph_view_inbox(&F, &N, &M, 2000);
-        CHECK(text_run("harness") && !text_prefix("\xc2\xb7"));
-        pod_model_supertab_ids(&M, ids, 1);
-        pod_model_supertab(&M, &S1, 3000);
 
         // toast_swarm_name_line
         const uint32_t t0 = 5000;
@@ -1779,10 +1773,13 @@ int main(void) {
         CHECK(text_prefix("Cable fit now counts") && S.runs[0].fg == ht_rgb(PH_TOAST_EDGE));   // the plain card, not the question's edge
         { int bars = 0, full = 0; for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == K_RECT && S.runs[i].pro_height == 7) { bars++; full += S.runs[i].w == 588 && S.runs[i].fg == ht_rgb(PH_TOAST_BAR); } CHECK(bars == 2 && full == 0); }   // a track and a shrunk fill
         CHECK(hits_of(POD_A_BANNER) == 1 && !strcmp(nth_hit(POD_A_BANNER, 0)->id, "l1"));
+
+        // inbox_swarm_row_goes_with_its_swarm: no project name, tag or text is left to draw once access is lost
         pod_model_supertab_ids(&M, ids, 0);
+        CHECK(!pod_model_unread_find(&M, "l1"));
         fresh();
-        ph_toast(&F, &M, u, t0, t0 + 1000);
-        CHECK(text_run("harness") && !text_prefix("\xc2\xb7"));
+        ph_view_inbox(&F, &N, &M, 2000);
+        CHECK(!text_run("harness") && !text_prefix("\xc2\xb7") && !text_prefix("Cable fit now counts") && hits_of(POD_A_OPEN_NOTIF) == 0);
     }
 
     {   // The Buddy's avatar (ph_avatar.c): the desktop's 15-bit agent pattern, mirrored, on a disc.

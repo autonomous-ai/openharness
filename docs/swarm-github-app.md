@@ -21,7 +21,7 @@ On GitHub, open the organization, then **Settings → Developer settings → Git
 
 | Field | Value |
 | --- | --- |
-| GitHub App name | A name of your choice, for example `Harness for Acme`. GitHub needs it to be unique. |
+| GitHub App name | `Harness` where it is free (GitHub needs it to be unique). Its address and its bot account follow it (`github.com/apps/harness`, `harness[bot]`): renaming the app later changes both, so set `GITHUB_APP_SLUG` again. |
 | Homepage URL | `https://harness.autonomous.ai` |
 | Callback URL, Setup URL | Leave empty. |
 | Webhook → Active | Clear it. Harness subscribes to no events. |
@@ -216,8 +216,11 @@ address. The `commit-msg` hook adds any missing trailers to a message written in
 editor. Trailers already in the message are not added again, so an amend keeps one
 of each. An empty message still aborts the commit.
 
-In a Harness Team account, the commits themselves are by the app's bot account
-(`<app>[bot] <id+<app>[bot]@users.noreply.github.com>`), as its pull requests are: the
+Every such commit also carries `Co-authored-by: Harness by Autonomous <noreply@autonomous.ai>`.
+
+In a Harness Team account, the commits themselves are by `Harness by Autonomous <noreply@autonomous.ai>`. No GitHub
+account owns that address, so GitHub links them to nobody; a Team agent's branch is told apart by who pushed it, from
+GitHub's activity log, which names the app's bot account. The
 account has no git identity of its own, and its commits read `Harness Team
 <harnessteam@<host>.local>` before. The token response names it as `commitAs` for a
 team account only; the daemon writes it to the session's `gitconfig`, which the
@@ -227,9 +230,14 @@ The `prepare-commit-msg` hook runs even with `--no-verify`. Two things leave a c
 without trailers: plumbing such as `git commit-tree`, and a command that sets its own
 `-c core.hooksPath`.
 
-The agent is told to start each pull request body with `Requested by <owner's email>
-through Harness.` The token response also carries `pullRequestLine` with the owner's
-name. This line depends on the agent following its instructions. Harness does not
+Each task's message ends with `Start each pull request body with: Requested by <email>
+through Harness.`, naming the person whose ask the task is: its group's requester while
+they can still read the project, otherwise the project's owner (`requestedByLine` in
+`backend/src/superTabs/projects.ts`). It comes with every task, so an agent reused for
+another person's task names that person; the start prompt names nobody. It is given
+for another person's project (its owner is not the machine's), not for a review. Who asked
+changes no token and no trailer: the token response's `pullRequestLine` and the
+co-author still name the project's owner, so members' emails do not enter git history. This line depends on the agent following its instructions. Harness does not
 assign the pull request, because it does not know the person's GitHub login.
 
 ## The token endpoint

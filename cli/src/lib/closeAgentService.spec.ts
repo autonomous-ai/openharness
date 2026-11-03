@@ -1,6 +1,6 @@
 import { screenFor } from '../engines/screens.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BUDDY_PROTECTED_DETAIL, CloseAgentService, LEAD_PROTECTED_DETAIL, inspectCloseActivity as inspectCloseReading, type CloseActivity, type CloseAgentServiceDeps, type AgentCloseRequest } from './closeAgentService.js'
+import { BUDDY_PROTECTED_DETAIL, CloseAgentService, LEAD_PROTECTED_DETAIL, LEAD_SWITCHING_DETAIL, inspectCloseActivity as inspectCloseReading, type CloseActivity, type CloseAgentServiceDeps, type AgentCloseRequest } from './closeAgentService.js'
 import { registry, type RegisteredSession } from './registry.js'
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -62,6 +62,63 @@ it.each(['now', 'idle', 'after_task'] as const)('refuses to close a Swarm Lead (
   expect(deps.activity).not.toHaveBeenCalled()
   expect(deps.stop).not.toHaveBeenCalled()
   expect(await svc.request(request('inspect'))).toEqual({ activity: expect.any(String) })
+  svc.dispose()
+})
+
+// Dee, 11-01: a Product Manager's engine is switched from its pane, as any pane's. Only the `now` close of the switch its owner
+// prepared passes the Lead guard (superTabs/leadSwitch.ts decides); every other close of it is refused with today's words.
+it('hands a Lead guard the switch only a now close names, and stops the Lead its switch was let through for', async () => {
+  const CHANGE = 'c'.repeat(32)
+  const leadProtected = vi.fn((id: string, changeId?: string) => id === row.agentId && changeId !== CHANGE)
+  const leadSwitchEnded = vi.fn()
+  const svc = new CloseAgentService({ ...deps, leadProtected, leadSwitchEnded })
+  for (const mode of ['idle', 'after_task'] as const) {
+    expect(await svc.request({ ...request(mode), changeId: CHANGE })).toEqual({ error: 'LEAD_PROTECTED', detail: LEAD_PROTECTED_DETAIL })
+  }
+  expect(leadProtected.mock.calls.map(call => call[1])).toEqual([undefined, undefined])
+  expect(await svc.request(request('now'))).toEqual({ error: 'LEAD_PROTECTED', detail: LEAD_PROTECTED_DETAIL })
+  expect(LEAD_PROTECTED_DETAIL).toBe('This harness is the Product Manager of a Swarm project. Delete its project first to stop it.')
+  expect(deps.stop).not.toHaveBeenCalled()
+  expect(await svc.request({ ...request('now'), changeId: CHANGE })).toEqual({ closed: true })
+  expect(leadProtected).toHaveBeenLastCalledWith(row.agentId, CHANGE)
+  expect(deps.stop).toHaveBeenCalledTimes(1)
+  // The switch rides with that one stop, so the core's stop guard lets it, and only it, through (security review 1 of #2493).
+  expect(vi.mocked(deps.stop).mock.calls[0][1]).toMatchObject({ leadSwitch: CHANGE })
+  // Its end is told once, stopped; the refused closes before it told nothing (security review 2 of #2493).
+  expect(leadSwitchEnded.mock.calls).toEqual([[row.agentId, CHANGE, true]])
+  svc.dispose()
+})
+
+// Security review 2 of #2493: a switch's close that fails ends its pass too, so nothing stays open after it.
+it('tells a switch\'s end when its close fails or throws, unstopped, and no stop carries a switch but its own', async () => {
+  const CHANGE = 'e'.repeat(32)
+  const leadSwitchEnded = vi.fn()
+  vi.mocked(deps.checkpoint).mockRejectedValueOnce(new Error('disk full'))
+  const svc = new CloseAgentService({ ...deps, leadProtected: () => false, leadSwitchEnded })
+  expect(await svc.request({ ...request('now'), changeId: CHANGE })).toMatchObject({ error: expect.any(String) })
+  expect(leadSwitchEnded).toHaveBeenLastCalledWith(row.agentId, CHANGE, false)
+  vi.spyOn(svc as unknown as { execute: () => Promise<unknown> }, 'execute').mockRejectedValueOnce(new Error('gone'))
+  await expect(svc.request({ ...request('now'), changeId: CHANGE })).rejects.toThrow('gone')
+  expect(leadSwitchEnded).toHaveBeenLastCalledWith(row.agentId, CHANGE, false)
+  // A close that names no switch tells nothing and hands its stop none.
+  leadSwitchEnded.mockClear()
+  expect(await svc.request(request('now'))).toEqual({ closed: true })
+  expect(leadSwitchEnded).not.toHaveBeenCalled()
+  expect(vi.mocked(deps.stop).mock.calls.at(-1)![1]).not.toHaveProperty('leadSwitch')
+  svc.dispose()
+})
+
+// A second switch from another window: the first may have stopped the Lead already, where a close is answered closed and
+// would start a second replacement. Refused before the agent is even looked at.
+it('refuses a Lead switch while another runs, before the agent is looked at', async () => {
+  const leadSwitching = vi.fn((_id: string, changeId: string) => changeId === 'd'.repeat(32))
+  const svc = new CloseAgentService({ ...deps, leadSwitching, closedAlready: () => true })
+  registry.removeAgent(row.agentId)
+  expect(await svc.request({ ...request('now'), changeId: 'd'.repeat(32) })).toEqual({ error: 'LEAD_SWITCHING', detail: LEAD_SWITCHING_DETAIL })
+  // Not a switch: answered as before.
+  expect(await svc.request({ ...request('idle'), changeId: 'd'.repeat(32) })).toEqual({ closed: true })
+  expect(await svc.request(request('now'))).toEqual({ closed: true })
+  expect(leadSwitching).toHaveBeenCalledTimes(1)
   svc.dispose()
 })
 

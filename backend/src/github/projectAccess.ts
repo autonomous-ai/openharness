@@ -12,14 +12,16 @@ export type ProjectGitHubAccess =
   | { state: 'not-github'; repositoryUrl: string }
   | { state: 'covered'; repository: string }
   | { state: 'not-installed'; repository: string; installUrl: string | null; canApprove: boolean }
-  | { state: 'not-approved'; repository: string; canApprove: boolean; approvedFor?: string[] }
+  | { state: 'not-approved'; repository: string; canApprove: boolean; approvedFor?: string[]; you?: { canPush: boolean; githubLogin: string } }
   | { state: 'unknown'; repository: string }
 
 /** [app]: this server's GitHub App, null when it has none. [approved]: whether someone who can push to the repository
  *  approved it for this project (github/approvals.ts). [canApprove]: this server has the app's sign-in to approve with.
  *  [refresh]: a person asked to check again. */
 export async function projectGitHubAccess(app: Pick<GitHubApp, 'resolve' | 'forget' | 'installUrl' | 'currentFullName'> | null, repositoryUrl: string | null,
-  approval: { approved: (repository: string) => Promise<boolean>; canApprove: boolean; approvedFor?: (repository: string) => Promise<string[]> },
+  approval: { approved: (repository: string) => Promise<boolean>; canApprove: boolean; approvedFor?: (repository: string) => Promise<string[]>
+    /** What GitHub last said about the reader on it (github/approvals.ts `reader`). */
+    you?: (repository: string) => Promise<{ canPush: boolean; githubLogin: string } | null> },
   refresh = false): Promise<ProjectGitHubAccess> {
   if (!app) return { state: 'unavailable' }
   if (!repositoryUrl) return { state: 'no-repository' }
@@ -36,7 +38,9 @@ export async function projectGitHubAccess(app: Pick<GitHubApp, 'resolve' | 'forg
     if (await approval.approved(repository.fullName.toLowerCase())) return { state: 'covered', repository: shown }
     // The reader's other projects it is approved for: approving is per project, so a second one asks again (2026-10-28).
     const approvedFor = await approval.approvedFor?.(repository.fullName.toLowerCase()) ?? []
-    return { state: 'not-approved', repository: shown, canApprove: approval.canApprove, ...(approvedFor.length ? { approvedFor } : {}) }
+    const you = await approval.you?.(repository.fullName.toLowerCase()) ?? null
+    return { state: 'not-approved', repository: shown, canApprove: approval.canApprove, ...(approvedFor.length ? { approvedFor } : {}),
+      ...(you ? { you } : {}) }
   } catch (error) {
     // Wrong app credentials are the server's to fix and say so; GitHub not answering is never read as covered.
     if (error instanceof GitHubAppError && error.code === 'GITHUB_APP_MISCONFIGURED') throw error

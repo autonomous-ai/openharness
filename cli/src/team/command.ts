@@ -13,7 +13,8 @@
  * Nothing here falls back to the owner: a team account that is missing, signed out or not private is reported, and
  * team work does not run as the owner instead.
  */
-import type { AuthSession } from '../lib/authSession.js'
+import type { AgentTmpState } from '../lib/agentTmp.js'
+import { sameSignIn, type AuthSession } from '../lib/authSession.js'
 import { SIGN_OUT_BUTTON_FLAG, type SignOutAsked } from '../lib/signOut.js'
 import type { AdminVia, RunAdmin } from './admin.js'
 import { teamConfigJson, type TeamConfig } from './config.js'
@@ -25,7 +26,7 @@ import {
 } from './layout.js'
 import type { PrivacyResult, TeamStatus } from './privacy.js'
 import {
-  LINUX_NO_SYSTEMD, LINUX_NO_TMUX, REMOVE_REFUSED, TEAM_COMPUTER_LINE, buildLinuxRemoveScript, buildLinuxSetupScript, buildRemoveScript,
+  LINUX_NO_SYSTEMD, LINUX_NO_TMUX, REMOVE_REFUSED, buildLinuxRemoveScript, buildLinuxSetupScript, buildRemoveScript,
   buildSetupScript, teamLaunchdPlist, teamSystemdUnit, type RemoveScriptInput, type SetupScriptInput, type TeamPlistInput,
 } from './script.js'
 import { windowsTeamPaths } from './windowsLayout.js'
@@ -156,6 +157,8 @@ export interface TeamCommandDeps {
   writeStatus(path: string, update: Partial<Omit<TeamStatus, 'version'>>): void
   accountExists(user: string): Promise<boolean>
   jobState(label: string): Promise<JobState>
+  /** The owner's agents' private temporary folder (lib/agentTmp.ts); absent on Windows, which has its own per account. */
+  agentTmp?(): AgentTmpState
 
   /** The team account's side: its handed-over code, the privacy check, and its own Claude Code and Codex (./engines.ts). */
   takeHandoff(path: string): string | null
@@ -473,12 +476,14 @@ async function status(deps: TeamCommandDeps, json: boolean): Promise<number> {
   const homeMode = deps.mode(ownerHome)
   // Task Scheduler keeps its definitions where a standard owner cannot look: what it says of the task is what is there.
   const plistPresent = here.windows ? job.loaded : deps.exists(serviceFile)
+  const agentTmp = here.windows ? null : deps.agentTmp?.() ?? null
   if (json) {
     deps.out(JSON.stringify({
       account: exists, user, realName: config?.realName ?? TEAM_REAL_NAME, home, homePresent: deps.exists(home),
       label, plist: serviceFile, plistPresent, job, port: config?.port ?? TEAM_PORT,
       config: config ? layout.configFile : null, ownerHomeMode: homeMode === null ? null : homeMode.toString(8),
-      signIn: report?.signIn ?? null, privacy: report?.privacy ?? null, engines: report?.engines ?? null, dedicated,
+      signIn: report?.signIn ?? null, privacy: report?.privacy ?? null, engines: report?.engines ?? null, purges: report?.purges ?? null, dedicated,
+      agentTmp: agentTmp && { ...agentTmp, mode: agentTmp.mode === null ? null : agentTmp.mode.toString(8) },
     }))
     return 0
   }
@@ -498,7 +503,13 @@ async function status(deps: TeamCommandDeps, json: boolean): Promise<number> {
   deps.out(here.windows
     ? `  your home   ${ownerHome} · ${privacy?.passed ? 'private ✓' : '? not proven private yet: the privacy check says why; harness team setup takes broad access off it again'}`
     : `  your home   ${ownerHome} · mode ${homeMode === null ? 'unknown' : homeMode.toString(8)}${homePrivate ? ' ✓' : ' ✗ should be 700: harness team setup makes it private again'}`)
+  if (agentTmp) {
+    deps.out(`  temp files  ${agentTmp.path} · ${agentTmp.state === 'not-made' ? 'made when your next agent starts'
+      : agentTmp.state === 'private' ? 'mode 700 ✓'
+      : `${agentTmp.mode === null ? 'not a private folder' : `mode ${agentTmp.mode.toString(8)}`} ✗ your agents may use the shared /tmp: your next agent makes it private, or says why not in the daemon's log`}`)
+  }
   for (const line of engineLines(report?.engines, (at) => ago(now, at), deps.platform)) deps.out(line)
+  for (const line of purgeLines(report?.purges, (at) => ago(now, at))) deps.out(line)
   deps.out('')
   deps.out('  What setup made:')
   for (const line of madeLines(here, owner, ownerHome)) deps.out(`  ${line}`)
@@ -506,6 +517,19 @@ async function status(deps: TeamCommandDeps, json: boolean): Promise<number> {
   deps.out('  undo: harness team remove')
   for (const line of byHandLines(here, owner, ownerHome)) deps.out(line)
   return 0
+}
+
+/** What `harness team status` says of ended sessions' data not deleted yet (superTabs/inCore/teamPurge.ts): nothing when none
+ *  waits. It holds the account, so this says why it takes no other project's work. */
+function purgeLines(purges: TeamStatus['purges'], ago: (at: number) => string): string[] {
+  if (purges?.unreadable) {
+    return ['  purges      ✗ the record of what is still to delete can\'t be read: the Team daemon\'s log says where it was kept.',
+      '              Until its owner clears it, this account takes no other project\'s work.']
+  }
+  if (!purges?.pending) return []
+  const count = purges.pending === 1 ? '1 ended session\'s' : `${purges.pending} ended sessions'`
+  return [`  purges      ◍ ${count} data not deleted yet (checked ${ago(purges.at)}). The daemon keeps trying by itself;`,
+    '              this account takes no other project\'s work until it has.']
 }
 
 /** A terminal app's bundle id as macOS gives it to what the app starts, for the one command that asks again. */
@@ -531,23 +555,24 @@ function refusedLines(deps: TeamCommandDeps, inTerminal: boolean): string[] {
   ]
 }
 
-interface MachineRow { machineId: string; computerId?: string | null; sessionKind?: string | null }
-
-/** A computer id as the backend keeps it (backend lib/deviceAuth.ts `normalizeComputerId`): lower case, no dashes. */
-const computerKey = (id: string | null | undefined): string => (id ?? '').trim().toLowerCase().replace(/-/g, '')
+interface MachineRow { machineId: string; sessionKind?: string | null; hostMachineId?: string | null }
 
 /**
- * The team account's computer, off the owner's Harness account: the backend ends the team sign-in bound to it with it.
- * Only after the account is gone: a removal macOS refuses must leave the account signed in and running. Only a team
- * machine with that computer id, never this computer's own.
+ * This computer's team machine, off the owner's Harness account: the backend ends the team sign-in bound to it with it.
+ * Only after the account is gone: a removal macOS refuses must leave the account signed in and running.
+ *
+ * Found by the Mac the backend recorded for it, from the owner's sign-in when setup minted the code (`hostMachineId`), which
+ * nothing a team session sends can set. Never by a computer id from the Team account's files: a Team agent could write there
+ * the id of the owner's team machine on another Mac, and this would remove that one (audit L3). A team machine with no Mac
+ * recorded stays, and the person is told to remove it.
  */
-async function forgetTeamComputer(deps: TeamCommandDeps, computerId: string): Promise<{ removed: number } | { error: string }> {
+async function forgetTeamComputer(deps: TeamCommandDeps): Promise<{ removed: number } | { error: string }> {
   if (!deps.session()) return { error: 'this computer is not signed in to Harness' }
   try {
     const { session, headers } = await deps.auth()
+    if (!session.machineId) return { removed: 0 }
     const { machines = [] } = await deps.get<{ machines?: MachineRow[] }>('/api/machines', headers)
-    const key = computerKey(computerId)
-    const ours = machines.filter((m) => key !== '' && computerKey(m.computerId) === key && m.sessionKind === 'team' && m.machineId !== session.machineId)
+    const ours = machines.filter((m) => m.sessionKind === 'team' && m.hostMachineId === session.machineId && m.machineId !== session.machineId)
     for (const machine of ours) await deps.delete(`/api/machines/${encodeURIComponent(machine.machineId)}`, headers)
     return { removed: ours.length }
   } catch (error) {
@@ -598,17 +623,16 @@ async function remove(deps: TeamCommandDeps, json: boolean): Promise<number> {
     return fail(deps, json, 'REMOVE_FAILED', `The Harness Team account was not fully removed: ${sentence(result.message)} Run \`harness team remove\` again.`)
   }
   try { deps.setupDecision?.decline() } catch { /* only Desktop's offer reads it */ }
-  const computerId = TEAM_COMPUTER_LINE.exec(result.stdout)?.[1] ?? null
-  const forgotten = computerId ? await forgetTeamComputer(deps, computerId) : null
+  const forgotten = await forgetTeamComputer(deps)
   if (json) {
     deps.out(JSON.stringify({ ok: true, removed: true, computer: forgotten }))
     return 0
   }
   deps.out(`✓ Removed the Harness Team account (${TEAM_USER}), ${layout.home} and the daemon ${layout.service.label}.`)
   const teamMachine = `"${deps.hostname().slice(0, 60)} · Team"`
-  if (forgotten && 'removed' in forgotten && forgotten.removed > 0) deps.out('✓ Took its computer off your Harness account, which signs it out.')
-  else if (forgotten && 'error' in forgotten) deps.out(`! Its computer is still on your Harness account (${forgotten.error}). Remove ${teamMachine}: harness machines`)
-  else if (!computerId) deps.out(`  If its computer, ${teamMachine}, is still on your Harness account, remove it there: harness machines`)
+  if ('error' in forgotten) deps.out(`! Its computer is still on your Harness account (${forgotten.error}). Remove ${teamMachine}: harness machines`)
+  else if (forgotten.removed > 0) deps.out('✓ Took its computer off your Harness account, which signs it out.')
+  else deps.out(`  If its computer, ${teamMachine}, is still on your Harness account, remove it there: harness machines`)
   // Windows may hold the profile's registry files until it restarts (./windowsScript.ts remove, step 5): said as it said it.
   const later = result.stdout.split('\n').find((line) => line.includes('is removed at the next restart'))
   if (later) deps.out(`  ${later.replace(/^harness: /, '').trim()}.`)
@@ -721,10 +745,11 @@ async function recordTeamMachine(deps: TeamCommandDeps, label: string, log: (lin
       { computerId: session.computerId, label }, headers)
     const machineId = answer?.machine?.machineId
     if (typeof machineId !== 'string' || !machineId) throw new Error('Harness answered without a machine id')
-    // A refresh may have rewritten the session meanwhile: the machine id goes into the newest one.
+    // A refresh may have rewritten the session meanwhile: the machine id goes into the newest one, while it is still the sign-in
+    // this asked for. A new owner's sign-in drops it, and its own start looks up its own.
     const kept = await deps.updateSession((latest) => latest.kind !== 'team' || latest.computerId !== session.computerId
-      || latest.machineId === machineId ? null : { ...latest, machineId, updatedAt: deps.now() })
-    if (kept?.kind !== 'team' || kept.computerId !== session.computerId) return
+      || !sameSignIn(latest, session.signInEpoch) || latest.machineId === machineId ? null : { ...latest, machineId, updatedAt: deps.now() })
+    if (kept?.machineId !== machineId) return
     log(`runs as machine ${machineId}`)
   } catch (error) {
     log(`could not look up this account's machine yet (${(error as Error).message}); the next start tries again`)

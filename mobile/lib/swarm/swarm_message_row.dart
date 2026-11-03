@@ -11,97 +11,160 @@ import 'package:harness_mobile/shared/theme/app_ink.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
+export 'swarm_file_links.dart' show swarmAttachmentHost, swarmAttachmentLink;
+export 'swarm_message_style.dart'
+    show swarmChatCard, swarmChatHair, swarmChatText;
+
 import 'model.dart';
 import 'swarm_attachment.dart';
 import 'swarm_code_block.dart';
+import 'swarm_file_links.dart';
+import 'swarm_message_text.dart';
+import 'swarm_message_style.dart';
 import 'swarm_face.dart';
 import 'swarm_ship_row.dart';
+import 'swarm_special_rows.dart';
+import 'swarm_task_line.dart';
 
-/// The host the backend serves message files from: a link anywhere else is
-/// not opened (the desktop's `attachmentLink`).
-const swarmAttachmentHost = String.fromEnvironment(
-  'SUPER_TAB_ATTACHMENTS_HOST',
-  defaultValue: 'cdn.harness.autonomous.ai',
+/// `@name` or `@name@domain`, as people tag in chat. Never right after a
+/// letter, digit, `@` or `/` (an address, a path, a link), and a name never
+/// ends in a dot: `@dee.` closes a sentence. The backend and the desktop read
+/// tags by this same rule; test/fixtures/tag_fixture.json is the table all
+/// three pass.
+final _tag = RegExp(
+  r'(?<![\w@/])@([\w+-]+(?:\.[\w+-]+)*)(@[\w-]+(?:\.[\w-]+)+)?',
 );
+final _oneWord = RegExp(r'^[\w+-]+(?:\.[\w+-]+)*$');
+final _fence = RegExp(r'^ {0,3}(`{3,}|~{3,})');
+final _codeSpan = RegExp(r'(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)');
+final _linkTarget = RegExp(r'\]\([^)\]]*\)');
+final _bareLink = RegExp(r'\b(?:https?://|www\.)\S+', caseSensitive: false);
+String _blank(String text) => text.replaceAll(RegExp(r'[^\n]'), ' ');
 
-/// [url] as a link to open, or null unless it is https on
-/// [swarmAttachmentHost]: a message's url is whatever its sender's row says.
-Uri? swarmAttachmentLink(String url) {
-  final link = Uri.tryParse(url);
-  return link != null &&
-          link.scheme == 'https' &&
-          link.host == swarmAttachmentHost
-      ? link
-      : null;
+/// [text] with what is never a tag blanked out, each character kept in its
+/// place: fenced and indented code, code spans, bare links and link
+/// destinations.
+String _prose(String text) {
+  final lines = text.split('\n');
+  String? fence;
+  var indented = false;
+  for (var i = 0; i < lines.length; i++) {
+    final line = lines[i];
+    if (fence != null) {
+      final close = _fence.firstMatch(line);
+      if (close != null &&
+          close[1]![0] == fence[0] &&
+          close[1]!.length >= fence.length &&
+          line.substring(close[0]!.length).trim().isEmpty) {
+        fence = null;
+      }
+      lines[i] = _blank(line);
+      continue;
+    }
+    final open = _fence.firstMatch(line);
+    if (open != null &&
+        !(open[1]![0] == '`' &&
+            line.substring(open[0]!.length).contains('`'))) {
+      fence = open[1];
+      lines[i] = _blank(line);
+      indented = false;
+      continue;
+    }
+    // Indented code starts after a blank line (or the first line) and runs
+    // while its lines stay indented.
+    final startsCode =
+        RegExp(r'^( {4}|\t)').hasMatch(line) &&
+        line.trim().isNotEmpty &&
+        (indented || i == 0 || lines[i - 1].trim().isEmpty);
+    indented = startsCode || (indented && line.trim().isEmpty);
+    if (startsCode) lines[i] = _blank(line);
+  }
+  String blanked(Match m) => _blank(m[0]!);
+  return lines
+      .join('\n')
+      .replaceAllMapped(_codeSpan, blanked)
+      .replaceAllMapped(_linkTarget, blanked)
+      .replaceAllMapped(_bareLink, blanked);
 }
 
-/// The chat's prose in the app's own face, as prototype v2 draws it: the
-/// messages, quotes, names and the field. Times, roles and day dividers stay
-/// in the terminal's.
-TextStyle swarmChatText(
-  double size, {
-  Color? color,
-  FontWeight weight = FontWeight.w400,
-  double height = 1.35,
-}) => TextStyle(
-  fontSize: size,
-  height: height,
-  color: color ?? AppPalette.textPrimary,
-  fontWeight: weight,
-);
-
-/// The hairline around the chat's cards, picker and field.
-Color swarmChatHair(Tty tty) => tty.text.withValues(alpha: 0.12);
-
-/// The ground of a card in the chat: a decision, the picker, a file.
-Color swarmChatCard(Tty tty) =>
-    Color.alphaBlend(tty.text.withValues(alpha: 0.05), tty.ground);
-
-/// The names an @mention in a message is marked for, as the desktop and the
-/// prototype mark them: the pattern that finds them is made once for every
-/// message drawn with them.
+/// The names an @mention in a message is marked for, as the desktop marks
+/// them: the chat's agents here, and per message the people it tags. A name
+/// of one word is marked where the shared tag rule finds it; an agent's name
+/// of several words by the pattern made once for every message drawn with it.
 class SwarmMentions {
   SwarmMentions(List<String> names)
     : names = List.unmodifiable(names),
-      _pattern = names.isEmpty
+      _words = {
+        for (final name in names)
+          if (_oneWord.hasMatch(name)) name.toLowerCase(),
+      },
+      _pattern = names.every(_oneWord.hasMatch)
           ? null
           : RegExp(
-              // Longest first, so "@Nova2" is not read as "@Nova".
-              '(?<![\\w@])@(?:${([...names]..sort((a, b) => b.length.compareTo(a.length))).map(RegExp.escape).join('|')})(?![\\w])',
+              // Longest first, so "@Nova 2" is not read as "@Nova".
+              '(?<![\\w@/])@(?:${([for (final name in names)
+                if (!_oneWord.hasMatch(name)) name]..sort((a, b) => b.length.compareTo(a.length))).map(RegExp.escape).join('|')})(?![\\w])',
               caseSensitive: false,
             );
 
   final List<String> names;
+  final Set<String> _words;
   final RegExp? _pattern;
 
-  /// [text] with each @mention of one of [names] marked.
-  TextSpan span(String text, TextStyle style) {
-    final pattern = _pattern;
-    if (pattern == null || !text.contains('@')) {
+  /// [text] with each @mention of one of [names] or [tagged] marked. A tag by
+  /// full address is a tagged person's only when it is their address in
+  /// [addresses] (by username), as the backend matches it to their email.
+  TextSpan span(
+    String text,
+    TextStyle style, {
+    Iterable<String> tagged = const [],
+    Map<String, String> addresses = const {},
+  }) {
+    if (!text.contains('@') || (names.isEmpty && tagged.isEmpty)) {
       return TextSpan(text: text, style: style);
     }
-    return TextSpan(style: style, children: _marked(text, pattern));
+    final words = {..._words, for (final name in tagged) name.toLowerCase()};
+    final known = {
+      for (final MapEntry(:key, :value) in addresses.entries)
+        key.toLowerCase(): value.toLowerCase(),
+    };
+    bool marks(Match match) {
+      final name = match[1]!.toLowerCase();
+      if (match[2] == null) return words.contains(name);
+      if (known.containsValue('$name${match[2]!.toLowerCase()}')) return true;
+      return words.contains(name) && !known.containsKey(name);
+    }
+
+    final prose = _prose(text);
+    final ranges = [
+      for (final match in _tag.allMatches(prose))
+        if (marks(match)) (match.start, match.end),
+      if (_pattern case final pattern?)
+        for (final match in pattern.allMatches(prose)) (match.start, match.end),
+    ]..sort((a, b) => a.$1.compareTo(b.$1));
+    if (ranges.isEmpty) return TextSpan(text: text, style: style);
+    return TextSpan(style: style, children: _marked(text, ranges));
   }
 }
 
-List<InlineSpan> _marked(String text, RegExp pattern) {
+List<InlineSpan> _marked(String text, List<(int, int)> marks) {
   final spans = <InlineSpan>[];
   var at = 0;
-  for (final match in pattern.allMatches(text)) {
-    if (match.start > at) {
-      spans.add(TextSpan(text: text.substring(at, match.start)));
-    }
+  for (final (start, end) in marks) {
+    if (start < at) continue;
+    if (start > at) spans.add(TextSpan(text: text.substring(at, start)));
     spans.add(
       TextSpan(
-        text: match[0],
+        text: text.substring(start, end),
+        // The desktop's tag pill (message_text.dart).
         style: TextStyle(
           color: AppPalette.accentOnSurface,
-          backgroundColor: AppPalette.accentOnSurface.withValues(alpha: 0.13),
-          fontWeight: FontWeight.w500,
+          backgroundColor: AppSurface.accentWash,
+          fontWeight: FontWeight.w600,
         ),
       ),
     );
-    at = match.end;
+    at = end;
   }
   if (at < text.length) spans.add(TextSpan(text: text.substring(at)));
   return spans;
@@ -192,7 +255,11 @@ class SwarmMessageRow extends StatelessWidget {
     required this.name,
     required this.look,
     required this.role,
+    this.pm = false,
     required this.mentions,
+    this.tagged = const [],
+    this.taggedAddresses = const {},
+    this.readerId = '',
     required this.grouped,
     required this.lit,
     this.followed = false,
@@ -205,8 +272,13 @@ class SwarmMessageRow extends StatelessWidget {
     this.reactions,
     this.thread,
     this.below,
+    this.receipt,
     this.card,
     this.onLongPress,
+    this.onOpenTask,
+    this.onOpenProposal,
+    this.references = const {},
+    this.onOpenConversation,
   });
 
   final SuperTabMessage message;
@@ -216,7 +288,22 @@ class SwarmMessageRow extends StatelessWidget {
   final SwarmLook look;
   final String? role;
 
+  /// Its author is its project's coordinator ([SuperTabSnapshot.isLead]),
+  /// whatever its role is called: it wears manager blue.
+  final bool pm;
+
   final SwarmMentions mentions;
+
+  /// The usernames of the people [message] tags: each reads as a pill where
+  /// the text says it.
+  final List<String> tagged;
+
+  /// Their addresses, by username: a tag by full address is theirs only when
+  /// it is this one.
+  final Map<String, String> taggedAddresses;
+
+  /// Who reads it: a message that tags them stands out.
+  final String readerId;
   final bool grouped, lit, actions;
 
   /// The row a quote led to: lit, then fading. Only it animates — a fade on
@@ -224,6 +311,19 @@ class SwarmMessageRow extends StatelessWidget {
   final bool followed;
   final Widget? quote;
   final VoidCallback onTap;
+
+  /// Opens a task held by the current reader; null for an unavailable target.
+  final VoidCallback? onOpenTask;
+
+  /// Opens a Buddy's proposal's thread: given in the chat, where a proposal is
+  /// one line; none in its thread, where it reads whole.
+  final VoidCallback? onOpenProposal;
+
+  /// The numbered conversations `#N` links in a message can open.
+  final Map<int, String> references;
+
+  /// Opens a conversation resolved from [references].
+  final ValueChanged<String>? onOpenConversation;
 
   /// Null where the person cannot post, or in the thread itself.
   final VoidCallback? onReply;
@@ -249,17 +349,62 @@ class SwarmMessageRow extends StatelessWidget {
   /// PM's private line answered in the project chat.
   final Widget? below;
 
-  /// Null where the person cannot post: picks a reaction.
+  /// Under all that: where the delivery of the person's newest message stands
+  /// (swarm_message_receipt.dart); null for every other message.
+  final Widget? receipt;
+
+  /// Opens its long-press sheet: reactions, Copy link to message.
   final VoidCallback? onLongPress;
+
+  /// One of the message's files, with what asks for a fresh link to it
+  /// (swarm_file_links.dart): the chat's Swarm, this message and the file.
+  Widget _attachment(BuildContext context, SuperTabAttachment file) {
+    final ref = SwarmFileRef(
+      file,
+      conversationId: message.conversationId,
+      messageId: message.id,
+      reader: SwarmFiles.of(context),
+    );
+    final link = ref.current;
+    return SwarmAttachment(
+      file: file,
+      link: link,
+      fileRef: ref,
+      chip: SwarmFileChip(file: file, link: link, fileRef: ref),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    if (swarmIsTaskLine(message)) {
+      return SwarmTaskLine(
+        key: ValueKey('swarm-message-${message.id}'),
+        message: message,
+        readerId: readerId,
+        onOpen: onOpenTask,
+      );
+    }
     // A ship line is a card, not a message from its author.
     if (swarmShips(message)) {
       return SwarmShipRow(
         key: ValueKey('swarm-message-${message.id}'),
         message: message,
       );
+    }
+    // Notes that are not chat from their author, as Desktop draws them.
+    final special = ValueKey('swarm-message-${message.id}');
+    if (message.proposalOwnerId != null && onOpenProposal != null) {
+      return SwarmProposalLine(
+        key: special,
+        message: message,
+        onOpen: onOpenProposal!,
+      );
+    }
+    if (message.terminalEvent) {
+      return SwarmTerminalRow(key: special, message: message);
+    }
+    if (message.route case final route?) {
+      return SwarmRouteRow(key: special, message: message, route: route);
     }
     // A row kept as it was is not built again: it follows a theme or font
     // change itself.
@@ -278,7 +423,7 @@ class SwarmMessageRow extends StatelessWidget {
         name: name,
         id: message.authorId,
         agent: message.fromAgent,
-        pm: role == 'PM',
+        pm: pm,
         picture: look.picture,
         status: look.status,
       ),
@@ -296,42 +441,32 @@ class SwarmMessageRow extends StatelessWidget {
       body: [
         if (lit) SizedBox(key: ValueKey('swarm-lit-${message.id}')),
         ?quote,
+        if (message.proposalOwnerId != null)
+          SwarmProposalLabel(owner: swarmProposalOwner(context, message)),
+        ?swarmTerminalNote(message),
         for (final part in swarmTextParts(message.text))
           if (part.code)
             SwarmCodeBlock(code: part.text, name: part.name, onTap: onTap)
           else
-            Semantics(
-              button: true,
-              hint: 'Reply to this message',
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
+            Padding(
+              padding: const EdgeInsets.only(top: SwarmMessageFrame.bodyGap),
+              child: SwarmMessageText(
+                text: part.text,
+                mentionNames: mentions.names,
+                references: references,
+                tagged: tagged,
+                addresses: taggedAddresses,
                 onTap: onTap,
-                child: Padding(
-                  padding: const EdgeInsets.only(
-                    top: SwarmMessageFrame.bodyGap,
-                  ),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: Text.rich(
-                      mentions.span(part.text, swarmChatText(16, height: 1.42)),
-                    ),
-                  ),
-                ),
+                onOpenConversation: onOpenConversation,
               ),
             ),
-        for (final file in message.attachments)
-          SwarmAttachment(
-            file: file,
-            link: swarmAttachmentLink(file.url),
-            chip: SwarmFileChip(
-              file: file,
-              link: swarmAttachmentLink(file.url),
-            ),
-          ),
+        ?swarmCutShort(message),
+        for (final file in message.attachments) _attachment(context, file),
         ?card,
         ?reactions,
         ?thread,
         ?below,
+        ?receipt,
         if (actions)
           Padding(
             padding: const EdgeInsets.only(top: AppSpace.s),
@@ -348,13 +483,7 @@ class SwarmMessageRow extends StatelessWidget {
                     label: inThread ? 'Reply in thread' : 'Reply',
                     onTap: reply,
                   ),
-                SwarmSmallButton(
-                  icon: LucideIcons.copy,
-                  label: 'Copy',
-                  onTap: () => unawaited(
-                    Clipboard.setData(ClipboardData(text: message.text)),
-                  ),
-                ),
+                SwarmCopyButton(text: message.text),
               ],
             ),
           ),
@@ -367,7 +496,31 @@ class SwarmMessageRow extends StatelessWidget {
             onLongPress: onLongPress,
             child: frame,
           );
-    if (!followed) return Padding(key: key, padding: padding, child: held);
+    // A message that tags the reader stands out, as Slack marks one that
+    // names you: an accent bar on its edge over a wash of the accent. The
+    // bar is drawn over the row, so nothing in it moves.
+    final taggedYou =
+        readerId.isNotEmpty && message.mentions.contains(readerId);
+    final bar = taggedYou
+        ? BoxDecoration(
+            border: Border(
+              left: BorderSide(color: AppPalette.accentOnSurface, width: 3),
+            ),
+          )
+        : null;
+    if (!followed) {
+      if (!taggedYou) return Padding(key: key, padding: padding, child: held);
+      return KeyedSubtree(
+        key: key,
+        child: Container(
+          key: ValueKey('swarm-tagged-you-${message.id}'),
+          padding: padding,
+          decoration: BoxDecoration(color: AppSurface.accentWash),
+          foregroundDecoration: bar,
+          child: held,
+        ),
+      );
+    }
     return AnimatedContainer(
       key: key,
       duration: const Duration(milliseconds: 600),
@@ -376,9 +529,12 @@ class SwarmMessageRow extends StatelessWidget {
       decoration: BoxDecoration(
         color: lit
             ? AppPalette.accentOnSurface.withValues(alpha: 0.16)
+            : taggedYou
+            ? AppSurface.accentWash
             : Colors.transparent,
         borderRadius: BorderRadius.circular(AppControl.rowRadius),
       ),
+      foregroundDecoration: bar,
       child: held,
     );
   }
@@ -484,7 +640,8 @@ class SwarmChatAvatar extends StatelessWidget {
   final String name, id;
   final bool agent;
 
-  /// A project's Product Manager: the prototype's blue, kept for them alone.
+  /// A project's coordinator, whatever its role is called: the prototype's
+  /// blue, kept for them alone.
   final bool pm;
 
   /// What they chose to wear; null wears the initial.
@@ -635,38 +792,138 @@ class SwarmSmallButton extends StatelessWidget {
   }
 }
 
+/// How long Copy reads Copied after a copy.
+const kSwarmCopiedFor = Duration(seconds: 3);
+
+/// A message's Copy (Tony, 11-02): once the clipboard has [text] it reads
+/// Copied with a check for [kSwarmCopiedFor]. Taps meanwhile neither copy again
+/// nor restart that time. A copy that failed stays Copy, to try again.
+class SwarmCopyButton extends StatefulWidget {
+  const SwarmCopyButton({super.key, required this.text});
+
+  final String text;
+
+  @override
+  State<SwarmCopyButton> createState() => _SwarmCopyButtonState();
+}
+
+class _SwarmCopyButtonState extends State<SwarmCopyButton> {
+  bool _copying = false;
+  Timer? _reset;
+
+  bool get _copied => _reset != null;
+
+  Future<void> _copy() async {
+    if (_copying || _copied) return;
+    _copying = true;
+    try {
+      await Clipboard.setData(ClipboardData(text: widget.text));
+    } on PlatformException {
+      return;
+    } finally {
+      _copying = false;
+    }
+    if (!mounted) return;
+    setState(() {
+      _reset = Timer(kSwarmCopiedFor, () {
+        if (mounted) setState(() => _reset = null);
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _reset?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => SwarmSmallButton(
+    icon: _copied ? LucideIcons.check : LucideIcons.copy,
+    label: _copied ? 'Copied' : 'Copy',
+    onTap: () => unawaited(_copy()),
+  );
+}
+
 /// A file's size as a chat shows it: whole kilobytes, rounded up, or megabytes to one place.
 String swarmFileSize(int bytes) {
   final kb = (bytes / 1024).ceil();
   return kb < 1024 ? '$kb KB' : '${(kb / 1024).toStringAsFixed(1)} MB';
 }
 
+/// Opens a chat file's link; tests replace it.
+@visibleForTesting
+Future<bool> Function(Uri url) swarmOpenFile = (url) =>
+    launchUrl(url, mode: LaunchMode.inAppBrowserView);
+
 /// A message's file: opened in the browser when its link is the backend's.
-class SwarmFileChip extends StatelessWidget {
-  const SwarmFileChip({super.key, required this.file, required this.link});
+/// With [fileRef], a link about to end is asked for again first
+/// (swarm_file_links.dart); a reader who lost access is told so, and a
+/// failed ask can be tapped again.
+class SwarmFileChip extends StatefulWidget {
+  const SwarmFileChip({
+    super.key,
+    required this.file,
+    required this.link,
+    this.fileRef,
+  });
 
   final SuperTabAttachment file;
   final Uri? link;
+  final SwarmFileRef? fileRef;
+
+  @override
+  State<SwarmFileChip> createState() => _SwarmFileChipState();
+}
+
+class _SwarmFileChipState extends State<SwarmFileChip> {
+  /// A fresh link is being asked for: another tap waits for it.
+  bool _opening = false;
+
+  bool get _opens =>
+      widget.fileRef != null ? !widget.fileRef!.refused : widget.link != null;
+
+  Future<void> _open() async {
+    final ref = widget.fileRef;
+    if (ref == null) {
+      if (widget.link case final url?) unawaited(swarmOpenFile(url));
+      return;
+    }
+    if (_opening) return;
+    setState(() => _opening = true);
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final Uri? found;
+    try {
+      found = await swarmOpenableLink(
+        context,
+        ref,
+        onProblem: (text) =>
+            messenger?.showSnackBar(SnackBar(content: Text(text))),
+      );
+    } finally {
+      if (mounted) setState(() => _opening = false);
+    }
+    final url = found;
+    if (url != null && mounted) unawaited(swarmOpenFile(url));
+  }
 
   @override
   Widget build(BuildContext context) {
+    final file = widget.file;
     final tty = Tty.of(context);
     final size = swarmFileSize(file.size);
-    final url = link;
-    final color = url == null ? AppPalette.textFaint : tty.blue;
+    final opens = _opens;
+    final color = !opens ? AppPalette.textFaint : tty.blue;
     return Padding(
       padding: const EdgeInsets.only(top: AppSpace.s),
       child: Semantics(
-        button: url != null,
+        button: opens,
         label: 'File: ${file.name}, $size',
         excludeSemantics: true,
         child: GestureDetector(
+          key: ValueKey('swarm-file-chip-${file.id}'),
           behavior: HitTestBehavior.opaque,
-          onTap: url == null
-              ? null
-              : () => unawaited(
-                  launchUrl(url, mode: LaunchMode.inAppBrowserView),
-                ),
+          onTap: !opens || _opening ? null : () => unawaited(_open()),
           child: Container(
             constraints: const BoxConstraints(minHeight: 40),
             padding: const EdgeInsets.symmetric(horizontal: AppSpace.m),

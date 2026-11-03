@@ -242,6 +242,28 @@ describe('late optional profile observations', () => {
     expect(manager.getState(agent.sessionId).model).toBeNull()
   })
 
+  // Codex at its own default effort writes `reasoning_effort: null` in each turn's context (0.164, 0.165): its model was never
+  // reported, so its Swarm attempts were recorded with none (Scholes, 2026-10-30).
+  it('names a Codex agent\'s model from its first turn at Codex\'s own default effort, as auto', () => {
+    const manager = new RuntimeProfileManager(), agent = session('codex')
+    manager.hydrate(agent, [JSON.stringify({ type: 'session_meta', payload: { cli_version: '0.165.0' } }),
+      JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-6.1-sol', collaboration_mode: { mode: 'default', settings: { model: 'gpt-6.1-sol', reasoning_effort: null } } } })])
+    expect(parseRuntimeProfile(manager.selectedModel(agent))).toMatchObject({ engine: 'codex', model: 'gpt-6.1-sol', effort: 'auto' })
+    // A later turn at a named effort says so; one back at the default reads auto again.
+    manager.ingest(agent, JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-6.1-sol', reasoning_effort: 'xhigh' } }), true)
+    expect(parseRuntimeProfile(manager.selectedModel(agent))).toMatchObject({ model: 'gpt-6.1-sol', effort: 'xhigh' })
+    manager.ingest(agent, JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-6.1-sol', reasoning_effort: null } }), true)
+    expect(parseRuntimeProfile(manager.selectedModel(agent))).toMatchObject({ model: 'gpt-6.1-sol', effort: 'auto' })
+    // A settings change that names a model and no effort changed only the model: the effort stays.
+    manager.ingest(agent, JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-6.1-sol', reasoning_effort: 'high' } }), true)
+    manager.ingest(agent, JSON.stringify({ type: 'event_msg', payload: { type: 'thread_settings_applied', thread_settings: { model: 'gpt-6-astra' } } }), true)
+    expect(parseRuntimeProfile(manager.selectedModel(agent))).toMatchObject({ model: 'gpt-6-astra', effort: 'high' })
+    // A context that names no model says nothing about one.
+    const none = new RuntimeProfileManager(), other = session('codex')
+    none.hydrate(other, [JSON.stringify({ type: 'turn_context', payload: { cwd: '/repo' } })])
+    expect(none.selectedModel(other)).toBeNull()
+  })
+
   it('cannot commit a staged transcript after forget or newer live evidence', () => {
     for (const forget of [true, false]) {
       const manager = new RuntimeProfileManager(), agent = session('codex')

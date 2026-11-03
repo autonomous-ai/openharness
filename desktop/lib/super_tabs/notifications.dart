@@ -12,6 +12,7 @@ import 'identity.dart';
 import 'machine_status.dart' show superTabAgo;
 import 'model.dart';
 import 'section_heading.dart';
+import '../widgets/laid_out_list.dart';
 
 /// A Lead's tag of the reader in one message (spec 2026-10-24-lead-mentions.md).
 class SuperTabMention {
@@ -26,7 +27,9 @@ class SuperTabMention {
       leadName = row['leadName'] as String? ?? 'Lead',
       text = row['text'] as String? ?? '',
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
-      resolvedBy = row['resolvedBy'] as String?;
+      resolvedBy = row['resolvedBy'] as String?,
+      threadId = row['threadId'] as String?,
+      messageSequence = (row['messageSequence'] as num?)?.toInt();
   final String id, projectId, projectName, conversationId, conversationTitle;
   final String messageId, leadName, text;
 
@@ -36,6 +39,16 @@ class SuperTabMention {
 
   /// `reply` or `done` once it moved to Earlier; null while it waits.
   final String? resolvedBy;
+
+  /// The thread's root when the tag is in a reply that lives only in its
+  /// thread: it counts on Threads, not on its chat's row. Null for a tag in
+  /// the main stream, and from a server before it.
+  final String? threadId;
+
+  /// The tagged message's place in its chat: the red number for it clears
+  /// once the reader has read past it, as in Slack. Null from a server
+  /// before it, where it counts until the tag is answered.
+  final int? messageSequence;
 }
 
 /// Whether the menu bar's Harness menu lists the reader's tags and decisions,
@@ -60,6 +73,18 @@ void Function(String tabId, SuperTabMention mention)? superTabMentionNotice(
             '${mention.projectName} · ${mention.conversationTitle}: '
             '${mention.text}',
         mention: (tabId: tabId, mentionId: mention.id),
+      );
+
+/// What tells the person about a new message in a chat they set to All new
+/// messages: the operating system, on Desktop only, as tags are. The notice
+/// names the chat, not its newest message.
+void Function(String tabId, SuperTabConversation group, int sequence)?
+superTabChatNotice(SystemNotifications system, {bool web = kIsWeb}) => web
+    ? null
+    : (tabId, group, sequence) => system.postNotice(
+        id: 'harness-chat:$tabId:${group.id}:$sequence',
+        title: group.title,
+        body: 'New messages',
       );
 
 /// The reader's tags in one Swarm: Waiting and Earlier, read from the backend
@@ -444,7 +469,7 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
     builder: (context, _) {
       grid.AppTheme.watch(context);
       final m = widget.mentions;
-      return ListView(
+      return LaidOutListView(
         padding: const EdgeInsets.only(bottom: 16),
         children: [
           if (m.error case final error?)

@@ -12,6 +12,13 @@ abstract interface class BatchLocalKeyValueStore implements LocalKeyValueStore {
   Future<Map<String, String?>> readMany(Iterable<String> keys);
 }
 
+/// Stores that can name every key they hold (the browser's), so all of one
+/// account's keys can go at sign-out ([forgetSwarmAccount]).
+abstract interface class KeyListingLocalKeyValueStore
+    implements LocalKeyValueStore {
+  Future<List<String>> keys();
+}
+
 /// A store shared by independent runtimes, such as browser tabs.
 abstract interface class SynchronizedLocalKeyValueStore
     implements LocalKeyValueStore {

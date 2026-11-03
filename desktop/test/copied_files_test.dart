@@ -36,6 +36,22 @@ void main() {
     expect(copied.files.single.name, 'at-the-limit.bin');
   });
 
+  test('kept on disk, one over the limit is listed by its path and size, '
+      'never read', () async {
+    final movie = write('movie.mov', List.filled(17, 0));
+    final copied = await readCopiedFiles(
+      [
+        movie,
+        write('small.txt', [1]),
+      ],
+      maxBytes: 16,
+      keepOnDisk: true,
+    );
+    expect(copied.onDisk, [(name: 'movie.mov', path: movie, size: 17)]);
+    expect(copied.tooLarge, isEmpty);
+    expect(copied.files.single.name, 'small.txt');
+  });
+
   test('a folder, and a file that is gone, are left out', () async {
     Directory('${dir.path}/folder').createSync();
     final copied = await readCopiedFiles([

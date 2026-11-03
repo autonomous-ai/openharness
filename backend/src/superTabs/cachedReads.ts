@@ -7,10 +7,11 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { stableId, type AgentStart } from './model.js'
 import { CacheView } from './cache.js'
+import { baseRule, dormantAgentRule, dormantProjectRule, dormantRule, feedRule, finishedStartsRule, groupRule, machinesRule } from './cachePatch.js'
 import * as store from './parts/index.js'
-import type { GroupData, Part, SwarmParts } from './parts/index.js'
-import { startFinished } from './parts/write.js'
+import type { GroupData, Part, PartKind, SwarmParts, SwarmDelta } from './parts/index.js'
 import { retryTransient } from './retry.js'
+import { lightKeys, lightSelect, projectLightGroup, type LightOptions as SelectOptions } from './parts/lightSelect.js'
 import { retryStaleIndex } from './parts/indexed.js'
 
 type Db = Pick<PrismaClient, '$transaction'> & Prisma.TransactionClient
@@ -28,12 +29,12 @@ const FEED_SLACK_MS = 15_000
 
 /** A Swarm's live machine parts, held at both stamps: a machine's reading moves only the machine stamp. */
 export const readMachines = (db: Prisma.TransactionClient, view: CacheView, tabId: string) =>
-  view.get(tabId, 'machines', 'all', () => store.loadMachines(db, tabId))
+  view.get(tabId, 'machines', 'all', () => store.loadMachines(db, tabId), machinesRule)
 
 /** The active parts, then the machines: one read of the base in a transaction, so its parts are one snapshot. A transaction
  *  that meets a lock it cannot get in 5 ms (an index build, a release) is tried again as a write's would be (retry.ts). */
 const base = (db: Db, view: CacheView, tabId: string) => Promise.all([
-  view.get(tabId, 'parts', 'main', () => retryTransient(() => retryStaleIndex(() => db.$transaction(tx => store.loadReadBase(tx, tabId))))),
+  view.get(tabId, 'parts', 'main', () => retryTransient(() => retryStaleIndex(() => db.$transaction(tx => store.loadReadBase(tx, tabId)))), baseRule),
   readMachines(db, view, tabId),
 ])
 
@@ -43,31 +44,128 @@ export async function readParts(db: Db, view: CacheView, tabId: string, named: R
   const held = new Set(active.groups.map(g => g.key))
   const extra: Part<GroupData>[] = []
   const add = (groups: Part<GroupData>[]) => { for (const g of groups) if (!held.has(g.key)) { held.add(g.key); extra.push(g) } }
-  if (named.allGroups || named.agentIds?.length || named.projectIds?.length) {
-    const dormant = await view.get(tabId, 'dormant', 'main', () => store.loadGroups(db, tabId, 'dormancy', { dormant: true }))
-    const agents = new Set(named.agentIds ?? []), projects = new Set(named.projectIds ?? [])
-    // A group stored with no project belongs to the default one (projects.ts groupProject).
-    add(named.allGroups ? dormant : dormant.filter(g => g.data!.agentIds.some(id => agents.has(id)) || projects.has(g.data!.projectId ?? 'lead')))
+  if (named.allGroups) add(await view.get(tabId, 'dormant', 'main', () => store.loadGroups(db, tabId, 'dormancy', { dormant: true }), dormantRule))
+  else {
+    // Each named agent's and project's dormant groups by their own index, not every dormant group filtered: 1,544 of them
+    // (8.9 MB) on prod's busiest Swarm, where one worker's are ~126 (2026-11-02).
+    const selections = await Promise.all([
+      ...[...new Set(named.agentIds ?? [])].map(id => view.get(tabId, `dormant:agent:${id}`, 'main',
+        () => store.loadGroups(db, tabId, 'agents', { agentIds: { $in: [id] }, dormant: true }), dormantAgentRule(id))),
+      // A group stored with no project belongs to the default one (projects.ts groupProject); a null match is a missing field too.
+      ...[...new Set(named.projectIds ?? [])].map(id => view.get(tabId, `dormant:project:${id}`, 'main',
+        () => store.loadGroups(db, tabId, 'project', { projectId: { $in: id === 'lead' ? ['lead', null] : [id] }, dormant: true }), dormantProjectRule(id))),
+    ])
+    for (const groups of selections) add(groups)
   }
   for (const id of named.groupIds ?? []) {
-    if (!held.has(id)) add(await view.get(tabId, `group:${id}`, 'main', () => store.loadGroups(db, tabId, 'key', { key: id })))
+    if (!held.has(id)) add(await view.get(tabId, `group:${id}`, 'main', () => store.loadGroups(db, tabId, 'key', { key: id }), groupRule(id)))
   }
-  const startIds = new Set(named.startIds ?? []), startAgents = new Set(named.startAgentIds ?? [])
-  const agentOf = (start: AgentStart) => start.harnessId ? stableId(start.request.machineId, start.harnessId) : null
-  const starts = named.includeRecentStarts ? active.starts : active.starts.filter(s => !startFinished(s.data!) || startIds.has(s.key)
-    || startAgents.has(agentOf(s.data!) ?? ''))
-  return { ...active, machines, groups: extra.length ? [...active.groups, ...extra] : active.groups, starts }
+  const finished = needsFinished(active.starts, named)
+    ? await view.get(tabId, 'finished-starts', 'main', () => store.loadFinishedStarts(db, tabId), finishedStartsRule) : []
+  return { ...active, machines, groups: extra.length ? [...active.groups, ...extra] : active.groups, starts: namedStarts(active.starts, finished, named) }
 }
+
+/** Whether a read needs the finished starts: a first load shows them all, and a read may name one by id or by its agent. */
+const needsFinished = (hot: Part<AgentStart>[], named: ReadNamed) => !!named.includeRecentStarts || !!named.startAgentIds?.length
+  || (named.startIds ?? []).some(id => !hot.some(s => s.key === id))
+
+/** Each held list of finished starts by the agent they started, worked out once per list: an agent is a sha256 (stableId),
+ *  and hashing every finished start on each read was ~40% of a messages read's CPU (prod's busiest Swarm, 2026-10-30). */
+const startsByAgent = new WeakMap<readonly Part<AgentStart>[], Map<string, Part<AgentStart>[]>>()
+function byAgent(finished: readonly Part<AgentStart>[]): Map<string, Part<AgentStart>[]> {
+  let index = startsByAgent.get(finished)
+  if (!index) {
+    index = new Map()
+    for (const start of finished) {
+      if (!start.data!.harnessId) continue
+      const agent = stableId(start.data!.request.machineId, start.data!.harnessId)
+      index.set(agent, [...index.get(agent) ?? [], start])
+    }
+    startsByAgent.set(finished, index)
+  }
+  return index
+}
+
+/** The starts loadActive gives for `named`: every unfinished one (`hot`), and the finished ones named by id or by the agent
+ *  they started, or all of them with `includeRecentStarts`. */
+export function namedStarts(hot: Part<AgentStart>[], finished: Part<AgentStart>[], named: ReadNamed): Part<AgentStart>[] {
+  const picked = named.includeRecentStarts ? finished : [...new Map(pickFinished(finished, named).map(s => [s.key, s])).values()]
+  if (!picked.length) return hot
+  // The two lists are patched at their own moments, so a start that just finished can be in both: it comes once, as its
+  // newer version (final review, Important 6).
+  const merged = new Map(hot.map(s => [s.key, s]))
+  for (const start of picked) {
+    const held = merged.get(start.key)
+    if (!held || start.version > held.version) merged.set(start.key, start)
+  }
+  return [...merged.values()]
+}
+
+const pickFinished = (finished: Part<AgentStart>[], named: ReadNamed): Part<AgentStart>[] => {
+  const ids = new Set(named.startIds ?? [])
+  const index = named.startAgentIds?.length ? byAgent(finished) : null
+  return [...finished.filter(s => ids.has(s.key)), ...(named.startAgentIds ?? []).flatMap(agent => index!.get(agent) ?? [])]
+}
+
+/** The read cache's delta (cache.ts): one snapshot, as a base load is (final review, Important 5), and tried again on a
+ *  transient error as one is. */
+export const readDelta = (db: Pick<PrismaClient, '$transaction'>) => (tabId: string, since: number, kinds: readonly PartKind[]): Promise<SwarmDelta> =>
+  retryTransient(() => db.$transaction(tx => store.loadDelta(tx, tabId, since, kinds)))
 
 /** The parts loadLight gives for `opts`, held whole by what it selects. */
 export async function readLight(db: Db, view: CacheView, tabId: string, opts: Omit<LightOptions, 'machines'>): Promise<SwarmParts> {
-  const name = `light:${JSON.stringify([opts.groups ?? 'active', !!opts.includeRecentStarts, !!opts.recentStartGroups, ...(['groupIds', 'agentIds', 'projectIds'] as const)
+  const name = `light:${JSON.stringify([opts.groups ?? 'active', !!opts.includeRecentStarts, ...(['groupIds', 'agentIds', 'projectIds'] as const)
     .map(key => [...opts[key] ?? []].sort())])}`
   const [light, machines] = await Promise.all([
-    view.get(tabId, name, 'main', () => retryTransient(() => retryStaleIndex(() => db.$transaction(tx => store.loadLight(tx, tabId, { ...opts, machines: false }))))),
+    // With a cache that patches, built from the entries it holds (deriveLight); otherwise, or for recent finished starts, which
+    // the base does not hold, read as before: a base dropped on every bump would cost more than this read.
+    view.get(tabId, name, 'main', () => view.patching && !opts.includeRecentStarts ? deriveLight(db, view, tabId, opts)
+      : retryTransient(() => retryStaleIndex(() => db.$transaction(tx => store.loadLight(tx, tabId, { ...opts, machines: false }))))),
     readMachines(db, view, tabId),
   ])
   return { ...light, machines }
+}
+
+/**
+ * `loadLight`'s selection built from entries the cache already holds and patches (spec 2026-11-02 poll cost, Part 1.2): the
+ * base's awake conversations, `light-group:{id}` for a named one the base lacks, and, for a machine's host state
+ * (`machineId`, read/host.ts hostParts), its agents' dormant conversations from `dormant:agent:{id}` plus its starts'
+ * conversations and their projects. Reads Mongo only for entries that miss.
+ */
+export async function deriveLight(db: Db, view: CacheView, tabId: string, opts: SelectOptions & { machineId?: string }): Promise<Omit<SwarmParts, 'machines'>> {
+  const [active] = await base(db, view, tabId)
+  const machineId = opts.machineId
+  const starts = machineId ? active.starts.filter(s => s.data!.request.machineId === machineId) : active.starts
+  const agentIds = machineId ? active.agents.filter(a => (a.data as { machineId?: string }).machineId === machineId).map(a => a.key) : opts.agentIds ?? []
+  const groupIds = machineId ? [...new Set(starts.map(s => s.data!.request.conversationId))] : opts.groupIds ?? []
+  const awake = active.groups.map(projectLightGroup)
+  const held = new Set(awake.map(g => g.key))
+  const named = lightKeys(active.head, active.starts, { ...opts, groupIds }).filter(id => !held.has(id))
+  const [byId, ...dormant] = await Promise.all([readLightGroups(db, view, tabId, named),
+    ...agentIds.map(id => view.get(tabId, `dormant:agent:${id}`, 'main',
+      () => store.loadGroups(db, tabId, 'agents', { agentIds: { $in: [id] }, dormant: true }), dormantAgentRule(id)))])
+  const candidates = new Map(awake.map(g => [g.key, g]))
+  for (const g of [...byId, ...dormant.flat().map(projectLightGroup)]) if (!candidates.has(g.key)) candidates.set(g.key, g)
+  // A machine's host state also lists every conversation of a project it has a start in (read/host.ts hostParts).
+  const projectIds = machineId ? [...new Set(groupIds.flatMap(id => { const g = candidates.get(id); return g ? [g.data!.projectId ?? 'lead'] : [] }))]
+    : opts.projectIds ?? []
+  return lightSelect({ ...active, groups: [...candidates.values()] }, { groups: opts.groups, groupIds, agentIds, projectIds })
+}
+
+/** Light conversations by id (parts/light.ts loadLightGroups), dormant ones too, in the order named: each held at the
+ *  Swarm's main stamp, an id no live conversation has held as none. A read's misses are one query, as readLastChangedAts
+ *  batches them; without stamps every id is read, still in one query. */
+export async function readLightGroups(db: Db, view: CacheView, tabId: string, ids: readonly string[]): Promise<Part<GroupData>[]> {
+  const missing: string[] = []
+  let batch: Promise<Map<string, Part<GroupData>>> | undefined
+  const groups = await Promise.all([...new Set(ids)].map(id => view.get(tabId, `light-group:${id}`, 'main', () => {
+    missing.push(id)
+    // As readLastChangedAts: every miss of this read joins before the query starts.
+    batch ??= Promise.resolve().then(async () => new Map((await retryStaleIndex(() => store.loadLightGroups(db, tabId, 'key', { key: { $in: missing } })))
+      .map(group => [group.key, group])))
+    return batch.then(found => found.get(id) ?? null)
+  })))
+  return groups.filter((group): group is Part<GroupData> => group !== null)
 }
 
 /** The Swarm's newest data change (parts/load.ts lastChangedAt), held at its main stamp: a machine's reading leaves it. */
@@ -95,6 +193,6 @@ export async function readChanged(db: Db, view: CacheView, tabId: string, since:
   const feed = await view.get(tabId, 'feed', 'all', async () => {
     const from = since - FEED_SLACK_MS
     return { from, parts: (await store.loadChanged(db, [tabId], new Date(from))).get(tabId) ?? [] }
-  })
+  }, feedRule)
   return since >= feed.from ? feed.parts.filter(p => Math.max(p.changedAt, p.readAt ?? 0) > since) : direct()
 }

@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -83,15 +86,20 @@ Future<void> shot(WidgetTester tester, String name) async {
 
 Future<SuperTabController> showView(
   WidgetTester tester,
-  ConversationServer server,
-) async {
+  ConversationServer server, {
+  String account = 'owner',
+  Brightness brightness = Brightness.dark,
+}) async {
   await tester.binding.setSurfaceSize(const Size(1200, 900));
   addTearDown(() => tester.binding.setSurfaceSize(null));
-  final c = server.controller();
+  final before = grid.AppTheme.brightness.value;
+  grid.AppTheme.brightness.value = brightness;
+  addTearDown(() => grid.AppTheme.brightness.value = before);
+  final c = server.controller(account: account);
   await c.refresh();
   await tester.pumpWidget(
     MaterialApp(
-      theme: grid.buildAppTheme(brightness: Brightness.dark),
+      theme: grid.buildAppTheme(brightness: brightness),
       builder: (context, child) => RepaintBoundary(key: _picture, child: child),
       home: Scaffold(
         body: SuperTabView(
@@ -114,6 +122,65 @@ String minutesAgo(int minutes) => DateTime.now()
     .subtract(Duration(minutes: minutes))
     .toIso8601String();
 
+/// The texts painted as tags, in order.
+List<String> tagRuns(WidgetTester tester) => [
+  for (final (text, _) in tagStyles(tester)) text,
+];
+
+/// Each tag painted, with its ink.
+List<(String, Color?)> tagStyles(WidgetTester tester) => [
+  for (final rich in tester.widgetList<RichText>(find.byType(RichText)))
+    ..._tagRuns(rich.text, null),
+];
+
+Iterable<(String, Color?)> _tagRuns(
+  InlineSpan span,
+  TextStyle? inherited,
+) sync* {
+  if (span is! TextSpan) return;
+  final style = inherited?.merge(span.style) ?? span.style;
+  if (span.text case final text?
+      when style?.backgroundColor == grid.AppSurface.accentWash &&
+          style?.fontWeight == FontWeight.w600) {
+    yield (text, style?.color);
+  }
+  for (final child in span.children ?? const <InlineSpan>[]) {
+    yield* _tagRuns(child, style);
+  }
+}
+
+/// WCAG contrast of [a] on [b].
+double contrast(Color a, Color b) {
+  final (x, y) = (a.computeLuminance(), b.computeLuminance());
+  return (math.max(x, y) + 0.05) / (math.min(x, y) + 0.05);
+}
+
+/// The table of tags and non-tags the backend and the phone pass too.
+final tagTable = jsonDecode(
+  File('test/fixtures/tag_fixture.json').readAsStringSync(),
+) as Map<String, dynamic>;
+
+/// A Swarm with diego and ken in it, and two messages from its owner: one
+/// that tags diego, one that tags nobody.
+ConversationServer taggedChat() {
+  final server = ConversationServer();
+  for (final name in ['diego', 'ken']) {
+    (server.state['people'] as List).add({
+      'id': name,
+      'email': '$name@example.com',
+      'role': 'collaborator',
+      'username': name,
+    });
+  }
+  server
+    ..append(
+      '@diego can you free some memory on your Pro-10? Reviews are waiting on it.',
+    )
+    ..append('Thanks, the review queue is moving again.');
+  server.messages.first['mentions'] = ['diego'];
+  return server;
+}
+
 /// The styles of every run of [text] painted in the tree.
 List<TextStyle?> runsOf(WidgetTester tester, String text) => [
   for (final rich in tester.widgetList<RichText>(find.byType(RichText)))
@@ -133,16 +200,21 @@ Iterable<TextStyle?> _runs(
   }
 }
 
-Future<void> showText(WidgetTester tester, String text, List<String> names) =>
-    tester.pumpWidget(
-      MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.dark),
-        home: Scaffold(body: SuperTabMessageText(text, mentions: names)),
-      ),
-    );
+Future<void> showText(
+  WidgetTester tester,
+  String text,
+  List<String> names, {
+  Map<String, String> addresses = const {},
+}) => tester.pumpWidget(
+  MaterialApp(
+    theme: grid.buildAppTheme(brightness: Brightness.dark),
+    home: Scaffold(
+      body: SuperTabMessageText(text, mentions: names, addresses: addresses),
+    ),
+  ),
+);
 
-Finder notificationsEntry() =>
-    find.byKey(const ValueKey('super-notifications'));
+Finder notificationsEntry() => find.byKey(const ValueKey('super-activity'));
 
 void main() {
   setUpAll(() async {
@@ -504,7 +576,7 @@ void main() {
   });
 
   group('notifications view', () {
-    testWidgets('the entry counts what waits and lists Waiting and Earlier', (
+    testWidgets('the entry counts what waits; the view lists only that', (
       tester,
     ) async {
       final server = ConversationServer()
@@ -523,108 +595,45 @@ void main() {
       );
       await tester.tap(notificationsEntry());
       await tester.pumpAndSettle();
-      final waiting = find.byKey(const ValueKey('super-mention-mention-2'));
-      final earlier = find.byKey(const ValueKey('super-mention-mention-1'));
-      expect(find.text('Waiting'), findsOneWidget);
-      expect(find.text('Earlier'), findsOneWidget);
-      expect(
-        tester.getTopLeft(waiting).dy,
-        lessThan(tester.getTopLeft(earlier).dy),
+      final waiting = find.byKey(
+        const ValueKey('super-activity-row-mention:mention-2'),
       );
-      for (final text in [
-        'web-project · Lead',
-        'Wren',
-        'Ship it?',
-        '3 min ago',
-      ]) {
-        expect(
-          find.descendant(of: waiting, matching: find.text(text)),
-          findsOneWidget,
-          reason: text,
-        );
-      }
+      expect(waiting, findsOneWidget);
       expect(
-        find.descendant(of: earlier, matching: find.text('1 h ago')),
+        find.descendant(
+          of: waiting,
+          matching: find.text('Wren mentioned you in # web-project'),
+        ),
         findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+        findsNothing,
       );
     });
 
-    testWidgets('a tag shows the Lead’s avatar beside its name', (
-      tester,
-    ) async {
-      final server = ConversationServer()
-        ..append('Ship it?')
-        ..tag('message-1', text: 'Ship it?', leadId: 'lead-agent');
-      server.state['agents'] = [
-        {
-          'id': 'lead-agent',
-          'name': 'Lead',
-          'displayName': 'Wren',
-          'machineId': 'm',
-          'harnessId': 'h',
-          'contributorId': 'owner',
-          'configuration': {'engine': 'claude'},
-          'avatar': {'kind': 'preset', 'key': 'owl'},
-        },
-      ];
-      await showView(tester, server);
-      await tester.tap(notificationsEntry());
-      await tester.pumpAndSettle();
-      final row = find.byKey(const ValueKey('super-mention-mention-1'));
-      expect(
-        find.descendant(of: row, matching: find.text('🦉')),
-        findsOneWidget,
-      );
-    });
-
-    testWidgets('a person’s tag shows their avatar and username', (
-      tester,
-    ) async {
-      final server = ConversationServer()
-        ..append('Ship it?')
-        ..tag('message-1', text: 'Ship it?', leadId: 'dee');
-      server.mentions.last['leadName'] = 'dee';
-      server.state['people'] = [
-        {'id': 'owner', 'email': 'owner@example.com', 'role': 'owner'},
-        {
-          'id': 'dee',
-          'email': 'dee@example.com',
-          'role': 'collaborator',
-          'username': 'deedee',
-          'avatar': {'kind': 'preset', 'key': 'fox'},
-        },
-      ];
-      await showView(tester, server);
-      await tester.tap(notificationsEntry());
-      await tester.pumpAndSettle();
-      final row = find.byKey(const ValueKey('super-mention-mention-1'));
-      expect(
-        find.descendant(of: row, matching: find.text('🦊')),
-        findsOneWidget,
-      );
-      // The name they go by now, though they were tagged under another.
-      expect(
-        find.descendant(of: row, matching: find.text('deedee')),
-        findsOneWidget,
-      );
-    });
-
-    testWidgets('mark done moves the tag to Earlier and clears the count', (
-      tester,
-    ) async {
+    testWidgets('Mark done, offered where the time is on hover, clears the tag '
+        'and the count', (tester) async {
       final server = ConversationServer()
         ..append('Ship it?')
         ..tag('message-1', text: 'Ship it?', createdAt: minutesAgo(3));
       await showView(tester, server);
       await tester.tap(notificationsEntry());
       await tester.pumpAndSettle();
+      expect(find.text('Mark done'), findsNothing);
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      addTearDown(mouse.removePointer);
+      await mouse.moveTo(
+        tester.getCenter(
+          find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+        ),
+      );
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Mark done'));
       await tester.pumpAndSettle();
-      expect(find.text('Mark done'), findsNothing);
-      expect(find.text('Nothing waiting for you.'), findsOneWidget);
       expect(
-        find.byKey(const ValueKey('super-mention-mention-1')),
-        findsOneWidget,
+        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+        findsNothing,
       );
       expect(
         find.descendant(of: notificationsEntry(), matching: find.text('1')),
@@ -651,7 +660,9 @@ void main() {
         expect(c.snapshot?.conversation('group'), isNull);
         await tester.tap(notificationsEntry());
         await tester.pumpAndSettle();
-        await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+        await tester.tap(
+          find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+        );
         await tester.pumpAndSettle();
         expect(c.selectedId, 'group');
         expect(find.text('Builder could not start.'), findsWidgets);
@@ -668,7 +679,9 @@ void main() {
       final c = await showView(tester, server);
       await tester.tap(notificationsEntry());
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+      await tester.tap(
+        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+      );
       await tester.pumpAndSettle();
       expect(find.text('Message unavailable'), findsOneWidget);
       expect(c.selectedId, isNot('private-chat'));
@@ -690,13 +703,15 @@ void main() {
       final c = await showView(tester, server);
       await tester.tap(notificationsEntry());
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+      await tester.tap(
+        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+      );
       await tester.pumpAndSettle();
       expect(
         find.text('This message is too far back to open.'),
         findsOneWidget,
       );
-      expect(find.text('Waiting'), findsOneWidget);
+      expect(find.byKey(const ValueKey('super-activity-list')), findsOneWidget);
       expect(c.selectedId, isNot('group'));
     });
 
@@ -721,7 +736,9 @@ void main() {
       server.tag('message-150', conversationId: 'group', text: 'Note 150');
       await tester.tap(notificationsEntry());
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+      await tester.tap(
+        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+      );
       await tester.pumpAndSettle();
       expect(
         find.text('This message is no longer in the conversation.'),
@@ -755,7 +772,9 @@ void main() {
       server.tag('message-120', conversationId: 'group', text: 'Note 120');
       await tester.tap(notificationsEntry());
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+      await tester.tap(
+        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+      );
       await tester.pumpAndSettle();
       expect(
         find.text('This message is no longer in the conversation.'),
@@ -790,7 +809,9 @@ void main() {
       server.tag('message-650', conversationId: 'group', text: 'Note 650');
       await tester.tap(notificationsEntry());
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+      await tester.tap(
+        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+      );
       await tester.pumpAndSettle();
       expect(
         find.text('This message is no longer in the conversation.'),
@@ -832,7 +853,9 @@ void main() {
         // A background poll is reading the rows held when the tag opens.
         final held = server.holdReads = Completer<void>();
         final poll = c.loadMessages('group');
-        await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+        await tester.tap(
+          find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+        );
         await tester.pump();
         server.holdReads = null;
         held.complete();
@@ -871,7 +894,9 @@ void main() {
       final c = await showView(tester, server);
       await tester.tap(notificationsEntry());
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+      await tester.tap(
+        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+      );
       await tester.pumpAndSettle();
       expect(c.selectedId, 'group');
       expect(find.text('Replying to owner'), findsOneWidget);
@@ -879,7 +904,7 @@ void main() {
         find.byKey(const ValueKey('super-message-message-100')).hitTestable(),
         findsOneWidget,
       );
-      expect(find.text('Waiting'), findsNothing);
+      expect(find.byKey(const ValueKey('super-activity-list')), findsNothing);
     });
   });
 
@@ -990,6 +1015,141 @@ void main() {
       await showText(tester, 'Run `ping @dee` now.', ['dee']);
       expect(runsOf(tester, 'ping @dee'), isNotEmpty);
     });
+
+    for (final row in (tagTable['cases'] as List).cast<Map>()) {
+      testWidgets('finds the tags in ${jsonEncode(row['text'])}', (
+        tester,
+      ) async {
+        final names = (tagTable['names'] as List).cast<String>();
+        final tags = (row['tags'] as List).cast<String>();
+        await showText(tester, row['text'] as String, names);
+        // A tagged name the text does not say opens it (withTags), so each
+        // name the table has no tag for in this text is shown first.
+        final said = {for (final tag in tags) tag.split('@').first};
+        expect(
+          [for (final tag in tagRuns(tester)) tag.substring(1).toLowerCase()],
+          [
+            for (final name in names)
+              if (!said.contains(name)) name,
+            ...tags,
+          ],
+        );
+      });
+    }
+
+    test('reads a 32,000-character text of unclosed link brackets in '
+        'linear time', () {
+      // Each `](` without a `)` once scanned to the end: about 3 s to draw.
+      final watch = Stopwatch()..start();
+      expect(SuperTabMessageText.tagsIn('${'](' * 15995}@dee.'), ['dee']);
+      // Leave room for shared runners; the regression this guards took about 3 s (#2331).
+      expect(watch.elapsedMilliseconds, lessThan(500));
+    });
+
+    testWidgets('a tag by its full address is said, and is its pill', (
+      tester,
+    ) async {
+      await showText(
+        tester,
+        '@diego.n@x.com look',
+        ['diego'],
+        addresses: {'diego': 'diego.n@x.com'},
+      );
+      expect(
+        find.text('@diego.n@x.com look', findRichText: true),
+        findsOneWidget,
+      );
+      expect(tagRuns(tester), ['@diego.n@x.com']);
+    });
+
+    testWidgets('another address is no tag of them', (tester) async {
+      await showText(
+        tester,
+        '@diego@other.com look',
+        ['diego'],
+        addresses: {'diego': 'diego.n@x.com'},
+      );
+      expect(
+        find.text('@diego @diego@other.com look', findRichText: true),
+        findsOneWidget,
+      );
+      expect(tagRuns(tester), ['@diego']);
+    });
+
+    testWidgets('the conversation knows the address of each person tagged', (
+      tester,
+    ) async {
+      final server = taggedChat();
+      (server.state['people'] as List).cast<Map>().firstWhere(
+        (p) => p['id'] == 'diego',
+      )['email'] = 'diego.n@x.com';
+      server.messages.first['text'] = '@diego.n@x.com can you look?';
+      await showView(tester, server, account: 'ken');
+      expect(
+        find.text('@diego.n@x.com can you look?', findRichText: true),
+        findsOneWidget,
+      );
+      expect(tagRuns(tester), ['@diego.n@x.com']);
+    });
+
+    for (final brightness in Brightness.values) {
+      testWidgets('a message that tags you stands out, for you alone '
+          '(${brightness.name})', (tester) async {
+        Finder tagged(String id) =>
+            find.byKey(ValueKey('super-tagged-you-$id'));
+        final server = taggedChat();
+        await showView(
+          tester,
+          server,
+          account: 'diego',
+          brightness: brightness,
+        );
+        await shot(tester, 'tagged-you-${brightness.name}');
+        expect(tagged('message-1'), findsOneWidget);
+        expect(tagged('message-2'), findsNothing);
+        final row = tester.widget<DecoratedBox>(tagged('message-1'));
+        expect(
+          (row.decoration as BoxDecoration).color,
+          grid.AppSurface.accentWash,
+        );
+        final bar = tester.getSize(
+          find.byKey(const ValueKey('super-tagged-bar-message-1')),
+        );
+        expect(bar.width, 3);
+        expect(bar.height, greaterThan(20));
+        expect(
+          tester
+              .widget<ColoredBox>(
+                find.byKey(const ValueKey('super-tagged-bar-message-1')),
+              )
+              .color,
+          grid.AppPalette.accentOnSurface,
+        );
+        // The tag in the text stays its pill, its ink readable on the pill
+        // over the wash (WCAG AA for text, 4.5:1).
+        final (tag, ink) = tagStyles(tester).single;
+        expect(tag, '@diego');
+        final behind = Color.alphaBlend(
+          grid.AppSurface.accentWash,
+          Color.alphaBlend(
+            grid.AppSurface.accentWash,
+            grid.AppTheme.surfacePalette.background,
+          ),
+        );
+        expect(contrast(ink!, behind), greaterThanOrEqualTo(4.5));
+
+        // The same message, read by someone else: plain.
+        await showView(tester, server, account: 'ken', brightness: brightness);
+        await shot(tester, 'tagged-other-${brightness.name}');
+        expect(tagged('message-1'), findsNothing);
+        // A tag in a message that is not yours keeps the pill it had.
+        expect(tagStyles(tester).single.$2, grid.AppPalette.accentOnSurface);
+        expect(
+          find.byKey(const ValueKey('super-tagged-bar-message-1')),
+          findsNothing,
+        );
+      });
+    }
 
     testWidgets('the conversation highlights the people a message tags', (
       tester,
@@ -1205,7 +1365,9 @@ void main() {
     await tester.tap(notificationsEntry());
     await tester.pumpAndSettle();
     await shot(tester, 'notifications');
-    await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+    await tester.tap(
+      find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+    );
     await tester.pumpAndSettle();
     expect(find.text('Replying to Wren'), findsOneWidget);
     await shot(tester, 'opened-at-message');
@@ -1246,11 +1408,16 @@ void main() {
         );
         expect(tab['attention'], 2);
       } else {
+        // A Swarm's tab is its name, bold when something there waits, with
+        // no count (Quiet Swarm, screen 0).
+        expect(find.byKey(ValueKey('tab-tags:${swarm.id}')), findsNothing);
+        expect(find.byKey(ValueKey('tab-activity:${swarm.id}')), findsNothing);
         expect(
           tester
-              .widget<Text>(find.byKey(ValueKey('tab-tags:${swarm.id}')))
-              .data,
-          '2',
+              .widget<Text>(find.byKey(ValueKey('tab-label:${swarm.id}')))
+              .style
+              ?.fontWeight,
+          grid.AppFont.semibold,
         );
       }
       await tester.pumpWidget(const SizedBox());

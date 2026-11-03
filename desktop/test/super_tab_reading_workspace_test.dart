@@ -8,11 +8,13 @@ import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/viewer/viewer_key_store.dart';
 import 'package:harness/viewer/viewer_services.dart';
 import 'package:harness/state/workspace_chrome.dart';
+import 'package:harness/super_tabs/reading.dart';
 import 'package:harness/super_tabs/workspace.dart';
 import 'package:harness/web/shell/web_chrome.dart';
 
 import 'super_tab_launch_test.dart'
     show SuperTabFixtureConnection, SuperTabLaunchFixture, tabId;
+import 'support/web_swarm_backend.dart';
 import 'swarm_state_test.dart' show MemoryStore;
 
 /// The Swarm state reads (first loads and change reads) the fixture's machine
@@ -111,6 +113,53 @@ Future<void> _mountApp(
 }
 
 void main() {
+  group('Desktop: the daemon coming up reads the Swarm at once', () {
+    late SuperTabLaunchFixture f;
+
+    Future<void> opened() async {
+      f = SuperTabLaunchFixture(local: true);
+      f.app.superTabs.reading = SuperTabReading.desktop;
+      f.app.machineStates['m']!.connectionStatus =
+          ConnectionStatus.disconnected;
+      f.app.connectionStatusForTest('m', ConnectionStatus.disconnected);
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+    }
+
+    test('when this computer connects', () async {
+      await opened();
+      final before = _stateReads(f);
+      f.app.connectionStatusForTest('m', ConnectionStatus.connected);
+      await Future<void>.delayed(Duration.zero);
+      expect(_stateReads(f), before + 1);
+      // Still connected: another status says nothing new.
+      f.app.connectionStatusForTest('m', ConnectionStatus.connected);
+      await Future<void>.delayed(Duration.zero);
+      expect(_stateReads(f), before + 1);
+      f.app.superTabs.dispose();
+    });
+
+    test('and not while it is only connecting', () async {
+      await opened();
+      final before = _stateReads(f);
+      f.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+      await Future<void>.delayed(Duration.zero);
+      expect(_stateReads(f), before);
+      f.app.superTabs.dispose();
+    });
+
+    test('when its backend comes back', () async {
+      await opened();
+      f.app.status = AppStatus.authenticated;
+      f.app.noteBackendOnlineForTest(false);
+      final before = _stateReads(f);
+      f.app.noteBackendOnlineForTest(true);
+      await Future<void>.delayed(Duration.zero);
+      expect(_stateReads(f), before + 1);
+      f.app.superTabs.dispose();
+    });
+  });
+
   testWidgets(
     'Desktop: a Swarm tab not shown, or a hidden app, polls every 15 s',
     (tester) async {
@@ -171,34 +220,42 @@ void main() {
   });
 
   // At the app's level: a viewer's connect also loads the machine's data and
-  // its device log, whose timers a widget test would have to wait out.
-  test('web: the machine connecting reads the Swarm tab at once', () async {
+  // its device log, whose timers a widget test would have to wait out. The web
+  // reads Swarm from the backend itself (docs/specs/2026-10-30-web-swarm-direct.md):
+  // a machine still connecting does not hold the tab, and its connect is no
+  // reason to read again.
+  test('web: the Swarm tab reads from the backend while the machine is still '
+      'connecting, and its connect reads nothing more', () async {
     final v = _viewer();
+    final backend = WebSwarmBackend(v.connection.server);
+    v.app.api = backend;
     v.app.superTabs
       ..reading = webWorkspaceChrome(v.app).superTabReading
       ..show(tabId);
     final c = await v.app.superTabs.open(tabId);
     await pumpEventQueue();
-    expect(c.snapshot, isNull);
-    // Within the grace: loading, not the error.
     expect(c.error, isNull);
-    expect(c.loading, isTrue);
+    expect(c.snapshot, isNotNull);
+    final reads = backend.calls.length;
     v.app.connectionStatusForTest('m', ConnectionStatus.connected);
     await pumpEventQueue();
-    expect(c.snapshot, isNotNull);
+    expect(backend.calls, hasLength(reads));
+    expect(_connectionReads(v.connection), 0);
     v.app.dispose();
   });
 
-  test('Desktop reading: the machine connecting waits for the poll', () async {
+  test('web with Desktop reading: the Swarm loads from the backend and the '
+      'machine is asked nothing', () async {
     final v = _viewer();
+    final backend = WebSwarmBackend(v.connection.server);
+    v.app.api = backend;
     final c = await v.app.superTabs.open(tabId);
     await pumpEventQueue();
-    expect(c.error, 'Connect one of your machines to open Swarm.');
-    final reads = _connectionReads(v.connection);
+    expect(c.error, isNull);
+    expect(c.snapshot, isNotNull);
     v.app.connectionStatusForTest('m', ConnectionStatus.connected);
     await pumpEventQueue();
-    expect(_connectionReads(v.connection), reads);
-    expect(c.snapshot, isNull);
+    expect(_connectionReads(v.connection), 0);
     v.app.dispose();
   });
 }

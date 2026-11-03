@@ -46,8 +46,6 @@ AppNotifier _appWithPane() {
 }
 
 WorkspaceChrome _hostChrome({bool flags = false}) => WorkspaceChrome(
-  leadingWidth: (_) => 0,
-  leading: (_, _) => const SizedBox.shrink(),
   menuOnEveryTab: flags,
   labelsPaneStatus: flags,
   compactPaneHeader: flags,
@@ -90,10 +88,7 @@ void main() {
   });
 
   test('a host chrome that names none of them leaves them off', () {
-    final chrome = WorkspaceChrome(
-      leadingWidth: (_) => 0,
-      leading: (_, _) => const SizedBox.shrink(),
-    );
+    final chrome = WorkspaceChrome();
 
     expect(chrome.menuOnEveryTab, isFalse);
     expect(chrome.labelsPaneStatus, isFalse);

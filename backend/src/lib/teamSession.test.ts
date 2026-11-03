@@ -118,7 +118,7 @@ beforeEach(async () => {
   // what the routes sign GitHub approval states with (github/approvals.ts `stateSecret`), and a team session's commits
   // carry the app's bot identity (github/app.ts `commitIdentity`).
   const github = { app: { config: { appId: '424242', privateKey: appKey, slug: null },
-    commitIdentity: vi.fn(async () => ({ name: 'harness-app[bot]', email: '424242+harness-app[bot]@users.noreply.github.com' })) },
+    commitIdentity: vi.fn(() => ({ name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' })) },
     issue: vi.fn(async () => ({ token: 'fixture-token', expiresAt: new Date(0).toISOString() })), release: vi.fn(async () => {}),
     prepare: vi.fn(async () => ({ token: 'fixture-read-token', expiresAt: new Date(0).toISOString(), repository: 'example/project' })) }
   // The read API by parts is recorded the same way: its classes reach the store only through it.
@@ -174,6 +174,11 @@ describe('a team session on its own machine', () => {
     ['GET', '/api/super-tabs/tab-1/native/context-1', undefined, 'native.read'],
     ['POST', '/api/super-tabs/tab-1/native/context-1', { turnId: 't1', kind: 'prompt', previousEventId: null, text: 'hi', truncated: false, interrupted: false }, 'native.append'],
     ['GET', '/api/super-tabs/tab-1/projects/project-1/roles/dev', undefined, 'roleText'],
+    // The project's instructions, which its agents work by: the launch line runs `instructions`, and the host installs each
+    // revision as the agent's swarm-instructions skill (2026-11-02: a teammate's agent read neither, refused here).
+    ['GET', '/api/super-tabs/tab-1/projects/project-1/instructions?asAgentId=agent-1', undefined, 'instructions'],
+    ['GET', '/api/super-tabs/tab-1/projects/project-1/instructions/revisions?asAgentId=agent-1', undefined, 'instructionRevisions'],
+    ['GET', '/api/super-tabs/tab-1/projects/project-1/instructions/revisions/3?asAgentId=agent-1', undefined, 'instructionRevision'],
   ]
   for (const [method, url, payload, reached] of own) {
     it(`${method} ${url.split('?')[0]} reaches the store as the team session`, async () => {
@@ -256,7 +261,9 @@ describe('a team session reaching past its own machine', () => {
       '/api/super-tabs/tab-1/route-decisions', '/api/super-tabs/tab-1/route-decisions/decision-1', '/api/super-tabs/tab-1/decisions?state=open',
       '/api/super-tabs/tab-1/conversations/lead/messages', '/api/super-tabs/tab-1/conversations/lead/attempts',
       '/api/super-tabs/tab-1/terminal/request-1', '/api/super-tabs/tab-1?asAgentId=', '/api/super-tabs/tab-1/parts',
-      '/api/super-tabs/tab-1/changes?cursor=eyJ2IjoyfQ', '/api/super-tabs/tab-1/groups?dormant=1', '/api/super-tabs/tab-1/groups/group-1']) limited(await call('GET', url))
+      '/api/super-tabs/tab-1/changes?cursor=eyJ2IjoyfQ', '/api/super-tabs/tab-1/groups?dormant=1', '/api/super-tabs/tab-1/groups/group-1',
+      '/api/super-tabs/tab-1/projects/project-1/instructions', '/api/super-tabs/tab-1/projects/project-1/instructions/revisions',
+      '/api/super-tabs/tab-1/projects/project-1/instructions/revisions/3']) limited(await call('GET', url))
     limited(await call('POST', '/api/super-tabs/tab-1/attachments'))
     expect(store.calls).toEqual([])
   })

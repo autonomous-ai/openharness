@@ -28,10 +28,13 @@ Sources and visual-review notes are in [the asset guide](../../.github/assets/st
 
 Daemon-level checks over the same loopback WebSocket the desktop uses (`ws://127.0.0.1:18473/api/local-ws`).
 They need a running daemon with the harness installed on this machine, and `cli/node_modules` (for `ws`).
-Run them as the OS user Harness runs as: since Harness 0.4.21 the loopback API refuses (401) any
-request without the daemon's local credential, which they read from `hook-credential` in
-`ADAPTER_DATA_DIR` (default `~/.harness/cli/data`) and send as `X-Harness-Local`
-(`local-credential.mjs`).
+Run them as the OS user Harness runs as: they reach the daemon over its 0600 socket in `ADAPTER_DATA_DIR`
+(default `~/.harness/cli/data`, or `~/.harness/s/<hash>` for a folder too long for a socket), `local-daemon.mjs`, and nothing goes to its TCP port, which any account can hold.
+On Windows they reach it over its named pipe, which the daemon's record `daemon-<port>.json` names: each request proves the
+daemon's token (`daemon-token`) without sending it, and an answer counts only with the daemon's proof. With no live pipe they say
+Harness is not running; nothing goes to the port, which the Team account's daemon can hold from boot (audit W1). Only a home
+too long to hold a socket uses the port, with `hook-credential` as `X-Harness-Local` (`local-credential.mjs`).
+The Store packages share the same transport, a copy of `local-daemon.mjs` in each (`lib/localDaemon.mjs`).
 
 ```sh
 node store/tools/dsh-e2e.mjs <machineId> <dshId> <engine> <workspace> [--keep] [--restart] [--bypass] [--no-verdict]

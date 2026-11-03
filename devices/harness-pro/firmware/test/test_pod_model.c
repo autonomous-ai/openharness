@@ -1338,6 +1338,56 @@ static void pod_model_test_swarm_notice(void) {
     pod_model_unread_add(&M, "a1", "Alpha", "x", 1, 1000);   // an agent entry is never a Swarm notice's read target
     CHECK(!pod_model_swarm_notice_read(&M, "S1", "a1", ""));
     CHECK(M.unread_count == 1);
+
+    // swarm_leaving_the_list_drops_its_rows: access lost (removed from a project, signed out on the Mac) sends no read frame, and the row holds chat text
+    {
+        const char *l1[] = {"L1", "L2"}, *l2[] = {"L3", "L4"};
+        pod_swarm_t s1 = card("S1", "one", l1, 2), s2 = card("S2", "two", l2, 2);
+        pod_model_reset(&M);
+        ids_of("S1", "S2", NULL, NULL);
+        pod_model_supertab(&M, &s1, 100);
+        pod_model_supertab(&M, &s2, 100);
+        pod_model_swarm_notice(&M, "S1", "L1", "c1", "private one", 1000);
+        pod_model_unread_add(&M, "a1", "Alpha", "a harness's own", 1, 1100);
+        pod_model_swarm_notice(&M, "S2", "L3", "c3", "still mine", 1200);
+        pod_model_swarm_notice(&M, "S1", "L2", "c2", "private two", 1300);
+        rev = M.revision;
+        ids_of("S2", NULL, NULL, NULL);
+        CHECK(M.revision != rev);
+        CHECK(M.unread_count == 2 && !pod_model_unread_find(&M, "L1") && !pod_model_unread_find(&M, "L2"));
+        CHECK(pod_model_unread_find(&M, "L3") && pod_model_unread_find(&M, "a1"));   // the Swarm still listed, and a harness's own entry
+        ids_of(NULL, NULL, NULL, NULL);   // signed out: no Swarms at all
+        CHECK(M.unread_count == 1 && pod_model_unread_find(&M, "a1") && !pod_model_unread_find(&M, "L3"));
+
+        // a_listed_swarm_whose_card_has_not_come_keeps_its_row: a reorder, or the frame still on its way, is not a loss
+        pod_model_reset(&M);
+        ids_of("S1", "S2", NULL, NULL);
+        pod_model_supertab(&M, &s1, 100);
+        pod_model_swarm_notice(&M, "S1", "L1", "c1", "kept", 1000);
+        ids_of("S2", "S1", NULL, NULL);
+        CHECK(pod_model_unread_find(&M, "L1"));
+    }
+
+    // lead_leaving_its_swarm_drops_its_row
+    {
+        const char *both[] = {"L1", "L2"}, *one[] = {"L1"}, *other[] = {"L2"};
+        pod_swarm_t s1 = card("S1", "one", both, 2), s1b = card("S1", "one", one, 1), s2 = card("S2", "two", other, 1);
+        pod_model_reset(&M);
+        ids_of("S1", "S2", NULL, NULL);
+        pod_model_supertab(&M, &s1, 100);
+        pod_model_supertab(&M, &s2, 100);
+        pod_model_swarm_notice(&M, "S1", "L1", "c1", "stays", 1000);
+        pod_model_swarm_notice(&M, "S1", "L2", "c2", "private", 1100);
+        pod_model_supertab(&M, &s1, 1200);   // the same Leads again: nothing goes
+        CHECK(M.unread_count == 2);
+        pod_model_supertab(&M, &s1b, 1300);
+        CHECK(M.unread_count == 1 && pod_model_unread_find(&M, "L1") && !pod_model_unread_find(&M, "L2"));
+
+        // the_same_lead_id_in_another_swarm_keeps_its_row: only the row of the Swarm it left goes
+        pod_model_swarm_notice(&M, "S2", "L2", "c9", "of the other Swarm", 1400);
+        pod_model_supertab(&M, &s1b, 1500);
+        CHECK(pod_model_unread_find(&M, "L2") && !strcmp(pod_model_unread_find(&M, "L2")->tab, "S2"));
+    }
 }
 
 int main(void) {

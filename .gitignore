@@ -1,4 +1,5 @@
 node_modules/
+cli/node_modules
 .vite/
 dist/
 .tsbuildinfo

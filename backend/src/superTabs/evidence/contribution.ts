@@ -48,7 +48,7 @@ const zero = (): Counts => Object.fromEntries(COUNTS.map(k => [k, 0])) as unknow
  * rework rounds come from its ledger entry, and its ship from the group's ledger; when that entry rolled off or the group is
  * gone, what was counted before stays, as those no longer change.
  */
-export function contributionOf(decision: EvidenceDecision, group: Pick<Conversation, 'reviewOf' | 'task' | 'ledger'> | undefined,
+export function contributionOf(decision: EvidenceDecision, group: Pick<Conversation, 'reviewOf' | 'step' | 'task' | 'ledger'> | undefined,
   previous: Contribution | null, groupProjectId: string | undefined): Contribution | null {
   const run = decision.run
   const projectId = groupProjectId ?? previous?.projectId

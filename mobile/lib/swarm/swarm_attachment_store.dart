@@ -73,13 +73,15 @@ class SwarmAttachmentStore {
   /// [keepOnly] and [clear] one after the other, never over each other.
   Future<void> _changing = Future.value();
 
-  /// [url]'s file, fetched the first time and kept after. Throws while nobody's
-  /// files are kept. Asked while they are being emptied, it waits for that.
-  Future<File> file(Uri url) async {
+  /// [url]'s file, fetched the first time and kept after, by [key] when given
+  /// (a signed link that changes for the same file), else by [url]. Throws
+  /// while nobody's files are kept. Asked while they are being emptied, it
+  /// waits for that.
+  Future<File> file(Uri url, {String? key}) async {
     await _changing;
     final account = _account;
     if (account == null) throw StateError('No account to keep files for.');
-    final fetch = _fetch(account, url);
+    final fetch = _fetch(account, url, key ?? url.toString());
     final done = fetch.then<void>((_) {}, onError: (Object _) {});
     _fetching.add(done);
     try {
@@ -89,8 +91,10 @@ class SwarmAttachmentStore {
     }
   }
 
-  Future<File> _fetch(String account, Uri url) async =>
-      (await (_cache ??= _cacheFor(account))).getSingleFile(url.toString());
+  Future<File> _fetch(String account, Uri url, String key) async =>
+      (await (_cache ??= _cacheFor(
+        account,
+      ))).getSingleFile(url.toString(), key: key);
 
   /// Keeps [accountId]'s files and empties every other account's; with null
   /// (nobody signed in, or Swarm off) empties everything. A file that could

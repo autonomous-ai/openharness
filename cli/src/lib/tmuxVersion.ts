@@ -30,8 +30,8 @@ export const TMUX_FEATURE_MIN = {
   paneOptions: { major: 3, minor: 0 },
   /** `send-keys -H`, keys given as hex bytes (3.0). */
   sendKeysHex: { major: 3, minor: 0 },
-  /** `respawn-pane -e` (3.0). */
-  respawnEnv: { major: 3, minor: 0 },
+  /** `respawn-pane -e` (3.0), given on stdin with `source-file -` (3.1) so no value shows in `ps` (tmuxBackend.ts `runScript`). */
+  respawnEnv: { major: 3, minor: 1 },
   /** `capture-pane -N`, a row's trailing spaces kept (3.1). */
   captureTrailingSpaces: { major: 3, minor: 1 },
   /** Client flags (3.2): `attach-session -f ignore-size`. */

@@ -106,6 +106,18 @@ describe('changes since a cursor (design 4.4)', () => {
     const changed = [write(fresh, 'starts', `start-${s.web}`, p => { p.deleted = true }), write(fresh, 'starts', `start-${s.secretGroup}`, p => { p.deleted = true })]
     expect(keys(receive(fresh, changed, peer).starts)).toEqual([`start-${s.web}`])
     expect(keys(receive(fresh, changed, owner).starts)).toEqual([`start-${s.web}`, `start-${s.secretGroup}`])
+    // A Buddy reads no starts, not even a removal's id, though it reads their group (security review 2 of #2258).
+    s.edit(state => {
+      const generation = state.people.find(p => p.id === peer.userId)!.generation, worker = state.agents.find(a => a.id === s.worker)!
+      state.agents.push({ ...worker, id: 'buddy', harnessId: 'buddy-harness', contributorId: peer.userId, membershipGeneration: generation,
+        name: 'Buddy', buddyOf: { personId: peer.userId, generation } })
+    })
+    const withBuddy = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
+    const removed = [write(withBuddy, 'starts', `start-${s.web}`, p => { p.deleted = true })]
+    const buddy: Actor = { kind: 'agent', agentId: 'buddy', machineOwnerId: `${owner.userId}-machine` }
+    expect(keys(receive(withBuddy, [write(withBuddy, 'groups', s.web, () => {})], buddy).groups)).toEqual([s.web])
+    expect(receive(withBuddy, removed, buddy).starts).toEqual([])
+    expect(keys(receive(withBuddy, removed, peer).starts)).toEqual([`start-${s.web}`])
   })
 
   it('sends changed project progress only to readers of the project', () => {

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/profile_model.dart';
 import 'package:harness/super_tabs/reading.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -87,6 +88,24 @@ SuperTabController _controller(
   reading: reading,
 );
 
+/// A machine of the Swarm as its last reading left it.
+Map<String, dynamic> _machine({required int free}) => {
+  'machineId': 'm1',
+  'name': 'Mac Studio',
+  'contributorId': 'owner',
+  'scope': 'swarm',
+  'cwd': '/swarm',
+  'engines': ['claude'],
+  'maxAgents': 4,
+  'paused': false,
+  'availableSlots': free,
+};
+
+Map<String, dynamic> _conversation(ConversationServer server, String id) =>
+    (server.state['conversations'] as List)
+        .cast<Map<String, dynamic>>()
+        .firstWhere((g) => g['id'] == id);
+
 void _reply(ConversationServer server, String text) {
   server.append(text);
   server.messages.last['author'] = {
@@ -109,28 +128,44 @@ void main() {
         reads.clear();
         async.elapse(const Duration(seconds: 30));
         expect(reads.states, 10);
-        // Nothing new: each poll reads the page again for its receipts.
-        expect(reads.pages, 10);
+        // Nothing new: each poll asks what came after the newest, and never
+        // reads the page again for its receipts (spec 2026-11-02-poll-cost).
+        expect(reads.tails, 10);
+        expect(reads.pages, 0);
         c.dispose();
       });
     });
 
-    test('each poll reads the state, then the messages', () {
-      fakeAsync((async) {
-        final server = ConversationServer()..append('Hello');
-        final reads = _Reads(server);
-        final c = _controller(reads)..start();
-        async.flushMicrotasks();
-        server.holdReads = Completer<void>();
-        reads.clear();
-        async.elapse(const Duration(seconds: 3));
-        expect(reads.paths, [_changesRead]);
-        server.holdReads!.complete();
-        server.holdReads = null;
-        async.flushMicrotasks();
-        c.dispose();
-      });
-    });
+    // Spec 2026-11-02-poll-cost, Part 2: the messages follow the state read
+    // that showed the conversation's counter move, never beside it, however
+    // the read was asked for.
+    test(
+      'each poll reads the state, then the messages its counters ask for',
+      () {
+        fakeAsync((async) {
+          final server = ConversationServer()..append('Hello');
+          final reads = _Reads(server);
+          final c = _controller(reads, reading: SuperTabReading.desktop)
+            ..start();
+          async.flushMicrotasks();
+          _reply(server, 'Done.');
+          server.holdReads = Completer<void>();
+          reads.clear();
+          c.told(main: true);
+          async.elapse(const Duration(seconds: 3));
+          expect(reads.paths, [_changesRead]);
+          server.holdReads!.complete();
+          server.holdReads = null;
+          async.flushMicrotasks();
+          expect(reads.paths, [
+            _changesRead,
+            '/api/super-tabs/tab/conversations/lead/messages?after=1',
+          ]);
+          expect(c.messages('lead').last.text, 'Done.');
+          c.dispose();
+        });
+      },
+    );
 
     test('every poll is drawn, changed or not', () {
       fakeAsync((async) {
@@ -184,6 +219,213 @@ void main() {
     });
   });
 
+  // Spec 2026-11-02-poll-cost, Part 2: the open conversation's messages are
+  // read when its own counters move, not on a change elsewhere in the Swarm.
+  group('Desktop reads by the open conversation\'s counters', () {
+    Iterable<String> leadReads(_Reads reads) =>
+        reads.paths.where((p) => p.contains('/conversations/lead/messages'));
+
+    test('no messages read while the open conversation\'s counters are '
+        'unchanged, whatever else in the Swarm or its machines changed', () {
+      fakeAsync((async) {
+        final server = ConversationServer()..append('Hello');
+        final reads = _Reads(server);
+        final c = _controller(reads, reading: SuperTabReading.desktop)..start();
+        async.elapse(const Duration(seconds: 3));
+        reads.clear();
+        server.state['name'] = 'Pilot, renamed';
+        server.state['machines'] = [_machine(free: 3)];
+        server.append('Elsewhere', conversationId: 'offline');
+        c.told(main: true);
+        async.elapse(const Duration(seconds: 6));
+        server.state['machines'] = [_machine(free: 2)];
+        c.told(main: false);
+        async.elapse(const Duration(seconds: 30));
+        expect(reads.states, greaterThan(10));
+        expect(c.snapshot!.name, 'Pilot, renamed');
+        expect(leadReads(reads), isEmpty);
+        c.dispose();
+      });
+    });
+
+    // Review focus 2: two Swarm tabs share a machine; its reading changes
+    // both, and only the one on screen has a new message.
+    test('a change in another Swarm reads nothing here', () {
+      fakeAsync((async) {
+        final here = ConversationServer()..append('Hello');
+        final there = ConversationServer()..append('Hello');
+        for (final server in [here, there]) {
+          server.state['machines'] = [_machine(free: 4)];
+        }
+        final hereReads = _Reads(here), thereReads = _Reads(there);
+        final offScreen = _controller(
+          hereReads,
+          reading: SuperTabReading.desktop,
+        )..start();
+        final onScreen = _controller(
+          thereReads,
+          reading: SuperTabReading.desktop,
+        )..start();
+        async.elapse(const Duration(seconds: 3));
+        offScreen.away = true;
+        async.elapse(const Duration(seconds: 15));
+        hereReads.clear();
+        thereReads.clear();
+        for (final server in [here, there]) {
+          server.state['machines'] = [_machine(free: 3)];
+        }
+        _reply(there, 'Done there.');
+        offScreen.told(main: false);
+        onScreen.told(main: true);
+        async.elapse(const Duration(seconds: 30));
+        expect(hereReads.states, greaterThan(0));
+        expect(hereReads.messageReads, isEmpty);
+        expect(thereReads.messageReads, [
+          '/api/super-tabs/tab/conversations/lead/messages?after=1',
+        ]);
+        expect(onScreen.messages('lead').last.text, 'Done there.');
+        offScreen.dispose();
+        onScreen.dispose();
+      });
+    });
+
+    test('one after read when lastMessageSequence moves', () {
+      fakeAsync((async) {
+        final server = ConversationServer()..append('Hello');
+        final reads = _Reads(server);
+        final c = _controller(reads, reading: SuperTabReading.desktop)..start();
+        async.elapse(const Duration(seconds: 3));
+        reads.clear();
+        _reply(server, 'Done.');
+        async.elapse(const Duration(seconds: 30));
+        expect(leadReads(reads), [
+          '/api/super-tabs/tab/conversations/lead/messages?after=1',
+        ]);
+        expect(c.messages('lead').last.text, 'Done.');
+        // A message this reader may not see still moves the counter: one
+        // empty after, no page read again, and nothing more while it stays.
+        reads.clear();
+        _conversation(server, 'lead')['lastMessageSequence'] = 7;
+        async.elapse(const Duration(seconds: 30));
+        expect(leadReads(reads), [
+          '/api/super-tabs/tab/conversations/lead/messages?after=2',
+        ]);
+        c.dispose();
+      });
+    });
+
+    // Final review, Important 3: the early page of a reopened Swarm can end before the state it is joined with.
+    test('a reply that lands between a reopened Swarm\'s early page and its state still shows', () {
+      fakeAsync((async) {
+        final server = ConversationServer()..append('Hello');
+        final reads = _Reads(server)..holdState = [];
+        final c = _controller(
+          reads,
+          reading: SuperTabReading.desktop,
+          initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
+        )..start();
+        async.flushMicrotasks();
+        // The early page has gone out and come back; the agent answers before the state is read.
+        _reply(server, 'Done.');
+        for (final wait in reads.holdState!) {
+          wait.complete();
+        }
+        reads.holdState = null;
+        async.flushMicrotasks();
+        async.elapse(const Duration(seconds: 10));
+        expect(c.messages('lead').last.text, 'Done.');
+        c.dispose();
+      });
+    });
+
+    test('a page re-read only when reactionSeq moves', () {
+      fakeAsync((async) {
+        final server = ConversationServer()..append('Hello');
+        final reads = _Reads(server);
+        final c = _controller(reads, reading: SuperTabReading.desktop)..start();
+        async.elapse(const Duration(seconds: 3));
+        reads.clear();
+        // Someone reacts on another device.
+        server.messages.single['reactions'] = [
+          {
+            'emoji': 'thumbs_up',
+            'count': 1,
+            'by': [
+              {'kind': 'person', 'id': 'peer'},
+            ],
+          },
+        ];
+        _conversation(server, 'lead')['reactionSeq'] = 1;
+        async.elapse(const Duration(seconds: 30));
+        expect(leadReads(reads), [
+          '/api/super-tabs/tab/conversations/lead/messages?after=1',
+          '/api/super-tabs/tab/conversations/lead/messages?before=2',
+        ]);
+        expect(
+          c.messages('lead').single.reactions.single.emoji,
+          SuperTabReactionEmoji.thumbsUp,
+        );
+        c.dispose();
+      });
+    });
+
+    test('the own receipt refreshes by messageId every 30 s and stops after '
+        'its bound', () {
+      fakeAsync((async) {
+        final server = ConversationServer()..append('Build it');
+        server.messages.single['deliveries'] = [
+          {'id': 'd', 'agentId': 'lead-agent', 'status': 'queued'},
+        ];
+        final reads = _Reads(server);
+        final c = _controller(reads, reading: SuperTabReading.desktop)..start();
+        async.flushMicrotasks();
+        reads.clear();
+        async.elapse(const Duration(seconds: 60));
+        // One row every 30 s, not the page every 3 s.
+        expect(leadReads(reads), [
+          '/api/super-tabs/tab/conversations/lead/messages?messageId=message-1',
+          '/api/super-tabs/tab/conversations/lead/messages?messageId=message-1',
+        ]);
+        // Queued: read for 10 minutes, then left for the next real read.
+        async.elapse(const Duration(minutes: 9));
+        reads.clear();
+        async.elapse(const Duration(minutes: 5));
+        expect(leadReads(reads), isEmpty);
+        c.dispose();
+      });
+    });
+
+    test('a held delivery\'s receipt is read for an hour, and stops once '
+        'delivered', () {
+      fakeAsync((async) {
+        final server = ConversationServer()..append('Build it');
+        server.messages.single['deliveries'] = [
+          {'id': 'd', 'agentId': 'lead-agent', 'status': 'claimed'},
+        ];
+        final reads = _Reads(server);
+        final c = _controller(reads, reading: SuperTabReading.desktop)..start();
+        async.elapse(const Duration(minutes: 50));
+        reads.clear();
+        async.elapse(const Duration(seconds: 60));
+        expect(reads.receipts, 2);
+        expect(reads.pages, 0);
+        server.messages.single['deliveries'] = [
+          {'id': 'd', 'agentId': 'lead-agent', 'status': 'delivered'},
+        ];
+        async.elapse(const Duration(seconds: 30));
+        expect(
+          c.messages('lead').single.deliveries.single['status'],
+          'delivered',
+        );
+        reads.clear();
+        async.elapse(const Duration(minutes: 5));
+        expect(reads.receipts, 0);
+        expect(reads.pages, 0);
+        c.dispose();
+      });
+    });
+  });
+
   group('web reading', () {
     test(
       'a quiet tab reads its state every 15 s, its new messages every 3 s',
@@ -202,8 +444,8 @@ void main() {
           async.elapse(const Duration(seconds: 60));
           expect(reads.states, 4);
           expect(reads.tails, 20);
-          // The page is read again only with a full read.
-          expect(reads.pages, 4);
+          // The page is read again only for a changed reaction.
+          expect(reads.pages, 0);
           c.dispose();
         });
       },
@@ -229,7 +471,8 @@ void main() {
       },
     );
 
-    test('the person\'s unsettled message settles within one 3 s check', () {
+    // Spec 2026-11-02-poll-cost, Part 2: one row every 30 s, not every check.
+    test('the person\'s unsettled message settles within one 30 s check', () {
       fakeAsync((async) {
         final server = ConversationServer()..append('Please start.');
         server.messages.first['deliveries'] = [
@@ -238,11 +481,6 @@ void main() {
         final reads = _Reads(server);
         final c = _controller(reads, reading: _web)..start();
         async.elapse(const Duration(seconds: 61));
-        // Just after a full read: the next poll is a light check.
-        do {
-          reads.clear();
-          async.elapse(const Duration(seconds: 3));
-        } while (reads.states == 0);
         expect(
           c.messages('lead').single.deliveries.single['status'],
           'claimed',
@@ -251,12 +489,11 @@ void main() {
           {'id': 'delivery', 'agentId': 'lead-agent', 'status': 'delivered'},
         ];
         reads.clear();
-        async.elapse(const Duration(seconds: 3));
+        async.elapse(const Duration(seconds: 30));
         expect(
           c.messages('lead').single.deliveries.single['status'],
           'delivered',
         );
-        expect(reads.states, 0);
         expect(reads.pages, 0);
         expect(reads.receipts, 1);
         c.dispose();
@@ -315,28 +552,33 @@ void main() {
       });
     });
 
-    test('a full read asks for new messages beside the state', () {
-      fakeAsync((async) {
-        final server = ConversationServer()..append('Hello');
-        final reads = _Reads(server);
-        final c = _controller(reads, reading: _web)..start();
-        async.flushMicrotasks();
-        server.holdReads = Completer<void>();
-        reads.clear();
-        async.elapse(const Duration(seconds: 3));
-        expect(reads.paths, [
-          '/api/super-tabs/tab/conversations/lead/messages?after=1',
-          _changesRead,
-        ]);
-        _reply(server, 'Done.');
-        server.holdReads!.complete();
-        server.holdReads = null;
-        async.flushMicrotasks();
-        // Its answer is used, not asked for again.
-        expect(reads.tails, 1);
-        c.dispose();
-      });
-    });
+    // Spec 2026-11-02-poll-cost, Part 2: beside every read, the messages were
+    // read on any change in the Swarm.
+    test(
+      'a full read after the first asks for the messages after the state',
+      () {
+        fakeAsync((async) {
+          final server = ConversationServer()..append('Hello');
+          final reads = _Reads(server);
+          final c = _controller(reads, reading: _web)..start();
+          async.flushMicrotasks();
+          server.holdReads = Completer<void>();
+          reads.clear();
+          async.elapse(const Duration(seconds: 3));
+          expect(reads.paths, [_changesRead]);
+          _reply(server, 'Done.');
+          server.holdReads!.complete();
+          server.holdReads = null;
+          async.flushMicrotasks();
+          expect(reads.paths, [
+            _changesRead,
+            '/api/super-tabs/tab/conversations/lead/messages?after=1',
+          ]);
+          expect(c.messages('lead').last.text, 'Done.');
+          c.dispose();
+        });
+      },
+    );
 
     test('a quiet full read with nothing new redraws nothing', () {
       fakeAsync((async) {
@@ -369,24 +611,23 @@ void main() {
       });
     });
 
-    test('a reply shows as its messages answer, not after the state', () {
+    // The spec's call: a reply shows one state read later, not beside it.
+    test('a reply shows once the state that says so answers', () {
       fakeAsync((async) {
         final server = ConversationServer()..append('Hello');
         final reads = _Reads(server);
         final c = _controller(reads, reading: _web)..start();
         async.flushMicrotasks();
         _reply(server, 'Done.');
-        // The state answers slowly; the messages at once.
-        server.holdReads = Completer<void>();
         final heldStates = <Completer<void>>[];
         reads.holdState = heldStates;
-        server.holdReads!.complete();
-        server.holdReads = null;
         async.elapse(const Duration(seconds: 3));
         expect(heldStates, hasLength(1));
-        expect(c.messages('lead').last.text, 'Done.');
+        expect(c.messages('lead').last.text, 'Hello');
+        expect(reads.tails, 0);
         heldStates.single.complete();
         async.flushMicrotasks();
+        expect(c.messages('lead').last.text, 'Done.');
         expect(reads.tails, 1);
         c.dispose();
       });

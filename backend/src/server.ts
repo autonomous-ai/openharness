@@ -1,5 +1,6 @@
 import 'dotenv/config'
 import cors from '@fastify/cors'
+import { CORS_OPTIONS } from './lib/corsOptions.js'
 import Fastify from 'fastify'
 import http from 'http'
 import net from 'net'
@@ -22,8 +23,13 @@ import { startTurnCredentialRefresh } from './lib/turnCredentials.js'
 import { closeBus, pub, redisCount, redisSsoProfileStore, redisSwarmStamps } from './lib/bus.js'
 import { prisma } from './lib/prisma.js'
 import { backendReadinessChecks, createReadiness, drainBeforeClosing, processDrain } from './lib/readiness.js'
-import { configureSwarmStamps } from './superTabs/cache.js'
+import { configureSwarmStamps, swarmReadCache } from './superTabs/cache.js'
+import { startCacheStats } from './superTabs/cacheStats.js'
+import { startDeliveryCalls } from './lib/deliveryCalls.js'
+import { startMemoryStats } from './lib/memoryStats.js'
+import { readDelta } from './superTabs/cachedReads.js'
 import { watchGroupIndexes } from './superTabs/parts/indexed.js'
+import { startMessageReadStats } from './superTabs/messageReadStats.js'
 import { useSharedSsoProfileStore } from './lib/ssoAuth.js'
 import { useSharedRateCounter } from './lib/rateLimit.js'
 import { createRouteRateLimit } from './middlewares/routeRateLimit.js'
@@ -31,9 +37,13 @@ import { redisWindowCounter } from './lib/redisRateCounter.js'
 import { selfProfileFromEnv } from './lib/selfProfile.js'
 import { startRelayUsageFlush } from './lib/productUsage.js'
 import { registerWorkContext, startQueryStats } from './lib/queryStats.js'
+import { startRetryStats } from './superTabs/retryStats.js'
+import { startRelayStats } from './lib/relayStats.js'
+import { startPodRoutes } from './lib/hub.js'
 import { registerRouteLatency, startRouteLatency } from './lib/routeLatency.js'
 import { drainAllSockets, openSocketCount, RELEASE_UPGRADE_SLOT, type SlotSocket } from './lib/wsServer.js'
 import { endpointOf, refusedUpgrade, startWsCounterLog, watchUpgrade } from './lib/wsAttribution.js'
+import { startMachineReportLog } from './superTabs/machineReports.js'
 
 // Node ≥ 15 turns an unhandled rejection into a process exit. On a cluster worker that holds thousands of
 // sockets, one DB/Redis hiccup inside a fire-and-forget promise would then drop every one of them and
@@ -141,7 +151,24 @@ async function start(): Promise<void> {
   selfProfileFromEnv(app)
   // Always on, every minute (DB roadmap Phase 1): queries by model.action, filter shape and route, and each route's p50/p95.
   const stopQueryStats = startQueryStats()
+  // Every minute, how often Swarm transactions ran again and commands loaded twice (superTabs/retryStats.ts, DB 2.1).
+  const stopRetryStats = startRetryStats()
+  // Every minute: re-claims, refused receipt reads and holds, what the daemons' delivery loop costs (spec 2026-11-02 poll cost).
+  const stopDeliveryCalls = startDeliveryCalls()
+  // Every minute: how the Swarm read cache served reads (hit, patched, loaded in full and why) and what its checks found.
+  const stopCacheStats = startCacheStats()
+  // Every minute: the process's memory and what the read cache holds of it (lib/memoryStats.ts; the HPA scales on memory).
+  const stopMemoryStats = startMemoryStats({ cache: () => swarmReadCache()?.size ?? null })
   const stopRouteLatency = startRouteLatency(registerRouteLatency(app))
+  // Every minute: who reads messages how, with the rows each page decoded and showed (superTabs/messageReadStats.ts).
+  const stopMessageReadStats = startMessageReadStats()
+  // Every minute: how each frame an adapter sends for one viewer reached it, and how many processes each publish woke.
+  const stopRelayStats = startRelayStats()
+  // Frames for one viewer go to the process holding it (lib/terminalRoute.ts), unless TERMINAL_POD_ROUTES=off.
+  let stopPodRoutes = (): void => {}
+  if (env.TERMINAL_POD_ROUTES !== 'off') {
+    startPodRoutes().then(stop => { stopPodRoutes = stop }, err => logger.warn('pod routes failed to start; frames use the machine channels', { error: String(err) }))
+  }
 
   app.setErrorHandler(errorHandler)
 
@@ -149,14 +176,7 @@ async function start(): Promise<void> {
 
   registerSecurityHeaders(app)
 
-  // Allow all origins (reflect the request origin so credentialed requests work too). Methods +
-  // headers are reflected (allowedHeaders omitted → echoes Access-Control-Request-Headers), so any
-  // client header (Authorization, x-api-key, …) passes preflight.
-  await app.register(cors, {
-    origin: true,
-    credentials: true,
-    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
-  })
+  await app.register(cors, CORS_OPTIONS)
 
   // Every process shares one memory of validated tokens; without it each worker asks the profile API
   // for itself. Attached before anything can authenticate — the REST gate below and the socket upgrades.
@@ -165,7 +185,11 @@ async function start(): Promise<void> {
   useSharedRateCounter(redisWindowCounter(pub))
   // Each pod's socket counts once a minute: open, connects by client, short-lived, refused (WebSocket roadmap Phase 0).
   startWsCounterLog()
-  configureSwarmStamps(redisSwarmStamps(), { reads: env.SWARM_READ_CACHE === 'on', maxBytes: env.SWARM_CACHE_MB * 2 ** 20 })
+  // Each pod's machine reports a minute, stored without a Swarm load (fast) or in full (DB roadmap 2.5).
+  const stopMachineReportLog = startMachineReportLog()
+  configureSwarmStamps(redisSwarmStamps(), { reads: env.SWARM_READ_CACHE === 'on', maxBytes: env.SWARM_CACHE_MB * 2 ** 20,
+    ...(env.SWARM_CACHE_DELTA === 'on' ? { delta: readDelta(prisma) } : {}),
+    verifyRate: env.SWARM_CACHE_VERIFY_RATE })
   // Hot Swarm reads name their indexes once the database is seen to have them (superTabs/parts/indexed.ts).
   watchGroupIndexes(prisma)
 
@@ -222,9 +246,17 @@ async function start(): Promise<void> {
       await Promise.race([fastifyClosed, new Promise((resolve) => setTimeout(resolve, 5_000))])
       // The sockets have closed, so no connect is left to count. Bounded: a slow database must not hold the exit.
       await Promise.race([stopRelayUsage().catch(() => {}), new Promise((resolve) => setTimeout(resolve, 3_000))])
-      // The last partial minute of both logs, once the drain and the usage flush have run their queries.
+      // The last partial minute of these logs, once the drain and the usage flush have run their queries.
       stopQueryStats()
+      stopRetryStats()
+      stopDeliveryCalls()
+      stopCacheStats()
+      stopMemoryStats()
       stopRouteLatency()
+      stopMachineReportLog()
+      stopMessageReadStats()
+      stopRelayStats()
+      stopPodRoutes()
       // The database stays connected through the drain, for the requests still being served (lib/prisma.ts).
       await Promise.allSettled([prisma.$disconnect(), closeBus()])
       process.exit(exitCode)

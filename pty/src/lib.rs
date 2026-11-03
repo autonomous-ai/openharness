@@ -13,6 +13,7 @@ pub mod logfile;
 pub mod pane;
 pub mod pane_ids;
 pub mod panes;
+pub mod peer;
 pub mod protocol;
 pub mod ps;
 pub mod server;

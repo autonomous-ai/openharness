@@ -20,10 +20,13 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import { dirname, join } from 'node:path'
 import type { RemoteAppPolicy } from '../../core/api.js'
 import { eventAgentId } from '../../core/guestPolicy.js'
+import { roleFromWire } from '../../lib/swarmSkills.js'
 import { observerSnapshotFile } from '../../sharing/swarmMarks.js'
-import type { PurgeRecord } from './teamPurge.js'
+import { readTeamConfig } from '../../team/config.js'
+import { writeTeamStatus } from '../../team/privacy.js'
+import type { PurgeRecord, PurgeStatus } from './teamPurge.js'
 export { isTeamDaemon, pmEngineHome, PM_HOMES } from '../teamDaemon.js'
-export { createConfidentialPurge, purgeRecord } from './teamPurge.js'
+export { createConfidentialPurge, purgeRecord, withPurgeRetries } from './teamPurge.js'
 
 /** Answered while a confidential session runs here: each only reads, and those naming a session only a non-confidential one.
  *  A terminal stream's frames are its own (terminalStreamManager.ts): it is watch-only, and only these reach it. */
@@ -218,7 +221,8 @@ export function teamAppPolicyFor(dataDir: string, machineId: () => string,
   stopped: () => ReadonlyArray<{ agentId: string; sessionId?: string | null; swarmSkill?: { role?: string } }>, purges?: PurgeRecord) {
   const record = confidentialRecord(confidentialRecordFile(dataDir))
   const held = (rows: ReadonlyArray<{ agentId: string; sessionId?: string | null; swarmSkill?: { role?: string } }>) =>
-    rows.map(s => ({ agentId: s.agentId, sessionId: s.sessionId ?? null, lead: s.swarmSkill?.role === 'lead' }))
+    // The coordinator, saved as `coordinator`, or as `lead` by a release from before role kinds.
+    rows.map(s => ({ agentId: s.agentId, sessionId: s.sessionId ?? null, lead: roleFromWire(s.swarmSkill?.role)?.role === 'coordinator' }))
   let seen: { key: string; marks: string[] | null } | null = null
   const marks = () => {
     if (record.unknown()) return null
@@ -231,4 +235,11 @@ export function teamAppPolicyFor(dataDir: string, machineId: () => string,
   return createTeamAppPolicy({ marks, heard: () => existsSync(observerSnapshotFile(dataDir, machineId())), live: () => held(live()), stopped: () => held(stopped()),
     recorded: record.ids, record: ids => record.add(ids),
     ...(purges ? { purging: () => ({ ids: purges.pending().map(t => t.agentId), unknown: purges.unknown() }) } : {}) })
+}
+
+/** Tells `harness team status` the purges still to finish, in the Team account's status file (team/privacy.ts). A computer
+ *  with no owner (`harness team on`) has no such file, and no one's apps to hold it from. */
+export const teamPurgeReport = () => (purges: PurgeStatus): void => {
+  const config = readTeamConfig()
+  if (config) writeTeamStatus(config.statusFile, { purges })
 }
