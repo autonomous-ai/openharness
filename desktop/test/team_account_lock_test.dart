@@ -12,6 +12,7 @@ import 'package:harness/auth/cli_login.dart';
 import 'package:harness/core/config.dart';
 
 import 'package:harness/core/models.dart';
+import 'package:harness/settings/settings_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/team_account_setup.dart';
@@ -526,6 +527,26 @@ void main() {
       await tester.pump();
       expect(find.byKey(const Key('team-account-lock')), findsOneWidget);
       expect(find.byKey(const Key('screen')), findsOneWidget);
+
+      // Review of #2779: the macOS app menu's rows (Settings, Check for
+      // Updates, Keyboard Shortcuts…) arrive over a channel, not by focus.
+      Future<void> appMenu(String action) async {
+        // Not awaited: the action ends when what it opened is closed.
+        tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+          'harness/app_menu',
+          const StandardMethodCodec().encodeMethodCall(MethodCall(action)),
+          (_) {},
+        );
+        await tester.pump();
+        await tester.pump();
+      }
+
+      await appMenu('settings');
+      expect(find.byType(SettingsScreen), findsNothing);
+      await own.teamAccountMade();
+      await tester.pump();
+      await appMenu('settings');
+      expect(find.byType(SettingsScreen), findsOneWidget);
     },
   );
 
