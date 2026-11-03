@@ -735,8 +735,11 @@ static void voice_begin_effect(const char *agent)
 {
     const char *why = pro_app_voice_block_reason(agent);
     const bool was_open = pro_voice_open();
+    pro_app_lock();
+    const bool face = pod_ui_talking_to_swarm(&s_pod);   // a Lead view's talk: its words are for the face chat it shows
+    pro_app_unlock();
     if (!why) {
-        pro_voice_begin(agent, false);
+        pro_voice_begin(agent, face);
         // The offer's gate raises s_updating BEFORE it reads whether voice is open, and a start opens voice BEFORE this reads
         // s_updating: one of the two always sees the other, so a recording never starts over an accepted update.
         if (atomic_load(&s_updating)) { pro_voice_end(false); why = "Updating"; }

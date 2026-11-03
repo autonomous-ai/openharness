@@ -147,6 +147,10 @@ static bool msg_number(cJSON **root, const char *key, double value)
 {
     return *root && msg_check(root, cJSON_AddNumberToObject(*root, key, value) != NULL);
 }
+static bool msg_bool(cJSON **root, const char *key, bool value)
+{
+    return *root && msg_check(root, cJSON_AddBoolToObject(*root, key, value) != NULL);
+}
 
 const char *pro_cable_fw_version(void)
 {
@@ -230,7 +234,7 @@ static void send_hello(void)
     msg_string(&root, "player", "library-v1");
     msg_string(&root, "superTab", "wait-v1");   // a question with superTab + attention is shown as a wait (handle_question)
     msg_string(&root, "swarmCard", "v1");       // supertabs / supertab.recap / supertab.focus: the Swarm cards (handle_supertab)
-    msg_string(&root, "swarmChat", "v1");       // each Lead's face chat (chat, chatId, chatName), recaps by chatId, supertab.notice / .read; voice stays in the Lead conversation (cable.md)
+    msg_string(&root, "swarmChat", "v1");       // each Lead's face chat (chat, chatId, chatName), recaps by chatId, supertab.notice / .read; voice follows the face only with voice.begin face (cable.md)
     msg_string(&root, "swarmBuddy", "v1");      // PM | Buddy: buddies, buddy {..}, the Swarm's side; supertab.side from the pill
     msg_string(&root, "ota", "v1");
     char mac[24] = "";
@@ -335,12 +339,12 @@ static bool upload_matches(const char *upload_id)
 
 bool pro_cable_voice_begin(const char *agent_id, bool face, const char *lang, int sample_rate, const char *upload_id)
 {
-    (void)face;
     if (!upload_id || !upload_id[0]) return false;
     remember_upload(upload_id);
     cJSON *root = msg("voice.begin");
     // OMITTED, not empty, without an agent: absence tells the daemon to route the transcript itself.
     if (agent_id && agent_id[0]) msg_string(&root, "agentId", agent_id);
+    if (face) msg_bool(&root, "face", true);   // OMITTED otherwise: an older daemon ignores it, a newer one routes as before swarmChat
     msg_string(&root, "lang", lang && lang[0] ? lang : "en");
     msg_number(&root, "sr", sample_rate);
     msg_string(&root, "uploadId", upload_id);
