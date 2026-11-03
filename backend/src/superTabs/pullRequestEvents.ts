@@ -99,6 +99,8 @@ export interface PullRequestReader { watch(url: string): Promise<PullRequestWatc
 const PULL = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([1-9][0-9]*)$/
 /** A task quiet this long is not watched: its Engineer is not waiting on its pull request. */
 export const WATCH_QUIET_MS = 7 * 24 * 3_600_000
+/** The most tasks a pass reads, the most recently active first (ENGINEERING.md 4: no read grows without a bound). */
+export const WATCH_GROUPS = 200
 
 /** Reads with the Harness GitHub App: one read-only token per repository for the whole pass, revoked when it is done (as the
  *  archive pass's, archive.ts). A repository the app is not installed on, or any GitHub failure, reads as null. */
@@ -130,16 +132,21 @@ export function appPullRequestWatch(app: GitHubApp): PullRequestReader {
 }
 
 /**
- * One pass: every open task (not a step) active in the last [WATCH_QUIET_MS] that links a pull request has each open one
- * read once, and what is new goes to its Engineer (store.ts pullRequestSeen). One group's failure is logged and skips that
- * group alone. The messages posted.
+ * One pass: open tasks (not steps) active in the last [WATCH_QUIET_MS] that link a pull request, at most [limit] of them, the
+ * most recently active first, have each open one read once, and what is new goes to its Engineer (store.ts
+ * pullRequestSeen). One group's failure is logged and skips that group alone. A pass that posted, or could not read a pull
+ * request, says so in one line: the measure of this feature (ENGINEERING.md 6 and 8). The messages posted.
  */
-export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabStore, 'pullRequestSeen'>, reader: PullRequestReader, now: number): Promise<number> {
+export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabStore, 'pullRequestSeen'>, reader: PullRequestReader, now: number,
+  limit = WATCH_GROUPS): Promise<number> {
   try {
-    // On the finished mark's index ([workFinished, archived, lastActivityAt]); only the few fields the pass needs.
+    // The finished mark's index, [workFinished, archived, lastActivityAt]: equality, equality, then the range, which also
+    // gives the sort; the rest filters what it fetches. A step's reviewOf is a string and a task has none (null matches it).
     const rows = await db.swarmGroup.aggregateRaw({ pipeline: [
-      { $match: { workFinished: false, archived: false, deleted: false, kind: null, lastActivityAt: { $gte: { $date: new Date(now - WATCH_QUIET_MS).toISOString() } },
-        'data.reviewOf': { $not: { $type: 'string' } }, 'data.pullRequestUrls.0': { $exists: true } } },
+      { $match: { workFinished: false, archived: false, lastActivityAt: { $gte: { $date: new Date(now - WATCH_QUIET_MS).toISOString() } },
+        deleted: false, kind: null, 'data.reviewOf': null, 'data.pullRequestUrls.0': { $exists: true } } },
+      { $sort: { lastActivityAt: -1 } },
+      { $limit: limit },
       { $project: { _id: 0, tabId: 1, key: 1, urls: '$data.pullRequestUrls' } },
     ] }) as unknown as Array<{ tabId: string; key: string; urls: string[] }>
     if (!rows.length) return 0
@@ -158,6 +165,10 @@ export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabSt
         }
       }
     }
+    const unreadable = (await Promise.all(reads.values())).filter(watch => watch === null).length
+    const line = { groups: rows.length, pulls: reads.size, unreadable, posted }
+    if (unreadable) logger.warn('[swarm-pr-events] pass', line)
+    else if (posted) logger.info('[swarm-pr-events] pass', line)
     return posted
   } finally { await reader.done() }
 }
@@ -168,7 +179,7 @@ export function startPullRequestWatch(db: PrismaClient, store: Pick<SuperTabStor
   const run = () => {
     if (running) return
     running = true
-    void watchPullRequests(db, store, reader(), Date.now()).then(count => { if (count) logger.info('[swarm-pr-events] posted', { count }) })
+    void watchPullRequests(db, store, reader(), Date.now())
       .catch(error => logger.warn('[swarm-pr-events] failed', { error: error instanceof Error ? error.message : String(error) }))
       .finally(() => { running = false })
   }
