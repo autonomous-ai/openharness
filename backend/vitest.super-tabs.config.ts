@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config'
 
-export default defineConfig({ test: { include: ['integration/superTabs.test.ts', 'integration/superTabSharing.test.ts', 'integration/superTabGithub.test.ts', 'integration/superTabTeam.test.ts', 'integration/superTabWorkspaces.test.ts',
+export default defineConfig({ test: { include: ['integration/superTabs.test.ts', 'integration/superTabSharing.test.ts', 'integration/superTabAutoJoin.test.ts', 'integration/superTabGithub.test.ts', 'integration/superTabTeam.test.ts', 'integration/superTabWorkspaces.test.ts',
     'integration/superTabRead.test.ts', 'integration/superTabReadMarks.test.ts', 'integration/superTabInbox.test.ts', 'integration/superTabFollowedThreads.test.ts', 'integration/superTabActivity.test.ts', 'integration/superTabLeaderboard.test.ts', 'integration/superTabMigration.test.ts', 'integration/superTabLiveness.test.ts',
     'integration/superTabTidy.test.ts', 'integration/superTabProfile.test.ts', 'integration/superTabLegacyDrop.test.ts', 'integration/shareRaces.test.ts', 'integration/superTabIndexes.test.ts', 'integration/superTabRouteDecisions.test.ts',
     'integration/superTabHotReads.test.ts', 'integration/swarmSweepStarts.test.ts', 'integration/superTabGroupPlans.test.ts', 'integration/superTabInvitationPlans.test.ts', 'integration/superTabCache.test.ts', 'integration/superTabCacheDelta.test.ts', 'integration/superTabHostGroups.test.ts', 'integration/superTabMachineReports.test.ts',
