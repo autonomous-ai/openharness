@@ -1,6 +1,8 @@
 """A pull request's Desktop and CLI, run as "Harness Test" beside the installed app.
 
-    python3 desktop/tool/test_flavor.py start     # build this checkout's CLI and Desktop and start "Harness Test"
+    python3 desktop/tool/test_flavor.py start [--account EMAIL]
+                                                  # build this checkout's CLI and Desktop and start "Harness Test";
+                                                  # the first start on a Mac names the project's test account
     python3 desktop/tool/test_flavor.py status    # its home, port, app and signed-in test account
     python3 desktop/tool/test_flavor.py stop      # quit it and remove everything it made
     python3 desktop/tool/test_flavor.py forget    # sign the test account out on this Mac
@@ -24,6 +26,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -37,6 +40,8 @@ CLAUDE_KEYCHAIN_SERVICE = 'Claude Code-credentials'
 # (GIT_CONFIG_PARAMETERS), gh's sign-in and model API keys (security review 1 of #2796).
 KEPT_ENV = ('PATH', 'LANG', 'TERM', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', '__CF_USER_TEXT_ENCODING')
 KEPT_ENV_PREFIXES = ('LC_',)
+
+BACKEND = 'https://harness-api.autonomous.ai'  # the CLI's default (BACKEND_WS_URL), which the test copy uses
 
 SAME_ACCOUNT = "The test copy signed in as this Mac's own account. Sign it in with the test account instead."
 
@@ -189,6 +194,10 @@ class Paths:
     def person_session(self):
         return self.person_home / '.harness/auth/session.json'
 
+    @property
+    def account(self):
+        return self.shared / 'account'
+
 
 class Runner:
     """The processes the test flavor starts and stops: its own build, CLI, app and tmux server, never another's."""
@@ -210,6 +219,23 @@ class Runner:
         except PermissionError:
             return True
         return True
+
+    def account_email(self, session):
+        """The email of the account a test session.json belongs to, from the backend, or None.
+
+        Reads the test account's own access token, in memory only, to ask `/api/auth/me`: never the person's.
+        """
+        try:
+            stored = json.loads(session.read_text())
+            request = urllib.request.Request(f'{BACKEND}/api/auth/me', headers={
+                'Authorization': f"Bearer {stored['accessToken']}",
+                'x-autonomous-env': stored.get('autonomousEnv', 'prod'),
+            })
+            with urllib.request.urlopen(request, timeout=15) as reply:
+                email = json.loads(reply.read())['data']['user']['email']
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        return email.strip().lower() if isinstance(email, str) and email.strip() else None
 
     def executable_of(self, pid):
         """The executable a running pid runs (macOS `ps -o comm=` gives its path), or None."""
@@ -271,9 +297,33 @@ def _copy_app(runner, paths):
                 '--preserve-metadata=entitlements,requirements,flags,runtime', paths.app])
 
 
-def start(runner, paths, installer):
+def _named_account(paths, named):
+    """The project's test account for this Mac: named on its first start, kept in ~/.harness-test/account."""
+    kept = paths.account.read_text().strip().lower() if paths.account.exists() else None
+    named = named.strip().lower() if named else None
+    if kept and named and named != kept:
+        raise Refused(f"This Mac's test account is {kept}; run forget to change it.")
+    if not kept and not named:
+        raise Refused("Name the project's test account the first time: start --account EMAIL")
+    if not kept:
+        paths.shared.mkdir(parents=True, exist_ok=True)
+        paths.account.write_text(f'{named}\n')
+    return kept or named
+
+
+def _person_account(paths):
+    """This Mac's own account id, None when it is not signed in; refuses when its session cannot be read."""
+    account = session_account(paths.person_session)
+    if account is None and paths.person_session.exists():
+        raise Refused("Could not read this Mac's own sign-in to compare the test account with it.")
+    return account
+
+
+def start(runner, paths, installer, named=None):
     if paths.state.exists():
         raise Refused('A test copy is already running; run stop first.')
+    expected = _named_account(paths, named)
+    person = _person_account(paths)
     port = choose_port(runner)
     test_home = Path(tempfile.mkdtemp(prefix='harness-test-flavor.'))
     launched = False
@@ -285,8 +335,14 @@ def start(runner, paths, installer):
             print('Sign the test copy in with the test account, in a private browser window:')
             runner.run([_cli(test_home)[0], cli, 'login', '--code'], env=env, interactive=True)
         try:
-            check_not_owner(session_account(paths.person_session), session_account(paths.test_session))
-        except SameAccount:
+            check_not_owner(person, session_account(paths.test_session))
+            # A fresh token for the question below; the test CLI refreshes its own session.
+            runner.run([_cli(test_home)[0], cli, 'auth', 'status', '--json'], env=env, check=False)
+            email = runner.account_email(paths.test_session)
+            if email != expected:
+                raise Refused(f"The test copy signed in as {email or 'an account it could not confirm'}, not the test "
+                              f'account {expected}. Sign it in with the test account instead.')
+        except Refused:
             runner.run([_cli(test_home)[0], cli, 'logout', '--from-sign-out-button'], env=env, check=False)
             shutil.rmtree(paths.shared / 'auth', ignore_errors=True)
             raise
@@ -303,7 +359,7 @@ def start(runner, paths, installer):
         if not launched:
             shutil.rmtree(test_home, ignore_errors=True)
             shutil.rmtree(paths.app, ignore_errors=True)
-    print(f'{TEST_NAME} is running: home {test_home}, port {port}, test account {session_account(paths.test_session)}.')
+    print(f'{TEST_NAME} is running: home {test_home}, port {port}, signed in as the test account {expected}.')
     print('When the test is done: python3 desktop/tool/test_flavor.py stop')
     return 0
 
@@ -320,7 +376,13 @@ def status(runner, paths):
     except SameAccount as refused:
         print(refused)
         return 1
-    print(f'test account {session_account(paths.test_session)}')
+    expected = paths.account.read_text().strip() if paths.account.exists() else None
+    email = runner.account_email(paths.test_session)
+    if not expected or email != expected:
+        print(f"The test copy is signed in as {email or 'an account it could not confirm'}, not the test account "
+              f'{expected}. Run stop, then start.')
+        return 1
+    print(f'signed in as the test account {email}')
     return 0
 
 
@@ -379,7 +441,8 @@ def main(argv, runner=None, paths=None, installer=install_cli):
                            person_home=Path.home())
     command = argv[0] if argv else ''
     if command == 'start':
-        return start(runner, paths, installer)
+        named = argv[argv.index('--account') + 1] if '--account' in argv[1:-1] else None
+        return start(runner, paths, installer, named)
     if command == 'status':
         return status(runner, paths)
     if command == 'stop':
