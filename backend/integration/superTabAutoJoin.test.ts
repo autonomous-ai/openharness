@@ -405,6 +405,35 @@ describe('Leaving is final for auto-join', () => {
   })
 })
 
+describe('A Workspace removal is final for auto-join', () => {
+  // Security review 2 of #2714: the Workspace's own record of a removal is purged after 30 days (sweeps.ts), so auto-join keeps
+  // its own, on the Workspace, until the person is added back on purpose.
+  it('never pulls back someone the Workspace removed, after the removal record is purged, until a Workspace invitation', async () => {
+    const { fired } = await org('eighteen', ['fired'])
+    const first = await create()
+    await turnOn(first)
+    expect(await listed(fired)).toContain(first)
+    const { workspaceId } = await storedState(first)
+    await store.workspaces.remove(current, workspaceId!, fired.sub)
+    // What the purge leaves: no member row and no removal row.
+    await db.swarmWorkspaceMember.deleteMany({ where: { workspaceId: workspaceId!, userId: fired.sub } })
+    await db.swarmWorkspaceRemoval.deleteMany({ where: { workspaceId: workspaceId!, userId: fired.sub } })
+    const later_ = await create()
+    await turnOn(later_)
+    later()
+    expect(await listed(fired)).not.toContain(later_)
+    expect(await personIn(later_, fired)).toBeUndefined()
+    expect((await db.superTab.findUniqueOrThrow({ where: { id: later_ } })).autoJoinDeclined).toContain(fired.sub)
+    // Invited back to the Workspace on purpose: auto-join may add them again.
+    await store.workspaces.invite(current, workspaceId!, fired.email, 'member')
+    await store.workspaces.accept(fired, workspaceId!)
+    const third = await create()
+    await turnOn(third)
+    later()
+    expect(await listed(fired)).toContain(third)
+  })
+})
+
 describe('What readers see', () => {
   it('tells every member auto-join is on, marks who came by domain, and never shows the declines or the sharing', async () => {
     const { joiner, leaver } = await org('fifteen', ['joiner', 'leaver'])
