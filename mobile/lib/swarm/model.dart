@@ -1279,6 +1279,15 @@ class SuperTabMessage {
       ? source['agentId'] as String?
       : null;
 
+  /// The Product Manager a usage-limit note is about; null for any other row
+  /// (desktop model.dart).
+  String? get leadLimitAgentId =>
+      source['kind'] == 'terminal-alert' &&
+          source['alert'] == 'limit' &&
+          source['lead'] == true
+      ? source['agentId'] as String?
+      : null;
+
   /// A note the backend writes about a terminal: a Lead's typing, or an alert.
   bool get terminalEvent =>
       source['kind'] == 'terminal-input' || source['kind'] == 'terminal-alert';

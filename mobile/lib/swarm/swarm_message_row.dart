@@ -23,6 +23,7 @@ import 'swarm_message_text.dart';
 import 'swarm_message_style.dart';
 import 'swarm_face.dart';
 import 'swarm_ship_row.dart';
+import 'swarm_special_rows.dart';
 import 'swarm_task_line.dart';
 
 /// `@name` or `@name@domain`, as people tag in chat. Never right after a
@@ -275,6 +276,7 @@ class SwarmMessageRow extends StatelessWidget {
     this.card,
     this.onLongPress,
     this.onOpenTask,
+    this.onOpenProposal,
     this.references = const {},
     this.onOpenConversation,
   });
@@ -312,6 +314,10 @@ class SwarmMessageRow extends StatelessWidget {
 
   /// Opens a task held by the current reader; null for an unavailable target.
   final VoidCallback? onOpenTask;
+
+  /// Opens a Buddy's proposal's thread: given in the chat, where a proposal is
+  /// one line; none in its thread, where it reads whole.
+  final VoidCallback? onOpenProposal;
 
   /// The numbered conversations `#N` links in a message can open.
   final Map<int, String> references;
@@ -385,6 +391,21 @@ class SwarmMessageRow extends StatelessWidget {
         message: message,
       );
     }
+    // Notes that are not chat from their author, as Desktop draws them.
+    final special = ValueKey('swarm-message-${message.id}');
+    if (message.proposalOwnerId != null && onOpenProposal != null) {
+      return SwarmProposalLine(
+        key: special,
+        message: message,
+        onOpen: onOpenProposal!,
+      );
+    }
+    if (message.terminalEvent) {
+      return SwarmTerminalRow(key: special, message: message);
+    }
+    if (message.route case final route?) {
+      return SwarmRouteRow(key: special, message: message, route: route);
+    }
     // A row kept as it was is not built again: it follows a theme or font
     // change itself.
     AppTheme.watch(context);
@@ -420,6 +441,9 @@ class SwarmMessageRow extends StatelessWidget {
       body: [
         if (lit) SizedBox(key: ValueKey('swarm-lit-${message.id}')),
         ?quote,
+        if (message.proposalOwnerId != null)
+          SwarmProposalLabel(owner: swarmProposalOwner(context, message)),
+        ?swarmTerminalNote(message),
         for (final part in swarmTextParts(message.text))
           if (part.code)
             SwarmCodeBlock(code: part.text, name: part.name, onTap: onTap)
@@ -436,6 +460,7 @@ class SwarmMessageRow extends StatelessWidget {
                 onOpenConversation: onOpenConversation,
               ),
             ),
+        ?swarmCutShort(message),
         for (final file in message.attachments) _attachment(context, file),
         ?card,
         ?reactions,

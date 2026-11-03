@@ -1983,6 +1983,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                   ? () => _openThread(c, root)
                   : () => _reply(c, m),
               inThread: root != null,
+              onOpenProposal: m.proposalOwnerId == null
+                  ? null
+                  : () => _openThread(c, m.id),
               card: card == null
                   ? null
                   : SwarmLiveCard(
@@ -2821,6 +2824,9 @@ Set<String> swarmGroupedMessages(List<SuperTabMessage> messages) {
     bool plain(SuperTabMessage m) =>
         !swarmIsTaskLine(m) &&
         m.source['kind'] != 'ship' &&
+        m.route == null &&
+        !m.terminalEvent &&
+        m.proposalOwnerId == null &&
         m.replyTo == null &&
         m.text.length <= 280 &&
         !m.text.contains('\n') &&
@@ -2830,6 +2836,7 @@ Set<String> swarmGroupedMessages(List<SuperTabMessage> messages) {
         !plain(previous) ||
         current.authorId.isEmpty ||
         current.authorId != previous.authorId ||
+        current.terminalNote != previous.terminalNote ||
         current.authorName != previous.authorName ||
         current.author['kind'] != previous.author['kind'] ||
         current.author['membershipGeneration'] !=
