@@ -270,6 +270,10 @@ class _RootShellState extends ConsumerState<RootShell>
     if (kIsWeb) _sharedLocation = SharedAgentLocation.parse(Uri.base);
     WidgetsBinding.instance.addObserver(this);
     _appMenuChannel.setMethodCallHandler(_onAppMenu);
+    // The Windows tab strip's ☰ is built below this shell, so it dispatches
+    // through the sink instead of a callback threaded through three
+    // constructors (desktop/design/windows-app-menu.md).
+    appMenuActionSink = runAppMenuAction;
     // Available from startup, including sign-in and setup.
     if (RuntimePlatform.isWindows && !kUnderTest) windowsStatusTray.install();
   }
@@ -279,6 +283,7 @@ class _RootShellState extends ConsumerState<RootShell>
     flushAppLog();
     WidgetsBinding.instance.removeObserver(this);
     _appMenuChannel.setMethodCallHandler(null);
+    appMenuActionSink = null;
     super.dispose();
   }
 

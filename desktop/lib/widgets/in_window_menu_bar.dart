@@ -20,6 +20,14 @@ import 'terminal_edit_actions.dart';
 /// `_RootShellState.runAppMenuAction`.
 typedef AppMenuActionHandler = Future<void> Function(String action);
 
+/// Where the app-menu actions go when the widget drawing them has no shell in
+/// reach. The shell installs its switch here at startup; the compact bar in the
+/// workspace tab strip (a child of the workspace screen, not of the shell's own
+/// Column) dispatches through it, so one switch still serves every surface —
+/// AppKit's menu bar, the Linux strip and the Windows button. Cleared when the
+/// shell goes away; null in a test that never mounted one.
+AppMenuActionHandler? appMenuActionSink;
+
 /// The app's commands as an in-window menu bar.
 ///
 /// On macOS the commands live in the native menu bar: the application menu's
@@ -97,13 +105,21 @@ enum EditMenuTarget { textField, terminal, none }
 class InWindowMenuBar extends StatefulWidget {
   const InWindowMenuBar({
     super.key,
-    required this.onAction,
+    this.onAction,
     this.state,
     this.visible,
     this.onQuit,
+    this.compact = false,
   });
 
-  final AppMenuActionHandler onAction;
+  /// Where a row's app-menu action goes. Omitted by the compact bar: it is
+  /// built by the workspace's tab strip, which has no handle on the shell, so
+  /// it falls back to [appMenuActionSink].
+  final AppMenuActionHandler? onAction;
+
+  /// One ☰ and a sectioned panel instead of the strip. Windows uses this now
+  /// that its menu row is gone (desktop/design/windows-app-menu.md).
+  final bool compact;
 
   /// How Quit Harness quits: the platform's own path unless a test passes
   /// its own.
@@ -191,15 +207,23 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
   /// and a margin for the screen edge; past that a menu really does scroll.
   MenuStyle get _panelStyle {
     final height = MediaQuery.sizeOf(context).height;
-    return grid.AppMenu.style(maxHeight: height - 36 - 24);
+    final style = grid.AppMenu.style(maxHeight: height - 36 - 24);
+    return widget.compact
+        ? style.copyWith(
+            minimumSize: const WidgetStatePropertyAll(Size(280, 0)),
+          )
+        : style;
   }
 
   @override
   Widget build(BuildContext context) {
+    if (widget.compact) return _buildCompact(context);
     // RuntimePlatform: false in a browser, where `dart:io` Platform throws.
-    final visible =
-        widget.visible ??
-        ((RuntimePlatform.isLinux || RuntimePlatform.isWindows) && !kUnderTest);
+    //
+    // Linux only. On GNOME this strip IS the title bar. On Windows it was a
+    // second bar under the OS caption, and those commands moved into the tab
+    // strip's ☰ (desktop/design/windows-app-menu.md).
+    final visible = widget.visible ?? (RuntimePlatform.isLinux && !kUnderTest);
     if (!visible) return const SizedBox.shrink();
     grid.AppTheme.watch(context);
     // The full set of menus outgrows a narrow window; a menubar that scrolls
@@ -278,6 +302,70 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
           ),
           const _WindowButtons(),
         ],
+      ),
+    );
+  }
+
+  /// The compact bar: one ☰, and every command in one panel grouped the way the
+  /// strip grouped them. Windows hosts this in the workspace tab strip, the row
+  /// its window controls sit in, now that it has no menu row of its own.
+  Widget _buildCompact(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final controller = _controllers.putIfAbsent('app-menu', MenuController.new);
+    final isOpen = identical(_openMenu, controller);
+    final sections = <Widget>[];
+    void section(String label, List<Widget> rows) {
+      sections
+        ..add(_SectionHeading(label))
+        ..addAll(rows)
+        ..add(const AppMenuDivider());
+    }
+
+    section('Harness', _buildHarnessMenu());
+    section('File', _buildFileMenu());
+    section('Edit', _buildEditMenu());
+    // View reads the window's full-screen state as it opens, as the strip does.
+    section('View', _buildViewMenu());
+    section('History', _buildHistoryMenu());
+    section('Window', _buildWindowMenu());
+    section('Help', _buildHelpMenu());
+    return _menuFocusRegion(
+      MenuAnchor(
+        controller: controller,
+        style: _panelStyle,
+        onOpen: () {
+          setState(() => _openMenu = controller);
+          _readFullScreen();
+        },
+        onClose: () {
+          if (identical(_openMenu, controller)) {
+            setState(() => _openMenu = null);
+          }
+        },
+        menuChildren: [for (final child in sections) _menuFocusRegion(child)],
+        child: Tooltip(
+          message: 'Menu',
+          child: TextButton(
+            key: const Key('app-menu-button'),
+            onPressed: () {
+              // Read at press time: the button does not rebuild between a panel
+              // closing and the click that reopens it.
+              final wasOpen = controller.isOpen;
+              _closeAll();
+              if (!wasOpen) controller.open();
+            },
+            style: TextButton.styleFrom(
+              foregroundColor: isOpen
+                  ? grid.AppPalette.textPrimary
+                  : grid.AppPalette.textSecondary,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: const Size(0, 28),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              shape: const RoundedRectangleBorder(),
+            ),
+            child: const Icon(AppIcons.menu, size: AppIcons.inlineSize),
+          ),
+        ),
       ),
     );
   }
@@ -716,7 +804,8 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
   bool _fullScreen = false;
 
   Future<void> _readFullScreen() async {
-    if (kUnderTest && widget.visible != null) return;
+    // No test host has a window to ask; a real one always does.
+    if (kUnderTest) return;
     final full = await windowManager.isFullScreen();
     if (mounted && full != _fullScreen) setState(() => _fullScreen = full);
   }
@@ -880,7 +969,7 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
         if (swarm) {
           swarmMenuBus.receive(MethodCall(action, args));
         } else {
-          widget.onAction(action);
+          (widget.onAction ?? appMenuActionSink)?.call(action);
         }
       },
     );
@@ -901,7 +990,7 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
       trailing: _hint(action),
       onPressed: () {
         _closeAll();
-        widget.onAction(action);
+        (widget.onAction ?? appMenuActionSink)?.call(action);
       },
     );
   }
@@ -1022,6 +1111,26 @@ class _MenuFocusRegion extends InheritedWidget {
 
   @override
   bool updateShouldNotify(_MenuFocusRegion oldWidget) => false;
+}
+
+/// The name over one group of a compact panel's rows: quiet, upper-case, and
+/// not a row — it never takes focus or a press.
+class _SectionHeading extends StatelessWidget {
+  const _SectionHeading(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 2),
+      child: Text(
+        label.toUpperCase(),
+        style: grid.AppType.monoLabel(color: grid.AppPalette.textFaint),
+      ),
+    );
+  }
 }
 
 /// A non-interactive menu row, matched to [AppMenuItem]'s metrics so a

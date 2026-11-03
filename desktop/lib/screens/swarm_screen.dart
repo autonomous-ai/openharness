@@ -64,7 +64,7 @@ import '../state/app_state.dart';
 import '../state/notification_inbox.dart';
 import '../state/status_menu.dart';
 import '../widgets/in_window_menu_bar.dart'
-    show LinuxTitleBar, linuxTitleBarActions;
+    show InWindowMenuBar, LinuxTitleBar, linuxTitleBarActions;
 import '../widgets/account_menu.dart';
 import '../widgets/notification_inbox.dart';
 import '../widgets/workspace_notifications_button.dart';
@@ -205,6 +205,7 @@ class SwarmScreen extends StatefulWidget {
     this.experimentalFeatures,
     this.chrome,
     this.statusTray,
+    this.appMenuButton,
   });
   final AppNotifier notifier;
   final bool? nativeTabs;
@@ -230,6 +231,12 @@ class SwarmScreen extends StatefulWidget {
 
   /// Extra tab-bar controls from a host composition (the web build's menu).
   final WorkspaceChrome? chrome;
+
+  /// Draws the compact app menu at the strip's left. Defaults to following the
+  /// host: Windows, where the menu strip above the workspace is gone
+  /// (desktop/design/windows-app-menu.md). A test seam, like [chrome], because
+  /// a widget test cannot make \`RuntimePlatform.isWindows\` true.
+  final bool? appMenuButton;
 
   /// The Windows tray (`harness/status_menu`): the macOS status menu's rows,
   /// fed from the same payload. A test passes its own; null off Windows.
@@ -262,6 +269,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
   late final SwarmMenuBus _menuBus = widget.nativeTabs == true
       ? SwarmMenuBus.forChannel()
       : swarmMenuBus;
+
+  /// Whether the strip draws the compact app menu's ☰: Windows, where no menu
+  /// row sits above the workspace, or a test that asked for it.
+  bool get _appMenuButton =>
+      widget.appMenuButton ?? (RuntimePlatform.isWindows && !kIsWeb);
 
   /// The tab the middle button went down on, so an up that slid onto another
   /// tab closes nothing. Null between presses.
@@ -9069,13 +9081,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
       final actionsWidth = _titleBarActions
           ? 0.0
           : cell.width * 8 + accountWidth;
+      // The app menu's ☰, where the host keeps no menu row above the
+      // workspace: it comes out of the tabs' budget like any other control.
+      final menuWidth = _appMenuButton ? cell.width * 2 : 0.0;
       final tabBudget = math.max(
         0.0,
         constraints.maxWidth -
             cell.width * 5 -
             grid.AppDesktop.tabBarTrailingInset -
             actionsWidth -
-            (_slotShown ? 44 : 0),
+            (_slotShown ? 44 : 0) -
+            menuWidth,
       );
       _tabWidths = List.filled(
         labels.length,
@@ -9101,6 +9117,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
           child: Row(
             children: [
               SizedBox(width: cell.width),
+              if (_appMenuButton)
+                SizedBox(
+                  width: menuWidth,
+                  child: const Align(
+                    alignment: Alignment.centerLeft,
+                    child: InWindowMenuBar(compact: true),
+                  ),
+                ),
               _withTabArrows(
                 arrows,
                 color: theme.foreground,
