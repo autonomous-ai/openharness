@@ -10,7 +10,6 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'model.dart';
 import 'swarm_message_row.dart' show SwarmMessageFrame, swarmChatText;
 import 'swarm_reader.dart';
-import 'swarm_request.dart';
 import 'swarm_session.dart';
 
 // The notes in a chat that are not chat from their author, drawn as Desktop
