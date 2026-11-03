@@ -138,6 +138,39 @@ class ImportHandoff {
   final ImportFile record, transcript;
 }
 
+/// Refuses an agent that any Swarm lists, open in this window or not: the
+/// backend's answer through this Mac's daemon (cli superTabs/service.ts
+/// `swarmRole`). A person may have added their own session to a Swarm, and its
+/// transcript may hold that Swarm's private project (security review of
+/// #2783). An answer that cannot be read refuses too: nothing is shared on a
+/// guess.
+Future<void> _notInAnySwarm(AppNotifier app, ImportableAgent agent) async {
+  Map<String, dynamic> answer;
+  try {
+    answer = await app.superTabMachineRequest(agent.machineId, {
+      'action': 'swarmRole',
+      'harnessId': agent.agent.id,
+    });
+  } catch (_) {
+    answer = const {};
+  }
+  if (!answer.containsKey('role')) {
+    throw ImportFailure(
+      ImportStep.prepare,
+      'Harness could not check whether a Swarm already has this agent. Try '
+      'again.',
+      code: 'role-unknown',
+    );
+  }
+  if (answer['role'] != null) {
+    throw ImportFailure(
+      ImportStep.prepare,
+      'This agent is already in a Swarm, so it is not imported.',
+      code: 'in-swarm',
+    );
+  }
+}
+
 /// Prepares [agent]'s handoff on its own machine, the Change agent's
 /// (`agent_handoff_prepare`, owner only), with a fresh change id and the
 /// agent's own engine as target, then reads both files it wrote. Nothing is
@@ -157,6 +190,7 @@ Future<ImportHandoff> prepareImportHandoff(
       code: 'no-folder',
     );
   }
+  await _notInAnySwarm(app, agent);
   final changeId = superTabOperationId();
   final Map<String, dynamic> reply;
   try {
