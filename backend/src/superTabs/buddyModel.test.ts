@@ -7,6 +7,7 @@ import { createSuperTab, type Actor } from './model.js'
 import type { ContributedMachine } from './machines.js'
 import { swarmBuddyChatId } from './buddies.js'
 import { sweepLiveness } from './liveness.js'
+import { withoutMachineNames } from './store.js'
 import { BUDDY_MODEL_GONE_MS, BUDDY_MODEL_LEASE_MS } from './tidy.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -126,19 +127,27 @@ describe('the Buddy\'s machine reporting the switch', () => {
     return { f, requestId: f.agent().modelRequest!.id }
   }
 
-  it('lands the Buddy on the model and tells its owner, in their Buddy chat alone, who serves it', () => {
+  it('lands the Buddy on the model and tells its owner, in their Buddy chat, who serves it', () => {
     const { f, requestId } = asked()
     const effects = f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId, ok: true }, f.buddy())
     expect(f.agent().gridModel).toBe(MODEL)
     expect(f.agent().modelRequest).toBeUndefined()
-    expect(effects.messages.map(m => [m.conversationId, m.text])).toEqual([
-      [f.chat, 'Your Buddy now runs on DeepSeek 4.1 Flash, served by Mac Studio.']])
+    expect(effects.messages.filter(m => m.conversationId === f.chat).map(m => m.text)).toEqual([
+      'Your Buddy now runs on DeepSeek 4.1 Flash, served by Mac Studio.'])
+  })
+
+  it('names no machine to a Buddy reading these lines: a Buddy reads no machines', () => {
+    const { f, requestId } = asked()
+    const effects = f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId, ok: true }, f.buddy())
+    const read = effects.messages.map(m => withoutMachineNames(m as unknown as Parameters<typeof withoutMachineNames>[0]).text)
+    expect(read).toEqual(['Your Buddy now runs on DeepSeek 4.1 Flash, served by a machine.',
+      "peer's Buddy now runs on DeepSeek 4.1 Flash, which your machine serves."])
   })
 
   it('says when the conversation was too long and the Buddy started fresh', () => {
     const { f, requestId } = asked()
     const effects = f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId, ok: true, fresh: true }, f.buddy())
-    expect(effects.messages.map(m => m.text)).toEqual(['Your Buddy started a fresh session on DeepSeek 4.1 Flash: this conversation is too long '
+    expect(effects.messages.filter(m => m.conversationId === f.chat).map(m => m.text)).toEqual(['Your Buddy started a fresh session on DeepSeek 4.1 Flash: this conversation is too long '
       + 'for it (128K). Switch back to your subscription to continue the earlier one.'])
   })
 
@@ -146,7 +155,7 @@ describe('the Buddy\'s machine reporting the switch', () => {
     const f = setup()
     f.run({ type: 'buddy.model', gridModel: 'gpt-6.1-sol' })
     const effects = f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId: f.agent().modelRequest!.id, ok: true }, f.buddy())
-    expect(effects.messages.map(m => m.text)).toEqual(["Your Buddy now runs on gpt-6.1-sol, owner's saved API."])
+    expect(effects.messages.filter(m => m.conversationId === f.chat).map(m => m.text)).toEqual(["Your Buddy now runs on gpt-6.1-sol, owner's saved API."])
   })
 
   it('brings the Buddy back to the subscription', () => {
@@ -200,7 +209,7 @@ describe('the member who serves the model', () => {
   it('is told, in their own Buddy chat, whose Buddy now runs on their machine\'s model', () => {
     const { effects } = landed()
     expect(effects.messages.filter(m => m.conversationId === ownerChat).map(m => m.text))
-      .toEqual(["peer's Buddy now runs on DeepSeek 4.1 Flash, served by your Mac Studio."])
+      .toEqual(["peer's Buddy now runs on DeepSeek 4.1 Flash, which your machine serves."])
   })
 
   it('is told when it is their saved API', () => {
@@ -222,7 +231,8 @@ describe('a Buddy coming home by itself', () => {
   /** peer's Buddy on DeepSeek, served by owner's Mac Studio. */
   const onModel = () => {
     const f = setup()
-    f.agent().gridModel = MODEL
+    f.run({ type: 'buddy.model', gridModel: MODEL })
+    f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId: f.agent().modelRequest!.id, ok: true }, f.buddy())
     return f
   }
   const finish = (f: ReturnType<typeof setup>, now = NOW) =>

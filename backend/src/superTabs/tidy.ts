@@ -1,6 +1,6 @@
 import { checksOpenWork, isStep, taskEnded } from './steps.js'
 import { isBuddy } from './buddies.js'
-import { expiredModelRequests } from './buddyModel.js'
+import { expiredModelRequests, unservedBuddyModels } from './buddyModel.js'
 import { agentDisplayName } from './agentNames.js'
 import { githubRepository } from '../github/repository.js'
 import { activeWork, appendPullRequestUrls, stableId, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
@@ -98,14 +98,18 @@ export function staleSwitches(state: SuperTabState, now: number): MessageDraft[]
   return rows
 }
 
-export { BUDDY_MODEL_LEASE_MS } from './buddyModel.js'
+export { BUDDY_MODEL_GONE_MS, BUDDY_MODEL_LEASE_MS } from './buddyModel.js'
 
 /** A Buddy's model switch its machine never reported is dropped (the Buddy stays where it was), and its owner's Buddy chat
  *  says so once. Run by the liveness sweep, as staleSwitches is: the Buddy's own machine may be the one down. */
 export function staleModelRequests(state: SuperTabState, now: number): MessageDraft[] {
-  return expiredModelRequests(state, now).map(({ buddy, requestId, conversationId, text }) => ({
-    id: stableId('buddy-model-stale', buddy.id, requestId), conversationId, replyTo: null, recipients: [], text, source: { kind: 'system' },
+  const drafts = expiredModelRequests(state, now).map(({ buddy, requestId, conversationId, text, machines }): MessageDraft => ({
+    id: stableId('buddy-model-stale', buddy.id, requestId), conversationId, replyTo: null, recipients: [], text,
+    source: { kind: 'system', ...(machines.length ? { machines } : {}) },
     author: { kind: 'agent', id: buddy.id, name: buddy.name, displayName: agentDisplayName(state.agents, buddy.id), membershipGeneration: buddy.membershipGeneration } }))
+  // After the expiry, so a Buddy whose machine never answered one request home is asked again on the next sweep.
+  unservedBuddyModels(state, now, buddy => stableId('buddy-model-gone', buddy.id, String(now)))
+  return drafts
 }
 
 /** A linked task (`reviewOf`) the Swarm does not archive by itself: none of its checks carries evidence, nobody cancelled it,

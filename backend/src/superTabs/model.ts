@@ -76,7 +76,13 @@ export interface Agent {
   /** A Buddy's owner asked its machine to move it onto a model on the Swarm's grid, or back to their subscription (null)
    *  (buddyModel.ts). What they were shown is kept for the line the result writes: the model's name, who serves it and its
    *  window, the smallest any serving machine reported. One at a time; the result or the liveness sweep's lease drops it. */
-  modelRequest?: { id: string; gridModel: string | null; name?: string; servedBy?: string[]; contextWindow?: number; requestedBy: string; at: string }
+  modelRequest?: { id: string; gridModel: string | null; name?: string; servedBy?: string[]; contextWindow?: number; requestedBy: string; at: string
+    /** Set when the Swarm sent the Buddy home by itself: the model hit a limit, kept failing, or nobody served it. */
+    reason?: 'limit' | 'failing' | 'gone' }
+  /** When the liveness sweep first found nobody serving the Buddy's `gridModel` (ms): two minutes on, it is sent home. */
+  gridModelUnservedSince?: number
+  /** The name its owner was shown for the Buddy's `gridModel`, for the lines after nobody serves it any more. */
+  gridModelName?: string
   /** The account it runs in on its machine once a switch moved it; absent for the machine's default account. */
   profileId?: string
   /** Captured from the original Swarm launch, never inferred from a later live session with the same id. */

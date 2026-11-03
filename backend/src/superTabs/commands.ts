@@ -48,7 +48,7 @@ import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRo
 import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, entryProject, liveSessions, mainBuddyOf, MAX_SESSION_WAITING, requireChatOwner, SESSION_ENDED_KIND, sessionAgentsOf, sessionOf, setSessions, type SessionEndReason } from './buddySessions.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, PROPOSAL_SENT_KIND, proposalSentText, proposalText, proposalTitle, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL, CODEX_BUDDY_REFUSAL } from './buddyContract.js'
-import { askBuddyModel, buddyModelResult } from './buddyModel.js'
+import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
 import { launchRefusedLine, leadJoined, leadOvertaken, leadStartFailed, leadStarting, placeLead } from './leadStart.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
@@ -1155,7 +1155,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const folder = project ? { cwd: projectFolder(pool, project), worktree: true, buddyNarrow: true as const }
         : { cwd: buddyHomeFolder(pool, me), worktree: false, buddyScope: 'swarm' as const, buddyProjects: buddyProjectsOn(state, pool, me) }
       const request: AgentStartRequest = { conversationId: chat.id, machineId: main.machineId, engine: main.configuration.engine,
-        ...(main.configuration.model ? { model: main.configuration.model } : {}), ...(main.configuration.effort ? { effort: main.configuration.effort } : {}),
+        // The model its Buddy runs on: a shared one starts on the Swarm's grid (buddyModel.ts).
+        ...sessionModel(state, main, context.now),
         name: main.displayName ?? main.name, ...folder, requirements: BUDDY_REQUIREMENTS,
         buddyOf: { personId: owner.id, generation: owner.generation },
         // The main chat's sequence before this message: the session's excerpt reads up to it (buddySessions.ts sessionContext).
@@ -1458,6 +1459,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         const resumeAt = command.alert === 'limit' && command.resetAt && Date.parse(command.resetAt) > context.now
           ? agent(state, command.agentId).limitedUntil ?? undefined : undefined
         effects.messages.push(...loseTasks(state, context.now, worker => worker.id === command.agentId, resumeAt))
+        // A Buddy on a shared model goes back to its owner's subscription: the member serving it set that limit (PRODUCT.md,
+        // Contribution, Safe), and a model that keeps failing answers nothing.
+        sendBuddyHome(state, agent(state, command.agentId), command.alert === 'limit' ? 'limit' : 'failing', operationId, context.now)
       }
       break
     }
@@ -2273,8 +2277,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       askBuddyModel(state, actor, command.gridModel, operationId, context.now)
       break
     case 'buddy.modelResult': {
-      const line = buddyModelResult(state, actor, command, context.now)
-      message(line.conversationId, line.text, [], null, SYSTEM_ROW)
+      // The machines a line names leave a Buddy's read of it (store.ts withoutMachineNames): a Buddy reads no machines.
+      buddyModelResult(state, actor, command, context.now).forEach((line, i) => {
+        const source = { ...SYSTEM_ROW, ...(line.machines.length ? { machines: line.machines } : {}) }
+        if (i === 0) message(line.conversationId, line.text, [], null, source)
+        else effects.messages.push({ id: stableId(operationId, 'buddy-model', String(i)), conversationId: line.conversationId, author: sender,
+          text: line.text, replyTo: null, recipients: [], source })
+      })
       break
     }
     case 'buddy.sessionEnd': {
