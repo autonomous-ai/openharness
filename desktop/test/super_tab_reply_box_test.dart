@@ -3,12 +3,14 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/composer_toggle.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/pane_layout.dart';
 import 'package:harness/super_tabs/thread_panel.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
 
 import 'box_render_preview_test.dart' show loadPreviewFonts;
 import 'support/super_tab_fixture.dart';
@@ -136,7 +138,8 @@ void main() {
   SuperTabComposerToggle box(WidgetTester tester, Finder finder) =>
       tester.widget<SuperTabComposerToggle>(finder);
 
-  /// The circle (off) or check (on) inside [chip], drawn inside its bounds.
+  /// The empty square (off) or checked square (on) inside [chip], drawn
+  /// inside its bounds: a checkbox, never a radio's circle (Scholes, 11-03).
   void expectMark(WidgetTester tester, Finder chip, {required bool on}) {
     final mark = find.descendant(
       of: chip,
@@ -145,6 +148,10 @@ void main() {
       ),
     );
     expect(mark, findsOneWidget);
+    expect(
+      tester.widget<Icon>(mark).icon,
+      on ? AppIcons.squareCheck : AppIcons.square,
+    );
     final rect = tester.getRect(mark), bounds = tester.getRect(chip);
     expect(rect.width, greaterThan(0));
     expect(bounds.contains(rect.center), isTrue);
@@ -249,7 +256,40 @@ void main() {
   });
 
   group('the options read as on/off choices', () {
-    testBox('off is an empty circle, on a check; tapping toggles it', (
+    // Scholes, 11-03: an outlined pill with a circle read as a radio, so New
+    // session and Also send looked like an either-or choice.
+    testBox('a checkbox with no pill around it, off or on', (tester) async {
+      await panel(tester, projectChat(), 'lead', width: 800);
+      DesktopPill pill() => tester.widget<DesktopPill>(
+        find.descendant(of: alsoSend, matching: find.byType(DesktopPill)),
+      );
+      expect(pill().quiet, isTrue);
+      expect(pill().choice, isFalse);
+      expect(pill().selected, isNull);
+      await tester.tap(alsoSend);
+      await tester.pump();
+      expectMark(tester, alsoSend, on: true);
+      expect(pill().quiet, isTrue);
+      expect(pill().selected, isNull);
+    });
+
+    testBox('a New session that can\'t start now is a greyed empty square', (
+      tester,
+    ) async {
+      final server = buddyChat()..state['paused'] = true;
+      await panel(tester, server, 'offline', width: 800);
+      expectMark(tester, newSession, on: false);
+      final mark = tester.widget<Icon>(
+        find.descendant(
+          of: newSession,
+          matching: find.byKey(const ValueKey('composer-toggle-off')),
+        ),
+      );
+      expect(mark.color!.a, lessThan(.5));
+      expect(find.byTooltip('New work is paused in this Swarm'), findsOneWidget);
+    });
+
+    testBox('off is an empty square, on a checked square; tapping toggles it', (
       tester,
     ) async {
       await panel(tester, projectChat(), 'lead', width: 800);
