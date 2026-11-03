@@ -40,6 +40,7 @@ import type { AuthUser } from '../lib/ssoAuth.js'
 import { DEFAULT_DAYS, MAX_DAYS } from '../superTabs/costs/read.js'
 import { WORKSPACE_ACCESS_REVOKED } from '../superTabs/workspaceStore.js'
 import { markNothingNew } from '../lib/routeLatency.js'
+import { onMachineRenamed } from '../superTabs/machineRenames.js'
 
 /** Runs a poll and marks its reply nothing-new for `route latency` when `empty` says so (spec 2026-11-02 poll cost, Part 0). */
 const noting = <T>(req: FastifyRequest, run: () => Promise<T>, empty: (result: T) => boolean) => async (): Promise<T> => {
@@ -276,6 +277,8 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       + 'so teammates\' agents get no access to it. Someone who can push to it approves it in Harness: Project details, GitHub access.', 403)
   }
   const store = options.store ?? await productionStore(github)
+  // A rename in Machines reaches the Swarms the machine is in at once (MachineService.rename).
+  onMachineRenamed(rename => store.machineRenamed(rename))
   const reads = options.reads ?? new SwarmReads(store, { githubApp: !!github })
   const hosts = options.hosts ?? new HostReads(store, { githubApp: !!github, teamAccountsIdle: !github })
   // Members' apps read a project's GitHub access again when its revision moves (projects.ts githubRevision). A move that
