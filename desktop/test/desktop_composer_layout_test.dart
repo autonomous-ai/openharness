@@ -13,6 +13,7 @@ import 'package:harness/core/config.dart';
 import 'package:harness/core/engine_availability.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/core/project_folder.dart';
+import 'package:harness/core/ssh_hosts.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/shortcuts/keymap_host.dart';
@@ -64,6 +65,7 @@ class _ReviewApp extends AppNotifier {
   final bool git;
   final List<String> branchNames;
   final launches = <Map<String, Object?>>[];
+  final folders = <String, List<String>>{};
 
   @override
   Future<void> probeEngines(String machineId, {bool force = false}) async {}
@@ -111,7 +113,13 @@ class _ReviewApp extends AppNotifier {
   Future<Map<String, dynamic>> listRemoteFolder(
     String machineId,
     String? path,
-  ) async => {'path': path ?? '/work', 'entries': []};
+  ) async => {
+    'path': path ?? '/work',
+    'entries': [
+      for (final name in folders[path] ?? const <String>[])
+        {'name': name, 'isDir': true},
+    ],
+  };
 
   @override
   Future<String?> createAgent(
@@ -648,12 +656,103 @@ void main() {
 
         await tester.enterText(_query, 'autonomous-ai/openharness');
         await tester.pumpAndSettle();
-        expect(find.text('Clone openharness').hitTestable(), findsOneWidget);
+        expect(
+          find.text('Clone autonomous-ai/openharness').hitTestable(),
+          findsOneWidget,
+        );
         await key(tester, LogicalKeyboardKey.escape);
         await tester.pumpAndSettle();
         expect(fixture.box.field, NewHarnessField.projectMenu);
         expect(fixture.box.task, 'Keep the task draft');
         expect(fixture.app.launches, isEmpty);
+        expect(tester.takeException(), isNull);
+      });
+    }
+    testWidgets(
+      'Esc leaves a pasted link without choosing it ${brightness.name}',
+      (tester) async {
+        final fixture = await _mount(
+          tester,
+          brightness: brightness,
+          onBrowse: (_) {},
+        );
+        final before = fixture.box.project;
+        await tester.tap(_field('project'));
+        await tester.pumpAndSettle();
+        await tester.enterText(_query, 'https://github.com/org/repo');
+        await tester.pumpAndSettle();
+        expect(find.text('Clone org/repo').hitTestable(), findsOneWidget);
+        await key(tester, LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(_query.hitTestable(), findsNothing);
+        expect(fixture.box.project, before);
+        expect(fixture.app.launches, isEmpty);
+        expect(tester.takeException(), isNull);
+      },
+    );
+    testWidgets('A pasted folder path says Open ${brightness.name}', (
+      tester,
+    ) async {
+      final fixture = await _mount(
+        tester,
+        brightness: brightness,
+        onBrowse: (_) {},
+      );
+      // Another computer's folders: a local listing reads the real disk.
+      fixture.app.machineStates['review']!.localOnly = false;
+      fixture.app.folders['/work'] = ['api'];
+      await tester.tap(_field('project'));
+      await tester.pumpAndSettle();
+      await tester.enterText(_query, '/work/api');
+      await tester.pump(const Duration(milliseconds: 150));
+      await tester.pumpAndSettle();
+      expect(find.text('Open /work/api').hitTestable(), findsOneWidget);
+      expect(find.text('Folder on office').hitTestable(), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+    for (final (typed, line, detail, why) in const [
+      (
+        'https://github.com/autonomous-ai',
+        'Not a repository link',
+        'Use github.com/owner/repo',
+        'Use a link to a repository, like github.com/owner/repo.',
+      ),
+      (
+        'git@gitlab-work:org/repo.git',
+        "gitlab-work isn't a GitHub host",
+        'Only GitHub repositories can be cloned here',
+        'gitlab-work does not lead to github.com on this computer.',
+      ),
+    ]) {
+      testWidgets('A refused paste is two lines and does not read as a choice: '
+          '$line ${brightness.name}', (tester) async {
+        final fixture = await _mount(
+          tester,
+          brightness: brightness,
+          onBrowse: (_) {},
+        );
+        fixture.box.sshHosts = const _FixedSshHosts('gitlab.com');
+        await tester.tap(_field('project'));
+        await tester.pumpAndSettle();
+        await tester.enterText(_query, typed);
+        await tester.pumpAndSettle();
+        await tester.enterText(_query, typed);
+        await tester.pumpAndSettle();
+        final row = find.byKey(
+          const ValueKey(
+            'new-harness-option-${NewHarnessController.pasteInvalidId}',
+          ),
+        );
+        expect(find.text(line).hitTestable(), findsOneWidget);
+        expect(find.text(detail).hitTestable(), findsOneWidget);
+        expect(find.text(why), findsNothing);
+        final fill = tester
+            .widget<Material>(
+              find.descendant(of: row, matching: find.byType(Material)).first,
+            )
+            .color;
+        expect(fill, isNot(DesktopChrome.activeSelection));
+        expect(fixture.box.selected?.enabled, isFalse);
         expect(tester.takeException(), isNull);
       });
     }
@@ -1666,4 +1765,15 @@ void main() {
       );
     }
   }
+}
+
+class _FixedSshHosts implements SshHosts {
+  const _FixedSshHosts(this.host);
+  final String host;
+
+  @override
+  Future<String?> resolveHost(String alias) async => host;
+
+  @override
+  Future<List<String>> githubAliases() async => const [];
 }

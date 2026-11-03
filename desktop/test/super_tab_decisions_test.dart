@@ -7,6 +7,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/decisions_view.dart';
 import 'package:harness/super_tabs/decisions.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -91,8 +92,7 @@ Future<SuperTabController> showView(
   return c;
 }
 
-Finder notificationsEntry() =>
-    find.byKey(const ValueKey('super-notifications'));
+Finder notificationsEntry() => find.byKey(const ValueKey('super-activity'));
 Finder option(String id, int index) =>
     find.byKey(ValueKey('super-decision-$id-$index'));
 Finder letPmDecide(String id) =>
@@ -241,7 +241,13 @@ void main() {
         );
         await tester.tap(notificationsEntry());
         await tester.pumpAndSettle();
-        expect(find.text('Decisions'), findsOneWidget);
+        expect(
+          find.descendant(
+            of: find.byType(SuperTabDecisionList),
+            matching: find.text('Decisions'),
+          ),
+          findsOneWidget,
+        );
         expect(
           find.text('Wren asked 2 questions · web-project · Lead'),
           findsOneWidget,
@@ -350,7 +356,7 @@ void main() {
   });
 
   group('a decision the reader does not want to answer', () {
-    test('Let PM decide sends a delegated answer, and the answer reads as the PM\'s', () async {
+    test('Let the coordinator decide sends a delegated answer, and the answer reads as theirs', () async {
       final server = swarm()..ask(['Ship how?'], recommended: 1);
       final controller = server.controller(account: 'peer');
       addTearDown(controller.dispose);
@@ -371,7 +377,7 @@ void main() {
     });
 
     testWidgets(
-      'the Buddy chat offers Let PM decide and Not now on each card, and no Let PM decide without a recommended option',
+      'the Buddy chat offers Let Product Manager decide and Not now on each card, and none without a recommended option',
       (tester) async {
         final server = swarm()
           ..ask(['Ship how?'])
@@ -394,13 +400,39 @@ void main() {
           'delegate': true,
         });
         expect(inPanel('Ship how?'), findsNothing);
-        // The answered list says the PM decided, never that the reader chose.
+        // The answered list says the Product Manager decided, never that the reader chose.
         await tester.tap(notificationsEntry());
         await tester.pumpAndSettle();
-        expect(find.text('PM decided: Behind a flag'), findsOneWidget);
+        expect(
+          find.text('Product Manager decided: Behind a flag'),
+          findsOneWidget,
+        );
         expect(find.text('You chose: Behind a flag'), findsNothing);
       },
     );
+
+    testWidgets('the coordinator is called what its project calls it', (
+      tester,
+    ) async {
+      final server = swarm()..ask(['Ship how?']);
+      (server.state['projects'] as List).first['coordinatorName'] =
+          'Coordinator';
+      await showView(tester, server);
+      await openPmChat(tester);
+      expect(
+        find.descendant(
+          of: letPmDecide('decision-1'),
+          matching: find.text('Let Coordinator decide'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(letPmDecide('decision-1'));
+      await tester.pumpAndSettle();
+      await tester.tap(notificationsEntry());
+      await tester.pumpAndSettle();
+      expect(find.text('Coordinator decided: Behind a flag'), findsOneWidget);
+      expect(find.textContaining('PM decide'), findsNothing);
+    });
 
     testWidgets(
       'Not now folds the card into one line, still folded after a restart, until a new decision arrives',

@@ -1,7 +1,10 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/core/local_key_value_store.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
@@ -9,18 +12,22 @@ import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/swarm/swarm_code_block.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
+import 'package:harness_mobile/swarm/swarm_leaderboard.dart';
+import 'package:harness_mobile/swarm/swarm_leaderboard_reader.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
 import 'package:harness_mobile/swarm/swarm_project_tasks.dart';
 import 'package:harness_mobile/swarm/swarm_project_team.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/swarm/swarm_style.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
 /// The project screen of Tony's Swarm Home, direction C (2026-10-30): the
-/// project's #name over its team line, and two tabs, Chat and Team.
+/// project's #name over its team line and its chat filling the screen, with
+/// ☰ opening its Leaderboard and its Team as sheets.
 void main() {
   const board = '/api/super-tabs/$tab/leaderboard?projectId=$project';
 
@@ -164,13 +171,73 @@ void main() {
     tabs: SwarmProjectTab.homeC,
   );
 
-  /// The page on its Team tab.
-  Future<SwarmHost> team(WidgetTester tester, FakeSwarm fake) async {
+  /// The page with the sheet of its menu's row keyed [row] open.
+  Future<SwarmHost> fromMenu(
+    WidgetTester tester,
+    FakeSwarm fake,
+    String row,
+  ) async {
     final host = await pump(tester, fake, page);
-    await tester.tap(key('swarm-project-tab-team'));
+    await tester.tap(key('swarm-project-menu'));
+    await tester.pumpAndSettle();
+    await tester.tap(key(row));
     await tester.pumpAndSettle();
     return host;
   }
+
+  /// The page with its Team sheet open.
+  Future<SwarmHost> team(WidgetTester tester, FakeSwarm fake) =>
+      fromMenu(tester, fake, 'swarm-project-menu-team');
+
+  /// [data] of a group whose agent last reported progress [ago] before [at].
+  Map<String, dynamic> progressed(
+    Map<String, dynamic> data,
+    DateTime at,
+    Duration ago,
+  ) => {
+    ...data,
+    'assignment': <String, dynamic>{
+      ...data['assignment'] as Map<String, dynamic>,
+      'progressAt': at.subtract(ago).millisecondsSinceEpoch,
+    },
+  };
+
+  /// [fake] whose first read has Nova's g1 progress 4m 30s and Juno's g2
+  /// 2h before [at].
+  FakeSwarm timed(FakeSwarm fake, DateTime at) {
+    final load = fake.routes['/api/super-tabs/$tab/parts']!;
+    fake.routes['/api/super-tabs/$tab/parts'] = (body) async {
+      final read = (await load(body))! as Map<String, dynamic>;
+      read['groups'] = [
+        for (final g in (read['groups'] as List).cast<Map<String, dynamic>>())
+          switch (g['key']) {
+            'g1' => {
+              ...g,
+              'data': progressed(
+                g['data'] as Map<String, dynamic>,
+                at,
+                const Duration(minutes: 4, seconds: 30),
+              ),
+            },
+            'g2' => {
+              ...g,
+              'data': progressed(
+                g['data'] as Map<String, dynamic>,
+                at,
+                const Duration(hours: 2),
+              ),
+            },
+            _ => g,
+          },
+      ];
+      return read;
+    };
+    return fake;
+  }
+
+  /// The page with its Leaderboard sheet open.
+  Future<SwarmHost> leaderboard(WidgetTester tester, FakeSwarm fake) =>
+      fromMenu(tester, fake, 'swarm-project-menu-leaderboard');
 
   /// The words of the row keyed [k], its rich text included.
   String said(WidgetTester tester, String k) => [
@@ -199,25 +266,29 @@ void main() {
     return gate;
   }
 
-  /// The member rows under the caption keyed [caption]'s card.
-  List<String> rowsAfter(WidgetTester tester, String caption, String? next) {
-    final top = tester.getBottomLeft(key(caption)).dy;
-    final bottom = next == null
-        ? double.infinity
-        : tester.getTopLeft(key(next)).dy;
-    final rows =
-        tester.widgetList<SwarmMemberRow>(find.byType(SwarmMemberRow)).where((
-          row,
-        ) {
-          final y = tester.getTopLeft(find.byWidget(row)).dy;
-          return y >= top && y < bottom;
-        }).toList()..sort(
-          (a, b) => tester
-              .getTopLeft(find.byWidget(a))
-              .dy
-              .compareTo(tester.getTopLeft(find.byWidget(b)).dy),
-        );
-    return [for (final row in rows) (row.key! as ValueKey<String>).value];
+  /// The people on the Leaderboard sheet, top to bottom.
+  List<String> onBoard(WidgetTester tester) {
+    final rows = find.byWidgetPredicate(
+      (w) => switch (w.key) {
+        ValueKey<String>(:final value) => value.startsWith(
+          'swarm-leaderboard-person-',
+        ),
+        _ => false,
+      },
+    );
+    final found = rows.evaluate().map((e) => e.widget).toList()
+      ..sort(
+        (a, b) => tester
+            .getTopLeft(find.byWidget(a))
+            .dy
+            .compareTo(tester.getTopLeft(find.byWidget(b)).dy),
+      );
+    return [
+      for (final w in found)
+        (w.key! as ValueKey<String>).value.substring(
+          'swarm-leaderboard-person-'.length,
+        ),
+    ];
   }
 
   /// The texts of the row keyed [k] with a digit in them, its face aside.
@@ -231,16 +302,16 @@ void main() {
     String workKey(WidgetTester tester) =>
         host(tester).session!.inbox.needs.whereType<SwarmWorkNeed>().single.key;
 
+    /// The key of that work's row.
+    String waitingKey(WidgetTester tester) =>
+        'swarm-waiting-${workKey(tester)}';
+
     testWidgets('on top: what waits on the person, then what is worked on, '
-        "in the Tasks tab's rows, counted beside their caption", (
-      tester,
-    ) async {
+        "in the Tasks tab's rows, under a caption each", (tester) async {
       await team(tester, backend());
 
-      expect(
-        said(tester, 'swarm-team-tasks-caption'),
-        'Tasks | 1 waiting on you · 1 working',
-      );
+      expect(said(tester, 'swarm-team-waiting-caption'), 'Waiting on you');
+      expect(said(tester, 'swarm-team-working-caption'), 'Working on');
       final waiting = 'swarm-waiting-${workKey(tester)}';
       expect(key(waiting), findsOneWidget);
       expect(tester.widget(key(waiting)), isA<SwarmWaitingRow>());
@@ -249,10 +320,10 @@ void main() {
       expect(key('swarm-reply-${workKey(tester)}'), findsOneWidget);
       double y(String k) => tester.getTopLeft(key(k)).dy;
       final order = [
-        y('swarm-team-tasks-caption'),
+        y('swarm-team-waiting-caption'),
         y(waiting),
+        y('swarm-team-working-caption'),
         y('swarm-task-g1'),
-        y('swarm-team-humans-caption'),
         y('swarm-team-agents-caption'),
       ];
       expect(order, [...order]..sort(), reason: 'Tasks first, waiting first');
@@ -329,15 +400,14 @@ void main() {
       });
     });
 
-    testWidgets('access taken away while Approve asks: confirming it then '
-        'holds and sends nothing', (tester) async {
+    testWidgets('access taken away while Approve asks: confirming it before '
+        'the dialog goes holds and sends nothing', (tester) async {
       final fake = asked();
       await team(tester, fake);
 
       await tester.tap(key('swarm-approve-d1'));
       await tester.pumpAndSettle();
       host(tester).session!.inbox.reader(tab)!.revoke();
-      await tester.pump();
       await tester.tap(key('swarm-activity-approve-confirm'));
       await tester.pumpAndSettle();
       await tester.pump(const Duration(seconds: 5));
@@ -345,6 +415,73 @@ void main() {
 
       expect(fake.commands, isEmpty);
       expect(find.byType(SwarmWaitingRow), findsNothing);
+    });
+
+    /// Approve asking over the Team sheet, its question on screen.
+    Future<FakeSwarm> asking(WidgetTester tester) async {
+      final fake = asked();
+      await team(tester, fake);
+      await tester.tap(key('swarm-approve-d1'));
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsOneWidget);
+      return fake;
+    }
+
+    /// Nothing of Approve or the sheet stays, and nothing was sent.
+    Future<void> expectAllGone(WidgetTester tester, FakeSwarm fake) async {
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.textContaining('Merge #2160?'), findsNothing);
+      expect(key('swarm-activity-approve-confirm'), findsNothing);
+      expect(find.byType(BottomSheet), findsNothing);
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+      expect(fake.commands, isEmpty);
+    }
+
+    testWidgets('access taken away while Approve asks: the dialog goes with '
+        'the sheet, and its question with it', (tester) async {
+      final fake = await asking(tester);
+
+      host(tester).session!.inbox.reader(tab)!.revoke();
+
+      await expectAllGone(tester, fake);
+    });
+
+    testWidgets('the project taken off the Swarm while Approve asks: the '
+        'dialog goes with the sheet', (tester) async {
+      final fake = await asking(tester);
+
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => {
+        ...changes(cursor: 'c3'),
+        'head': part('head', 2, headData(projects: const [])),
+      };
+      await host(tester).session!.inbox.reader(tab)!.refresh();
+
+      await expectAllGone(tester, fake);
+    });
+
+    testWidgets('the account signing out while Approve asks: the dialog goes '
+        'with the sheet', (tester) async {
+      final fake = await asking(tester);
+
+      (host(tester).account as ValueNotifier<String?>).value = null;
+
+      await expectAllGone(tester, fake);
+    });
+
+    testWidgets('closing the sheet takes nothing under it: the chat and the '
+        'page stay', (tester) async {
+      final fake = await asking(tester);
+
+      await tester.tap(key('swarm-activity-approve-cancel'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-team-close'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SwarmProjectPage), findsOneWidget);
+      expect(find.text('CI on #2154 is green.'), findsOneWidget);
+      expect(fake.commands, isEmpty);
     });
 
     testWidgets('a task opens its chat', (tester) async {
@@ -382,86 +519,281 @@ void main() {
       };
       await team(tester, fake);
 
-      expect(said(tester, 'swarm-team-tasks-caption'), 'Tasks');
+      expect(said(tester, 'swarm-team-working-caption'), 'Working on');
+      expect(key('swarm-team-waiting-caption'), findsNothing);
       expect(key('swarm-team-no-tasks'), findsOneWidget);
       expect(find.text('No open tasks.'), findsOneWidget);
       expect(key('swarm-task-g1'), findsNothing);
     });
-  });
 
-  group('Team, its humans', () {
-    testWidgets("ordered by this week's points, most first, as Desktop's "
-        'member list draws them (#2230): the name and what they are on now, '
-        'a line of what they did this week, and the points at the right', (
-      tester,
-    ) async {
-      await team(tester, backend());
+    /// [backend] with [count] tasks going on, g-0 the latest, besides what
+    /// waits on the person.
+    FakeSwarm manyTasks(int count) {
+      final fake = backend();
+      final load = fake.routes['/api/super-tabs/$tab/parts']!;
+      fake.routes['/api/super-tabs/$tab/parts'] = (body) async {
+        final read = (await load(body))! as Map<String, dynamic>;
+        final groups = read['groups'] as List;
+        groups.removeWhere((g) => (g as Map)['key'] == 'g1');
+        return {
+          ...read,
+          'groups': [
+            ...groups,
+            for (var i = 0; i < count; i++)
+              part(
+                'g-$i',
+                1,
+                groupData(
+                  'g-$i',
+                  title: 'Task $i',
+                  number: 3000 + i,
+                  agentIds: ['agent-lead', 'agent-builder'],
+                  status: 'working',
+                  workerId: 'agent-builder',
+                  lastMessageSequence: 100 - i,
+                ),
+              ),
+          ],
+        };
+      };
+      return fake;
+    }
 
-      expect(said(tester, 'swarm-team-humans-caption'), 'Humans');
+    Finder workRows() => find.byType(SwarmWorkRow);
+
+    /// A view tall enough that the list builds every row.
+    void tall(WidgetTester tester) {
+      tester.view
+        ..physicalSize = const Size(800, 3000)
+        ..devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+    }
+
+    testWidgets('shows five of the work going on, and See all shows the rest '
+        'in place, above the agents', (tester) async {
+      tall(tester);
+      await team(tester, manyTasks(8));
+
+      expect(key(waitingKey(tester)), findsOneWidget, reason: 'not capped');
+      expect(workRows(), findsNWidgets(5));
+      for (var i = 0; i < 5; i++) {
+        expect(key('swarm-task-g-$i'), findsOneWidget, reason: 'latest first');
+      }
+      expect(key('swarm-task-g-5'), findsNothing);
+      final seeAll = key('swarm-team-see-all');
+      expect(find.text('See all 8 tasks'), findsOneWidget);
       expect(
-        rowsAfter(
-          tester,
-          'swarm-team-humans-caption',
-          'swarm-team-agents-caption',
-        ),
-        [
-          'swarm-member-person-person-me',
-          'swarm-member-person-diego',
-          'swarm-member-person-ken',
+        tester.getSize(seeAll).height,
+        greaterThanOrEqualTo(minTouchTarget),
+      );
+      double y(String k) => tester.getTopLeft(key(k)).dy;
+      expect(y('swarm-task-g-4'), lessThan(y('swarm-team-see-all')));
+      expect(
+        y('swarm-team-see-all'),
+        lessThan(y('swarm-team-agents-caption')),
+        reason: 'the agents are a short way down, however many tasks',
+      );
+
+      await tester.tap(seeAll);
+      await tester.pumpAndSettle();
+
+      expect(workRows(), findsNWidgets(8));
+      expect(find.byType(SwarmProjectTeamSheet), findsOneWidget);
+      expect(find.text('Show fewer'), findsOneWidget);
+      expect(find.text('See all 8 tasks'), findsNothing);
+
+      await tester.tap(seeAll);
+      await tester.pumpAndSettle();
+      expect(workRows(), findsNWidgets(5), reason: 'it folds again');
+    });
+
+    testWidgets('five or fewer have no See all', (tester) async {
+      await team(tester, manyTasks(5));
+
+      expect(workRows(), findsNWidgets(5));
+      expect(key('swarm-team-see-all'), findsNothing);
+    });
+
+    testWidgets('See all stays open when the Swarm is read again, and over a '
+        'task opened from it and back', (tester) async {
+      tall(tester);
+      final fake = manyTasks(8);
+      await team(tester, fake);
+      await tester.tap(key('swarm-team-see-all'));
+      await tester.pumpAndSettle();
+      expect(workRows(), findsNWidgets(8));
+
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+        cursor: 'c3',
+        groups: [
+          part(
+            'g-0',
+            9,
+            groupData(
+              'g-0',
+              title: 'Task 0, renamed',
+              number: 3000,
+              agentIds: ['agent-lead', 'agent-builder'],
+              status: 'working',
+              workerId: 'agent-builder',
+              lastMessageSequence: 200,
+            ),
+          ),
         ],
       );
-      expect(
-        heard(tester, 'swarm-member-person-person-me'),
-        'person-me, you, 6 shipped · 3 unblocked, 1320 points',
-      );
-      expect(
-        heard(tester, 'swarm-member-person-diego'),
-        'diego, 🎯 Reviewing PRs, 10 hours lent, 1050 points',
-      );
-      expect(
-        heard(tester, 'swarm-member-person-ken'),
-        'ken, 640 points',
-        reason: 'a status whose time has passed is not shown, nor zeros',
-      );
-      expect(
-        said(tester, 'swarm-member-person-diego'),
-        'D | diego  🎯 Reviewing PRs | 10 hours lent | 1050',
-        reason: 'the status after the name, as on Desktop',
-      );
-      final name = tester.getTopRight(
-        find.descendant(
-          of: key('swarm-member-person-diego'),
-          matching: find.textContaining('diego', findRichText: true),
+      await host(tester).session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Task 0, renamed'), findsWidgets);
+      expect(workRows(), findsNWidgets(8), reason: 'a read folds nothing');
+
+      await tester.tap(key('swarm-task-g-1'));
+      await tester.pumpAndSettle();
+      expect(find.byType(SwarmProjectTeamSheet, skipOffstage: false), findsOne);
+      await tester.tap(key('tty-back'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SwarmProjectTeamSheet), findsOneWidget);
+      expect(workRows(), findsNWidgets(8), reason: 'back, as it was');
+    });
+
+    testWidgets('lists no humans: they are on the Leaderboard, and its board '
+        'is not read for the Team', (tester) async {
+      final fake = backend();
+      await team(tester, fake);
+
+      expect(find.text('Humans'), findsNothing);
+      expect(fake.paths.where((p) => p.contains('/leaderboard')), isEmpty);
+      for (final id in ['person-me', 'diego', 'ken']) {
+        expect(key('swarm-member-person-$id'), findsNothing, reason: id);
+      }
+    });
+  });
+
+  group('Team, its instructions', () {
+    FakeSwarm withInstructions({bool coordinator = true}) {
+      final fake = backend();
+      final parts = fake.routes['/api/super-tabs/$tab/parts']!;
+      fake.routes['/api/super-tabs/$tab/parts'] = (body) async {
+        final read = Map<String, dynamic>.from(await parts(body) as Map);
+        final data = Map<String, dynamic>.from(
+          (read['head'] as Map)['data'] as Map,
+        );
+        data['projects'] = [
+          {
+            ...(data['projects'] as List).first as Map<String, dynamic>,
+            if (coordinator) 'coordinatorName': 'Product Manager',
+            'instructionsRevision': 7,
+            'notesRevision': 1,
+          },
+        ];
+        read['head'] = part('head', 1, data);
+        return read;
+      };
+      fake.routes['/api/super-tabs/$tab/projects/$project/instructions'] =
+          (_) => {
+            'projectId': project,
+            'revision': 7,
+            'text': 'The rules',
+            'template': false,
+            'coordinatorName': 'Product Manager',
+            'notesRevision': 1,
+            'notes': <Object>[],
+          };
+      return fake;
+    }
+
+    testWidgets('Team lists the instructions after the agents', (tester) async {
+      await team(tester, withInstructions());
+      await tester.scrollUntilVisible(
+        key('swarm-team-instructions'),
+        200,
+        scrollable: find.descendant(
+          of: key('swarm-project-team-list'),
+          matching: find.byType(Scrollable),
         ),
       );
-      Finder points(String id, String value) => find.descendant(
-        of: key('swarm-member-person-$id'),
-        matching: find.text(value),
+      await tester.pumpAndSettle();
+      expect(said(tester, 'swarm-team-instructions'), contains('Revision 7'));
+      expect(
+        tester.getTopLeft(key('swarm-team-instructions')).dy,
+        greaterThan(tester.getTopLeft(key('swarm-member-agent-ash')).dy),
+      );
+      await tester.tap(key('swarm-team-instructions'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-instructions-text'), findsOneWidget);
+    });
+
+    testWidgets('a backend that does not know them shows no row', (
+      tester,
+    ) async {
+      await team(tester, withInstructions(coordinator: false));
+      expect(key('swarm-team-instructions'), findsNothing);
+    });
+  });
+
+  group('the Leaderboard sheet', () {
+    testWidgets("this project's humans by this week's points, most first, "
+        'without ranks: the name, a line of what they did this week and the '
+        'points at the right', (tester) async {
+      final fake = backend();
+      await leaderboard(tester, fake);
+
+      expect(find.text('Leaderboard'), findsOneWidget);
+      expect(find.text('This week'), findsOneWidget);
+      expect(key('swarm-leaderboard-close'), findsOneWidget);
+      expect(onBoard(tester), ['person-me', 'diego', 'ken']);
+      expect(
+        heard(tester, 'swarm-leaderboard-person-person-me'),
+        'person-me, 1320 points, 6 shipped, 3 unblocked',
       );
       expect(
-        tester.getTopLeft(points('diego', '1050')).dx,
-        greaterThan(name.dx),
-        reason: 'at the right',
+        heard(tester, 'swarm-leaderboard-person-diego'),
+        'diego, 1050 points, 10 hours lent',
       );
       expect(
-        tester.getTopRight(points('diego', '1050')).dx,
-        tester.getTopRight(points('ken', '640')).dx,
+        heard(tester, 'swarm-leaderboard-person-ken'),
+        'ken, 640 points',
+        reason: 'no zeros',
+      );
+      expect(
+        find.byKey(const ValueKey('swarm-leaderboard-rank-diego')),
+        findsNothing,
+        reason: 'no rank numbers',
+      );
+      Finder points(String id) => key('swarm-leaderboard-points-$id');
+      expect(
+        tester.getTopRight(points('diego')).dx,
+        tester.getTopRight(points('ken')).dx,
         reason: 'the points line up',
       );
-    });
-
-    testWidgets('in the one row shape the agents share', (tester) async {
-      await team(tester, backend());
-
+      expect(fake.paths.where((p) => p == board).length, 1);
       expect(
-        rowsAfter(tester, 'swarm-team-agents-caption', null),
-        hasLength(4),
+        fake.paths.where(
+          (p) => p.contains('/leaderboard') && !p.startsWith(board),
+        ),
+        isEmpty,
+        reason: "this project's board, and no other",
       );
-      final human = tester.getSize(key('swarm-member-person-diego'));
-      final agent = tester.getSize(key('swarm-member-agent-ash'));
-      expect(human.height, agent.height);
-      expect(human.width, agent.width);
     });
+
+    testWidgets(
+      'its top line fits at 320 wide, with a finger for each control',
+      (tester) async {
+        tester.view
+          ..physicalSize = const Size(320, 640)
+          ..devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        await leaderboard(tester, backend());
+
+        expect(tester.takeException(), isNull);
+        for (final k in ['swarm-leaderboard-close', 'swarm-leaderboard-week']) {
+          final size = tester.getSize(key(k));
+          expect(size.height, greaterThanOrEqualTo(minTouchTarget), reason: k);
+          expect(size.width, greaterThanOrEqualTo(minTouchTarget), reason: k);
+        }
+      },
+    );
 
     testWidgets('equal points, and none, go by name', (tester) async {
       final fake = backend();
@@ -471,32 +803,47 @@ void main() {
           scoreData('diego', points: 40, rank: 1),
         ],
       );
-      await team(tester, fake);
+      await leaderboard(tester, fake);
 
+      expect(onBoard(tester), ['diego', 'ken', 'person-me']);
       expect(
-        rowsAfter(
-          tester,
-          'swarm-team-humans-caption',
-          'swarm-team-agents-caption',
-        ),
-        [
-          'swarm-member-person-diego',
-          'swarm-member-person-ken',
-          'swarm-member-person-person-me',
-        ],
+        heard(tester, 'swarm-leaderboard-person-person-me'),
+        'person-me',
+        reason: 'the board does not list them: no points are made up',
+      );
+    });
+
+    testWidgets('the week picker reads the week picked, for this project, and '
+        'says so', (tester) async {
+      final fake = backend();
+      await leaderboard(tester, fake);
+
+      await tester.tap(key('swarm-leaderboard-week'));
+      await tester.pumpAndSettle();
+      fake.routes.addAll({
+        for (var back = 1; back < 4; back++)
+          '$board&week=${swarmWeekOf(DateTime.now()) - back * swarmWeekMs}': (
+            _,
+          ) => leaderboardData(people: [scoreData('ken', points: 7, rank: 1)]),
+      });
+      await tester.tap(key('swarm-leaderboard-week-1'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Last week'), findsOneWidget);
+      expect(onBoard(tester).first, 'ken');
+      expect(
+        fake.paths.where((p) => p.startsWith('$board&week=')),
+        hasLength(1),
       );
     });
 
     testWidgets('a row opens their week', (tester) async {
-      await team(tester, backend());
+      await leaderboard(tester, backend());
 
-      await tester.tap(key('swarm-member-person-diego'));
+      await tester.tap(key('swarm-leaderboard-person-diego'));
       await tester.pumpAndSettle();
 
-      expect(
-        find.byKey(const ValueKey('swarm-leaderboard-sheet')),
-        findsOneWidget,
-      );
+      expect(key('swarm-leaderboard-sheet'), findsOneWidget);
     });
 
     testWidgets('a private project lists only the people who read it', (
@@ -514,89 +861,284 @@ void main() {
         ];
         return read;
       };
-      await team(tester, fake);
+      await leaderboard(tester, fake);
 
-      expect(key('swarm-member-person-ken'), findsNothing);
-      expect(key('swarm-member-person-diego'), findsOneWidget);
+      expect(onBoard(tester), ['person-me', 'diego']);
     });
 
-    testWidgets('while the board is read, the people show at once by name, '
-        'never a Loading that stays, and take its order when it answers', (
+    testWidgets('shows only the points: no change against last week, up or '
+        'down, drawn or heard', (tester) async {
+      final fake = backend();
+      fake.routes[board] = (_) => leaderboardData(
+        people: [
+          scoreData('diego', points: 28, rank: 1)..['prevWeekPoints'] = 20,
+          scoreData('ken', points: 21, rank: 2)..['prevWeekPoints'] = 25,
+        ],
+      );
+      await leaderboard(tester, fake);
+
+      for (final (id, points) in [('diego', '28'), ('ken', '21')]) {
+        expect(
+          find.descendant(
+            of: key('swarm-leaderboard-points-$id'),
+            matching: find.text(points),
+          ),
+          findsOneWidget,
+          reason: id,
+        );
+      }
+      for (final id in ['diego', 'ken']) {
+        expect(key('swarm-leaderboard-trend-$id'), findsNothing, reason: id);
+        expect(
+          key('swarm-leaderboard-trend-column-$id'),
+          findsNothing,
+          reason: 'no room kept for it: $id',
+        );
+        expect(
+          heard(tester, 'swarm-leaderboard-person-$id'),
+          isNot(contains('from last week')),
+        );
+      }
+      expect(find.byIcon(LucideIcons.arrowUp300), findsNothing);
+      expect(find.byIcon(LucideIcons.arrowDown300), findsNothing);
+      expect(find.text('8'), findsNothing);
+      expect(find.text('4'), findsNothing);
+    });
+
+    /// The Leaderboard sheet opened while the board is held on its way: its
+    /// skeleton pulses, so nothing settles.
+    Future<void> openHeld(WidgetTester tester, FakeSwarm fake) async {
+      await pump(tester, fake, page);
+      await tester.tap(key('swarm-project-menu'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-project-menu-leaderboard'));
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+    }
+
+    testWidgets('while the board is read, skeleton rows stand for its people, '
+        'one each, and nobody shows until it answers, in its order', (
       tester,
     ) async {
       final fake = backend();
       final gate = hold(fake, board);
-      await team(tester, fake);
+      await openHeld(tester, fake);
 
-      List<String> humans() => rowsAfter(
-        tester,
-        'swarm-team-humans-caption',
-        'swarm-team-agents-caption',
-      );
-      expect(humans(), [
-        'swarm-member-person-diego',
-        'swarm-member-person-ken',
-        'swarm-member-person-person-me',
-      ]);
-      expect(find.textContaining('Loading'), findsNothing);
-      for (final id in ['person-me', 'diego', 'ken']) {
-        expect(
-          figures('swarm-member-person-$id'),
-          findsNothing,
-          reason: 'no points nor numbers before the board answers: $id',
-        );
+      expect(key('swarm-leaderboard-loading'), findsOneWidget);
+      for (final i in [0, 1, 2]) {
+        expect(key('swarm-leaderboard-loading-$i'), findsOneWidget);
       }
+      expect(key('swarm-leaderboard-loading-3'), findsNothing);
+      expect(onBoard(tester), isEmpty);
+      expect(find.textContaining('Loading'), findsNothing);
+      expect(key('swarm-leaderboard-close'), findsOneWidget);
+      expect(key('swarm-leaderboard-week'), findsOneWidget);
 
       gate.complete();
       await tester.pumpAndSettle();
-      expect(humans(), [
-        'swarm-member-person-person-me',
-        'swarm-member-person-diego',
-        'swarm-member-person-ken',
-      ]);
+      expect(key('swarm-leaderboard-loading'), findsNothing);
+      expect(onBoard(tester), ['person-me', 'diego', 'ken']);
     });
 
-    testWidgets('a board that cannot be read says so, and Try again reads it '
-        'once', (tester) async {
+    testWidgets('a skeleton row is as tall as the person named alone that '
+        'replaces it', (tester) async {
+      final fake = backend();
+      fake.routes[board] = (_) =>
+          throw const SuperTabFailure('INTERNAL', 'Board is down.');
+      final gate = hold(fake, board);
+      await openHeld(tester, fake);
+      final skeleton = tester.getSize(key('swarm-leaderboard-loading-0'));
+
+      gate.complete();
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.getSize(key('swarm-leaderboard-person-diego')).height,
+        skeleton.height,
+      );
+    });
+
+    testWidgets("another week's read has the skeleton, none of this week's "
+        'numbers under its name', (tester) async {
+      final fake = backend();
+      await leaderboard(tester, fake);
+      await tester.tap(key('swarm-leaderboard-week'));
+      await tester.pumpAndSettle();
+      final gate = Completer<void>();
+      fake.routes.addAll({
+        for (var back = 1; back < 4; back++)
+          '$board&week=${swarmWeekOf(DateTime.now()) - back * swarmWeekMs}':
+              (_) async {
+                await gate.future;
+                return leaderboardData(
+                  people: [scoreData('ken', points: 7, rank: 1)],
+                );
+              },
+      });
+      await tester.tap(key('swarm-leaderboard-week-1'));
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      expect(key('swarm-leaderboard-loading'), findsOneWidget);
+      expect(onBoard(tester), isEmpty);
+
+      gate.complete();
+      await tester.pumpAndSettle();
+      expect(key('swarm-leaderboard-loading'), findsNothing);
+      expect(onBoard(tester).first, 'ken');
+    });
+
+    testWidgets('a pull over a board read keeps its rows, with no skeleton', (
+      tester,
+    ) async {
+      final fake = backend();
+      await leaderboard(tester, fake);
+      final gate = hold(fake, board);
+
+      await tester.fling(
+        key('swarm-leaderboard-person-diego'),
+        const Offset(0, 400),
+        1000,
+      );
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      expect(key('swarm-leaderboard-loading'), findsNothing);
+      expect(onBoard(tester), ['person-me', 'diego', 'ken']);
+
+      gate.complete();
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('before its Swarm is read, the sheet has skeleton rows too', (
+      tester,
+    ) async {
+      final fake = backend();
+      final gate = hold(fake, '/api/super-tabs/$tab/parts');
+      await pump(
+        tester,
+        fake,
+        const Scaffold(
+          body: SwarmLeaderboardPage(
+            swarmId: tab,
+            projectId: project,
+            sheet: true,
+          ),
+        ),
+        settle: false,
+      );
+
+      expect(key('swarm-leaderboard-loading'), findsOneWidget);
+      expect(onBoard(tester), isEmpty);
+
+      gate.complete();
+      await tester.pumpAndSettle();
+      expect(key('swarm-leaderboard-loading'), findsNothing);
+      expect(onBoard(tester), ['person-me', 'diego', 'ken']);
+    });
+
+    testWidgets('a first read that fails says so, and Try again recovers it, '
+        'with one read', (tester) async {
       final fake = backend();
       final answer = fake.routes[board]!;
       fake.routes[board] = (_) =>
           throw const SuperTabFailure('INTERNAL', 'Board is down.');
-      await team(tester, fake);
+      await leaderboard(tester, fake);
 
       expect(find.text('Board is down.'), findsOneWidget);
-      expect(key('swarm-member-person-diego'), findsOneWidget);
+      expect(key('swarm-leaderboard-loading'), findsNothing);
+      expect(onBoard(tester), contains('diego'));
+      expect(find.textContaining('Loading'), findsNothing);
       final reads = fake.paths.where((p) => p == board).length;
 
       fake.routes[board] = answer;
-      await tester.tap(key('swarm-team-board-retry'));
+      await tester.tap(key('swarm-leaderboard-retry'));
       await tester.pumpAndSettle();
 
       expect(fake.paths.where((p) => p == board).length, reads + 1);
       expect(find.text('Board is down.'), findsNothing);
-      expect(
-        rowsAfter(
-          tester,
-          'swarm-team-humans-caption',
-          'swarm-team-agents-caption',
-        ).first,
-        'swarm-member-person-person-me',
-      );
+      expect(onBoard(tester), ['person-me', 'diego', 'ken']);
+      expect(figures('swarm-leaderboard-person-diego'), findsWidgets);
     });
 
-    testWidgets('access taken away while it is open leaves nothing of the '
-        'team, and the board answer on its way is dropped', (tester) async {
+    testWidgets('a pull reads the board and the Swarm, once each', (
+      tester,
+    ) async {
+      final fake = backend();
+      await leaderboard(tester, fake);
+      int count(String path) =>
+          fake.paths.where((p) => p.startsWith(path)).length;
+      final boards = count(board);
+      const swarm = '/api/super-tabs/$tab/changes';
+      final reads = count(swarm);
+
+      await tester.fling(
+        key('swarm-leaderboard-person-diego'),
+        const Offset(0, 400),
+        1000,
+      );
+      await tester.pumpAndSettle();
+
+      expect(count(board), boards + 1);
+      expect(count(swarm), reads + 1);
+      expect(find.byType(SwarmLeaderboardPage), findsOneWidget, reason: 'open');
+    });
+
+    testWidgets('a server with no board says so, and its people still show', (
+      tester,
+    ) async {
+      final fake = backend();
+      fake.routes[board] = (_) =>
+          throw const SuperTabFailure('NOT_FOUND', 'Nope.', statusCode: 404);
+      await leaderboard(tester, fake);
+
+      expect(key('swarm-leaderboard-unavailable'), findsOneWidget);
+      expect(key('swarm-leaderboard-loading'), findsNothing);
+      expect(onBoard(tester), ['diego', 'ken', 'person-me']);
+    });
+
+    testWidgets('the board answer that lands after the sheet closed changes '
+        'nothing, and opening it again reads it anew', (tester) async {
       final fake = backend();
       final gate = hold(fake, board);
-      await team(tester, fake);
+      await openHeld(tester, fake);
+
+      await tester.tap(key('swarm-leaderboard-close'));
+      await tester.pumpAndSettle();
+      expect(find.byType(SwarmLeaderboardPage), findsNothing);
+      final reads = fake.paths.where((p) => p == board).length;
+      gate.complete();
+      await tester.pumpAndSettle();
+
+      expect(find.text('1320'), findsNothing);
+      expect(tester.takeException(), isNull);
+
+      await tester.tap(key('swarm-project-menu'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-project-menu-leaderboard'));
+      await tester.pumpAndSettle();
+      expect(fake.paths.where((p) => p == board).length, reads + 1);
+      expect(find.text('1320'), findsOneWidget);
+    });
+
+    testWidgets('access taken away while it is open closes it, and the board '
+        'answer on its way is dropped', (tester) async {
+      final fake = backend();
+      final gate = hold(fake, board);
+      await openHeld(tester, fake);
+      expect(key('swarm-leaderboard-loading'), findsOneWidget);
 
       host(tester).session!.inbox.reader(tab)!.revoke();
       await tester.pump();
       gate.complete();
       await tester.pumpAndSettle();
 
-      expect(find.byType(SwarmMemberRow), findsNothing);
-      expect(find.byType(SwarmProjectTeam), findsNothing);
+      expect(find.byType(SwarmLeaderboardPage), findsNothing);
+      expect(onBoard(tester), isEmpty);
+      expect(find.text('diego'), findsNothing);
       expect(
         find.text('This project is no longer in the Swarm.'),
         findsOneWidget,
@@ -641,10 +1183,158 @@ void main() {
       }
     });
 
+    testWidgets("each says how long since its agent's last progress, in the "
+        "desktop's words, worked out again no more than once a minute, and "
+        'from now when its state changes', (tester) async {
+      final start = clock.now();
+      final fake = timed(backend(), start);
+      await team(tester, fake);
+
+      expect(
+        heard(tester, 'swarm-member-agent-builder'),
+        'Nova, Working · #2156 Buddy chat header · 4m',
+      );
+      expect(
+        heard(tester, 'swarm-member-agent-juno'),
+        'Juno, Needs input · #2160 Saved views cache · 2h',
+      );
+      expect(heard(tester, 'swarm-member-agent-ash'), 'Ash, Idle');
+
+      // Past 5m since its progress, but the minute's tick is not due yet.
+      expect(SwarmProjectTeam.tick, const Duration(minutes: 1));
+      await tester.pump(const Duration(seconds: 40));
+      expect(
+        heard(tester, 'swarm-member-agent-builder'),
+        'Nova, Working · #2156 Buddy chat header · 4m',
+      );
+      await tester.pump(const Duration(seconds: 20));
+      expect(
+        heard(tester, 'swarm-member-agent-builder'),
+        'Nova, Working · #2156 Buddy chat header · 5m',
+      );
+
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+        cursor: 'c3',
+        groups: [
+          part(
+            'g1',
+            9,
+            progressed(
+              groupData(
+                'g1',
+                title: 'Buddy chat header',
+                number: 2156,
+                agentIds: ['agent-lead', 'agent-builder'],
+                status: 'needs_human',
+                workerId: 'agent-builder',
+                lastMessageSequence: 3,
+              ),
+              clock.now(),
+              Duration.zero,
+            ),
+          ),
+        ],
+      );
+      await host(tester).session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+
+      expect(
+        heard(tester, 'swarm-member-agent-builder'),
+        'Nova, Needs input · #2156 Buddy chat header · now',
+      );
+    });
+
+    testWidgets('on a 320-point phone a long task gives way and its time '
+        'stays whole', (tester) async {
+      tester.view
+        ..physicalSize = const Size(320, 568) * 3
+        ..devicePixelRatio = 3;
+      addTearDown(tester.view.reset);
+      final start = clock.now();
+      final fake = timed(backend(), start);
+      final load = fake.routes['/api/super-tabs/$tab/parts']!;
+      fake.routes['/api/super-tabs/$tab/parts'] = (body) async {
+        final read = (await load(body))! as Map<String, dynamic>;
+        for (final g in (read['groups'] as List).cast<Map>()) {
+          if (g['key'] == 'g1') {
+            (g['data'] as Map)['title'] =
+                'Buddy chat header that runs far past the edge of a phone';
+          }
+        }
+        return read;
+      };
+      await team(tester, fake);
+      await tester.ensureVisible(key('swarm-member-agent-builder'));
+      await tester.pumpAndSettle();
+
+      final row = key('swarm-member-agent-builder');
+      final age = find.descendant(of: row, matching: key('swarm-member-age'));
+      expect(tester.widget<Text>(age).data, ' · 4m');
+      expect(
+        tester.getRect(age).right,
+        lessThanOrEqualTo(tester.getRect(row).right),
+      );
+      final words = find.descendant(
+        of: row,
+        matching: find.textContaining('Working · #2156'),
+      );
+      expect(
+        tester.renderObject<RenderParagraph>(words).didExceedMaxLines,
+        isTrue,
+        reason: 'the title is cut, not the time',
+      );
+      expect(
+        heard(tester, 'swarm-member-agent-builder'),
+        'Nova, Working · #2156 Buddy chat header that runs far past the edge '
+        'of a phone · 4m',
+      );
+    });
+
+    testWidgets('back in the app, its times are worked out at once', (
+      tester,
+    ) async {
+      final start = clock.now();
+      await team(tester, timed(backend(), start));
+      expect(
+        heard(tester, 'swarm-member-agent-builder'),
+        'Nova, Working · #2156 Buddy chat header · 4m',
+      );
+
+      // Away for 40s, short of the minute's tick, in the states a phone
+      // passes through.
+      void go(List<AppLifecycleState> states) {
+        for (final state in states) {
+          tester.binding.handleAppLifecycleStateChanged(state);
+        }
+      }
+
+      go(const [
+        AppLifecycleState.inactive,
+        AppLifecycleState.hidden,
+        AppLifecycleState.paused,
+      ]);
+      await tester.pump(const Duration(seconds: 40));
+      expect(
+        heard(tester, 'swarm-member-agent-builder'),
+        'Nova, Working · #2156 Buddy chat header · 4m',
+      );
+      go(const [
+        AppLifecycleState.hidden,
+        AppLifecycleState.inactive,
+        AppLifecycleState.resumed,
+      ]);
+      await tester.pump();
+
+      expect(
+        heard(tester, 'swarm-member-agent-builder'),
+        'Nova, Working · #2156 Buddy chat header · 5m',
+      );
+    });
+
     testWidgets('a row opens the task its agent holds', (tester) async {
       await team(tester, backend());
 
-      // Under the Tasks and the humans.
+      // Under the Tasks.
       await tester.ensureVisible(key('swarm-member-agent-builder'));
       await tester.pumpAndSettle();
       await tester.tap(key('swarm-member-agent-builder'));
@@ -655,9 +1345,18 @@ void main() {
   });
 
   group('the project screen', () {
-    testWidgets('its #name over the humans, the agents and who is working', (
-      tester,
-    ) async {
+    /// What the header's line under the name says, whole.
+    String? teamLine(WidgetTester tester) => tester
+        .widget<Text>(
+          find.descendant(
+            of: key('swarm-project-team-line'),
+            matching: find.byType(Text),
+          ),
+        )
+        .data;
+
+    testWidgets('its #name over only how many humans and agents: no Swarm, '
+        'and nobody said to be working', (tester) async {
       await pump(tester, backend(), page);
 
       expect(
@@ -665,16 +1364,29 @@ void main() {
         '#Mobile',
         reason: 'a channel name, as Slack writes one',
       );
-      expect(
-        find.descendant(
-          of: key('swarm-project-team-line'),
-          matching: find.textContaining(
-            '3 humans · 4 agents · ● 1 working',
-            findRichText: true,
-          ),
-        ),
-        findsOneWidget,
+      expect(teamLine(tester), '3 humans · 4 agents');
+    });
+
+    testWidgets('with several Swarms the line still names none of them', (
+      tester,
+    ) async {
+      const other = 'tab-other';
+      final fake = backend();
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': [
+          {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
+          {'id': other, 'name': 'Work Swarm', 'ownerId': me},
+        ],
+        'next': null,
+      };
+      fake.routes['/api/super-tabs/$other/parts'] = (_) => firstLoad(
+        tabId: other,
+        head: headData(id: other, name: 'Work Swarm'),
       );
+      final session = await pump(tester, fake, page);
+
+      expect(session.session!.inbox.swarms, hasLength(2));
+      expect(teamLine(tester), '3 humans · 4 agents');
     });
 
     testWidgets('one human and one agent are said so', (tester) async {
@@ -687,16 +1399,7 @@ void main() {
       };
       await pump(tester, fake, page);
 
-      expect(
-        find.descendant(
-          of: key('swarm-project-team-line'),
-          matching: find.textContaining(
-            '1 human · 1 agent · All idle',
-            findRichText: true,
-          ),
-        ),
-        findsOneWidget,
-      );
+      expect(teamLine(tester), '1 human · 1 agent');
     });
 
     testWidgets('a private project counts only the people who read it', (
@@ -717,60 +1420,114 @@ void main() {
       await pump(tester, fake, page);
 
       expect(
-        find.descendant(
-          of: key('swarm-project-team-line'),
-          matching: find.textContaining(
-            '2 humans · 4 agents',
-            findRichText: true,
-          ),
-        ),
-        findsOneWidget,
+        teamLine(tester),
+        '2 humans · 4 agents',
         reason: 'its owner (the viewer) and diego; ken does not read it',
       );
     });
 
-    testWidgets('has two tabs, Chat and Team, each half the width and a '
-        "finger's height", (tester) async {
-      await pump(tester, backend(), page);
-
-      for (final name in ['buddy', 'tasks', 'leaderboard']) {
-        expect(key('swarm-project-tab-$name'), findsNothing, reason: name);
-      }
-      final width = tester.getSize(find.byType(SwarmProjectPage)).width;
-      for (final name in ['chat', 'team']) {
-        final size = tester.getSize(key('swarm-project-tab-$name'));
-        expect(size.height, greaterThanOrEqualTo(minTouchTarget), reason: name);
-        expect(size.width, greaterThan(width / 2 - 16), reason: name);
-      }
-      expect(find.text('Chat'), findsOneWidget);
-      expect(find.text('Team'), findsOneWidget);
-      expect(
-        key('swarm-project-team'),
-        findsNothing,
-        reason: 'the team is a tab, not a sheet from the header',
-      );
-    });
-
-    testWidgets('opens on its chat, and Team shows the team in its place', (
+    testWidgets('has no tab bar: its chat fills the screen under its header', (
       tester,
     ) async {
       await pump(tester, backend(), page);
+
+      expect(find.byType(SwarmProjectTabBar), findsNothing);
+      for (final name in ['chat', 'buddy', 'tasks', 'leaderboard', 'team']) {
+        expect(key('swarm-project-tab-$name'), findsNothing, reason: name);
+      }
       expect(find.text('CI on #2154 is green.'), findsOneWidget);
-      expect(key('swarm-project-body-chat'), findsOneWidget);
-
-      await tester.tap(key('swarm-project-tab-team'));
-      await tester.pumpAndSettle();
-
-      expect(key('swarm-project-body-team'), findsOneWidget);
-      expect(find.text('CI on #2154 is green.'), findsNothing);
       expect(
-        tester
-            .widget<Semantics>(key('swarm-project-tab-team'))
-            .properties
-            .selected,
-        isTrue,
+        tester.getTopLeft(key('swarm-project-body-chat')).dy,
+        tester.getBottomLeft(find.byType(SwarmTopBar)).dy,
+      );
+      expect(
+        tester.getBottomLeft(key('swarm-project-body-chat')).dy,
+        tester.getSize(find.byType(SwarmProjectPage)).height,
+      );
+      expect(
+        key('swarm-project-team'),
+        findsNothing,
+        reason: "direction B's team button",
       );
     });
+
+    testWidgets('⋮ at the end of the header, a finger wide and tall, says '
+        'Menu, and opens Leaderboard and Team on the menu surface', (
+      tester,
+    ) async {
+      await pump(tester, backend(), page);
+
+      final button = key('swarm-project-menu');
+      expect(
+        find.descendant(
+          of: button,
+          matching: find.byIcon(LucideIcons.ellipsisVertical300),
+        ),
+        findsOneWidget,
+      );
+      expect(find.byIcon(LucideIcons.menu300), findsNothing);
+      final size = tester.getSize(button);
+      expect(size.width, greaterThanOrEqualTo(minTouchTarget));
+      expect(size.height, greaterThanOrEqualTo(minTouchTarget));
+      expect(heard(tester, 'swarm-project-menu'), 'Menu');
+      expect(
+        tester.getTopRight(button).dx,
+        greaterThan(tester.getTopRight(key('swarm-title')).dx),
+        reason: 'at the end of the header',
+      );
+      expect(find.text('Leaderboard'), findsNothing);
+
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Leaderboard'), findsOneWidget);
+      expect(find.text('Team'), findsOneWidget);
+      for (final row in ['leaderboard', 'team']) {
+        expect(
+          tester.getSize(key('swarm-project-menu-$row')).height,
+          greaterThanOrEqualTo(minTouchTarget),
+          reason: row,
+        );
+      }
+      expect(
+        tester.widget<MenuAnchor>(find.byType(MenuAnchor)).style,
+        isNull,
+        reason: "the theme's menu surface, AppMenu's, not one of its own",
+      );
+
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+      expect(find.text('Leaderboard'), findsNothing, reason: 'it closes');
+    });
+
+    for (final (row, closeKey, title) in [
+      ('leaderboard', 'swarm-leaderboard-close', 'Leaderboard'),
+      ('team', 'swarm-team-close', 'Team'),
+    ]) {
+      testWidgets('$row opens as a sheet over the chat, with ✕ and a top '
+          'radius of 12; ✕ is back on the chat', (tester) async {
+        await fromMenu(tester, backend(), 'swarm-project-menu-$row');
+
+        expect(find.byType(BottomSheet), findsOneWidget);
+        expect(find.text(title), findsOneWidget);
+        expect(key('swarm-project-menu-$row'), findsNothing, reason: 'closed');
+        final sheet = tester.widget<BottomSheet>(find.byType(BottomSheet));
+        expect(
+          (sheet.shape! as RoundedRectangleBorder).borderRadius,
+          const BorderRadius.vertical(top: Radius.circular(12)),
+        );
+        final close = tester.getSize(key(closeKey));
+        expect(close.height, greaterThanOrEqualTo(minTouchTarget));
+        expect(close.width, greaterThanOrEqualTo(minTouchTarget));
+
+        await tester.tap(key(closeKey));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(BottomSheet), findsNothing);
+        expect(find.text('CI on #2154 is green.'), findsOneWidget);
+        expect(key('swarm-project-body-chat'), findsOneWidget);
+      });
+    }
 
     testWidgets('the four tabs of direction B stay as they were', (
       tester,
@@ -778,13 +1535,18 @@ void main() {
       await pump(
         tester,
         backend(),
-        const SwarmProjectPage(swarmId: tab, projectId: project),
+        const SwarmProjectPage(
+          swarmId: tab,
+          projectId: project,
+          tabs: SwarmProjectTab.homeB,
+        ),
       );
 
       for (final name in ['chat', 'buddy', 'tasks', 'leaderboard']) {
         expect(key('swarm-project-tab-$name'), findsOneWidget, reason: name);
       }
       expect(key('swarm-project-tab-team'), findsNothing);
+      expect(key('swarm-project-menu'), findsNothing);
       expect(tester.widget<Text>(key('swarm-title')).data, 'Mobile');
       expect(key('swarm-project-team'), findsOneWidget);
     });
@@ -987,6 +1749,80 @@ void main() {
       expect(marksSent(fake).last, 40);
     });
 
+    testWidgets('a message that comes under a sheet is not read until the '
+        'sheet closes, and the line and Jump to latest stay', (tester) async {
+      final fake = chat([for (var i = 1; i <= 40; i++) said(i)], mark: 40);
+      await pump(tester, fake, page);
+      await tester.drag(key('swarm-messages'), const Offset(0, 1500));
+      await tester.pumpAndSettle();
+      expect(key('swarm-jump-latest'), findsOneWidget);
+      await tester.tap(key('swarm-jump-latest'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(key('swarm-project-menu'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-project-menu-team'));
+      await tester.pumpAndSettle();
+      final sent = marksSent(fake).length;
+
+      fake.routes['/api/super-tabs/$tab/conversations/$leadChat/messages'] =
+          (_) => {
+            'messages': [for (var i = 1; i <= 41; i++) said(i)],
+            'next': null,
+          };
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+        cursor: 'c3',
+        groups: [
+          part(
+            leadChat,
+            9,
+            groupData(
+              leadChat,
+              title: 'Mobile',
+              agentIds: ['agent-lead'],
+              leadId: 'agent-lead',
+              lastMessageSequence: 41,
+            ),
+          ),
+        ],
+      );
+      await host(tester).session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 2));
+      expect(marksSent(fake).length, sent, reason: 'under the sheet');
+
+      await tester.tap(key('swarm-team-close'));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 2));
+      expect(marksSent(fake).last, 41, reason: 'seen once it closed');
+
+      await tester.drag(key('swarm-messages'), const Offset(0, 1500));
+      await tester.pumpAndSettle();
+      expect(key('swarm-jump-latest'), findsOneWidget);
+    });
+
+    testWidgets('the New messages line is still there after a sheet opened '
+        'and closed', (tester) async {
+      await pump(
+        tester,
+        chat([for (var i = 1; i <= 4; i++) said(i)], mark: 2),
+        page,
+      );
+      expect(line, findsOneWidget);
+
+      await tester.tap(key('swarm-project-menu'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-project-menu-leaderboard'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-leaderboard-close'));
+      await tester.pumpAndSettle();
+
+      expect(line, findsOneWidget);
+      final y = tester.getTopLeft(line).dy;
+      expect(tester.getTopLeft(find.text('Update 2.')).dy, lessThan(y));
+      expect(tester.getTopLeft(find.text('Update 3.')).dy, greaterThan(y));
+    });
+
     testWidgets('reading more than a screen back, Jump to latest takes the '
         'person to the foot; a little way back, none', (tester) async {
       await pump(
@@ -1058,7 +1894,11 @@ void main() {
       await pump(
         tester,
         chat([for (var i = 1; i <= 4; i++) said(i)], mark: 2),
-        const SwarmProjectPage(swarmId: tab, projectId: project),
+        const SwarmProjectPage(
+          swarmId: tab,
+          projectId: project,
+          tabs: SwarmProjectTab.homeB,
+        ),
       );
 
       expect(find.text('Update 4.'), findsOneWidget);
@@ -1069,7 +1909,11 @@ void main() {
       await pump(
         tester,
         chat([for (var i = 1; i <= 40; i++) said(i)], mark: 40),
-        const SwarmProjectPage(swarmId: tab, projectId: project),
+        const SwarmProjectPage(
+          swarmId: tab,
+          projectId: project,
+          tabs: SwarmProjectTab.homeB,
+        ),
       );
       await tester.drag(key('swarm-messages'), const Offset(0, 1500));
       await tester.pumpAndSettle();
@@ -1311,7 +2155,8 @@ void main() {
     const messages = '/api/super-tabs/$tab/conversations/$leadChat/messages';
 
     /// [backend] whose Swarm has a second project, Desktop, the person reads
-    /// too: Ash, Mobile's agent, still holds work there; another agent named
+    /// too: Ash, Mobile's agent, still holds work there, its last progress 3h
+    /// ago; another agent named
     /// Nova waits on the person there; and Mobile has the person's Buddy chat
     /// with Pip.
     FakeSwarm twoProjects() {
@@ -1356,14 +2201,18 @@ void main() {
             'g3',
             8,
             there(
-              groupData(
-                'g3',
-                title: 'Desktop sign-in',
-                number: 3001,
-                agentIds: ['agent-ash'],
-                status: 'working',
-                workerId: 'agent-ash',
-                lastMessageSequence: 2,
+              progressed(
+                groupData(
+                  'g3',
+                  title: 'Desktop sign-in',
+                  number: 3001,
+                  agentIds: ['agent-ash'],
+                  status: 'working',
+                  workerId: 'agent-ash',
+                  lastMessageSequence: 2,
+                ),
+                clock.now(),
+                const Duration(hours: 3),
               ),
             ),
           ),
@@ -1419,10 +2268,6 @@ void main() {
             .length,
         1,
       );
-      expect(
-        said(tester, 'swarm-team-tasks-caption'),
-        'Tasks | 1 waiting on you · 1 working',
-      );
     });
 
     testWidgets('an agent of this project still holding work in another '
@@ -1463,7 +2308,7 @@ void main() {
           findsOneWidget,
           reason: id,
         );
-        expect(key('swarm-project-tab-team'), findsNothing, reason: id);
+        expect(key('swarm-project-menu'), findsNothing, reason: id);
         for (final words in [
           'Mobile',
           'Desktop',
@@ -1500,27 +2345,19 @@ void main() {
           ],
         };
       };
-      await team(tester, fake);
+      await leaderboard(tester, fake);
 
       expect(shown('Mallory'), findsNothing);
+      expect(shown('Former member'), findsNothing);
       expect(shown('9999'), findsNothing);
       expect(shown('40 shipped'), findsNothing);
-      expect(
-        rowsAfter(
-          tester,
-          'swarm-team-humans-caption',
-          'swarm-team-agents-caption',
-        ),
-        [
-          'swarm-member-person-person-me',
-          'swarm-member-person-diego',
-          'swarm-member-person-ken',
-        ],
-      );
+      expect(onBoard(tester), ['person-me', 'diego', 'ken']);
     });
 
-    testWidgets('access taken away with the Team open: its tasks and agents '
-        'go, and the Swarm read on its way brings none back', (tester) async {
+    testWidgets('access taken away with the Team open: the sheet closes, its '
+        'tasks and agents go, and the Swarm read on its way brings none back', (
+      tester,
+    ) async {
       final fake = backend();
       await team(tester, fake);
       expect(find.byType(SwarmWaitingRow), findsOneWidget);
@@ -1534,6 +2371,8 @@ void main() {
       gate.complete();
       await tester.pumpAndSettle();
 
+      expect(find.byType(BottomSheet), findsNothing);
+      expect(find.byType(SwarmProjectTeamSheet), findsNothing);
       expect(find.byType(SwarmWaitingRow), findsNothing);
       expect(find.byType(SwarmWorkRow), findsNothing);
       expect(find.byType(SwarmMemberRow), findsNothing);
@@ -1553,8 +2392,221 @@ void main() {
       expect(fake.commands, isEmpty);
     });
 
+    testWidgets('access taken away with the Team open says none of its '
+        "agents' times again, though its minute ticks by", (tester) async {
+      await team(tester, timed(backend(), clock.now()));
+      expect(
+        heard(tester, 'swarm-member-agent-builder'),
+        'Nova, Working · #2156 Buddy chat header · 4m',
+      );
+
+      host(tester).session!.inbox.reader(tab)!.revoke();
+      await tester.pumpAndSettle();
+      await tester.pump(SwarmProjectTeam.tick * 3);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SwarmProjectTeamSheet), findsNothing);
+      expect(find.byType(SwarmMemberRow), findsNothing);
+      for (final words in ['· 4m', '· 5m', '· 7m', '· 2h', 'Nova', 'Juno']) {
+        expect(shown(words), findsNothing, reason: words);
+      }
+    });
+
+    testWidgets('access taken away with the menu open: it closes, and its rows '
+        'open nothing', (tester) async {
+      await pump(tester, backend(), page);
+      await tester.tap(key('swarm-project-menu'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-project-menu-team'), findsOneWidget);
+
+      host(tester).session!.inbox.reader(tab)!.revoke();
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-project-menu-team'), findsNothing);
+      expect(key('swarm-project-menu-leaderboard'), findsNothing);
+      expect(key('swarm-project-menu'), findsNothing);
+      expect(find.byType(BottomSheet), findsNothing);
+    });
+
+    for (final (row, what) in [
+      ('team', SwarmProjectTeamSheet),
+      ('leaderboard', SwarmLeaderboardPage),
+    ]) {
+      testWidgets('access taken away between the tap on $row and its first '
+          'frame: it does not stay', (tester) async {
+        await pump(tester, backend(), page);
+        await tester.tap(key('swarm-project-menu'));
+        await tester.pumpAndSettle();
+        await tester.tap(key('swarm-project-menu-$row'));
+
+        host(tester).session!.inbox.reader(tab)!.revoke();
+        await tester.pumpAndSettle();
+
+        expect(find.byType(what), findsNothing);
+        expect(find.byType(BottomSheet), findsNothing);
+      });
+
+      testWidgets("the project taken off the Swarm with $row open, the Swarm "
+          'still read: it closes', (tester) async {
+        final fake = backend();
+        await fromMenu(tester, fake, 'swarm-project-menu-$row');
+        expect(find.byType(what), findsOneWidget);
+        final reader = host(tester).session!.inbox.reader(tab)!;
+
+        fake.routes['/api/super-tabs/$tab/changes'] = (_) => {
+          ...changes(cursor: 'c3'),
+          'head': part('head', 2, headData(projects: const [])),
+        };
+        await reader.refresh();
+        await tester.pumpAndSettle();
+
+        expect(reader.accessRevoked, isFalse);
+        expect(find.byType(what), findsNothing);
+        expect(find.byType(BottomSheet), findsNothing);
+      });
+
+      testWidgets('the account signing out with $row open: it closes', (
+        tester,
+      ) async {
+        await fromMenu(tester, backend(), 'swarm-project-menu-$row');
+        expect(find.byType(what), findsOneWidget);
+
+        (host(tester).account as ValueNotifier<String?>).value = null;
+        await tester.pumpAndSettle();
+
+        expect(find.byType(what), findsNothing);
+        expect(find.byType(BottomSheet), findsNothing);
+      });
+
+      testWidgets('leaving the page with $row open by a way that skips the '
+          'sheet: it closes with the page', (tester) async {
+        final nav = GlobalKey<NavigatorState>();
+        final fake = backend();
+        final features = ExperimentalFeaturesStore(
+          storage: MemoryKeyValueStore(),
+        )..value = {PhoneExperiment.swarm};
+        final account = ValueNotifier<String?>(me);
+        final swarm = SwarmHost(
+          accountId: () => account.value,
+          account: account,
+          request: fake.request,
+          notices: SilentSystemNotices(),
+          features: features,
+          readMarks: MemoryKeyValueStore(),
+        )..foreground = false;
+        addTearDown(swarm.dispose);
+        late Route<void> pageRoute;
+        await tester.pumpWidget(
+          MaterialApp(
+            navigatorKey: nav,
+            builder: (context, child) =>
+                SwarmScope(notifier: swarm, child: child!),
+            home: const SizedBox(),
+          ),
+        );
+        pageRoute = MaterialPageRoute<void>(builder: (_) => page);
+        unawaited(nav.currentState!.push(pageRoute));
+        await tester.pumpAndSettle();
+        await tester.tap(key('swarm-project-menu'));
+        await tester.pumpAndSettle();
+        await tester.tap(key('swarm-project-menu-$row'));
+        await tester.pumpAndSettle();
+        expect(find.byType(what), findsOneWidget);
+
+        nav.currentState!.removeRoute(pageRoute);
+        await tester.pumpAndSettle();
+
+        expect(find.byType(SwarmProjectPage), findsNothing);
+        expect(find.byType(what), findsNothing);
+        expect(find.byType(BottomSheet), findsNothing);
+      });
+    }
+
+    testWidgets('access taken away with a task opened over the Team: the sheet '
+        'under it closes, and back shows nothing of it', (tester) async {
+      await team(tester, backend());
+      await tester.tap(key('swarm-task-g1'));
+      await tester.pumpAndSettle();
+      expect(find.text('Header is in.'), findsOneWidget);
+
+      host(tester).session!.inbox.reader(tab)!.revoke();
+      await tester.pumpAndSettle();
+
+      expect(find.text('Header is in.'), findsNothing);
+      expect(
+        find.byType(SwarmProjectTeamSheet, skipOffstage: false),
+        findsNothing,
+      );
+      await tester.tap(key('tty-back').first);
+      await tester.pumpAndSettle();
+      expect(find.byType(BottomSheet), findsNothing);
+      expect(
+        find.text('This project is no longer in the Swarm.'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('access taken away with the week picker up over the '
+        'Leaderboard: both close, and the pick is never read', (tester) async {
+      final fake = backend();
+      await leaderboard(tester, fake);
+      await tester.tap(key('swarm-leaderboard-week'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-leaderboard-week-1'), findsOneWidget);
+
+      host(tester).session!.inbox.reader(tab)!.revoke();
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-leaderboard-week-1'), findsNothing);
+      expect(find.byType(BottomSheet), findsNothing);
+      expect(fake.paths.where((p) => p.contains('&week=')), isEmpty);
+    });
+
+    testWidgets('a first read that fails shows no menu; the read that recovers '
+        'brings it, and it works', (tester) async {
+      final fake = backend();
+      final load = fake.routes['/api/super-tabs/$tab/parts']!;
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) =>
+          throw const SuperTabFailure('INTERNAL', 'Swarm is down.');
+      await pump(tester, fake, page);
+
+      expect(find.text('Swarm is down.'), findsOneWidget);
+      expect(key('swarm-project-menu'), findsNothing);
+      expect(find.textContaining('Loading'), findsNothing);
+
+      fake.routes['/api/super-tabs/$tab/parts'] = load;
+      await tester.fling(
+        find.text('Swarm is down.'),
+        const Offset(0, 400),
+        1000,
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(key('swarm-project-menu'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-project-menu-team'));
+      await tester.pumpAndSettle();
+      expect(find.byType(SwarmProjectTeamSheet), findsOneWidget);
+      expect(key('swarm-task-g1'), findsOneWidget);
+    });
+
+    testWidgets('a Swarm read that fails with the Team open keeps what it '
+        'shows, and no Loading', (tester) async {
+      final fake = backend();
+      await team(tester, fake);
+
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
+          throw const SuperTabFailure('INTERNAL', 'Swarm is down.');
+      await host(tester).session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SwarmProjectTeamSheet), findsOneWidget);
+      expect(key('swarm-task-g1'), findsOneWidget);
+      expect(find.textContaining('Loading'), findsNothing);
+    });
+
     /// [backend] whose Mobile is private to the person and Diego, on its
-    /// Team with Diego's week open.
+    /// Leaderboard with Diego's week open.
     Future<FakeSwarm> diegoWeek(WidgetTester tester) async {
       final fake = backend();
       final load = fake.routes['/api/super-tabs/$tab/parts']!;
@@ -1568,8 +2620,8 @@ void main() {
         ];
         return read;
       };
-      await team(tester, fake);
-      await tester.tap(key('swarm-member-person-diego'));
+      await leaderboard(tester, fake);
+      await tester.tap(key('swarm-leaderboard-person-diego'));
       await tester.pumpAndSettle();
       expect(key('swarm-leaderboard-sheet'), findsOneWidget);
       expect(find.text('diego'), findsWidgets);
@@ -1589,8 +2641,8 @@ void main() {
 
     testWidgets("access taken away between the tap on a person and the week's "
         'first frame: it does not stay', (tester) async {
-      await team(tester, backend());
-      await tester.tap(key('swarm-member-person-diego'));
+      await leaderboard(tester, backend());
+      await tester.tap(key('swarm-leaderboard-person-diego'));
 
       host(tester).session!.inbox.reader(tab)!.revoke();
       await tester.pumpAndSettle();

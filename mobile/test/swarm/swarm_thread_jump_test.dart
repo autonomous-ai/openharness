@@ -6,6 +6,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/swarm/swarm_thread_page.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
@@ -142,6 +143,90 @@ void main() {
     final row = tester.getRect(f);
     return row.top >= view.top && row.bottom <= view.bottom;
   }
+
+  group('opened from Threads', () {
+    Future<void> openAt(
+      WidgetTester tester,
+      FakeSwarm fake, {
+      String? threadId,
+    }) async {
+      final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
+        ..value = {PhoneExperiment.swarm};
+      final account = ValueNotifier<String?>(me);
+      final host = SwarmHost(
+        accountId: () => account.value,
+        account: account,
+        request: fake.request,
+        upload: refuseSwarmUpload,
+        notices: SilentSystemNotices(),
+        features: features,
+        readMarks: MemoryKeyValueStore(),
+      )..foreground = false;
+      addTearDown(host.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          builder: (context, child) =>
+              SwarmScope(notifier: host, child: child!),
+          home: SwarmConversationPage(
+            swarmId: tab,
+            conversationId: 'g1',
+            messageId: 'm1',
+            threadId: threadId,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('a thread with no new replies opens in its thread', (
+      tester,
+    ) async {
+      await openAt(tester, backend(replies(3), mark: 3), threadId: 'm1');
+
+      expect(find.byType(SwarmThreadPage), findsOneWidget);
+      expect(find.text('Reply 3.'), findsOneWidget);
+    });
+
+    testWidgets('a quote of the root tapped after the thread is left brings '
+        'the root into view, no thread open again', (tester) async {
+      final fake = backend(replies(3), mark: 3);
+      fake.routes[messages] = (_) => {
+        'messages': [
+          {
+            ...said(9),
+            'id': 'm9',
+            'text': 'About the question.',
+            'thread': 'm9',
+            'replyTo': 'm1',
+          },
+          said(1),
+        ],
+        'next': null,
+        'threads': [lineOf(2, 3)],
+      };
+      await openAt(tester, fake, threadId: 'm1');
+      expect(find.byType(SwarmThreadPage), findsOneWidget);
+
+      Navigator.of(tester.element(find.byType(SwarmThreadPage))).pop();
+      await tester.pumpAndSettle();
+      expect(find.byType(SwarmThreadPage), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('swarm-quote-m9')));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SwarmThreadPage), findsNothing);
+    });
+
+    testWidgets('a link to a root lands on it in the chat, no thread open', (
+      tester,
+    ) async {
+      await openAt(tester, backend(replies(3), mark: 3));
+
+      expect(find.byType(SwarmThreadPage), findsNothing);
+      expect(find.text('The question.'), findsOneWidget);
+    });
+  });
 
   group('Jump to latest', () {
     testWidgets('while the latest is more than a screen below it takes the '

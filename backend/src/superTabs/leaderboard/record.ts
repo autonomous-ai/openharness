@@ -14,17 +14,20 @@ import type { UnblockKind } from './contract.js'
 export interface Unblock { personId: string; at: number; waitedMs: number; kind?: UnblockKind; item?: string }
 /** One attempt at a group's work: what it ran on and whether its first review passed (roadmap, Dec: about 30% of work on
  *  cheaper models without lower quality). `grid`: a model served on the Swarm's grid, named by its start, since the engine
- *  reports none of its own. `firstVerdicts`: each independent check's first verdict during this attempt, by check id.
- *  `firstReview`: false once any of them failed, true once every independent check passed its first, absent until then. */
+ *  reports none of its own. `firstVerdicts`: each check's first verdict during this attempt by anyone but its assignee, by
+ *  check id. `firstReview`: false once any of them failed, true while every one so far passed, absent until the first. */
 export interface Run extends RanOn { assignmentId: string; at: number
+  /** The agent and its terminal that ran it, so the model that terminal reports later fills this attempt only (record
+   *  ReportedModel). Absent from attempts recorded before them. */
+  agentId?: string; harnessId?: string
   firstVerdicts?: Record<string, boolean>; firstReview?: boolean
-  /** The step up from a cheaper model this attempt is (stepUp.ts): its attempt number and why. */
+  /** The step up from a cheaper model this attempt is, on a task stepped up before project instructions: its attempt number and why. */
   stepUp?: { attempt: number; reason: string }
-  /** Its agent was launched on the engine's own model, which Codex reports by a slug the policy may not name: it is rated by
-   *  the engine's `default` row (rules.ts policyQuality; review of ee4ee6c9a). */
+  /** Its agent was launched on the engine's own model, which Codex reports by a slug the policy may not name: the board rates
+   *  it by the engine's `default` row (review of ee4ee6c9a). */
   engineDefault?: true
-  /** Re-reviews after a failed review during this attempt (evidence routing, Ken 2026-10-29): the most on any one independent
-   *  check, so a review that judges two checks counts once. Absent until a review fails; 0 while a failure waits for its
+  /** Re-reviews after a failed review during this attempt (evidence routing, Ken 2026-10-29): the most on any one check, so
+   *  a review that judges two checks counts once. Absent until a review fails; 0 while a failure waits for its
    *  re-review. `reworks`: each check's last verdict and its re-reviews after a failure, by check id. */
   reworkRounds?: number
   reworks?: Record<string, { last: boolean; rounds: number }> }
@@ -112,7 +115,8 @@ function shipOn(group: Conversation, run?: Run): void {
 function shipAttempt(ledger: GroupLedger, run?: Run): void {
   const shipping = run ?? ledger.runs?.filter(r => r.at <= ledger.shippedAt!).at(-1) ?? ledger.runs?.[0]
   if (!shipping) return
-  const { firstVerdicts: _verdicts, firstReview: _review, reworkRounds: _rounds, reworks: _reworks, ...shippedBy } = shipping
+  const { firstVerdicts: _verdicts, firstReview: _review, reworkRounds: _rounds, reworks: _reworks, agentId: _agent, harnessId: _harness,
+    ...shippedBy } = shipping
   ledger.shippedBy = shippedBy
 }
 
@@ -234,11 +238,39 @@ export function waitsNow(group: Conversation): boolean {
 /** An assignment records what its agent runs on (ranOn), for the board's models. */
 export function recordRun(state: SuperTabState, group: Conversation, assignment: Assignment, worker: Agent, now: number): void {
   const run: Run = { assignmentId: assignment.id, ...ranOn(state, worker, assignment.configuration), at: now,
+    agentId: worker.id, harnessId: worker.harnessId,
     ...(group.stepUp ? { stepUp: { attempt: group.stepUp.attempt, reason: group.stepUp.reason } } : {}),
     ...(agentTarget(state, worker).launchedDefault ? { engineDefault: true as const } : {}) }
   const ledger = group.ledger ??= {}
   ledger.firstAssignedAt ??= firstAssignedAt(ledger) ?? now
   ledger.runs = [...ledger.runs ?? [], run].slice(-MAX_RUNS)
+}
+
+/** An agent started on its engine's own model reports which one only once it runs (Codex): its attempts recorded before
+ *  then, with none, take the model it reports, so the board names it and step-ups rate it by it rather than by the engine
+ *  alone (Dee, 2026-10-30). That holds for a finished or handed-on attempt too (Scholes, 2026-10-30: a review done before
+ *  its agent's first report stayed "model not reported"). Only this agent's own attempts in its current terminal: a
+ *  replacement terminal (agent.rebind) may run another model. An attempt recorded before attempts named their agent is
+ *  matched as its group's current one. A model on record is never rewritten, nor a grid model's, nor another engine's. */
+export function recordReportedModel(state: SuperTabState, worker: Agent): void {
+  const model = worker.configuration.model
+  if (!model || worker.gridModel) return
+  const fill = (on: RanOn | undefined) => {
+    if (on && on.model === null && !on.grid && on.engine === worker.configuration.engine) on.model = model
+  }
+  for (const group of state.conversations) {
+    const ledger = group.ledger
+    if (!ledger?.runs?.length) continue
+    const current = group.assignment
+    const legacy = current?.agentId === worker.id && current.execution.harnessId === worker.harnessId ? current.id : null
+    for (const run of ledger.runs) {
+      const own = run.agentId !== undefined ? run.agentId === worker.id && run.harnessId === worker.harnessId : run.assignmentId === legacy
+      if (!own) continue
+      fill(run)
+      // The copy kept when its merge was recorded while it still ran.
+      if (ledger.shippedBy?.assignmentId === run.assignmentId) fill(ledger.shippedBy)
+    }
+  }
 }
 
 /** When a request's first attempt was assigned: kept since that was recorded. A request recorded before has its first
@@ -251,16 +283,17 @@ export function firstAssignedAt(ledger: GroupLedger): number | undefined {
   return runs.length < MAX_RUNS ? runs[0]!.at : ledger.askedAt ?? runs[0]!.at
 }
 
-/** An agent's verdict on an independent check is one finished review by the model it runs on. */
-export function recordVerdict(state: SuperTabState, group: Conversation, check: Check, reviewer: Agent, now: number): void {
-  if (!check.independent) return
+/** An agent's verdict on a check of another agent's task is one finished review by the model it runs on; the assignee's own
+ *  verdicts are no review (checks are information, project instructions phase 4: `independent` is read by nothing). */
+export function recordVerdict(state: SuperTabState, group: Conversation, check: Check, checker: Agent, now: number): void {
+  if (checker.id === group.assignment?.agentId) return
   const ledger = group.ledger ??= {}
   // A check given again on the same attempt is the same review (full review of #2097): only its first verdict counts.
   // An attempt recorded before attempts were has no run to tell a repeat by, so it earns no model credit (review of
   // #2128).
   const run = ledger.runs?.find(r => r.assignmentId === group.assignment?.id)
   if (!run || run.firstVerdicts?.[check.id] !== undefined) return
-  const on = ranOn(state, reviewer, reviewer.configuration), week = weekStart(now)
+  const on = ranOn(state, checker, checker.configuration), week = weekStart(now)
   // Only the weeks the board reads: one row per week and model, however many verdicts.
   const kept = (ledger.reviews ?? []).filter(r => week - r.week < LEDGER_WEEKS * WEEK_MS)
   const same = kept.find(r => r.week === week && r.engine === on.engine && r.model === on.model && r.effort === on.effort && r.grid === on.grid)
@@ -288,18 +321,16 @@ function ranOn(state: SuperTabState, worker: Agent, configuration: AgentConfigur
 const namedEffort = (effort: string | null): string | undefined =>
   effort && effort !== 'auto' && effort !== 'default' ? effort : undefined
 
-/** Each independent check's first verdict during an attempt is its first review; later verdicts are repairs and never
- *  rewrite it. The attempt passed its first review only when every independent check passed the first time (review of
- *  #1808: one check passing first used to count as a pass while another failed). */
-export function recordReview(group: Conversation, check: Check, passed: boolean): void {
+/** Each check's first verdict during an attempt, by anyone but its assignee, is its first review; later verdicts are repairs
+ *  and never rewrite it. The attempt's first review fails once any first verdict failed, and passes while every one so far
+ *  passed (review of #1808: one check passing first used to count as a pass while another failed). */
+export function recordReview(group: Conversation, check: Check, passed: boolean, byAssignee: boolean): void {
   const run = group.ledger?.runs?.find(r => r.assignmentId === group.assignment?.id)
-  if (!check.independent || !run) return
+  if (byAssignee || !run) return
   const verdicts = run.firstVerdicts ??= {}
   verdicts[check.id] ??= passed
   recordRework(run, check.id, passed)
-  const firsts = group.checks.filter(c => c.independent).map(c => verdicts[c.id])
-  if (firsts.includes(false)) run.firstReview = false
-  else if (firsts.every(v => v === true)) run.firstReview = true
+  run.firstReview = !group.checks.some(c => verdicts[c.id] === false)
 }
 
 /** A verdict on a check whose last verdict in this attempt failed is a rework round. */

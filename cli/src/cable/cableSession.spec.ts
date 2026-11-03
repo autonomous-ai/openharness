@@ -12,6 +12,8 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
 import { CABLE_MAX_FRAME, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
+import { DaemonCableHost } from './cableHost.js'
+import type { MachineFleet } from './machineFleet.js'
 import { CableSession, recapFrame, type CableAgent, type CableHost, type CableMachine, type CablePort } from './cableSession.js'
 import { DialLog } from './dialLog.js'
 import { leadsOf, type SaidOnCard, type SwarmCard, type SwarmLead } from '../superTabs/cards.js'
@@ -2363,6 +2365,163 @@ describe('cable session', () => {
     await session.stop()
   })
 
+  /**
+   * Diego's Buddy, 11-02. The dial's picks are not queued: a slow one is still out when the next arrives. Picking the
+   * machine the dial is already on took the "already selected" shortcut, so the host never heard of it, the slow pick
+   * landed, and `machine.selected` moved the dial's check mark away. On the real host, because the bug is between the two.
+   */
+  describe('a slow pick left behind', () => {
+    async function slowPick() {
+      const asked: Array<{ machineId: string; ok: () => void }> = []
+      const rows = [{ machineId: 'm2', name: 'office', state: 'ready', authMode: 'remote' }]
+      const fleet = {
+        list: async () => ({ machines: rows, source: 'backend' as const }),
+        recentAsks: async () => [],
+        online: async () => {},
+        // This computer's own select only announces where the dial is, and is answered at once here: the slow one is the pick.
+        select: (machineId: string) => machineId === 'mac-local' ? Promise.resolve() : new Promise<void>((ok) => { asked.push({ machineId, ok }) }),
+        release: vi.fn(),
+        listAgents: async () => [],
+      } as unknown as MachineFleet
+      const host = new DaemonCableHost({
+        sessions: () => [], displayName: () => '', machineName: () => 'this-mac', machineId: () => 'mac-local', computerId: () => 'abc',
+        sendTurn: vi.fn(), stopTurn: vi.fn(), answer: vi.fn(), recent: () => [], recentAsks: () => [], log: vi.fn(),
+      }, fleet)
+      const { session, port } = await connect(host)
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      port.sent.length = 0
+      const told = (type: string) => port.sent.filter((m) => m.t === type).map((m) => m.machineId)
+      return { host, session, port, asked, told }
+    }
+    /** What the dial is told takes a few sends after a pick settles; let them all out. */
+    const drained = async () => { for (let turn = 0; turn < 20; turn++) await settle() }
+
+    it('tells the dial nothing of the slow machine once the person picked the one the dial is on', async () => {
+      const { host, session, port, asked, told } = await slowPick()
+      port.say({ t: 'machine.select', machineId: 'm2' })
+      await vi.waitFor(() => expect(asked.map((a) => a.machineId)).toEqual(['m2']))
+      port.say({ t: 'machine.select', machineId: 'mac-local' })
+      await vi.waitFor(() => expect(told('machine.selected')).toEqual(['mac-local']))
+      asked[0]!.ok()
+      await drained()
+      expect(told('machine.selected')).toEqual(['mac-local'])
+      expect(host.selectedMachine()).toBe('mac-local')
+      await session.stop()
+    })
+
+    it('follows the app back to the machine the dial is on, which replaces a slow pick the same way', async () => {
+      const { host, session, port, asked, told } = await slowPick()
+      port.say({ t: 'machine.select', machineId: 'm2' })
+      await vi.waitFor(() => expect(asked.map((a) => a.machineId)).toEqual(['m2']))
+      await session.followApp('mac-local', 'a1')
+      asked[0]!.ok()
+      await drained()
+      expect(told('machine.selected')).toEqual(['mac-local'])
+      expect(host.selectedMachine()).toBe('mac-local')
+      await session.stop()
+    })
+
+    it('leaves a pick running when the window re-announces the focus it already had', async () => {
+      // Desktop re-sends its focus whenever its visible panes change: nobody chose anything (review of #2504).
+      const { host, session, port, asked, told } = await slowPick()
+      await session.followApp('mac-local', 'a1')
+      await drained()
+      port.sent.length = 0
+      port.say({ t: 'machine.select', machineId: 'm2' })
+      await vi.waitFor(() => expect(asked).toHaveLength(1))
+      await session.followApp('mac-local', 'a1')
+      expect(host.pendingPick!()).toBe('m2')
+      asked[0]!.ok()
+      await drained()
+      expect(told('machine.error')).toEqual([])
+      expect(told('machine.selected')).toEqual(['m2'])
+      expect(host.selectedMachine()).toBe('m2')
+      await session.stop()
+    })
+
+    it('leaves a pick running when the window echoes a turn of the dial', async () => {
+      const { host, session, port, asked, told } = await slowPick()
+      port.say({ t: 'machine.select', machineId: 'm2' })
+      await vi.waitFor(() => expect(asked).toHaveLength(1))
+      port.say({ t: 'focus', agentId: 'a7' })
+      await drained()
+      await session.followApp('mac-local', 'a7')
+      expect(host.pendingPick!()).toBe('m2')
+      asked[0]!.ok()
+      await drained()
+      expect(told('machine.selected')).toEqual(['m2'])
+      await session.stop()
+    })
+
+    it('answers the dial when an app follow joins its pick and a newer focus drops the follow\'s answer', async () => {
+      // Both reviews of #2504: the dial's wait has only its own pick left to end it, or it says "No response" at 6 s.
+      const { host, session, port, asked, told } = await slowPick()
+      port.say({ t: 'machine.select', machineId: 'm2' })
+      await vi.waitFor(() => expect(asked).toHaveLength(1))
+      const follow = session.followApp('m2', 'r1')
+      await drained()
+      const newer = session.followApp('m2', 'r2')
+      await drained()
+      expect(asked).toHaveLength(1)
+      asked[0]!.ok()
+      await Promise.all([follow, newer])
+      await drained()
+      expect(told('machine.error')).toEqual([])
+      expect(told('machine.selected')).toContain('m2')
+      expect(host.selectedMachine()).toBe('m2')
+      await session.stop()
+    })
+
+    it('shows no error when the dial gives up on a slow machine and the person picks it again', async () => {
+      // The firmware shows a machine.error for the machine it still waits on, so one here would read as a failure.
+      const { host, session, port, asked, told } = await slowPick()
+      port.say({ t: 'machine.select', machineId: 'm2' })
+      await vi.waitFor(() => expect(asked).toHaveLength(1))
+      port.say({ t: 'machine.select', machineId: 'm2' })
+      await drained()
+      expect(asked).toHaveLength(1)
+      asked[0]!.ok()
+      await drained()
+      expect(told('machine.error')).toEqual([])
+      expect(told('machine.selected')).toEqual(['m2', 'm2'])
+      expect(host.selectedMachine()).toBe('m2')
+      await session.stop()
+    })
+
+    it('shows no error when a person goes away and back: the last pick answers for the first', async () => {
+      // The dial shows a machine.error for the machine it still waits on, and a false one would clear its wait.
+      const { host, session, port, asked, told } = await slowPick()
+      port.say({ t: 'machine.select', machineId: 'm2' })
+      await vi.waitFor(() => expect(asked).toHaveLength(1))
+      port.say({ t: 'machine.select', machineId: 'mac-local' })
+      await vi.waitFor(() => expect(told('machine.selected')).toEqual(['mac-local']))
+      port.say({ t: 'machine.select', machineId: 'm2' })
+      await vi.waitFor(() => expect(asked).toHaveLength(2))
+      asked[0]!.ok()
+      await drained()
+      expect(told('machine.error')).toEqual([])
+      expect(told('machine.selected')).toEqual(['mac-local'])
+      asked[1]!.ok()
+      await drained()
+      expect(told('machine.selected')).toEqual(['mac-local', 'm2', 'm2'])
+      expect(host.selectedMachine()).toBe('m2')
+      await session.stop()
+    })
+
+    it('tells a dial its pick was replaced when something else chose another machine', async () => {
+      // The dial still waits on its pick here, and only this ends the wait before its own "No response".
+      const { session, port, asked, told } = await slowPick()
+      port.say({ t: 'machine.select', machineId: 'm2' })
+      await vi.waitFor(() => expect(asked).toHaveLength(1))
+      await session.followApp('mac-local', 'a1')
+      asked[0]!.ok()
+      await drained()
+      expect(told('machine.error')).toEqual(['m2'])
+      await session.stop()
+    })
+  })
+
   it('shows one row and says why when there is no lane to anywhere else', async () => {
     const host = makeHost({ listMachines: async () => ({ machines: [LOCAL_ROW], source: 'signed-out' as const }) })
     const { session, port } = await connect(host)
@@ -4532,6 +4691,69 @@ describe('swarm cards', () => {
       } finally { await session.stop() }
     })
 
+    describe('a Pro that says swarmChat speaks to the Lead conversation, whatever chat the desktop has open', () => {
+      const PRO_CHAT = { ...ROUND, board: 'pro' }
+      const buddyFace = { kind: 'buddy' as const, id: 'pm1', name: "diego's Buddy", working: false }
+      const spoken = async (leads: SwarmLead[], over: Partial<CableHost> = {}, agentId = 'a1', said: SaidOnCard = { said: true }) => {
+        const swarmSay = vi.fn(async () => said)
+        const host = cardHost({ cards: [card('st1', leads)] }, { transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay, ...over })
+        const { session, port } = await connect(host)
+        try {
+          port.say(PRO_CHAT)
+          await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+          voice(port, agentId)
+          await vi.waitFor(() => expect(port.types().some((t) => t === 'voice.transcript' || t === 'voice.error') || vi.mocked(host.sendTurn).mock.calls.length > 0).toBe(true))
+          return { swarmSay, host, errors: ofType(port, 'voice.error').map((e) => e.message), transcripts: ofType(port, 'voice.transcript') }
+        } finally { await session.stop() }
+      }
+
+      it.each([['a group', group], ['the PM chat', pmChat], ['the Buddy chat', buddyFace]])('with %s open on the desktop', async (_, chat) => {
+        const { swarmSay, transcripts } = await spoken([lead(1, { local: 'a1', chat })])
+        // Exactly the Lead conversation's call: no chat flag and no chat id, so no chat of the desktop's is named or followed.
+        expect(swarmSay.mock.calls).toEqual([['a1', 'ship it']])
+        expect(transcripts).toHaveLength(1)
+      })
+
+      it('from a plain agent room (not a Lead), where the Pro shows no chat', async () => {
+        const { swarmSay } = await spoken([lead(1, { local: 'a1', chat: group })], {}, 'other-harness')
+        expect(swarmSay.mock.calls).toEqual([['other-harness', 'ship it']])
+      })
+
+      it('to a Lead on another machine: no chat named, and no terminal here takes the words when it fails', async () => {
+        const remote = 'a'.repeat(24)
+        const { swarmSay, host, errors } = await spoken([lead(1, { id: remote, chat: group })], {}, remote, { said: false })
+        expect(swarmSay.mock.calls).toEqual([[remote, 'ship it']])
+        expect(host.sendTurn).not.toHaveBeenCalled()
+        expect(errors).toEqual(['Could not reach the Swarm. Try again.'])
+      })
+
+      it('after the Swarm is gone from the machine\'s cards (access lost): still no chat', async () => {
+        const { swarmSay } = await spoken([], {})
+        expect(swarmSay.mock.calls).toEqual([['a1', 'ship it']])
+      })
+
+      it('a post the backend refused is the refusal, not a turn', async () => {
+        const refused: SaidOnCard = { said: false, refused: { code: 'READ_ONLY', message: 'This chat is read-only.' } }
+        const { swarmSay, host, errors } = await spoken([lead(1, { local: 'a1', chat: pmChat })], {}, 'a1', refused)
+        expect(swarmSay.mock.calls).toEqual([['a1', 'ship it']])
+        expect(host.sendTurn).not.toHaveBeenCalled()
+        expect(errors).toEqual(['This chat is read-only.'])
+      })
+
+      it('a round dial still posts in its face chat', async () => {
+        const swarmSay = vi.fn(async () => ({ said: true as const }))
+        const host = cardHost({ cards: [card('st1', [lead(1, { local: 'a1', chat: group })])] }, { transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay })
+        const { session, port } = await connect(host)
+        try {
+          port.say(ROUND)
+          await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+          voice(port, 'a1')
+          await vi.waitFor(() => expect(swarmSay).toHaveBeenCalled())
+          expect(swarmSay.mock.calls[0]).toEqual(['a1', 'ship it', true, 'g1'])
+        } finally { await session.stop() }
+      })
+    })
+
     it('12 Leads with chats stay under the device\'s 512-token guard', async () => {
       const wide = 'é'.repeat(24)   // 48 bytes
       const cards = [card('st1', Array.from({ length: 13 }, (_, l) => lead(l, {
@@ -4580,7 +4802,8 @@ describe('swarm cards', () => {
     const twelve = () => [card('st1', Array.from({ length: 12 }, (_, i) => big(i + 1)))]
 
     it('a Pro\'s swarmBuddy supertab frame stays within 480 JSON tokens with 12 Leads and a Buddy each', async () => {
-      const { session, port } = await connect(cardHost({ cards: twelve() }))
+      const log = vi.fn()
+      const { session, port } = await connect(cardHost({ cards: twelve() }, { log }))
       try {
         port.say({ ...BUDDY, board: 'pro' })
         await vi.waitFor(() => expect(ofType(port, 'supertab').length).toBeGreaterThan(0))
@@ -4588,6 +4811,8 @@ describe('swarm cards', () => {
         // 483 tokens with every Buddy: at least one block goes, and no name is shortened for it.
         expect((frames.at(-1)!.leads as Array<Record<string, unknown>>).some((l) => !('buddy' in l))).toBe(true)
         expect((frames.at(-1)!.leads as Array<Record<string, unknown>>).every((l) => String(l.project).length === 48 && String(l.chatName).length === 48)).toBe(true)
+        // The spec's known limit says so in the log, with how many went.
+        expect(log).toHaveBeenCalledWith(expect.stringMatching(/supertab st1 too large — \d+ Buddy block\(s\) dropped/))
         for (const f of frames) {
           expect(tokens(f)).toBeLessThanOrEqual(480)
           const has = (f.leads as Array<Record<string, unknown>>).map((l) => 'buddy' in l)
@@ -4598,13 +4823,15 @@ describe('swarm cards', () => {
     })
 
     it('a round\'s swarmBuddy supertab frame is unchanged by the Pro budget', async () => {
-      const { session, port } = await connect(cardHost({ cards: twelve() }))
+      const log = vi.fn()
+      const { session, port } = await connect(cardHost({ cards: twelve() }, { log }))
       try {
         port.say(BUDDY)
         await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
         const leads = ofType(port, 'supertab')[0].leads as Array<Record<string, unknown>>
         expect(leads).toHaveLength(12)
         expect(leads.every((l) => 'buddy' in l)).toBe(true)
+        expect(log).not.toHaveBeenCalledWith(expect.stringContaining('Buddy block'))
       } finally { await session.stop() }
     })
 
@@ -4702,6 +4929,47 @@ describe('swarm cards', () => {
       } finally { await session.stop() }
     })
 
+    // Review of #2500: with the window on # buddy (the Swarm's one Buddy chat, no project) the PM side had no project to open.
+    it('a swipe back to the PM side from the Swarm\'s Buddy chat, which names no project, opens the Lead chat of the project the dial has open, else the first', async () => {
+      const state = { cards: [card('st1', [withBuddy({ buddy: mine }), lead(2, { buddies: true, buddy: mine, chat: pmChat, sideChat: pmChat })])], open: { superTabId: 'st1', projectId: '', conversationId: 'pm1', fromDevice: false } }
+      const host = cardHost(state)
+      const { session, port } = await connect(host)
+      try {
+        port.say(BUDDY)
+        await vi.waitFor(() => expect(ofType(port, 'supertab.focus')).toHaveLength(1), NEXT_TICKS)
+        // Already on the Buddy side: nothing to open.
+        port.say({ t: 'supertab.side', tab: 'st1', side: 'buddy' }); await settle()
+        expect(host.superTabSelected).not.toHaveBeenCalled()
+        port.say({ t: 'supertab.side', tab: 'st1', side: 'pm' }); await settle()
+        expect(vi.mocked(host.superTabSelected!).mock.calls).toEqual([['st1', 'proj1', 'pm']])
+      } finally { await session.stop() }
+      // The dial has the second project open: that one.
+      const second = cardHost({ cards: state.cards, open: { superTabId: 'st1', projectId: '', conversationId: 'pm1', fromDevice: false } })
+      const again = await connect(second)
+      try {
+        again.port.say(BUDDY)
+        await vi.waitFor(() => expect(ofType(again.port, 'supertab.focus')).toHaveLength(1), NEXT_TICKS)
+        again.port.say({ t: 'supertab.open', tab: 'st1', lead: 'lead2' }); await settle()
+        again.port.say({ t: 'supertab.side', tab: 'st1', side: 'pm' }); await settle()
+        expect(vi.mocked(second.superTabSelected!).mock.calls).toEqual([['st1', 'proj2', 'pm']])
+      } finally { await again.session.stop() }
+    })
+
+    // Second review of #2500: a DM or Chat with PM names no project either, but is not the Buddy chat: the swipe opens nothing.
+    it('a swipe to the PM side from a chat with no project that is not the reader\'s Buddy chat (a DM, Chat with PM) opens nothing', async () => {
+      for (const conversationId of ['dm1', undefined]) {
+        const cards = [card('st1', [withBuddy({ buddy: mine }), lead(2, { buddies: true, buddy: mine, chat: pmChat, sideChat: pmChat })])]
+        const host = cardHost({ cards, open: { superTabId: 'st1', projectId: '', ...(conversationId ? { conversationId } : {}), fromDevice: false } })
+        const { session, port } = await connect(host)
+        try {
+          port.say(BUDDY)
+          await vi.waitFor(() => expect(ofType(port, 'supertab.focus')).toHaveLength(1), NEXT_TICKS)
+          port.say({ t: 'supertab.side', tab: 'st1', side: 'pm' }); await settle()
+          expect(host.superTabSelected).not.toHaveBeenCalled()
+        } finally { await session.stop() }
+      }
+    })
+
     it('the swipe follows the project the dial last picked in that Swarm', async () => {
       const state = { cards: [card('st1', [withBuddy({ buddy: mine }), lead(2, { buddies: true, buddy: { ...mine, chatId: 'b2' } })])], open: onDesk() }
       const host = cardHost(state)
@@ -4779,6 +5047,34 @@ describe('swarm cards', () => {
         port.say({ t: 'agent.open', agentId: 'h-buddy', reason: 'question' }); await settle()
         expect(vi.mocked(host.openAgent).mock.calls.at(-1)).toEqual(['h-buddy', 'question'])
       } finally { await session.stop() }
+    })
+
+    // Diego, 11-02: with one Buddy per Swarm every card of the Swarm carries the same Buddy session, so the tap found two
+    // claims and opened a terminal tile of its own (whose close stops the Buddy) instead of the Buddy chat.
+    it('a tap on the Swarm\'s one Buddy, which every card carries, opens its chat in the project the dial is on, else the first', async () => {
+      const shared = () => [withBuddy({ local: 'h-lead1', buddy: mine }), lead(2, { chat: pmChat, sideChat: pmChat, buddies: true, local: 'h-lead2', buddy: mine })]
+      const host = cardHost({ cards: [card('st1', shared())] })
+      const { session, port } = await connect(host)
+      try {
+        port.say(BUDDY)
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        port.say({ t: 'agent.open', agentId: 'h-buddy' }); await settle()
+        // The dial is now on project 1; a pick of project 2 moves it, and the Buddy opens there.
+        port.say({ t: 'supertab.select', tab: 'st1', lead: 'lead2' }); await settle()
+        port.say({ t: 'agent.open', agentId: 'h-buddy' }); await settle()
+        expect(vi.mocked(host.superTabSelected!).mock.calls).toEqual([['st1', 'proj1', 'buddy'], ['st1', 'proj2'], ['st1', 'proj2', 'buddy']])
+        expect(host.openAgent).not.toHaveBeenCalled()
+      } finally { await session.stop() }
+      // The same Buddy session on the cards of two Swarms is still no one Swarm's.
+      const two = cardHost({ cards: [card('st1', shared()), card('st2', [lead(7, { buddies: true, buddy: mine })])] })
+      const second = await connect(two)
+      try {
+        second.port.say(BUDDY)
+        await vi.waitFor(() => expect(ofType(second.port, 'supertab')).toHaveLength(2))
+        second.port.say({ t: 'agent.open', agentId: 'h-buddy' }); await settle()
+        expect(two.superTabSelected).not.toHaveBeenCalled()
+        expect(vi.mocked(two.openAgent).mock.calls).toEqual([['h-buddy', undefined]])
+      } finally { await second.session.stop() }
     })
 
     it('a tap on the Buddy or a Lead opens its Swarm chat from any round dial, older ones too', async () => {
@@ -4882,6 +5178,29 @@ describe('swarm cards', () => {
           expect(ofType(port, 'supertab.notice').map((n) => n.id)).toEqual(hello === BUDDY ? ['n1', 'b1', 'b2'] : ['n1'])
         } finally { await session.stop() }
       }
+    })
+
+    // Review of #2500: with one Swarm Buddy, its one word badges every card; seeing the Buddy side clears them all.
+    it('showing the Buddy side reads the Swarm Buddy\'s notice on every card that shares it, and no other chat\'s', async () => {
+      const own = { ...buddyNotice('o1'), chatId: 'own-chat' }
+      const state = { cards: [card('st1', [withBuddy(), lead(2, { chat: pmChat, sideChat: buddyChat, buddies: true }), lead(3, { chat: pmChat, sideChat: buddyChat, buddies: true })])] }
+      const { session, port } = await connect(cardHost(state))
+      try {
+        port.say(BUDDY)
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        await settle(); await settle()
+        state.cards = [card('st1', [withBuddy({ buddyNotice: buddyNotice('b1') }), lead(2, { chat: pmChat, sideChat: buddyChat, buddies: true, buddyNotice: buddyNotice('b1') }),
+          lead(3, { chat: pmChat, sideChat: buddyChat, buddies: true, buddyNotice: own })])]
+        await session.syncSwarmCards()
+        await vi.waitFor(() => expect(ofType(port, 'supertab.notice')).toHaveLength(3))
+        port.say({ t: 'supertab.side', tab: 'st1', side: 'buddy' })
+        await vi.waitFor(() => expect(ofType(port, 'supertab.notice.read')).toHaveLength(2))
+        expect(ofType(port, 'supertab.notice.read')).toEqual([
+          { t: 'supertab.notice.read', tab: 'st1', lead: 'lead1', chatId: 'pm1' }, { t: 'supertab.notice.read', tab: 'st1', lead: 'lead2', chatId: 'pm1' }])
+        // Swiping again reads nothing twice; the Lead whose own chat spoke is still unread.
+        port.say({ t: 'supertab.side', tab: 'st1', side: 'buddy' }); await settle(); await settle()
+        expect(ofType(port, 'supertab.notice.read')).toHaveLength(2)
+      } finally { await session.stop() }
     })
 
     it('asks recaps, opens and talks for the face on its side, and takes only the recaps of that face', async () => {
@@ -5169,6 +5488,18 @@ describe('swarm cards', () => {
       // And under the dial's JSON guard (cable_json_guard.h, 512 tokens), which today's firmware applies to every frame.
       expect(tokens(frame)).toBeLessThan(512)
       expect(frame.leads.map((l) => l.buddy.name)).toEqual(Array(12).fill('é'.repeat(24)))
+    })
+
+    // Review of #2500: one Swarm Buddy is on all 12 Leads (the same chat id and name on each), at the longest ids a dial holds.
+    it('12 Leads that all carry the Swarm\'s one Buddy stay under 8192 bytes and the 512-token guard, and keep their Buddy block', async () => {
+      const shared = fullCards((kind, l) => `${kind}${'x'.repeat(44)}${String(l).padStart(2, '0')}`)
+      for (const l of shared[0].leads) l.buddy = { ...l.buddy!, chatId: `s${'x'.repeat(46)}`, local: undefined }
+      const frame = await sent(shared)
+      expect(frame.leads).toHaveLength(12)
+      expect(Buffer.byteLength(JSON.stringify(frame))).toBeLessThan(8192)
+      expect(tokens(frame)).toBeLessThan(512)
+      // Every Lead still tells the dial a Buddy exists; the Buddies' names may be cut, never the block.
+      expect(frame.leads.every((l) => 'buddy' in l)).toBe(true)
     })
 
     it('shortens the Buddies\' names, on a character, rather than send a frame the cable cannot carry', async () => {

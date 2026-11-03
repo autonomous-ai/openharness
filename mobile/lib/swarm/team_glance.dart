@@ -54,7 +54,18 @@ class SwarmTeamGlance {
       : parts.isEmpty
       ? 'All idle'
       : parts.map((part) => part.text).join(' · ');
+
+  /// "5 agents running", counting who [working] counts: what a project's row
+  /// on Home says of its team. Null with nobody running.
+  late final String? running = switch (working) {
+    0 => null,
+    1 => '1 agent running',
+    final n => '$n agents running',
+  };
 }
+
+/// "1 human", "3 humans".
+String swarmHumans(int count) => count == 1 ? '1 human' : '$count humans';
 
 const _finished = {'done', 'stopped', 'cancelled'};
 
@@ -170,7 +181,7 @@ SwarmAgentGlance _glance(
     ),
     _ when work == 'blocked' => (SwarmAgentState.stuck, 'Stuck'),
     _ when work == 'needs_human' => (SwarmAgentState.waiting, 'Waiting'),
-    _ when work == 'review' => (SwarmAgentState.working, 'In review'),
+    _ when work == 'review' => (SwarmAgentState.working, 'Waiting on others'),
     _ when work == 'reconciling' => (SwarmAgentState.working, 'Checking'),
     _ when work == 'planned' || work == 'working' => (
       SwarmAgentState.working,

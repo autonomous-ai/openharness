@@ -1215,7 +1215,14 @@ export interface SwarmLaunch {
 
 /** Fill a missing Swarm role of an older Swarm session at its restart or resume (superTabs/inCore/adoption.ts): the row
  *  to launch, or null when the launch is no longer this one's. Absent while the Swarm is off. */
-export type AdoptSwarmSkill = (session: RegisteredSession, current: () => boolean) => Promise<RegisteredSession | null>
+export type AdoptSwarmSkill = ((session: RegisteredSession, current: () => boolean) => Promise<RegisteredSession | null>) & {
+  /** One role read, for a relaunch that cannot wait (boot restore, a model switch, a host move): the row to launch with
+   *  its role, written to the registry only by `commit`; `unavailable` when the role could not be read, which the caller
+   *  holds or refuses, never launching without it; null when the launch is no longer this one's. */
+  lookup?(session: RegisteredSession, current: () => boolean): Promise<{ row: RegisteredSession; commit(): void } | 'unavailable' | null>
+  /** Whether a relaunch of this row asks the Swarm for its role first (restore's `needs`). */
+  needed?(session: RegisteredSession): boolean
+}
 
 export type LeadState = 'ask' | 'stuck' | 'work' | 'done'
 /** One Swarm's Lead on a Harness Pro's card (superTabs/cards.ts). `order`: the project's index in the Swarm (the app's
@@ -1709,13 +1716,15 @@ export interface LaneSeal {
   rekey(machineId: string, payload: Record<string, unknown>): Promise<void>
   /** A frame for the machine, sealed as its session seals that type (a type it does not seal goes as it is). */
   seal(machineId: string, frame: Record<string, unknown>): Promise<LaneSealed>
-  /** A sealed frame from the machine, opened; `unreadable` when it does not open (stale, forged, garbled). */
+  /** A sealed frame from the machine, opened; `unreadable` when it does not open (stale, forged, garbled);
+   *  `unknownEpoch` when it is sealed under a group epoch none of the machine's sessions here ever held: the
+   *  far daemon restarted, and the session here is with a process that is gone. */
   open(machineId: string, frame: Record<string, unknown>): Promise<LaneOpened>
   /** The lane is done with the machine's session. */
   drop(machineId: string): void
 }
 export type LaneSealed = { frame: Record<string, unknown> } | { lost: true }
-export type LaneOpened = { frame: Record<string, unknown> } | { unreadable: true } | { lost: true }
+export type LaneOpened = { frame: Record<string, unknown> } | { unreadable: true } | { unknownEpoch: true } | { lost: true }
 /** A service with no lane of the core's: it starts no session and seals nothing, never sends in the clear. */
 export const LANE_OFF: LaneSeal = {
   hello: () => Promise.reject(new Error('no lane: this process holds no E2EE identity')),

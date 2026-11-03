@@ -65,6 +65,8 @@ describe('starting a project\'s Product Manager on a Swarm machine', () => {
       request: expect.objectContaining({ conversationId: f.app.conversationId, machineId: 'owner-mac', engine: 'claude', model: 'opus', effort: 'high',
         cwd: `/swarm/${f.app.projectId}`, worktree: true, leadFor: { projectId: f.app.projectId, personId: 'owner', generation: expect.any(String) } }) })])
     expect(started.result).toMatchObject({ machineId: 'owner-mac' })
+    // Memory and disk gate it; CPU is one momentary sample, so a busy machine admits it as it does a routed Builder (Diego, 10-30).
+    expect(f.state.starts![0]!.request.requirements).toEqual({ memoryBytes: 2 * 1024 ** 3, diskBytes: 1024 ** 3, maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false })
     expect(f.project().lead).toMatchObject({ status: 'starting', machineId: 'owner-mac', machineName: 'Owner Mac', startId: started.result.startId })
     // The repository it clones, recorded for the project.
     expect(f.project().repository).toEqual({ machineId: 'owner-mac', cwd: `/swarm/${f.app.projectId}`, repositoryUrl: REPO })
@@ -194,6 +196,51 @@ describe('starting a project\'s Product Manager on a Swarm machine', () => {
   })
 })
 
+describe('the Product Manager\'s model and effort (Scholes\'s roadmap, piece 1)', () => {
+  const requestOf = (f: ReturnType<typeof swarm>) => f.state.starts!.at(-1)!.request
+  it('asks for Claude Opus 5.5 at xhigh when its person names no model', () => {
+    const f = swarm()
+    f.lead('owner-mac')
+    expect(requestOf(f)).toMatchObject({ engine: 'claude', model: 'opus', effort: 'xhigh' })
+  })
+  it('keeps a model or effort its person named, and leaves a Codex Product Manager on its engine\'s own model', () => {
+    const named = swarm()
+    named.lead('owner-mac', { model: 'sonnet', effort: 'high' })
+    expect(requestOf(named)).toMatchObject({ model: 'sonnet', effort: 'high' })
+    const effortOnly = swarm()
+    effortOnly.lead('owner-mac', { effort: 'max' })
+    expect(requestOf(effortOnly)).toMatchObject({ model: 'opus', effort: 'max' })
+    const codex = swarm()
+    codex.lead('owner-mac', { engine: 'codex' })
+    expect(requestOf(codex)).not.toHaveProperty('model')
+    expect(requestOf(codex)).not.toHaveProperty('effort')
+  })
+  // Only the built-in coordinator default (project instructions, phase 4): an older client's custom lead role default is
+  // read by nothing.
+  it('takes the built-in default whatever an older custom set said, for Claude only', () => {
+    const f = swarm()
+    // The set an older client made, as the state keeps it: role saves are kept nowhere now.
+    const roles = [{ id: 'lead', name: 'Product Manager', kind: 'lead' as const, version: 'v', defaults: { engine: 'codex' as const, model: 'gpt-6.1-sol', effort: 'xhigh' } },
+      { id: 'dev', name: 'Engineer', kind: 'builder' as const, version: 'v' }]
+    Object.assign(f.project(), { skillSet: 'custom', roles: structuredClone(roles) })
+    f.lead('owner-mac', { engine: 'codex' })
+    expect(requestOf(f)).not.toHaveProperty('model')
+    const claude = swarm()
+    Object.assign(claude.project(), { skillSet: 'custom', roles: structuredClone(roles) })
+    claude.lead('owner-mac')
+    expect(requestOf(claude)).toMatchObject({ engine: 'claude', model: 'opus', effort: 'xhigh' })
+  })
+  it('never takes another project\'s role default', () => {
+    const f = swarm()
+    const other = f.run({ type: 'project.create', name: 'Other', visibility: 'private', brief: 'Other work.' }).result.projectId as string
+    Object.assign(f.state.projects!.find(p => p.id === other)!, { skillSet: 'custom', roles: [{ id: 'lead', name: 'PM', kind: 'lead', version: 'v',
+      defaults: { engine: 'codex', model: 'gpt-6.1-sol', effort: 'xhigh' } }] })
+    f.lead('owner-mac', { engine: 'codex' })
+    expect(requestOf(f)).toMatchObject({ engine: 'codex', leadFor: { projectId: f.app.projectId } })
+    expect(requestOf(f)).not.toHaveProperty('model')
+  })
+})
+
 describe('a Product Manager\'s start, once its host reports it', () => {
   /** The host of [machineId] acting for the start's requester, as the store's host route does (store.ts poolHostActor). */
   const hosted = (f: ReturnType<typeof swarm>, machineId: string) => ({ contribution: { machineOwnerId: f.machine(machineId).contributorId,
@@ -201,10 +248,25 @@ describe('a Product Manager\'s start, once its host reports it', () => {
   const messages = (effects: ReturnType<ReturnType<typeof swarm>['run']>, conversationId: string) =>
     effects.messages.filter(m => m.conversationId === conversationId).map(m => m.text)
 
+  it('says when it runs another model or effort than it asked for, and nothing when it cannot tell', () => {
+    const joinedWith = (configuration: AgentConfiguration) => {
+      const f = swarm()
+      const startId = f.lead('mate-mac').result.startId as string
+      return messages(f.run({ type: 'agent.started', startId, harnessId: 'pm', configuration }, owner, hosted(f, 'mate-team')), f.app.conversationId)
+    }
+    expect(joinedWith({ ...config, model: 'claude-sonnet-5-5', effort: 'high' })).toEqual(
+      ['Product Manager started on MacBook Pro. It asked for opus at xhigh and runs claude-sonnet-5-5 at high there.'])
+    expect(joinedWith({ ...config, model: 'claude-opus-5-5', effort: 'high' })).toEqual(
+      ['Product Manager started on MacBook Pro. It asked for opus at xhigh and runs claude-opus-5-5 at high there.'])
+    expect(joinedWith({ ...config, model: 'claude-opus-5-5', effort: 'xhigh' })).toEqual(['Product Manager started on MacBook Pro.'])
+    expect(joinedWith({ ...config, model: 'claude-opus-5-5[1m]', effort: 'auto' })).toEqual(['Product Manager started on MacBook Pro.'])
+    expect(joinedWith({ ...config, model: null, effort: null })).toEqual(['Product Manager started on MacBook Pro.'])
+  })
+
   it('running, becomes the project\'s Lead and says on which machine', () => {
     const f = swarm()
     const startId = f.lead('mate-mac').result.startId as string
-    const joined = f.run({ type: 'agent.started', startId, harnessId: 'pm', configuration: config }, owner, hosted(f, 'mate-team'))
+    const joined = f.run({ type: 'agent.started', startId, harnessId: 'pm', configuration: { ...config, effort: 'xhigh' } }, owner, hosted(f, 'mate-team'))
     const agentId = joined.result.agentId as string
     const home = f.state.conversations.find(c => c.id === f.app.conversationId)!
     expect(home).toMatchObject({ leadId: agentId, agentIds: [agentId] })
@@ -214,6 +276,23 @@ describe('a Product Manager\'s start, once its host reports it', () => {
     // Settling it does not call the Product Manager ready for an assignment.
     const settled = f.run({ type: 'agent.startSettled', startId, warning: null }, owner, hosted(f, 'mate-team'))
     expect(messages(settled, f.app.conversationId)).toEqual([])
+  })
+
+  // Project instructions: the coordinator is called what its project calls it (instructions.ts coordinatorNameOf).
+  it('names the coordinator as its project calls it', () => {
+    const f = swarm()
+    f.run({ type: 'project.coordinatorName', projectId: f.app.projectId, name: 'Coordinator' })
+    const startId = f.lead('mate-mac').result.startId as string
+    expect(f.state.starts!.find(s => s.id === startId)!.request.name).toBe('Coordinator')
+    expect(refusal(() => f.lead('owner-mac'))).toMatchObject({ code: 'LEAD_STARTING', message: 'This project\'s Coordinator is already starting.' })
+    const joined = f.run({ type: 'agent.started', startId, harnessId: 'pm', configuration: { ...config, effort: 'xhigh' } }, owner, hosted(f, 'mate-team'))
+    expect(messages(joined, f.app.conversationId)).toEqual(['Coordinator started on MacBook Pro.'])
+    const agentId = joined.result.agentId as string
+    expect(f.state.agents.find(a => a.id === agentId)!.name).toBe('Coordinator')
+    expect(refusal(() => f.lead('owner-mac'))).toMatchObject({ code: 'LEAD_EXISTS', message: 'This project already has its Coordinator.' })
+    const protectedLead = refusal(() => f.run({ type: 'agent.remove', agentId }))
+    expect(protectedLead).toMatchObject({ code: 'LEAD_PROTECTED' })
+    expect(protectedLead!.message).toContain('is the Coordinator of project App.')
   })
 
   it('failed on the machine the person chose, says why and waits for them', () => {
@@ -386,6 +465,25 @@ describe('the terminal of a Product Manager in a Team account', () => {
     expect(code(owner, { type: 'agent.screen', agentId: sibling, scrollback: 50 })).toBe('ok')
   })
 
+  // Any agent of the project drives another's terminal (project instructions, phase 4), but not one there: typing in it is a
+  // shell as that user. Only the session itself and the Product Manager there, which already runs as that user, may.
+  it('while it holds the account, no other agent of the project reads or types in an agent there, but that Product Manager does', async () => {
+    const t = await running('mate-mac')
+    const group = t.f.run({ type: 'conversation.create', projectId: t.f.app.projectId, title: 'Work', brief: 'Build it.', checks: [] }).result.conversationId as string
+    t.f.run({ type: 'agent.add', conversationId: group, machineId: 'mate-team', harnessId: 'sibling', name: 'Sibling', configuration: config, lead: false }, owner,
+      { contribution: { machineOwnerId: 'mate', contributorId: 'mate', hostGrant: null } })
+    t.f.run({ type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId: 'worker', name: 'Worker', configuration: config, lead: false }, owner,
+      { contribution: { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null } })
+    const as = (harnessId: string): Actor => { const a = t.f.state.agents.find(a => a.harnessId === harnessId)!; return { kind: 'agent', agentId: a.id, machineOwnerId: a.machineOwnerId } }
+    const sibling = t.f.state.agents.find(a => a.harnessId === 'sibling')!.id
+    const code = (actor: Actor, command: Command) => refusal(() => t.f.run(command, actor))?.code ?? 'ok'
+    const input: Command = { type: 'agent.input', agentId: sibling, text: 'cat ~/.claude/projects/*' }, screen: Command = { type: 'agent.screen', agentId: sibling, scrollback: 50 }
+    expect(code(as('worker'), input)).toBe('TERMINAL_PRIVATE')
+    expect(code(as('worker'), screen)).toBe('TERMINAL_PRIVATE')
+    expect(code(as('pm'), input)).toBe('ok')
+    expect(code(as('pm'), screen)).toBe('ok')
+  })
+
   it('stays held when its machine row is gone: the rules never fall back to the old ones', async () => {
     const t = await running('mate-mac')
     expect(t.f.state.agents.find(a => a.id === t.pm)).toMatchObject({ teamAccount: true })
@@ -509,7 +607,8 @@ describe('a Team account hosting a Product Manager', () => {
     expect(refusal(() => web.start())?.code).toBe('TEAM_ACCOUNT_HELD')
     // Still not confirmed after a while: its project's conversation is gone with it, so the Swarm's Lead conversation hears.
     const later = sweepLiveness(f.state, NOW + PURGE_NOTICE_MS + MINUTE)
-    expect(later.map(m => [m.conversationId, m.source])).toEqual([['lead', { kind: 'system' }]])
+    // Its source names the machine, so a Buddy reading this conversation reads it without (store.ts withoutMachineNames; review 2 of #2258).
+    expect(later.map(m => [m.conversationId, m.source])).toEqual([['lead', { kind: 'system', machine: 'MacBook Pro' }]])
     expect(later[0]!.text).toBe('The saved session of a removed agent that held people\'s private chats, on MacBook Pro, is not deleted yet, so its Harness Team account takes no other project\'s work until it is.')
     expect(sweepLiveness(f.state, NOW + PURGE_NOTICE_MS + 2 * MINUTE)).toEqual([])
     f.run({ type: 'agent.sessionClosed', agentId: pm, harnessId: 'pm' }, mate)

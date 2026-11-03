@@ -1,15 +1,56 @@
+import 'package:file_selector/file_selector.dart' show XFile;
 import 'package:flutter/foundation.dart';
 
 import '../terminal/terminal_binary.dart'
     show terminalLocalPasteFileMaxPayloadBytes;
 
-/// One file attached to a harness that does not exist yet.
+/// One file attached to a harness that does not exist yet, or to a chat
+/// message: its bytes in memory, or a file on disk read only as it is sent.
 @immutable
 class HarnessAttachment {
-  const HarnessAttachment(this.name, this.bytes);
+  const HarnessAttachment(this.name, Uint8List this.bytes)
+    : _disk = null,
+      _size = 0;
+
+  /// A file on disk, of the size it had when it was attached. It is read as
+  /// it is sent, so a large file is never held whole in memory.
+  const HarnessAttachment.onDisk(this.name, XFile this._disk, this._size)
+    : bytes = null;
 
   final String name;
-  final Uint8List bytes;
+
+  /// The file's bytes, or null when it stays on disk until it is sent.
+  final Uint8List? bytes;
+  final XFile? _disk;
+  final int _size;
+
+  /// This file under [name], wherever it is held.
+  HarnessAttachment named(String name) => name == this.name
+      ? this
+      : bytes != null
+      ? HarnessAttachment(name, bytes!)
+      : HarnessAttachment.onDisk(name, _disk!, _size);
+
+  /// Whether the file is read from disk as it is sent.
+  bool get onDisk => _disk != null;
+
+  /// How much it weighed when it was attached.
+  int get size => bytes?.length ?? _size;
+
+  /// How much it weighs now: a file on disk may have changed since.
+  Future<int> length() async => bytes?.length ?? await _disk!.length();
+
+  /// The whole file, read now when it is on disk.
+  Future<Uint8List> readBytes() async => bytes ?? await _disk!.readAsBytes();
+
+  /// Its first [length] bytes, as a stream read from disk as it is taken.
+  Stream<List<int>> openRead(int length) {
+    final held = bytes;
+    if (held == null) return _disk!.openRead(0, length);
+    return Stream.value(
+      held.length > length ? Uint8List.sublistView(held, 0, length) : held,
+    );
+  }
 }
 
 /// The files a New Harness box carries into its harness. Held in memory
@@ -19,7 +60,8 @@ class HarnessAttachments extends ChangeNotifier {
     this.onDeliveryProblem,
     this.limitBytes = maxBytes,
     this.limitFiles,
-  });
+    int? readUpTo,
+  }) : readUpTo = readUpTo ?? limitBytes;
 
   /// What one file may weigh: the daemon's own ceiling for a pasted file.
   static const maxBytes = terminalLocalPasteFileMaxPayloadBytes;
@@ -27,6 +69,10 @@ class HarnessAttachments extends ChangeNotifier {
   /// What one file may weigh in this box; a box whose files go somewhere with
   /// a lower ceiling than the daemon's passes it.
   final int limitBytes;
+
+  /// What a picked or dropped file may weigh to be read into memory when it
+  /// is attached; a heavier one stays on disk and is read as it is sent.
+  final int readUpTo;
 
   /// How many files this box holds, or null for any number.
   final int? limitFiles;
@@ -77,8 +123,8 @@ class HarnessAttachments extends ChangeNotifier {
     final tooLarge = [...oversized];
     var surplus = 0;
     for (final file in files) {
-      if (file.bytes.isEmpty) continue;
-      if (file.bytes.length > limitBytes) {
+      if (file.size == 0) continue;
+      if (file.size > limitBytes) {
         tooLarge.add(file.name);
         continue;
       }
@@ -106,8 +152,7 @@ class HarnessAttachments extends ChangeNotifier {
   }) {
     final taken = {for (final file in _files) file.name};
     return add([
-      for (final file in files)
-        HarnessAttachment(_freeName(file.name, taken), file.bytes),
+      for (final file in files) file.named(_freeName(file.name, taken)),
     ], oversized: oversized);
   }
 

@@ -299,11 +299,7 @@ class SwarmMachineSheet extends StatelessWidget {
                 for (final a in agents)
                   _detail(
                     a.name,
-                    '${a.agent.isReviewer
-                        ? 'Rev'
-                        : a.agent.name == 'Lead'
-                        ? 'PM'
-                        : 'Dev'} · ${a.label}',
+                    '${snapshot.roleOf(a.agent.id)?.badge ?? 'Dev'} · ${a.label}',
                   ),
             ],
           ),

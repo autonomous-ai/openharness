@@ -123,13 +123,11 @@ void main() {
   Future<void> settle() => Future<void>.delayed(Duration.zero);
 
   test(
-    'missing main requires choosing a branch without changing Worktree',
+    'no default, no main and no current branch asks without changing Worktree',
     () async {
       final connection = _Connection()
         ..answers['/repo'] = {
           'isGit': true,
-          'branch': 'master',
-          'defaultRef': 'refs/remotes/origin/master',
           'branches': [
             {'ref': 'refs/heads/master', 'name': 'master'},
             {'ref': 'refs/heads/feature', 'name': 'feature'},

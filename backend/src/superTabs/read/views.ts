@@ -6,11 +6,12 @@
 import { suspendedEngines } from '../engineHealth.js'
 import { leadChoices } from '../leadStart.js'
 import { isBuddyChat, isBuddyReader } from '../buddies.js'
-import { agentWithoutMachine, groupWithoutMachines, isLeads, machineHiddenFrom, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
-import { machineSlots, machineTeamWork, teamAccountSwarm, type ContributedMachine } from '../machines.js'
+import { agentForBuddy, agentWithoutMachine, groupForBuddy, machineHiddenFrom, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
+import { slotCounter, machineTeamWork, type ContributedMachine } from '../machines.js'
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup } from '../projects.js'
+import { coordinatorNameOf, roleNameOf } from '../instructions.js'
 import { withAvatarView } from '../profile.js'
 import { swarmUsernames } from '../usernames.js'
 import type { AgentView, Derived, GroupView, HeadView, LivePart, MachineView, MemberView, ProgressView, StartView } from './contract.js'
@@ -47,6 +48,8 @@ export interface ReadExtras {
   decisionsWaiting?: number
   /** Which ones they are, as a digest (decisions.ts). */
   decisionsDigest?: string
+  /** Which of their Activity rows are unread, as a digest (activity.ts). */
+  activityDigest?: string
 }
 
 const HEAD_FIELDS = ['version', 'id', 'name', 'project', 'projects', 'leadsConversationId', 'ownerId', 'environment',
@@ -65,10 +68,9 @@ export function groupView(group: Conversation, seenMachines: ReadonlySet<string>
   return { ...rest, messageSeq: messageSeq ?? 0, ...(dormant ? { dormant: true as const } : {}), ...readers }
 }
 
-/** A conversation's whole data as the reader may see it: the Leads conversation lists only the agents the reader can see, and a
- *  task's requirement only the machines they see. */
-export function visibleGroupView(group: Conversation, visibleAgents: ReadonlySet<string>, seenMachines: ReadonlySet<string>): GroupView {
-  return groupView(isLeads(group) ? { ...group, agentIds: group.agentIds.filter(id => visibleAgents.has(id)) } : group, seenMachines)
+/** A conversation's whole data as the reader may see it: a task's requirement lists only the machines they see. */
+export function visibleGroupView(group: Conversation, _visibleAgents: ReadonlySet<string>, seenMachines: ReadonlySet<string>): GroupView {
+  return groupView(group, seenMachines)
 }
 
 /** The machines a reader's view shows them: listed, or running an agent they see (model.ts seenMachineIds). */
@@ -88,7 +90,8 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
   const part = <T>(list: Part<T>[]) => { const keyed = new Map(list.map(p => [p.key, p])); return (key: string) => keyed.get(key)! }
   const agentPart = part(parts.agents), groupPart = part(parts.groups), machinePart = part(parts.machines), startPart = part(parts.starts)
   const head = Object.fromEntries(HEAD_FIELDS.filter(field => visible[field] !== undefined).map(field => [field, visible[field]])) as HeadView
-  if (head.projects) head.projects = head.projects.map(({ progress: _progress, ...project }) => project)
+  // Every project names its coordinator; one from before the field reads as the Product Manager (instructions.ts).
+  if (head.projects) head.projects = head.projects.map(({ progress: _progress, ...project }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
   head.invitations = visible.invitations.filter(i => readable.has(i.conversationId))
   const projects = new Set((visible.projects ?? []).map(p => p.id)), seen = seenMachineIds(visible), names = swarmUsernames(state)
   const buddy = isBuddyReader(state, actor)
@@ -101,9 +104,11 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
       members: parts.members.filter(m => !m.deleted).map(m => envelope(m, { ...withAvatarView(m.data!), username: names.get(m.key) } as MemberView)),
       agents: visible.agents.map(a => {
         const stored = state.agents.find(s => s.id === a.id)!
-        return envelope(agentPart(a.id), buddy || machineHiddenFrom(state, actor, stored) ? agentWithoutMachine(agentView(stored)) : agentView(stored))
+        const view = agentView(stored)
+        return envelope(agentPart(a.id), buddy && actor.kind === 'agent' ? agentForBuddy(view, actor.agentId)
+          : machineHiddenFrom(state, actor, stored) ? agentWithoutMachine(view) : view)
       }),
-      groups: groups.map(g => envelope(groupPart(g.id), groupView(buddy ? groupWithoutMachines(g) : g, seen))),
+      groups: groups.map(g => envelope(groupPart(g.id), groupView(buddy ? groupForBuddy(g) : g, seen))),
       machines: (visible.machines ?? []).map(m => envelope(machinePart(m.machineId), m)),
       starts: (visible.starts ?? []).filter(s => readable.has(s.request.conversationId)).map(s => envelope(startPart(s.id), s)),
       progress: parts.progress.filter(p => !p.deleted && projects.has(p.key)).map(p => envelope(p, progressView(p.data!))),
@@ -121,25 +126,33 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     ? leadChoices(state, actor.userId, { now, teamMachines: extras.teamMachines, otherWorkspaceMachines: extras.otherWorkspaceMachines ?? [],
       ...(extras.teamAccountsIdle ? { teamAccountsIdle: true } : {}) })
     : {}
+  // Every listed machine's slots from one pass over the Swarm's lists (machines.ts slotCounter).
+  const slots = slotCounter(state)
   const machine = (pool: ContributedMachine) => {
     const stored = state.machines!.find(m => m.machineId === pool.machineId)!
     const refusal = machineTeamWork(state, stored, now, extras.teamMachines, extras.otherWorkspaceMachines ?? [])
     const version = extras.machineVersions?.[pool.machineId]
     const suspended = suspendedEngines(stored, now)
-    return [pool.machineId, { availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, stored)),
+    return [pool.machineId, { availableSlots: Math.max(0, pool.maxAgents - slots(stored)),
       teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const }, ...(version ? { clientVersion: version } : {}),
       ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}), ...(leads[pool.machineId] ? { lead: leads[pool.machineId] } : {}) }] as const
   }
   return {
     agents: Object.fromEntries(visible.agents.map(seen => [seen.id, { downSince: seen.downSince ?? null, limitedUntil: seen.limitedUntil ?? null,
       workDecision: seen.workDecision === 'awaiting' && state.agents.find(a => a.id === seen.id)!.workDecision !== 'awaiting' ? 'awaiting' as const : null,
-      roleId: seen.roleId ?? null }])),
+      roleId: seen.roleId ?? null,
+      // Derived on every read: who leads a project, and its role set, live outside the agent's own part.
+      roleName: roleNameOf(state, state.agents.find(a => a.id === seen.id)!) }])),
     machines: Object.fromEntries((visible.machines ?? []).map(machine)),
     ...(visible.otherProjectsWork ? { otherProjectsWork: visible.otherProjectsWork } : {}),
     ...(actor.kind === 'person' && extras.mentionsWaiting !== undefined ? { mentionsWaiting: extras.mentionsWaiting } : {}),
     ...(actor.kind === 'person' && extras.mentionsDigest !== undefined ? { mentionsDigest: extras.mentionsDigest } : {}),
     ...(actor.kind === 'person' && extras.decisionsWaiting !== undefined ? { decisionsWaiting: extras.decisionsWaiting } : {}),
     ...(actor.kind === 'person' && extras.decisionsDigest !== undefined ? { decisionsDigest: extras.decisionsDigest } : {}),
-    ...(teamAccountSwarm(state) ? {} : { teamAccounts: false as const }),
+    ...(actor.kind === 'person' && extras.activityDigest !== undefined ? { activityDigest: extras.activityDigest } : {}),
+    threadSessions: true as const,
+    sessionsFromChat: true as const,
+    // One Buddy per person per Swarm (Dee, 10-31): an app shows # buddy and New session in a project only when the server says so.
+    swarmBuddy: true as const,
   }
 }

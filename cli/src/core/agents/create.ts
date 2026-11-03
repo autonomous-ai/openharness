@@ -8,7 +8,7 @@ import type { NativeLaunch, NativeLaunchResult, NativeLaunchSource } from '../..
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
 import { realpathSync, statSync } from 'node:fs'
-import { readdir } from 'node:fs/promises'
+import { readdir, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { BackendSocket } from '../../backendSocket.js'
 import type { ModelsPort, SwarmLaunch } from '../api.js'
@@ -42,8 +42,10 @@ import { nativeHookLocations } from '../../engines/kit/nativeLocations.js'
 import { engineHooks } from '../../engines/hooks.js'
 import { acceptFullMode, folderTrust } from '../../engines/launchPrep.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
+import { harnessMadeWorktree } from '../../lib/gitProject.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
+import { parseSwarmSkill } from '../../lib/savedSkill.js'
 import type { TerminalBackend } from '../../lib/terminalBackend.js'
 import { windowsLaunchRefusal } from '../../lib/windows/launch.js'
 import { isWindowsHeldPane, windowsPaneLaunch } from '../../lib/windows/engineStart.js'
@@ -103,6 +105,13 @@ export interface CreateAgentDeps {
   swarmLaunch?: SwarmLaunch
 }
 
+/** A Git checkout directly in the projects root (a clone the desktop made there), or a worktree Harness made. */
+async function swarmFolder(cwd: string): Promise<boolean> {
+  const root = projectsRoot()
+  if (dirname(cwd) === root) return stat(join(cwd, '.git')).then(info => info.isDirectory(), () => false)
+  return harnessMadeWorktree(cwd, root)
+}
+
 export function createAgentCreator({
   native: inspectNative, publishConfig, createBackend: initialBackend, recoverBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, externalResume, watchNewPane, announceSession, attachDsh,
   prepareApiTools, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
@@ -133,6 +142,15 @@ export function createAgentCreator({
     // preparation writes, but grant trust only after its dependencies are ready.
     const trustEmptyProject = context?.local === true && !dsh && dirname(cwd) === projectsRoot()
       && await readdir(cwd).then(names => names.length === 0, () => false)
+    // A Swarm agent's folder has content: the desktop's New Swarm clones a GitHub project into the projects root, or makes
+    // a worktree of a local repository, itself, and sends the folder as a plain cwd. 2026-10-30: a Cmd+S Swarm's PM sat
+    // at Claude Code's "do you trust this folder?", which no Swarm view shows; it read Idle and every message to it was
+    // withheld. The person chose that repository and full mode for the Swarm in this window, so a Claude Code Swarm agent
+    // in full mode is trusted in a Git checkout directly in the projects root or a worktree Harness made, read from disk.
+    // Never from a relayed request, which could name any repository here. Codex's trust also sets defaults for the
+    // person's own sessions in that folder, so it stays theirs to give.
+    const trustSwarmFolder = !trustEmptyProject && context?.local === true && !dsh && engine === 'claude' && !!input.swarmRole
+      && permissionMode === 'full' && await swarmFolder(cwd)
     if (!authority.current()) return stale()
     // A harness can pin its permission mode (`dshPinnedPermissionMode`): the Grid harness starts model
     // servers, which Codex's sandbox would start without a GPU. Pinned before anything reads the mode,
@@ -304,14 +322,14 @@ export function createAgentCreator({
       try { acceptFullMode(engine, native ? { ...native.environment, ...gridLaunch?.env, ...dshEnv } : undefined) }
       catch (error) { console.warn(`[agent] full mode acceptance · ${error instanceof Error ? error.message : error}`) }
     }
-    if (trustEmptyProject) {
+    if (trustEmptyProject || trustSwarmFolder) {
       try {
         // A clone or user edit can arrive while dependencies are being prepared.
-        // Trust only the same physical workspace, still empty at the write boundary.
+        // Trust only the same physical workspace, still empty at the write boundary (a Swarm agent's, still the same).
         const files = new NativeFiles()
         const empty = files.entries(cwd).length === 0
         if (!current()) return stale()
-        if (empty && workspaceIdentity() === originalWorkspace) {
+        if ((empty || trustSwarmFolder) && workspaceIdentity() === originalWorkspace) {
           files.verify()
           const environment = native ? { ...native.environment, ...gridLaunch?.env, ...dshEnv } : undefined
           const profile = engine === 'codex' && environment ? nativeHookLocations(environment).CODEX_HOME : codexHome
@@ -364,8 +382,12 @@ export function createAgentCreator({
     // A harness another agent started says so in the pull requests it opens (lib/agentAttribution.ts), last, as every
     // relaunch appends it (`buildLaunchOverrides`), and read from the person's settings where this launch reads them.
     // What Harness tells the agent (its instructions, and the pull request line for one another agent started), last.
-    const swarmSkill = input.swarmRole ? { role: input.swarmRole, key: label, ...(input.swarmSkillMode ? { mode: input.swarmSkillMode } : {}),
-      ...(swarmGitHub ? { github: true as const } : {}) } : undefined
+    // A launch an older CLI saved to finish later (a pending intent) names its role in the wire's values (lead, dev, review):
+    // read as this release keeps it, so a Reviewer keeps its swarm-review file. Nothing else is one.
+    const swarmSkill = input.swarmRole ? parseSwarmSkill({ role: input.swarmRole, key: label, fallback: input.swarmFallback, mode: input.swarmSkillMode,
+      github: swarmGitHub ? true : undefined }) : undefined
+    // Its own words: the Swarm's skill code (and its refusal's text) stays out of the core's bundle (src/leanEntry.spec.ts).
+    if (input.swarmRole && !swarmSkill) return { ok: false, error: 'SWARM_SKILL_FAILED', detail: 'This launch names no Swarm role this Harness knows.' }
     let swarmInstructions: string | undefined
     if (swarmLaunch && swarmSkill) {
       try { swarmInstructions = swarmLaunch.prepare(cwd, swarmSkill).instructions }
@@ -375,7 +397,7 @@ export function createAgentCreator({
     // The person's machine MCP servers (lib/machineMcp.ts, #1872), beside the grid's and their own: read at each launch,
     // as every relaunch reads them again (`buildLaunchOverrides`). Never a Buddy's: it starts no MCP server, as a server
     // runs with its person's credentials and its tools are not its guard's to vet (review 3 of #2092).
-    const machineMcp = input.swarmRole === 'buddy' ? [] : machineMcpLaunchArgs(engine, cwd)
+    const machineMcp = swarmSkill?.role === 'buddy' ? [] : machineMcpLaunchArgs(engine, cwd)
     const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? relay?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...machineMcp, ...(swarmLaunch && swarmSkill ? swarmLaunch.args(engine) : []), ...told])
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).

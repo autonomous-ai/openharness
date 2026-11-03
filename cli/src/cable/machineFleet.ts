@@ -12,6 +12,18 @@ import type { CableAgent } from './cableSession.js'
 import type { RecentTurn } from './cableHost.js'
 
 /** One of the owner's machines, as the fleet knows it. The local row is added by the host, not here. */
+/**
+ * Why `online()` failed, as the `code` on what it rejects with, so the dial's plug-in retry (cableHost.ts) tries again
+ * only what nothing else will (follow-up to #2483, both security reviews):
+ * - LANE_TOKEN_UNAVAILABLE: the token could not be read just now (a refresh lost to a network blip). No socket was
+ *   made, so the lane has no close to retry from: only the caller can try again.
+ * - LANE_SESSION_OVER: the session is over (signed out, a refresh refused, SSO asking for a new sign-in). Trying again
+ *   cannot fix it; the next sign-in and plug-in do.
+ * Any other failure was the socket's, and the lane's own reconnect retries it (deviceLink.ts onClose).
+ */
+export const LANE_TOKEN_UNAVAILABLE = 'TOKEN_UNAVAILABLE'
+export const LANE_SESSION_OVER = 'SESSION_OVER'
+
 export interface FleetMachine {
   machineId: string
   name: string

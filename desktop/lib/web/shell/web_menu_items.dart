@@ -7,9 +7,9 @@ import '../../shared/theme/app_pane_icon.dart';
 /// bar already shows, others make no sense on a phone.
 enum WebMenuWidth { any, compact, wide }
 
-/// One entry of the web app menu: a workspace command id, its menu label and
-/// the glyph the desktop menu bar gives the same command. The command itself
-/// lives in the workspace's shared command table.
+/// One entry of the `+` menu: a workspace command id, its menu label and the
+/// glyph the desktop menu bar gives the same command. The command itself lives
+/// in the workspace's shared command table.
 typedef WebMenuItem = ({
   String command,
   String label,
@@ -17,18 +17,20 @@ typedef WebMenuItem = ({
   WebMenuWidth width,
 });
 
-/// What the menu offers, in groups a thin rule separates. Only what has no
-/// other door in the browser chrome: new work is the `+` beside the tabs
-/// (a new tab opens on "Start an agent"), agents the search button, tabs the
-/// tab bar and switcher, attention the bell, closing a pane its own header;
-/// keyboard tours and grid layout stay out of a mouse-first menu. New Swarm is
-/// here because its only other door is a key (Alt+S), which a phone has not.
-/// Splitting is here because the header gave it up: a split is an edge to
-/// hover, which a finger cannot. Sharing is not — Share is an experimental button, off until
-/// its setting is switched on, and a row here would put it back for everyone.
-/// All commands still reaches every one.
+/// What the `+` beside the tabs offers, in groups a thin rule separates: new
+/// work and what opens it (Huy, 2026-11-02). Machines and Models are the
+/// footer's links, as on Desktop; who is signed in, Settings and Appearance are
+/// the avatar's. New Swarm is here because its only other door is a key
+/// (Alt+S), which a phone has not. Splitting is here because a split is an edge
+/// to hover, which a finger cannot.
 const List<List<WebMenuItem>> kWebMenuGroups = [
   [
+    (
+      command: 'swarm.new',
+      label: 'New tab',
+      icon: Icon(AppIcons.plus),
+      width: WebMenuWidth.any,
+    ),
     (
       command: 'super_tab.new',
       label: 'New Swarm',
@@ -37,16 +39,18 @@ const List<List<WebMenuItem>> kWebMenuGroups = [
     ),
   ],
   [
+    // One split, always to the right: a second "down" row only lengthens the
+    // menu, and `>` in search still has Split down.
     (
-      command: 'machines.list',
-      label: 'Machines',
-      icon: Icon(AppIcons.server),
+      command: 'pane.split_right',
+      label: 'Split pane',
+      icon: AppPaneIcon(AppPaneSymbol.splitRight, size: AppIcons.inlineSize),
       width: WebMenuWidth.any,
     ),
     (
-      command: 'models.list',
-      label: 'Models',
-      icon: Icon(AppIcons.cpu),
+      command: 'navigation.history',
+      label: 'History',
+      icon: Icon(AppIcons.history),
       width: WebMenuWidth.any,
     ),
     // The wide bar has its own Store button; the phone bar gives it up.
@@ -57,52 +61,70 @@ const List<List<WebMenuItem>> kWebMenuGroups = [
       width: WebMenuWidth.compact,
     ),
   ],
-  [
-    // One split, always to the right: a second "down" row only lengthens the
-    // menu, and All commands still has Split down.
-    (
-      command: 'pane.split_right',
-      label: 'Split pane',
-      icon: AppPaneIcon(AppPaneSymbol.splitRight, size: AppIcons.inlineSize),
-      width: WebMenuWidth.any,
-    ),
-  ],
-  [
-    (
-      command: 'navigation.history',
-      label: 'History',
-      icon: Icon(AppIcons.history),
-      width: WebMenuWidth.any,
-    ),
-    (
-      command: 'navigation.commands',
-      label: 'All commands',
-      icon: Icon(AppIcons.command),
-      width: WebMenuWidth.any,
-    ),
-  ],
-  [
-    (
-      command: 'app.settings',
-      label: 'Settings',
-      icon: Icon(AppIcons.settings),
-      width: WebMenuWidth.any,
-    ),
-    (
-      command: 'app.customize',
-      label: 'Appearance',
-      icon: Icon(AppIcons.palette),
-      width: WebMenuWidth.any,
-    ),
-    // Pairing a phone is for a computer; a phone is already here.
-    (
-      command: 'app.add_phone',
-      label: 'Add phone',
-      icon: Icon(AppIcons.smartphone),
-      width: WebMenuWidth.wide,
-    ),
-  ],
 ];
+
+/// Behind the `+` menu's More: what a mouse-first page must keep clickable and
+/// a phone has no key for, now All commands is gone.
+const List<WebMenuItem> kWebMoreItems = [
+  (
+    command: 'pane.zoom',
+    label: 'Zoom pane',
+    icon: Icon(AppIcons.maximize),
+    width: WebMenuWidth.any,
+  ),
+  (
+    command: 'pane.move_left',
+    label: 'Move pane left',
+    icon: Icon(AppIcons.arrowLeft),
+    width: WebMenuWidth.any,
+  ),
+  (
+    command: 'pane.move_right',
+    label: 'Move pane right',
+    icon: Icon(AppIcons.arrowRight),
+    width: WebMenuWidth.any,
+  ),
+  (
+    command: 'pane.move_up',
+    label: 'Move pane up',
+    icon: Icon(AppIcons.arrowUp),
+    width: WebMenuWidth.any,
+  ),
+  (
+    command: 'pane.move_down',
+    label: 'Move pane down',
+    icon: Icon(AppIcons.arrowDown),
+    width: WebMenuWidth.any,
+  ),
+  (
+    command: 'pane.move_to_tab',
+    label: 'Move pane to another tab',
+    icon: Icon(AppIcons.arrowRightLeft),
+    width: WebMenuWidth.any,
+  ),
+  (
+    command: 'pane.layout',
+    label: 'Layouts',
+    icon: Icon(AppIcons.layoutGrid),
+    width: WebMenuWidth.any,
+  ),
+  (
+    command: 'swarm.reopen',
+    label: 'Reopen closed tab',
+    icon: Icon(AppIcons.rotateCcw),
+    width: WebMenuWidth.any,
+  ),
+];
+
+/// Commands that only change how several panes sit, so one pane has no use for
+/// them.
+const _needsTwoPanes = {
+  'pane.zoom',
+  'pane.move_left',
+  'pane.move_right',
+  'pane.move_up',
+  'pane.move_down',
+};
 
 /// The groups as they can be drawn right now: rows for the other layout, and
 /// commands that cannot run in this workspace state, are left out, and a group
@@ -122,4 +144,15 @@ List<List<WebMenuItem>> runnableWebMenu(
             .toList()
         case final items when items.isNotEmpty)
       items,
+];
+
+/// More's rows as they can be drawn right now. Empty means no More row.
+List<WebMenuItem> runnableWebMore(
+  bool Function(String command) canRun, {
+  required int panes,
+}) => [
+  for (final item in kWebMoreItems)
+    if (canRun(item.command) &&
+        (panes > 1 || !_needsTwoPanes.contains(item.command)))
+      item,
 ];

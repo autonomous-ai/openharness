@@ -46,6 +46,7 @@ class SwitchConnection extends MonitorConnection {
   final handoffTimeouts = <Duration>[];
   final eventsAtHandoff = <List<String>>[];
   final completedHandoffs = <Map<String, dynamic>>[];
+  final closeRequests = <Map<String, dynamic>>[];
   String? completionError;
   Object? completionThrows;
 
@@ -73,6 +74,7 @@ class SwitchConnection extends MonitorConnection {
       return recent;
     }
     if (type == 'agent_close') {
+      closeRequests.add(Map.of(payload));
       events.add('save/stop');
       expect(payload['mode'], 'now');
       expect(payload['sessionId'], 'saved-conversation');
@@ -1197,6 +1199,69 @@ void main() {
     expect(app.panes.single, same(pane));
     expect(pane.agentId, 'a0');
     expect(app.stateOf('m')!.agents.first.isStopped, isFalse);
+  });
+
+  // Dee, 11-01: a Swarm Product Manager's engine is switched from its pane,
+  // as any pane's. Its machine lets the stop through only for the switch
+  // whose handoff it prepared, so the stop names that switch.
+  test(
+    'a switch names the change its handoff was prepared for on the stop',
+    () async {
+      final connection = SwitchConnection()..handoff = handoffOk;
+      final app = fixture(connection);
+      addTearDown(app.dispose);
+      await app.addAgentToSwarm('m', 'a0');
+      expect(await app.changeAgent('m', 'a0', 'claude'), isNull);
+      final changeId = connection.handoffCalls.single['changeId'] as String;
+      expect(changeId, matches(RegExp(r'^[0-9a-f]{32}$')));
+      expect(connection.closeRequests.single['changeId'], changeId);
+      expect(connection.closeRequests.single['mode'], 'now');
+    },
+  );
+
+  test(
+    'a stop with no prepared handoff, or any other close, names no change',
+    () async {
+      final connection = SwitchConnection();
+      final app = fixture(connection);
+      addTearDown(app.dispose);
+      await app.addAgentToSwarm('m', 'a0');
+      expect(await app.changeAgent('m', 'a0', 'claude'), isNull);
+      expect(connection.closeRequests.single.containsKey('changeId'), isFalse);
+      final other = SwitchConnection();
+      final plain = fixture(other);
+      addTearDown(plain.dispose);
+      await plain.prepareSessionClose('m', plain.stateOf('m')!.agents.first)(
+        'now',
+      );
+      expect(other.closeRequests.single.containsKey('changeId'), isFalse);
+    },
+  );
+
+  test('a Product Manager its machine will not stop keeps its agent and pane, with the machine\'s words', () async {
+    for (final refusal in [
+      {
+        'error': 'LEAD_PROTECTED',
+        'detail': 'This harness is the Product Manager of a Swarm project. Delete its project first to stop it.',
+      },
+      {
+        'error': 'LEAD_SWITCHING',
+        'detail': 'This Product Manager is already switching its agent. Wait for it to finish.',
+      },
+    ]) {
+      final connection = SwitchConnection()
+        ..handoff = handoffOk
+        ..closeRefusal = refusal;
+      final app = fixture(connection);
+      addTearDown(app.dispose);
+      await app.addAgentToSwarm('m', 'a0');
+      final pane = app.panes.single;
+      expect(await app.changeAgent('m', 'a0', 'claude'), refusal['detail']);
+      expect(connection.creations, isEmpty);
+      expect(app.panes.single, same(pane));
+      expect(pane.agentId, 'a0');
+      expect(app.stateOf('m')!.agents.first.isStopped, isFalse);
+    }
   });
 
   test('a failed launch preserves the stopped session and permits a different agent', () async {

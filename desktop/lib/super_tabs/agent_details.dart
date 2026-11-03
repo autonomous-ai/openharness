@@ -149,10 +149,14 @@ class SuperTabAgentInfo {
       return switch (workStatus) {
         'planned' => 'Assigned to "${group.title}"',
         'blocked' => 'Stuck on "${group.title}"',
-        'review' => 'Waiting for review on "${group.title}"',
+        'review' => 'Waiting on others for "${group.title}"',
         // Handed over with its status still working, as the Swarm reads it.
-        'working' when SuperTabAgentWork(group).handedOver =>
-          'Waiting for review on "${group.title}"',
+        'working'
+            when SuperTabAgentWork(
+              group,
+              readsHandoff: superTabReadsHandoff(controller, group),
+            ).handedOver =>
+          'Waiting on others for "${group.title}"',
         'reconciling' => 'Checking "${group.title}"',
         // Its machine died, it stalled or hit a limit, and the Lead hands it on (backend liveness.ts).
         'lost' => 'Lost "${group.title}"',
@@ -294,12 +298,8 @@ Future<void> showSuperTabAgentDetails(
                   children: [
                     _fact(
                       'Role',
-                      controller.snapshot?.activeRoleForAgent(current)?.name ??
-                          (controller.snapshot?.isLead(agent.id) == true
-                              ? 'Product Manager'
-                              : current.isReviewer
-                              ? 'Reviewer'
-                              : 'Engineer'),
+                      controller.snapshot?.roleOf(current.id)?.name ??
+                          'Engineer',
                     ),
                     if (info.engine case final value?) _fact('Engine', value),
                     if (current.name != name) _fact('Agent name', current.name),

@@ -13,6 +13,7 @@ import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../core/dsh_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/widgets/app_menu.dart';
 import '../terminal/terminal_text.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
@@ -28,6 +29,7 @@ import 'finger_target.dart';
 import 'new_harness_attachments.dart';
 import 'new_harness_paste.dart';
 import 'engine_identity.dart';
+import 'laid_out_list.dart';
 
 /// Desktop composer and legacy terminal launch form sharing the same draft.
 /// Enter on the selected launch action starts with the displayed defaults.
@@ -92,11 +94,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       box.leadBlocked == null &&
       !box.linkingProfile &&
       box.requiredChoice == null &&
-      !box.taskTooLong &&
-      (box.integration?.roles == null ||
-          box.integration!.roles!.any(
-            (role) => role.id == box.integration!.roleId,
-          ));
+      !box.taskTooLong;
   FocusNode get _desktopDefaultFocus => box.takesTask
       ? _taskFocus
       : _desktopStartEnabled
@@ -2572,44 +2570,17 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       if (box.canCancelPending) _cancelPendingButton(),
       if (box.canDiscardPending) _discardPendingButton(),
       if (box.existingFolder != null) _useExistingFolderButton(),
-      if (box.integration?.roles case final roles?)
-        roles.isEmpty
-            ? const Text('This project has no Engineer or Reviewer roles.')
-            : SizedBox(
-                width: 180,
-                child: InputDecorator(
-                  decoration: const InputDecoration(labelText: 'Role'),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<String>(
-                      key: const ValueKey('new-harness-role'),
-                      isExpanded: true,
-                      value:
-                          roles.any(
-                            (role) => role.id == box.integration!.roleId,
-                          )
-                          ? box.integration!.roleId
-                          : null,
-                      items: [
-                        for (final role in roles)
-                          DropdownMenuItem(
-                            value: role.id,
-                            child: Text(
-                              role.name,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                      ],
-                      onChanged: box.locked
-                          ? null
-                          : (value) => setState(() {
-                              if (value != null) {
-                                box.integration!.chooseRole(value);
-                              }
-                            }),
-                    ),
-                  ),
-                ),
-              ),
+      if (box.integration?.roleSuggestions case final suggestions?)
+        _RoleField(
+          key: const ValueKey('new-harness-role'),
+          suggestions: suggestions,
+          initial: box.integration!.roleName ?? '',
+          enabled: !box.locked,
+          onChanged: (value) {
+            final name = value.trim();
+            box.integration!.roleName = name.isEmpty ? null : name;
+          },
+        ),
       if (includeProjectVisibility &&
           box.integration?.projectVisibility != null)
         _desktopProjectVisibility(9.95),
@@ -3032,7 +3003,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       return 'Open Folder…';
     }
     final folder = option.project?.folder;
-    if (box.field == NewHarnessField.projectMenu && folder != null) {
+    if (box.field == NewHarnessField.projectMenu &&
+        folder != null &&
+        option.id != NewHarnessController.pasteOpenId) {
       return folder
               .split(RegExp(r'[/\\]'))
               .where((part) => part.isNotEmpty)
@@ -3097,12 +3070,12 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   Widget _desktopOption(NewHarnessOption option) {
     final title = _desktopOptionTitle(option);
     final highlighted = identical(option, box.selected);
-    final ink = highlighted
-        ? DesktopChrome.onSelection
-        : DesktopChrome.foreground;
-    final muted = highlighted
-        ? DesktopChrome.selectionDetail
-        : DesktopChrome.muted;
+    // A refused paste is the answer to what was typed, not a choice: its two
+    // lines say why, and it keeps a quiet fill instead of the selection's.
+    final refused = option.id == NewHarnessController.pasteInvalidId;
+    final active = highlighted && !refused;
+    final ink = active ? DesktopChrome.onSelection : DesktopChrome.foreground;
+    final muted = active ? DesktopChrome.selectionDetail : DesktopChrome.muted;
     final titleStyle = DesktopChrome.text(
       size: _desktopTitleSize,
       color: option.enabled ? ink : muted,
@@ -3116,7 +3089,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               : box.app.stateOf(option.id)?.isOffline == true
               ? 'Offline'
               : null
-        : !option.enabled
+        : !option.enabled && !refused
         ? option.why
         : null;
     return Semantics(
@@ -3133,8 +3106,10 @@ class NewHarnessFormState extends State<NewHarnessForm> {
           if (!option.enabled) option.why else ?note,
         ].join('\n'),
         child: Material(
-          color: highlighted
+          color: active
               ? DesktopChrome.activeSelection
+              : highlighted
+              ? DesktopChrome.foreground.withValues(alpha: .06)
               : Colors.transparent,
           borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
           child: InkWell(
@@ -4371,5 +4346,120 @@ class _LaunchProgressState extends State<_LaunchProgress> {
     softWrap: false,
     overflow: TextOverflow.clip,
     style: widget.style,
+  );
+}
+
+const _roleFieldWidth = 180.0;
+
+/// The server's limit on a role name, in UTF-16 units (`.length` in JavaScript).
+const _roleNameUnits = 40;
+
+/// Keeps text to [max] UTF-16 units as the server counts them, never cutting a
+/// surrogate pair in two.
+class _Utf16Limit extends TextInputFormatter {
+  const _Utf16Limit(this.max);
+  final int max;
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final text = newValue.text;
+    if (text.length <= max) return newValue;
+    var end = max;
+    if (_isHigh(text.codeUnitAt(end - 1))) end--;
+    return TextEditingValue(
+      text: text.substring(0, end),
+      selection: TextSelection.collapsed(offset: end),
+    );
+  }
+
+  static bool _isHigh(int unit) => unit >= 0xD800 && unit <= 0xDBFF;
+}
+
+/// A joining agent's role: free text, with the project document's role
+/// headings offered as suggestions (all of them on focus, filtered as typed).
+class _RoleField extends StatefulWidget {
+  const _RoleField({
+    super.key,
+    required this.suggestions,
+    required this.initial,
+    required this.enabled,
+    required this.onChanged,
+  });
+  final List<String> suggestions;
+  final String initial;
+  final bool enabled;
+  final ValueChanged<String> onChanged;
+
+  @override
+  State<_RoleField> createState() => _RoleFieldState();
+}
+
+class _RoleFieldState extends State<_RoleField> {
+  late final _text = TextEditingController(text: widget.initial);
+  final _focus = FocusNode(debugLabel: 'New harness role');
+
+  @override
+  void dispose() {
+    _text.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: _roleFieldWidth,
+    child: RawAutocomplete<String>(
+      textEditingController: _text,
+      focusNode: _focus,
+      optionsBuilder: (value) {
+        final typed = value.text.trim().toLowerCase();
+        return [
+          for (final name in widget.suggestions)
+            if (typed.isEmpty || name.toLowerCase().contains(typed)) name,
+        ];
+      },
+      onSelected: widget.onChanged,
+      fieldViewBuilder: (context, controller, focusNode, onSubmit) => TextField(
+        controller: controller,
+        focusNode: focusNode,
+        enabled: widget.enabled,
+        inputFormatters: [_Utf16Limit(_roleNameUnits)],
+        onChanged: widget.onChanged,
+        style: DesktopChrome.control(),
+        decoration: const InputDecoration(
+          labelText: 'Role',
+          hintText: 'Engineer',
+          counterText: '',
+          isDense: true,
+        ),
+      ),
+      optionsViewBuilder: (context, onSelected, options) => Align(
+        alignment: Alignment.topLeft,
+        child: Material(
+          color: grid.AppMenu.fill,
+          elevation: grid.AppMenu.elevation,
+          borderRadius: BorderRadius.all(
+            Radius.circular(grid.AppMenu.panelRadius),
+          ),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              maxWidth: _roleFieldWidth,
+              maxHeight: grid.AppControl.menuMaxHeight,
+            ),
+            child: LaidOutListView(
+              padding: grid.AppMenu.panelPadding,
+              shrinkWrap: true,
+              children: [
+                for (final name in options)
+                  AppMenuItem(label: name, onPressed: () => onSelected(name)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
   );
 }

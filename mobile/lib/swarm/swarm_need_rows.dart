@@ -141,11 +141,15 @@ class SwarmNeedLine extends StatelessWidget {
     required this.session,
     required this.need,
     required this.onTap,
+    this.chevron = LucideIcons.chevronDown300,
   });
 
   final SwarmSession session;
   final SwarmNeed need;
   final VoidCallback onTap;
+
+  /// Down where it opens in place on Home; right where it opens elsewhere.
+  final IconData chevron;
 
   @override
   Widget build(BuildContext context) {
@@ -168,7 +172,7 @@ class SwarmNeedLine extends StatelessWidget {
       ),
       title: swarmNeedTitle(need),
       detail: line.isEmpty ? null : SwarmRow.line(line),
-      chevron: LucideIcons.chevronDown300,
+      chevron: chevron,
       onTap: onTap,
     );
   }

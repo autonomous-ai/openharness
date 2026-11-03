@@ -15,11 +15,7 @@ import 'package:harness/web/shell/web_chrome.dart';
 
 import 'support/super_tab_fixture.dart';
 
-final _recovers = WorkspaceChrome(
-  leadingWidth: (_) => 0,
-  leading: (_, _) => const SizedBox.shrink(),
-  superTabRecovers: true,
-);
+final _recovers = WorkspaceChrome(superTabRecovers: true);
 
 void main() {
   final loading = find.textContaining('Loading conversation');
@@ -143,13 +139,7 @@ void main() {
         configStore: null,
       );
       addTearDown(app.dispose);
-      expect(
-        WorkspaceChrome(
-          leadingWidth: (_) => 0,
-          leading: (_, _) => const SizedBox.shrink(),
-        ).superTabRecovers,
-        isFalse,
-      );
+      expect(WorkspaceChrome().superTabRecovers, isFalse);
       expect(webWorkspaceChrome(app).superTabRecovers, isTrue);
     },
   );

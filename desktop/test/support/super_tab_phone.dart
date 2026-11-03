@@ -9,11 +9,7 @@ import 'package:harness/super_tabs/view.dart';
 
 import 'super_tab_fixture.dart';
 
-final _phoneChrome = WorkspaceChrome(
-  leadingWidth: (_) => 0,
-  leading: (_, _) => const SizedBox.shrink(),
-  compactBelow: 720,
-);
+final _phoneChrome = WorkspaceChrome(compactBelow: 720);
 
 /// The lead conversation, with one message from its owner and [seed]'s, in a
 /// [size] window. [desktop] mounts it without chrome, as Desktop does.

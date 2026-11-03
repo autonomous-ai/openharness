@@ -497,6 +497,41 @@ void main() {
     expect(find.byKey(_jump), findsNothing);
   });
 
+  testWidgets('a second link in a chat showing the pill keeps it steady on '
+      'the way', (tester) async {
+    final c = await show(tester, offlineChat(22));
+    c.openMessageLink(
+      const SwarmMessageLink(
+        tabId: 'tab',
+        conversationId: 'offline',
+        messageId: 'message-60',
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(_jump), findsOneWidget);
+    c.openMessageLink(
+      const SwarmMessageLink(
+        tabId: 'tab',
+        conversationId: 'offline',
+        messageId: 'message-40',
+      ),
+    );
+    for (var frame = 0; frame < 30; frame++) {
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(find.byKey(_jump), findsOneWidget, reason: 'frame $frame');
+    }
+    await tester.pumpAndSettle();
+    expect(
+      onScreen(
+        tester,
+        find.byKey(const ValueKey('super-message-message-40')),
+        chat: 'offline',
+      ),
+      isTrue,
+    );
+    expect(find.byKey(_jump), findsOneWidget);
+  });
+
   testWidgets('opened at a linked message below the line, a pill above the '
       'list takes the reader back to it, then goes', (tester) async {
     final server = _server(2);

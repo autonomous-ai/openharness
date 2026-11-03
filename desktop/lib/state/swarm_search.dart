@@ -9,7 +9,6 @@ import '../models/api_connections_controller.dart'
     show ApiConnection, ApiModel, agentOnApiModel;
 import '../models/local_model.dart';
 import '../models/model_search_catalog.dart';
-import '../models/coding_model.dart';
 import '../models/swarm_models_target.dart';
 import '../usage/models_menu_controller.dart' show subscriptionSearchId;
 import '../core/dsh_catalog.dart';
@@ -536,14 +535,12 @@ class SwarmSearchController extends ChangeNotifier {
           run: ready ? act('stop', forSwarm: true) : null,
         );
       }
-      // Too small or too slow to drive a coding agent: no Builder would be offered it, so neither Get nor Run is
-      // (coding_model.dart; the preview says why).
-      final capable = codingRefusal(local) == null;
+      // A model small or slow for a coding agent is offered all the same; its preview says so (coding_model.dart).
       if (!local.downloaded && !local.canStop) {
         return (
           label: 'Get',
           command: 'picker.model_download',
-          run: ready && capable && local.canStart && owner.supportsDownload
+          run: ready && local.canStart && owner.supportsDownload
               ? act('download')
               : null,
         );
@@ -551,9 +548,7 @@ class SwarmSearchController extends ChangeNotifier {
       return (
         label: 'Run for Swarm',
         command: 'picker.model_start',
-        run: ready && capable && local.canStart
-            ? act('start', forSwarm: true)
-            : null,
+        run: ready && local.canStart ? act('start', forSwarm: true) : null,
       );
     }
     if (entry.apiModel case final model?) {
@@ -565,7 +560,7 @@ class SwarmSearchController extends ChangeNotifier {
         run: () => swarm.share(api.id, model.id, start: !on),
       );
     }
-    // A model shared with the person, on someone else's grid: offering it lets the Lead start Builders on their
+    // A model shared with the person, on someone else's grid: offering it lets agents in this Swarm run on their
     // machines on it (owner, 2026-10-23: a choice, as running a model or sharing an API is).
     if (entry.gridModel case GridModel(:final id, grid: final sharedGrid?)
         when entry.api == null) {

@@ -20,6 +20,7 @@ import 'swarm_profile.dart';
 import 'swarm_reader.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
+import 'swarm_username_editor.dart';
 
 /// One photo from the person's library, or null when they back out. Asked
 /// no larger than an avatar needs, so a 12-megapixel photo is never decoded
@@ -50,8 +51,8 @@ Future<Uint8List?> readPickedSwarmPhoto(XFile? picked) async {
 }
 
 /// The person's own profile in the Swarm [swarmId], in a sheet over the
-/// page: a built-in picture or a photo of theirs, and a status that clears
-/// when they say — the desktop's profile (`profile_sheet.dart`) in the
+/// page: their username, a built-in picture or a photo of theirs, and a
+/// status that clears when they say — the desktop's profile (`profile_sheet.dart`) in the
 /// phone's own way.
 Future<void> showSwarmProfile(
   BuildContext context, {
@@ -113,6 +114,9 @@ class _SwarmProfileSheetState extends State<SwarmProfileSheet> {
   /// The editor took the person's status once, when it was first read.
   bool _seeded = false;
   bool _busy = false;
+
+  /// The username's own Save is on its way: [_busy] says it for the rest.
+  bool _naming = false;
   String? _error;
 
   @override
@@ -132,6 +136,18 @@ class _SwarmProfileSheetState extends State<SwarmProfileSheet> {
       _busy = false;
       _error = error;
     });
+  }
+
+  /// A refused name is said under its own field, not at the foot of the
+  /// sheet (the desktop's `_saveUsername`).
+  Future<String?> _saveUsername(SwarmProfile profile, String username) async {
+    setState(() {
+      _busy = _naming = true;
+      _error = null;
+    });
+    final error = await profile.setUsername(username);
+    if (mounted) setState(() => _busy = _naming = false);
+    return error;
   }
 
   Future<void> _photo(SwarmProfile profile) async {
@@ -246,7 +262,11 @@ class _SwarmProfileSheetState extends State<SwarmProfileSheet> {
           ),
         ),
         Flexible(
-          child: me == null || profile == null
+          child: reader?.accessRevoked ?? false
+              // Taken away while open: nothing of it stays, and no rows wait
+              // for a read that will not come.
+              ? const _Note('You can no longer see this Swarm.')
+              : me == null || profile == null
               // Not read yet: rows on their way.
               ? SwarmSkeletonRows(id: 'swarm-profile-loading', round: true)
               : SingleChildScrollView(child: _body(me, status, profile)),
@@ -307,6 +327,17 @@ class _SwarmProfileSheetState extends State<SwarmProfileSheet> {
               ),
             ],
           ),
+        ),
+        // A viewer's name is theirs too, though they change nothing else.
+        // One field per reader: an answer sent under another account or
+        // Swarm never lands in this one.
+        SwarmUsernameEditor(
+          key: ObjectKey(profile.reader),
+          username: me.username,
+          // Typing goes on while its own Save is on its way, as on the desktop.
+          enabled: profile.canRename && (!_busy || _naming),
+          busy: _naming,
+          onSave: (username) => _saveUsername(profile, username),
         ),
         if (!profile.canEdit) _Note('You have read-only access to this Swarm.'),
         const SwarmCaption('Picture'),

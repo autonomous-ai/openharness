@@ -118,9 +118,7 @@ void main() {
     expect(line(tester), 'Waiting on a person · 12m');
   });
 
-  testWidgets('queued for a free machine, with the PM retrying', (
-    tester,
-  ) async {
+  testWidgets('queued for a free machine, routed again', (tester) async {
     await show(
       tester,
       task(
@@ -129,11 +127,11 @@ void main() {
         leadAction: {'kind': 'route', 'at': ago(minute * 2)},
       ),
     );
-    expect(line(tester), 'Queued: no free machine · 25m · PM retrying 2m ago');
+    expect(line(tester), 'Queued: no free machine · 25m · Routed again 2m ago');
     expect(mark(tester), HarnessActivity.unknown);
   });
 
-  testWidgets('quiet, with what the PM did once it went quiet', (tester) async {
+  testWidgets('quiet, with what was done once it went quiet', (tester) async {
     await show(
       tester,
       task(
@@ -141,9 +139,9 @@ void main() {
         leadAction: {'kind': 'assign', 'at': ago(minute)},
       ),
     );
-    expect(line(tester), 'Quiet 34m · PM reassigned it 1m ago');
+    expect(line(tester), 'Quiet 34m · Reassigned 1m ago');
     expect(mark(tester), HarnessActivity.failed);
-    // What the PM did before it went quiet is not handling it.
+    // What was done before it went quiet is not handling it.
     await show(
       tester,
       task(
@@ -159,7 +157,17 @@ void main() {
         leadAction: {'kind': 'post', 'at': ago(minute)},
       ),
     );
-    expect(line(tester), 'Quiet 34m · PM posted 1m ago');
+    expect(line(tester), 'Quiet 34m · Posted 1m ago');
+    // Facts about what was done; any agent may have done it.
+    await show(
+      tester,
+      task(
+        liveness: state('quiet', 'silent', minute * 34),
+        leadAction: {'kind': 'start', 'at': ago(minute)},
+      ),
+    );
+    expect(line(tester), 'Quiet 34m · Starting another agent 1m ago');
+    expect(find.textContaining('PM'), findsNothing);
   });
 
   testWidgets(
@@ -188,10 +196,10 @@ void main() {
         await tester.pumpWidget(
           MaterialApp(home: Material(child: SuperTabTaskLine(group))),
         );
-        expect(line(tester), 'Quiet 34m · PM posted 1m ago');
+        expect(line(tester), 'Quiet 34m · Posted 1m ago');
         for (final expected in [
-          'Quiet 35m · PM posted 2m ago',
-          'Quiet 36m · PM posted 3m ago',
+          'Quiet 35m · Posted 2m ago',
+          'Quiet 36m · Posted 3m ago',
         ]) {
           at = at.add(minute);
           await tester.pump(minute + const Duration(milliseconds: 2));
@@ -245,12 +253,21 @@ void main() {
     }
   });
 
-  testWidgets('waiting on a review, a new revision, a blocker or a start', (
+  testWidgets('waiting on others, a new revision, a blocker or a start', (
     tester,
   ) async {
     final cases = {
       task(status: 'review', liveness: state('waiting', 'review', minute * 3)):
-          ('Waiting for review · 3m', HarnessActivity.needsInput),
+          ('Waiting on others · 3m', HarnessActivity.needsInput),
+      // With the agent's note.
+      task(
+        status: 'review',
+        result: 'PR 12 is up',
+        liveness: state('waiting', 'review', minute * 3),
+      ): (
+        'Waiting on others · PR 12 is up · 3m',
+        HarnessActivity.needsInput,
+      ),
       task(liveness: state('waiting', 'revision', minute * 3)): (
         'Waiting for the new revision · 3m',
         HarnessActivity.needsInput,

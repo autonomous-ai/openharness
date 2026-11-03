@@ -21,7 +21,7 @@ describe('the dormant groups the leaderboard sums', () => {
     const [{ pipeline }] = asked as [{ pipeline: Array<Record<string, Record<string, unknown>>> }]
     expect(pipeline[0]!.$match).toEqual({ tabId: 'tab', deleted: false, dormant: true, lastActivityAt: { $gte: { $date: new Date(since).toISOString() } }, projectId: { $in: ['web'] } })
     expect(Object.keys(pipeline[1]!.$project!).sort()).toEqual(['_id', ...['archived', 'assignment.id', 'assignment.status', 'audience', 'id', 'kind', 'leadId', 'ledger',
-      'projectId', 'pullRequestUrls', 'requesterId', 'reviewOf', 'title'].map(field => `data.${field}`)].sort())
+      'projectId', 'pullRequestUrls', 'requesterId', 'reviewOf', 'step', 'title'].map(field => `data.${field}`)].sort())
   })
 
   it('reads the default project\'s groups stored with no project too', async () => {

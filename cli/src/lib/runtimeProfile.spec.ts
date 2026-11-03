@@ -566,7 +566,10 @@ describe('RuntimeProfileManager.transcriptFields', () => {
     const codex = session('codex')
     expect(manager.transcriptFields(codex, codexLine('turn_context', { model: 'gpt-6', reasoning_effort: 'high', collaboration_mode: { mode: 'plan' } })))
       .toEqual(['model', 'effort', 'mode'])
-    expect(manager.transcriptFields(codex, codexLine('turn_context', { model: 'gpt-6', collaboration_mode: { mode: 'default' } }))).toEqual(['model', 'mode'])
+    // A turn's context with no effort runs the model at Codex's own default (`reasoning_effort: null`): it sets the effort, as
+    // auto, so a read from the end stops at the last turn rather than walking the whole transcript for one (Scholes, 10-30).
+    expect(manager.transcriptFields(codex, codexLine('turn_context', { model: 'gpt-6', collaboration_mode: { mode: 'default' } }))).toEqual(['model', 'effort', 'mode'])
+    expect(manager.transcriptFields(codex, codexLine('turn_context', { collaboration_mode: { mode: 'default' } }))).toEqual(['mode'])
     expect(manager.transcriptFields(codex, codexLine('event_msg', { type: 'thread_settings_applied', thread_settings: { model: 'gpt-6', reasoning_effort: 'low' } })))
       .toEqual(['model', 'effort'])
     expect(manager.transcriptFields(codex, codexLine('session_meta', { cli_version: '0.159.0' }))).toEqual([])

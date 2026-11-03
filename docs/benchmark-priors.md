@@ -39,9 +39,12 @@ No data on any benchmark of the kind means no prior.
 
 ## Owner override
 
-The routing policy's `priorOverrides` is a list of `{ model, kind, quality }`. The first row for the kind whose every word is in
-the model's name wins (as in `localModels.models`) and replaces the benchmark prior, also for a model with no data. A Swarm
-override of the field replaces the account's list. Policies saved before the field read as having none.
+A model's rating now lives in the model catalog (`backend/src/superTabs/catalog.ts`), and a project that wants a model
+rated differently says so in words in the Routing section of its instructions (see
+[Routing](swarms.md#routing)); the route shows the instructions' words, and the coordinator follows them. The routing
+policy's `priorOverrides` rows (`{ model, kind, quality }`, the first row for the kind whose every word is in the
+model's name) are read by nothing: an older client's policy save is accepted and ignored, and the migration copied
+each saved row into the project's Routing section as a line.
 
 ## Refresh
 

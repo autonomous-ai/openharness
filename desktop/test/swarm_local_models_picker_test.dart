@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/models/model_search_catalog.dart';
@@ -7,6 +8,8 @@ import 'package:harness/models/swarm_models_target.dart';
 import 'package:harness/state/swarm_navigation.dart';
 import 'package:harness/state/swarm_search.dart';
 import 'package:harness/usage/models_menu_controller.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
+import 'package:harness/widgets/swarm_resource_preview.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'support/model_manager.dart';
@@ -292,15 +295,55 @@ void main() {
   });
 
   test(
-    'offers neither Run nor Get for a model too small to drive a coding agent',
+    'offers Get and Run for Swarm for a small model too: its preview says why '
+    'it may struggle',
     () {
       final run = search.swarmModelAction(row('tiny'))!;
       expect(run.label, 'Run for Swarm');
-      expect(run.run, isNull);
+      expect(run.run, isNotNull);
       final get = search.swarmModelAction(row('tiny-get'))!;
       expect(get.label, 'Get');
-      expect(get.run, isNull);
+      expect(get.run, isNotNull);
       expect(search.swarmModelAction(row('downloaded'))!.run, isNotNull);
+    },
+  );
+
+  testWidgets(
+    "a small model's preview carries the note, offered all the same",
+    (tester) async {
+      search.cursor = search.rows.indexOf(row('tiny'));
+      final controls = SearchPreviewControls();
+      addTearDown(controls.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: DesktopChrome(
+              child: SwarmResourcePreview(
+                search: search,
+                controls: controls,
+                onChoose: (_) {},
+                onRefocus: () {},
+                onModalChanged: (_) {},
+                onCommands: () {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(
+        find.textContaining(
+          'a coding agent usually needs 7B or more',
+          findRichText: true,
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Builders', findRichText: true), findsNothing);
+      expect(
+        find.textContaining('Not offered', findRichText: true),
+        findsNothing,
+      );
+      await tester.pumpWidget(const SizedBox());
     },
   );
 

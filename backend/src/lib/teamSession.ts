@@ -119,6 +119,8 @@ export const TEAM_ROUTES: readonly TeamRoute[] = [
   // has no git login of its own (routes/superTabs.ts).
   { method: 'POST', url: '/api/super-tabs/hosts/:machineId/starts/:tabId/:startId/github-token', scope: 'machine' },
   { method: 'POST', url: '/api/super-tabs/:tabId/machines/:machineId', scope: 'machine' },
+  // The same readings for all of its Swarms in one call (DB roadmap 2.5).
+  { method: 'POST', url: '/api/super-tabs/hosts/:machineId/readings', scope: 'machine' },
   // Reads as one of its agents.
   { method: 'GET', url: '/api/super-tabs/:tabId', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/parts', scope: 'agent' },
@@ -132,6 +134,8 @@ export const TEAM_ROUTES: readonly TeamRoute[] = [
   // The decisions its agent asked of people, and their answers (superTabs/decisions.ts).
   { method: 'GET', url: '/api/super-tabs/:tabId/decisions', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/conversations/:conversationId/messages', scope: 'agent' },
+  // A fresh link to one file of a message its agent may read (superTabs/fileLinks.ts).
+  { method: 'GET', url: '/api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/attachments/:attachmentId', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/conversations/:conversationId/attempts', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/terminal/:requestId', scope: 'agent' },
   { method: 'POST', url: '/api/super-tabs/:tabId/attachments', scope: 'agent' },

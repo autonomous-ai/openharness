@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/logging/app_log.dart';
 import 'package:harness_mobile/swarm/swarm_conversation.dart';
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
@@ -150,6 +151,36 @@ void main() {
 
     expect([for (final s in i.swarms) s.id], ['b']);
     expect(i.reader('a'), isNull);
+    expect(i.needs, isEmpty);
+  });
+
+  test('a Swarm its owner deleted leaves the switcher on the next read, and '
+      'a row marked deleted is never listed', () async {
+    final fake = backend({
+      'a': [groupData('g1', status: 'needs_human')],
+      'b': [],
+      'c': [],
+    });
+    final i = inbox(fake);
+    await i.refresh();
+    expect([for (final s in i.swarms) s.id], ['a', 'b', 'c']);
+
+    // Deleted: the server lists it to nobody, and its reads answer as for a
+    // Swarm that does not exist.
+    fake.routes['/api/super-tabs/list'] = (_) => {
+      'tabs': [
+        listing('b', 'Swarm b'),
+        {...listing('c', 'Swarm c'), 'deletedAt': 100},
+      ],
+      'next': null,
+    };
+    fake.routes.remove('/api/super-tabs/a/parts');
+    fake.routes.remove('/api/super-tabs/a/changes');
+    await i.refresh();
+
+    expect([for (final s in i.swarms) s.id], ['b']);
+    expect(i.reader('a'), isNull);
+    expect(i.reader('c'), isNull);
     expect(i.needs, isEmpty);
   });
 
@@ -722,6 +753,89 @@ void main() {
     expect(i.error, 'This Swarm is being moved. Try again in a moment.');
   });
 
+  group('a list that could not be read goes in the log', () {
+    late _Log log;
+
+    setUp(() {
+      final before = appLog;
+      log = _Log();
+      appLog = log;
+      addTearDown(() => appLog = before);
+    });
+
+    test('a Swarm that could not be read, once however many reads fail', () async {
+      final fake = backend({'a': []});
+      fake.routes['/api/super-tabs/a/parts'] = (_) =>
+          throw SuperTabFailure('INTERNAL', 'Broken', statusCode: 500);
+      final i = inbox(fake);
+
+      await i.refresh();
+      final reader = i.reader('a')!;
+      await reader.refresh();
+      await reader.refresh();
+
+      expect(reader.error, 'Broken');
+      expect(log.events, hasLength(1));
+      expect(log.events.single.level, AppLogLevel.warn);
+      expect(log.events.single.message, contains('Swarm a not read: Broken'));
+    });
+
+    test('what threw, with its stack, once however many polls fail, and '
+        'again after a read that worked', () async {
+      final fake = backend({'a': []});
+      final listed = fake.routes['/api/super-tabs/list']!;
+      fake.routes['/api/super-tabs/list'] = (_) =>
+          throw const FormatException('Bad answer');
+      final i = inbox(fake);
+
+      await i.refresh();
+      await i.refresh();
+
+      expect(log.events, hasLength(1));
+      expect(log.events.single.level, AppLogLevel.error);
+      expect(log.events.single.error, isA<FormatException>());
+      expect(log.events.single.stackTrace, isNotNull);
+
+      fake.routes['/api/super-tabs/list'] = listed;
+      await i.refresh();
+      expect(i.error, isNull);
+      expect(log.events, hasLength(1), reason: 'a read that worked');
+
+      fake.routes['/api/super-tabs/list'] = (_) =>
+          throw const FormatException('Bad answer');
+      await i.refresh();
+      expect(log.events, hasLength(2));
+    });
+
+    test("a server's refusal is a warning naming its code, once for the "
+        'same words, again for other ones', () async {
+      final fake = FakeSwarm();
+      void refuse(String code, String words) =>
+          fake.routes['/api/super-tabs/list'] = (_) =>
+              throw SuperTabFailure(code, words, statusCode: 503);
+      refuse('SWARM_MIGRATING', 'Being moved.');
+      final i = inbox(fake);
+
+      await i.refresh();
+      await i.refresh();
+
+      expect(log.events, hasLength(1));
+      expect(log.events.single.level, AppLogLevel.warn);
+      expect(log.events.single.message, contains('SWARM_MIGRATING 503'));
+
+      refuse('INTERNAL', 'Broken.');
+      await i.refresh();
+      expect(log.events, hasLength(2));
+      expect(log.events.last.message, contains('INTERNAL 503'));
+    });
+
+    test('a read that works logs nothing', () async {
+      await inbox(backend({'a': []})).refresh();
+
+      expect(log.events, isEmpty);
+    });
+  });
+
   test('without a computer it asks again within seconds, on a backoff, '
       'not at the next poll', () {
     fakeAsync((async) {
@@ -899,8 +1013,10 @@ void main() {
     await settle();
 
     expect(store.values[key], isNotNull, reason: 'kept, not forgotten');
+    // The first read's mark, kept apart as no read of a tag.
     expect(jsonDecode(store.values[key]!), {
       'marks': {'g1': 3},
+      'firstRead': {'g1': 3},
     });
     final next = SwarmInbox(
       accountId: me,
@@ -922,4 +1038,30 @@ void main() {
       isFalse,
     );
   });
+}
+
+class _Log implements AppLog {
+  final events =
+      <
+        ({
+          AppLogLevel level,
+          String message,
+          Object? error,
+          StackTrace? stackTrace,
+        })
+      >[];
+
+  @override
+  void record(
+    AppLogLevel level,
+    String category,
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) => events.add((
+    level: level,
+    message: message,
+    error: error,
+    stackTrace: stackTrace,
+  ));
 }

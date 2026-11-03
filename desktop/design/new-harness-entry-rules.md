@@ -14,7 +14,7 @@ Agent, Computer, and Repo selectors sit above the message. The local computer is
 **This Mac** on macOS and **This Computer** on Linux; remote computers retain their
 names. Model, Approvals, applicable Account, Worktree, and Branch remain visible
 below the message. Worktree and Branch stay on one line, without explanatory text
-underneath. **From main** identifies the base of a new worktree branch; a tooltip
+underneath. **From \<branch\>**, usually **From main**, identifies the base of a new worktree branch; a tooltip
 explains the operation. Existing branches and worktrees retain their branch name.
 
 The model control retains the provider/subscription picker and shared models.
@@ -182,10 +182,11 @@ person browses or types stays itself: the harness works in it on its current
 branch, and Worktree is off and unavailable ("Already a worktree"). Worktrees
 Start made are never offered as recent projects.
 
-**Branch** starts on `main` for a fresh desktop form. With Worktree on, local
-`main` or `origin/main` can supply the base. With Worktree off, it must be a local
-branch; a remote-only `main` requires an explicit local branch choice. Missing `main` requires
-an explicit branch choice; a failed worktree creation never silently turns
+**Branch** starts on the project's default branch (`origin/HEAD`) for a fresh desktop
+form; then `main`, for a project that names none; then the branch it is on. With
+Worktree on, a local or remote default can supply the base. With Worktree off, it must
+be a local branch; a remote-only default requires an explicit local branch choice. None
+of these requires an explicit branch choice; a failed worktree creation never silently turns
 Worktree off. Branch does not follow the pane New Harness was opened from:
 New Harness is new work, and another agent's branch is one pick away. The start
 action reads **New Harness**, whatever the rows say.
@@ -281,6 +282,35 @@ machine and starts there only when pressed; a file of that name, or another
 name or machine, offers nothing. A clone whose destination is already a
 checkout of the same repository (its `origin`, however git spells it) starts in
 that checkout instead of cloning; anything else there is still refused.
+
+## Pasting a path or a GitHub link
+
+The project search reads what was typed
+(docs/plans/2026-10-30-new-harness-paste-path-or-repository.md). A path, or a
+GitHub link (`github.com/…` or `git@<host>:…`), gets one action row above the
+doors, highlighted, so Enter does it. Anything else, a bare `owner/repo`
+included, filters the recent projects as before.
+
+- A path naming a folder: **Open \<path\>**. Otherwise **Browse \<folder\>/**,
+  which moves to the Open Folder prompt with the typed text. A half-typed path
+  that a recent project matches shows no Browse row: the project keeps the
+  highlight.
+- A repository link: **Clone owner/repo**, the same row the GitHub prompt shows.
+  Its detail names the SSH alias it goes through, and, on another computer,
+  that it uses that computer's GitHub access. A GitHub link that is no
+  repository is a disabled **Not a repository link**. On this computer, an
+  alias whose `ssh -G` host is not github.com is a disabled **\<alias\> isn't a
+  GitHub host**. Another computer's daemon checks its own aliases at launch.
+- A terminal takes no project, so it clones nothing: a link shows a disabled **A terminal
+  can't clone**, and changing to Terminal with a clone chosen asks for a folder or an agent.
+- While it clones the line reads **Cloning owner/repo…**. A checkout of that
+  repository already in the projects folder is used, not cloned, and the line
+  stays **Starting harness…**, as it does when the computer cannot say. A clone refused
+  access tries the other transport, then up to three `~/.ssh/config` aliases
+  leading to github.com. It moves on only after a refusal, never after a network
+  failure or a timeout. Through an alias, the workspace says **Cloned via
+  \<alias\>** once. Refused everywhere: **No access to owner/repo on \<computer\>**,
+  with the task and choices kept.
 
 ## Regression coverage
 

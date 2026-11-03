@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -8,20 +9,26 @@ import 'package:harness/widgets/engine_identity.dart';
 import 'support/humans_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
-/// Models in the left sidebar, after Machines (Dee, 2026-10-29): each model's
-/// share of the tasks of the week the right pane shows, rounded so the rows
-/// add up to 100%, behind its engine's icon; the counts and its first-review
-/// pass rate in words on hover and for a screen reader.
+/// Models in the left sidebar, after Machines (Dee, 2026-10-29 and 10-30):
+/// every model by its exact name with its share of the agents' tasks of the
+/// last 7 days, largest first, rounded so the rows add up to 100%, behind its
+/// engine's icon. A record with no reported model is not listed and not in
+/// the shares (Scholes, 2026-11-02). Its chevron collapses it like every other section; the
+/// counts and first-review pass rate are in words on hover and for a screen
+/// reader.
 void main() {
   Future<SuperTabController> show(
     WidgetTester tester,
-    ConversationServer server,
-  ) async {
+    ConversationServer server, {
+    Map<String, dynamic>? initial,
+  }) async {
     await tester.binding.setSurfaceSize(const Size(1300, 1400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final controller = server.controller(
       account: 'peer',
-      initial: {'tabId': 'tab', 'accountId': 'peer', 'selectedId': 'lead'},
+      initial:
+          initial ??
+          {'tabId': 'tab', 'accountId': 'peer', 'selectedId': 'lead'},
     );
     await controller.refresh();
     await tester.pumpWidget(
@@ -51,43 +58,110 @@ void main() {
   final heading = find.byKey(const ValueKey('super-models-heading'));
   final headingText = find.descendant(
     of: heading,
-    matching: find.text('Models · this week'),
+    matching: find.text('Models'),
   );
   Finder row(String name) => find.byKey(ValueKey('super-model-$name'));
+  final rows = find.byWidgetPredicate(
+    (w) =>
+        w.key is ValueKey<String> &&
+        (w.key! as ValueKey<String>).value.startsWith('super-model-'),
+  );
   Finder inRow(String name, Finder finder) =>
       find.descendant(of: row(name), matching: finder);
   Finder mark(String name, String engine) => inRow(
     name,
     find.byWidgetPredicate((w) => w is EngineMark && w.engine == engine),
   );
+  // Nothing in the list, its tooltips or its words says "not reported".
+  final notReported = find.byWidgetPredicate(
+    (w) =>
+        (w is Tooltip && (w.message ?? '').contains('not reported')) ||
+        (w is Text && (w.data ?? '').contains('not reported')),
+  );
+  List<String> names(WidgetTester tester) {
+    final found = rows.evaluate().toList()
+      ..sort(
+        (a, b) => tester
+            .getTopLeft(find.byWidget(a.widget))
+            .dy
+            .compareTo(tester.getTopLeft(find.byWidget(b.widget)).dy),
+      );
+    return [
+      for (final element in found)
+        (element.widget.key! as ValueKey<String>).value.substring(
+          'super-model-'.length,
+        ),
+    ];
+  }
 
   testWidgets(
-    'lists the top three by share of the week\'s tasks after Machines',
+    'is headed Models, says on hover it is the last 7 days, and lists every model largest first after Machines',
     (tester) async {
       final controller = await show(tester, modelsSwarm());
       expect(headingText, findsOneWidget);
+      expect(find.textContaining('this week'), findsNothing);
+      // The chevron says what it does, as every section's does; the title
+      // says what the shares are.
+      expect(find.byTooltip('Collapse Models'), findsOneWidget);
+      expect(
+        find.byTooltip('Share of agent work, last 7 days'),
+        findsOneWidget,
+      );
       expect(
         tester.getTopLeft(heading).dy,
         greaterThan(tester.getTopLeft(find.text('Machines')).dy),
       );
-      // 32 tasks: 14, 9, 6 and 3 of them, 43.75, 28.1, 18.75 and 9.4%.
-      expect(inRow('Opus 5.5', find.text('44%')), findsOneWidget);
-      expect(inRow('GPT-6.1 Sol', find.text('28%')), findsOneWidget);
-      expect(inRow('Sonnet 5.5', find.text('19%')), findsOneWidget);
-      // Fourth, so not shown until asked for; no task of its own, never.
-      expect(row('Haiku 5.5'), findsNothing);
-      expect(row('GPT-6.1 Luna'), findsNothing);
-      final top = tester.getTopLeft(row('Opus 5.5')).dy;
-      final second = tester.getTopLeft(row('GPT-6.1 Sol')).dy;
-      expect(top, lessThan(second));
-      expect(second, lessThan(tester.getTopLeft(row('Sonnet 5.5')).dy));
-      // No effort split, no rank, no other number.
-      expect(find.textContaining('Opus 5.5 ·'), findsNothing);
+      // 97 tasks of named models (the fixture's 3 with no model are left
+      // out): no Other row, the rest add up to 100.
+      expect(names(tester), ['Opus 5.5', 'Sonnet 5.5', 'GPT-6.1 Sol']);
+      expect(find.text('Other'), findsNothing);
+      expect(find.textContaining('not reported'), findsNothing);
+      expect(inRow('Opus 5.5', find.text('87%')), findsOneWidget);
+      expect(inRow('Sonnet 5.5', find.text('11%')), findsOneWidget);
+      expect(inRow('GPT-6.1 Sol', find.text('2%')), findsOneWidget);
       // The percentages line up at their trailing edge.
       expect(
-        tester.getTopRight(find.text('44%')).dx,
-        tester.getTopRight(find.text('19%')).dx,
+        tester.getTopRight(find.text('87%')).dx,
+        tester.getTopRight(find.text('2%')).dx,
       );
+      await close(tester, controller);
+    },
+  );
+
+  testWidgets(
+    'says the last 7 days over the title and Collapse over the chevron, and a screen reader hears the action',
+    (tester) async {
+      final semantics = tester.ensureSemantics();
+      final controller = await show(tester, modelsSwarm());
+      const explained = 'Share of agent work, last 7 days';
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: Offset.zero);
+      addTearDown(mouse.removePointer);
+      await mouse.moveTo(tester.getCenter(headingText));
+      await tester.pumpAndSettle(const Duration(seconds: 2));
+      expect(find.text(explained), findsOneWidget);
+      expect(find.text('Collapse Models'), findsNothing);
+      await mouse.moveTo(Offset.zero);
+      await tester.pumpAndSettle(const Duration(seconds: 2));
+      await mouse.moveTo(
+        tester.getCenter(
+          find.descendant(of: heading, matching: find.byType(Icon)).first,
+        ),
+      );
+      await tester.pumpAndSettle(const Duration(seconds: 2));
+      expect(find.text('Collapse Models'), findsOneWidget);
+      expect(find.text(explained), findsNothing);
+      // The button is named by its title and its action, as Projects' is;
+      // the explanation is a hint, never its name.
+      final node = tester.getSemantics(headingText);
+      expect(node.label, 'Models');
+      expect(node.tooltip, 'Collapse Models');
+      expect(node.hint, explained);
+      expect(
+        find.bySemanticsLabel(RegExp('Share of agent work')),
+        findsNothing,
+      );
+      semantics.dispose();
       await close(tester, controller);
     },
   );
@@ -99,7 +173,6 @@ void main() {
     for (final (name, engine) in [
       ('Opus 5.5', 'claude'),
       ('GPT-6.1 Sol', 'codex'),
-      ('Sonnet 5.5', 'claude'),
     ]) {
       expect(mark(name, engine), findsOneWidget, reason: name);
       expect(
@@ -117,181 +190,164 @@ void main() {
   });
 
   testWidgets(
-    'says the tasks and first-review pass rate on hover and to a screen reader',
+    'says the last 7 days\' tasks and first-review pass rate on hover and to a screen reader',
     (tester) async {
       final semantics = tester.ensureSemantics();
       final controller = await show(tester, modelsSwarm());
       const opus =
-          'Opus 5.5: 14 of 32 tasks this week · 92% passed first review';
+          'Opus 5.5: 84 of 97 tasks in the last 7 days · 92% passed first review';
       expect(find.byTooltip(opus), findsOneWidget);
       expect(find.bySemanticsLabel(opus), findsOneWidget);
-      expect(
-        find.byTooltip(
-          'GPT-6.1 Sol: 9 of 32 tasks this week · 75% passed first review',
-        ),
-        findsOneWidget,
-      );
+      expect(notReported, findsNothing);
       semantics.dispose();
       await close(tester, controller);
     },
   );
-
-  testWidgets('shows the whole list from its heading, and back', (
-    tester,
-  ) async {
-    final controller = await show(tester, modelsSwarm());
-    await tester.tap(headingText);
-    await tester.pumpAndSettle();
-    expect(inRow('Haiku 5.5', find.text('9%')), findsOneWidget);
-    expect(mark('Haiku 5.5', 'claude'), findsOneWidget);
-    // Not reviewed yet: says so rather than a pass rate.
-    expect(
-      find.byTooltip(
-        'Haiku 5.5: 3 of 32 tasks this week · no first review yet',
-      ),
-      findsOneWidget,
-    );
-    expect(row('GPT-6.1 Luna'), findsNothing);
-    await tester.tap(headingText);
-    await tester.pumpAndSettle();
-    expect(row('Haiku 5.5'), findsNothing);
-    await close(tester, controller);
-  });
 
   testWidgets(
-    'adds the models behind the heading as one Other row, so the shown rows add up to 100%',
+    'collapses fully from its chevron and expands again, remembered after a restart',
     (tester) async {
-      final semantics = tester.ensureSemantics();
-      final controller = await show(tester, modelsSwarm());
-      final other = find.byKey(const ValueKey('super-models-other'));
-      expect(other, findsOneWidget);
-      // Haiku's 3 of 32 tasks, 9%: 44 + 28 + 19 + 9 = 100.
-      expect(
-        find.descendant(of: other, matching: find.text('Other')),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(of: other, matching: find.text('9%')),
-        findsOneWidget,
-      );
-      final shown = [
-        for (final name in ['Opus 5.5', 'GPT-6.1 Sol', 'Sonnet 5.5'])
-          inRow(name, find.textContaining('%')),
-        find.descendant(of: other, matching: find.textContaining('%')),
-      ];
-      expect(
-        shown
-            .map(
-              (f) =>
-                  int.parse(tester.widget<Text>(f).data!.replaceAll('%', '')),
-            )
-            .fold<int>(0, (sum, percent) => sum + percent),
-        100,
-      );
-      const words = 'Other: 3 of 32 tasks this week · no first review yet';
-      expect(find.byTooltip(words), findsOneWidget);
-      expect(find.bySemanticsLabel(words), findsOneWidget);
-      // The whole list names them instead.
+      final server = modelsSwarm();
+      final controller = await show(tester, server);
+      expect(controller.modelsGroupOpen, isTrue);
       await tester.tap(headingText);
       await tester.pumpAndSettle();
-      expect(other, findsNothing);
-      expect(inRow('Haiku 5.5', find.text('9%')), findsOneWidget);
-      semantics.dispose();
+      // Collapsed: the heading stays, nothing below it.
+      expect(headingText, findsOneWidget);
+      expect(rows, findsNothing);
+      expect(find.text('87%'), findsNothing);
+      await controller.flush();
+      expect(server.saved!['modelsGroupOpen'], isFalse);
       await close(tester, controller);
+
+      final reopened = await show(tester, server, initial: server.saved);
+      expect(reopened.modelsGroupOpen, isFalse);
+      expect(headingText, findsOneWidget);
+      expect(rows, findsNothing);
+      await tester.tap(headingText);
+      await tester.pumpAndSettle();
+      expect(names(tester), hasLength(3));
+      expect(inRow('Opus 5.5', find.text('87%')), findsOneWidget);
+      await close(tester, reopened);
     },
   );
-
-  testWidgets('has no Other row when every model is shown', (tester) async {
-    final server = modelsSwarm();
-    server.leaderboard!['byModel'] = [
-      modelScore('claude', 'claude-opus-5-5', 'high', attempts: 3),
-      modelScore('codex', 'gpt-6.1-sol', null, attempts: 1),
-    ];
-    final controller = await show(tester, server);
-    expect(find.byKey(const ValueKey('super-models-other')), findsNothing);
-    expect(inRow('Opus 5.5', find.text('75%')), findsOneWidget);
-    expect(inRow('GPT-6.1 Sol', find.text('25%')), findsOneWidget);
-    await close(tester, controller);
-  });
 
   testWidgets('rounds the shares so all rows add up to 100%', (tester) async {
     final server = modelsSwarm();
     // A third each: plain rounding says 33% three times, 99%.
-    server.leaderboard!['byModel'] = [
-      modelScore('claude', 'claude-opus-5-5', 'high', attempts: 1),
-      modelScore('codex', 'gpt-6.1-sol', null, attempts: 1),
-      modelScore('claude', 'claude-sonnet-5-5', 'high', attempts: 1),
+    server.leaderboard!['recentModels'] = [
+      recentModel('claude', 'claude-opus-5-5', attempts: 1),
+      recentModel('codex', 'gpt-6.1-sol', attempts: 1),
+      recentModel('claude', 'claude-sonnet-5-5', attempts: 1),
     ];
     final controller = await show(tester, server);
     // Of three alike, by name.
+    expect(names(tester), ['GPT-6.1 Sol', 'Opus 5.5', 'Sonnet 5.5']);
     expect(inRow('GPT-6.1 Sol', find.text('34%')), findsOneWidget);
     expect(inRow('Opus 5.5', find.text('33%')), findsOneWidget);
     expect(inRow('Sonnet 5.5', find.text('33%')), findsOneWidget);
-    expect(
-      tester.getTopLeft(row('GPT-6.1 Sol')).dy,
-      lessThan(tester.getTopLeft(row('Opus 5.5')).dy),
-    );
     await close(tester, controller);
   });
 
-  testWidgets('follows the week the right pane shows', (tester) async {
+  testWidgets('says under 1% for a model with a few tasks, never 0%', (
+    tester,
+  ) async {
+    final server = modelsSwarm();
+    // 2 of 500 tasks: 0.4%.
+    server.leaderboard!['recentModels'] = [
+      recentModel('claude', 'claude-opus-5-5', attempts: 498),
+      recentModel('codex', 'gpt-6.1-sol', attempts: 2),
+    ];
+    final controller = await show(tester, server);
+    expect(inRow('Opus 5.5', find.text('100%')), findsOneWidget);
+    expect(inRow('GPT-6.1 Sol', find.text('<1%')), findsOneWidget);
+    expect(find.text('0%'), findsNothing);
+    await close(tester, controller);
+  });
+
+  testWidgets('says the same for models with as many tasks', (tester) async {
+    final server = modelsSwarm();
+    // 163, 1, 1 and 1 of 166: largest remainders give two of the three 1s a
+    // point to reach 100; under 1% each, they all read alike.
+    server.leaderboard!['recentModels'] = [
+      recentModel('claude', 'claude-opus-5-5', attempts: 163),
+      recentModel('claude', 'claude-sonnet-5-5', attempts: 1),
+      recentModel('codex', 'gpt-6.1-sol', attempts: 1),
+      recentModel('codex', 'gpt-6.1-luna', attempts: 1),
+    ];
+    final controller = await show(tester, server);
+    expect(inRow('Opus 5.5', find.text('98%')), findsOneWidget);
+    for (final name in ['Sonnet 5.5', 'GPT-6.1 Sol', 'GPT-6.1 Luna']) {
+      expect(inRow(name, find.text('<1%')), findsOneWidget, reason: name);
+    }
+    await close(tester, controller);
+  });
+
+  testWidgets(
+    'lists one model under one name, however its engine or provider spelled it',
+    (tester) async {
+      // Review of e4b70e9: one grid model through Claude Code and Codex drew
+      // two rows with one key ("Duplicate keys found").
+      final server = modelsSwarm();
+      server.leaderboard!['recentModels'] = [
+        recentModel('claude', 'qwen3', attempts: 3, reviewed: 4, passed: 3),
+        recentModel('codex', 'qwen3', attempts: 5, reviewed: 4, passed: 4),
+        recentModel('claude', 'claude-opus-5-5', attempts: 1),
+        recentModel('claude', 'Claude-Opus-5.5', attempts: 1),
+      ];
+      final controller = await show(tester, server);
+      expect(tester.takeException(), isNull);
+      expect(names(tester), ['qwen3', 'Opus 5.5']);
+      expect(inRow('qwen3', find.text('80%')), findsOneWidget);
+      expect(inRow('Opus 5.5', find.text('20%')), findsOneWidget);
+      expect(mark('qwen3', 'codex'), findsOneWidget);
+      expect(
+        find.byTooltip(
+          'qwen3: 8 of 10 tasks in the last 7 days · 88% passed first review',
+        ),
+        findsOneWidget,
+      );
+      await close(tester, controller);
+    },
+  );
+
+  testWidgets('keeps the last 7 days whichever week the right pane shows', (
+    tester,
+  ) async {
     final server = modelsSwarm();
     final controller = await show(tester, server);
-    server.leaderboard!['byModel'] = [
-      modelScore(
-        'claude',
-        'claude-sonnet-5-5',
-        'high',
-        attempts: 4,
-        reviewed: 4,
-        passed: 4,
-      ),
-    ];
     await tester.tap(find.byKey(const ValueKey('leaderboard-week')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Last week').last);
     await tester.pumpAndSettle();
     expect(server.leaderboardReads.last, contains('&week='));
-    expect(
-      find.descendant(of: heading, matching: find.text('Models · last week')),
-      findsOneWidget,
-    );
-    expect(row('Opus 5.5'), findsNothing);
-    expect(inRow('Sonnet 5.5', find.text('100%')), findsOneWidget);
-    expect(
-      find.byTooltip(
-        'Sonnet 5.5: 4 of 4 tasks last week · 100% passed first review',
-      ),
-      findsOneWidget,
-    );
+    expect(headingText, findsOneWidget);
+    expect(find.textContaining('last week'), findsNothing);
+    expect(inRow('Opus 5.5', find.text('87%')), findsOneWidget);
     await close(tester, controller);
   });
 
   testWidgets(
-    'lists a model run through two engines once, behind the engine that ran most of it',
+    'shows the week\'s models from a server before the last 7 days, still headed Models',
     (tester) async {
-      // Review of e4b70e9: one grid model through Claude Code and Codex drew
-      // two rows with one key ("Duplicate keys found").
       final server = modelsSwarm();
-      server.leaderboard!['byModel'] = [
-        modelScore(
-          'claude',
-          'qwen3',
-          'high',
-          attempts: 3,
-          reviewed: 4,
-          passed: 3,
-        ),
-        modelScore('codex', 'qwen3', null, attempts: 5, reviewed: 4, passed: 4),
-      ];
+      server.leaderboard!.remove('recentModels');
       final controller = await show(tester, server);
-      expect(tester.takeException(), isNull);
-      expect(row('qwen3'), findsOneWidget);
-      expect(inRow('qwen3', find.text('100%')), findsOneWidget);
-      expect(mark('qwen3', 'codex'), findsOneWidget);
+      expect(headingText, findsOneWidget);
+      expect(find.byTooltip('Share of agent work, this week'), findsOneWidget);
+      // 32 tasks: Opus at two efforts as one, 14; then 9, 6 and 3; Luna ran
+      // none of its own.
+      expect(names(tester), [
+        'Opus 5.5',
+        'GPT-6.1 Sol',
+        'Sonnet 5.5',
+        'Haiku 5.5',
+      ]);
+      expect(inRow('Opus 5.5', find.text('44%')), findsOneWidget);
+      expect(inRow('Haiku 5.5', find.text('9%')), findsOneWidget);
       expect(
         find.byTooltip(
-          'qwen3: 8 of 8 tasks this week · 88% passed first review',
+          'Opus 5.5: 14 of 32 tasks this week · 92% passed first review',
         ),
         findsOneWidget,
       );
@@ -299,13 +355,78 @@ void main() {
     },
   );
 
-  testWidgets('hides Models when no model ran a task this week', (
+  testWidgets(
+    'leaves records with no reported model out of the list and the shares',
+    (tester) async {
+      // Records written before the 10-31 fix: Codex, and Claude, with no
+      // model, in any of the shapes a server sends it.
+      final server = modelsSwarm();
+      server.leaderboard!['recentModels'] = [
+        recentModel('claude', 'claude-opus-5-5', attempts: 1),
+        recentModel('codex', null, attempts: 5, reviewed: 2, passed: 1),
+        recentModel('claude', null, attempts: 7),
+        recentModel('codex', '', attempts: 3),
+        recentModel('codex', '  ', attempts: 4),
+        recentModel('codex', 'gpt-6.1-sol', attempts: 2),
+      ];
+      final controller = await show(tester, server);
+      expect(names(tester), ['GPT-6.1 Sol', 'Opus 5.5']);
+      expect(notReported, findsNothing);
+      // 1 and 2 of the 3 tasks that named a model: the rows add up to 100.
+      expect(inRow('GPT-6.1 Sol', find.text('67%')), findsOneWidget);
+      expect(inRow('Opus 5.5', find.text('33%')), findsOneWidget);
+      expect(
+        find.byTooltip(
+          'Opus 5.5: 1 of 3 tasks in the last 7 days · no first review yet',
+        ),
+        findsOneWidget,
+      );
+      await close(tester, controller);
+    },
+  );
+
+  testWidgets('hides Models when only records with no model ran tasks', (
     tester,
   ) async {
     final server = modelsSwarm();
-    server.leaderboard!['byModel'] = [
-      modelScore('codex', 'gpt-6.1-luna', null, attempts: 0, reviews: 3),
+    server.leaderboard!['recentModels'] = [
+      recentModel('codex', null, attempts: 3),
+      recentModel('claude', null, attempts: 9),
     ];
+    final controller = await show(tester, server);
+    expect(heading, findsNothing);
+    expect(rows, findsNothing);
+    expect(notReported, findsNothing);
+    await close(tester, controller);
+  });
+
+  testWidgets(
+    'leaves records with no model out of the week\'s models from a server before the last 7 days',
+    (tester) async {
+      final server = modelsSwarm();
+      server.leaderboard!.remove('recentModels');
+      (server.leaderboard!['byModel'] as List).add(
+        modelScore('codex', null, null, attempts: 20),
+      );
+      final controller = await show(tester, server);
+      // The same 32 tasks of named models as without the record.
+      expect(names(tester), [
+        'Opus 5.5',
+        'GPT-6.1 Sol',
+        'Sonnet 5.5',
+        'Haiku 5.5',
+      ]);
+      expect(inRow('Opus 5.5', find.text('44%')), findsOneWidget);
+      expect(notReported, findsNothing);
+      await close(tester, controller);
+    },
+  );
+
+  testWidgets('hides Models when no model ran a task in the last 7 days', (
+    tester,
+  ) async {
+    final server = modelsSwarm();
+    server.leaderboard!['recentModels'] = <Object>[];
     final controller = await show(tester, server);
     expect(heading, findsNothing);
     await close(tester, controller);
@@ -314,6 +435,7 @@ void main() {
   testWidgets('hides Models from a server before task counts', (tester) async {
     // Its rows carry first reviews but no tasks: no share to show.
     final server = modelsSwarm();
+    server.leaderboard!.remove('recentModels');
     server.leaderboard!['byModel'] = [
       modelScore(
         'claude',
@@ -329,6 +451,21 @@ void main() {
     await close(tester, controller);
   });
 
+  testWidgets(
+    'shows Models once a failed first read recovers, without a stuck row',
+    (tester) async {
+      final server = modelsSwarm()..failLeaderboardReads = 1;
+      final controller = await show(tester, server);
+      expect(heading, findsNothing);
+      expect(find.textContaining('Loading'), findsNothing);
+      await controller.refresh();
+      await tester.pump(const Duration(minutes: 5));
+      await tester.pumpAndSettle();
+      expect(inRow('Opus 5.5', find.text('87%')), findsOneWidget);
+      await close(tester, controller);
+    },
+  );
+
   testWidgets('clears Models once the reader loses the project', (
     tester,
   ) async {
@@ -339,7 +476,7 @@ void main() {
     await controller.refresh();
     await tester.pumpAndSettle();
     expect(heading, findsNothing);
-    expect(find.text('44%'), findsNothing);
+    expect(find.text('87%'), findsNothing);
     await close(tester, controller);
   });
 

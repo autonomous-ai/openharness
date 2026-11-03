@@ -1796,6 +1796,58 @@ static void swarm_notice_toasts_and_beeps(void) {
     swarm_lead_open(1);
     CHECK(pod_ui_swarm_notice(&U, "sw1", "l1", "pm", "c1", "Hi.", false, 4000) && pod_model_unread_find(&U.model, "l1"));
 }
+static bool select_taken(void) {
+    const int n = take();
+    for (int i = 0; i < n; i++) if (!strcmp(Q[i].t, "supertab.select")) return true;
+    return false;
+}
+// Access lost sends no read frame: the row, its toast and a finger already on either must not outlive the Swarm or the Lead (review of #2298).
+static void swarm_notice_goes_with_its_swarm(void) {
+    // the Swarm leaves the list while its toast shows
+    swarm_lead_open(1);
+    CHECK(pod_ui_swarm_notice(&U, "sw1", "l2", "c1", "Private words.", true, 3400));
+    render(3400);
+    CHECK(U.frame.banner);
+    pod_ui_supertab_ids(&U, NULL, 0);
+    render(3500);
+    CHECK(!U.frame.banner && !U.ban_on && !pod_model_unread_find(&U.model, "l2") && U.model.unread_count == 0);
+
+    // a Lead leaves its Swarm while its toast shows; a finger on the toast opens no Lead and sends no select
+    swarm_lead_open(1);
+    CHECK(pod_ui_swarm_notice(&U, "sw1", "l2", "c1", "Private words.", true, 3400));
+    render(3400);
+    const pod_hit_t *h = find(POD_A_BANNER);
+    CHECK(h);
+    const int x = h->x + h->w / 2, y = h->y + h->h / 2;
+    take();
+    t_(true, x, y, 3450);
+    static pod_swarm_t without;
+    without = *pod_model_swarm(&U.model, "sw1");
+    memmove(&without.leads[2], &without.leads[3], (size_t)(without.lead_n - 3) * sizeof without.leads[0]);
+    without.lead_n--;
+    pod_ui_supertab(&U, &without, 3460);
+    t_(false, x, y, 3500);
+    CHECK(!pod_model_unread_find(&U.model, "l2") && U.model.unread_count == 0 && !U.ban_on);
+    CHECK(top()->view != POD_V_LEAD || top()->lead == 1);
+    CHECK(!select_taken());
+
+    // a finger on a Notices row when the Swarm goes: nothing opens, and the row is off the next frame
+    swarm_home(4);
+    CHECK(pod_ui_swarm_notice(&U, "sw1", "l2", "c1", "Private words.", true, 3400));
+    act(POD_A_INBOX, 0);
+    render(3420);
+    CHECK(top()->view == POD_V_INBOX);
+    h = find(POD_A_OPEN_NOTIF);
+    CHECK(h && !strcmp(h->id, "l2"));
+    const int rx = h->x + h->w / 2, ry = h->y + h->h / 2;
+    take();
+    t_(true, rx, ry, 3450);
+    pod_ui_supertab_ids(&U, NULL, 0);
+    t_(false, rx, ry, 3500);
+    CHECK(top()->view == POD_V_INBOX && !select_taken());
+    render(3600);
+    CHECK(!find(POD_A_OPEN_NOTIF));
+}
 static void notif_replace_keeps_swarm_notices(void) {
     swarm_lead_open(1);
     CHECK(pod_ui_swarm_notice(&U, "sw1", "l2", "pm", "c1", "Merged.", true, 3400));
@@ -2449,6 +2501,7 @@ int main(void) {
     notice_for_other_chat_on_lead_view_files_row();
     notice_for_face_chat_on_lead_view_clears_old_row();
     chat_switch_asks_recap_at_once();
+    swarm_notice_goes_with_its_swarm();
     notif_replace_keeps_swarm_notices();
     swarm_toast_tap_opens_lead_and_selects();
     swarm_row_tap_opens_lead_and_selects();

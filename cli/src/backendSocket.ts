@@ -1,6 +1,7 @@
 import { messageReceipt, productObservation, productUsageIntent, productUsageLaunch, productUsageRequest, productUsageSource } from './lib/productUsageSignals.js'
 import type { MessageReceipt } from './lib/sessionInput.js'
 import { isLocalOnly, withoutUpdate } from './lib/cardUpdate.js'
+import { slimForRelay } from './lib/slimForRelay.js'
 import type { PurgeAgentService } from './lib/purgeAgentService.js'
 import { MESSAGES_REQUESTS, SHARE_REQUESTS, type Asker, type LocalWindows, type WindowSurface, type BackendNotice, type GatewayEvents, type GatewayPort, type ModelsPort, type RemoteAppPolicy, type RemoteClient, type RemoteRole, type RemoteTransport, type TabFrame } from './core/api.js'
 import { ServiceUnavailableError } from './core/serviceHost.js'
@@ -163,8 +164,11 @@ export class BackendSocket {
      *  null when the pane opens on an empty input. Validated here — length, and that the engine has a
      *  contract for it — so cli.ts never sees one it cannot hand over. Never logged. */
     prompt: string | null
-    /** Session-scoped built-in instructions for a newly launched Swarm agent. */
+    /** Session-scoped built-in instructions for a newly launched Swarm agent: a coordinator, an agent or a Buddy. A launch an
+     *  older CLI saved to finish later names it in the wire's values (lead, dev, review), which create.ts reads too. */
     swarmRole?: import('./lib/swarmSkills.js').SwarmRole
+    /** With swarmRole `agent`: an older client's Reviewer, which keeps its swarm-review file. */
+    swarmFallback?: 'review'
     /** The skills of the Swarm project it joins; absent from a start before modes, which launches on orchestration. */
     swarmSkillMode?: import('./lib/swarmSkills.js').SwarmSkillMode
     /** With swarmRole: git and gh use the Harness GitHub App's token for the agent's task (lib/swarmGitHub.ts). */
@@ -617,9 +621,11 @@ export class BackendSocket {
     return this.remoteAppPolicy ? this.remoteAppPolicy.event(frame) : frame
   }
 
+  /** Apps away from this desk get transcript events slim (lib/slimForRelay.ts), cut before the frame crosses to the
+   *  gateway's process: no tool output, thinking text or image goes up the relay. The windows here got the whole event. */
   private toRemoteApps(given: Frame): void {
     if (this.thisComputerOnly) return
-    const frame = this.forApps(given)
+    const frame = this.forApps(slimForRelay(given))
     if (!frame) return
     const guest = this.frameGuest(frame)
     this.toGateway('web', (gateway) => gateway.broadcast(frame, guest ?? undefined))

@@ -24,6 +24,15 @@ describe('assignment ids', () => {
       .toMatchObject({ assignmentId: '58c2d5f2bdc100771bc57de7' })
   })
 
+  // E2E 2026-11-02: a Reviewer holding a step could not record its verdict on the task's checks ("another agent's"), so the
+  // Engineer passed its own review check. The backend lets anyone in the task record one; only a status is the holder's.
+  it('fills "current" for another agent\'s check on the task, never its status', () => {
+    expect(withCurrentAssignment({ type: 'work.check', conversationId: 'g1', assignmentId: 'current', checkId: 'c', passed: true }, state, 'reviewer'))
+      .toMatchObject({ assignmentId: '58c2d5f2bdc100771bc57de7' })
+    const check = { type: 'work.check', conversationId: 'g1', assignmentId: 'stale', checkId: 'c', passed: true }
+    expect(staleAssignmentHint(check, state, 'reviewer')).toMatch(/is 58c2d5f2bdc100771bc57de7/)
+  })
+
   it('leaves an explicit id, another command, or a group with no task as sent', () => {
     const named = { type: 'work.status', conversationId: 'g1', assignmentId: '9887f5667a24ace0b589b7ff' }
     expect(wantsCurrent(named)).toBe(false)
@@ -31,6 +40,18 @@ describe('assignment ids', () => {
     expect(wantsCurrent({ type: 'message.send', conversationId: 'g1' })).toBe(false)
     const none = { type: 'work.status', conversationId: 'g2', assignmentId: 'current' }
     expect(withCurrentAssignment(none, state, 'builder')).toBe(none)
+  })
+
+  it('fills a missing group for a status or check from the one task the agent holds', () => {
+    const two = { conversations: [...state.conversations, { id: 'g3', assignment: { id: 'a3', agentId: 'builder', status: 'working' } }] }
+    const ended = { conversations: [state.conversations[0], { id: 'g3', assignment: { id: 'a3', agentId: 'builder', status: 'done' } }] }
+    const check = { type: 'work.check', assignmentId: 'current', checkId: 'c1', passed: true }
+    expect(withCurrentAssignment(check, state, 'builder')).toEqual({ ...check, conversationId: 'g1', assignmentId: '58c2d5f2bdc100771bc57de7' })
+    expect(withCurrentAssignment(check, ended, 'builder')).toMatchObject({ conversationId: 'g1' })
+    expect(withCurrentAssignment(check, two, 'builder')).toBe(check)
+    expect(withCurrentAssignment(check, state, 'lead')).toBe(check)
+    const cancel = { type: 'work.cancel', assignmentId: 'current' }
+    expect(withCurrentAssignment(cancel, state, 'builder')).toBe(cancel)
   })
 
   it('names the id to use when a stale one is refused', () => {

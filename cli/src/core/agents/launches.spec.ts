@@ -13,7 +13,7 @@ import type { AgentFrame } from '../../lib/agentFrame.js'
 import { MAX_FIRST_PROMPT_CHARS, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent, unsupportedLaunchModelFlag } from '../../lib/engineLaunch.js'
 import { parseGridLaunchOverride } from '../../lib/gridLaunchWire.js'
 import { parseNewAgentModel } from '../../lib/newAgentModel.js'
-import { parseProjectFolder, prepareProjectFolder, ProjectFolderError } from '../../lib/projectFolder.js'
+import { parseProjectFolder, prepareProjectFolder, ProjectFolderError, RepositoryAccessError } from '../../lib/projectFolder.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createLaunchRequests, type CreateAgent, type ForkAgent, type LaunchRequestDeps, type RestartAgent, type ResumeAgent } from './launches.js'
 import * as pendingLaunches from './pendingLaunches.js'
@@ -266,9 +266,11 @@ describe('agent_create, refused before any pane exists', () => {
 
   it('passes explicit Swarm roles and refuses invalid role metadata before dispatch', async () => {
     const { ask, create } = setup()
-    for (const engine of ['claude', 'codex']) for (const swarmRole of ['lead', 'dev', 'review']) {
+    // Taken as the kinds the CLI keeps (project instructions, phase 4); a Reviewer keeps its swarm-review file.
+    const kinds = { lead: { swarmRole: 'coordinator' }, dev: { swarmRole: 'agent' }, review: { swarmRole: 'agent', swarmFallback: 'review' } }
+    for (const engine of ['claude', 'codex']) for (const swarmRole of ['lead', 'dev', 'review'] as const) {
       await ask({ engine, cwd: '/w', swarmRole })
-      expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ engine, swarmRole })
+      expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ engine, ...kinds[swarmRole] })
     }
     for (const swarmRole of [7, '', 'builder', 'reviewer']) {
       expect(await ask({ engine: 'claude', cwd: '/w', swarmRole })).toMatchObject({ error: 'INVALID_SWARM_ROLE' })
@@ -277,11 +279,44 @@ describe('agent_create, refused before any pane exists', () => {
     expect(await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev', resumeSessionId: 'old-session' })).toMatchObject({ error: 'INVALID_SESSION' })
   })
 
+  // Project instructions, phase 4 (decision 1): an older Harness sends lead, dev or review; the next one may send the kinds.
+  it('takes older and newer Swarm roles from agent_create', async () => {
+    const { ask, create } = setup()
+    const launched = () => vi.mocked(create!).mock.calls.at(-1)![0]
+    await ask({ engine: 'claude', cwd: '/w', swarmRole: 'review' })
+    expect(launched()).toMatchObject({ swarmRole: 'agent', swarmFallback: 'review' })
+    for (const [swarmRole, role] of [['lead', 'coordinator'], ['dev', 'agent'], ['buddy', 'buddy'], ['coordinator', 'coordinator'], ['agent', 'agent']]) {
+      await ask({ engine: 'codex', cwd: '/w', swarmRole })
+      expect(launched()).toMatchObject({ swarmRole: role })
+      expect(launched()).not.toHaveProperty('swarmFallback')
+    }
+    const calls = vi.mocked(create!).mock.calls.length
+    for (const swarmRole of ['pm', 'Coordinator', 'reviewer']) {
+      expect(await ask({ engine: 'claude', cwd: '/w', swarmRole })).toStrictEqual({ error: 'INVALID_SWARM_ROLE',
+        detail: 'A Swarm role is coordinator, agent or buddy (or lead, dev or review from an older Harness), for Claude Code or Codex.' })
+    }
+    expect(vi.mocked(create!).mock.calls).toHaveLength(calls)
+  })
+
+  it('finds the receipt a start got before role kinds when it is asked again, whichever role values it carries', async () => {
+    const { ask, create, deps, replies } = setup()
+    // What this machine fingerprinted for a Reviewer's start before its update.
+    const before = { engine: 'claude', cwd: '/w', bypassPermission: true, permissionMode: null, grid: null, codexHome: null, dsh: null, prompt: null,
+      swarmRole: 'review', name: null, agent: null, resumeSessionId: null, takeOver: null }
+    await deps.receipts.run(CREATION, creationFingerprint(before), async () => ({ state: 'created', agentId: 'new-agent' }))
+    await ask({ engine: 'claude', cwd: '/w', swarmRole: 'review', creationId: CREATION })
+    await vi.waitFor(() => expect(replies.at(-1)).toMatchObject({ state: 'created' }))
+    await ask({ engine: 'claude', cwd: '/w', swarmRole: 'agent', creationId: `${CREATION}-new` })
+    await vi.waitFor(() => expect(replies).toHaveLength(2))
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(deps.receipts.has(`${CREATION}-new`, creationFingerprint({ ...before, swarmRole: 'dev' }))).toBe(true)
+  })
+
   it('passes the project\'s skill mode with a Swarm role, and refuses one it does not know before dispatch', async () => {
     const { ask, create } = setup()
     for (const swarmSkillMode of ['default', 'orchestration']) {
       await ask({ engine: 'claude', cwd: '/w', swarmRole: 'dev', swarmSkillMode })
-      expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'dev', swarmSkillMode })
+      expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'agent', swarmSkillMode })
     }
     // From a start before modes: the session launches as it did then.
     await ask({ engine: 'claude', cwd: '/w', swarmRole: 'dev' })
@@ -296,7 +331,7 @@ describe('agent_create, refused before any pane exists', () => {
   it('passes the GitHub App flag with a Swarm role only, and refuses anything else before dispatch', async () => {
     const { ask, create } = setup()
     await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev', swarmGitHub: true })
-    expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'dev', swarmGitHub: true })
+    expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'agent', swarmGitHub: true })
     await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev' })
     expect(vi.mocked(create!).mock.calls.at(-1)![0]).not.toHaveProperty('swarmGitHub')
     const calls = vi.mocked(create!).mock.calls.length
@@ -655,6 +690,36 @@ describe('agent_create with a receipt', () => {
     expect(create).not.toHaveBeenCalled()
   })
 
+  it('lets the person\'s own clone try every way in, says which alias worked, and calls a refusal everywhere denied', async () => {
+    const { ask, status, replies } = setup()
+    const remote = { engine: 'claude', projectSource: 'remote', repositoryUrl: 'https://github.com/acme/app' }
+    vi.mocked(prepareProjectFolder).mockImplementationOnce(async (_project, options) => {
+      options?.onCloned?.({ url: 'git@gh-work:acme/app.git', alias: 'gh-work' })
+      return '/projects/prepared'
+    })
+    const answer = async (payload: Record<string, unknown>) => {
+      const before = replies.length
+      await ask(payload)
+      await vi.waitFor(() => expect(replies.length).toBeGreaterThan(before))
+      return replies.at(-1)!
+    }
+    expect(await answer({ ...remote, creationId: CREATION })).toMatchObject({ state: 'created', agent: { id: 'new-agent' }, clonedVia: { alias: 'gh-work' } })
+    expect(vi.mocked(prepareProjectFolder).mock.calls.at(-1)![1]).toMatchObject({ cloneFallback: true })
+    expect(await status({ creationId: CREATION })).toMatchObject({ clonedVia: { alias: 'gh-work' } })
+    // A transport switch is no news: the account is the same.
+    vi.mocked(prepareProjectFolder).mockImplementationOnce(async (_project, options) => {
+      options?.onCloned?.({ url: 'git@github.com:acme/app.git' })
+      return '/projects/prepared'
+    })
+    expect(await answer({ ...remote, creationId: `${CREATION}-plain` })).not.toHaveProperty('clonedVia')
+    vi.mocked(prepareProjectFolder).mockRejectedValueOnce(new RepositoryAccessError('CLONE_FAILED', 'Could not access this repository.'))
+    expect(await answer({ ...remote, creationId: `${CREATION}-denied` })).toStrictEqual({ creationId: `${CREATION}-denied`, state: 'failed',
+      failure: { code: 'CLONE_FAILED', detail: 'Could not access this repository.', access: 'denied' } })
+    // A Swarm agent's repository was cloned by its start, one address per transport and never an alias.
+    await answer({ ...remote, swarmRole: 'lead', creationId: `${CREATION}-swarm` })
+    expect(vi.mocked(prepareProjectFolder).mock.calls.at(-1)![1]).toMatchObject({ cloneFallback: false })
+  })
+
   it('records the prepared folder of a launch that then failed, so the person can open it', async () => {
     const { ask, replies } = setup({}, { create: vi.fn(async () => ({ ok: false as const, error: 'ENGINE_MISSING' })) })
     await ask({ engine: 'claude', projectSource: 'new', creationId: CREATION })
@@ -816,7 +881,8 @@ describe('agent_create with a receipt', () => {
     await launch({ engine: 'claude', ...remote, permissionMode: 'full' }, 2)
     await launch({ engine: 'claude', ...remote, swarmRole: 'lead', permissionMode: 'auto' }, 3)
     await launch({ engine: 'claude', cwd: dir, swarmRole: 'lead', permissionMode: 'full' }, 4)
-    await launch({ engine: 'claude', projectSource: 'worktree', gitSource: '/elsewhere', branchName: 'feature', swarmRole: 'lead', permissionMode: 'full' }, 5)
+    await ask({ creationId: `${CREATION}-5`, engine: 'claude', projectSource: 'worktree', gitSource: '/elsewhere', branchName: 'feature', swarmRole: 'lead', permissionMode: 'full' }, false)
+    await vi.waitFor(() => expect(replies).toHaveLength(5))
     expect(preTrustClaudeProject).toHaveBeenCalledOnce()
     // Claude Code only: a Codex Lead's checkout is not trusted for it.
     await launch({ engine: 'codex', ...remote, swarmRole: 'lead', permissionMode: 'full' }, 6)
@@ -825,6 +891,23 @@ describe('agent_create with a receipt', () => {
     vi.mocked(claudeTrusts).mockImplementation(path => path === '/projects/prepared')
     await launch({ engine: 'claude', projectSource: 'worktree', gitSource: '/projects/prepared', branchName: 'feature', swarmRole: 'lead', permissionMode: 'full' }, 7)
     expect(preTrustClaudeProject).toHaveBeenCalledTimes(2)
+  })
+
+  // 2026-10-30: a new Swarm made with Cmd+S on a local openharness checkout started its PM in a worktree of that
+  // checkout, which Claude Code had never been told to trust; the PM sat at the question, shown as Idle in the Swarm.
+  it('trusts the worktree of a repository the person picked in this machine\'s window for a Swarm agent in full mode', async () => {
+    const { ask, replies } = setup()
+    const launch = async (payload: Record<string, unknown>, local: boolean, n: number) => { await ask({ creationId: `${CREATION}-${n}`, ...payload }, local); await vi.waitFor(() => expect(replies).toHaveLength(n)) }
+    const worktree = { projectSource: 'worktree', gitSource: '/Users/me/openharness', branchName: 'lively-meteor' }
+    await launch({ engine: 'claude', ...worktree, swarmRole: 'lead', permissionMode: 'full' }, true, 1)
+    expect(preTrustClaudeProject).toHaveBeenCalledWith('/projects/prepared')
+    // Not relayed, not outside a Swarm or full mode, not for Codex: those stay the person's question.
+    await launch({ engine: 'claude', ...worktree, swarmRole: 'lead', permissionMode: 'full' }, false, 2)
+    await launch({ engine: 'claude', ...worktree, permissionMode: 'full' }, true, 3)
+    await launch({ engine: 'claude', ...worktree, swarmRole: 'lead', permissionMode: 'auto' }, true, 4)
+    await launch({ engine: 'codex', ...worktree, swarmRole: 'lead', permissionMode: 'full' }, true, 5)
+    expect(preTrustClaudeProject).toHaveBeenCalledOnce()
+    expect(preTrustCodexProject).not.toHaveBeenCalled()
   })
 
   // A Codex agent on its own profile reads its trust from THAT profile's config.toml: the trust was

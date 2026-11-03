@@ -771,6 +771,10 @@ void pod_model_supertab_ids(pod_model_t *m, const char (*ids)[ID_MAX], int n) {
         if (!ids[i][0] || memchr(ids[i], 0, ID_MAX) == NULL || want_idx(m, ids[i]) >= 0) continue;
         memcpy(m->want[m->want_n++], ids[i], ID_MAX);
     }
+    // A Swarm off the list is access lost as often as not (removed from its project, signed out on the Mac), and no read frame comes: its Notices rows hold chat
+    // text and the project's name, so they go with it. A listed Swarm keeps its rows, its card here or not (the frame may be on its way).
+    for (int i = m->unread_count - 1; i >= 0; i--)
+        if (m->unread[i].tab[0] && want_idx(m, m->unread[i].tab) < 0) unread_drop(m, i);
     int k = 0;   // keep the listed ones, free the rest
     for (int i = 0; i < m->swarm_n; i++) {
         if (want_idx(m, m->swarms[i].id) < 0) {
@@ -838,6 +842,9 @@ void pod_model_supertab(pod_model_t *m, const pod_swarm_t *s, uint32_t now_ms) {
         l->buddy_unread = carry[j].buddy_unread;
         l->since_at_ms = now_ms;
     }
+    // The same for a Lead that left this Swarm. The same id in another Swarm is another row's business.
+    for (int i = m->unread_count - 1; i >= 0; i--)
+        if (!strcmp(m->unread[i].tab, d->id) && pod_model_lead_index(d, m->unread[i].agent) < 0) unread_drop(m, i);
     if (m->side_press != POD_SIDE_NONE && !strcmp(m->side_press_swarm, s->id)) { m->side_press = POD_SIDE_NONE; m->side_press_swarm[0] = 0; }   // the daemon has answered
     m->revision++;
 }

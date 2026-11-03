@@ -48,7 +48,11 @@ const list = (v: unknown): Json[] => Array.isArray(v) ? v.map(object) : []
 const projectKey = (project: Json): string => String(project.id ?? 'lead')
 const inProject = (conversation: Json, projectId: string): boolean => (conversation.projectId ?? 'lead') === projectId
 /** A Buddy chat (backend buddies.ts), where the PM's private lines land since Buddies replaced Chat with PM (10-29). */
-const isBuddyChat = (conversation: Json): boolean => conversation.kind === 'buddy'
+const isBuddyChat = (conversation: Json): boolean => conversation.kind === 'buddy' || conversation.kind === 'swarm-buddy'
+/** A person's one Buddy chat for the whole Swarm (backend buddies.ts, Dee 10-31): it has no project, so no project's id
+ *  finds it. Since #2447 it is where the reader's Buddy lives, and a card that looked only in its own project lost the
+ *  dial's Buddy side (Diego, 11-02). */
+const isSwarmBuddyChat = (conversation: Json): boolean => conversation.kind === 'swarm-buddy'
 /** A Chat with PM: a private conversation with an audience that is not a Buddy chat. Read-only once Buddies are on
  *  (backend commands.ts `PM_CHAT_READ_ONLY`), so words spoken to it on the dial would only be refused. */
 const isChatWithPm = (conversation: Json): boolean => conversation.audience != null && !isBuddyChat(conversation)
@@ -59,15 +63,20 @@ const isReadersBuddyChat = (conversation: Json, me: string | undefined): boolean
 const sequenceOf = (conversation: Json): number => typeof conversation.lastMessageSequence === 'number' ? conversation.lastMessageSequence : 0
 const idsOf = (v: unknown): string[] => Array.isArray(v) ? v.filter((id): id is string => typeof id === 'string') : []
 
-/** The reader's live Buddy chat in a project, when its id is one a dial can hold. */
+/** The reader's live Buddy chat for a project, when its id is one a dial can hold: their one Swarm Buddy chat when the Swarm
+ *  has given them one (every project shares it), else their Buddy chat in that project, as older Swarms keep it. Another
+ *  person's chat is neither, whatever a read holds. */
 function buddyChatOf(conversations: Json[], projectId: string, me: string | undefined): Json | undefined {
-  return conversations.find(c => isReadersBuddyChat(c, me) && inProject(c, projectId) && c.archived !== true && cardId(c.id))
+  const live = (c: Json) => isReadersBuddyChat(c, me) && c.archived !== true && cardId(c.id)
+  return conversations.find(c => isSwarmBuddyChat(c) && live(c)) ?? conversations.find(c => !isSwarmBuddyChat(c) && inProject(c, projectId) && live(c))
 }
 /** The reader's Buddies in their chat: the chat's agents that are a Buddy of the reader. One whose `buddyOf` names someone
- *  else (an agent id reused or misfiled) is not. */
+ *  else (an agent id reused or misfiled) is not, and neither is a thread session (spec 2026-10-30-buddy-thread-sessions),
+ *  which answers in its own thread: the dial's Buddy is the main one. */
 function buddiesIn(agents: Json[], chat: Json, me: string | undefined): Json[] {
   const ids = idsOf(chat.agentIds)
-  return agents.filter(a => typeof a.id === 'string' && ids.includes(a.id) && me !== undefined && object(a.buddyOf).personId === me)
+  return agents.filter(a => typeof a.id === 'string' && ids.includes(a.id) && me !== undefined && object(a.buddyOf).personId === me
+    && (a.buddySession === undefined || a.buddySession === null))
 }
 /** The name Desktop shows and draws an agent by (super_tabs/identity.dart). */
 const agentName = (agent: Json): string => String(agent.displayName ?? agent.name ?? '')
@@ -443,10 +452,35 @@ export class SwarmCards {
     const watched = new Set<string>()
     for (const [tabId, { state }] of this.tabs) {
       const conversations = list(state.conversations), agents = list(state.agents), buddies = state.buddies === true
-      for (const { project, lead, leadId } of leadProjects(state)) {
+      const projects = leadProjects(state)
+      // The reader's one Swarm Buddy chat is every project's Buddy: read once per poll (its key is the chat's), and its newest
+      // word is the quiet notice of each Lead alike. A project's own Buddy chat (older Swarms) is that project's alone.
+      const swarmChat = buddies ? conversations.find(c => isSwarmBuddyChat(c) && isReadersBuddyChat(c, this.me) && c.archived !== true && cardId(c.id)) : undefined
+      if (swarmChat && typeof swarmChat.lastMessageSequence === 'number') {
+        const key = `${tabId}:${swarmChat.id}`, sequence = swarmChat.lastMessageSequence, baseline = this.seen.get(key)
+        watched.add(key)
+        if (baseline === undefined) this.seen.set(key, sequence)
+        else if (sequence > baseline && this.recapsRunning < MAX_RECAPS_IN_FLIGHT) {
+          this.recapsRunning++
+          try {
+            const page = object(await backend(this.core, 'GET', `/api/super-tabs/${tabId}/conversations/${swarmChat.id}/messages`))
+            const after = list(page.messages).filter(m => typeof m.sequence === 'number' && m.sequence > baseline)
+            const said = lastAgentMessage(after, new Set(buddiesIn(agents, swarmChat, this.me).map(a => a.id as string)))
+            for (const { leadId } of projects) raise(this.buddyNotices, recapKey(tabId, leadId), 'buddy', swarmChat.id as string, said)
+            this.seen.set(key, sequence)
+            this.failed.delete(key)
+          } catch (error) {
+            if (!this.failed.has(key)) {
+              this.failed.add(key)
+              this.log(`[super-tabs] the Buddy's new message could not be read for the dial; tried again at the next poll: ${error instanceof Error ? error.message : String(error)}`)
+            }
+          } finally { this.recapsRunning-- }
+        }
+      }
+      for (const { project, lead, leadId } of projects) {
         const projectId = projectKey(project)
         const chats: Array<{ conversation: Json; chat: 'lead' | 'pm' }> = [{ conversation: lead, chat: 'lead' },
-          ...conversations.filter(c => inProject(c, projectId) && isReadersBuddyChat(c, this.me) && c.archived !== true).map(conversation => ({ conversation, chat: 'pm' as const }))]
+          ...conversations.filter(c => !isSwarmBuddyChat(c) && inProject(c, projectId) && isReadersBuddyChat(c, this.me) && c.archived !== true).map(conversation => ({ conversation, chat: 'pm' as const }))]
         for (const { conversation, chat } of chats) {
           if (!cardId(conversation.id) || typeof conversation.lastMessageSequence !== 'number') continue
           const key = `${tabId}:${conversation.id}`, sequence = conversation.lastMessageSequence
@@ -598,7 +632,8 @@ export class SwarmCards {
     if (!found) return false
     if (found.lead.id === chatId) return true
     const c = list(state.conversations).find(c => c.id === chatId)
-    return !!c && cardId(c.id) && inProject(c, projectKey(found.project)) && c.archived !== true && (!isBuddyChat(c) || isReadersBuddyChat(c, this.me))
+    return !!c && cardId(c.id) && c.archived !== true && (isSwarmBuddyChat(c) ? isReadersBuddyChat(c, this.me)
+      : inProject(c, projectKey(found.project)) && (!isBuddyChat(c) || isReadersBuddyChat(c, this.me)))
   }
 
   /** Remembered recaps are kept only for Leads that are still in a tab, and a chat's only while it is on the face. */

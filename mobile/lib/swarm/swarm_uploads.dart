@@ -131,7 +131,7 @@ class SwarmUploads {
           conversationId: conversationId,
           name: file.name,
           mime: swarmMimeForName(file.name),
-          bytes: file.bytes,
+          file: file,
           cancel: token,
           onProgress: (sent) {
             if (token.isCancelled) return;

@@ -351,8 +351,9 @@ describe('the harness shares list as permissions change', () => {
     const generation = (await poolRows(store, a, 'a-mac')).find(p => p.tabId === tab)!.machine.generation
     await store.observeMachine(a, tab, 'a-mac', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
       diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
-    quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] })
-    const startId = String((await execute({ type: 'buddy.create', projectId: 'lead', machineId: 'a-mac', engine: 'claude' }, a)).result.startId)
+    // A host that runs a person's one Buddy for the Swarm (machines.ts SWARM_BUDDY_CAPABILITY).
+    quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [], capabilities: ['buddySessions', 'swarmBuddy'] })
+    const startId = String((await execute({ type: 'buddy.create', machineId: 'a-mac', engine: 'claude' }, a)).result.startId)
     // Started by A's host, as a running host does.
     const harnessId = `perm-${n}-buddy`
     await execute({ type: 'agent.startDispatch', startId }, a, 'a-mac')

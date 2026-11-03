@@ -26,14 +26,11 @@ void main() {
     expect(parts.lastChangedAt, 1793010101002);
     expect(snapshot.id, 'c51479bd73b59e58176ad9e4');
     expect(snapshot.name, 'openharness');
-    expect(snapshot.leadsConversationId, 'leads');
     expect(snapshot.people.single.email, 'ken15@autonomous.ai');
     expect(snapshot.projects.single.leadConversationId, 'lead5701');
-    expect(snapshot.conversations.map((g) => g.id), [
-      'leads',
-      'lead5701',
-      'aeef',
-    ]);
+    // The Product Managers chat an older server still sends is gone from
+    // what the screens read (Dee, 2026-10-31).
+    expect(snapshot.conversations.map((g) => g.id), ['lead5701', 'aeef']);
     expect(snapshot.conversation('aeef')!.lastMessageSequence, 219804);
     expect(snapshot.agents.map((a) => a.displayName), ['River', 'Hugo']);
     expect(snapshot.localModels!.grid, 'swarm-c514');

@@ -6,7 +6,18 @@ import { agentDisplayName, isRoleName } from './agentNames.js'
 import { fail, nextConversationNumber, person, stableId, type Actor, type Agent, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 
 export const isBuddy = (target: Pick<Agent, 'buddyOf'>): boolean => !!target.buddyOf
-export const isBuddyChat = (group: Pick<Conversation, 'kind'>): boolean => group.kind === 'buddy'
+/** A person's Buddy chat: in a project, or their one chat for the whole Swarm. */
+export const isBuddyChat = (group: Pick<Conversation, 'kind'>): boolean => group.kind === 'buddy' || group.kind === 'swarm-buddy'
+/** A person's one Buddy chat for the whole Swarm (Dee, 10-31): outside every project, as the Leads conversation is. */
+export const isSwarmBuddyChat = (group: Pick<Conversation, 'kind'>): boolean => group.kind === 'swarm-buddy'
+/** A Buddy that reads every project its person reads and writes nowhere but its own chat: a Swarm chat's main Buddy or plain
+ *  session. A project session, and every Buddy of a project's chat, reads its one project instead. */
+export const isSwarmBuddy = (target: Pick<Agent, 'buddyOf' | 'buddyScope'> | undefined): boolean => !!target?.buddyOf && target.buddyScope === 'swarm'
+/** The project a project session works in (spec: The model); undefined for a Swarm-wide Buddy and for a Buddy of a project's
+ *  chat, whose project is its chat's. */
+export const sessionProjectId = (target: Pick<Agent, 'buddySession'> | undefined): string | undefined => target?.buddySession?.projectId
+/** A project PM's private line to one person in their one Buddy chat (commands.ts person.tell): its source names the project. */
+export const PM_LINE_KIND = 'pm-line'
 
 /** Whether a Buddy reads [group] of its own project, as its person would (Ken, 10-29): the project chat, its own chat, and
  *  the project's workgroups. Never a private conversation, its own person's with others included, nor another Buddy chat.
@@ -20,7 +31,8 @@ export function buddyReads(buddy: Agent, group: Conversation, leadConversationId
 
 /** The rows that tell how work is routed: a route and its override name the machines that could run a task and why others
  *  could not, and a rule row the routing rules. A Buddy reads none of them, as its Swarm read has no machines or rules. */
-const ROUTING_ROWS: ReadonlySet<string> = new Set(['route', 'route-override', 'rule'])
+/** The nightly routing reflection (lib/routingReflection.ts) says what each engine and model cost and how it went: routing too. */
+const ROUTING_ROWS: ReadonlySet<string> = new Set(['route', 'route-override', 'rule', 'routing-reflection'])
 export const routingRow = (source: unknown): boolean => ROUTING_ROWS.has(String((source as { kind?: unknown } | null | undefined)?.kind))
 
 /** Whether [actor] is a Buddy, which reads no routing (no route rows, routing decisions, policy or costs) and no machines. */
@@ -47,6 +59,26 @@ export function openBuddyChat(state: SuperTabState, projectId: string, owner: Pe
     chat = { id, kind: 'buddy', ...(state.projects ? { projectId } : {}), number, title: defaultBuddyName(owner), leadId: null,
       agentIds: [], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0,
       audience: { people: [{ id: owner.id, generation: owner.generation }] } }
+    state.conversations.push(chat)
+  }
+  chat.archived = false
+  return chat
+}
+
+/** A person's one Buddy chat in the Swarm, the same each time they open it; a new membership opens a new one. */
+export const swarmBuddyChatId = (owner: Pick<Person, 'id' | 'generation'>): string => stableId('buddy', 'swarm', owner.id, owner.generation)
+
+/** [owner]'s one Buddy chat in the Swarm (Dee, 10-31), opened if they have none yet and again if archived: at Swarm level, with
+ *  no project, read only by them and their Buddy (projects.ts readsRecordsIn). A quiet one is loaded by its id first
+ *  (store.ts commandGroups). */
+export function openSwarmBuddyChat(state: SuperTabState, owner: Person): Conversation {
+  const id = swarmBuddyChatId(owner)
+  let chat = state.conversations.find(c => c.id === id)
+  if (!chat) {
+    const number = nextConversationNumber(state)
+    state.groupCounter = number
+    chat = { id, kind: 'swarm-buddy', number, title: defaultBuddyName(owner), leadId: null, agentIds: [], archived: false, brief: '',
+      checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: owner.id, generation: owner.generation }] } }
     state.conversations.push(chat)
   }
   chat.archived = false
@@ -130,8 +162,9 @@ export function chosenBuddyName(state: SuperTabState, chat: Conversation, owner:
   return { name: chat.title, notice: `${was} is taken now; your Buddy starts as ${chat.title}. Rename it from the ⋮ menu.` }
 }
 
-/** What a Buddy asks of its machine: it reads and talks, so the usual agent's share with git to read the project. */
-export const BUDDY_REQUIREMENTS: AgentStartRequest['requirements'] = { memoryBytes: 2 * 1024 ** 3, diskBytes: 1024 ** 3, maxCpuPercent: 85,
+/** What a Buddy asks of its machine: it reads and talks, so the usual agent's share with git to read the project. CPU use is one
+ *  momentary sample, so it is not capped, as a routed Builder's start (Diego, 10-30). */
+export const BUDDY_REQUIREMENTS: AgentStartRequest['requirements'] = { memoryBytes: 2 * 1024 ** 3, diskBytes: 1024 ** 3, maxCpuPercent: 100,
   tools: ['git'], devices: [], quotaRequired: false }
 
 /** The line a Buddy's chat shows once its session joined. */

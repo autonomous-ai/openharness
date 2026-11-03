@@ -5,12 +5,12 @@ import '../onboarding/saved_computers.dart';
 import '../onboarding/web_first_machine.dart';
 import '../footer/web_footer_bar.dart';
 import '../tabs/web_tab_switcher.dart';
-import 'web_app_menu.dart';
 import 'web_layout.dart';
 import 'web_machine_choice.dart';
+import 'web_new_menu.dart';
 
-/// Everything the browser adds to the shared workspace: a menu before the
-/// tabs, a tab switcher and a one-dropdown footer on narrow screens, a clickable Back in the picker
+/// Everything the browser adds to the shared workspace: a `+` that opens a small
+/// menu, the account's avatar, a tab switcher and a one-dropdown footer on narrow screens, a clickable Back in the picker
 /// with its key hints hidden, and a connected machine for New Harness, since
 /// a browser is not a machine. It also turns on a menu on every tab, worded
 /// pane states and the compact pane header, which the web reads and Desktop
@@ -26,9 +26,9 @@ WorkspaceChrome webWorkspaceChrome(AppNotifier app) =>
 final _webChromes = Expando<WorkspaceChrome>('webWorkspaceChrome');
 
 WorkspaceChrome _webWorkspaceChrome(AppNotifier app) => WorkspaceChrome(
-  leadingWidth: WebAppMenuButton.widthOf,
-  leading: (context, commands) =>
-      WebAppMenuButton(app: app, commands: commands),
+  newTabControl: (context, commands) =>
+      WebNewMenuButton(app: app, commands: commands),
+  showsAccount: true,
   newHarnessMachine: () => webNewHarnessMachine(app),
   pickerShowsBack: true,
   showsKeyHints: false,

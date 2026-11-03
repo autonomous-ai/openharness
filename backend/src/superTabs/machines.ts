@@ -4,7 +4,8 @@ import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
 import { activeWork, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { WORKSPACE_LABEL } from './workspaces.js'
 import { startFinished } from './parts/write.js'
-import { agentProjectId, canReadProject, groupProject, ledProject, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
+import { agentProjectId, canReadProject, groupProject, ledProject, projectOf, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
+import { isSwarmBuddyChat } from './buddies.js'
 export { teamAccountPool } from './projects.js'
 import { conversation } from './model.js'
 
@@ -159,6 +160,54 @@ export type MachineObservation = z.infer<typeof machineObservationSchema>
 /** A machine reports every 15 seconds (cli/src/superTabs/machines.ts); three missed beats is offline. */
 export const MACHINE_FRESH_MS = 45_000
 
+/** A machine's reading as its pool keeps it. */
+export type StoredReading = NonNullable<ContributedMachine['observation']>
+
+/** A start this machine may say it is preparing: one it launched that neither runs nor failed (liveness.ts). */
+export const preparableStart = (start: AgentStart, machineId: string): boolean =>
+  start.request.machineId === machineId && !!start.dispatched && !start.harnessId && !start.error
+
+/**
+ * What a report stores of [observation] on [pool]: progress and tokens of running sessions only (leases and attempts read
+ * them), the preparing starts [preparable] allows, the contributed engines' quotas, privacy only from a team session
+ * (observedPrivacy), and how the machine is signed in, from the session and never from the report (lib/teamSession.ts).
+ * A full report and a reading-only one (DB 2.5) store the same.
+ */
+export function storedObservation(pool: ContributedMachine, observation: MachineObservation,
+  opts: { team: boolean; now: number; preparable: (startId: string) => boolean }): StoredReading {
+  const { privacy: reported, harnessProgress, harnessTokens, preparingStartIds, ...reading } = observation
+  const running = (id: string) => observation.runningHarnessIds.includes(id)
+  const progress = harnessProgress && Object.fromEntries(Object.entries(harnessProgress).filter(([id]) => running(id)))
+  const tokens = harnessTokens && Object.fromEntries(Object.entries(harnessTokens).filter(([id]) => running(id)))
+  const preparing = preparingStartIds?.filter(opts.preparable)
+  const privacy = observedPrivacy(pool.observation?.privacy, reported, opts.team, opts.now)
+  return { ...reading, quotas: observation.quotas.filter(q => contributedEngines(pool, observation).includes(q.engine)), receivedAt: opts.now,
+    sessionKind: opts.team ? 'team' : 'computer', ...(privacy ? { privacy } : {}), ...(progress ? { harnessProgress: progress } : {}),
+    ...(tokens ? { harnessTokens: tokens } : {}), ...(preparing ? { preparingStartIds: preparing } : {}) }
+}
+
+const sameSet = (a: readonly string[] = [], b: readonly string[] = []) => {
+  const left = new Set(a), right = new Set(b)
+  return left.size === right.size && [...left].every(id => right.has(id))
+}
+
+/**
+ * Whether [next] changes nothing a report decides from, against [previous] (DB 2.5 spec, section 1 condition 2): the same
+ * running and stopped sessions, no stop proof, the same preparing starts. Progress renews leases (liveness.ts
+ * reportRenewedAt), so it also keeps its shape, and no session's progress goes back: a lease then ends no sooner than the
+ * last full report saw.
+ */
+export function readingOnly(previous: StoredReading | undefined, next: StoredReading): boolean {
+  // How the machine is signed in decides who may host it (store.ts teamByRecord reads the stored one): a reading from the
+  // other kind of session runs in full, so the full report's refusal is never skipped (review of #2378).
+  if (!previous || next.stoppedReservations?.length || previous.sessionKind !== next.sessionKind) return false
+  if (!sameSet(previous.runningHarnessIds, next.runningHarnessIds) || !sameSet(previous.stoppedHarnessIds, next.stoppedHarnessIds)
+    || !sameSet(previous.preparingStartIds, next.preparingStartIds)) return false
+  if (!previous.harnessProgress || !next.harnessProgress) return !previous.harnessProgress && !next.harnessProgress
+  const before = previous.harnessProgress, after = next.harnessProgress
+  return sameSet(Object.keys(before), Object.keys(after)) && Object.entries(before).every(([id, at]) => after[id]! >= at)
+}
+
 /** Whether [start] is preparing now: launched, neither running nor failed, and named by a fresh report of its own machine.
  *  Read from that report, never written into the start, so a report a minute per start writes nothing more. */
 export function startPreparing(state: SuperTabState, start: AgentStart, now: number): boolean {
@@ -212,29 +261,15 @@ const PRIVACY_ITEMS: Record<string, string> = {
 const ONLY_OWN = 'so it runs only its owner\'s projects'
 
 /**
- * Whether a teammate's work needs a Harness Team account on every machine of [state]'s Swarm
- * (`SWARM_TEAM_ACCOUNT_REQUIRED=1`). Until the CLI that makes team accounts is released, it does not: a machine without
- * one takes a teammate's work as it did before team accounts, while a machine with one already follows the rule.
+ * Whether a teammate's work needs a Harness Team account on every machine of a Swarm (`SWARM_TEAM_ACCOUNT_REQUIRED=1`).
+ * Without it, a machine without one takes a teammate's work as it did before team accounts, while a machine with one
+ * already follows the rule. Read on every call, so a test can set it.
  *
- * `SWARM_TEAM_ACCOUNT_OWNERS`, comma-separated emails, holds the switch to the Swarms those people own, so it can be tried
- * on production with one's own Swarm first and no other Swarm changes (2026-10-27). Empty, it is every Swarm's. Both are
- * read on every call, so a test can set them.
+ * Every Swarm alike (2026-11-02). It was held to the Swarms of the owners `SWARM_TEAM_ACCOUNT_OWNERS` listed while the
+ * feature was tried on production (2026-10-27 to 11-02); that variable is no longer read.
  */
-export function teamAccountRequired(state?: Pick<SuperTabState, 'ownerId' | 'people'>): boolean {
-  return process.env.SWARM_TEAM_ACCOUNT_REQUIRED === '1' && teamAccountSwarm(state)
-}
-
-/**
- * Whether Harness Team accounts take part in [state]'s Swarm at all: they join it where their Mac was added (hostRows.ts)
- * and teammates' work goes to them (teamMachineFor). With `SWARM_TEAM_ACCOUNT_OWNERS` set, only the Swarms those people
- * own, so a bug in the team account cannot reach anyone else's Swarm while it is tried out (2026-10-28): elsewhere a Mac
- * runs teammates' work itself, as before team accounts. Empty, every Swarm.
- */
-export function teamAccountSwarm(state?: Pick<SuperTabState, 'ownerId' | 'people'>): boolean {
-  const owners = (process.env.SWARM_TEAM_ACCOUNT_OWNERS ?? '').split(',').map(email => email.trim().toLowerCase()).filter(Boolean)
-  if (!owners.length) return true
-  const owner = state?.people.find(person => person.id === state.ownerId)?.email.toLowerCase()
-  return !!owner && owners.includes(owner)
+export function teamAccountRequired(): boolean {
+  return process.env.SWARM_TEAM_ACCOUNT_REQUIRED === '1'
 }
 
 /** Why this contributed machine may not run a teammate's project now, or null when it may. `teamRow`: its account row
@@ -287,10 +322,10 @@ export function teamWorkCheck(state: SuperTabState, machineId: string, contribut
   if (project.ownerId === contributorId) return null
   if (!pool) {
     // Off the Machines list nothing reports a team account (store.ts teamMachines), so this is the switch alone.
-    if (!teamAccountRequired(state)) return null
+    if (!teamAccountRequired()) return null
     return { code: 'TEAM_ACCOUNT_REQUIRED', reason: `This machine is not a Team machine of this Swarm, ${ONLY_OWN}.` }
   }
-  return teamWorkRefusal(pool, now, teamMachines.includes(machineId), teamAccountRequired(state), otherWorkspaceMachines.includes(machineId))
+  return teamWorkRefusal(pool, now, teamMachines.includes(machineId), teamAccountRequired(), otherWorkspaceMachines.includes(machineId))
 }
 
 // ── One machine: a Mac and its Harness Team account ─────────────────────────────────────────────────────────────────
@@ -320,9 +355,9 @@ export function teamPoolOf(state: SuperTabState, pool: ContributedMachine, live?
  */
 export function machineTeamWork(state: SuperTabState, pool: ContributedMachine, now: number, teamMachines: readonly string[],
   otherWorkspaceMachines: readonly string[] = []): TeamWorkRefusal | null {
-  const team = !pool.hostMachineId && teamAccountSwarm(state) ? teamPoolOf(state, pool, teamMachines) : undefined
+  const team = !pool.hostMachineId ? teamPoolOf(state, pool, teamMachines) : undefined
   const subject = team ?? pool
-  return teamWorkRefusal(subject, now, teamMachines.includes(subject.machineId), teamAccountRequired(state), otherWorkspaceMachines.includes(subject.machineId))
+  return teamWorkRefusal(subject, now, teamMachines.includes(subject.machineId), teamAccountRequired(), otherWorkspaceMachines.includes(subject.machineId))
 }
 
 /** The projects with work on [machineId]: its agents' and its pending starts'. */
@@ -349,7 +384,7 @@ export function productManagerOn(state: SuperTabState, machineId: string): strin
  *  its contributor's own and the Mac has one in this Swarm, else the machine named. */
 export function teamMachineFor(state: SuperTabState, machineId: string, project: SwarmProject, idle = false, live?: readonly string[]): string {
   // With no GitHub App on this server a team account cannot fetch or push, so the work stays on the Mac, as before.
-  if (idle || !teamAccountSwarm(state)) return machineId
+  if (idle) return machineId
   const pool = state.machines?.find(m => m.machineId === machineId)
   if (!pool || project.ownerId === pool.contributorId) return machineId
   return teamPoolOf(state, pool, live)?.machineId ?? machineId
@@ -360,6 +395,31 @@ export function projectFolder(pool: ContributedMachine, project: SwarmProject): 
   return pool.scope === 'swarm'
     ? project.repository?.machineId === pool.machineId ? project.repository.cwd : `${pool.cwd.replace(/\/+$/, '')}/${project.id}`
     : pool.cwd
+}
+
+/** What a host reports (`capabilities`) when it runs a Swarm-wide Buddy in its folder of project worktrees (Dee, 10-31). */
+export const SWARM_BUDDY_CAPABILITY = 'swarmBuddy'
+/** At most this many projects' worktrees in a Swarm-wide Buddy's folder (spec: Staying within one context). */
+export const MAX_BUDDY_PROJECTS = 50
+
+/** A Swarm-wide Buddy's own folder on [pool] (spec: Folder): its host makes it, with one read-only worktree per project in it. It
+ *  is no project's checkout, so nothing of one project is ever another's. */
+export function buddyHomeFolder(pool: ContributedMachine, owner: { id: string }): string {
+  return `${pool.cwd.replace(/\/+$/, '')}/.buddy-${owner.id}`
+}
+
+/** The projects [owner] reads, as a Swarm-wide Buddy's folder on [pool] holds them: each project's own folder there, the oldest
+ *  first, at most MAX_BUDDY_PROJECTS. Ids, names and folders only (starts are listed to the PM). */
+export function buddyProjectsOn(state: SuperTabState, pool: ContributedMachine, owner: { id: string; email: string }): Array<{ id: string; name: string; cwd: string }> {
+  const readable = projectsOf(state).filter(p => canReadProject(state, { kind: 'person', userId: owner.id, email: owner.email }, p))
+    // A machine shared for one project only has that project's folder alone (projectFolder answers its folder for any project):
+    // never list another project at it (security review 1 of #2435).
+    .filter(p => pool.scope === 'swarm' || p.id === 'lead')
+    .map(p => ({ id: p.id, name: p.name, cwd: projectFolder(pool, p) }))
+  // Only projects with a folder of their own: two that answer the same folder would show one project's code as the other's.
+  const counts = new Map<string, number>()
+  for (const p of readable) counts.set(p.cwd, (counts.get(p.cwd) ?? 0) + 1)
+  return readable.filter(p => counts.get(p.cwd) === 1).slice(0, MAX_BUDDY_PROJECTS)
 }
 
 /**
@@ -515,33 +575,61 @@ export function removalEnded(state: SuperTabState, pool: ContributedMachine, how
 /** Pending intents reserve slots too. Only an explicit host stop frees a launched slot. A Mac and its Harness Team account
  *  share the Mac's slots (One machine, teamStartRequest): each counts what runs on both. */
 export function machineSlots(state: SuperTabState, pool: ContributedMachine) {
-  const mac = pool.hostMachineId ? state.machines?.find(m => m.machineId === pool.hostMachineId && m.contributorId === pool.contributorId) : pool
-  const team = mac && teamPoolOf(state, mac)
-  return [...new Set([pool, mac, team])].reduce((sum, each) => sum + (each ? poolSlots(state, each) : 0), 0)
+  return slotCounter(state)(pool)
 }
 
-function poolSlots(state: SuperTabState, pool: ContributedMachine) {
-  const reservations = (state.harnessReservations ?? []).filter(r => r.machineId === pool.machineId)
-  const live = new Set(reservations.map(r => r.harnessId))
-  const released = (state.releasedHarnesses ?? []).filter(r => r.machineId === pool.machineId && !live.has(r.harnessId)).map(r => r.harnessId)
-  const observed = pool.observation?.stoppedHarnessIds ?? []
-  const stopped = new Set([...observed.filter(id => {
-    const reservation = reservations.find(r => r.harnessId === id)
-    // Older hosts can prove a first launch stopped, but cannot distinguish a resumed runtime from its predecessor.
-    return !reservation || !reservation.renewed || pool.observation?.stoppedReservations?.some(r => r.harnessId === id && r.generation === reservation.generation)
-  }), ...released])
-  const running = new Set((pool.observation?.runningHarnessIds ?? []).filter(id => !stopped.has(id)))
-  for (const a of state.agents) if (a.machineId === pool.machineId && !stopped.has(a.harnessId)) running.add(a.harnessId)
-  for (const r of reservations) if (!stopped.has(r.harnessId)) running.add(r.harnessId)
-  let pending = 0
-  for (const start of state.starts ?? []) {
-    if (start.request.machineId !== pool.machineId || start.error) continue
-    // A finished start's harness counts through its agent or its host's report. Reads keep finished starts until they expire,
-    // and counted every harness ever started there (Mac Studio, 10-29: 13 running, 121 counted, no free agents shown).
-    if (start.harnessId) { if (!startFinished(start) && !stopped.has(start.harnessId)) running.add(start.harnessId) }
-    else pending++
+/**
+ * The slots each pool of `state` holds, for every pool a read lists: the Swarm's reservations, released harnesses, agents
+ * and starts are grouped by machine once, where each pool used to filter the whole lists again (prod 10-31: 543 released
+ * harnesses on 17 machines, ~27 k callbacks per change read, a quarter of its CPU). Counts the state as it is when called;
+ * a command that changes the state asks again (machineSlots).
+ */
+export function slotCounter(state: SuperTabState): (pool: ContributedMachine) => number {
+  const group = <T>(items: readonly T[] | undefined, machineOf: (item: T) => string) => {
+    const by = new Map<string, T[]>()
+    for (const item of items ?? []) {
+      const list = by.get(machineOf(item))
+      if (list) list.push(item)
+      else by.set(machineOf(item), [item])
+    }
+    return by
   }
-  return running.size + pending
+  const reservationsBy = group(state.harnessReservations, r => r.machineId)
+  const releasedBy = group(state.releasedHarnesses, r => r.machineId)
+  const agentsBy = group(state.agents, a => a.machineId)
+  const startsBy = group(state.starts, s => s.request.machineId)
+  const counted = new Map<ContributedMachine, number>()
+  const poolSlots = (pool: ContributedMachine) => {
+    const known = counted.get(pool)
+    if (known !== undefined) return known
+    const reservations = reservationsBy.get(pool.machineId) ?? []
+    const live = new Set(reservations.map(r => r.harnessId))
+    const released = (releasedBy.get(pool.machineId) ?? []).filter(r => !live.has(r.harnessId)).map(r => r.harnessId)
+    const observed = pool.observation?.stoppedHarnessIds ?? []
+    const stopped = new Set([...observed.filter(id => {
+      const reservation = reservations.find(r => r.harnessId === id)
+      // Older hosts can prove a first launch stopped, but cannot distinguish a resumed runtime from its predecessor.
+      return !reservation || !reservation.renewed || pool.observation?.stoppedReservations?.some(r => r.harnessId === id && r.generation === reservation.generation)
+    }), ...released])
+    const running = new Set((pool.observation?.runningHarnessIds ?? []).filter(id => !stopped.has(id)))
+    for (const a of agentsBy.get(pool.machineId) ?? []) if (!stopped.has(a.harnessId)) running.add(a.harnessId)
+    for (const r of reservations) if (!stopped.has(r.harnessId)) running.add(r.harnessId)
+    let pending = 0
+    for (const start of startsBy.get(pool.machineId) ?? []) {
+      if (start.error) continue
+      // A finished start's harness counts through its agent or its host's report. Reads keep finished starts until they expire,
+      // and counted every harness ever started there (Mac Studio, 10-29: 13 running, 121 counted, no free agents shown).
+      if (start.harnessId) { if (!startFinished(start) && !stopped.has(start.harnessId)) running.add(start.harnessId) }
+      else pending++
+    }
+    counted.set(pool, running.size + pending)
+    return running.size + pending
+  }
+  return pool => {
+    const mac = pool.hostMachineId ? state.machines?.find(m => m.machineId === pool.hostMachineId && m.contributorId === pool.contributorId) : pool
+    const team = mac && teamPoolOf(state, mac)
+    return [...new Set([pool, mac, team])].reduce((sum, each) => sum + (each ? poolSlots(each) : 0), 0)
+  }
 }
 
 /** Machines of the Swarm serving models on its grid now, by model: only fresh readings count. */
@@ -581,7 +669,9 @@ export function localModelAllowed(state: SuperTabState, request: AgentStartReque
 /** [forProject]: the project it is for when that is not yet its conversation's, as New Project's Product Manager before the
  *  project exists (leadStart.ts leadChoices). */
 export function admitMachineStart(state: SuperTabState, request: AgentStartRequest, now: number, start?: AgentStart, teamMachines: readonly string[] = [],
-  otherWorkspaceMachines: readonly string[] = [], forProject?: SwarmProject) {
+  otherWorkspaceMachines: readonly string[] = [], forProject?: SwarmProject,
+  /** A read that admits many machines against one state counts their slots once (leadStart.ts leadChoices). */
+  slots: (pool: ContributedMachine) => number = pool => machineSlots(state, pool)) {
   const pool = machineContribution(state, request.machineId)
   if (!pool) return null
   if (pool.buddyOnly && request.buddyOf?.personId !== pool.contributorId) fail('NOT_SWARM_MACHINE', NOT_SWARM_MACHINE, 403)
@@ -590,17 +680,21 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   if (pool.removal) fail('MACHINE_REMOVED', 'This machine is being removed from the Swarm.')
   if (start && start.poolGeneration !== pool.generation) fail('CONTRIBUTION_REVOKED', 'This machine contribution changed. Reconcile the original start.', 403)
   if (pool.paused) fail('MACHINE_PAUSED', 'New work is paused on this machine.')
-  const project = forProject ?? groupProject(state, conversation(state, request.conversationId))
-  if (!pool.scope && project.id !== 'lead') fail('PROJECT_CONTRIBUTION', 'Ask its owner to add this machine to the swarm again to support other projects.')
+  // A person's one Buddy chat has no project (Dee, 10-31): its project session works in the one it names, and its main Buddy
+  // and plain sessions in none, in their own folder (buddyHomeFolder).
+  const group = forProject ? undefined : conversation(state, request.conversationId)
+  const project = forProject ?? (!isSwarmBuddyChat(group!) ? groupProject(state, group!)
+    : request.buddySession?.projectId ? projectOf(state, request.buddySession.projectId) : undefined)
+  if (project && !pool.scope && project.id !== 'lead') fail('PROJECT_CONTRIBUTION', 'Ask its owner to add this machine to the swarm again to support other projects.')
   const held = teamAccountPool(pool) ? productManagerOn(state, pool.machineId) : null
-  if (held && held !== project.id) {
+  if (held && held !== project?.id) {
     fail('TEAM_ACCOUNT_HELD', `The Harness Team account on ${pool.name} runs another project's Product Manager, so it takes only that project's work for now.`, 403)
   }
   // Before the request's own fields: a machine that takes none of this project's work says so first. A Buddy is its owner's
   // own agent on their own machine (commands.ts buddy.create), as a Lead is: teammates' work rules do not apply to it. Nor to
   // a Product Manager outside a Team account: any machine of the Swarm takes it (leadStart.ts, Ken 10-29).
-  if (!request.buddyOf && !(request.leadFor && !teamAccountPool(pool))) requireTeamWork(state, pool.machineId, pool.contributorId, project, now, teamMachines, otherWorkspaceMachines)
-  const cwd = projectFolder(pool, project)
+  if (!request.buddyOf && !(request.leadFor && !teamAccountPool(pool))) requireTeamWork(state, pool.machineId, pool.contributorId, project!, now, teamMachines, otherWorkspaceMachines)
+  const cwd = project ? projectFolder(pool, project) : buddyHomeFolder(pool, { id: request.buddyOf!.personId })
   // Every refused field is named, with what the machine does accept. Values the caller sent are not echoed: an account
   // setting can be a path or a name of the caller's own.
   const refused: string[] = []
@@ -620,7 +714,7 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   }
   // A Buddy-only machine is recorded with its Buddy's start, before its host ever read the Swarm: the start waits for it.
   if (machineOffline(pool, now) && !(pool.buddyOnly && !pool.observation)) fail('MACHINE_OFFLINE', 'Wait for a fresh reading from the contributed machine.')
-  if (!start && machineSlots(state, pool) >= pool.maxAgents) fail('MACHINE_FULL', 'This machine has reached its contributed agent limit.')
+  if (!start && slots(pool) >= pool.maxAgents) fail('MACHINE_FULL', 'This machine has reached its contributed agent limit.')
   // A new start only: a grid model runs without the engine's subscription, and one already asked for is settled by its host.
   const unusable = !start && !local ? engineUnusable(pool, request.engine, now) : null
   if (unusable) fail('ENGINE_UNAVAILABLE', unusable)

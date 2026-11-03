@@ -18,10 +18,12 @@ export type AgentClosePlan = {
 }
 /** Why the Lead of an active Swarm project is not closed (owner, 2026-10-23: it is never stopped, in any case). */
 export const LEAD_PROTECTED_DETAIL = 'This harness is the Product Manager of a Swarm project. Delete its project first to stop it.'
+export const LEAD_SWITCHING_DETAIL = 'This Product Manager is already switching its agent. Wait for it to finish.'
 /** Why a Swarm Buddy is not closed (Diego, 10-30: closing the tab that showed his Buddy stopped it, and two proposals
  *  waited 30 minutes). A window closes only its view; the machine's owner still stops it with Stop Harness. */
 export const BUDDY_PROTECTED_DETAIL = 'This is a Swarm Buddy. Its person removes it from the Swarm, or Stop Harness stops it.'
-export type AgentCloseRequest = { agentId: string; sessionId: string; createdAt: string; mode: CloseMode; onlyIfHidden?: boolean; onlyIfOriginalLaunch?: boolean; expiresAt?: number }
+/** `changeId`: the Change agent switch this `now` close is part of, which its handoff was prepared for (superTabs/leadSwitch.ts). */
+export type AgentCloseRequest = { agentId: string; sessionId: string; createdAt: string; mode: CloseMode; onlyIfHidden?: boolean; onlyIfOriginalLaunch?: boolean; expiresAt?: number; changeId?: string }
 /** `withoutConversation`: closed while still starting, before Harness could read its conversation, so none is kept. */
 /** `keptRunning`: a close refused for a session that keeps running on purpose (a Swarm Buddy): a window closes its view and
  *  stops nothing, as it does for a Swarm pane (desktop app_state.dart `canStop`). */
@@ -118,8 +120,14 @@ export interface CloseAgentServiceDeps {
   openTabs?: { assertHidden(s: RegisteredSession): Promise<void>; isHidden(s: RegisteredSession): boolean }
   /** Whether the conversation [request] names is closed already: no longer live, and kept as stopped. */
   closedAlready?(request: AgentCloseRequest): boolean
-  /** Whether the agent may be the Lead of an active Swarm project (superTabs/retention.ts `mayBeLead`): never closed. */
-  leadProtected?(agentId: string): boolean
+  /** Whether the agent may be the Lead of an active Swarm project (superTabs/leadSwitch.ts `leadCloseProtected`): never closed,
+   *  but by the `now` close of a switch of its engine its owner prepared ([changeId]). */
+  leadProtected?(agentId: string, changeId?: string): boolean
+  /** Whether another switch of this Lead's engine than [changeId] is running (superTabs/leadSwitch.ts `leadSwitching`). */
+  leadSwitching?(agentId: string, changeId: string): boolean
+  /** The `now` close naming switch [changeId] ended, [stopped] or not (superTabs/leadSwitch.ts `leadSwitchEnded`): the pass its
+   *  stop was given is gone either way. */
+  leadSwitchEnded?(agentId: string, changeId: string, stopped: boolean): void
   /** Whether the agent may be a Swarm Buddy (superTabs/retention.ts `mayBeBuddy`): a close never stops it. Stop Harness does. */
   buddyProtected?(agentId: string): boolean
   /** Whether its pane shows a question the engine asks before any conversation: the folder's trust, or an MCP server the
@@ -171,10 +179,16 @@ export class CloseAgentService {
 
   request(request: AgentCloseRequest): Promise<AgentCloseResult> {
     const current = this.deps.registry.byAgent(request.agentId)
+    // A Product Manager's switch named while another runs is refused before anything else: the first one may have stopped it
+    // already, and a stopped agent's close would answer closed, starting a second replacement (Lead, 11-01).
+    const changeId = request.mode === 'now' ? request.changeId : undefined
+    if (changeId && this.deps.leadSwitching?.(request.agentId, changeId)) {
+      return Promise.resolve({ error: 'LEAD_SWITCHING', detail: LEAD_SWITCHING_DETAIL })
+    }
     if (!matches(current, request, this.now())) return Promise.resolve(this.changed(request))
     if (request.mode === 'cancel') { this.cancel(request.agentId); return Promise.resolve({ cancelled: true }) }
     // Refused before anything is read or saved: a Close after task once answered a Lead "deferred" (the review of #1635).
-    if (request.mode !== 'inspect' && this.deps.leadProtected?.(request.agentId)) {
+    if (request.mode !== 'inspect' && this.deps.leadProtected?.(request.agentId, changeId)) {
       return Promise.resolve({ error: 'LEAD_PROTECTED', detail: LEAD_PROTECTED_DETAIL })
     }
     const buddy = this.deps.buddyProtected?.(request.agentId) === true
@@ -200,7 +214,15 @@ export class CloseAgentService {
     })
     this.jobs.set(key, job)
     this.queues.set(request.agentId, job)
-    return buddy ? job.then(keptRunning) : job
+    // A switch's close ends its pass, stopped or not: nothing is left open after it (security review 2 of #2493).
+    const answered = !changeId ? job : job.then(result => {
+      this.deps.leadSwitchEnded?.(request.agentId, changeId, result.closed === true)
+      return result
+    }, (error: unknown) => {
+      this.deps.leadSwitchEnded?.(request.agentId, changeId, false)
+      throw error
+    })
+    return buddy ? answered.then(keptRunning) : answered
   }
 
   /**
@@ -321,6 +343,8 @@ export class CloseAgentService {
       if (request.mode === 'idle' && activity !== 'idle') return { error: 'SESSION_NOT_IDLE', activity }
       await this.deps.stop(s.agentId, {
         ...(withoutConversation ? { withoutConversation: () => { unkept = true } } : {}),
+        // The pass a Product Manager's switch earned rides with this one stop, and with no other (security review 1 of #2493).
+        ...(request.mode === 'now' && request.changeId ? { leadSwitch: request.changeId } : {}),
         current: () => {
           const latest = current()
           if (!latest) return false

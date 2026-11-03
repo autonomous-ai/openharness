@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/repository_clone.dart';
+import 'package:harness/core/ssh_hosts.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
@@ -268,4 +269,214 @@ void main() {
     },
     skip: Platform.isWindows ? 'Uses the POSIX sleep fixture.' : false,
   );
+
+  group('a private repository', () {
+    late String source;
+    late List<String> tried;
+    late Directory parent;
+
+    setUp(() async {
+      source = p.join(root.path, 'fixture.git');
+      expect(
+        (await Process.run('git', ['init', '--bare', source])).exitCode,
+        0,
+      );
+      parent = await Directory(p.join(root.path, 'projects')).create();
+      tried = [];
+    });
+
+    /// Git as GitHub answers: [refused] addresses are refused access, a
+    /// [broken] one fails the way a dead network does, anything else clones
+    /// the local fixture.
+    RepositoryClone cloner({
+      Set<String> refused = const {},
+      Set<String> broken = const {},
+      Map<String, String> hosts = const {'gh-work': 'github.com'},
+      List<String> aliases = const ['gh-work'],
+    }) => RepositoryClone(
+      sshHosts: _FakeSshHosts(hosts, aliases),
+      startProcess: (arguments, environment) {
+        final url = arguments[2];
+        tried.add(url);
+        if (refused.contains(url) || broken.contains(url)) {
+          final message = refused.contains(url)
+              ? 'fatal: could not read Username for https://github.com'
+              : 'fatal: unable to access: Could not resolve host: github.com';
+          return Process.start('sh', ['-c', 'echo "$message" >&2; exit 128']);
+        }
+        return Process.start('git', [
+          'clone',
+          '--',
+          source,
+          arguments.last,
+        ], environment: environment);
+      },
+    );
+
+    Future<String?> origin(String folder) async => (await Process.run('git', [
+      '-C',
+      folder,
+      'remote',
+      'get-url',
+      'origin',
+    ])).stdout.toString().trim();
+
+    test('a refused HTTPS link is cloned over SSH instead', () async {
+      final clone = cloner(refused: {'https://github.com/owner/project.git'});
+      final folder = await clone.run(
+        GitHubRepository.parse('https://github.com/owner/project')!,
+        parent.path,
+      );
+      expect(tried, [
+        'https://github.com/owner/project.git',
+        'git@github.com:owner/project.git',
+      ]);
+      expect(clone.clonedVia, isNull);
+      // The fixture's own path stands in for the address that worked.
+      expect(await origin(folder), source);
+      expect((await parent.list().toList()).map((e) => p.basename(e.path)), [
+        'project',
+      ]);
+    });
+
+    test('a second GitHub account is reached through its alias', () async {
+      final clone = cloner(
+        refused: {
+          'https://github.com/owner/project.git',
+          'git@github.com:owner/project.git',
+        },
+      );
+      await clone.run(GitHubRepository.parse('owner/project')!, parent.path);
+      expect(tried.last, 'git@gh-work:owner/project.git');
+      expect(clone.clonedVia, 'gh-work');
+    });
+
+    test('a network failure stops at once', () async {
+      final clone = cloner(broken: {'https://github.com/owner/project.git'});
+      await expectLater(
+        clone.run(GitHubRepository.parse('owner/project')!, parent.path),
+        throwsA(isNot(isA<RepositoryAccessDenied>())),
+      );
+      expect(tried, ['https://github.com/owner/project.git']);
+      expect(await parent.list().toList(), isEmpty);
+    });
+
+    test('refused everywhere says so in one line', () async {
+      final clone = cloner(
+        refused: {
+          'https://github.com/owner/project.git',
+          'git@github.com:owner/project.git',
+          'git@gh-work:owner/project.git',
+        },
+      );
+      await expectLater(
+        clone.run(GitHubRepository.parse('owner/project')!, parent.path),
+        throwsA(
+          isA<RepositoryAccessDenied>().having(
+            (e) => e.message,
+            'message',
+            startsWith('No access to owner/project on this '),
+          ),
+        ),
+      );
+      expect(tried, hasLength(3));
+      expect(await parent.list().toList(), isEmpty);
+    });
+
+    test('a pasted alias that is not GitHub never starts Git', () async {
+      final clone = cloner(hosts: {'gitlab-work': 'gitlab.com'});
+      await expectLater(
+        clone.run(
+          GitHubRepository.parse('git@gitlab-work:owner/project.git')!,
+          parent.path,
+        ),
+        throwsA(
+          isA<RepositoryCloneException>().having(
+            (e) => e.message,
+            'message',
+            'gitlab-work isn\'t a GitHub host on this computer.',
+          ),
+        ),
+      );
+      expect(tried, isEmpty);
+    });
+
+    test('a checkout made through an alias is the repository a browser link '
+        'names', () async {
+      final checkout = p.join(parent.path, 'project');
+      expect((await Process.run('git', ['init', checkout])).exitCode, 0);
+      await Process.run('git', [
+        '-C',
+        checkout,
+        'remote',
+        'add',
+        'origin',
+        'git@gh-work:Owner/Project.git',
+      ]);
+      final folder = await cloner().run(
+        GitHubRepository.parse('https://github.com/owner/project')!,
+        parent.path,
+      );
+      expect(folder, checkout);
+      expect(tried, isEmpty);
+    });
+
+    test('a pasted alias again starts in the checkout it made', () async {
+      final checkout = p.join(parent.path, 'project');
+      expect((await Process.run('git', ['init', checkout])).exitCode, 0);
+      await Process.run('git', [
+        '-C',
+        checkout,
+        'remote',
+        'add',
+        'origin',
+        'git@gh-work:owner/project.git',
+      ]);
+      final folder = await cloner().run(
+        GitHubRepository.parse('git@gh-work:owner/project.git')!,
+        parent.path,
+      );
+      expect(folder, checkout);
+      expect(tried, isEmpty);
+    });
+
+    test('a refused attempt leaves no staging behind the next', () async {
+      final seen = <List<String>>[];
+      final clone = RepositoryClone(
+        sshHosts: _FakeSshHosts(const {}, const []),
+        startProcess: (arguments, environment) async {
+          seen.add([
+            for (final entry in parent.listSync()) p.basename(entry.path),
+          ]);
+          if (arguments[2].startsWith('https://')) {
+            return Process.start('sh', [
+              '-c',
+              'echo "fatal: could not read Username" >&2; exit 128',
+            ]);
+          }
+          return Process.start('git', [
+            'clone',
+            '--',
+            source,
+            arguments.last,
+          ], environment: environment);
+        },
+      );
+      await clone.run(GitHubRepository.parse('owner/project')!, parent.path);
+      // Each attempt sees only its own staging folder.
+      expect(seen.map((names) => names.length), [1, 1]);
+    });
+  });
+}
+
+class _FakeSshHosts implements SshHosts {
+  _FakeSshHosts(this.hosts, this.aliases);
+  final Map<String, String> hosts;
+  final List<String> aliases;
+
+  @override
+  Future<String?> resolveHost(String alias) async => hosts[alias];
+
+  @override
+  Future<List<String>> githubAliases() async => aliases;
 }

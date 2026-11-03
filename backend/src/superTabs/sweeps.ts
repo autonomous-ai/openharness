@@ -1,13 +1,18 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AgentStart, Conversation } from './model.js'
+import { stepSleeps } from './steps.js'
 import { clock, guardedWrite, PartConflict, type HeadData, type ProgressData } from './parts/index.js'
 import { DORMANT_AFTER_MS, RETENTION_MS } from './parts/types.js'
+import { deletedSwarms } from './deletion.js'
 import { logger } from '../utils/logger.js'
 import { ensureIndex } from '../lib/db/indexes.js'
 import { swarmTransaction } from './cache.js'
 import { listNamedIndexes, readBy } from './parts/indexed.js'
 import { autonomousEnvironments } from '../lib/autonomousEnvironment.js'
 import { expireEvidence } from './evidence/store.js'
+import { sweepThreadMarks } from './readMarks.js'
+import { sweepActivity } from './activity.js'
+import { sweepChatSettings } from './chatSettings.js'
 
 /** Parts whose key is never used twice (conversations, starts, projects' progress) lose their tombstone at `purgeAt`.
  *  A person, agent or machine can come back under the same key, so its tombstone is kept for good, compacted to its
@@ -82,15 +87,26 @@ async function sleepQuietGroups(db: PrismaClient, now: number): Promise<number> 
     if (!progress.has(id)) progress.set(id, ((await db.swarmProgress.findUnique({ where: { id } }))?.data as unknown as ProgressData | undefined) ?? null)
     return progress.get(id)!
   }
+  const tasks = new Map<string, { archived: boolean; dormant: boolean } | null>()
+  const taskOf = async (tabId: string, key: string) => {
+    const id = `${tabId}:${key}`
+    if (!tasks.has(id)) tasks.set(id, await db.swarmGroup.findUnique({ where: { tabId_key: { tabId, key } }, select: { archived: true, dormant: true } }))
+    return tasks.get(id)!
+  }
+  // A deleted Swarm's groups stay as they are for its restore (deletion.ts).
+  const isDeleted = deletedSwarms(db)
   let slept = 0, after: { at: Date; id: string } | null = null
   for (;;) {
     const cursor: Prisma.SwarmGroupWhereInput = after ? { AND: [{ OR: [{ lastActivityAt: { gt: after.at } }, { lastActivityAt: after.at, id: { gt: after.id } }] }] } : {}
     const rows: Array<{ id: string; tabId: string; key: string; version: number; lastActivityAt: Date; data: Prisma.JsonValue }> = await db.swarmGroup.findMany({ where: { ...base, ...cursor }, orderBy: [{ lastActivityAt: 'asc' }, { id: 'asc' }], take: BATCH })
     for (const row of rows) {
+      if (await isDeleted(row.tabId)) continue
       const group = row.data as unknown as Conversation
       const quiet = row.lastActivityAt.getTime() < now - DORMANT_AFTER_MS && ['done', 'cancelled'].includes(group.assignment?.status ?? '')
       if (!group.archived && !quiet) continue
       if ((await leadsOf(row.tabId)).has(group.id)) continue
+      // A step sleeps with its task (task steps design): read once per task in this pass.
+      if (group.reviewOf && !stepSleeps(await taskOf(row.tabId, group.reviewOf))) continue
       const reports = group.audience ? null : await progressOf(row.tabId, group.projectId ?? 'lead')
       if (reports && (group.reportSeq ?? 0) > (reports.summarized[group.id] ?? reports.summarizedFloor)) continue
       if (await guarded(db, { tabId: row.tabId, op: 'update', kind: 'group', key: row.key, seen: row.version, data: { ...group, dormant: true } })) slept++
@@ -108,7 +124,9 @@ async function expireStarts(db: PrismaClient, now: number): Promise<number> {
     { $match: { deleted: false, finishedAt: { $lt: { $date: new Date(now - RETENTION_MS).toISOString() } } } }, { $limit: BATCH },
     { $project: { tabId: 1, key: 1, version: 1, data: 1 } }])
   let expired = 0
+  const isDeleted = deletedSwarms(db)
   for (const row of rows) {
+    if (await isDeleted(row.tabId as string)) continue
     if (await guarded(db, { tabId: row.tabId as string, op: 'remove', kind: 'start', key: row.key as string, seen: Number(row.version), data: row.data as unknown as AgentStart })) expired++
   }
   return expired
@@ -126,6 +144,9 @@ async function expireInvitations(db: PrismaClient, now: number): Promise<number>
     const head = await db.swarmHead.findUnique({ where: { id: `${tabId as string}:head` } })
     if (!head || head.deleted) continue
     const data = head.data as unknown as HeadData
+    // A deleted Swarm is invited to by nobody (deletion.ts): writing its invitations back would list it again. A delete that
+    // lands after this read moves the head, so the guarded write below conflicts and is skipped.
+    if (data.deletion) continue
     const kept = data.invitations.filter(i => i.expiresAt > now)
     if (kept.length === data.invitations.length) continue
     try {
@@ -143,10 +164,39 @@ async function expireInvitations(db: PrismaClient, now: number): Promise<number>
   return expired
 }
 
+/** The thread-mark sweep (readMarks.ts), its failure said and kept to itself: the other sweeps of the pass still run. */
+export async function threadMarks(db: PrismaClient, now: number) {
+  try {
+    return await sweepThreadMarks(db, now)
+  } catch (error) {
+    logger.warn('[swarm-sweeps] thread marks failed', { error: error instanceof Error ? error.message : String(error) })
+    return { failed: true as const }
+  }
+}
+
+/** The Activity and chat setting sweeps (activity.ts, chatSettings.ts), each failure said and kept to itself, as thread marks. */
+export async function activityRows(db: PrismaClient, now: number) {
+  try {
+    return { expired: await sweepActivity(db, now) }
+  } catch (error) {
+    logger.warn('[swarm-sweeps] activity failed', { error: error instanceof Error ? error.message : String(error) })
+    return { failed: true as const }
+  }
+}
+export async function chatSettings(db: PrismaClient, now: number) {
+  try {
+    return await sweepChatSettings(db, now)
+  } catch (error) {
+    logger.warn('[swarm-sweeps] chat settings failed', { error: error instanceof Error ? error.message : String(error) })
+    return { failed: true as const }
+  }
+}
+
 /** One pass of every sweep (spec, Archive). Each part it changes is a guarded write, so a command in between wins. */
 export async function sweepSwarms(db: PrismaClient, now = Date.now()) {
   return { slept: await sleepQuietGroups(db, now), startsExpired: await expireStarts(db, now), invitationsExpired: await expireInvitations(db, now),
-    tombstonesCompacted: await compactTombstones(db, now), evidenceExpired: await expireEvidence(db, now) }
+    tombstonesCompacted: await compactTombstones(db, now), evidenceExpired: await expireEvidence(db, now), threadMarks: await threadMarks(db, now),
+    activity: await activityRows(db, now), chatSettings: await chatSettings(db, now) }
 }
 
 /** Runs the sweeps every hour in the singleton worker. `finishWorkspaceRemovals` finishes Workspace removals whose Swarm removals

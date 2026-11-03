@@ -271,6 +271,6 @@ describe('the automatic removal after a release', () => {
 
     const row = await new SuperTabStore(db).row(db, user, tabId)
 
-    expect(Object.keys(row).sort()).toEqual(['format', 'id', 'ownerId', 'revision'])
+    expect(Object.keys(row).sort()).toEqual(['deletedAt', 'format', 'id', 'ownerId', 'revision'])
   })
 })

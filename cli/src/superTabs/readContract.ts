@@ -60,7 +60,7 @@ export interface PartsPayload extends ReadMeta {
   derived: Derived
 }
 /** `GET /api/super-tabs/:tabId/parts` (design 4.3). */
-export interface FirstLoad extends PartsPayload { tabId: string; githubApp?: true }
+export interface FirstLoad extends PartsPayload { tabId: string; githubApp?: true; /** The backend opens steps (task steps design). */ steps?: true }
 /** `GET /api/super-tabs/:tabId/changes?cursor=` (design 4.4); `{ reload: true }` asks for a first load instead. */
 export type ChangedParts = PartsPayload & { reload: false }
 export type Changes = ChangedParts | { reload: true }

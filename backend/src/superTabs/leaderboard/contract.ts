@@ -79,6 +79,18 @@ export interface ModelScore {
   reviews: number
 }
 
+/** A model's tasks over the 7 days up to the read, whichever week the board shows: the sidebar's Models (Dee, 2026-10-30: "this
+ *  week is very confusing"). One row per engine and model as its agents reported it, every effort as one; `model` null for
+ *  attempts whose agent had reported none. */
+export interface RecentModel {
+  engine: string
+  model: string | null
+  /** Attempts at requests, never reviews, started in the 7 days. */
+  attempts: number
+  /** Those with a first review on record, and how many passed it. */
+  firstReview: { reviewed: number; passed: number }
+}
+
 export interface Leaderboard {
   projectId: string
   week: number
@@ -94,4 +106,6 @@ export interface Leaderboard {
   agents: AgentScore[]
   /** Every model that worked this week, most points first. Absent from a backend before it. */
   byModel: ModelScore[]
+  /** The models of the 7 days up to now, most attempts first. Absent from a backend before it. */
+  recentModels: RecentModel[]
 }

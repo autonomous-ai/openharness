@@ -9,6 +9,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
 import '../core/open_in_browser.dart';
+import '../core/linux_webview_runtime.dart';
 import '../core/runtime_platform.dart';
 import '../core/models.dart' show AgentVerdict;
 import '../core/test_run.dart';
@@ -27,6 +28,7 @@ import 'engine_identity.dart';
 import 'harness_activity_mark.dart';
 import '../terminal/terminal_text.dart';
 import 'verdict_marks.dart';
+import 'native_webview_host.dart';
 
 /// A domain harness's viewer, in a tile beside its agent's terminal.
 ///
@@ -38,8 +40,8 @@ import 'verdict_marks.dart';
 ///
 /// The webview is a native view (WKWebView through `webview_flutter`), and a
 /// native view cannot exist where no platform implementation is registered:
-/// under `flutter test`, and on Linux today. There the body is the URL in
-/// words, so every layout around it still builds and the tests can prove the
+/// under `flutter test`, and on Linux without WebKitGTK. There the body shows
+/// the URL in words, so every layout around it still builds and the tests can prove the
 /// tile is placed, sized and closed correctly without instantiating it.
 class WebPanePanel extends StatefulWidget {
   const WebPanePanel({
@@ -86,7 +88,10 @@ class WebPanePanel extends StatefulWidget {
   /// Whether this build can put a real webview on screen. One place, so the
   /// panel and its tests agree on when the placeholder is the right answer.
   static bool get webviewAvailable =>
-      webviewAvailableForTest ?? (!kUnderTest && RuntimePlatform.isMacOS);
+      webviewAvailableForTest ??
+      (!kUnderTest &&
+          (RuntimePlatform.isMacOS ||
+              (RuntimePlatform.isLinux && LinuxWebViewRuntime.available)));
 
   /// A test that installs a fake `WebViewPlatform` mounts the real webview path.
   @visibleForTesting
@@ -401,7 +406,12 @@ class _WebPanePanelState extends State<WebPanePanel> {
         children: [
           _header(context),
           Divider(height: 1, color: AppColors.border),
-          Expanded(child: _body(context)),
+          Expanded(
+            child: NativeWebViewHost(
+              visible: widget.visible,
+              child: _body(context),
+            ),
+          ),
         ],
       ),
     );

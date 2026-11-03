@@ -5,7 +5,8 @@
  *
  * - Cache writes are the 5-minute rate: transcripts do not say which cache a write went to, so 1-hour writes count low.
  * - Claude Haiku 5.5 is left out on purpose: its rate doubles past 100,000 prompt tokens, which the counts cannot tell.
- * - gpt-6.1-sol is its rate up to 272K input tokens; longer prompts cost more.
+ * - gpt-6.1-sol and gpt-6-astra are their rates up to 272K input tokens; longer prompts cost more. Their cache writes are the
+ *   30-minute rate.
  * - Grid models are priced at OpenRouter's rates, which is how the Swarm reaches them (Lead, 2026-10-29). DeepSeek's
  *   off-peak hours are half this rate, so its cost is an upper bound.
  */
@@ -29,6 +30,7 @@ export const PRICES: readonly ModelPrice[] = [
   { model: 'claude-opus-5-5', input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5, source: ANTHROPIC, checked: '2026-10-29' },
   { model: 'claude-sonnet-5-5', input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5, source: ANTHROPIC, checked: '2026-10-29' },
   { model: 'gpt-6.1-sol', input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5, source: OPENAI, checked: '2026-10-29' },
+  { model: 'gpt-6-astra', input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5, source: OPENAI, checked: '2026-10-30' },
   { model: 'moonshotai/kimi-k3', input: 0.192, output: 20, cacheRead: 0.182, cacheWrite: 0, source: OPENROUTER, checked: '2026-10-29' },
   { model: 'deepseek/deepseek-v4.1-flash-1017', input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0, source: OPENROUTER, checked: '2026-10-29' },
 ]

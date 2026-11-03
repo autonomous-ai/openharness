@@ -98,9 +98,14 @@ class SuperTabDecisions extends ChangeNotifier {
       '/api/super-tabs/${Uri.encodeComponent(controller.tabId)}';
 
   /// The open ones asked in [projectId]'s conversations, for its Buddy chat.
+  /// The open decisions asked in [projectId]; for the empty id, the
+  /// reader's one Buddy chat for the whole Swarm, every project's (spec
+  /// 2026-10-31-one-buddy-per-swarm; security review 1 of #2437).
   List<SuperTabDecision> openIn(String projectId) => [
     for (final d in open)
-      if (d.projectId == projectId) d,
+      if (projectId == SuperTabController.kSwarmBuddyKey ||
+          d.projectId == projectId)
+        d,
   ];
 
   /// Those of [openIn] the reader has not set aside with Not now or Hide.

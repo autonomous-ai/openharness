@@ -22,6 +22,7 @@ import { createCircuitBreaker } from './circuitBreaker.js'
 import { guardRedisCommands, isRedisFailure, wasNotSent } from './redisGuard.js'
 import type { Frame, UpBusMsg, DownBusMsg } from './tunnel.js'
 import { redisStamps, type SwarmStamps } from '../superTabs/cache.js'
+import { busKind, markCpuKind } from './selfProfile.js'
 
 // A connection in subscriber mode must never fail its (re)SUBSCRIBE commands, so the sub side keeps
 // ioredis' "retry forever" setting.
@@ -157,7 +158,7 @@ function dispatchJson(registry: JsonSubscriber, channel: string, payload: string
 
 function createJsonSubscriber(conn: Redis, label: string): JsonSubscriber {
   const registry: JsonSubscriber = { conn, label, channelSubs: new Map(), channelSubscribePromises: new Map() }
-  conn.on('message', (channel: string, payload: string) => dispatchJson(registry, channel, payload))
+  conn.on('message', (channel: string, payload: string) => { markCpuKind(busKind(label, channel)); dispatchJson(registry, channel, payload) })
   return registry
 }
 
@@ -233,7 +234,11 @@ function dispatchBinary(channel: string, payload: Buffer): void {
     try { callback(Buffer.from(payload)) } catch (err) { logger.error('[bus] binary subscriber callback threw', err) }
   }
 }
-terminalSub.on('messageBuffer', (channelRaw: Buffer, payload: Buffer) => dispatchBinary(channelRaw.toString('utf8'), payload))
+terminalSub.on('messageBuffer', (channelRaw: Buffer, payload: Buffer) => {
+  const channel = channelRaw.toString('utf8')
+  markCpuKind(busKind('terminal', channel))
+  dispatchBinary(channel, payload)
+})
 
 async function addBinarySub(channel: string, callback: BinaryCb): Promise<() => void> {
   let callbacks = binarySubs.get(channel)
@@ -267,6 +272,69 @@ export function publishTerminalUp(machineId: string, payload: Uint8Array): Promi
 }
 export function publishTerminalDown(machineId: string, payload: Uint8Array): Promise<number> {
   return safePublish(terminalDownChannel(machineId), Buffer.from(payload))
+}
+
+// ── per-process channels for frames addressed to one viewer (lib/terminalRoute.ts) ─────────────────
+
+/** How long a viewer's record lives without its process renewing it (hub heartbeat every 25 s). */
+export const CONN_OWNER_TTL_MS = 60_000
+const connOwnerKey = (connId: string): string => `conn:${connId}`
+const podHopChannel = (processId: string): string => `termpod:${processId}`
+const podJsonChannel = (processId: string): string => `uppod:${processId}`
+
+/** Records that these viewer connections live on `processId`, in one pipeline. A failure leaves them unrecorded: frames
+ *  for them then go through the machine's channels, as before records existed. */
+export async function recordConnOwners(connIds: readonly string[], processId: string): Promise<void> {
+  if (connIds.length === 0) return
+  const p = pub.pipeline()
+  for (const connId of connIds) p.set(connOwnerKey(connId), processId, 'PX', CONN_OWNER_TTL_MS)
+  try { await p.exec() } catch (err) { logger.debug('[bus] conn owner record failed', { error: String(err) }) }
+}
+export async function forgetConnOwner(connId: string): Promise<void> {
+  try { await pub.del(connOwnerKey(connId)) } catch { /* expires on its own */ }
+}
+/** The process holding this viewer connection, or null when none is recorded (or Redis cannot say). */
+export async function connOwner(connId: string): Promise<string | null> {
+  try { return await pub.get(connOwnerKey(connId)) } catch { return null }
+}
+
+/** A terminal hop for one process: the machine id (2-byte length + UTF-8) before the hop, so the receiver delivers only
+ *  to that machine's viewer with the hop's connection id. */
+export function encodePodHop(machineId: string, packet: Uint8Array): Buffer {
+  const id = Buffer.from(machineId, 'utf8')
+  const out = Buffer.allocUnsafe(2 + id.length + packet.length)
+  out.writeUInt16BE(id.length, 0)
+  id.copy(out, 2)
+  out.set(packet, 2 + id.length)
+  return out
+}
+export function decodePodHop(payload: Buffer): { machineId: string; packet: Uint8Array } | null {
+  if (payload.length < 2) return null
+  const length = payload.readUInt16BE(0)
+  if (payload.length < 2 + length) return null
+  return { machineId: payload.toString('utf8', 2, 2 + length), packet: payload.subarray(2 + length) }
+}
+export function publishPodHop(processId: string, machineId: string, packet: Uint8Array): Promise<number> {
+  return safePublish(podHopChannel(processId), encodePodHop(machineId, packet))
+}
+export function publishPodJson(processId: string, machineId: string, msg: UpBusMsg): Promise<number> {
+  return safePublish(podJsonChannel(processId), JSON.stringify({ machineId, msg }))
+}
+/** This process's own channels: hops on the terminal subscriber connection, JSON frames on the main one, the same
+ *  connections the machine's channels use, so a viewer's frames keep their order on each. */
+export async function subscribePod(processId: string, on: { hop(machineId: string, packet: Uint8Array): void; json(machineId: string, msg: UpBusMsg): void }): Promise<() => void> {
+  const subscribed = await Promise.allSettled([
+    addBinarySub(podHopChannel(processId), payload => { const hop = decodePodHop(payload); if (hop) on.hop(hop.machineId, hop.packet) }),
+    // Only a frame for one connection comes here; anything else would reach every viewer of the machine on this process.
+    addSub(podJsonChannel(processId), message => {
+      const { machineId, msg } = (message ?? {}) as { machineId?: unknown; msg?: UpBusMsg }
+      if (typeof machineId === 'string' && msg && typeof msg.targetConnId === 'string') on.json(machineId, msg)
+    }),
+  ])
+  const stops = subscribed.flatMap(each => each.status === 'fulfilled' ? [each.value] : [])
+  const failed = subscribed.find((each): each is PromiseRejectedResult => each.status === 'rejected')
+  if (failed) { for (const stop of stops) stop(); throw failed.reason }
+  return () => { for (const stop of stops) stop() }
 }
 
 // ── up / down data channels ──────────────────────────────────────────────────────────────────────
@@ -853,6 +921,50 @@ export function publishDeskChanged(userId: string, msg: DeskChangedMsg): Promise
 
 export function subscribeDeskChanged(userId: string, cb: (msg: DeskChangedMsg) => void): Promise<() => void> {
   return addSub(deskChannel(userId), cb as Cb)
+}
+
+// ── a terminal app open on the account (docs/plans/2026-10-31-live-events-relay-design.md, change 5) ─────────────────
+// Few people run `harness tui` (or Harness OS, which runs it), and only it reads some transcript events in full: a daemon
+// holds those back from the relay while none of its account's is open (one Desktop's day, 2026-10-30: about 12,700 of
+// its 170,666 frames). A daemon with one attached sends app_presence `open` at once and a `ping` at most once a minute
+// (cli gateway/upstream.ts APP_PRESENCE_UP_MS); the key outlives two and a half pings, and the daemons are told at once on
+// an open and at most once a minute after, each word good for three minutes: closing one needs no message.
+const tuiOpenKey = (userId: string): string => `tui_open:${userId}`
+const tuiSaidKey = (userId: string): string => `tui_open_said:${userId}`
+const tuiChannel = (userId: string): string => `tui:${userId}`
+/** How long a daemon takes one word that a terminal app is open (cli gateway.ts `__tui_open`). */
+export const TUI_OPEN_FOR_MS = 180_000
+const TUI_OPEN_KEY_SEC = 150
+const TUI_SAID_SEC = 60
+
+/** A terminal app of [userId]'s is open (its daemon's `open`) or still is (`ping`). Never throws. Without Redis its keys
+ *  cannot be kept, but the daemons are told anyway (final review: in single-pod mode `safePublish` still reaches this
+ *  pod's daemons, and holding a terminal app's events back is what must not happen silently). */
+export async function noteTuiPresence(userId: string, kind: 'open' | 'ping'): Promise<void> {
+  let tell = kind === 'open'
+  try {
+    await pub.set(tuiOpenKey(userId), '1', 'EX', TUI_OPEN_KEY_SEC)
+    if (!tell) tell = await pub.set(tuiSaidKey(userId), '1', 'EX', TUI_SAID_SEC, 'NX') === 'OK'
+  } catch (err) {
+    tell = true
+    logger.warn('[bus] terminal app presence not kept', { userId, error: err instanceof Error ? err.message : String(err) })
+  }
+  if (tell) await safePublish(tuiChannel(userId), '1')
+}
+
+/** Whether a terminal app of [userId]'s is open now; null when Redis cannot say, and then the daemon is told nothing and
+ *  relays every event, which costs frames, never a terminal app its events. */
+export async function tuiOpenNow(userId: string): Promise<boolean | null> {
+  try {
+    return await pub.exists(tuiOpenKey(userId)) > 0
+  } catch (err) {
+    logger.warn('[bus] terminal app presence unreadable', { userId, error: err instanceof Error ? err.message : String(err) })
+    return null
+  }
+}
+
+export function subscribeTuiOpen(userId: string, cb: () => void): Promise<() => void> {
+  return addSub(tuiChannel(userId), (() => cb()) as Cb)
 }
 
 // Per-USER zoo invalidation: the account's daemons or eggs changed (routes/zoo.ts). The same path as

@@ -52,6 +52,21 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- harness://swarm/<tab>/<conversation>/<message>: the message link Desktop's Copy
+                 link to message makes. MainActivity hands it to Dart over `harness/links`, which
+                 opens the chat at that message; the link names ids only and grants nothing. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="harness" android:host="swarm" />
+            </intent-filter>
+            <!-- Off: a message link goes through `harness/links`, never Flutter's own route push,
+                 which this app's navigator has no route for. -->
+            <meta-data
+              android:name="flutter_deeplinking_enabled"
+              android:value="false"
+              />
         </activity>
         <!-- "Back to Harness" on the last page of "Continue with Google / Apple": brings the app
              back over the Custom Tab the sign-in ran in, and takes the tab down with it (see

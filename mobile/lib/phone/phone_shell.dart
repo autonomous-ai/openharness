@@ -8,12 +8,15 @@ import 'package:harness_mobile/state/app_state.dart';
 
 import '../notify/system_notices.dart';
 import '../p2p/phone_terminal_p2p.dart';
+import '../swarm/swarm_activity_page.dart' show swarmActivityRoute;
 import '../swarm/swarm_attachment_store.dart';
 import '../swarm/swarm_computers.dart';
-import '../swarm/swarm_conversation_page.dart';
 import '../swarm/swarm_dictation.dart';
 import '../swarm/swarm_home_root.dart';
+import '../swarm/swarm_inbox.dart' show SwarmDecisionNeed;
+import '../swarm/swarm_message_link.dart';
 import '../swarm/swarm_profile.dart';
+import '../swarm/swarm_project_page.dart' show swarmChatRoute;
 import '../swarm/swarm_session.dart';
 import '../swarm/swarm_tabs.dart';
 import 'agent_home.dart';
@@ -24,6 +27,7 @@ import 'exit_app.dart';
 import 'new_device_banner.dart';
 import 'phone_navigation.dart';
 import 'phone_shell_scope.dart';
+import 'phone_status.dart';
 import 'settings_page.dart' show openPhoneSettings;
 import 'voice_input_controller.dart';
 import 'voice_input_scope.dart';
@@ -77,6 +81,8 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
 
   /// The centre's Swarm notices: the app's own centre carries them; a stand-in that does not
   /// (a test's) gets a silent one.
+  late final SwarmLinkChannel _links;
+
   late final SwarmNotices _swarmNotices =
       switch (widget.notifier.agentNotices.system) {
         final SwarmNotices notices => notices,
@@ -101,7 +107,8 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     notices.openedDevice.addListener(_openNoticedDevice);
     final state = WidgetsBinding.instance.lifecycleState;
     _swarm = SwarmHost(
-      accountId: () => widget.notifier.currentUser?.id,
+      accountId: () => widget.notifier.swarmAccountId,
+      accountReading: () => widget.notifier.accountReading,
       account: widget.notifier,
       request: widget.notifier.swarmRequest,
       upload: widget.notifier.swarmUpload,
@@ -130,6 +137,9 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     )..foreground = state == null || _inFront(state);
     _swarmFiles = SwarmAttachmentKeeper(_swarm);
     _swarmNotices.openedSwarm.addListener(_openNoticedSwarm);
+    // A message link (Desktop's Copy link to message): one that launched the
+    // app or came before sign-in waits on the native side until now.
+    _links = SwarmLinkChannel(_openLinkedMessage)..listen();
     // Install tap callbacks and read the launch payload even when no new notice
     // arrives. Checking permission does not ask for it.
     unawaited(noticesEnabled(notices));
@@ -169,6 +179,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
       _openNoticedDevice,
     );
     _swarmNotices.openedSwarm.removeListener(_openNoticedSwarm);
+    _links.close();
     _home.dispose();
     _swarmFiles.dispose();
     _swarm.dispose();
@@ -357,22 +368,60 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     _showNoticedChat(target);
   }
 
+  /// A message link: Swarm Home, and over it the chat at that message. The
+  /// chat says "not open" for one the person cannot read, as for a notice.
+  void _openLinkedMessage(SwarmMessageLink link) {
+    if (!mounted) return;
+    if (_navigator.currentState == null) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _openLinkedMessage(link),
+      );
+      WidgetsBinding.instance.ensureVisualUpdate();
+      return;
+    }
+    if (_swarm.session == null) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(
+          content: Text('Turn on Swarm in Settings to open this link.'),
+        ),
+      );
+      return;
+    }
+    _showNoticedChat((
+      swarmId: link.tabId,
+      conversationId: link.conversationId,
+      messageId: link.messageId,
+      decisionId: null,
+    ));
+  }
+
   void _showNoticedChat(SwarmNoticeTarget target) {
     ++_navigationRequest;
     final navigator = _navigator.currentState;
     if (navigator == null) return;
     navigator.popUntil((route) => route.isFirst);
     _home.showSwarm();
+    // A decision opens in Activity, where it is answered, as Desktop opens
+    // it in Notifications: no chat shows decisions. Activity says so when it
+    // is no longer open, whoever's it was.
+    if (target.decisionId case final decisionId?) {
+      unawaited(
+        navigator.push(
+          swarmActivityRoute(
+            focus: SwarmDecisionNeed.keyOf(decisionId),
+            swarmId: target.swarmId,
+          ),
+        ),
+      );
+      return;
+    }
+    // A project's own chat opens as its project, on Swarm Home C's tabs.
     unawaited(
       navigator.push(
-        phoneRoute(
-          (_) => SwarmConversationPage(
-            swarmId: target.swarmId,
-            conversationId: target.conversationId,
-            messageId: target.messageId,
-            decisionId: target.decisionId,
-          ),
-          listensForItself: true,
+        swarmChatRoute(
+          swarmId: target.swarmId,
+          conversationId: target.conversationId,
+          messageId: target.messageId,
         ),
       ),
     );
@@ -552,6 +601,8 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
       onMachineLinked: _followLinkedMachine,
       onOpenAgent: _openAgentAtHome,
       onShowSwarm: _showSwarm,
+      canOpenMachine: (machineId) =>
+          phoneMachineOpensTerminals(widget.notifier.machineStates[machineId]),
       // Rebuilt when the root switches, so back from Harness can reach Swarm Home.
       child: ListenableBuilder(
         listenable: _home,

@@ -29,9 +29,10 @@ import {
 import { parseGridLaunchOverride, type GridLaunchOverride } from '../../lib/gridLaunchWire.js'
 import { parseLaunchModel } from '../../lib/launchModel.js'
 import { parseNewAgentModel, type NewAgentModel } from '../../lib/newAgentModel.js'
-import { parseProjectFolder, prepareProjectFolder, projectsRoot, ProjectFolderError, type ProjectFolder } from '../../lib/projectFolder.js'
+import { parseProjectFolder, prepareProjectFolder, projectsRoot, ProjectFolderError, RepositoryAccessError, type ProjectFolder } from '../../lib/projectFolder.js'
 import type { ScmLaunchRecord } from '../../scm/types.js'
 import { parentAgentIdOf, type RegisteredSession } from '../../lib/registry.js'
+import { roleFromWire, wireRole } from '../../lib/savedSkill.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import type { LaunchAuthority, LaunchPreparation } from '../../lib/launchPreparation.js'
 import { createPendingLaunches } from './pendingLaunches.js'
@@ -106,17 +107,25 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     /** A new project's folder, which this made empty: removed again if nothing starts in it. */
     let made: string | undefined
     let scmLaunchRecord: ScmLaunchRecord | null = null
+    /** The SSH alias a clone got in through, which the apps tell the person: it is the account later pushes go as. */
+    let clonedVia: { alias: string } | undefined
     if (projectFolder) {
       try {
         preparedFolder = await prepareProjectFolder(projectFolder, { label: (dsh ? installedDsh(dsh)?.manifest.name : null) ?? engineLabel(input.engine),
-          onPrepared: prepared => { scmLaunchRecord = prepared.scmLaunchRecord } })
+          onPrepared: prepared => { scmLaunchRecord = prepared.scmLaunchRecord },
+          // The person's own start may try every way this computer reaches GitHub. A Swarm agent's repository was cloned
+          // by its start (superTabs/projectFolder.ts), which keeps to one address per transport and never an alias.
+          ...(projectFolder.source === 'remote' ? { cloneFallback: !input.swarmRole,
+            onCloned: (clone: { alias?: string }) => { if (clone.alias) clonedVia = { alias: clone.alias } } } : {}) })
         if (projectFolder.source === 'new') made = preparedFolder
       }
       catch (error) {
         return { state: 'failed', error: error instanceof ProjectFolderError ? error.code : 'PROJECT_PREPARATION_FAILED',
           detail: error instanceof ProjectFolderError ? error.message : 'Could not prepare the project folder.',
           // The folder a typed name found already there: the apps offer to start in it, and `harness new` names it.
-          ...(error instanceof ProjectFolderError && error.folder ? { existingFolder: error.folder } : {}) }
+          ...(error instanceof ProjectFolderError && error.folder ? { existingFolder: error.folder } : {}),
+          // GitHub refused every way in: the apps say "No access" in their own words rather than git's.
+          ...(error instanceof RepositoryAccessError ? { access: 'denied' as const } : {}) }
       }
       // Only a folder this daemon just made EMPTY is one the engine need not ask about. A clone or
       // the person's own repo is theirs to answer for (engines/kit/folderTrust.ts); a worktree gets only
@@ -130,8 +139,13 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       // answered. Its Yes then landed under the source's key (Claude Code records a worktree's answer under its
       // main repository), which made the source look trusted before the worktree started.
       // Claude Code only: Codex's trust also sets its defaults for the person's own later sessions in that folder.
-      const swarmCheckout = input.engine === 'claude' && projectFolder.source === 'remote' && !!input.swarmRole
-        && input.permissionMode === 'full'
+      //
+      // And a worktree of a repository the person picked in this machine's OWN window for a Swarm agent in full mode:
+      // 2026-10-30, a new Swarm made with Cmd+S on a local openharness checkout started its PM in a worktree of it, and
+      // the PM sat at Claude Code's trust question, which no Swarm view shows; it read Idle and every message to it was
+      // withheld. Only from a local frame: a relayed request could name any repository on this machine.
+      const swarmAgent = input.engine === 'claude' && !!input.swarmRole && input.permissionMode === 'full'
+      const swarmCheckout = swarmAgent && (projectFolder.source === 'remote' || (projectFolder.source === 'worktree' && local))
       try {
         // A Codex agent on its own profile reads its trust from that profile's config.toml, not ~/.codex.
         const engineTrust = folderTrust(input.engine, input.codexHome)
@@ -161,7 +175,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       } catch (error) { console.warn(`[agent] pre-trust ${input.cwd} · ${error instanceof Error ? error.message : error}`) }
     }
     const result = await invoke(preparedFolder ? { ...input, cwd: preparedFolder, scmLaunchRecord } : input)
-    if (result.ok) return { state: 'created', agentId: result.session.agentId }
+    if (result.ok) return { state: 'created', agentId: result.session.agentId, ...(clonedVia ? { clonedVia } : {}) }
     // tmux may have executed before a timeout; registration cleanup is best-effort.
     // Neither can prove that no process started, so never encourage another launch.
     if (result.error === 'SPAWN_FAILED' || result.error === 'REGISTRATION_FAILED') return { state: 'unconfirmed' }
@@ -253,7 +267,8 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     if (status.state === 'created') {
       const session = byAgent(status.agentId)
       return session
-        ? { state: 'created', agent: await toProject(session), ...(status.level ? { level: status.level } : {}), ...(status.resumed !== undefined ? { resumed: status.resumed } : {}) }
+        ? { state: 'created', agent: await toProject(session), ...(status.level ? { level: status.level } : {}), ...(status.resumed !== undefined ? { resumed: status.resumed } : {}),
+          ...(status.clonedVia ? { clonedVia: status.clonedVia } : {}) }
         : { state: 'unavailable', createdAgentId: status.agentId }
     }
     // A recorded refusal is a completed outcome. Keep it separate from transport/dispatch errors
@@ -261,7 +276,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     if (status.state === 'failed') {
       return { state: 'failed', ...(status.preparedFolder ? { preparedFolder: status.preparedFolder } : {}), failure: { code: status.error,
         ...(status.reason ? { reason: status.reason } : {}), ...(status.detail ? { detail: status.detail } : {}),
-        ...(status.existingFolder ? { existingFolder: status.existingFolder } : {}) } }
+        ...(status.existingFolder ? { existingFolder: status.existingFolder } : {}), ...(status.access ? { access: status.access } : {}) } }
     }
     return status
   }
@@ -411,10 +426,12 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     if (!swarmLaunch && ((swarmRole !== undefined && swarmRole !== null) || payload.swarmSkillMode !== undefined || payload.swarmGitHub !== undefined)) {
       reply({ error: 'INVALID_SWARM_ROLE', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' }); return
     }
-    const isSwarmRole = (value: unknown): value is NonNullable<CreateInput['swarmRole']> => !!swarmLaunch?.role(value)
+    // Project instructions, phase 4 (decision 1): a coordinator, an agent or a Buddy. An older Harness sends lead, dev or review
+    // (a Reviewer, which keeps its swarm-review file); the next release may send the kinds, so this one takes both.
+    const swarm = swarmRole === undefined || swarmRole === null ? null : roleFromWire(swarmRole)
     if (swarmRole !== undefined && swarmRole !== null &&
-      (!isSwarmRole(swarmRole) || (engine !== 'claude' && engine !== 'codex'))) {
-      reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm role is lead, dev or review, for Claude Code or Codex.' }); return
+      (!swarm || !swarmLaunch?.role(swarm.role) || (engine !== 'claude' && engine !== 'codex'))) {
+      reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm role is coordinator, agent or buddy (or lead, dev or review from an older Harness), for Claude Code or Codex.' }); return
     }
     // The skills of the project the agent joins (superTabs/start.ts); a start from before modes sends none.
     const swarmSkillMode = payload.swarmSkillMode
@@ -424,7 +441,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     // Another person's project work: git and gh use the Harness GitHub App's token for the task (lib/swarmGitHub.ts).
     // Only `true`, and only with a role; a start from before the app sends none and launches as it did.
     const swarmGitHub = payload.swarmGitHub
-    if (swarmGitHub !== undefined && (swarmGitHub !== true || !isSwarmRole(swarmRole))) {
+    if (swarmGitHub !== undefined && (swarmGitHub !== true || !swarm)) {
       reply({ error: 'INVALID_SWARM_ROLE', detail: 'swarmGitHub is true, with a Swarm role.' }); return
     }
     // Its worktree fetches nothing with this machine's own git login: its host fetched with the app's token just before
@@ -498,7 +515,8 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       codexHome,
       dsh,
       prompt,
-      ...(isSwarmRole(swarmRole) ? { swarmRole, ...(swarmSkillMode ? { swarmSkillMode } : {}), ...(swarmGitHub ? { swarmGitHub } : {}) } : {}),
+      ...(swarm ? { swarmRole: swarm.role, ...(swarm.fallback ? { swarmFallback: swarm.fallback } : {}), ...(swarmSkillMode ? { swarmSkillMode } : {}),
+        ...(swarmGitHub ? { swarmGitHub } : {}) } : {}),
       name,
       agent,
       resumeSessionId,
@@ -508,7 +526,11 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       ...(launchModel.state === 'ok' ? { launchModel: launchModel.launchModel } : {}),
       ...(parentAgentId ? { parentAgentId } : {}),
     }
-    const fingerprintInput = model.state === 'ok' ? { ...input, modelSelection: model.selection } : input
+    // The fingerprint names the role in the wire's values, as every receipt from before role kinds does: a start asked again
+    // after this machine's update still finds the receipt its first ask got, whichever value set the asker sends.
+    const { swarmFallback: _fallback, ...stable } = input
+    const recorded = swarm ? { ...stable, swarmRole: wireRole(swarm) } : input
+    const fingerprintInput = model.state === 'ok' ? { ...recorded, modelSelection: model.selection } : recorded
     if (creationId !== undefined) {
       // Reserve before spawning. A transport retry carries the SAME creationId; a deliberate
       // New agent action carries a new one. Detach so a status check can pass a slow create

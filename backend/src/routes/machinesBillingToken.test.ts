@@ -18,6 +18,10 @@ vi.mock('../services/index.js', () => ({
 vi.mock('../lib/prisma.js', () => ({ prisma: {}, machineAlive: {} }))
 vi.mock('../lib/machineAccess.js', () => ({ machinesSharedWith: vi.fn(async () => []) }))
 vi.mock('../lib/ssoSession.js', () => ({ ssoAccessTokenFor: m.ssoAccessTokenFor }))
+// The machine routes reach the Redis bus (lib/bus.ts), which opens its clients as it is imported. With no Redis, their
+// connection errors were logged after this short file had finished, and the worker closed with those logs on their way
+// ("Closing rpc while onUserConsoleLog was pending", CI on #2434). Nothing here publishes, so no client is opened.
+vi.mock('../lib/bus.js', () => ({}))
 
 import { machineRoutes } from './machines.js'
 import { errorHandler } from '../middlewares/errorHandler.js'

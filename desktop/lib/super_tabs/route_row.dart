@@ -3,15 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
-import '../shared/widgets/app_dialog.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/finger_target.dart';
 import 'controller.dart';
-import 'dialog_scope.dart';
 import 'message_row.dart';
 import 'model.dart';
-import 'routing_policy.dart';
-import 'routing_policy_form.dart';
 
 /// A read-only routing note. Reassignment belongs in the conversation with the
 /// lead, rather than a control attached to an earlier routing decision.
@@ -49,11 +45,8 @@ class _SuperTabRouteRowState extends State<SuperTabRouteRow> {
   String get _how => switch (widget.route.via) {
     'jev' => 'Jev ${((widget.route.p ?? 0) * 100).round()}%',
     'only' => 'Only available candidate',
-    _ => switch (widget.route.fallback) {
-      'unavailable' => 'Policy order (Jev unavailable)',
-      'unsure' => 'Policy order (Jev unsure)',
-      _ => 'Policy order',
-    },
+    // An older backend's policy order too: it ranks, never refuses.
+    _ => 'Ranked by strength, price and quota',
   };
 
   Future<void> _load() async {
@@ -107,7 +100,6 @@ class _SuperTabRouteRowState extends State<SuperTabRouteRow> {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final r = widget.route;
     final style = DesktopChrome.metadata(
       color: Theme.of(context).colorScheme.onSurfaceVariant,
     );
@@ -126,14 +118,6 @@ class _SuperTabRouteRowState extends State<SuperTabRouteRow> {
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               Text('Routed to $_target', style: style),
-              if (r.belowFloor)
-                Padding(
-                  padding: const EdgeInsets.only(left: 8),
-                  child: Text(
-                    'Below quality floor',
-                    style: style.copyWith(color: grid.AppPalette.warn),
-                  ),
-                ),
               Semantics(
                 expanded: _expanded,
                 child: _action(_expanded ? 'Hide details' : 'Details', _toggle),
@@ -174,8 +158,14 @@ class _SuperTabRouteRowState extends State<SuperTabRouteRow> {
               _action('Retry', () => unawaited(_load())),
             ],
           ),
-        if (record['floor'] case final num floor) Text('Quality floor $floor'),
-        if (record['notes'] == true) const Text('Policy notes applied'),
+        // The instructions the route read (phase 4 decision 12); a record
+        // from before it says nothing of them.
+        if (record['instructionsRevision'] case final num revision)
+          Text(
+            revision == 0
+                ? 'Relied on the built-in instructions'
+                : 'Relied on instructions revision ${revision.toInt()}',
+          ),
         if (candidates.isNotEmpty) ...[
           const SizedBox(height: 4),
           const Text('Considered'),
@@ -191,174 +181,6 @@ class _SuperTabRouteRowState extends State<SuperTabRouteRow> {
         for (final e in excluded)
           Text('Unavailable: ${e['title']} — ${e['reason']}'),
       ],
-    );
-  }
-}
-
-/// Opens this Swarm's routing policy: the effective policy, with the
-/// fields it overrides marked. Only the owner can change it.
-Future<void> showSuperTabRouting(BuildContext context, SuperTabController c) =>
-    showAppDialog<void>(
-      context: context,
-      builder: (_) => SuperTabDialogScope(
-        controller: c,
-        requireWrite: false,
-        child: _RoutingDialog(controller: c),
-      ),
-    );
-
-class _RoutingDialog extends StatefulWidget {
-  const _RoutingDialog({required this.controller});
-  final SuperTabController controller;
-  @override
-  State<_RoutingDialog> createState() => _RoutingDialogState();
-}
-
-class _RoutingDialogState extends State<_RoutingDialog> {
-  RoutingPolicy? _policy;
-  // The owner's account policy: what a field shows after Use account default.
-  RoutingPolicy? _account;
-  // The fields this Swarm overrides; the rest follow the account default.
-  final _overridden = <String>{};
-  List<String> _warnings = const [];
-  String? _problem;
-  bool _valid = true;
-
-  SuperTabController get _c => widget.controller;
-
-  @override
-  void initState() {
-    super.initState();
-    unawaited(_load());
-  }
-
-  Future<void> _load() async {
-    try {
-      final answer = await _c.request(
-        'GET',
-        '/api/super-tabs/${_c.tabId}/routing-policy',
-      );
-      if (!mounted) return;
-      setState(() {
-        _policy = RoutingPolicy.fromJson(superTabMap(answer['policy']));
-        if (answer['account'] is Map) {
-          _account = RoutingPolicy.fromJson(superTabMap(answer['account']));
-        }
-        _overridden.addAll((answer['overridden'] as List? ?? const []).cast());
-        _warnings = (answer['warnings'] as List? ?? const [])
-            .whereType<String>()
-            .toList();
-      });
-    } catch (failure) {
-      if (mounted) {
-        setState(
-          () => _problem = 'Could not load the routing policy. $failure',
-        );
-      }
-    }
-  }
-
-  Future<void> _save() async {
-    final policy = _policy;
-    if (policy == null) return;
-    setState(() => _problem = null);
-    // command() answers null without trying when the controller is busy, so
-    // that case must not be reported as a refusal.
-    if (_c.saving || _c.hasPendingAction) {
-      setState(() => _problem = 'Finish the pending action first.');
-      return;
-    }
-    final result = await _c.command({
-      'type': 'tab.routingPolicy',
-      'policy': _overridden.isEmpty ? null : policy.fields(_overridden),
-    });
-    if (!mounted) return;
-    if (result == null) {
-      setState(
-        () => _problem = _c.operationError ?? 'Could not save the routing.',
-      );
-      return;
-    }
-    Navigator.of(context).pop();
-  }
-
-  /// The fields [next] differs in, so editing one marks it as overridden.
-  Set<String> _changed(RoutingPolicy a, RoutingPolicy b) {
-    final x = a.toJson(), y = b.toJson();
-    return {
-      for (final k in const ['models', 'floor', 'quotaReserve', 'notes'])
-        if (x[k].toString() != y[k].toString()) k,
-    };
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final policy = _policy;
-    final owner = _c.isOwner;
-    return ListenableBuilder(
-      listenable: _c,
-      builder: (context, _) => AlertDialog(
-        title: const Text('Routing for this Swarm'),
-        content: SizedBox(
-          width: 560,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (policy == null && _problem == null)
-                  const LinearProgressIndicator(),
-                for (final warning in _warnings)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Text(warning, style: DesktopChrome.metadata()),
-                  ),
-                if (policy != null)
-                  RoutingPolicyForm(
-                    value: policy,
-                    readOnly: !owner,
-                    overridden: _overridden,
-                    onValidChanged: (ok) => setState(() => _valid = ok),
-                    onChanged: (next) => setState(() {
-                      _overridden.addAll(_changed(policy, next));
-                      _policy = next;
-                    }),
-                    onUseDefault: (field) => setState(() {
-                      _overridden.remove(field);
-                      final account = _account;
-                      if (account != null) {
-                        _policy = policy.takeField(field, account);
-                      }
-                    }),
-                  ),
-                if (_problem != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Text(
-                      _problem!,
-                      style: DesktopChrome.control(
-                        color: Theme.of(context).colorScheme.error,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text(owner ? 'Cancel' : 'Close'),
-          ),
-          if (owner)
-            FilledButton(
-              onPressed: policy == null || !_valid || _c.saving
-                  ? null
-                  : () => unawaited(_save()),
-              child: const Text('Save'),
-            ),
-        ],
-      ),
     );
   }
 }

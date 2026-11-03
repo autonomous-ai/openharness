@@ -99,12 +99,21 @@ describe('the Swarm\'s agents, as the core lets it close and reopen them', () =>
     harnesses.mockReturnValue(new Set())
     expect(await swarm.closeMember('live')).toEqual({ error: 'NOT_A_MEMBER' })
     expect(purgeEnded).toHaveBeenCalledTimes(2)
-    purgeEnded.mockRejectedValueOnce(new Error('EIO'))
-    expect(await swarm.closeMember('absent')).toEqual({ error: 'PURGE_FAILED', detail: 'EIO' })
+    // A thrown failure is said by its kind alone, in the log and the answer: its message may name a path (security review 2
+    // of #2389).
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      purgeEnded.mockRejectedValueOnce(Object.assign(new Error("EACCES: permission denied, scandir '/Users/team/.claude/projects/-secret-folder'"), { code: 'EACCES' }))
+      expect(await swarm.closeMember('absent')).toEqual({ error: 'PURGE_FAILED', detail: 'EACCES' })
+      purgeEnded.mockRejectedValueOnce(new TypeError('/Users/team/.claude/projects/-secret-folder is not a thing'))
+      expect(await swarm.closeMember('absent')).toEqual({ error: 'PURGE_FAILED', detail: 'TypeError' })
+      purgeEnded.mockRejectedValueOnce('/Users/team/.claude/projects/-secret-folder: disk full')
+      expect(await swarm.closeMember('absent')).toEqual({ error: 'PURGE_FAILED', detail: 'unknown failure' })
+      expect(warned.mock.calls.map(([line]) => String(line))).toEqual(['EACCES', 'TypeError', 'unknown failure']
+        .map(kind => `[super-tabs] could not delete the session data of absent: ${kind}`))
+    } finally { warned.mockRestore() }
     purgeEnded.mockResolvedValueOnce({ error: 'SCRUB_INCOMPLETE', detail: 'Something still names the session: /x' } as never)
     expect(await swarm.closeMember('absent')).toEqual({ error: 'PURGE_FAILED', detail: 'Something still names the session: /x' })
-    purgeEnded.mockRejectedValueOnce('disk full')
-    expect(await swarm.closeMember('absent')).toEqual({ error: 'PURGE_FAILED', detail: 'disk full' })
     purgeEnded.mockResolvedValueOnce({ error: 'NOT_FOUND' } as never)
     expect(await swarm.closeMember('absent')).toEqual({ error: 'PURGE_FAILED', detail: 'NOT_FOUND' })
     // A close that failed deletes nothing: the session is still there.

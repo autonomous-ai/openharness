@@ -39,28 +39,13 @@ Future<void> _showWork(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (group?.task case final task?) ...[
-                  for (final section in [
-                    ('Goal', task.goal),
-                    ('Changes', task.changes),
-                    ('Constraints', task.constraints),
-                    ('Owns', task.owns.map((area) => '- $area').join('\n')),
-                  ]) ...[
-                    Text(
-                      section.$1,
-                      style: DesktopChrome.control(medium: true),
-                    ),
-                    const SizedBox(height: 4),
-                    SuperTabMessageText(section.$2),
-                    const SizedBox(height: 16),
-                  ],
-                ] else if (group?.brief.isNotEmpty == true)
+                // The brief as written (the backend writes a task's from its
+                // parts), never parts of a fixed shape.
+                if (group?.brief.isNotEmpty == true)
                   SuperTabMessageText(group!.brief)
                 else
-                  const Text(
-                    'The product manager hasn’t defined an assignment in this conversation yet.',
-                  ),
-                if (c.reviewLine(group) case final line?) ...[
+                  const Text('This task has no description yet.'),
+                if (c.linkedLine(group) case final line?) ...[
                   const SizedBox(height: 16),
                   Text(line),
                 ],
@@ -84,8 +69,6 @@ Future<void> _showWork(
                     check['description'] as String,
                     style: DesktopChrome.control(medium: true),
                   ),
-                  if (check['independent'] == true)
-                    const Text('Requires an independent check.'),
                   if (check['evidence'] is String)
                     SuperTabMessageText(check['evidence'] as String),
                   Text(check['passedBy'] == null ? 'Not verified' : 'Verified'),

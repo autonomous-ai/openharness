@@ -205,8 +205,9 @@ const NAME_CUTS = [24, 12, 6, 3, 1, 0]
  * without its Buddies a frame is today's swarmChat one, about 5.3 KB at most. A frame that fits is sent as it is.
  * With `tokens`, as for the Harness Pro, whose guard refuses a JSON frame over 512 tokens, a frame fits only if it is also
  * within that many JSON tokens. Shorter names do not lower that count, so only the Buddy blocks go for it.
+ * Returns how many Buddy blocks went, for the caller's log.
  */
-function fitFrame(frame: { name: string; leads: Array<Record<string, unknown>> }, tokens?: number): void {
+function fitFrame(frame: { name: string; leads: Array<Record<string, unknown>> }, tokens?: number): number {
   const small = () => Buffer.byteLength(JSON.stringify(frame)) < CABLE_MAX_PAYLOAD
   const fits = () => small() && (tokens === undefined || jsonTokens(frame) <= tokens)
   type Named = { [key: string]: unknown }
@@ -218,7 +219,9 @@ function fitFrame(frame: { name: string; leads: Array<Record<string, unknown>> }
       for (const [holder, key] of fields) holder[key] = truncateUtf8(String(holder[key]), bytes)
     }
   }
-  for (let i = frame.leads.length - 1; i >= 0 && !fits(); i--) delete frame.leads[i].buddy
+  let dropped = 0
+  for (let i = frame.leads.length - 1; i >= 0 && !fits(); i--) if (frame.leads[i].buddy !== undefined) { delete frame.leads[i].buddy; dropped++ }
+  return dropped
 }
 /** A Lead's new message as the round dial's alert, sized as the recap is. */
 function noticeFrame(tab: string, lead: string, n: LeadNotice): Message {
@@ -390,6 +393,8 @@ export interface CableHost {
    * so the dial needs no table for a set it does not own.
    */
   selectMachine(machineId: string): Promise<{ ok: true } | { ok: false; code: string; message: string }>
+  /** The machine a pick is still on its way to, or '' when none is. Picking the selected machine then has to replace it. */
+  pendingPick?(): string
   /** The window's swarms and which is on screen. Empty with no window: the dial then draws no swarm line. */
   listSwarms(): { selected: string; swarms: CableSwarm[]; tiles: CableTile[] }
   /** The dial picked a swarm. Relayed to the window, which switches and re-describes its desk. */
@@ -1452,6 +1457,7 @@ export class CableSession {
         if (this.swarmBuddy && CARD_ID.test(tab) && (side === 'pm' || side === 'buddy')) {
           this.host.swarmCardSide?.(tab, side)
           this.followSide(tab, side)
+          if (side === 'buddy') this.queued(() => this.readSharedBuddyNotices(tab)).catch((err) => this.log(`cable: Buddy notices not cleared (${(err as Error).message})`))
         }
         return
       }
@@ -1749,13 +1755,13 @@ export class CableSession {
         // start. Quoted text, carried text, questions and edits already have their own pinned targets.
         // Except words for a Swarm face's chat: the dial shows that chat, so a pane focused in the window never takes them.
         const plain = str('agentId') && !formVoice && !searchVoice && !draftVoice && !questionVoice && !carryVoice && !('selectionId' in msg)
-        const dialFace = plain ? this.swarmFaceOf(str('agentId')!) : undefined
+        const dialFace = plain ? this.voiceFaceOf(str('agentId')!) : undefined
         // A Swarm Lead's id (the backend's 24 hex; a harness's is a UUID) with no card here yet (the devices process just
         // restarted) or any more: words for a Lead on another machine, which the focused pane must not take (review of #2232).
         const swarmId = plain && !dialFace && SWARM_AGENT_ID.test(str('agentId')!)
         const focused = plain && !dialFace && !swarmId ? this.host.appFocus?.() : undefined
         const agentId = focused?.agentId ?? str('agentId')
-        const swarmFace = dialFace ?? (agentId ? this.swarmFaceOf(agentId) : undefined)
+        const swarmFace = dialFace ?? (agentId ? this.voiceFaceOf(agentId) : undefined)
         this.voice = {
           agentId,
           ...(swarmFace ? { swarmFace } : {}),
@@ -2784,6 +2790,16 @@ export class CableSession {
     return undefined
   }
 
+  /**
+   * The chat words spoken to this Lead are posted in: its face chat, for a dial that names where words go. Never for a Pro:
+   * it shows the face chat but no "Sending to", and its plain agent room shows no chat at all, so following the desktop's
+   * open chat would post the person's words in a group or PM chat they cannot see they are talking to (review of #2298). Its
+   * words go to the Lead conversation, as before it said swarmChat, until voice comes to the Pro (Swarm parity, part 3).
+   */
+  private voiceFaceOf(harnessId: string): SwarmFace | undefined {
+    return this.seqOn ? undefined : this.swarmFaceOf(harnessId)
+  }
+
   /** Whether `harnessId` is a Swarm Lead's harness on this machine. */
   private swarmLeadHere(harnessId: string): boolean {
     return (this.host.swarmCards?.() ?? []).some((card) => card.leads.some((l) => l.local === harnessId))
@@ -2791,6 +2807,8 @@ export class CableSession {
 
   /** The extra arguments of words spoken to a Swarm Lead: the dial's chat flag, and the chat they were spoken to. */
   private sayArgs(face: SwarmFace | undefined): [chat?: CardChat, chatId?: string] {
+    // A chat flag with no id means "the chat open on the desktop" to the Swarm service: a Pro sends neither (voiceFaceOf).
+    if (this.seqOn) return []
     const [chat] = this.chatFlag()
     if (chat === undefined) return []
     return face ? [chat, face.id] : [chat]
@@ -2884,10 +2902,12 @@ export class CableSession {
       const frame = { t: 'supertab', id: card.id, tab, name: card.name, count: card.count, ...(this.swarmBuddy ? { side: card.side ?? 'pm' } : {}),
         leads: card.leads.slice(0, SWARM_LEADS_MAX).map((l) => this.swarmBuddy ? buddyLead(l) : this.swarmChat ? chatLead(l) : { id: l.id, projectId: l.projectId, project: l.project,
           engine: l.engine, owner: l.owner, local: l.local, state: l.state, order: l.order, ...(l.since === undefined ? {} : { since: l.since }) }) }
-      fitFrame(frame, this.seqOn ? SWARM_TOKENS_MAX : undefined)
+      const buddiesDropped = fitFrame(frame, this.seqOn ? SWARM_TOKENS_MAX : undefined)
       const key = JSON.stringify(frame)
       if (this.cardKeys.get(card.id) === key) continue
       this.cardKeys.set(card.id, key)
+      // Once per frame sent: those Leads show "No Buddy here yet" though they have one (spec 2026-10-30-harness-pro-swarm-parity, Scale).
+      if (buddiesDropped) this.log(`cable: supertab ${card.id.slice(0, 8)} too large — ${buddiesDropped} Buddy block(s) dropped`)
       await this.send(frame)
     }
     if (this.swarmChat) await this.pushNotices(cards, force)
@@ -2916,6 +2936,23 @@ export class CableSession {
       }
     }
     for (const key of [...this.notices.keys()]) if (!live.has(key)) this.notices.delete(key)
+  }
+
+  /**
+   * The dial showed the Buddy side of a Swarm. The reader's one Swarm Buddy speaks on every card, so one word badged them
+   * all, and the dial clears only the Lead it shows (review of #2500): the others' badges for the same chat are read here,
+   * so seeing the Buddy once is reading it once. A chat only one Lead's notice names (an older Swarm's own) is left alone.
+   */
+  private async readSharedBuddyNotices(tab: string): Promise<void> {
+    const leads = this.host.swarmCards?.()?.find((c) => c.id === tab)?.leads.slice(0, SWARM_LEADS_MAX) ?? []
+    for (const lead of leads) {
+      const notice = lead.buddyNotice
+      if (!notice || leads.filter((l) => l.buddyNotice?.chatId === notice.chatId).length < 2) continue
+      const held = this.notices.get(`${tab}:${lead.id}:buddy`)
+      if (!held?.open || held.id !== notice.id) continue
+      held.open = false
+      await this.send({ t: 'supertab.notice.read', tab, lead: lead.id, chatId: notice.chatId })
+    }
   }
 
   /** One alert of a Lead (held at `key`): sent once when it is new, unless replayed or read on the desktop (`openChat`, the
@@ -3047,10 +3084,22 @@ export class CableSession {
    * guessed; a Buddy side where the reader has no Buddy opens nothing, so no Buddy chat is made from a swipe.
    */
   private followSide(tab: string, side: CardSide): void {
-    const [focusedTab, projectId] = this.focusedKey.split('/')
-    if (focusedTab !== tab || !projectId) return
+    const [focusedTab, focusedProject] = this.focusedKey.split('/')
+    if (focusedTab !== tab) return
     const card = this.host.swarmCards?.()?.find((c) => c.id === tab)
-    if (!card?.leads.some((l) => l.projectId === projectId)) return
+    // The window is on the Swarm's one Buddy chat, which names no project (# buddy): the Buddy side is already open, and the
+    // PM side opens the Lead chat of the project the dial has open, else its first, so the dial is not stranded on # buddy
+    // (review of #2500). The Buddy side there asks for nothing. Only that chat: a DM or Chat with PM names no project either,
+    // and a swipe from one of them opens nothing, as before (second review of #2500).
+    let projectId = focusedProject
+    const window = this.host.activeSwarmProject?.()
+    const onBuddy = window?.superTabId === tab && window.conversationId !== undefined
+      && card?.leads.some((l) => l.buddies === true && l.buddy?.chatId === window.conversationId) === true
+    if (!projectId && side === 'pm' && card && onBuddy) {
+      const shown = this.openLead?.tabId === tab ? card.leads.find((l) => l.id === this.openLead?.leadId) : undefined
+      projectId = (shown ?? card.leads[0])?.projectId
+    }
+    if (!projectId || !card?.leads.some((l) => l.projectId === projectId)) return
     if (side === 'buddy' && !this.buddyIn(card, projectId)) return
     this.openSwarmChat(tab, projectId, side)
   }
@@ -3071,7 +3120,15 @@ export class CableSession {
         if (lead.buddies && lead.buddy?.local === agentId) found.push({ tab: card.id, projectId: lead.projectId, chat: 'buddy' })
       }
     }
-    return found.length === 1 ? found[0] : null
+    if (found.length === 1) return found[0]
+    // The reader's one Swarm Buddy is every project's Buddy, so its session is on each card of its Swarm: a tap on it opens
+    // the chat in the project the dial is on, else the first. Two sessions of different Swarms, or a Lead beside it, stay
+    // ambiguous, as before.
+    const [first] = found
+    if (first?.chat === 'buddy' && found.every((f) => f.chat === 'buddy' && f.tab === first.tab)) {
+      return found.find((f) => `${f.tab}/${f.projectId}` === this.focusedKey) ?? first
+    }
+    return null
   }
 
   // ── swarms ────────────────────────────────────────────────────────────────────────────────────────
@@ -3230,7 +3287,9 @@ export class CableSession {
    */
   private async selectMachine(machineId: string, isCurrent = () => true): Promise<void> {
     if (!machineId) return
-    if (machineId === this.host.selectedMachine()) {
+    // Not while a pick is on its way elsewhere: this one replaces it, so the host has to hear of it. Answered here alone,
+    // the slow pick landed afterwards and moved the check mark to a machine the person had left (Diego's Buddy, 11-02).
+    if (machineId === this.host.selectedMachine() && !this.host.pendingPick?.()) {
       await this.send({ t: 'machine.selected', machineId })
       await this.syncAgents()
       this.restoreInBackground()
@@ -3592,6 +3651,9 @@ export class CableSession {
     if (!this.link?.isOpen || this.greetedMac === null) return
     if (!agentId) return
 
+    // Read now: the focus step below writes the record. Desktop re-sends the same focus whenever its visible panes change,
+    // and a dial's own turn comes back as an echo: neither is anyone choosing anything (review of #2504).
+    const moved = agentId !== this.desiredFocus || this.appFocusUnsent
     const generation = ++this.appFocusGeneration
     const task = this.appFocusTail.then(async () => {
       // A newer desktop selection made this queued one obsolete before it started.
@@ -3639,7 +3701,8 @@ export class CableSession {
       await focused
       const isCurrent = () => generation === this.appFocusGeneration
       if (!isCurrent() || !machineId) return
-      if (machineId === this.host.selectedMachine()) {
+      // Only a focus that really moved replaces a pick on its way elsewhere (see selectMachine).
+      if (machineId === this.host.selectedMachine() && !(moved && this.host.pendingPick?.())) {
         // An older attachment to this same machine may have finished without acknowledging it,
         // because a newer pane superseded that request. The wheel still needs its selection.
         await this.syncMachines()

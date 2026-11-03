@@ -178,19 +178,20 @@ describe('message page reads', () => {
     const rows = await pageDeliveries(db, 'A', ['A-m150'])
     expect(rows.find(row => row.id === 'A-150-3')).toEqual({ id: 'A-150-3', messageId: 'A-m150', agentId: 'agent-3', status: 'delivered',
       receipt: 'typed', holdReason: 'busy', holdSince: new Date(T0 + 7000), deliveredAt: new Date(T0 + 8000), answeredAt: new Date(T0 + 9000),
-      createdAt: new Date(T0 + 150_000), updatedAt: expect.any(Date) })
+      createdAt: new Date(T0 + 150_000), updatedAt: expect.any(Date), claimFailingSince: null, claimFailures: null })
     expect(rows.find(row => row.id === 'A-150-old')).toEqual({ id: 'A-150-old', messageId: 'A-m150', agentId: 'agent-old', status: 'answered',
-      receipt: null, holdReason: null, holdSince: null, deliveredAt: null, answeredAt: null, createdAt: new Date(T0), updatedAt: new Date(T0 + 1) })
+      receipt: null, holdReason: null, holdSince: null, deliveredAt: null, answeredAt: null, createdAt: new Date(T0), updatedAt: new Date(T0 + 1), claimFailingSince: null, claimFailures: null })
     expect(rows.find(row => row.id === 'A-150-4')).toEqual({ id: 'A-150-4', messageId: 'A-m150', agentId: 'agent-4', status: 'answered',
       receipt: null, holdReason: null, holdSince: null, deliveredAt: null, answeredAt: null,
-      createdAt: new Date(T0 + 150_000), updatedAt: new Date(T0 + 150_500) })
+      createdAt: new Date(T0 + 150_000), updatedAt: new Date(T0 + 150_500), claimFailingSince: null, claimFailures: null })
   })
 
   // The delivery read never had an order (no orderBy: it followed whichever index the planner took), so it is compared by id.
   // Reactions keep the tabId+messageId index order, which their counts' `by` lists show.
   it('returns the same rows as the Prisma reads it replaces', async () => {
     const select = { id: true, messageId: true, agentId: true, status: true, receipt: true,
-      holdReason: true, holdSince: true, deliveredAt: true, answeredAt: true, createdAt: true, updatedAt: true }
+      holdReason: true, holdSince: true, deliveredAt: true, answeredAt: true, createdAt: true, updatedAt: true,
+      claimFailingSince: true, claimFailures: true }
     const byId = (rows: Array<{ id: string }>) => [...rows].sort((a, b) => a.id.localeCompare(b.id))
     expect(byId(await pageDeliveries(db, 'A', PAGE))).toEqual(byId(await db.superTabDelivery.findMany({ where: { tabId: 'A', messageId: { in: PAGE } }, select })))
     expect(await pageReactions(db, 'A', PAGE)).toEqual(await db.superTabReaction.findMany({ where: { tabId: 'A', messageId: { in: PAGE } },

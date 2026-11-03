@@ -70,9 +70,9 @@ describe('the account\'s own apps under a remote app policy', () => {
   it('withholds from the apps the events the policy withholds, and still tells the windows here', async () => {
     const { socket, gw } = session()
     const broadcast = vi.spyOn(gw, 'broadcast').mockImplementation(() => {})
-    socket.send({ type: 'text_delta', payload: { agentId: 'pm', text: 'private' } })
-    socket.send({ type: 'text_delta', payload: { agentId: 'worker', text: 'hello' } })
-    expect(broadcast.mock.calls.map(([frame]) => frame)).toEqual([{ type: 'text_delta', payload: { agentId: 'worker', text: 'hello' } }])
+    socket.send({ type: 'text_delta', payload: { agentId: 'pm', content: 'private' } })
+    socket.send({ type: 'text_delta', payload: { agentId: 'worker', content: 'hello' } })
+    expect(broadcast.mock.calls.map(([frame]) => frame)).toEqual([{ type: 'text_delta', payload: { agentId: 'worker', content: 'hello' } }])
   })
 
   it('holds the account\'s own apps to watching their terminals, and no guest, window here or daemon without a policy', () => {

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_conversation.dart';
+import 'package:harness_mobile/swarm/swarm_outbox.dart';
 import 'package:harness_mobile/swarm/swarm_read_marks.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
@@ -42,6 +43,8 @@ void main() {
     List<String> agentIds = const ['agent-lead', 'agent-builder'],
     String role = 'owner',
     bool archived = false,
+    Map<String, int> readMarks = const {},
+    int? mainSequence,
   }) {
     final swarm = FakeSwarm();
     Map<String, dynamic> g1(int seq) => {
@@ -52,9 +55,10 @@ void main() {
         lastMessageSequence: seq,
       ),
       'archived': archived,
+      'lastMainSequence': ?mainSequence,
     };
     swarm.routes['/api/super-tabs/$tab/parts'] = (_) => {
-      ...firstLoad(groups: [g1(sequence)]),
+      ...firstLoad(groups: [g1(sequence)], derived: {'readMarks': readMarks}),
       'members': [part(me, 1, person(me, role: role))],
     };
     swarm.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
@@ -340,7 +344,11 @@ void main() {
     final r = rig();
     r.swarm.routes[messages] = (_) => {'messages': <Object>[], 'next': null};
     final taken = Completer<Object?>();
-    r.swarm.routes['/api/super-tabs/$tab/commands'] = (_) => taken.future;
+    String? receipt;
+    r.swarm.routes['/api/super-tabs/$tab/commands'] = (body) {
+      receipt = body!['operationId'] as String;
+      return taken.future;
+    };
     final c = await open(r.reader);
 
     c.draft = 'On my way';
@@ -348,19 +356,26 @@ void main() {
     await settle();
 
     expect(c.draft, isEmpty, reason: 'the field is free at once');
-    expect(c.pending?.text, 'On my way');
+    expect(c.outgoing.firstOrNull?.text, 'On my way');
     expect(c.sending, isTrue);
 
     r.swarm.routes[messages] = (_) => {
       'messages': [
-        message('m9', 3, text: 'On my way', authorId: me, fromAgent: false),
+        message(
+          sentId(receipt!),
+          3,
+          text: 'On my way',
+          authorId: me,
+          fromAgent: false,
+        ),
       ],
       'next': null,
     };
     taken.complete({'result': <String, dynamic>{}});
     expect(await sent, isTrue);
+    await settle();
 
-    expect(c.pending, isNull);
+    expect(c.outgoing, isEmpty);
     expect([for (final m in c.messages) m.text], ['On my way']);
   });
 
@@ -375,7 +390,7 @@ void main() {
     c.draft = 'hi';
     expect(await c.send(), isFalse);
 
-    expect(c.pending?.text, 'hi');
+    expect(c.outgoing.firstOrNull?.text, 'hi');
     expect(c.sending, isFalse);
     expect(c.unconfirmed, isTrue);
     expect(c.draft, isEmpty);
@@ -403,7 +418,7 @@ void main() {
 
     expect(await c.send(), isFalse);
 
-    expect(c.pending, isNull);
+    expect(c.outgoing, isEmpty);
     expect(c.draft, '@Nova please');
     expect(c.replyingTo?.id, 'm1');
     expect(c.error, 'This message is too long.');
@@ -1220,21 +1235,21 @@ void main() {
       return (marks: marks, sent: sent);
     }
 
-    /// A change read in which g1 moved on to [sequence].
-    void moveOn(FakeSwarm swarm, int sequence) =>
+    /// A change read in which g1 moved on to [sequence], its main stream to
+    /// [main] where the server says it.
+    void moveOn(FakeSwarm swarm, int sequence, {int? main}) =>
         swarm.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
           cursor: 'c3',
           groups: [
-            part(
-              'g1',
-              9 + sequence,
-              groupData(
+            part('g1', 9 + sequence, {
+              ...groupData(
                 'g1',
                 title: 'Fix login',
                 agentIds: const ['agent-lead', 'agent-builder'],
                 lastMessageSequence: sequence,
               ),
-            ),
+              'lastMainSequence': ?main,
+            }),
           ],
         );
 
@@ -1379,6 +1394,153 @@ void main() {
       expect(m.sent, isEmpty, reason: 'covered: it marked nothing');
     });
 
+    test('an open chat whose newest message is a reply only in a thread is '
+        'read through its newest message in the main stream, and a reply '
+        'only in a thread arriving later marks nothing', () async {
+      final r = rig(sequence: 3, readMarks: const {'g1': 1}, mainSequence: 2);
+      final m = marked(r);
+      r.swarm.routes[messages] = (_) => {
+        'messages': [
+          {...message('m3', 3, text: 'in the thread'), 'thread': 'm1'},
+          message('m2', 2),
+          {...message('m1', 1), 'thread': 'm1'},
+        ],
+        'next': null,
+      };
+
+      final c = await open(r.reader);
+      await settle();
+      expect(c.messages.last.threadReply, isTrue, reason: 'loaded, last');
+      expect(m.sent, [2], reason: 'the thread reply is not on screen');
+      expect(m.marks.readThrough('g1'), 2);
+
+      r.swarm.routes['$messages?after=3'] = (_) => {
+        'messages': [
+          {...message('m4', 4, text: 'in the thread'), 'thread': 'm1'},
+        ],
+        'next': null,
+      };
+      moveOn(r.swarm, 4, main: 2);
+      await r.reader.refresh();
+      await settle();
+
+      expect(c.messages.last.id, 'm4');
+      expect(m.sent, [2]);
+      expect(m.marks.readThrough('g1'), 2);
+    });
+
+    test('a chat read before, opened again with no network, is read through '
+        'the newest main-stream message it kept', () async {
+      final r = rig(sequence: 3, readMarks: const {'g1': 1}, mainSequence: 2);
+      final m = marked(r);
+      r.swarm.routes[messages] = (_) => {
+        'messages': [
+          {...message('m3', 3, text: 'in the thread'), 'thread': 'm1'},
+          message('m2', 2),
+          {...message('m1', 1), 'thread': 'm1'},
+        ],
+        'next': null,
+      };
+      await r.reader.refresh();
+      var c = SwarmConversation(r.reader, 'g1', shown: false);
+      await c.load();
+      c.dispose();
+      await settle();
+      expect(m.sent, isEmpty);
+
+      // Offline: the kept page shows and is read; nothing reads on.
+      r.swarm.routes.remove(messages);
+      r.swarm.routes[read] = (_) => throw StateError('offline');
+      c = SwarmConversation(r.reader, 'g1');
+      addTearDown(c.dispose);
+      await settle();
+
+      expect(c.messages.last.id, 'm3');
+      expect(m.marks.readThrough('g1'), 2);
+    });
+
+    test('a chat opened at a reply only in a thread is read through the '
+        'main-stream message before it', () async {
+      final r = rig(sequence: 4, mainSequence: 4);
+      final m = marked(r);
+      r.swarm.routes[messages] = (_) => {
+        'messages': [
+          message('m4', 4),
+          {...message('m3', 3, text: 'in the thread'), 'thread': 'm1'},
+          message('m2', 2),
+          {...message('m1', 1), 'thread': 'm1'},
+        ],
+        'next': null,
+      };
+      await r.reader.refresh();
+      final c = SwarmConversation(r.reader, 'g1', heldAt: 'm3');
+      addTearDown(c.dispose);
+      await c.load();
+      await settle();
+
+      expect(m.sent, [2]);
+    });
+
+    test('a reply also sent to the chat is in the main stream, and moves '
+        'the mark when it is the newest', () async {
+      final r = rig(sequence: 3, readMarks: const {'g1': 1}, mainSequence: 3);
+      final m = marked(r);
+      r.swarm.routes[messages] = (_) => {
+        'messages': [
+          {
+            ...message('m3', 3, text: 'also in the chat'),
+            'thread': 'm1',
+            'alsoInChat': true,
+          },
+          message('m2', 2),
+          {...message('m1', 1), 'thread': 'm1'},
+        ],
+        'next': null,
+      };
+
+      await open(r.reader);
+      await settle();
+
+      expect(m.sent, [3]);
+    });
+
+    test('a server too old to say a chat\'s newest main-stream message is '
+        'read through its newest message, as on the desktop', () async {
+      final r = rig(sequence: 3, readMarks: const {'g1': 1});
+      final m = marked(r);
+      r.swarm.routes[messages] = (_) => {
+        'messages': [
+          {...message('m3', 3, text: 'in the thread'), 'thread': 'm1'},
+          message('m2', 2),
+          {...message('m1', 1), 'thread': 'm1'},
+        ],
+        'next': null,
+      };
+
+      await open(r.reader);
+      await settle();
+
+      expect(r.reader.snapshot!.conversation('g1')!.lastMainSequence, isNull);
+      expect(m.sent, [3]);
+    });
+
+    test('a mark the server holds ahead of what the chat shows is neither '
+        'sent back nor replaced', () async {
+      final r = rig(sequence: 3, readMarks: const {'g1': 5});
+      final m = marked(r);
+      r.swarm.routes[messages] = (_) => {
+        'messages': [message('m3', 3), message('m2', 2)],
+        'next': null,
+      };
+
+      await open(r.reader);
+      await settle();
+
+      expect(r.reader.snapshot!.readMarks['g1'], 5);
+      expect(m.sent, isEmpty);
+      expect(m.marks.readThrough('g1'), 5);
+    });
+
     test('a Swarm without read marks marks nothing', () async {
       final r = rig();
       r.swarm.routes[messages] = (_) => {
@@ -1390,6 +1552,269 @@ void main() {
       await settle();
 
       expect(r.swarm.paths.where((p) => p.endsWith('/read')), isEmpty);
+    });
+  });
+
+  group('posts on their way (Dee, 11-01)', () {
+    const commands = '/api/super-tabs/$tab/commands';
+
+    /// Chat g1, read, with nothing in it; its posts wait [timeout] for an
+    /// answer.
+    Future<({FakeSwarm swarm, SwarmReader reader, SwarmConversation c})> chat({
+      Duration timeout = SwarmOutbox.defaultTimeout,
+    }) async {
+      final r = rig();
+      r.swarm.routes[messages] = (_) => {'messages': <Object>[], 'next': null};
+      await r.reader.refresh();
+      final c = SwarmConversation(r.reader, 'g1', sendTimeout: timeout);
+      addTearDown(c.dispose);
+      await c.load();
+      return (swarm: r.swarm, reader: r.reader, c: c);
+    }
+
+    /// The bodies [swarm] was sent, by receipt, each answered by hand.
+    Map<String, Completer<Object?>> held(FakeSwarm swarm) {
+      final answers = <String, Completer<Object?>>{};
+      swarm.routes[commands] = (body) =>
+          (answers[body!['operationId'] as String] ??= Completer()).future;
+      return answers;
+    }
+
+    Map<String, dynamic> mine(String id, int sequence, String text) =>
+        message(id, sequence, text: text, authorId: me, fromAgent: false);
+
+    test(
+      'a read that brings the post back under the id the backend gives it '
+      'takes its copy away at once, though its answer is still coming',
+      () async {
+        final r = await chat();
+        final answers = held(r.swarm);
+        r.c.draft = 'On it';
+        final sending = r.c.send();
+        await settle();
+        final receipt = answers.keys.single;
+        expect(r.c.outgoing.single.messageId, sentId(receipt));
+
+        r.swarm.routes[messages] = (_) => {
+          'messages': [mine(sentId(receipt), 3, 'On it')],
+          'next': null,
+        };
+        await r.c.load();
+
+        expect(r.c.outgoing, isEmpty, reason: 'shown once, as its message');
+        expect(r.c.sending, isFalse);
+        answers[receipt]!.complete({'result': <String, dynamic>{}});
+        expect(await sending, isTrue);
+        expect(r.c.outgoing, isEmpty);
+        expect(r.c.error, isNull);
+      },
+    );
+
+    test('the id in the answer is the one looked for', () async {
+      final r = await chat();
+      r.swarm.routes[commands] = (_) => {
+        'result': {'messageId': 'server-m7'},
+      };
+      r.c.draft = 'On it';
+
+      expect(await r.c.send(), isTrue);
+      expect(r.c.outgoing.single.messageId, 'server-m7');
+      expect(r.c.outgoing.single.state, SwarmPostState.confirmed);
+
+      r.swarm.routes[messages] = (_) => {
+        'messages': [mine('server-m7', 3, 'On it')],
+        'next': null,
+      };
+      await r.c.load();
+      expect(r.c.outgoing, isEmpty);
+    });
+
+    test('a second post goes while the first is on its way, under its own '
+        'receipt, and each leaves when it is read back', () async {
+      final r = await chat();
+      final answers = held(r.swarm);
+      r.c.draft = 'One';
+      final one = r.c.send();
+      await settle();
+      r.c.draft = 'Two';
+      expect(r.c.canSend, isTrue, reason: 'never waits on the first');
+      final two = r.c.send();
+      await settle();
+
+      final [first, second] = answers.keys.toList();
+      expect(first, isNot(second));
+      expect([for (final p in r.c.outgoing) p.text], ['One', 'Two']);
+      expect(
+        r.c.outgoing.every((p) => p.state == SwarmPostState.sending),
+        isTrue,
+      );
+
+      r.swarm.routes[messages] = (_) => {
+        'messages': [mine(sentId(second), 3, 'Two')],
+        'next': null,
+      };
+      answers[second]!.complete({'result': <String, dynamic>{}});
+      expect(await two, isTrue);
+      await settle();
+      expect([for (final p in r.c.outgoing) p.text], ['One']);
+
+      r.swarm.routes[messages] = (_) => {
+        'messages': [
+          mine(sentId(second), 3, 'Two'),
+          mine(sentId(first), 4, 'One'),
+        ],
+        'next': null,
+      };
+      answers[first]!.complete({'result': <String, dynamic>{}});
+      expect(await one, isTrue);
+      await settle();
+      expect(r.c.outgoing, isEmpty);
+    });
+
+    test('no answer in time says Not sent; Retry sends the same receipt, and '
+        'the first answer landing late still counts', () async {
+      final r = await chat(timeout: const Duration(milliseconds: 20));
+      final answers = held(r.swarm);
+      r.c.draft = 'Once only';
+
+      expect(await r.c.send(), isFalse);
+      final post = r.c.outgoing.single;
+      expect(post.state, SwarmPostState.unconfirmed);
+      expect(r.c.unconfirmed, isTrue);
+      expect(r.c.error, contains('not sent'));
+      expect(r.c.canSend, isFalse, reason: 'the field is empty');
+      r.c.draft = 'Meanwhile';
+      expect(r.c.canSend, isTrue, reason: 'a lost post holds nothing back');
+      r.c.draft = '';
+
+      final again = r.c.retry(post);
+      await settle();
+      final posts = [
+        for (final call in r.swarm.calls)
+          if (call.path == commands) call.body!['operationId'],
+      ];
+      expect(posts, hasLength(2));
+      expect(posts.toSet(), hasLength(1), reason: 'one post, one receipt');
+      // Both tries are one command: its one answer answers both.
+      answers.values.single.complete({'result': <String, dynamic>{}});
+      expect(await again, isTrue);
+      expect(post.state, SwarmPostState.confirmed);
+      expect(r.c.error, isNull);
+    });
+
+    test(
+      'a refusal that lands after Not sent still puts the text back',
+      () async {
+        final r = await chat(timeout: const Duration(milliseconds: 20));
+        final answers = held(r.swarm);
+        r.c.draft = 'Too long';
+
+        expect(await r.c.send(), isFalse);
+        expect(r.c.outgoing.single.state, SwarmPostState.unconfirmed);
+        expect(r.c.draft, isEmpty);
+
+        answers.values.single.completeError(
+          const SuperTabFailure('TOO_LONG', 'Too long.', statusCode: 400),
+        );
+        await settle();
+        expect(r.c.outgoing, isEmpty);
+        expect(r.c.draft, 'Too long');
+        expect(r.c.error, 'Too long.');
+      },
+    );
+
+    test('a refused post goes back to the draft while another stays on its '
+        'way', () async {
+      final r = await chat();
+      final answers = held(r.swarm);
+      r.c.draft = 'Too long';
+      final refused = r.c.send();
+      await settle();
+      r.c.draft = 'Fine';
+      final fine = r.c.send();
+      await settle();
+
+      final [first, _] = answers.keys.toList();
+      answers[first]!.completeError(
+        const SuperTabFailure('TOO_LONG', 'Too long.', statusCode: 400),
+      );
+      expect(await refused, isFalse);
+
+      expect(r.c.draft, 'Too long');
+      expect(r.c.error, 'Too long.');
+      expect([for (final p in r.c.outgoing) p.text], ['Fine']);
+      answers.values.last.complete({'result': <String, dynamic>{}});
+      expect(await fine, isTrue);
+    });
+
+    test('access lost while posts are on their way drops them, and their '
+        'answers change nothing', () async {
+      final r = await chat();
+      final answers = held(r.swarm);
+      r.c.draft = 'Secret plan';
+      final sending = r.c.send();
+      await settle();
+      expect(
+        await r.c.retry(r.c.outgoing.single),
+        isFalse,
+        reason: 'one on its way is not sent again',
+      );
+      expect(r.c.error, isNull);
+
+      r.reader.revoke();
+      await settle();
+      expect(r.c.outgoing, isEmpty);
+      expect(r.c.draft, isEmpty);
+
+      answers.values.single.completeError(
+        const SuperTabFailure('TOO_LONG', 'Too long.', statusCode: 400),
+      );
+      expect(await sending, isFalse);
+      expect(r.c.draft, isEmpty, reason: 'nothing put back');
+      expect(r.c.outgoing, isEmpty);
+      expect(r.c.error, isNull);
+    });
+
+    test('an answer after the chat closed changes nothing', () async {
+      final r = await chat();
+      final answers = held(r.swarm);
+      final c = SwarmConversation(r.reader, 'g1');
+      await c.load();
+      c.draft = 'Bye';
+      final sending = c.send();
+      await settle();
+
+      c.dispose();
+      answers.values.single.complete({'result': <String, dynamic>{}});
+      expect(await sending, isFalse);
+    });
+
+    test('a first read that failed and later recovered still sends and '
+        'settles', () async {
+      final r = rig();
+      var fail = true;
+      final rows = <Map<String, dynamic>>[];
+      r.swarm.routes[messages] = (_) => fail
+          ? throw StateError('offline')
+          : {'messages': rows.reversed.toList(), 'next': null};
+      r.swarm.routes[commands] = (body) {
+        rows.add(mine(sentId(body!['operationId'] as String), 3, 'Hello'));
+        return {'result': <String, dynamic>{}};
+      };
+      await r.reader.refresh();
+      final c = SwarmConversation(r.reader, 'g1');
+      addTearDown(c.dispose);
+      await c.load();
+      expect(c.error, isNotNull);
+
+      fail = false;
+      c.draft = 'Hello';
+      expect(c.canSend, isTrue);
+      expect(await c.send(), isTrue);
+      await settle();
+
+      expect(c.outgoing, isEmpty);
+      expect([for (final m in c.messages) m.text], ['Hello']);
     });
   });
 }

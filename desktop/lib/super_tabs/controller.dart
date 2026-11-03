@@ -13,6 +13,7 @@ import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
 import 'avatar_upload.dart';
 import 'message_link.dart';
+import 'identity.dart' show superTabMachineName;
 import 'model.dart';
 import 'buddy_chat.dart';
 import 'catch_up.dart';
@@ -20,7 +21,8 @@ import 'project_github.dart';
 import 'parts.dart';
 import 'read_marks.dart';
 import 'reading.dart';
-import 'review_verdict.dart';
+import 'linked_tasks.dart';
+import 'task_steps.dart';
 
 /// A messages read started beside a state read, and what it asked for.
 typedef _EarlyRead = ({String query, Future<Map<String, dynamic>> page});
@@ -60,6 +62,18 @@ String superTabMessageId({
 /// and show it; this one knows it by [_unsentKey] and shows Not sent alone.
 const _unsentReason = 'Not sent before this window closed.';
 const _unsentKey = 'unsent';
+
+/// What a thread reply refused for New session says: the server does not
+/// take it yet (an older backend, or one of its servers during a release).
+const superTabSessionsUnavailable =
+    "New sessions aren't available yet; send without it?";
+
+/// What a message refused for its form says, in place of the schema's own
+/// words ('command: Unrecognized key: ...'), which name fields, not causes.
+const superTabRefusedAsSent = "The server couldn't take this message.";
+
+/// The schema's own words, as a refusal saved before this version kept them.
+final _schemaWords = RegExp(r'Unrecognized key|^command(\.\w+)*: ');
 
 class SuperTabFailure implements Exception {
   const SuperTabFailure(this.code, this.message, {this.statusCode = 0});
@@ -174,9 +188,15 @@ class SuperTabController extends ChangeNotifier {
       _decisionsAside.addAll(
         (initial['decisionsAside'] as List? ?? const []).whereType<String>(),
       );
+      _statusFolded.addAll(
+        (initial['statusFolded'] as List? ?? const []).whereType<String>(),
+      );
       devicesSelected = initial['devicesSelected'] == true;
       projectsGroupOpen = initial['projectsGroupOpen'] as bool? ?? true;
+      unreadOnly = initial['unreadOnly'] == true;
       machinesGroupOpen = initial['machinesGroupOpen'] as bool? ?? true;
+      buddiesGroupOpen = initial['buddiesGroupOpen'] as bool? ?? true;
+      modelsGroupOpen = initial['modelsGroupOpen'] as bool? ?? true;
       offlineMachinesOpen = initial['offlineMachinesOpen'] as bool? ?? false;
       selectedId = initial['selectedId'] as String? ?? 'lead';
       final drafts = initial['drafts'];
@@ -238,7 +258,11 @@ class SuperTabController extends ChangeNotifier {
                         in superTabMap(row['mentions']).entries)
                       if (token is String) agent: token,
                   },
-                  error: row[_unsentKey] == true ? '' : row['error'] as String,
+                  error: row[_unsentKey] == true
+                      ? ''
+                      : _schemaWords.hasMatch(row['error'] as String)
+                      ? superTabRefusedAsSent
+                      : row['error'] as String,
                 ),
           ];
           if (kept.isNotEmpty) _refused[key] = kept;
@@ -330,7 +354,13 @@ class SuperTabController extends ChangeNotifier {
     return _uploadErrors[conversationId];
   }
 
-  /// Sets [operationError] for [command], remembering its conversation.
+  /// The thread the last failed reply was going to: the thread of the message
+  /// it answers, or that message itself, as the backend files a reply. Null
+  /// when the failure was not a reply.
+  String? _operationErrorRoot;
+
+  /// Sets [operationError] for [command], remembering its conversation and,
+  /// for a reply, its thread.
   void _failOperation(
     String message, {
     required Map<String, dynamic> command,
@@ -340,11 +370,28 @@ class SuperTabController extends ChangeNotifier {
     operationErrorCode = code;
     final id = command['conversationId'];
     _operationErrorFor = id is String ? id : null;
+    final replyTo = command['replyTo'];
+    _operationErrorRoot = id is String && replyTo is String
+        ? _threadOf(id, replyTo) ?? replyTo
+        : null;
   }
 
-  /// The same for the reply box of [root]'s thread in [conversationId].
-  String? threadComposerError(String conversationId, String root) =>
-      operationError ?? _uploadErrors[(conversationId, root)];
+  /// The same for the reply box of [root]'s thread in [conversationId]: the
+  /// last action's [operationError] when it was a reply in this thread, for
+  /// no conversation, or is still unconfirmed; else the thread's own upload
+  /// failure. A failure in another chat, or in this chat's main stream, is
+  /// not said here.
+  String? threadComposerError(String conversationId, String root) {
+    final failure = operationError;
+    if (failure != null &&
+        (_operationErrorFor == null ||
+            (_operationErrorFor == conversationId &&
+                _operationErrorRoot == root) ||
+            _pending != null)) {
+      return failure;
+    }
+    return _uploadErrors[(conversationId, root)];
+  }
 
   /// One line for the sender after a command succeeds, from the backend: that a
   /// credential was removed from what they sent and should be revoked.
@@ -639,6 +686,10 @@ class SuperTabController extends ChangeNotifier {
   final _threadBefore = <String, Map<String, dynamic>>{};
   final _threadDrafts = <String, String>{};
 
+  /// The people and agents picked with `@` in each thread's reply box, by its
+  /// conversation and root, as [_mentions] holds the chat's own.
+  final _threadMentions = <(String, String), Map<String, String>>{};
+
   /// The thread open beside the chat.
   ({String conversationId, String root})? openedThread;
   final _attachments = <String, HarnessAttachments>{};
@@ -736,6 +787,10 @@ class SuperTabController extends ChangeNotifier {
   bool devicesSelected = false;
   bool projectsGroupOpen = true, machinesGroupOpen = true;
 
+  /// The sidebar's Buddies and Models, collapsed and remembered like Projects
+  /// and Machines (Dee, 2026-10-30: every section the same).
+  bool buddiesGroupOpen = true, modelsGroupOpen = true;
+
   bool isMachineExpanded(String id) => expandedMachines.contains(id);
 
   void toggleMachineExpanded(String id) {
@@ -800,6 +855,26 @@ class SuperTabController extends ChangeNotifier {
     if (_decisionsAside.length != before) _saveSoon();
   }
 
+  /// The projects whose status card the reader folded to its heading line:
+  /// saved on this computer for this reader. Only the newest
+  /// [statusFoldedKept] are kept, so the set cannot grow without end.
+  final _statusFolded = <String>{};
+  static const statusFoldedKept = 200;
+  bool statusFolded(String projectId) => _statusFolded.contains(projectId);
+
+  void setStatusFolded(String projectId, {required bool folded}) {
+    // Folded again moves it to the newest end.
+    _statusFolded.remove(projectId);
+    if (folded) {
+      _statusFolded.add(projectId);
+      while (_statusFolded.length > statusFoldedKept) {
+        _statusFolded.remove(_statusFolded.first);
+      }
+    }
+    _saveSoon();
+    _changed();
+  }
+
   void toggleProjectsGroup() {
     projectsGroupOpen = !projectsGroupOpen;
     _saveSoon();
@@ -808,6 +883,18 @@ class SuperTabController extends ChangeNotifier {
 
   void toggleMachinesGroup() {
     machinesGroupOpen = !machinesGroupOpen;
+    _saveSoon();
+    _changed();
+  }
+
+  void toggleBuddiesGroup() {
+    buddiesGroupOpen = !buddiesGroupOpen;
+    _saveSoon();
+    _changed();
+  }
+
+  void toggleModelsGroup() {
+    modelsGroupOpen = !modelsGroupOpen;
     _saveSoon();
     _changed();
   }
@@ -851,6 +938,8 @@ class SuperTabController extends ChangeNotifier {
     final files = HarnessAttachments(
       limitBytes: kSuperTabAttachmentMaxBytes,
       limitFiles: kSuperTabAttachmentMaxFiles,
+      // A heavier file stays on disk until it goes, straight to storage.
+      readUpTo: kSuperTabFormAttachmentMaxBytes,
     );
     files.addListener(() {
       // Changing the files answers a refused upload.
@@ -885,6 +974,10 @@ class SuperTabController extends ChangeNotifier {
         .where((agent) => group.agentIds.contains(agent.id))
         .toList();
   }
+
+  /// Whether [conversationId]'s terminals are open as a group ([term]).
+  bool groupTerminalsOpen(String conversationId) =>
+      !accessRevoked && !devicesSelected && _terminals[conversationId] == '*';
 
   void selectGroupTerminals(String conversationId) {
     if (_disposed ||
@@ -1089,8 +1182,29 @@ class SuperTabController extends ChangeNotifier {
   bool threadUnread(SuperTabThread thread) {
     final last = thread.authors.firstOrNull;
     return thread.people.contains(accountId) &&
-        thread.lastSequence > (_threadSeen[thread.id] ?? 0) &&
+        thread.lastSequence > threadReadMark(thread.id) &&
         !(last?['kind'] == 'person' && last?['id'] == accountId);
+  }
+
+  /// How far the reader has read [root]'s thread: the higher of this
+  /// device's mark and the server's, from any of their devices (backend
+  /// readMarks.ts), which reads a thread opened only elsewhere as read here.
+  int threadReadMark(String root) =>
+      max(_threadSeen[root] ?? 0, _serverThreadMark(root));
+
+  /// The server's thread marks by root, from the snapshot's by conversation;
+  /// worked out again only when a read brings new ones.
+  Map<String, Map<String, int>>? _threadMarksFrom;
+  var _threadMarksByRoot = const <String, int>{};
+
+  int _serverThreadMark(String root) {
+    final marks = snapshot?.threadMarks;
+    if (marks == null || marks.isEmpty) return 0;
+    if (!identical(marks, _threadMarksFrom)) {
+      _threadMarksFrom = marks;
+      _threadMarksByRoot = {for (final threads in marks.values) ...threads};
+    }
+    return _threadMarksByRoot[root] ?? 0;
   }
 
   void _keepThreads(String id, Object? rows) {
@@ -1119,11 +1233,44 @@ class SuperTabController extends ChangeNotifier {
           0,
       threadMessages(root).lastOrNull?.sequence ?? 0,
     );
+    if (open != null &&
+        open.root == root &&
+        !accessRevoked &&
+        last > 0 &&
+        snapshot?.conversation(open.conversationId) != null) {
+      _serverThreadMarks.mark(
+        (open.conversationId, root),
+        last,
+        kept: snapshot?.threadMarks[open.conversationId]?[root] ?? 0,
+      );
+    }
     if ((_threadSeen[root] ?? 0) >= last) return;
     // Moved to the end: the newest marks are the ones a save keeps.
     _threadSeen.remove(root);
     _threadSeen[root] = last;
     _saveSoon();
+  }
+
+  /// [root]'s thread in [conversationId] was read through [sequence] outside
+  /// the thread pane (the Threads view): kept here and sent to the server,
+  /// so it reads as read on every device. Nothing once access is gone.
+  void markThreadRead(String conversationId, String root, int sequence) {
+    if (_disposed ||
+        accessRevoked ||
+        sequence <= 0 ||
+        snapshot?.conversation(conversationId) == null) {
+      return;
+    }
+    _serverThreadMarks.mark(
+      (conversationId, root),
+      sequence,
+      kept: snapshot?.threadMarks[conversationId]?[root] ?? 0,
+    );
+    if ((_threadSeen[root] ?? 0) >= sequence) return;
+    _threadSeen.remove(root);
+    _threadSeen[root] = sequence;
+    _saveSoon();
+    _changed();
   }
 
   /// The root and replies of [root]'s thread in the selected conversation,
@@ -1175,6 +1322,7 @@ class SuperTabController extends ChangeNotifier {
     _uploadErrors.removeWhere(
       (key, _) => key is (String, String) && gone(key.$1),
     );
+    _threadMentions.removeWhere((key, _) => gone(key.$1));
     if (openedThread case final open? when gone(open.conversationId)) {
       openedThread = null;
     }
@@ -1219,7 +1367,34 @@ class SuperTabController extends ChangeNotifier {
   }
 
   String threadDraft(String root) => _threadDrafts[root] ?? '';
-  void setThreadDraft(String root, String text) => _threadDrafts[root] = text;
+  void setThreadDraft(String root, String text) {
+    _threadDrafts[root] = text;
+    // A tag the text no longer says is no longer picked.
+    for (final MapEntry(key: thread, value: tags) in _threadMentions.entries) {
+      if (thread.$2 == root) {
+        tags.removeWhere((_, token) => !containsMention(text, token));
+      }
+    }
+    _threadMentions.removeWhere((_, tags) => tags.isEmpty);
+  }
+
+  /// The tags picked in the reply box of [root]'s thread in [conversationId].
+  Map<String, String> threadMentions(String conversationId, String root) =>
+      Map.unmodifiable(_threadMentions[(conversationId, root)] ?? const {});
+
+  /// [id] picked as [token] in the open thread's reply box, or [to]'s (the
+  /// Threads view), while its draft says it.
+  void threadMention(
+    String id,
+    String token, {
+    ({String conversationId, String root})? to,
+  }) {
+    final open = to ?? openedThread;
+    if (open == null || accessRevoked) return;
+    if (!containsMention(threadDraft(open.root), token)) return;
+    (_threadMentions[(open.conversationId, open.root)] ??= {})[id] = token;
+    _changed();
+  }
 
   /// How many pages a thread reads when it opens; past them "Show earlier
   /// replies" reads on, a page at a time.
@@ -1306,53 +1481,261 @@ class SuperTabController extends ChangeNotifier {
     }
   }
 
-  /// Sends the open thread's draft and files to its root; [alsoSend] shows it in the
-  /// main stream too. [onSending] is told when the reply is on its way, which
-  /// is after its files have gone up.
+  /// Sends the open thread's draft and files to its root, or [to]'s (the
+  /// Threads view replies without opening the thread); [alsoSend] shows it in
+  /// the main stream too. [onSending] is told when the reply is on its way,
+  /// which is after its files have gone up.
   Future<Map<String, dynamic>?> sendThreadReply({
     bool alsoSend = false,
+    bool newSession = false,
     VoidCallback? onSending,
+    ({String conversationId, String root})? to,
   }) async {
-    final open = openedThread;
-    if (open == null) return null;
+    final open = to ?? openedThread;
+    if (open == null || accessRevoked) return null;
     final text = threadDraft(open.root).trim();
     final owner = threadAttachments(open.conversationId, open.root);
     final files = owner.files;
+    final group = snapshot?.conversation(open.conversationId);
     if ((text.isEmpty && files.isEmpty) ||
-        selected == null ||
-        selected!.archived ||
+        group == null ||
+        group.archived ||
         !canWrite ||
         uploading ||
         saving ||
         _pending != null) {
       return null;
     }
-    final ids = await _uploadAll(open.conversationId, owner, (
-      open.conversationId,
-      open.root,
-    ));
+    final thread = (open.conversationId, open.root);
+    // The tags as picked when sent: the box may take new ones meanwhile.
+    final picked = Map<String, String>.of(_threadMentions[thread] ?? const {});
+    final (:tagged, :addressed) = _tagsSaid(picked, text);
+    // The thread's own chat: a reply from the Threads view goes to a chat
+    // that may not be the one selected, or none may be.
+    final failure = addressed.any((id) => !group.agentIds.contains(id))
+        ? 'A mentioned agent is no longer in this conversation. Remove its mention or choose another agent.'
+        // Only its own session hears a session's thread (backend
+        // routeBuddySession): another agent's tag there would be refused.
+        : addressed.isNotEmpty &&
+              (newSession || threadSession(open.root) != null)
+        ? 'Only this thread\'s session hears a reply here. Remove the agent\'s mention.'
+        : null;
+    if (failure != null) {
+      _failOperation(
+        failure,
+        command: {'conversationId': open.conversationId, 'replyTo': open.root},
+      );
+      _changed();
+      return null;
+    }
+    final ids = await _uploadAll(open.conversationId, owner, thread);
     if (ids == null) return null;
     final before = _pending;
-    final sending = command({
+    final operationId = superTabOperationId();
+    final sending = command(operationId: operationId, {
       'type': 'message.send',
       'conversationId': open.conversationId,
       'text': text,
       'replyTo': open.root,
-      'recipientIds': const <String>[],
-      if (alsoSend) 'alsoSend': true,
+      'recipientIds': addressed,
+      if (tagged.isNotEmpty) 'mentions': tagged,
+      // A session's thread stays in the thread: never also sent.
+      if (alsoSend && !newSession) 'alsoSend': true,
+      if (newSession) 'newSession': true,
       if (ids.isNotEmpty) 'attachmentIds': ids,
+      // As the chat's own send: the server refuses it in an earlier chat.
+      if (oneBuddy) 'oneBuddy': true,
     });
     if (_pending case final pending? when !identical(pending, before)) {
+      _sendingMentions[pending['operationId'] as String] = picked;
       // Only a draft still holding what went: more may have been typed since.
       if (_threadDrafts[open.root]?.trim() == text) {
         _threadDrafts.remove(open.root);
+        _threadMentions.remove(thread);
       }
       onSending?.call();
       _changed();
     }
     final result = await sending;
     _forgetRefusedUploads(result);
+    if (result == null && newSession) {
+      _restoreSessionRefusal(open.conversationId, open.root, operationId);
+    }
     return result;
+  }
+
+  /// A message the server refused only for New session goes back into its
+  /// box (the thread of [root], or the chat's own when null), ready to send
+  /// without it, when nothing was typed there since and it carries no files;
+  /// else it stays Not sent, and its Retry goes without New session.
+  void _restoreSessionRefusal(
+    String conversationId,
+    String? root,
+    String operationId,
+  ) {
+    final kept = _refused[conversationId];
+    final i = kept?.indexWhere((r) => r.operationId == operationId) ?? -1;
+    if (i < 0) return;
+    final refused = kept![i];
+    final files = refused.command['attachmentIds'];
+    if (refused.error != superTabSessionsUnavailable ||
+        (files is List && files.isNotEmpty) ||
+        (root == null ? draft(conversationId) : threadDraft(root))
+            .trim()
+            .isNotEmpty) {
+      return;
+    }
+    kept.removeAt(i);
+    if (kept.isEmpty) _refused.remove(conversationId);
+    _sendOrder.remove(operationId);
+    final text = refused.command['text'] as String? ?? '';
+    if (root == null) {
+      _drafts[conversationId] = text;
+      if (refused.mentions.isNotEmpty) {
+        _mentions[conversationId] = refused.mentions;
+      }
+    } else {
+      _threadDrafts[root] = text;
+      if (refused.mentions.isNotEmpty) {
+        _threadMentions[(conversationId, root)] = refused.mentions;
+      }
+    }
+    unawaited(
+      _persist().catchError((Object _) {
+        error = 'Could not save this change on this computer.';
+        _changed();
+      }),
+    );
+    _changed();
+  }
+
+  // ── Buddy thread sessions (spec 2026-10-30-buddy-thread-sessions) ───────
+
+  /// How many thread sessions a Buddy chat may run at once (backend limit).
+  static const maxBuddySessions = 3;
+
+  /// When the server last refused a reply's New session as a field it does not
+  /// know, though it said it takes them (one of its servers older during a
+  /// release): New session is not offered for [_sessionsRefusedFor] after.
+  DateTime? _sessionsRefusedAt;
+  static const _sessionsRefusedFor = Duration(minutes: 10);
+
+  /// Whether this Swarm's server takes New session: it says so in its reads,
+  /// and has not just refused one.
+  bool get _serverTakesThreadSessions {
+    if (snapshot?.threadSessions != true) return false;
+    final refused = _sessionsRefusedAt;
+    return refused == null ||
+        clock.now().difference(refused) >= _sessionsRefusedFor;
+  }
+
+  /// The open thread's chat when it is the reader's own Buddy chat, where a
+  /// thread may have a session of its own; null anywhere else.
+  SuperTabConversation? get _ownBuddyChat =>
+      _ownBuddyChatOf(openedThread?.conversationId ?? selectedId);
+
+  /// Chat [id] when it is the reader's own Buddy chat; null anywhere else.
+  SuperTabConversation? _ownBuddyChatOf(String id) {
+    final chat = snapshot?.conversation(id);
+    return chat != null &&
+            chat.isBuddyChat &&
+            chat.buddyOwnerId == accountId &&
+            !accessRevoked
+        ? chat
+        : null;
+  }
+
+  /// Whether the selected chat's own composer shows New session: the reader's
+  /// own Buddy chat, with a Buddy, on a server that takes New session on a
+  /// top-level message. It may still show disabled, saying why
+  /// ([threadSessionBlocked]).
+  bool get offersChatSessions {
+    final chat = _ownBuddyChatOf(selectedId);
+    return chat != null &&
+        snapshot?.sessionsFromChat == true &&
+        _serverTakesThreadSessions &&
+        buddy(chat.projectId) != null;
+  }
+
+  /// Whether the open chat's thread composer shows New session: the reader's
+  /// own Buddy chat, with a Buddy, or in [root]'s thread that had a session
+  /// (its reply must start a new one). It may still show disabled, saying why
+  /// ([threadSessionBlocked]).
+  bool offersThreadSessions([String? root]) {
+    final chat = _ownBuddyChat;
+    if (chat == null || !_serverTakesThreadSessions) return false;
+    return buddy(chat.projectId) != null || (root != null && _hadSession(root));
+  }
+
+  /// Why the open Buddy chat cannot start a session now, as the disabled
+  /// choice says it; null when it can, as far as this computer can tell (the
+  /// server still decides, and its refusal shows in the composer).
+  String? get threadSessionBlocked {
+    final chat = _ownBuddyChat;
+    if (chat == null) return null;
+    if (snapshot?.paused == true) return 'New work is paused in this Swarm';
+    final main = buddy(chat.projectId);
+    if (main == null || main.downSince != null) return 'Start your Buddy first';
+    if (main.engine != 'claude') return 'Sessions need a Claude Code Buddy';
+    // The host says what it can run in its report; a machine this computer
+    // has no report of is left to the server.
+    final pool = snapshot?.pool(main.machineId);
+    final observation = pool?['observation'];
+    if (observation is Map) {
+      final capabilities = observation['capabilities'];
+      if (capabilities is! List || !capabilities.contains('buddySessions')) {
+        return 'Update Harness on ${sessionMachineName(main.machineId) ?? 'your Buddy\'s computer'} to start sessions';
+      }
+    }
+    return null;
+  }
+
+  /// The Swarm's name for [machineId], as people read it; null when unknown.
+  String? sessionMachineName(String machineId) {
+    final name = snapshot?.pool(machineId)?['name'];
+    return name is String && name.isNotEmpty ? superTabMachineName(name) : null;
+  }
+
+  /// Whether [root]'s thread has a reply from or to a thread session.
+  bool _hadSession(String root) =>
+      threadMessages(root).any((m) => m.buddySession);
+
+  /// The live or starting session answering [root] in the reader's own Buddy
+  /// chat; null when none does, or anywhere else.
+  SuperTabBuddySession? threadSession(String root) =>
+      _ownBuddyChat?.sessionFor(root);
+
+  /// The session agent of [session], once it started.
+  SuperTabAgent? sessionAgent(SuperTabBuddySession session) =>
+      session.agentId == null ? null : snapshot?.agent(session.agentId!);
+
+  /// The row saying [root]'s last session ended (its ended line, else its
+  /// last session reply), while no session answers there: a plain reply
+  /// would be refused, so a new one must start. Any session reply locks it,
+  /// ended line or not.
+  SuperTabMessage? threadSessionEnded(String root) {
+    if (_ownBuddyChat == null || threadSession(root) != null) return null;
+    final messages = threadMessages(root);
+    return messages.where((m) => m.sessionEnded).lastOrNull ??
+        messages.where((m) => m.buddySession).lastOrNull;
+  }
+
+  /// Whether the open Buddy chat already runs [maxBuddySessions] sessions.
+  bool get buddySessionsFull =>
+      (_ownBuddyChat?.buddySessions.length ?? 0) >= maxBuddySessions;
+
+  /// Ends [root]'s session in the reader's own Buddy chat. Closing the thread
+  /// pane only hides it; this stops it. False when refused or not sent.
+  Future<bool> endThreadSession(String root) async {
+    final chat = _ownBuddyChat;
+    if (chat == null || chat.sessionFor(root) == null) return false;
+    return await command({
+          'type': 'buddy.sessionEnd',
+          'conversationId': chat.id,
+          'thread': root,
+          'reason': 'ended',
+        }) !=
+        null;
   }
 
   List<SuperTabMessage> messages(String id) => List.unmodifiable(
@@ -1362,42 +1745,43 @@ class SuperTabController extends ChangeNotifier {
   static bool _listed(SuperTabMessage m) =>
       m.source['kind'] != 'update-request';
 
-  /// "Reviewer: Ada · Ready: yes on 1a2b3c4d5". The verdict is the newest
-  /// review group's for [group], as its Reviewer recorded it (its result or
-  /// check evidence), else the newest `Ready:` message a reviewer of [group]
-  /// posted in the loaded history. Null without a reviewer.
-  String? reviewLine(SuperTabConversation? group) {
+  /// [id]'s messages with its steps' rows merged in by time (task steps
+  /// design): each step keeps its own conversation, shown inside its task.
+  List<SuperTabMessage> taskMessages(String id) {
     final state = snapshot;
-    if (group == null || state == null) return null;
-    final reviews =
-        state.conversations.where((c) => c.reviewOf == group.id).toList()
-          ..sort((a, b) => (b.number ?? 0).compareTo(a.number ?? 0));
-    final reviewers = {
-      for (final r in [
-        ...state.reviewers(group),
-        for (final review in reviews) ...state.reviewers(review),
-      ])
-        r.id: r,
-    }.values;
-    if (reviewers.isEmpty) return null;
-    final ids = {for (final r in reviewers) r.id};
-    final recorded = reviews
-        .expand(
-          (review) => [
-            review.assignment?['result'],
-            for (final check in review.checks) check['evidence'],
-          ],
-        )
-        .whereType<String>();
-    final posted = messages(group.id).reversed
-        .where((m) => m.fromAgent && ids.contains(m.authorId))
-        .map((m) => m.text);
-    final verdict = [
-      ...recorded,
-      ...posted,
-    ].map(parseSuperTabVerdict).nonNulls.firstOrNull;
-    final names = reviewers.map((r) => state.agentName(r.id)).join(', ');
-    return 'Reviewer: $names · ${verdict?.label ?? 'No verdict yet'}';
+    final task = state?.conversation(id);
+    final steps = state == null || task == null
+        ? const <SuperTabConversation>[]
+        : superTabStepsOf(state, task);
+    if (steps.isEmpty) return messages(id);
+    // Merged from the rows held, as they are held: an unchanged chat is the
+    // same list, not sorted again on each of a build's reads of it.
+    final merged = (_merges[id] ??= SuperTabStepsMerge()).of(
+      _messages[id] ?? const [],
+      {for (final step in steps) step.id: _messages[step.id] ?? const []},
+    );
+    return merged.every(_listed)
+        ? merged
+        : List.unmodifiable(merged.where(_listed));
+  }
+
+  final _merges = <String, SuperTabStepsMerge>{};
+
+  /// The name of the step [message] was written in; null for a task's own.
+  String? stepNameOf(SuperTabMessage message) {
+    final group = snapshot?.conversation(message.conversationId);
+    return group != null && superTabIsStep(group)
+        ? superTabStepName(group)
+        : null;
+  }
+
+  /// [group]'s linked tasks with their checks' results ([superTabLinkedLine]);
+  /// null without any.
+  String? linkedLine(SuperTabConversation? group) {
+    final state = snapshot;
+    return group == null || state == null
+        ? null
+        : superTabLinkedLine(state, group);
   }
 
   bool hasOlder(String id) => _before[id] != null;
@@ -1543,18 +1927,49 @@ class SuperTabController extends ChangeNotifier {
 
   /// Each conversation's reaction counter as its last page said it.
   final _reactionSeq = <String, int>{};
-  int _loadedMessageSequence(String id) =>
-      _messages[id]?.reversed
-          .where((m) => m.source['kind'] != 'update-request')
-          .firstOrNull
-          ?.sequence ??
-      0;
+
+  /// The newest message held for [id] that reading the chat reads: one in
+  /// its main stream. A reply only in its thread is read in that thread, as in
+  /// Slack, so the chat's mark stops short of it and the thread stays unread
+  /// (backend read/inbox.ts counts replies past the chat's mark). From a
+  /// server before main-stream numbers, any row, as before.
+  int _loadedMessageSequence(String id) {
+    final mainOnly = snapshot?.conversation(id)?.lastMainSequence != null;
+    return _messages[id]?.reversed
+            .where(
+              (m) =>
+                  m.source['kind'] != 'update-request' &&
+                  (!mainOnly || m.inMainStream),
+            )
+            .firstOrNull
+            ?.sequence ??
+        0;
+  }
 
   /// How far the reader has read [id]: the higher of the mark kept on the
   /// server, from any of their devices, and this device's own, which stands
   /// in while the server is out of reach.
   int readMark(String id) =>
       max(_readAt[id] ?? 0, snapshot?.readMarks[id] ?? 0);
+
+  /// A fresh short-lived link to one file of one message (backend
+  /// fileLinks.ts), answered only while the reader may read that message.
+  Future<SuperTabAttachment> readFileLink(
+    String conversationId,
+    String messageId,
+    String attachmentId,
+  ) async => SuperTabAttachment.fromJson(
+    superTabMap(
+      superTabMap(
+        await request(
+          'GET',
+          '$_path/conversations/${Uri.encodeComponent(conversationId)}'
+              '/messages/${Uri.encodeComponent(messageId)}'
+              '/attachments/${Uri.encodeComponent(attachmentId)}',
+        ),
+      )['attachment'],
+    ),
+  );
 
   /// What the reader missed in [id] after [after] (backend catchUp.ts).
   Future<SuperTabCatchUp> readCatchUp(
@@ -1569,12 +1984,26 @@ class SuperTabController extends ChangeNotifier {
     ),
   );
 
-  late final _serverMarks = SuperTabReadMarkSender(
+  late final _serverMarks = SuperTabReadMarkSender<String>(
     (id, sequence) => request(
       'POST',
       '$_path/conversations/${Uri.encodeComponent(id)}/read',
       body: {'sequence': sequence},
     ),
+  );
+
+  /// Sends the marks of threads read here, by conversation and root. A server
+  /// without thread marks refuses them; this device's own mark stands, and a
+  /// refused mark waits a minute before it is tried again.
+  late final _serverThreadMarks = SuperTabReadMarkSender<(String, String)>(
+    (thread, sequence) => request(
+      'POST',
+      '$_path/conversations/${Uri.encodeComponent(thread.$1)}'
+          '/threads/${Uri.encodeComponent(thread.$2)}/read',
+      body: {'sequence': sequence},
+    ),
+    retryAfter: const Duration(minutes: 1),
+    now: clock.now,
   );
 
   /// Whether [group] has a message in its main stream past the reader's
@@ -1814,10 +2243,22 @@ class SuperTabController extends ChangeNotifier {
 
   /// Open dialogs and native panes lose their content immediately, before
   /// account cleanup waits for an in-flight read or a draft write.
-  void revokeAccess(String message) {
+  ///
+  /// With [keepSaved] (Desktop), what is saved on this computer stays as it
+  /// was: this account's own refused, unsent and unconfirmed messages are
+  /// there for its next sign-in (saved state is kept per account), and an
+  /// unconfirmed one is checked against the backend by its receipt id then.
+  /// The web clears what an account leaves behind, so it keeps nothing.
+  void revokeAccess(String message, {bool keepSaved = false}) {
     if (_disposed) return;
+    if (keepSaved) {
+      _pruneSendOrder();
+      _savedAtRevoke ??=
+          jsonDecode(jsonEncode(_localState())) as Map<String, dynamic>;
+    }
     accessRevoked = true;
     devicesSelected = false;
+    _forgetAttention();
     error = message;
     snapshot = null;
     _parts = null;
@@ -1838,6 +2279,9 @@ class SuperTabController extends ChangeNotifier {
     }
     _queuedSends.clear();
     _poll?.cancel();
+    // A file on its way stops: a large one would go on to storage for an
+    // account that no longer reads this Swarm.
+    cancelUpload();
     _changed();
   }
 
@@ -1848,9 +2292,13 @@ class SuperTabController extends ChangeNotifier {
     'expandedProjects': expandedProjects.toList(),
     'expandedMachines': expandedMachines.toList(),
     'decisionsAside': _decisionsAside.toList(),
+    'statusFolded': _statusFolded.toList(),
     'devicesSelected': devicesSelected,
     'projectsGroupOpen': projectsGroupOpen,
+    'unreadOnly': unreadOnly,
     'machinesGroupOpen': machinesGroupOpen,
+    'buddiesGroupOpen': buddiesGroupOpen,
+    'modelsGroupOpen': modelsGroupOpen,
     'offlineMachinesOpen': offlineMachinesOpen,
     'drafts': Map<String, String>.of(_drafts),
     'terminals': Map<String, String>.of(_terminals),
@@ -1897,7 +2345,12 @@ class SuperTabController extends ChangeNotifier {
       },
   };
 
-  Future<void> _persist() {
+  /// The state saved once access is revoked ([revokeAccess]): every later
+  /// write, an autosave queued before or a send answering after, writes it, so
+  /// the emptied screen never overwrites what this account kept here.
+  Map<String, dynamic>? _savedAtRevoke;
+
+  void _pruneSendOrder() {
     final active = {
       if (_pending != null) _pending!['operationId'],
       ..._sent.keys,
@@ -1906,10 +2359,14 @@ class SuperTabController extends ChangeNotifier {
       ..._queuedSends.map((q) => q.operationId),
     };
     _sendOrder.removeWhere((id) => !active.contains(id));
+  }
+
+  Future<void> _persist() {
+    if (_savedAtRevoke == null) _pruneSendOrder();
     // Serial writes prevent an older autosave from restoring a resolved receipt.
     final next = _persisting
         .catchError((Object _) {})
-        .then((_) => save(_localState()));
+        .then((_) => save(_savedAtRevoke ?? _localState()));
     _persisting = next;
     return next;
   }
@@ -1933,6 +2390,22 @@ class SuperTabController extends ChangeNotifier {
       (_, token) => !containsMention(value, token),
     );
     _saveSoon();
+  }
+
+  /// The tags of [picked] that [text] still says: a person's is a tag, an
+  /// agent's makes it a recipient.
+  ({List<String> tagged, List<String> addressed}) _tagsSaid(
+    Map<String, String> picked,
+    String text,
+  ) {
+    final said = picked.entries
+        .where((entry) => containsMention(text, entry.value))
+        .map((entry) => entry.key);
+    bool isPerson(String id) => snapshot?.people.any((p) => p.id == id) == true;
+    return (
+      tagged: said.where(isPerson).toList(),
+      addressed: said.where((id) => !isPerson(id)).toList(),
+    );
   }
 
   static bool containsMention(String text, String token) =>
@@ -2124,6 +2597,22 @@ class SuperTabController extends ChangeNotifier {
     );
   }
 
+  /// The key the reader's one Buddy for the whole Swarm goes by in [buddyChat],
+  /// [buddy], [buddyStart], [addBuddy] and [removeBuddy]: its chat and agent
+  /// belong to no project, as the Product Managers' conversation does (spec
+  /// 2026-10-31-one-buddy-per-swarm).
+  static const kSwarmBuddyKey = '';
+
+  /// Whether this Swarm gives each person one Buddy for the whole Swarm: the
+  /// sidebar's # buddy row in place of a Buddies section.
+  bool get oneBuddy => snapshot?.swarmBuddy == true;
+
+  /// Whether [group] is the reader's older Buddy chat in a project, where the
+  /// Swarm gives one Buddy for the whole Swarm: its history reads here, and
+  /// its person talks to their Buddy in # buddy (spec: history).
+  bool isEarlierBuddyChat(SuperTabConversation? group) =>
+      oneBuddy && group != null && group.isBuddyChat && !group.isSwarmBuddyChat;
+
   /// The signed-in person's chat with their Buddy in [projectId], where the
   /// PM's private lines to them land too: Buddies replaced Chat with PM in
   /// every Swarm (Ken, 10-29). It is there before any Buddy is
@@ -2132,9 +2621,11 @@ class SuperTabController extends ChangeNotifier {
       _indexed()?.buddyChats[projectId];
 
   /// The signed-in person's Buddy in [projectId]; null when they have none.
+  /// Its main session only: a thread's own session is never "the Buddy".
   SuperTabAgent? buddy(String projectId) => snapshot?.agents
       .where(
-        (a) => a.isBuddy && a.buddyOf == accountId && a.projectId == projectId,
+        (a) =>
+            a.isMainBuddy && a.buddyOf == accountId && a.projectId == projectId,
       )
       .firstOrNull;
 
@@ -2145,9 +2636,14 @@ class SuperTabController extends ChangeNotifier {
     final chat = _indexed()?.buddyChats[projectId]?.id;
     return snapshot?.buddyStarts.reversed.where((start) {
       final request = superTabMap(start['request']);
+      // A thread session's start is its thread's, never the Buddy's own.
+      if (request['buddySession'] != null) return false;
       return superTabMap(request['buddyOf'])['personId'] == accountId &&
           (request['projectId'] == projectId ||
-              (chat != null && request['conversationId'] == chat));
+              (chat != null && request['conversationId'] == chat) ||
+              // The one Buddy's start, before its chat is read here.
+              (projectId == kSwarmBuddyKey &&
+                  request['buddyScope'] == 'swarm'));
     }).firstOrNull;
   }
 
@@ -2163,7 +2659,7 @@ class SuperTabController extends ChangeNotifier {
   }) async {
     final result = await command({
       'type': 'buddy.create',
-      'projectId': projectId,
+      if (projectId != kSwarmBuddyKey) 'projectId': projectId,
       'machineId': machineId,
       'engine': engine,
       'setup': ?setup,
@@ -2176,7 +2672,11 @@ class SuperTabController extends ChangeNotifier {
 
   /// Removes the reader's Buddy in [projectId]; its chat stays.
   Future<bool> removeBuddy(String projectId) async =>
-      await command({'type': 'buddy.remove', 'projectId': projectId}) != null;
+      await command({
+        'type': 'buddy.remove',
+        if (projectId != kSwarmBuddyKey) 'projectId': projectId,
+      }) !=
+      null;
 
   /// Names the reader's Buddy in [projectId] from its chat, or clears the
   /// name for the default when [name] is empty. Everyone in the Swarm sees it.
@@ -2241,22 +2741,34 @@ class SuperTabController extends ChangeNotifier {
         (held.first.sequence <= readMark(group.id) || !hasOlder(group.id));
   }
 
+  /// The reader's Buddy chats that count toward the Swarm badge: the one
+  /// Buddy's chat where the Swarm gives one Buddy for the whole Swarm (its
+  /// older project Buddy chats are copies of its lines, so they never count
+  /// twice), else each project's.
+  Iterable<SuperTabConversation> get _countedBuddyChats sync* {
+    if (oneBuddy) {
+      if (buddyChat(kSwarmBuddyKey) case final chat?) yield chat;
+      return;
+    }
+    for (final project in snapshot?.projects ?? const <SuperTabProject>[]) {
+      if (buddyChat(project.id) case final chat?) yield chat;
+    }
+  }
+
   /// The unread messages in the reader's own Buddy chats, the PM's private
   /// lines among them, for the Swarm badge.
   int get buddyUnread => [
-    for (final project in snapshot?.projects ?? const <SuperTabProject>[])
-      if (buddyChat(project.id) case final chat?) unreadCount(chat),
+    for (final chat in _countedBuddyChats)
+      // A muted chat never counts (Slack).
+      if (notifyOf(chat.id) != SuperTabNotify.muted) unreadCount(chat),
   ].fold(0, (a, b) => a + b);
 
   /// Reads each Buddy chat whose count is still open ([_countOpen]), page by
   /// page, so the count is exact up to [kCountCap]; nothing once every chat's
   /// count is known.
   void _readUnreadBuddyChats() {
-    for (final project in snapshot?.projects ?? const <SuperTabProject>[]) {
-      final chat = buddyChat(project.id);
-      if (chat == null || !_countOpen(chat) || !_counting.add(chat.id)) {
-        continue;
-      }
+    for (final chat in _countedBuddyChats) {
+      if (!_countOpen(chat) || !_counting.add(chat.id)) continue;
       unawaited(
         _countChat(chat.id).whenComplete(() {
           _counting.remove(chat.id);
@@ -2403,9 +2915,11 @@ class SuperTabController extends ChangeNotifier {
   Future<bool> openBuddyChat(String projectId) async {
     if (buddyChat(projectId) case final chat?) return select(chat.id);
     final me = snapshot?.people.where((p) => p.id == accountId).firstOrNull;
+    // The empty id is the reader's one Buddy chat for the Swarm (spec
+    // 2026-10-31-one-buddy-per-swarm), which names no project.
     final result = await command({
       'type': 'buddy.chat',
-      'projectId': projectId,
+      if (projectId != kSwarmBuddyKey) 'projectId': projectId,
     }, operationId: _buddyChatOperation(projectId, me?.generation));
     final id = result?['conversationId'];
     return id is String && await select(id);
@@ -2456,6 +2970,137 @@ class SuperTabController extends ChangeNotifier {
     return true;
   }
 
+  /// The reader's notification setting for [id] (backend chatSettings.ts):
+  /// the one being sent, else the server's, else Mentions only.
+  SuperTabNotify notifyOf(String id) =>
+      _notifySending[id] ??
+      _notifyKept[id]?.$1 ??
+      snapshot?.chatSettings[id] ??
+      SuperTabNotify.mentions;
+
+  /// Settings sent and not yet seen back in a read, newest choice per chat.
+  final _notifySending = <String, SuperTabNotify>{};
+  int _notifyAsked = 0;
+
+  /// Whether [group] shows as unread in the sidebar: unread, and not muted.
+  /// A muted chat stays listed, greyed, and never counts (Slack).
+  bool unreadShown(SuperTabConversation group) =>
+      notifyOf(group.id) != SuperTabNotify.muted && unread(group);
+
+  /// Keeps [level] for [id] on every device of the reader. Shown at once;
+  /// false, and the old setting back, when the server did not keep it. A
+  /// later choice for the same chat wins over an earlier one still on its way.
+  Future<bool> setNotify(String id, SuperTabNotify level) async {
+    if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
+      return false;
+    }
+    final asked = ++_notifyAsked;
+    final epoch = visibilityEpoch;
+    _notifySending[id] = level;
+    _changed();
+    var kept = false;
+    try {
+      final answer = await request(
+        'POST',
+        '$_path/conversations/${Uri.encodeComponent(id)}/notifications',
+        body: {'notify': level.name},
+      );
+      return kept = SuperTabNotify.parse(answer['notify'] as String?) == level;
+    } catch (_) {
+      return false;
+    } finally {
+      // Only the newest choice for this chat settles it; a read since
+      // carries the server's, which [notifyOf] reads once this is gone.
+      if (!_disposed && asked == _notifyAsked) {
+        _notifySending.remove(id);
+        if (kept && !accessRevoked && visibilityEpoch == epoch) {
+          _notifyKept[id] = (level, _readSerial);
+        }
+        _changed();
+      }
+    }
+  }
+
+  /// Settings the server answered for, until a read carries them: without
+  /// it a chat would flick back to the last read's setting meanwhile.
+  /// With the number of the newest read started when the answer came: a
+  /// read started after it carries the setting, and replaces it.
+  final _notifyKept = <String, (SuperTabNotify, int)>{};
+
+  /// Reads started, in order ([_read]).
+  int _readSerial = 0;
+
+  /// The one Mark all read that waits for its Undo, if any.
+  SuperTabMarkAll? _markAll;
+
+  /// How long Mark all read waits before the marks go to the server: read
+  /// marks never move back there, so Undo works by not sending them yet.
+  static const markAllHold = Duration(seconds: 6);
+
+  /// Marks every chat of this Swarm the sidebar shows unread as read (Slack's
+  /// Shift+Esc): at once on this device, on the server once [markAllHold]
+  /// passes without [SuperTabMarkAll.undo]. Null when nothing is unread. A
+  /// second one sends the first's marks before it starts.
+  SuperTabMarkAll? markAllRead() {
+    final snapshot = this.snapshot;
+    if (_disposed || accessRevoked || snapshot == null) return null;
+    _markAll?._commit();
+    final before = <String, int?>{}, through = <String, int>{};
+    for (final group in snapshot.conversations) {
+      if (group.dormant || !unreadShown(group)) continue;
+      final top = max(
+        group.lastMainSequence ?? group.lastMessageSequence,
+        _loadedMessageSequence(group.id),
+      );
+      before[group.id] = _readAt[group.id];
+      through[group.id] = top;
+      _readAt[group.id] = max(_readAt[group.id] ?? 0, top);
+    }
+    if (through.isEmpty) return null;
+    final epoch = visibilityEpoch;
+    late final SuperTabMarkAll held;
+    held = _markAll = SuperTabMarkAll._(
+      count: through.length,
+      commit: () {
+        if (_markAll == held) _markAll = null;
+        if (_disposed || accessRevoked || visibilityEpoch != epoch) return;
+        for (final MapEntry(key: id, value: top) in through.entries) {
+          if (snapshot.conversation(id) == null) continue;
+          _serverMarks.mark(id, top, kept: this.snapshot?.readMarks[id] ?? 0);
+        }
+      },
+      undo: () {
+        if (_markAll == held) _markAll = null;
+        if (_disposed) return;
+        for (final MapEntry(key: id, value: was) in before.entries) {
+          // Only what this Mark all read moved: a chat read since keeps it.
+          if (_readAt[id] != through[id]) continue;
+          if (was == null) {
+            _readAt.remove(id);
+          } else {
+            _readAt[id] = was;
+          }
+        }
+        _saveSoon();
+        _changed();
+      },
+      hold: markAllHold,
+    );
+    _saveSoon();
+    _changed();
+    return held;
+  }
+
+  /// The sidebar lists only chats with something unread (and the open one):
+  /// Slack's unread filter, kept on this computer.
+  bool unreadOnly = false;
+
+  void toggleUnreadOnly() {
+    unreadOnly = !unreadOnly;
+    _saveSoon();
+    _changed();
+  }
+
   /// A visible transcript passes the boundary it displayed. The loaded messages
   /// are authoritative: snapshots can arrive either before or after their tail.
   void markRead(String id, {int? through}) {
@@ -2484,6 +3129,7 @@ class SuperTabController extends ChangeNotifier {
     // An adapting read that changes nothing redraws nothing: on a phone each
     // redraw of the whole tab is a long frame, every poll.
     final quiet = _policy.adapts && snapshot != null;
+    final serial = ++_readSerial;
     final before = _shown;
     var stateChanged = false;
     loading = snapshot == null;
@@ -2553,6 +3199,7 @@ class SuperTabController extends ChangeNotifier {
           throw const FormatException('A different Swarm was returned.');
         }
         snapshot = next;
+        _notifyKept.removeWhere((_, kept) => kept.$2 < serial);
         final allowed = next.conversations.map((c) => c.id).toSet();
         // What this device keeps of a group goes with the group itself (a
         // tombstone), not when a read leaves it out: a closed group is out of
@@ -2979,6 +3626,7 @@ class SuperTabController extends ChangeNotifier {
         const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
       accessRevoked = true;
       devicesSelected = false;
+      _forgetAttention();
       snapshot = null;
       _parts = null;
       _messages.clear();
@@ -2988,6 +3636,7 @@ class SuperTabController extends ChangeNotifier {
       _quoting.clear();
       _forgetThreads();
       _poll?.cancel();
+      cancelUpload();
     }
   }
 
@@ -3005,13 +3654,34 @@ class SuperTabController extends ChangeNotifier {
     bool older = false,
     bool light = false,
     _EarlyRead? early,
-  }) => _reading[(id, older)] ??=
-      _loadMessages(id, older: older, light: light, early: early).whenComplete(
-        () {
+  }) {
+    final read = _reading[(id, older)] ??=
+        _loadMessages(
+          id,
+          older: older,
+          light: light,
+          early: early,
+        ).whenComplete(() {
           // A block: whenComplete would wait on the removed future, itself.
           _reading.remove((id, older));
-        },
-      );
+        });
+    // The open task's steps are read with it: its chat shows their rows.
+    if (!older && id == selectedId) _readSteps(id, light: light);
+    return read;
+  }
+
+  void _readSteps(String id, {required bool light}) {
+    final state = snapshot;
+    final task = state?.conversation(id);
+    if (state == null || task == null) return;
+    for (final step in superTabStepsOf(state, task)) {
+      // Read again only when the Swarm says the step moved past the rows held
+      // (final review, minor 8: every poll read every step).
+      final held = _messages[step.id]?.lastOrNull?.sequence;
+      if (held != null && step.lastMessageSequence <= held) continue;
+      unawaited(_readMessages(step.id, light: light));
+    }
+  }
 
   Future<void> _loadMessages(
     String id, {
@@ -3363,11 +4033,12 @@ class SuperTabController extends ChangeNotifier {
           _pending = pending;
         }
       } else if (!_disposed && !accessRevoked) {
+        final command = superTabMap(pending['command']);
         _failOperation(
           failure is SuperTabFailure
-              ? failure.message
+              ? _refusalText(failure, command)
               : 'The action is not confirmed. Retry to check it.',
-          command: superTabMap(pending['command']),
+          command: command,
           code: failure is SuperTabFailure ? failure.code : null,
         );
         if (failure is SuperTabFailure &&
@@ -3376,7 +4047,20 @@ class SuperTabController extends ChangeNotifier {
             !const {408, 429}.contains(failure.statusCode)) {
           // A definitive rejection made no change. Keep the message for the
           // person to correct; a lost reply retains its exact receipt ID.
-          _refuse(pending, operationError!);
+          // One refused for New session is kept without it: its Retry, or
+          // its text back in the box, sends a plain reply.
+          final unsupported = operationError == superTabSessionsUnavailable;
+          if (unsupported) _sessionsRefusedAt = clock.now();
+          _refuse(
+            unsupported
+                ? {
+                    ...pending,
+                    'command': Map<String, dynamic>.of(command)
+                      ..remove('newSession'),
+                  }
+                : pending,
+            operationError!,
+          );
           _pending = null;
           try {
             await _persist();
@@ -3415,6 +4099,27 @@ class SuperTabController extends ChangeNotifier {
         );
       }
     }
+  }
+
+  /// What a person reads for [failure] of [command]: the server's own words,
+  /// except where a message was refused for its form (`VALIDATION_ERROR`, the
+  /// schema naming fields): a reply whose New session the server does not know
+  /// says so; any other says it plainly.
+  static String _refusalText(
+    SuperTabFailure failure,
+    Map<String, dynamic> command,
+  ) {
+    if (command['type'] != 'message.send' ||
+        failure.code != 'VALIDATION_ERROR') {
+      return failure.message;
+    }
+    // Only the field itself unknown means the server can't start sessions;
+    // a reply refused for anything else (too many files) keeps New session.
+    return command['newSession'] == true &&
+            failure.message.contains('Unrecognized key') &&
+            failure.message.contains('newSession')
+        ? superTabSessionsUnavailable
+        : superTabRefusedAsSent;
   }
 
   static String _excerpt(String text) {
@@ -3490,10 +4195,16 @@ class SuperTabController extends ChangeNotifier {
 
   /// Sends the selected conversation's draft. [onSending] is told when the
   /// message is on its way and shows in [outgoing].
+  ///
+  /// With [newSession], in the reader's own Buddy chat, the message starts its
+  /// own thread's session (a top-level one roots that thread), and the thread
+  /// opens once the server took it, if this chat is still the one shown.
   Future<Map<String, dynamic>?> send({
     String? replyTo,
     List<String> recipients = const [],
     VoidCallback? onSending,
+    bool newSession = false,
+    String? sessionProjectId,
   }) async {
     final text = draft(selectedId).trim();
     final files = attachments(selectedId).files;
@@ -3502,18 +4213,14 @@ class SuperTabController extends ChangeNotifier {
         selected!.archived ||
         !canWrite ||
         uploading ||
-        ((saving || _pending != null) && (files.isNotEmpty || !canQueueText))) {
+        (newSession && !offersChatSessions) ||
+        ((saving || _pending != null) &&
+            (files.isNotEmpty || newSession || !canQueueText))) {
       return null;
     }
-    // A tag the text still says: an agent's is a recipient, a person's a tag.
-    final said = mentions(selectedId).entries
-        .where((entry) => containsMention(text, entry.value))
-        .map((entry) => entry.key);
-    bool isPerson(String id) => snapshot?.people.any((p) => p.id == id) == true;
-    final tagged = said.where(isPerson).toList();
-    final addressed = recipients.isEmpty
-        ? said.where((id) => !isPerson(id)).toList()
-        : recipients;
+    final said = _tagsSaid(mentions(selectedId), text);
+    final tagged = said.tagged;
+    final addressed = recipients.isEmpty ? said.addressed : recipients;
     if (addressed.any((id) => !selected!.agentIds.contains(id))) {
       _failOperation(
         'A mentioned agent is no longer in this conversation. Remove its mention or choose another agent.',
@@ -3523,7 +4230,9 @@ class SuperTabController extends ChangeNotifier {
       return null;
     }
     final conversationId = selectedId;
-    if (files.isEmpty) {
+    // A text alone waits in the queue; one that starts a session goes now,
+    // so its answer can open its thread.
+    if (files.isEmpty && !newSession) {
       final operationId = superTabOperationId();
       _sendOrder.add(operationId);
       final result = Completer<Map<String, dynamic>?>();
@@ -3539,6 +4248,7 @@ class SuperTabController extends ChangeNotifier {
           'replyTo': replyTo,
           'recipientIds': addressed,
           if (tagged.isNotEmpty) 'mentions': tagged,
+          if (oneBuddy) 'oneBuddy': true,
         },
         result: result,
       ));
@@ -3568,6 +4278,17 @@ class SuperTabController extends ChangeNotifier {
       'recipientIds': addressed,
       if (tagged.isNotEmpty) 'mentions': tagged,
       if (ids.isNotEmpty) 'attachmentIds': ids,
+      if (newSession) 'newSession': true,
+      // An app that knows one Buddy per Swarm says so: the server then
+      // refuses its write into an older Buddy chat (security review 1 of
+      // #2435). Older apps and phones say nothing and still write there.
+      if (oneBuddy) 'oneBuddy': true,
+      // A New session in one project of the reader's one Buddy chat (spec
+      // 2026-10-31-one-buddy-per-swarm).
+      if (newSession &&
+          sessionProjectId != null &&
+          selected?.isSwarmBuddyChat == true)
+        'sessionProjectId': sessionProjectId,
     });
     // On its way: the message shows in the chat, and the draft is free for
     // the next one. Both are in the save made before the request.
@@ -3582,6 +4303,17 @@ class SuperTabController extends ChangeNotifier {
     }
     final result = await sending;
     _forgetRefusedUploads(result);
+    if (newSession && result == null) {
+      _restoreSessionRefusal(conversationId, null, operationId);
+    } else if (result?['messageId'] case final String id
+        when newSession &&
+            !_disposed &&
+            !accessRevoked &&
+            selectedId == conversationId) {
+      // Its thread opens beside the chat: the session answers there. A top-
+      // level message is its own thread's root.
+      openThread(_threadOf(conversationId, replyTo) ?? replyTo ?? id);
+    }
     return result;
   }
 
@@ -3742,7 +4474,7 @@ class SuperTabController extends ChangeNotifier {
           conversationId: conversationId,
           name: file.name,
           mime: mimeForName(file.name),
-          bytes: file.bytes,
+          file: file,
           cancel: token,
           onProgress: (sent) {
             watch();
@@ -3776,18 +4508,44 @@ class SuperTabController extends ChangeNotifier {
   }
 
   Future<void> flush() async {
+    // Closing or changing account is no Undo: held marks go now.
+    _markAll?._commit();
     _draftSave?.cancel();
     await _persist();
   }
 
+  /// Access went: a held Mark all read sends nothing, and settings on their
+  /// way or answered belong to the access that is gone.
+  void _forgetAttention() {
+    _markAll?._cancel();
+    _markAll = null;
+    _notifySending.clear();
+    _notifyKept.clear();
+    _notifyAsked++;
+  }
+
+  /// Runs [then] when this controller is disposed: a helper that keeps a
+  /// timer of its own (attention.dart) stops with it.
+  void onDispose(VoidCallback then) => _onDispose.add(then);
+  final _onDispose = <VoidCallback>[];
+
   @override
   void dispose() {
+    // Closing the Swarm is no Undo: the held marks go before anything stops.
+    _markAll?._commit();
     _disposed = true;
+    for (final then in _onDispose) {
+      then();
+    }
+    _onDispose.clear();
+    // Closing the tab or signing out stops a file on its way.
+    cancelUpload();
     for (final queued in _queuedSends) {
       queued.result.complete(null);
     }
     _queuedSends.clear();
     _serverMarks.dispose();
+    _serverThreadMarks.dispose();
     _poll?.cancel();
     _toldRead?.cancel();
     _graceEnd?.cancel();
@@ -3800,5 +4558,47 @@ class SuperTabController extends ChangeNotifier {
     }
     // The owner awaits flush when changing account or closing the tab.
     super.dispose();
+  }
+}
+
+/// One Mark all read waiting for its Undo ([SuperTabController.markAllRead]).
+class SuperTabMarkAll {
+  SuperTabMarkAll._({
+    required this.count,
+    required void Function() commit,
+    required void Function() undo,
+    required Duration hold,
+  }) : _onCommit = commit,
+       _onUndo = undo {
+    _timer = Timer(hold, _commit);
+  }
+
+  /// How many chats it marked read.
+  final int count;
+  final void Function() _onCommit, _onUndo;
+  late final Timer _timer;
+  bool _done = false;
+
+  /// Whether its marks went to the server, or it was undone or dropped.
+  bool get done => _done;
+
+  /// Puts every chat it marked back as it was, if the marks are not sent yet.
+  void undo() {
+    if (_done) return;
+    _done = true;
+    _timer.cancel();
+    _onUndo();
+  }
+
+  void _commit() {
+    if (_done) return;
+    _done = true;
+    _timer.cancel();
+    _onCommit();
+  }
+
+  void _cancel() {
+    _done = true;
+    _timer.cancel();
   }
 }

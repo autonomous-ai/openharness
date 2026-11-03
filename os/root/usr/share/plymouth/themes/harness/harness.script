@@ -63,7 +63,36 @@ fun show_hotspot() {
     phone.SetOpacity(1);
 }
 
+# The power button's factory reset (initramfs harness-unlock-button): "reset:ask:N" while it waits for
+# one press more, "reset:now" once it starts again in the recovery, "reset:" when nothing was reset.
+reset_note = Sprite();
+
+fun show_reset(state) {
+    if (state == "") {
+        reset_note.SetOpacity(0);
+        return;
+    }
+    note = "Resetting this computer. Do not turn it off.";
+    if (state.SubString(0, 3) == "ask") {
+        note = "Factory reset? Press the power button once more to erase this computer.\n" +
+               "Do nothing to keep everything.";
+        # "ask:7": the seconds left to answer.
+        if (state.SubString(0, 4) == "ask:") {
+            note = note + "\n" + state.SubString(4, state.Length()) + " seconds left";
+        }
+    }
+    note_image = Image.Text(note, 0.85, 0.78, 0.1, 1, "monospace 14", "center");
+    reset_note.SetImage(note_image);
+    reset_note.SetPosition(Window.GetX() + (Window.GetWidth() - note_image.GetWidth()) / 2,
+                           Window.GetY() + 48, 2);
+    reset_note.SetOpacity(1);
+}
+
 fun display_message(text) {
+    if (text.SubString(0, 6) == "reset:") {
+        show_reset(text.SubString(6, text.Length()));
+        return;
+    }
     if (text.SubString(0, 8) != "hotspot:") return;
     hotspot = text.SubString(8, text.Length());
     show_hotspot();

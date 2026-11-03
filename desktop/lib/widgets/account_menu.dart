@@ -4,6 +4,7 @@ import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_menu.dart';
 import 'desktop_chrome.dart';
+import 'finger_target.dart';
 import 'pane_menu.dart';
 import 'workspace_account_button.dart';
 
@@ -30,6 +31,7 @@ Future<AccountMenuChoice?> showAccountMenu(
   required String email,
   double topInset = 0,
   bool focusFirst = false,
+  bool forPhone = false,
   void Function(void Function() close)? onOpen,
   bool Function(Offset position)? ownsPointer,
 }) => showPaneMenu<AccountMenuChoice>(
@@ -40,7 +42,12 @@ Future<AccountMenuChoice?> showAccountMenu(
   focusFirst: focusFirst,
   onOpen: onOpen == null ? null : (_, close) => onOpen(close),
   ownsPointer: ownsPointer,
-  body: (close) => AccountMenu(name: name, email: email, onChoose: close),
+  body: (close) => AccountMenu(
+    name: name,
+    email: email,
+    forPhone: forPhone,
+    onChoose: close,
+  ),
 );
 
 class AccountMenu extends StatelessWidget {
@@ -49,12 +56,17 @@ class AccountMenu extends StatelessWidget {
     required this.name,
     required this.email,
     required this.onChoose,
+    this.forPhone = false,
   });
 
   /// As the account gives it; empty when it has only an email.
   final String name;
   final String email;
   final void Function(AccountMenuChoice? choice) onChoose;
+
+  /// The web on a phone: rows a finger can hit, and no Add Phone (a phone is
+  /// already here).
+  final bool forPhone;
 
   static const width = 264.0;
 
@@ -128,16 +140,21 @@ class AccountMenu extends StatelessWidget {
                 ),
               ),
               const AppMenuDivider(),
-              for (final (choice, icon, label) in _rows) ...[
-                // Sign out stands apart from what opens something.
-                if (choice == AccountMenuChoice.signOut) const AppMenuDivider(),
-                AppMenuItem(
-                  key: ValueKey('account-menu-${choice.name}'),
-                  icon: icon,
-                  label: label,
-                  onPressed: () => onChoose(choice),
-                ),
-              ],
+              for (final (choice, icon, label) in _rows)
+                if (!forPhone || choice != AccountMenuChoice.addPhone) ...[
+                  // Sign out stands apart from what opens something.
+                  if (choice == AccountMenuChoice.signOut)
+                    const AppMenuDivider(),
+                  fingerTarget(
+                    enabled: forPhone,
+                    AppMenuItem(
+                      key: ValueKey('account-menu-${choice.name}'),
+                      icon: icon,
+                      label: label,
+                      onPressed: () => onChoose(choice),
+                    ),
+                  ),
+                ],
             ],
           ),
         ),

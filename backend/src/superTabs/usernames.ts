@@ -3,14 +3,17 @@ import { isBuddy } from './buddies.js'
 import { fail, person, type Actor, type Agent, type Person, type SuperTabState } from './model.js'
 import { agentProjectId, canReadAgent, projectsOf } from './projects.js'
 
-/** A username as a person types it: 2 to 32 lowercase letters, digits, `.`, `_` or `-`, starting with a letter or digit. */
-const SHAPE = /^[a-z0-9][a-z0-9._-]{1,31}$/
+/** A username as a person types it: 2 to 32 lowercase letters, digits, `.`, `_` or `-`, starting with a letter or digit. Never
+ *  a dot at its end or two in a row, so `@name` in a message tags them (mentions.ts: `@dee.` closes a sentence). */
+const SHAPE = /^[a-z0-9](?:[a-z0-9_-]|\.(?!\.)){0,30}[a-z0-9_-]$/
 /** Room left in a default for its number (`ken` → `ken12`). */
 const DEFAULT_BASE_LENGTH = 30
 
-/** The name a person's email prefix makes: lowercased, only the characters a username takes, never too short. */
+/** The name a person's email prefix makes: lowercased, only the characters a username takes, never too short. Like a chosen
+ *  name (SHAPE), never a dot at its end or two in a row, so `@name` in a message tags them: trimmed after it is cut. */
 function base(email: string): string {
-  const prefix = email.split('@')[0]!.toLowerCase().replace(/[^a-z0-9._-]/g, '').replace(/^[._-]+/, '').slice(0, DEFAULT_BASE_LENGTH)
+  const prefix = email.split('@')[0]!.toLowerCase().replace(/[^a-z0-9._-]/g, '').replace(/\.{2,}/g, '.').replace(/^[._-]+/, '')
+    .slice(0, DEFAULT_BASE_LENGTH).replace(/\.+$/, '')
   if (!prefix) return 'user'
   return prefix.length < 2 ? `${prefix}1` : prefix
 }
@@ -65,7 +68,7 @@ export function setUsername(state: SuperTabState, actor: Actor, input: string | 
   const member = person(state, actor.userId)
   if (input === null) return void delete member.username
   const name = input.trim().toLowerCase()
-  if (!SHAPE.test(name)) fail('INVALID_USERNAME', 'Use 2 to 32 letters, digits, dots, dashes or underscores, starting with a letter or digit.', 400)
+  if (!SHAPE.test(name)) fail('INVALID_USERNAME', 'Use 2 to 32 letters, digits, dots, dashes or underscores, starting with a letter or digit, with no dot at the end or two in a row.', 400)
   // Only agents this person can see, the scope their reads use: refusing another's name would tell them it exists.
   const sees = (agent: Agent) => projectsOf(state).some(p => p.id === agentProjectId(state, agent)) && canReadAgent(state, actor, agent)
   if (agentNames(state, sees).some(agent => agent.toLowerCase() === name)) {

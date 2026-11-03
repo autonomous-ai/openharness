@@ -16,6 +16,7 @@ import 'swarm_face.dart';
 import 'swarm_home_cache.dart';
 import 'swarm_home_prefs.dart';
 import 'swarm_inbox.dart';
+import 'swarm_mark_all.dart';
 import 'swarm_notices.dart';
 import 'swarm_profile.dart';
 import 'swarm_request.dart';
@@ -35,8 +36,10 @@ class SwarmSession extends ChangeNotifier {
     required SwarmNotices notices,
     Duration pollInterval = const Duration(seconds: 15),
     this.undoWindow = swarmUndoWindow,
+    this.markAllHold = swarmMarkAllHold,
     SwarmHomeCache? homeCache,
     LocalKeyValueStore? readMarks,
+    SwarmTold? told,
   }) : inbox = SwarmInbox(
          accountId: accountId,
          request: request,
@@ -49,9 +52,12 @@ class SwarmSession extends ChangeNotifier {
     _announcer = SwarmAnnouncer(
       notices,
       quiet: (_) => !swarmLocalNotices || _screens > 0,
+      told: told,
     );
+    _chatNotices = SwarmChatNotices(_announcer);
     inbox
       ..onArrived = announce
+      ..onSwarmRead = _swarmRead
       ..addListener(_needsChanged);
   }
 
@@ -79,7 +85,44 @@ class SwarmSession extends ChangeNotifier {
   /// How long a decision's answer is held before it is sent.
   final Duration undoWindow;
 
+  /// How long Mark all read waits for its Undo before the marks are sent.
+  final Duration markAllHold;
+
+  /// The one Mark all read waiting for its Undo, if any.
+  SwarmMarkAll? get markAll => _markAll;
+  SwarmMarkAll? _markAll;
+
+  /// Mark all read on Home (the desktop's Shift+Esc): every chat of Swarms
+  /// [swarmIds] shown unread reads as read on this phone at once, and on
+  /// the server once [markAllHold] passes without [SwarmMarkAll.undo]. Null
+  /// when nothing is unread. A second one sends the first's marks before
+  /// it starts; leaving the app or closing the session sends them at once.
+  SwarmMarkAll? markAllRead(Iterable<String> swarmIds) {
+    if (_disposed) return null;
+    _markAll?.commit();
+    late final SwarmMarkAll? held;
+    held = SwarmMarkAll.start(
+      [
+        for (final id in swarmIds)
+          if (inbox.reader(id) case final reader? when !reader.accessRevoked)
+            ?reader.readMarks,
+      ],
+      hold: markAllHold,
+      onDone: () {
+        if (_markAll != held) return;
+        _markAll = null;
+        if (!_disposed) notifyListeners();
+      },
+    );
+    _markAll = held;
+    if (held != null) notifyListeners();
+    return held;
+  }
+
   late final SwarmAnnouncer _announcer;
+
+  /// What tells of new messages in chats set to All new messages.
+  late final SwarmChatNotices _chatNotices;
   int _screens = 0;
   final _watching = <String, int>{};
   final _held = <String, ({int choice, Timer timer})>{};
@@ -90,8 +133,10 @@ class SwarmSession extends ChangeNotifier {
   bool _foreground = false, _disposed = false;
 
   /// Harness is in front: the Swarms are read every poll, and those a screen
-  /// watches every few seconds. Behind, nothing is.
+  /// watches every few seconds. Behind, nothing is. Going behind sends a
+  /// held Mark all read at once: the app may not come back to send it.
   set foreground(bool value) {
+    if (!value) _markAll?.commit();
     _foreground = value;
     inbox.shown = value;
     _show();
@@ -103,6 +148,39 @@ class SwarmSession extends ChangeNotifier {
 
   /// Posts [need]'s notice, unless a Swarm screen is up.
   void announce(SwarmNeed need) => _announcer.announce(need);
+
+  /// Swarms read whose decisions and tags are still being read: what the
+  /// read missed is counted once they are ([_countReads]).
+  final _readsToCount = <String>{};
+
+  void _swarmRead(String id) {
+    if (inbox.reader(id) case final reader?) _chatNotices.read(id, reader);
+    _readsToCount.add(id);
+    _countReads();
+  }
+
+  /// Tells the announcer of each Swarm read once what waits there is known:
+  /// a Swarm read again from nothing has no decisions or tags until they are
+  /// read again, which is not their being gone. While they cannot be read,
+  /// nothing counts as missed.
+  void _countReads() {
+    for (final id in _readsToCount.toList()) {
+      final asks = inbox.asks(id);
+      if (asks == null) {
+        _readsToCount.remove(id);
+        continue;
+      }
+      if (asks.loading) continue;
+      // The lists are read again after the Swarm: counted once they are.
+      if (asks.reading case final reading?) {
+        unawaited(reading.whenComplete(() => _disposed ? null : _countReads()));
+        continue;
+      }
+      _readsToCount.remove(id);
+      if (asks.error != null) continue;
+      _announcer.swarmRead(id, inbox.needs);
+    }
+  }
 
   /// A screen shows Swarm [swarmId] closely (a conversation): it is read
   /// every few seconds while Harness is in front, until no screen does.
@@ -140,6 +218,9 @@ class SwarmSession extends ChangeNotifier {
   /// unless [undo] takes it back first.
   void hold(SwarmDecisionNeed need, int choice) {
     if (_disposed) return;
+    // Off the list since it was asked (answered elsewhere, or access taken
+    // away): there is nothing to answer.
+    if (!inbox.needs.any((open) => open.key == need.key)) return;
     _held.remove(need.key)?.timer.cancel();
     _dropped.remove(need.key);
     if (undoWindow <= Duration.zero) {
@@ -171,11 +252,24 @@ class SwarmSession extends ChangeNotifier {
   void _needsChanged() {
     _show();
     if (inbox.loaded) {
-      home.keepOnly({for (final swarm in inbox.swarms) swarm.id});
+      final listed = {for (final swarm in inbox.swarms) swarm.id};
+      home.keepOnly(listed);
+      _chatNotices.keepOnly(listed);
     }
     // What was read of a Swarm off the list, or out of reach, leaves memory.
     peeks.keepOnly([for (final swarm in inbox.swarms) ?inbox.reader(swarm.id)]);
-    _announcer.settle(inbox.needs);
+    _announcer.settle(
+      inbox.needs,
+      // A Swarm off the list, or out of reach, keeps no notice up.
+      readable: inbox.loaded
+          ? {
+              for (final swarm in inbox.swarms)
+                if (inbox.reader(swarm.id) case final reader?
+                    when !reader.accessRevoked)
+                  swarm.id,
+            }
+          : null,
+    );
     // Answered somewhere else meanwhile, or out of the list while the Swarm
     // is read again: nothing is sent, and a card that comes back says so.
     final open = {for (final need in inbox.needs) need.key};
@@ -188,10 +282,13 @@ class SwarmSession extends ChangeNotifier {
       _dropped.add(key);
     }
     if (gone.isNotEmpty) notifyListeners();
+    _countReads();
   }
 
   @override
   void dispose() {
+    // Closing the account or Swarm is no Undo: held marks go now.
+    _markAll?.commit();
     _disposed = true;
     for (final held in _held.values) {
       held.timer.cancel();
@@ -213,6 +310,7 @@ class SwarmSession extends ChangeNotifier {
 class SwarmHost extends ChangeNotifier {
   SwarmHost({
     required this.accountId,
+    this.accountReading,
     required this.account,
     required this.request,
     this.upload = refuseSwarmUpload,
@@ -235,6 +333,10 @@ class SwarmHost extends ChangeNotifier {
 
   /// The signed-in account's id; null while nobody is.
   final String? Function() accountId;
+
+  /// Whether someone is signed in and [accountId] is on its way; null where
+  /// nobody can tell, and no account is taken to be coming.
+  final bool Function()? accountReading;
 
   /// Tells when [accountId] may have changed.
   final Listenable account;
@@ -274,6 +376,17 @@ class SwarmHost extends ChangeNotifier {
   SwarmSession? session;
   bool _foreground = true;
 
+  /// What the account was told on this phone, kept across its sessions: a
+  /// session made again (the account read again) tells none of it again.
+  final _told = SwarmTold();
+
+  /// No session yet, only because the account is on its way: Swarm is on and
+  /// someone is signed in, so Home shows its skeleton, not that Swarm is off.
+  bool get accountComing =>
+      session == null &&
+      features.isOn(PhoneExperiment.swarm) &&
+      (accountReading?.call() ?? false);
+
   /// Whether Swarm was on at the last [_update]; null before the first.
   bool? _on;
 
@@ -293,11 +406,20 @@ class SwarmHost extends ChangeNotifier {
     final wasOn = _on;
     _on = on;
     final id = on ? accountId() : null;
+    // Swarm off forgets what was told; a moment with no account does not, as
+    // the same account may be back at once. Another account starts over.
+    if (!on) {
+      _told.account = null;
+    } else if (id != null) {
+      _told.account = id;
+    }
     if (id == session?.accountId) {
       // Swarm off with no session to end: its switch is read before the first
       // frame, so this is known, and what an earlier run kept goes. A missing
       // account is not: the signed-in shell is up before the account is read.
       if (!on && wasOn != false) unawaited(homeCache.clear());
+      // No session either way, but [accountComing] may have moved with it.
+      if (wasOn != null && on != wasOn) notifyListeners();
       return;
     }
     // Signed out, another account, or Swarm turned off: nothing of it stays.
@@ -315,6 +437,7 @@ class SwarmHost extends ChangeNotifier {
             notices: notices,
             homeCache: homeCache,
             readMarks: readMarks,
+            told: _told,
           )..foreground = _foreground);
     notifyListeners();
   }
@@ -344,6 +467,15 @@ class SwarmScope extends InheritedNotifier<SwarmHost> {
       .dependOnInheritedWidgetOfExactType<SwarmScope>()
       ?.notifier
       ?.session;
+
+  /// Whether there is no session only because the account is on its way
+  /// ([SwarmHost.accountComing]); false outside the shell.
+  static bool accountComingOf(BuildContext context) =>
+      context
+          .dependOnInheritedWidgetOfExactType<SwarmScope>()
+          ?.notifier
+          ?.accountComing ??
+      false;
 
   /// How an avatar photo goes up ([SwarmHost.uploadAvatar]); null outside
   /// the shell or where none can.

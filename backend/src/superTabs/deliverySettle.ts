@@ -17,6 +17,9 @@ export const HOLD_LIMIT_MS = 60 * 60_000
 export const WAITING_ON_PERSON_LIMIT_MS = 24 * 60 * 60_000
 /** How long a person has to check a delivery its host could not confirm before it ends, as their Open terminal ends it. */
 export const UNCERTAIN_LIMIT_MS = 60 * 60_000
+/** A queued delivery whose claims have failed this long, and failed again within this long, is stuck behind a Swarm that keeps
+ *  answering busy (prod 10-30, v1.3.71: every person's messages to their own Buddy sat queued for 2 hours, and nothing said so). */
+export const CLAIM_FAILING_ALARM_MS = 5 * 60_000
 const SETTLE_EVERY_MS = 5 * 60_000
 const OPEN = ['queued', 'claimed', 'uncertain']
 const BATCH = 500
@@ -31,13 +34,19 @@ export function stuck(delivery: Pick<SuperTabDelivery, 'status' | 'holdReason' |
   return since(delivery.holdSince) > (delivery.holdReason === 'team_waiting_user' ? WAITING_ON_PERSON_LIMIT_MS : HOLD_LIMIT_MS)
 }
 
+/** Whether a delivery's claims keep failing: the alarm only logs it, because cancelling would drop a message a healthy host can still take. */
+export function claimsFailing(delivery: Pick<SuperTabDelivery, 'status' | 'claimFailingSince' | 'claimFailedAt'>, now: number): boolean {
+  if (delivery.status !== 'queued' || !delivery.claimFailingSince || !delivery.claimFailedAt) return false
+  return now - delivery.claimFailingSince.getTime() >= CLAIM_FAILING_ALARM_MS && now - delivery.claimFailedAt.getTime() <= CLAIM_FAILING_ALARM_MS
+}
+
 /** A page of open deliveries, by id. Read by their own index (status, id) with a plain match: Prisma sends `status in` as an
  *  $expr $or that no index can bound (pageReads.ts), and a pass must not read every delivery ever sent. */
 async function openDeliveries(db: PrismaClient, after: string | null): Promise<SuperTabDelivery[]> {
   const rows = await db.superTabDelivery.aggregateRaw({ pipeline: [{ $match: { status: { $in: OPEN }, ...after ? { _id: { $gt: after } } : {} } },
     { $sort: { _id: 1 } }, { $limit: BATCH }] }) as unknown as Array<Record<string, unknown>>
   const date = (value: unknown) => value == null ? null : new Date(ms(value))
-  return rows.map(({ _id, ...row }) => ({ ...row, id: _id as string, holdSince: date(row.holdSince), deliveredAt: date(row.deliveredAt),
+  return rows.map(({ _id, ...row }) => ({ ...row, id: _id as string, holdSince: date(row.holdSince), claimFailingSince: date(row.claimFailingSince), claimFailedAt: date(row.claimFailedAt), deliveredAt: date(row.deliveredAt),
     answeredAt: date(row.answeredAt), createdAt: date(row.createdAt)!, updatedAt: date(row.updatedAt)! }) as unknown as SuperTabDelivery)
 }
 
@@ -52,6 +61,16 @@ export async function settleStuckDeliveries(db: PrismaClient, store: Pick<SuperT
       // One Swarm that cannot be read now (it is being migrated) never holds the others back.
       try { settled += await store.settleDeliveries(tabId, tabRows, now) } catch (error) {
         logger.warn('[swarm-deliveries] could not settle', { tabId, error: error instanceof Error ? error.message : String(error) })
+      }
+      // Counted per page, so a Swarm whose rows span two 500-row pages logs one line per page. Rare; prod watch counts lines per tab.
+      // Its own try/catch: a Swarm whose count throws must not stop the pass for the Swarms after it.
+      try {
+        const failing = tabRows.filter(row => claimsFailing(row, now))
+        if (failing.length) logger.warn('[swarm-deliveries] claims failing', { tabId, deliveries: failing.length,
+          oldestFailingSince: new Date(Math.min(...failing.map(row => row.claimFailingSince!.getTime()))).toISOString(),
+          codes: [...new Set(failing.map(row => row.claimFailure).filter((code): code is string => !!code))].sort() })
+      } catch (error) {
+        logger.warn('[swarm-deliveries] could not count failing claims', { tabId, error: error instanceof Error ? error.message : String(error) })
       }
     }
     if (rows.length < BATCH) return settled

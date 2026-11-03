@@ -7,9 +7,12 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
 import '../core/dsh_catalog.dart';
+import '../core/linux_webview_runtime.dart';
+import '../core/runtime_platform.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../terminal/terminal_text.dart';
+import '../widgets/native_webview_host.dart';
 
 Future<void> showStoreDemo(
   BuildContext context, {
@@ -75,11 +78,17 @@ class _StoreDemoDialogState extends State<StoreDemoDialog>
   bool _loading = true;
   bool _openingBrowser = false;
 
+  bool get _webviewAvailable =>
+      WebViewPlatform.instance != null &&
+      (!RuntimePlatform.isLinux || LinuxWebViewRuntime.available);
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    if (WebViewPlatform.instance != null) _start();
+    if (_webviewAvailable) {
+      _start();
+    }
   }
 
   Future<void> _start() async {
@@ -208,7 +217,7 @@ class _StoreDemoDialogState extends State<StoreDemoDialog>
             Expanded(
               child: ColoredBox(
                 color: const Color(0xFF111316),
-                child: _failed || WebViewPlatform.instance == null
+                child: _failed || !_webviewAvailable
                     ? Center(
                         child: Padding(
                           padding: const EdgeInsets.all(24),
@@ -243,7 +252,9 @@ class _StoreDemoDialogState extends State<StoreDemoDialog>
                         children: [
                           if (_controller != null)
                             Positioned.fill(
-                              child: WebViewWidget(controller: _controller!),
+                              child: NativeWebViewHost(
+                                child: WebViewWidget(controller: _controller!),
+                              ),
                             ),
                           if (_loading)
                             const Center(child: CircularProgressIndicator()),
