@@ -144,6 +144,14 @@ describe('the Buddy\'s machine reporting the switch', () => {
       "peer's Buddy now runs on DeepSeek 4.1 Flash, which your machine serves."])
   })
 
+  it('says which of its thread sessions stayed where they were', () => {
+    const { f, requestId } = asked()
+    const effects = f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId, ok: true,
+      error: 'A thread session stayed where it was: it was answering' }, f.buddy())
+    expect(effects.messages.filter(m => m.conversationId === f.chat).map(m => m.text)).toEqual([
+      'Your Buddy now runs on DeepSeek 4.1 Flash, served by Mac Studio. A thread session stayed where it was: it was answering.'])
+  })
+
   it('says when the conversation was too long and the Buddy started fresh', () => {
     const { f, requestId } = asked()
     const effects = f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId, ok: true, fresh: true }, f.buddy())
