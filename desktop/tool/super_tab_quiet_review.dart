@@ -194,8 +194,80 @@ ConversationServer _seed() {
               .subtract(const Duration(minutes: 20))
               .millisecondsSinceEpoch,
         },
+        // Backlog review (PR #2776): a second project, every group, tasks
+        // dee asked for (Mine), and a private task dee is not in.
+        {
+          'id': 't-queued',
+          'projectId': 'lamp',
+          'number': 2347,
+          'title': 'New session starts on the last project',
+          'leadId': 'river',
+          'agentIds': <Object>[],
+          'archived': false,
+          'brief': 'New session starts on the last project',
+          'checks': <Object>[],
+          'requesterId': 'dee',
+        },
+        {
+          ..._conversation('t-orphan', 'Machine names', agent: 'finn'),
+          'projectId': 'lamp',
+          'number': 2348,
+          'requesterId': 'tony',
+          'liveness': {
+            'state': 'orphaned',
+            'why': 'removed',
+            'since': _now
+                .subtract(const Duration(minutes: 9))
+                .millisecondsSinceEpoch,
+          },
+        },
+        {
+          ..._conversation(
+            't-review',
+            'Thread reply bar',
+            agent: 'juno',
+            status: 'review',
+          ),
+          'projectId': 'lamp',
+          'number': 2349,
+          'requesterId': 'dee',
+          'pullRequestUrls': [
+            'https://github.com/autonomous-ai/openharness/pull/2730',
+          ],
+        },
+        {
+          ..._conversation(
+            't-ready',
+            'Status menu fixture',
+            agent: 'lark',
+            status: 'done',
+          ),
+          'number': 2350,
+          'requesterId': 'scholes',
+          'pullRequestUrls': [
+            'https://github.com/autonomous-ai/openharness/pull/2717',
+          ],
+        },
+        {
+          ..._conversation('t-private', 'Pay review', agent: 'moss'),
+          'number': 2351,
+          'requesterId': 'ken15',
+          'audience': {
+            'people': [
+              {'id': 'ken15'},
+            ],
+          },
+        },
       ],
     });
+  // Change times as the real backend sends them: epoch milliseconds, not
+  // the fake server's ticks (which read as 57 years ago).
+  server.parts.clock = _now
+      .subtract(const Duration(minutes: 10))
+      .millisecondsSinceEpoch;
+  for (final g in (server.state['conversations'] as List).cast<Map>()) {
+    if (g['id'] == 't-nico' || g['id'] == 't-theo') g['requesterId'] = 'dee';
+  }
   server.revision = 200;
   server.leaderboard = {
     'projectId': 'oh',
