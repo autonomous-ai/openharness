@@ -103,6 +103,49 @@ void main() {
     expect(find.byKey(const ValueKey('swarm-project-dot')), findsOneWidget);
   });
 
+  /// The round marks in the row.
+  Finder dots() => find.descendant(
+    of: find.byKey(row),
+    matching: find.byWidgetPredicate(
+      (w) =>
+          w is Container &&
+          w.decoration is BoxDecoration &&
+          (w.decoration! as BoxDecoration).shape == BoxShape.circle,
+    ),
+  );
+
+  Color? dotColor(WidgetTester tester) =>
+      (tester.widget<Container>(dots()).decoration! as BoxDecoration).color;
+
+  testWidgets('its team idle: no dot, its place kept so the names stay in '
+      'line', (tester) async {
+    await pump(tester, running: 1);
+    expect(dots(), findsOneWidget);
+    final dotted = tester.getTopLeft(name).dx;
+
+    await pump(tester);
+
+    expect(
+      dots(),
+      findsNothing,
+      reason: 'a faint dot on every row said nothing',
+    );
+    expect(
+      tester.getSize(find.byKey(const ValueKey('swarm-project-dot'))).width,
+      16,
+    );
+    expect(tester.getTopLeft(name).dx, dotted);
+  });
+
+  testWidgets('its dot: green while its team works, yellow with a tag waiting '
+      'on the person though the team is idle', (tester) async {
+    await pump(tester, running: 1);
+    expect(dotColor(tester), swarmStateColor(SwarmAgentState.working));
+
+    await pump(tester, news: (bold: false, tags: 1, hasWaitingTag: false));
+    expect(dotColor(tester), swarmStateColor(SwarmAgentState.waiting));
+  });
+
   testWidgets('quiet, the name in the second ink, not bold', (tester) async {
     await pump(tester);
 
@@ -115,7 +158,11 @@ void main() {
   testWidgets('something new: bold in the main ink, heard as unread, with no '
       'dot at its end', (tester) async {
     final semantics = tester.ensureSemantics();
-    await pump(tester, news: (bold: true, tags: 0, hasWaitingTag: false));
+    await pump(
+      tester,
+      running: 1,
+      news: (bold: true, tags: 0, hasWaitingTag: false),
+    );
 
     final style = nameText(tester).style!;
     expect(style.color, AppPalette.textPrimary);

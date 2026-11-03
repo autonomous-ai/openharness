@@ -130,7 +130,8 @@ class SwarmInvitationRow extends StatelessWidget {
 }
 
 /// One project on Home, on one line as Slack's channels (Tony, 2026-11-03): a
-/// dot in the colour of how its team is ([swarmProjectColor]), its name as a
+/// dot in the colour of how its team is ([swarmProjectColor]), or its place
+/// left empty while the team is idle so the names stay in line; its name as a
 /// channel's ("#openharness") — bold and bright with something new in it,
 /// quiet otherwise — its Swarm faint after it where Home shows several, the
 /// first to go when the row is short, and at its end the tags waiting in it
@@ -185,12 +186,10 @@ class SwarmHomeProjectRow extends StatelessWidget {
                 child: SizedBox(
                   key: const ValueKey('swarm-project-dot'),
                   width: 16,
-                  child: Center(
-                    child: _Dot(
-                      size: 8,
-                      color: swarmProjectColor(glance, news),
-                    ),
-                  ),
+                  child: switch (swarmProjectColor(glance, news)) {
+                    final color? => Center(child: _Dot(size: 8, color: color)),
+                    null => null,
+                  },
                 ),
               ),
               const SizedBox(width: AppSpace.s),
@@ -307,15 +306,16 @@ class SwarmOtherProjectsRow extends StatelessWidget {
 
 /// How a project's team is, as its dot on Home: red with someone down,
 /// yellow with someone waiting or a tag waiting on the person, green with
-/// someone working, faint otherwise.
-Color swarmProjectColor(SwarmTeamGlance glance, SwarmProjectNews news) =>
+/// someone working. Null, no dot, while it is idle: a faint dot on nearly
+/// every row said nothing and hid the few that do (Tony, 2026-11-03).
+Color? swarmProjectColor(SwarmTeamGlance glance, SwarmProjectNews news) =>
     glance.down > 0
     ? swarmStateColor(SwarmAgentState.down)
     : glance.waiting > 0 || news.tags > 0 || news.hasWaitingTag
     ? swarmStateColor(SwarmAgentState.waiting)
     : glance.working > 0
     ? swarmStateColor(SwarmAgentState.working)
-    : AppPalette.textFaint;
+    : null;
 
 /// A row's ink on a tap, with a click a thumb can feel.
 class _Tap extends StatelessWidget {

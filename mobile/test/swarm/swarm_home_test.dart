@@ -10,7 +10,7 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart'
-    show AppFont, AppPalette;
+    show AppFont;
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_home_list.dart';
@@ -323,16 +323,17 @@ void main() {
     };
   }
 
-  /// The colour of the dot before project row [k].
+  /// The colour of the dot before project row [k], null with none there.
   Color? dotOf(WidgetTester tester, String k) =>
       ((tester
-                  .widget<Container>(
+                  .widgetList<Container>(
                     find.descendant(
                       of: inside(k, key('swarm-project-dot')),
                       matching: find.byType(Container),
                     ),
                   )
-                  .decoration
+                  .firstOrNull
+                  ?.decoration
               as BoxDecoration?)
           ?.color);
 
@@ -980,7 +981,12 @@ void main() {
         AppColors.danger,
         reason: 'someone down comes first',
       );
-      expect(dotOf(tester, webRow), AppPalette.textFaint, reason: 'all idle');
+      expect(dotOf(tester, webRow), isNull, reason: 'all idle: no dot');
+      expect(
+        tester.getTopLeft(inside(webRow, find.text('#Web'))).dx,
+        tester.getTopLeft(inside(mobileRow, find.text('#Mobile'))).dx,
+        reason: "the idle dot's place is kept: the names stay in line",
+      );
       semantics.dispose();
     });
 
