@@ -4,7 +4,7 @@
 
 **Goal:** The machine removal preview names only agents and projects the machine owner may read, counts hidden entries, and keeps removal blocked when an unreadable project's PM runs on the machine.
 
-**Architecture:** Filter preview details with the existing project access rules in the backend. Return aggregate counts for hidden agents and sole source projects, and a generic blocking reason when the Product Manager's project is unreadable. Current Desktop and Mobile clients request `/removal/v2` and require its response marker; older backends return not found, so current clients fail closed without fetching legacy data. Released clients keep the old `/removal` response shape when every detail is readable; when hidden details apply, the server refuses with a generic update-required message. Filter unreadable agent IDs from the removal command result too.
+**Architecture:** Filter preview details with the existing project access rules in the backend. Return aggregate counts for hidden agents and sole source projects, and a generic blocking reason when the Product Manager's project is unreadable. Current Desktop, Mobile, and CLI clients request `/removal/v2`; Desktop and Mobile require its response marker, while CLI's v2 path cannot fetch the legacy response. Released clients keep the old `/removal` response shape when every detail is readable; when hidden details apply, the server refuses with a generic update-required message. Retire the legacy route in a cleanup PR no earlier than Dec 4, 2026 and no earlier than 30 days after the first Desktop, phone, and CLI releases using v2. Filter unreadable agent IDs from the removal command result too.
 
 **Tech Stack:** TypeScript, Vitest, Fastify integration tests, Dart, Flutter widget tests.
 
@@ -27,7 +27,7 @@
 - Released clients never silently confirm removal when hidden details apply; current clients fail closed if the backend lacks the versioned preview.
 - The removal command result never includes IDs of agents the actor cannot read.
 - Visible agents, projects and PMs retain their existing details.
-- Desktop and Mobile show aggregate counts while preserving the current visible-entry presentation.
+- Desktop, Mobile, and CLI use the versioned preview; Desktop and Mobile show aggregate counts while preserving the current visible-entry presentation.
 
 ---
 
@@ -111,23 +111,39 @@ Added after the independent security review found that the phone rejected a reas
 - Test: `mobile/test/swarm/swarm_machines_test.dart`
 
 **Interfaces:**
-- Current clients request the `/removal/v2` endpoint and require `previewVersion: 2`; older backends therefore fail closed without returning the legacy preview.
+- Current Desktop, Mobile, and CLI clients request the `/removal/v2` endpoint; Desktop and Mobile require `previewVersion: 2`, and CLI cannot fall back to the legacy preview.
 - Older clients receive an update-required refusal whenever hidden counts or an unreadable Product Manager apply, and the old shape when all details are readable.
+- Retire the legacy route in a cleanup PR no earlier than Dec 4, 2026 and no earlier than 30 days after the first Desktop, phone, and CLI releases that use v2.
 - Generic Product Manager copy follows the Naming System and remains accurate across refusal paths.
 - `machine.remove` returns only agent IDs readable by its actor.
 
-- [ ] **Step 1: Add failing tests** for versioned client success, legacy client refusal with hidden data and compatibility with fully readable data, current clients rejecting an unversioned backend response, and filtering unreadable agent IDs from removal results.
-- [ ] **Step 2: Implement the compatibility handshake, neutral generic copy and readable-ID filter.**
-- [ ] **Step 3: Run the focused tests for each changed component.**
+- [x] **Step 1: Add failing tests** for versioned client success, legacy client refusal with hidden data and compatibility with fully readable data, current clients rejecting an unversioned backend response, and filtering unreadable agent IDs from removal results.
+- [x] **Step 2: Implement the compatibility handshake, neutral generic copy and readable-ID filter.**
+- [x] **Step 3: Run focused backend unit tests; the full integration suite remains in Task 7.**
 
-### Task 6: Run required verification
+### Task 6: Keep CLI on the versioned preview
+
+Added after security review found the CLI still requested the legacy route.
+
+**Files:**
+- Modify: `cli/src/superTabs/command.ts`
+- Test: `cli/src/superTabs/command.spec.ts`
+
+**Interfaces:**
+- CLI removal previews request `/removal/v2`, so current CLI users see hidden-item counts and do not receive the update-required refusal intended for released clients.
+
+- [ ] **Step 1: Update the CLI test** to expect the v2 route and a versioned response; confirm it fails against the legacy request.
+- [ ] **Step 2: Commit** the failing CLI test.
+- [ ] **Step 3: Point CLI removal previews at `/removal/v2`, rerun the affected CLI test, and commit the code fix.**
+
+### Task 7: Run required verification
 
 **Files:**
 - No additional files.
 
 **Interfaces:**
-- Consumes: Tasks 1–5.
+- Consumes: Tasks 1–6.
 
 - [ ] **Step 1: Run affected backend unit tests and the full Super Tab integration suite.**
-- [ ] **Step 2: Run the affected Desktop and Mobile tests and analyze changed Dart code.**
-- [ ] **Step 3: Record red/green evidence in a PR comment, attach the changed Desktop screenshot, and request two independent security reviews.**
+- [ ] **Step 2: Run the affected CLI test, Desktop and Mobile tests, and analyze changed Dart code.**
+- [ ] **Step 3: Record red/green evidence in a PR comment, attach the changed Desktop screenshot, and finish two independent security reviews.**
