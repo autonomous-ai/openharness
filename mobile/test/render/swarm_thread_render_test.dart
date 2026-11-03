@@ -11,6 +11,8 @@ import 'package:harness_mobile/phone/voice_input_controller.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/shared/theme/color_palette.dart';
+import 'package:harness_mobile/swarm/swarm_conversation.dart'
+    show swarmMentionedAgentLeft;
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_file_picker.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
@@ -249,6 +251,10 @@ void main() {
     });
   }
 
+  /// The Swarm and the app of the last [chat] pumped, to change under it.
+  late FakeSwarm swarm;
+  late SwarmHost app;
+
   for (final brightness in Brightness.values) {
     final look = brightness.name;
 
@@ -300,7 +306,7 @@ void main() {
       final host = SwarmHost(
         accountId: () => account.value,
         account: account,
-        request: backend().request,
+        request: (swarm = backend()).request,
         upload: stuck,
         notices: SilentSystemNotices(),
         features: features,
@@ -311,6 +317,7 @@ void main() {
           language: ValueNotifier('en'),
         ),
       )..foreground = false;
+      app = host;
       addTearDown(host.dispose);
       final key = GlobalKey();
       await tester.pumpWidget(
@@ -384,6 +391,51 @@ void main() {
       // The draft's save, a moment after it changed.
       await tester.pump(const Duration(seconds: 1));
     });
+
+    testWidgets(
+      'the thread, a picked agent who left the chat refused '
+      '($look)',
+      skip: skip,
+      (tester) async {
+        final key = await chat(tester);
+        await tester.tap(find.byKey(const ValueKey('swarm-thread-line-m1')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('swarm-tag')));
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byKey(const ValueKey('swarm-pick-agent-builder')),
+        );
+        await tester.pumpAndSettle();
+        // Nova leaves the chat, and the Swarm is read again.
+        final parts = swarm.routes['/api/super-tabs/$tab/parts']!;
+        swarm.routes['/api/super-tabs/$tab/parts'] = (body) {
+          final read = parts(body) as Map<String, dynamic>;
+          return {
+            ...read,
+            'groups': [
+              for (final g in (read['groups'] as List).cast<Map>())
+                g['key'] == 'g1'
+                    ? part('g1', (g['version'] as int) + 1, {
+                        ...(g['data'] as Map<String, dynamic>),
+                        'agentIds': ['agent-lead'],
+                      })
+                    : g,
+            ],
+          };
+        };
+        swarm.routes['/api/super-tabs/$tab/changes'] = (_) => {'reload': true};
+        await tester.runAsync(() => app.session!.inbox.reader(tab)!.refresh());
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('swarm-thread-send')));
+        await tester.pumpAndSettle();
+        expect(find.text(swarmMentionedAgentLeft), findsOneWidget);
+        FocusManager.instance.primaryFocus?.unfocus();
+        await tester.pumpAndSettle();
+        await shoot(tester, key, 'swarm-thread-agent-left-$look');
+        // The draft's save, a moment after it changed.
+        await tester.pump(const Duration(seconds: 1));
+      },
+    );
 
     testWidgets('the thread, its mic listening ($look)', skip: skip, (
       tester,
