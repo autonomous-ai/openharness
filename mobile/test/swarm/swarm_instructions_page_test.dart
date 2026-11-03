@@ -56,18 +56,23 @@ void main() {
     WidgetTester tester, {
     required Object? Function(Map<String, dynamic>? body) route,
     int revision = 3,
+    Object? Function(Map<String, dynamic>? body)? commands,
+    String role = 'owner',
   }) async {
     final fake = FakeSwarm();
     fake.routes['/api/super-tabs/$tab/parts'] = (_) {
       final load = firstLoad(head: head(revision));
       // The member's username differs from their id.
       load['members'] = [
-        part(me, 1, {...person(me), 'username': 'ken'}),
+        part(me, 1, {...person(me, role: role), 'username': 'ken'}),
       ];
       return load;
     };
     fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
     fake.routes[path] = route;
+    if (commands != null) {
+      fake.routes['/api/super-tabs/$tab/commands'] = commands;
+    }
     final reader = SwarmReader(
       tabId: tab,
       accountId: me,
@@ -121,7 +126,6 @@ void main() {
     expect(find.byType(TextField), findsNothing);
     expect(find.byType(EditableText), findsNothing);
     expect(find.text('Save'), findsNothing);
-    expect(find.text('Delete'), findsNothing);
     expect(find.text('Restore'), findsNothing);
   });
 
@@ -249,5 +253,87 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('The server is busy.'), findsOneWidget);
     expect(find.textContaining('Kept text'), findsOneWidget);
+  });
+
+  group('Delete on a note', () {
+    final notes = [note('n1', 'Do not use Codex.', '2026-10-01T10:00:00.000Z')];
+    final remove = find.byKey(const ValueKey('swarm-instructions-delete-n1'));
+
+    testWidgets('an allowed person confirms, and one delete goes', (
+      tester,
+    ) async {
+      final sent = <Map<String, dynamic>>[];
+      var kept = notes;
+      await open(
+        tester,
+        route: (_) => doc(3, 'Rules.', notes: kept),
+        commands: (body) {
+          sent.add(body!);
+          kept = [];
+          return {'result': <String, dynamic>{}};
+        },
+      );
+      expect(remove, findsOneWidget);
+      await tester.tap(remove);
+      await tester.pumpAndSettle();
+      expect(find.text('Delete this note?'), findsOneWidget);
+      expect(sent, isEmpty, reason: 'nothing goes before they confirm');
+      await tester.tap(find.text('Delete').last);
+      await tester.pumpAndSettle();
+      expect(sent, hasLength(1));
+      expect(sent.single['command'], {
+        'type': 'note.remove',
+        'projectId': project,
+        'noteId': 'n1',
+      });
+      expect(sent.single['operationId'], isA<String>());
+      expect(find.text('Do not use Codex.'), findsNothing);
+    });
+
+    testWidgets('Cancel sends nothing', (tester) async {
+      final sent = <Object?>[];
+      await open(
+        tester,
+        route: (_) => doc(3, 'Rules.', notes: notes),
+        commands: (body) {
+          sent.add(body);
+          return {'result': <String, dynamic>{}};
+        },
+      );
+      await tester.tap(remove);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(sent, isEmpty);
+      expect(find.text('Do not use Codex.'), findsOneWidget);
+    });
+
+    testWidgets('a person who may not sees no Delete', (tester) async {
+      await open(
+        tester,
+        route: (_) => doc(3, 'Rules.', notes: notes),
+        role: 'viewer',
+      );
+      expect(find.text('Do not use Codex.'), findsOneWidget);
+      expect(remove, findsNothing);
+    });
+
+    testWidgets('a refusal says why and keeps the note', (tester) async {
+      await open(
+        tester,
+        route: (_) => doc(3, 'Rules.', notes: notes),
+        commands: (_) => throw const SuperTabFailure(
+          'NOT_FOUND',
+          'This note is unavailable.',
+          statusCode: 404,
+        ),
+      );
+      await tester.tap(remove);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Delete').last);
+      await tester.pumpAndSettle();
+      expect(find.text('This note is unavailable.'), findsOneWidget);
+      expect(find.text('Do not use Codex.'), findsOneWidget);
+    });
   });
 }

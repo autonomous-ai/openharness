@@ -9,6 +9,7 @@ import 'model.dart';
 import 'parts.dart';
 import 'swarm_buddy.dart';
 import 'swarm_chat_notify.dart';
+import 'swarm_kept.dart';
 import 'swarm_read_marks.dart';
 import 'swarm_request.dart';
 import 'waiting_work.dart';
@@ -106,6 +107,10 @@ class SwarmReader extends ChangeNotifier {
   /// How far the person has read each chat, which its inbox keeps with it;
   /// null where nobody keeps them, and nothing reads as unread.
   SwarmReadMarks? readMarks;
+
+  /// The account's drafts and unsent posts, which its inbox keeps; null where
+  /// nobody keeps them, and each chat holds its own while it is open.
+  SwarmKept? kept;
 
   /// What the last read could not do, as a sentence; null once one succeeds.
   String? error;
