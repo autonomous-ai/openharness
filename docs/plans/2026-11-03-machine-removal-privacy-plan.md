@@ -4,7 +4,7 @@
 
 **Goal:** The machine removal preview names only agents and projects the machine owner may read, counts hidden entries, and keeps removal blocked when an unreadable project's PM runs on the machine.
 
-**Architecture:** Filter preview details with the existing project access rules in the backend. Return aggregate counts for hidden agents and sole source projects, and a generic blocking reason when the PM's project is unreadable. Update the Desktop and Mobile removal confirmations to display those aggregate counts without exposing hidden names.
+**Architecture:** Filter preview details with the existing project access rules in the backend. Return aggregate counts for hidden agents and sole source projects, and a generic blocking reason when the Product Manager's project is unreadable. Current Desktop and Mobile clients request a versioned preview and require its response marker. Released clients keep the old response shape when every detail is readable; when hidden details apply, the server refuses with a generic update-required message. Filter unreadable agent IDs from the removal command result too.
 
 **Tech Stack:** TypeScript, Vitest, Fastify integration tests, Dart, Flutter widget tests.
 
@@ -24,6 +24,8 @@
 - A hidden PM still blocks removal while exposing only a generic reason.
 - A direct removal command refused for a hidden PM must not expose its name or project.
 - Hidden sole source projects contribute to an aggregate count without exposing IDs or names.
+- Released clients never silently confirm removal when hidden details apply; current clients fail closed if the backend lacks the versioned preview.
+- The removal command result never includes IDs of agents the actor cannot read.
 - Visible agents, projects and PMs retain their existing details.
 - Desktop and Mobile show aggregate counts while preserving the current visible-entry presentation.
 
@@ -38,11 +40,11 @@
 
 **Interfaces:**
 - Consumes: `canReadAgent(state, actor, agent)` and `canReadProject(state, actor, project)` from `projects.ts`.
-- Produces: `agents` for readable agents, `hiddenAgentCount`, `blockedBy` with visible project details or `{ reason: "A PM of a project you can't see runs here." }`, `soleSourceProjects` for readable projects, and `hiddenSoleSourceProjectCount`.
+- Produces: version 2 previews with a response marker, readable `agents`, `hiddenAgentCount`, `blockedBy` with visible project details or `{ reason: "A Product Manager of a project you can't see runs on this machine." }`, readable `soleSourceProjects`, and `hiddenSoleSourceProjectCount`. Unversioned requests receive the legacy shape only when no hidden details exist; otherwise they receive a generic update-required refusal.
 
 - [ ] **Step 1: Write a failing unit test** named `the removal preview names only the agents and projects its owner reads`. Build a peer-contributed machine containing a worker and PM in an unreadable private project, plus an unreadable sole source project; assert that readable entries remain detailed, hidden entries are counted, and the result contains none of the hidden IDs, names, project names or task titles.
 - [ ] **Step 2: Run the named unit test** with `cd backend && npm test -- src/superTabs/machines.test.ts -t 'the removal preview names only the agents and projects its owner reads'`; confirm it fails because private details are currently returned.
-- [ ] **Step 3: Implement filtering in `removalPreview`**. Keep all agents in `hiddenAgentCount` accounting; include an agent's ID, name, project name and task only when `canReadAgent` is true. For `blockedBy`, return a project ID and name only when `canReadProject` is true, otherwise return only `{ reason: "A PM of a project you can't see runs here." }`. Preserve the block in both cases. Count unreadable sole source projects in `hiddenSoleSourceProjectCount`.
+- [ ] **Step 3: Implement filtering in `removalPreview`**. Keep all agents in `hiddenAgentCount` accounting; include an agent's ID, name, project name and task only when `canReadAgent` is true. For `blockedBy`, return a project ID and name only when `canReadProject` is true, otherwise return only the generic Product Manager reason. Preserve the block in both cases. Count unreadable sole source projects in `hiddenSoleSourceProjectCount`.
 - [ ] **Step 4: Make `protectLead(state, agentId, actor)` generic when `canReadProject` is false**, so direct attempts to remove a machine with an unreadable PM stay blocked without returning hidden names.
 - [ ] **Step 5: Rerun the named unit test and the direct removal refusal integration test**; confirm both pass.
 - [ ] **Step 6: Commit** failing tests before the passing backend implementation.
@@ -106,3 +108,26 @@ Added after the independent security review found that the phone rejected a reas
 - [ ] **Step 1: Run affected backend unit tests and the full Super Tab integration suite.**
 - [ ] **Step 2: Run the affected Desktop and Mobile tests and analyze changed Dart code.**
 - [ ] **Step 3: Record red/green evidence in a PR comment and request two independent security reviews.**
+
+### Task 6: Preserve privacy across client versions and removal results
+
+**Files:**
+- Modify: `backend/src/routes/superTabs.ts`
+- Modify: `backend/src/superTabs/store.ts`
+- Modify: `backend/src/superTabs/commands.ts`
+- Test: `backend/integration/superTabs.test.ts`
+- Test: `backend/src/superTabs/commands.test.ts`
+- Modify: `desktop/lib/super_tabs/machines.dart`
+- Test: `desktop/test/super_tab_machines_test.dart`
+- Modify: `mobile/lib/swarm/swarm_machine_menu.dart`
+- Test: `mobile/test/swarm/swarm_machines_test.dart`
+
+**Interfaces:**
+- Current clients request preview version 2 and require `previewVersion: 2`; older backends therefore fail closed.
+- Older clients receive an update-required refusal whenever hidden counts or an unreadable Product Manager apply, and the old shape when all details are readable.
+- Generic Product Manager copy follows the Naming System and remains accurate across refusal paths.
+- `machine.remove` returns only agent IDs readable by its actor.
+
+- [ ] **Step 1: Add failing tests** for versioned client success, legacy client refusal with hidden data and compatibility with fully readable data, current clients rejecting an unversioned backend response, and filtering unreadable agent IDs from removal results.
+- [ ] **Step 2: Implement the compatibility handshake, neutral generic copy and readable-ID filter.**
+- [ ] **Step 3: Run the focused tests for each changed component.**
