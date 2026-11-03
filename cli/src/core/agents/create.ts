@@ -226,6 +226,9 @@ export function createAgentCreator({
     // refusal rather than a fallback — an agent silently started on the engine's own login spends the
     // wrong account and looks identical to one that worked. Asked of models before a harness's workspace is
     // laid out or trusted: a create refused here leaves the folder as it was.
+    // A Buddy starts no MCP server (docs/swarms.md, Buddies), so none of a grid's web tools either: its permission mode's
+    // --strict-mcp-config would otherwise load exactly the grid's server. Relaunches drop it the same way (launchOverrides.ts).
+    if (grid && input.swarmRole === 'buddy') { const { mcpUrl: _web, ...withoutWeb } = grid; grid = withoutWeb }
     const built = grid ? await buildGridLaunch({ engine, override: grid, machine: await gridLaunchMachine(engine, native) }) : null
     if (!current()) return stale()
     if (built && !built.ok) {
