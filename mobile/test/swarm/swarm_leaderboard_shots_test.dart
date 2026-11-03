@@ -106,6 +106,32 @@ void main() {
               {'machineName': 'MACs-Mac-Studio.local', 'busyHours': 31.5},
               {'machineName': 'build-box', 'busyHours': 8.5},
             ],
+            // A server that reads Brought shows it in place of Lent.
+            'brought': [
+              {
+                'machineId': 'studio',
+                'machineName': 'MACs-Mac-Studio.local',
+                'shipped': 5,
+                'busyHours': 31.5,
+                'subscriptions': [
+                  {
+                    'engine': 'claude',
+                    'usedPercent': 38,
+                    'resetsAt': DateTime.now()
+                        .add(const Duration(days: 3, hours: 2))
+                        .millisecondsSinceEpoch,
+                  },
+                  {'engine': 'codex', 'usedPercent': null, 'resetsAt': null},
+                ],
+              },
+              {
+                'machineId': 'box',
+                'machineName': 'build-box',
+                'shipped': 0,
+                'busyHours': 8.5,
+                'subscriptions': <Object>[],
+              },
+            ],
           },
         },
         {
@@ -185,6 +211,22 @@ void main() {
         final png = await image.toByteData(format: ui.ImageByteFormat.png);
         await File('$shots/phone-leaderboard-person-${brightness.name}.png')
             .writeAsBytes(png!.buffer.asUint8List());
+      });
+      // Scrolled to its end: what the machines they brought did.
+      await tester.drag(
+        find.byKey(const ValueKey('swarm-leaderboard-details')),
+        const Offset(0, -600),
+      );
+      await tester.pumpAndSettle();
+      await tester.runAsync(() async {
+        final image =
+            await (boundary.currentContext!.findRenderObject()!
+                    as RenderRepaintBoundary)
+                .toImage(pixelRatio: 3);
+        final png = await image.toByteData(format: ui.ImageByteFormat.png);
+        await File(
+          '$shots/phone-leaderboard-person-brought-${brightness.name}.png',
+        ).writeAsBytes(png!.buffer.asUint8List());
       });
       await tester.pumpWidget(const SizedBox());
       host.dispose();

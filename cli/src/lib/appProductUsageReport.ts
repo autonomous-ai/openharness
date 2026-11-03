@@ -9,8 +9,9 @@ import { PRODUCT_USAGE_ADD_PHONE_METRICS, PRODUCT_USAGE_ADD_PHONE_PAIRED_METRICS
  * Desktop sends a name newer than revision 1 only once a proxy has announced it, so an older CLI never sees one.
  * 5: first-arrival episodes and shared-tab invitation outcomes.
  * 6: returning-account phone offers, offer skip reasons and Add Phone pairing sources.
+ * 7: Import an agent running on this Mac (`ui_desktop_agent_import_*`, task #2379).
  * Raise it with each name the Desktop gates on it (`ProductHealthMeasure.vocabulary`, `ProductFlow.vocabulary`). */
-export const APP_USAGE_VOCABULARY = 6
+export const APP_USAGE_VOCABULARY = 7
 export const APP_USAGE_VOCABULARY_HEADER = 'x-harness-usage-vocabulary'
 
 // hn's counts reach the daemon's own queue only through hn's `product_observe`; no app can file them.

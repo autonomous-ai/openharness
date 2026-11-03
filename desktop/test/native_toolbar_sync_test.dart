@@ -104,6 +104,21 @@ class _SharesDaemon extends WsConn {
   }
 }
 
+/// This computer's daemon wanting its Harness Team account set up.
+class _TeamDaemon extends _SharesDaemon {
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    if (type == 'super_tabs' && payload['action'] == 'teamSetupCheck') {
+      return {'ok': true, 'state': 'wanted'};
+    }
+    return super.request(type, payload: payload, timeout: timeout);
+  }
+}
+
 /// A roster as `shares` lists it: [owner]'s tab with [harnesses] harnesses,
 /// shared from [ownerMachine]. The owner's own roster names its desk tab
 /// ([tabId]); a member's desk tab is derived from [sharedTabId] ([_memberTab]).
@@ -840,4 +855,64 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     });
   });
+
+  // Review of #2779: the menu bar, its key equivalents and the tab row reach
+  // the workspace over the channel, not through Flutter's focus, so the lock's
+  // barrier alone did not hold them.
+  testWidgets(
+    'the Team account setup lock greys the menus and the tab row, and drops their actions',
+    (tester) async {
+      final app = _App(daemon: _TeamDaemon())
+        ..teamAccountHereForTest = true
+        ..currentUser = const CurrentUserProfile(
+          id: 'owner',
+          email: 'owner@example.com',
+        );
+      addTearDown(app.dispose);
+      final first = app.activeSwarmId;
+      app.newSwarm(name: 'Other');
+      final other = app.activeSwarmId;
+      expect(other, isNot(first));
+      await mount(tester, app, nativeTabs: true);
+      await tester.pumpAndSettle();
+      expect(updates().last['enabled'], isTrue);
+
+      await app.offerTeamAccount('join', tabId: 'tab-1');
+      await tester.pumpAndSettle();
+      expect(app.teamSetupLocked, isTrue);
+      expect(updates().last['enabled'], isFalse);
+      expect(updates().last['stripEnabled'], isFalse);
+
+      Future<void> native(String method, Map args) =>
+          tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+            'harness/swarm_tabs',
+            const StandardMethodCodec().encodeMethodCall(
+              MethodCall(method, args),
+            ),
+            (_) {},
+          );
+      // A row click or key equivalent that arrives anyway does nothing.
+      unawaited(native('select', {'id': first}));
+      await tester.pumpAndSettle();
+      unawaited(
+        native('rowAction', {
+          'method': 'select',
+          'arguments': {'id': first},
+        }),
+      );
+      await tester.pumpAndSettle();
+      unawaited(native('keymapCommand', {'command': 'tab.previous'}));
+      await tester.pumpAndSettle();
+      expect(app.activeSwarmId, other);
+
+      await app.teamAccountMade();
+      await tester.pumpAndSettle();
+      expect(updates().last['enabled'], isTrue);
+      expect(updates().last['stripEnabled'], isTrue);
+      unawaited(native('select', {'id': first}));
+      await tester.pumpAndSettle();
+      expect(app.activeSwarmId, first);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 }

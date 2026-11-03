@@ -116,7 +116,13 @@ class _ConflictApi extends ApiClient {
   Future<Map<String, dynamic>?> daemonDevices() async => {
     'members': <Object?>[],
     'pending': <String>[],
-    'conflict': {'pub': 'holder', 'label': 'Old install', 'fingerprint': 'AAAA·BBBB', 'addedAt': 5, 'afterJoin': true},
+    'conflict': {
+      'pub': 'holder',
+      'label': 'Old install',
+      'fingerprint': 'AAAA·BBBB',
+      'addedAt': 5,
+      'afterJoin': true,
+    },
   };
 }
 
@@ -282,58 +288,69 @@ void main() {
 
     // Notifications are off until somebody wants them; the one offer comes
     // when an agent finished while the person was away and nothing told them.
-    test('an agent that finished while away offers notifications once, on return', () async {
-      os = _Recorder();
-      state = AppLifecycleState.inactive;
-      final app = AppNotifier(
-        config: AppConfig.dev,
-        authSession: AuthSession(),
-        alerts: AlertSounds(
-          store: AlertSoundStore(storage: _Memory()),
-          channel: const MethodChannel('test/no-sound'),
-        ),
-        agentAlerts: AgentAlerts(store: ScreenAlertStore(storage: _Memory())),
-        systemNotifications: SystemNotifications(store: store(on: false), notifier: os),
-      )..lifecycle = () => state;
-      addTearDown(app.dispose);
-      app.notificationOfferStoreForTest = NotificationOfferStore(storage: _Memory());
-      app.machines = [_machine];
-      app.machineStates['m1'] = MachineState(_machine)
-        ..agents = [const Agent(id: 'a1', name: 'Fix login', engine: 'codex')];
-      var offers = 0;
-      app.notificationOffer = () => offers++;
-      app.appLifecycleChanged(AppLifecycleState.inactive);
-      await finish(app);
-      await Future<void>.delayed(Duration.zero);
-      expect(os.shown, isEmpty);
-      expect(offers, 0, reason: 'not while the person is away');
-      state = AppLifecycleState.resumed;
-      app.appLifecycleChanged(AppLifecycleState.resumed);
-      expect(offers, 1);
-      expect(app.notificationOfferStoreForTest.value, isTrue);
+    test(
+      'an agent that finished while away offers notifications once, on return',
+      () async {
+        os = _Recorder();
+        state = AppLifecycleState.inactive;
+        final app = AppNotifier(
+          config: AppConfig.dev,
+          authSession: AuthSession(),
+          alerts: AlertSounds(
+            store: AlertSoundStore(storage: _Memory()),
+            channel: const MethodChannel('test/no-sound'),
+          ),
+          agentAlerts: AgentAlerts(store: ScreenAlertStore(storage: _Memory())),
+          systemNotifications: SystemNotifications(
+            store: store(on: false),
+            notifier: os,
+          ),
+        )..lifecycle = () => state;
+        addTearDown(app.dispose);
+        app.notificationOfferStoreForTest = NotificationOfferStore(
+          storage: _Memory(),
+        );
+        app.machines = [_machine];
+        app.machineStates['m1'] = MachineState(
+          _machine,
+        )..agents = [const Agent(id: 'a1', name: 'Fix login', engine: 'codex')];
+        var offers = 0;
+        app.notificationOffer = () => offers++;
+        app.appLifecycleChanged(AppLifecycleState.inactive);
+        await finish(app);
+        await Future<void>.delayed(Duration.zero);
+        expect(os.shown, isEmpty);
+        expect(offers, 0, reason: 'not while the person is away');
+        state = AppLifecycleState.resumed;
+        app.appLifecycleChanged(AppLifecycleState.resumed);
+        expect(offers, 1);
+        expect(app.notificationOfferStoreForTest.value, isTrue);
 
-      state = AppLifecycleState.inactive;
-      app.appLifecycleChanged(AppLifecycleState.inactive);
-      await app.handleMachineEventForTest('m1', {
-        'type': 'turn_summary',
-        'agentId': 'a1',
-        'payload': {
+        state = AppLifecycleState.inactive;
+        app.appLifecycleChanged(AppLifecycleState.inactive);
+        await app.handleMachineEventForTest('m1', {
+          'type': 'turn_summary',
           'agentId': 'a1',
-          'notification': {'id': 'result-a1-2', 'kind': 'done'},
-        },
-      });
-      app.appLifecycleChanged(AppLifecycleState.resumed);
-      expect(offers, 1, reason: 'asked once, whatever the answer');
+          'payload': {
+            'agentId': 'a1',
+            'notification': {'id': 'result-a1-2', 'kind': 'done'},
+          },
+        });
+        app.appLifecycleChanged(AppLifecycleState.resumed);
+        expect(offers, 1, reason: 'asked once, whatever the answer');
 
-      await app.acceptNotificationOffer();
-      expect(app.systemNotifications.store.value, isTrue);
-      expect(os.authorizations, 1);
-    });
+        await app.acceptNotificationOffer();
+        expect(app.systemNotifications.store.value, isTrue);
+        expect(os.authorizations, 1);
+      },
+    );
 
     test('no offer when notifications are already on', () async {
       final app = wired();
       addTearDown(app.dispose);
-      app.notificationOfferStoreForTest = NotificationOfferStore(storage: _Memory());
+      app.notificationOfferStoreForTest = NotificationOfferStore(
+        storage: _Memory(),
+      );
       var offers = 0;
       app.notificationOffer = () => offers++;
       app.appLifecycleChanged(AppLifecycleState.inactive);
@@ -373,21 +390,24 @@ void main() {
       expect(os.withdrawn, [SystemNotifications.idFor('m1', 'a1')]);
     });
 
-    test('reading on the dial withdraws the banner and system notification', () async {
-      final app = wired();
-      addTearDown(app.dispose);
-      await finish(app);
-      await Future<void>.delayed(Duration.zero);
-      expect(app.agentAlerts.alerts, hasLength(1));
-      final token = app.agentUnread.readTokenFor('m1', 'a1')!;
-      await app.handleMachineEventForTest('m1', {
-        'type': 'dial_notification_read',
-        'payload': {'machineId': 'm1', 'agentId': 'a1', 'readToken': token},
-      });
-      expect(app.agentUnread.count, 0);
-      expect(app.agentAlerts.alerts, isEmpty);
-      expect(os.withdrawn, [SystemNotifications.idFor('m1', 'a1')]);
-    });
+    test(
+      'reading on the dial withdraws the banner and system notification',
+      () async {
+        final app = wired();
+        addTearDown(app.dispose);
+        await finish(app);
+        await Future<void>.delayed(Duration.zero);
+        expect(app.agentAlerts.alerts, hasLength(1));
+        final token = app.agentUnread.readTokenFor('m1', 'a1')!;
+        await app.handleMachineEventForTest('m1', {
+          'type': 'dial_notification_read',
+          'payload': {'machineId': 'm1', 'agentId': 'a1', 'readToken': token},
+        });
+        expect(app.agentUnread.count, 0);
+        expect(app.agentAlerts.alerts, isEmpty);
+        expect(os.withdrawn, [SystemNotifications.idFor('m1', 'a1')]);
+      },
+    );
   });
 
   group('macOS', () {
@@ -473,9 +493,15 @@ void main() {
                 ),
                 (_) {},
               );
-      await tap({'machineId': SystemNotifications.deviceNoticeMachine, 'agentId': 'pub-1'});
+      await tap({
+        'machineId': SystemNotifications.deviceNoticeMachine,
+        'agentId': 'pub-1',
+      });
       // A device notice with no key in it opens nothing.
-      await tap({'machineId': SystemNotifications.deviceNoticeMachine, 'agentId': ''});
+      await tap({
+        'machineId': SystemNotifications.deviceNoticeMachine,
+        'agentId': '',
+      });
       expect(taps, ['@device/pub-1']);
       mac.onTap = null;
     });
@@ -485,11 +511,19 @@ void main() {
     test('carry the device in the click slots; an account notice without one carries nothing', () async {
       final os = _Recorder();
       final system = SystemNotifications(store: store(), notifier: os);
-      system.postNotice(id: 'harness-device:p', title: 'New device on your account', body: 'b', devicePub: 'p');
+      system.postNotice(
+        id: 'harness-device:p',
+        title: 'New device on your account',
+        body: 'b',
+        devicePub: 'p',
+      );
       system.postNotice(id: 'harness-other', title: 't', body: 'b');
       await Future<void>.delayed(Duration.zero);
       expect(SystemNotifications.deviceNoticeMachine, '@device');
-      expect(os.shown.map((s) => (s.machineId, s.agentId)), [('@device', 'p'), ('', '')]);
+      expect(os.shown.map((s) => (s.machineId, s.agentId)), [
+        ('@device', 'p'),
+        ('', ''),
+      ]);
     });
 
     test('a device the daemon announces reaches the system, naming the device and where to remove it', () async {
@@ -506,7 +540,12 @@ void main() {
       app.ownDaemonMachineIdForTest('m1');
       await app.handleEventForTest('m1', {
         'type': 'device_key_added',
-        'payload': {'pub': 'pub-1', 'label': 'Test iPad', 'kind': 'viewer', 'fingerprint': 'AAAA·BBBB·CCCC·DDDD'},
+        'payload': {
+          'pub': 'pub-1',
+          'label': 'Test iPad',
+          'kind': 'viewer',
+          'fingerprint': 'AAAA·BBBB·CCCC·DDDD',
+        },
       });
       await Future<void>.delayed(Duration.zero);
       expect(app.newDevices.single.pub, 'pub-1');
@@ -518,12 +557,23 @@ void main() {
       expect((shown.machineId, shown.agentId), ('@device', 'pub-1'));
     });
 
-    Map<String, Object?> removedFrame({bool signerPending = false, bool selfRemoved = false, String pub = 'gone'}) => {
+    Map<String, Object?> removedFrame({
+      bool signerPending = false,
+      bool selfRemoved = false,
+      String pub = 'gone',
+    }) => {
       'type': 'device_key_removed',
       'payload': {
-        'pub': pub, 'label': 'Old iPad', 'kind': 'viewer', 'fingerprint': 'AAAA·BBBB',
-        'signer': 'signer', 'signerLabel': 'MacBook', 'signerFingerprint': 'E2FB·0DF5·5FD8·E6C7',
-        'signerPending': signerPending, 'selfRemoved': selfRemoved, 'at': 1,
+        'pub': pub,
+        'label': 'Old iPad',
+        'kind': 'viewer',
+        'fingerprint': 'AAAA·BBBB',
+        'signer': 'signer',
+        'signerLabel': 'MacBook',
+        'signerFingerprint': 'E2FB·0DF5·5FD8·E6C7',
+        'signerPending': signerPending,
+        'selfRemoved': selfRemoved,
+        'at': 1,
       },
     };
 
@@ -544,19 +594,34 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       // The same device twice is one notice, the later word.
       expect(app.deviceRemovals.single.signerPending, isTrue);
-      expect(os.shown.map((n) => n.title), ['Device removed', 'Removed by a new device']);
-      expect(os.shown.first.body, 'Old iPad was removed from your account by MacBook.');
+      expect(os.shown.map((n) => n.title), [
+        'Device removed',
+        'Removed by a new device',
+      ]);
+      expect(
+        os.shown.first.body,
+        'Old iPad was removed from your account by MacBook.',
+      );
       expect((os.shown.first.machineId, os.shown.first.agentId), ('', ''));
-      expect((os.shown.last.machineId, os.shown.last.agentId), ('@device', 'signer'));
+      expect(
+        (os.shown.last.machineId, os.shown.last.agentId),
+        ('@device', 'signer'),
+      );
       // A new device that signs itself out is its own act: not red, and nothing to open.
-      await app.handleEventForTest('m1', removedFrame(signerPending: true, selfRemoved: true, pub: 'other'));
+      await app.handleEventForTest(
+        'm1',
+        removedFrame(signerPending: true, selfRemoved: true, pub: 'other'),
+      );
       expect(os.shown.last.title, 'Device signed out');
       expect((os.shown.last.machineId, os.shown.last.agentId), ('', ''));
       app.dismissDeviceRemoval('gone');
       app.dismissDeviceRemoval('other');
       expect(app.deviceRemovals, isEmpty);
       // A frame that is not whole raises nothing.
-      await app.handleEventForTest('m1', {'type': 'device_key_removed', 'payload': {'pub': 'x'}});
+      await app.handleEventForTest('m1', {
+        'type': 'device_key_removed',
+        'payload': {'pub': 'x'},
+      });
       expect(app.deviceRemovals, isEmpty);
     });
 
@@ -587,7 +652,11 @@ void main() {
         systemNotifications: SystemNotifications(store: store(), notifier: os),
       );
       addTearDown(app.dispose);
-      const relayed = Machine(machineId: 'relayed', authMode: MachineAuthMode.remote, name: 'Remote');
+      const relayed = Machine(
+        machineId: 'relayed',
+        authMode: MachineAuthMode.remote,
+        name: 'Remote',
+      );
       app.machines = [_machine, relayed];
       app.machineStates['m1'] = MachineState(_machine);
       // The relayed machine carries a backend-supplied computer id that says it is "local": still not the daemon.
@@ -597,8 +666,20 @@ void main() {
         'type': 'device_key_added',
         'payload': {'pub': 'fake', 'label': 'X', 'kind': 'viewer'},
       });
-      await app.handleEventForTest('relayed', removedFrame(signerPending: true));
-      await app.handleEventForTest('relayed', {'type': 'device_conflict', 'payload': {'pub': 'holder', 'label': 'H', 'fingerprint': 'AAAA', 'addedAt': 5, 'afterJoin': true}});
+      await app.handleEventForTest(
+        'relayed',
+        removedFrame(signerPending: true),
+      );
+      await app.handleEventForTest('relayed', {
+        'type': 'device_conflict',
+        'payload': {
+          'pub': 'holder',
+          'label': 'H',
+          'fingerprint': 'AAAA',
+          'addedAt': 5,
+          'afterJoin': true,
+        },
+      });
       await Future<void>.delayed(Duration.zero);
       expect(app.newDevices, isEmpty);
       expect(app.deviceRemovals, isEmpty);
@@ -610,7 +691,11 @@ void main() {
     });
 
     test('a conflict frame is only a hint: the conflict is re-read from the daemon, and stays dismissed', () async {
-      final app = AppNotifier(config: AppConfig.dev, authSession: AuthSession(), configStore: null);
+      final app = AppNotifier(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+      );
       addTearDown(app.dispose);
       final api = _ConflictApi();
       app.api = api;
@@ -620,7 +705,13 @@ void main() {
       // A frame carrying a fake holder changes nothing by itself: what the daemon lists is what shows.
       final frame = {
         'type': 'device_conflict',
-        'payload': {'pub': 'fake', 'label': 'Fake', 'fingerprint': 'FFFF', 'addedAt': 5, 'afterJoin': true},
+        'payload': {
+          'pub': 'fake',
+          'label': 'Fake',
+          'fingerprint': 'FFFF',
+          'addedAt': 5,
+          'afterJoin': true,
+        },
       };
       await app.handleEventForTest('m1', frame);
       await Future<void>.delayed(Duration.zero);
@@ -747,6 +838,191 @@ void main() {
         await expectLater(
           run('harness-test-no-such-notify-send', []),
           throwsA(isA<ProcessException>()),
+        );
+      },
+      skip: Platform.isWindows,
+    );
+
+    // Diego (11-03): on Linux no Swarm notice click did anything. notify-send
+    // reports the click on its default action while it waits (--wait).
+    group('a click on a tag or chat notice', () {
+      Future<void> notice(LinuxSystemNotifier n, String machine, String to) =>
+          n.show(
+            id: 'harness-chat:$to',
+            title: 'Offline editing',
+            body: 'New messages',
+            machineId: machine,
+            agentId: to,
+          );
+
+      test('comes back as its target', () async {
+        final n = linux(
+          (args) => args.contains('--wait')
+              ? ProcessResult(0, 0, 'default\n', '')
+              : ProcessResult(0, 0, '7\n', ''),
+        );
+        final taps = <(String, String)>[];
+        n.onTap = (machine, agent) => taps.add((machine, agent));
+        await notice(n, '@chat', 'tab-1/offline');
+        await notice(n, SystemNotifications.mentionNoticeMachine, 'tab-1/m-2');
+        await pumpEventQueue();
+        expect(ran[0], containsAll(['--action=default=Open', '--wait']));
+        expect(taps, [
+          ('@chat', 'tab-1/offline'),
+          (SystemNotifications.mentionNoticeMachine, 'tab-1/m-2'),
+        ]);
+        // An agent's alert still replaces its last one, and waits for nothing.
+        await post(n);
+        expect(ran.last, contains('--print-id'));
+        expect(ran.last, isNot(contains('--wait')));
+      });
+
+      test('closed without a click opens nothing', () async {
+        final n = linux((_) => ProcessResult(0, 0, '', ''));
+        final taps = <(String, String)>[];
+        n.onTap = (machine, agent) => taps.add((machine, agent));
+        await notice(n, '@chat', 'tab-1/offline');
+        await pumpEventQueue();
+        expect(taps, isEmpty);
+      });
+
+      test('an old notify-send without actions still shows it', () async {
+        final n = linux(
+          (args) => args.contains('--wait')
+              ? ProcessResult(0, 1, '', 'Unknown option --action')
+              : ProcessResult(0, 0, '', ''),
+        );
+        await notice(n, '@chat', 'tab-1/offline');
+        await pumpEventQueue();
+        expect(ran, hasLength(2));
+        expect(ran.last, isNot(contains('--wait')));
+        expect(ran.last, contains('Offline editing'));
+        // Asked once: the next notice goes up plainly at once.
+        await notice(n, '@chat', 'tab-1/other');
+        await pumpEventQueue();
+        expect(ran, hasLength(3));
+        expect(ran.last, isNot(contains('--wait')));
+      });
+
+      /// A fake [NoticeWaiter]: each wait stays open until the test answers it, and a kill
+      /// ends it as a signal does.
+      ({
+        LinuxSystemNotifier notifier,
+        List<Completer<ProcessResult>> open,
+        List<int> killed,
+        List<Duration> limits,
+        List<List<String>> plain,
+      })
+      waiting() {
+        final open = <Completer<ProcessResult>>[];
+        final killed = <int>[];
+        final limits = <Duration>[];
+        final plain = <List<String>>[];
+        final notifier = LinuxSystemNotifier(
+          run: (exe, args) async {
+            plain.add(args);
+            return ProcessResult(0, 0, '', '');
+          },
+          wait: (exe, args, {required limit}) {
+            final i = open.length;
+            final done = Completer<ProcessResult>();
+            open.add(done);
+            limits.add(limit);
+            return (
+              result: done.future,
+              kill: () {
+                killed.add(i);
+                if (!done.isCompleted) {
+                  done.complete(ProcessResult(0, -15, '', ''));
+                }
+              },
+            );
+          },
+        );
+        return (
+          notifier: notifier,
+          open: open,
+          killed: killed,
+          limits: limits,
+          plain: plain,
+        );
+      }
+
+      // Review of #2808 (Lyra): GNOME and KDE keep an unclicked notice in their list, so a
+      // wait can last all session; once eight were stuck, no notice could be clicked again.
+      test(
+        'past eight waiting, the oldest gives way and the newest still opens',
+        () async {
+          final w = waiting();
+          final taps = <(String, String)>[];
+          w.notifier.onTap = (machine, agent) => taps.add((machine, agent));
+          for (var i = 0; i < 9; i++) {
+            await notice(w.notifier, '@chat', 'tab-1/c$i');
+          }
+          await pumpEventQueue();
+          expect(
+            w.open,
+            hasLength(9),
+            reason: 'every notice waits for its click',
+          );
+          expect(w.killed, [0], reason: 'the oldest wait gave way');
+          expect(w.plain, isEmpty);
+          w.open[8].complete(ProcessResult(0, 0, 'default\n', ''));
+          await pumpEventQueue();
+          expect(taps, [('@chat', 'tab-1/c8')]);
+        },
+      );
+
+      test('each wait has a time limit', () async {
+        final w = waiting();
+        await notice(w.notifier, '@chat', 'tab-1/offline');
+        expect(w.limits.single, greaterThan(Duration.zero));
+        expect(w.limits.single, lessThanOrEqualTo(const Duration(minutes: 30)));
+      });
+
+      test('a wait that fails still puts its notice up, plainly', () async {
+        final plain = <List<String>>[];
+        final n = LinuxSystemNotifier(
+          run: (exe, args) async {
+            plain.add(args);
+            return ProcessResult(0, 0, '', '');
+          },
+          wait: (exe, args, {required limit}) => (
+            result: Future.value(ProcessResult(0, 1, '', 'Could not connect')),
+            kill: () {},
+          ),
+        );
+        await notice(n, '@chat', 'tab-1/offline');
+        await pumpEventQueue();
+        expect(plain, hasLength(1));
+        expect(plain.single, contains('Offline editing'));
+      });
+    });
+
+    test(
+      'a waiting notify-send stops at its limit, or when it is stopped',
+      () async {
+        // `sleep 30; true` keeps the shell's child, as Linux's dash keeps a lone one: stopping
+        // the shell leaves the child holding its output (CI, desktop shard 3, 11-03).
+        final answered = await waitOffUiIsolate('/bin/sh', [
+          '-c',
+          'printf default',
+        ], limit: const Duration(minutes: 1)).result;
+        expect((answered.exitCode, answered.stdout), (0, 'default'));
+        final timedOut = await waitOffUiIsolate(
+          '/bin/sh',
+          ['-c', 'sleep 30; true'],
+          limit: const Duration(milliseconds: 200),
+        ).result.timeout(const Duration(seconds: 10));
+        expect(timedOut.exitCode, isNot(0));
+        final stopped = waitOffUiIsolate('/bin/sh', [
+          '-c',
+          'sleep 30; true',
+        ], limit: const Duration(minutes: 1));
+        stopped.kill();
+        expect(
+          (await stopped.result.timeout(const Duration(seconds: 10))).exitCode,
+          isNot(0),
         );
       },
       skip: Platform.isWindows,

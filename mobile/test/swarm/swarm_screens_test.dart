@@ -256,9 +256,9 @@ void main() {
         reason: "River's task-chat tag stays on its own row",
       );
       expect(
-        find.descendant(of: row, matching: find.text('1 human')),
-        findsOneWidget,
-        reason: 'how many people read it, with no agent running',
+        find.descendant(of: row, matching: find.textContaining('human')),
+        findsNothing,
+        reason: 'one line: who reads it is on its Team, not on Home',
       );
     });
 

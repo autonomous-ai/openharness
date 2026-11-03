@@ -16,6 +16,7 @@ import { stableId, type SuperTabState } from '../src/superTabs/model.js'
 import { roleVersion } from '../src/superTabs/projects.js'
 import { assignmentRows, poolRows, rosterRows } from './hostRows.test-support.js'
 import { logger } from '../src/utils/logger.js'
+import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 
 // A team session (docs/plans/2026-10-24-swarm-team-account.md, Task 1) is the owner's account signed in on a second
 // macOS user of the owner's Mac. In a Swarm it may host its own machine and speak as the agents running there, and
@@ -393,6 +394,26 @@ describe('a team session speaking in a Swarm', () => {
     await expect(store.githubAssignment(team, f.tab, f.builder, 'personal-mac')).rejects.toMatchObject({ status: 403 })
     // The person's own sign-in still gets one for the agent on their personal Mac.
     expect(await store.githubAssignment(person, f.tab, f.personal, 'personal-mac')).toMatchObject({ agentId: f.personal })
+  })
+
+  it('reads costs and CI load and sends a file over the form\'s 10 MB only as an agent on its own machine', async () => {
+    const f = await fixture()
+    const files = new MemoryAttachmentStore()
+    const attaching = new SuperTabStore(db, Date.now, { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
+    // As its own agent: the route's measures, and a file sent by link (`post --attach` past the form's limit).
+    expect(await attaching.costSummary(team, f.tab, 7, f.builder)).toMatchObject({ rows: expect.any(Array) })
+    expect(await attaching.ciRepository(team, f.tab, 'lead', f.builder)).toEqual({ repositoryUrl: null })
+    const { upload } = await attaching.uploadLink(team, f.tab, f.teamGroup, { name: 'trace.zip', mime: 'application/zip', size: 5 }, f.builder)
+    expect(await files.receive(upload.url, upload.headers, Buffer.from('hello'))).toBe(200)
+    expect((await attaching.completeUpload(team, f.tab, upload.id, f.builder)).attachment).toMatchObject({ id: upload.id, size: 5 })
+    // As the person, or as the person's agent on their personal Mac: refused before anything is read or signed.
+    for (const as of [undefined, f.personal]) {
+      await expect(attaching.costSummary(team, f.tab, 7, as)).rejects.toMatchObject(LIMITED)
+      await expect(attaching.ciRepository(team, f.tab, 'lead', as)).rejects.toMatchObject(LIMITED)
+      await expect(attaching.uploadLink(team, f.tab, f.personalGroup, { name: 'trace.zip', mime: 'application/zip', size: 5 }, as))
+        .rejects.toMatchObject(LIMITED)
+      await expect(attaching.completeUpload(team, f.tab, upload.id, as)).rejects.toMatchObject(LIMITED)
+    }
   })
 
   it('reads a custom role text only for its own machine\'s agents, never as the project\'s owner', async () => {
@@ -1212,5 +1233,22 @@ describe('a message from an agent of another account (audit M3)', () => {
     await db.superTabMessage.update({ where: { id: message.id }, data: { author: { ...(message.author as Record<string, unknown>), membershipGeneration: 'earlier' } } })
     const delivery = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: f.tab, agentId: f.lead, messageId: message.id } })
     expect(await store.delivery(owner, f.tab, f.lead, delivery.id, { type: 'claim', claimId: randomUUID() })).toMatchObject({ otherAccount: true })
+  })
+})
+
+// Task #2390 (Tony, 11-03): a machine's owner keeps it for some projects; every other project's work is refused there.
+describe('a machine its owner keeps for some projects', () => {
+  it('is kept for them across reads, set by its owner alone, and takes no start for another project', async () => {
+    const f = await fixture()
+    const limit = (projectIds: string[] | null, user: AuthUser) => run(f.tab, { type: 'machine.projects', machineId: 'team-mac', projectIds } as Command, user)
+    await expect(limit([f.own], owner)).rejects.toMatchObject({ code: 'OWNER_REQUIRED' })
+    // Its Harness Team account session cannot change what its owner chose.
+    await expect(limit(['lead'], team)).rejects.toMatchObject({ code: 'TEAM_SESSION_LIMITED' })
+    await limit([f.own], person)
+    expect((await store.read(owner, f.tab)).state.machines!.find(m => m.machineId === 'team-mac')!.projects).toEqual([f.own])
+    await expect(run(f.tab, { type: 'agent.start', request: { conversationId: f.teamGroup, machineId: 'team-mac', engine: 'codex',
+      name: 'Second', cwd: '/team', worktree: false, requirements } })).rejects.toMatchObject({ code: 'MACHINE_PROJECTS', message: 'MacBook Pro · Team runs only Own.' })
+    await limit(null, person)
+    expect((await store.read(owner, f.tab)).state.machines!.find(m => m.machineId === 'team-mac')!.projects).toBeUndefined()
   })
 })

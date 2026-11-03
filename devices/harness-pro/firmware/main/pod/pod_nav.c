@@ -290,18 +290,26 @@ static pod_out_t nav_act(pod_nav_t *n, pod_model_t *m, pod_action_t a, int arg, 
         }
         break;
     case POD_A_TALK:
-        if (f->view == POD_V_LEAD) {   // a local Lead: talk to its harness (a remote one has none: f->agent is empty)
-            const pod_agent_t *talk_to = pod_model_find(m, f->agent);
-            if (!talk_to || talk_to->state == POD_OFFLINE) break;
+        if (f->view == POD_V_LEAD) {   // the round's rule: the Lead's `local` whenever set (roster or not: the daemon pins the face by it), else its own Swarm id when arg says the daemon routes it
+            const pod_swarm_t *sw = NULL;
+            const pod_lead_t *l = pod_nav_lead(n, m, &sw);
+            const char *id = !l ? NULL : l->local[0] ? l->local : arg && f->lead_id[0] ? f->lead_id : NULL;
+            if (!id) break;
             n->talk_prev = POD_V_LEAD;
+            n->talk_buddy = l->chat == POD_CHAT_BUDDY && l->has_buddy;   // the voice view signs the face pinned now, whatever the desktop flips mid-recording
+            if (n->talk_buddy) {
+                pod_copy_str(n->talk_name, sizeof n->talk_name, l->buddy.name);
+                pod_copy_str(n->talk_engine, sizeof n->talk_engine, l->buddy.engine);
+            }
             f->view = POD_V_TALK;
             n->talk_started_ms = now_ms;
-            return out_fx(POD_FX_VOICE_BEGIN, f->agent);
+            return out_fx(POD_FX_VOICE_BEGIN, id);
         }
         if (f->view == POD_V_AGENT || f->view == POD_V_RECAP) {
             const pod_agent_t *talk_to = pod_model_find(m, f->agent);
             if (!talk_to || talk_to->state == POD_OFFLINE) break;   // an offline machine has nobody to hear it
             n->talk_prev = f->view;
+            n->talk_buddy = false;
             f->view = POD_V_TALK;
             n->talk_started_ms = now_ms;
             return out_fx(POD_FX_VOICE_BEGIN, f->agent);
@@ -311,7 +319,7 @@ static pod_out_t nav_act(pod_nav_t *n, pod_model_t *m, pod_action_t a, int arg, 
             n->sending = true;       // stay on the voice screen; pod_nav_flip_recaps releases it
             n->sent_seen = false;
             n->send_started_ms = now_ms;
-            set_id(n->sent_agent, f->agent);
+            set_id(n->sent_agent, f->agent);   // empty for a remote Lead: release_send waits it out
             return out_fx(POD_FX_VOICE_END, f->agent);
         }
         break;
@@ -353,6 +361,7 @@ static pod_out_t nav_act(pod_nav_t *n, pod_model_t *m, pod_action_t a, int arg, 
     case POD_A_NONE:
     case POD_A_BANNER:
     case POD_A_LEAD:
+    case POD_A_SIDE:
         break;
     }
     return out_none();
@@ -385,7 +394,8 @@ static void release_send(pod_nav_t *n, const pod_model_t *m, pod_frame_t *f) {
     const pod_agent_t *a = pod_model_find(m, n->sent_agent);
     if (a && a->sent) n->sent_seen = true;
     bool turn = a && a->state == POD_WORKING && !a->sent && (n->sent_seen || (int32_t)(a->since_ms - n->send_started_ms) >= 0);
-    if (turn || !a || (int32_t)(m->clock_ms - n->send_started_ms) >= (int32_t)POD_SENT_WAIT_MS) {
+    const bool remote = f->swarm[0] && !f->agent[0];   // a remote Lead has no turn to see here: the screen holds its time
+    if (turn || (!a && !remote) || (int32_t)(m->clock_ms - n->send_started_ms) >= (int32_t)POD_SENT_WAIT_MS) {
         n->sending = false;
         f->view = f->swarm[0] ? POD_V_LEAD : turn ? POD_V_AGENT : n->talk_prev == POD_V_RECAP ? POD_V_RECAP : POD_V_AGENT;
     }

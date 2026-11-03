@@ -61,7 +61,8 @@ List<SwarmProjectHuman> swarmProjectHumans(
     for (final person in swarmProjectPeople(snapshot, project))
       (
         person: person,
-        name: scores[person.id]?.displayName ?? person.username,
+        // The name they set for this Swarm wins over their account's.
+        name: person.name ?? scores[person.id]?.displayName ?? person.username,
         score: scores[person.id],
         own: person.id == viewer,
       ),
@@ -552,7 +553,7 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
     SuperTabPerson? personOf(String id) =>
         people.where((p) => p.id == id).firstOrNull;
     String nameOf(SwarmScore score) => switch (personOf(score.personId)) {
-      final person? => score.displayName ?? person.username,
+      final person? => person.name ?? score.displayName ?? person.username,
       null => 'Former member',
     };
     final week = _shownLabel(reader, current);
@@ -1429,13 +1430,34 @@ class _PersonDetailsState extends State<_PersonDetails> {
                 trailing: swarmWaited(unblocked.waitedMinutes),
               ),
           ]),
-          _section('lent', 'Lent', 'No machines lent yet', [
-            for (final lent in details.lent)
-              _DetailItem(
-                title: lent.machineName,
-                trailing: swarmBusy(lent.busyHours),
-              ),
-          ]),
+          // What each machine the person brought did (contributor view,
+          // #2444), as the desktop's card; a server before it says Lent.
+          if (widget.score.brought case final brought?)
+            _section('brought', 'Brought', 'No machines brought yet', [
+              for (final machine in brought)
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _DetailItem(
+                      title: machine.machineName,
+                      trailing: swarmBroughtSummary(machine),
+                    ),
+                    for (final (engine, week) in swarmBroughtSubscriptions(
+                      machine,
+                      clock.now(),
+                    ))
+                      _DetailItem(title: engine, trailing: week, under: true),
+                  ],
+                ),
+            ])
+          else
+            _section('lent', 'Lent', 'No machines lent yet', [
+              for (final lent in details.lent)
+                _DetailItem(
+                  title: lent.machineName,
+                  trailing: swarmBusy(lent.busyHours),
+                ),
+            ]),
         ],
       ),
     );
@@ -1497,7 +1519,9 @@ class _PersonDetailsState extends State<_PersonDetails> {
 
 /// One item behind a person's numbers, a thumb tall: its title on up to two
 /// lines and what it measured at its right. A pull request with a web
-/// [link] opens it, and reads as a link; [onTap] makes it a button.
+/// [link] opens it, and reads as a link; [onTap] makes it a button. [under]
+/// sets it in under the item before, quieter and only as tall as its words:
+/// a brought machine's subscriptions.
 class _DetailItem extends StatelessWidget {
   const _DetailItem({
     super.key,
@@ -1505,12 +1529,14 @@ class _DetailItem extends StatelessWidget {
     this.trailing,
     this.link,
     this.onTap,
+    this.under = false,
   });
 
   final String title;
   final String? trailing;
   final Uri? link;
   final VoidCallback? onTap;
+  final bool under;
 
   @override
   Widget build(BuildContext context) {
@@ -1519,35 +1545,50 @@ class _DetailItem extends StatelessWidget {
         ? this.onTap
         : () => unawaited(launchUrl(link, mode: LaunchMode.inAppBrowserView));
     final row = ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: minTouchTarget),
+      constraints: BoxConstraints(minHeight: under ? 0 : minTouchTarget),
       // A title on two lines keeps the room one on one line has.
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: AppSpace.xs),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: AppType.body(
-                  color: onTap == null
-                      ? AppPalette.textPrimary
-                      : AppPalette.swarmAccent,
+        padding: EdgeInsets.only(
+          left: under ? AppSpace.l : 0,
+          top: AppSpace.xs,
+          bottom: AppSpace.xs,
+        ),
+        child: LayoutBuilder(
+          builder: (context, line) => Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppType.body(
+                    color: under
+                        ? AppPalette.textSecondary
+                        : onTap == null
+                        ? AppPalette.textPrimary
+                        : AppPalette.swarmAccent,
+                  ),
                 ),
               ),
-            ),
-            if (trailing != null) ...[
-              const SizedBox(width: AppSpace.m),
-              Text(
-                trailing,
-                style: AppType.caption(
-                  color: AppPalette.textSecondary,
-                  fontFeatures: _figures,
+              if (trailing != null) ...[
+                const SizedBox(width: AppSpace.m),
+                // A long measure ("5 shipped · 31 h for others" in large
+                // text on a small phone) wraps rather than push the title
+                // off the line.
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: line.maxWidth * .6),
+                  child: Text(
+                    trailing,
+                    textAlign: TextAlign.end,
+                    style: AppType.caption(
+                      color: AppPalette.textSecondary,
+                      fontFeatures: _figures,
+                    ),
+                  ),
                 ),
-              ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );

@@ -30,7 +30,7 @@ typedef SwarmThreadFace = ({
 });
 
 /// The newest reply authors of [thread] as [snapshot] names and dresses them:
-/// an agent by the Swarm's name for it, a person by their username,
+/// an agent by the Swarm's name for it, a person by the name they show by,
 /// part, as the chat names a message's author. The project's coordinator
 /// wears manager blue here as on its own messages, whatever its role is
 /// called.
@@ -61,7 +61,7 @@ List<SwarmThreadFace> swarmThreadFaces(
                   snapshot?.people
                       .where((p) => p.id == id)
                       .firstOrNull
-                      ?.username ??
+                      ?.shownName ??
                   superTabPersonName(author['name'] as String? ?? ''),
               id: id,
               agent: false,

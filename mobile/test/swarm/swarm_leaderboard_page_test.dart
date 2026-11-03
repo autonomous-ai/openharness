@@ -547,7 +547,11 @@ void main() {
 
     /// This week's board, diego's and ken's numbers with what they are made
     /// of: [shipped] stands for diego's pull requests when given.
-    FakeSwarm detailed({List<Map<String, dynamic>>? shipped}) {
+    /// [brought] is ken's machines, from a server that reads Brought.
+    FakeSwarm detailed({
+      List<Map<String, dynamic>>? shipped,
+      List<Object>? brought,
+    }) {
       final fake = backend();
       fake.routes[path] = (_) {
         final data = board();
@@ -585,6 +589,7 @@ void main() {
             {'machineName': 'MACs-Mac-Studio.local', 'busyHours': 12.5},
             {'machineName': 'build-box', 'busyHours': 7},
           ],
+          'brought': ?brought,
         };
         return data;
       };
@@ -674,6 +679,131 @@ void main() {
       expect(
         tester.getTopLeft(within('lent', 'MACs-Mac-Studio')).dy,
         lessThan(tester.getTopLeft(within('lent', 'build-box')).dy),
+      );
+    });
+
+    /// Ken's two machines: one with a subscription read, one not read yet.
+    List<Object> machines() => [
+      {
+        'machineId': 'studio',
+        'machineName': 'MACs-Mac-Studio.local',
+        'shipped': 5,
+        'busyHours': 31,
+        'subscriptions': [
+          {
+            'engine': 'claude',
+            'usedPercent': 38,
+            'resetsAt': DateTime.now()
+                .add(const Duration(days: 3, hours: 2))
+                .millisecondsSinceEpoch,
+          },
+          {'engine': 'codex', 'usedPercent': null, 'resetsAt': null},
+        ],
+      },
+      {
+        'machineId': 'box',
+        'machineName': 'build-box',
+        'shipped': 0,
+        'busyHours': 0,
+        'subscriptions': <Object>[],
+      },
+    ];
+
+    testWidgets('from a server with Brought, the machines the person brought '
+        'stand in place of Lent, each subscription\'s week under its '
+        'machine', (tester) async {
+      await pump(tester, detailed(brought: machines()));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-leaderboard-person-ken'));
+      await tester.pumpAndSettle();
+
+      Finder within(String text) =>
+          inside('swarm-leaderboard-details-brought', find.text(text));
+      expect(key('swarm-leaderboard-details-lent'), findsNothing);
+      expect(within('Brought'), findsOneWidget);
+      expect(within('2'), findsOneWidget, reason: 'its count');
+      // Named without .local, as the desktop does.
+      expect(within('MACs-Mac-Studio'), findsOneWidget);
+      expect(within('5 shipped · 31 h for others'), findsOneWidget);
+      expect(within('Claude'), findsOneWidget);
+      expect(within('38% used, resets in 3d'), findsOneWidget);
+      expect(within('Codex'), findsOneWidget);
+      expect(within('not read yet'), findsOneWidget);
+      expect(within('build-box'), findsOneWidget);
+      expect(within('0 shipped · 0 h for others'), findsOneWidget);
+      // Each subscription under its machine, set in and quieter.
+      final studio = tester.getTopLeft(within('MACs-Mac-Studio'));
+      final claude = tester.getTopLeft(within('Claude'));
+      final codex = tester.getTopLeft(within('Codex'));
+      final box = tester.getTopLeft(within('build-box'));
+      expect(studio.dy, lessThan(claude.dy));
+      expect(claude.dy, lessThan(codex.dy));
+      expect(codex.dy, lessThan(box.dy));
+      expect(claude.dx, greaterThan(studio.dx));
+      expect(
+        tester.widget<Text>(within('Claude')).style!.color,
+        AppPalette.textSecondary,
+      );
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('from a server with Brought and nothing brought, it says so',
+        (tester) async {
+      await pump(tester, detailed(brought: <Object>[]));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-leaderboard-person-ken'));
+      await tester.pumpAndSettle();
+
+      expect(
+        inside(
+          'swarm-leaderboard-details-brought',
+          find.text('No machines brought yet'),
+        ),
+        findsOneWidget,
+      );
+      expect(key('swarm-leaderboard-details-lent'), findsNothing);
+    });
+
+    testWidgets('a 320pt phone with large text fits a brought machine\'s '
+        'lines', (tester) async {
+      tester.view.devicePixelRatio = 2;
+      tester.view.physicalSize = const Size(320 * 2, 568 * 2);
+      addTearDown(tester.view.reset);
+      tester.platformDispatcher.textScaleFactorTestValue = 1.3;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      await pump(tester, detailed(brought: machines()));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-leaderboard-person-ken'));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      final sheet = tester.getRect(key('swarm-leaderboard-details'));
+      for (final text in [
+        '5 shipped · 31 h for others',
+        '38% used, resets in 3d',
+      ]) {
+        final line = tester.getRect(
+          inside('swarm-leaderboard-details-brought', find.text(text)),
+        );
+        expect(line.right, lessThanOrEqualTo(sheet.right), reason: text);
+      }
+      // The machine's name keeps its room beside its measure.
+      final name = tester.getRect(
+        inside('swarm-leaderboard-details-brought', find.text('MACs-Mac-Studio')),
+      );
+      expect(name.width, greaterThan(0));
+      expect(
+        name.right,
+        lessThan(
+          tester
+              .getRect(
+                inside(
+                  'swarm-leaderboard-details-brought',
+                  find.text('5 shipped · 31 h for others'),
+                ),
+              )
+              .left,
+        ),
       );
     });
 

@@ -149,7 +149,7 @@ describe('the leaderboard read', () => {
   it('details what each person shipped, a dormant group\'s too, and never a private chat\'s title', async () => {
     const s = await scene()
     const now = await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead`, peer)
-    expect(score(now.body, peer.sub).details).toEqual({ shipped: [{ title: 'Fresh', prUrl: PR, mergedAt: NOW - HOUR }], unblocked: [], lent: [] })
+    expect(score(now.body, peer.sub).details).toEqual({ shipped: [{ title: 'Fresh', prUrl: PR, mergedAt: NOW - HOUR }], unblocked: [], lent: [], brought: [] })
     expect(JSON.stringify(now.body.data)).not.toMatch(/Peer and PM|Hidden/)
     const last = await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&week=${WEEK - WEEK_MS}`, peer)
     expect(score(last.body, peer.sub).details.shipped).toEqual([{ title: 'Old', prUrl: PR, mergedAt: WEEK - 2 * 86_400_000 }])
@@ -182,6 +182,9 @@ describe('the leaderboard read', () => {
       const url = `/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&period=30d`
       const first = await get(url, peer)
       expect(score(first.body, peer.sub).lent).toEqual({ machines: 1, agentMs: 30 * HOUR })
+      // The machine the person brought, through the real read: its hours for others, nothing shipped on it, its week unread (#2444).
+      expect(score(first.body, peer.sub).details.brought).toEqual([{ machineId: 'peer-mac', machineName: 'Peer Mac', shipped: 0, busyHours: 30,
+        subscriptions: [{ engine: 'claude', usedPercent: null, resetsAt: null }] }])
       expect(first.body.data.byModel.find((m: { model: string }) => m.model === 'opus')).toMatchObject({ reviews: 5 })
       expect((await get(url, peer)).body.data).toEqual(first.body.data)
       // A week's read is as it was.

@@ -230,3 +230,40 @@ describe('route decision reads', () => {
     } finally { await app.close() }
   })
 })
+
+describe('a route decision as stored (task #2488)', () => {
+  // As production's routes were on 2026-11-03: every engine on every machine, 13 candidates with labels of ~540 characters and
+  // 47 exclusions of 5 reasons, ~20 KB a row. Only the pick's label and each reason once are kept; readers get the record whole.
+  it('keeps the pick\'s label and each exclusion reason once, reads back every candidate and exclusion, and still links its start', async () => {
+    const f = await swarm()
+    const long = (text: string, size: number) => `${text} ${'·'.repeat(Math.max(0, size - text.length - 1))}`
+    const fit = { status: 'fits', coverage: 1.5, effectiveCost: 3, expiring: 0, spend: { '5-hour': 30, weekly: 4 }, account: 'k'.repeat(64) }
+    const candidates = [
+      { id: 'c0', kind: 'member', agentId: f.worker, machineId: 'test-host', engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3,
+        title: 'Worker · Claude opus high · Worker Mac', label: long('Worker · strength 3, cost 3 · fits: weekly 4% of 69%', 540), fit },
+      ...Array.from({ length: 12 }, (_, i) => ({ id: `c${i + 1}`, kind: 'new', machineId: 'test-host', engine: 'claude', model: `model-${i}`, effort: 'high',
+        quality: 2, cost: 2, title: `New agent · Claude model-${i} high · Worker Mac`, label: long(`New agent · strength 2, cost 2 · candidate ${i}`, 540), fit })),
+    ]
+    const reasons = Array.from({ length: 5 }, (_, i) => long(`Reason ${i}: Machine is offline or unreachable, or its engine is suspended.`, 100))
+    const excluded = Array.from({ length: 47 }, (_, i) => ({ title: long(`New agent · Codex default default · machine-${i}`, 80), reason: reasons[i % 5]! }))
+    const decision = { assessment: { difficulty: 'medium', risk: 'low', why: 'Parser work.', size: 'medium', kind: 'parser' },
+      candidates, excluded, floor: 1, notes: false, pick: 'c0', via: 'order', p: null, belowFloor: false, why: 'First by strength.' }
+    const id = String((await f.execute({ type: 'route.record', conversationId: f.group, decision } as Command, host, f.lead)).result.routeDecisionId)
+    const [sizes] = (await db.$runCommandRaw({ aggregate: 'SuperTabRouteDecision', pipeline: [{ $match: { _id: id } },
+      { $project: { stored: { $bsonSize: '$record' }, sent: { $bsonSize: { $literal: decision } } } }], cursor: {} }) as
+      { cursor: { firstBatch: Array<{ stored: number; sent: number }> } }).cursor.firstBatch
+    expect(sizes!.sent).toBeGreaterThan(19_000)
+    expect(sizes!.stored, JSON.stringify(sizes)).toBeLessThan(sizes!.sent * 0.6)
+    for (const read of [await f.store.routeDecision(owner, f.tab, id), await f.store.routeDecision(host, f.tab, id, f.lead)]) {
+      const record = read.record as unknown as typeof decision
+      expect(record.candidates.map(c => c.id)).toEqual(candidates.map(c => c.id))
+      expect(record.candidates.map(c => c.label)).toEqual([candidates[0]!.label, ...Array(12).fill(undefined)])
+      expect(record.candidates.map(({ label: _label, ...c }) => c)).toEqual(candidates.map(({ label: _label, ...c }) => c))
+      expect(record.excluded).toHaveLength(47)
+      expect(new Set(record.excluded.map(e => JSON.stringify(e)))).toEqual(new Set(excluded.map(e => JSON.stringify(e))))
+      expect(read).not.toHaveProperty('record.unavailable')
+    }
+    await f.assign(id)
+    expect(await f.decision(id)).toMatchObject({ final: { kind: 'member', agentId: f.worker }, override: null })
+  })
+})

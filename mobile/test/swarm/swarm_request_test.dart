@@ -54,14 +54,17 @@ void main() {
       expect(await rig.app.swarmRequest('GET', path), {'tabs': <Object>[]});
     });
 
-    test('a value of null is an answer, not a reason to ask a machine', () async {
-      final rig = await signedInWith({'m': []});
-      addTearDown(rig.app.dispose);
-      rig.api.onSwarmRead = (_) async => null;
+    test(
+      'a value of null is an answer, not a reason to ask a machine',
+      () async {
+        final rig = await signedInWith({'m': []});
+        addTearDown(rig.app.dispose);
+        rig.api.onSwarmRead = (_) async => null;
 
-      expect(await rig.app.swarmRequest('GET', path), isNull);
-      expect(rig.conn('m').payloadsOf('super_tabs'), isEmpty);
-    });
+        expect(await rig.app.swarmRequest('GET', path), isNull);
+        expect(rig.conn('m').payloadsOf('super_tabs'), isEmpty);
+      },
+    );
 
     test('its query goes with it', () async {
       final rig = await signedInWith({'m': []});
@@ -73,21 +76,24 @@ void main() {
       expect(rig.api.swarmReads, ['/api/super-tabs/t/changes?cursor=c1']);
     });
 
-    test('without phone write credentials a machine forwards a command', () async {
-      final rig = await signedInWith({'m': []});
-      addTearDown(rig.app.dispose);
-      rig.api.onSwarmRead = (_) async => fail('a command is not a read');
-      rig.conn('m').answers['super_tabs'] = (_) => forwarded({'result': {}});
+    test(
+      'without phone write credentials a machine forwards a command',
+      () async {
+        final rig = await signedInWith({'m': []});
+        addTearDown(rig.app.dispose);
+        rig.api.onSwarmRead = (_) async => fail('a command is not a read');
+        rig.conn('m').answers['super_tabs'] = (_) => forwarded({'result': {}});
 
-      await rig.app.swarmRequest(
-        'POST',
-        '/api/super-tabs/t/commands',
-        body: {'operationId': 'op'},
-      );
+        await rig.app.swarmRequest(
+          'POST',
+          '/api/super-tabs/t/commands',
+          body: {'operationId': 'op'},
+        );
 
-      expect(rig.api.swarmReads, isEmpty);
-      expect(rig.conn('m').payloadsOf('super_tabs'), hasLength(1));
-    });
+        expect(rig.api.swarmReads, isEmpty);
+        expect(rig.conn('m').payloadsOf('super_tabs'), hasLength(1));
+      },
+    );
 
     for (final (code, status) in const [
       ('FORBIDDEN', 403),
@@ -99,7 +105,8 @@ void main() {
         final rig = await signedInWith({'m': []});
         addTearDown(rig.app.dispose);
         rig.api.onSwarmRead = (_) async => throw refusal(code, status);
-        rig.conn('m').answers['super_tabs'] = (_) => forwarded('from a machine');
+        rig.conn('m').answers['super_tabs'] = (_) =>
+            forwarded('from a machine');
 
         await expectLater(
           rig.app.swarmRequest('GET', path),
@@ -127,7 +134,8 @@ void main() {
         final rig = await signedInWith({'m': []});
         addTearDown(rig.app.dispose);
         rig.api.onSwarmRead = (_) async => throw failure;
-        rig.conn('m').answers['super_tabs'] = (_) => forwarded('from a machine');
+        rig.conn('m').answers['super_tabs'] = (_) =>
+            forwarded('from a machine');
 
         expect(await rig.app.swarmRequest('GET', path), 'from a machine');
         expect(rig.conn('m').payloadsOf('super_tabs'), hasLength(1));

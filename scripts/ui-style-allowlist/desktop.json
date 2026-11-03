@@ -36,7 +36,7 @@
     "border-radius": 1
   },
   "desktop/lib/super_tabs/message_row.dart": {
-    "edge-insets": 5
+    "edge-insets": 4
   },
   "desktop/lib/super_tabs/notifications.dart": {
     "edge-insets": 8
@@ -45,7 +45,7 @@
     "font-size": 1
   },
   "desktop/lib/super_tabs/project_sidebar.dart": {
-    "edge-insets": 9
+    "edge-insets": 8
   },
   "desktop/lib/super_tabs/pull_requests.dart": {
     "edge-insets": 12,
