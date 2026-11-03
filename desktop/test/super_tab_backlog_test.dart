@@ -430,6 +430,19 @@ void main() {
       expect(rowText(tester, 'shipped'), contains('PR #2713'));
     });
 
+    testWidgets('who asked and who it waits on read by the name they set '
+        '(#2794)', (tester) async {
+      final server = swarm();
+      (server.state['people'] as List).cast<Map>().firstWhere(
+            (p) => p['id'] == 'pilot',
+          )['name'] =
+          'Pilot Pham';
+      await show(tester, server);
+      expect(rowText(tester, 'asking'), contains('api · Pilot Pham'));
+      expect(rowText(tester, 'asking'), contains('Waiting on Pilot Pham'));
+      expect(rowText(tester, 'asking'), isNot(contains('pilot')));
+    });
+
     testWidgets('a task the reader cannot read is absent, even when a server '
         'sends it', (tester) async {
       final server = swarm()..parts.leaksHiddenGroups = true;
