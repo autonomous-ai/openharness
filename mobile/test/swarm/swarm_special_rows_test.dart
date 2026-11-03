@@ -247,13 +247,16 @@ void main() {
       expect(inRow('t1', find.text('River')), findsNothing);
     });
 
-    testWidgets('of a usage limit says until when', (tester) async {
+    testWidgets('of the coordinator\'s usage limit says until when', (
+      tester,
+    ) async {
       await show(
         tester,
         backend([
           row('t1', 2, 'River hit its usage limit', {
             'kind': 'terminal-alert',
             'alert': 'limit',
+            'lead': true,
             'agentId': 'agent-River',
             'limitedUntil': DateTime(2026, 11, 3, 18, 5).toIso8601String(),
           }),
@@ -262,6 +265,28 @@ void main() {
       expect(textOf(tester, 't1'), contains('until'));
       expect(textOf(tester, 't1'), contains('18:05'));
     });
+  });
+
+  testWidgets('a worker\'s usage limit says only what its text says', (
+    tester,
+  ) async {
+    await show(
+      tester,
+      backend([
+        row(
+          't1',
+          2,
+          'Nico hit its usage limit. Routing skips it until 14:30 UTC.',
+          {
+            'kind': 'terminal-alert',
+            'alert': 'limit',
+            'agentId': 'agent-Nico',
+            'limitedUntil': DateTime.utc(2026, 11, 3, 14, 30).toIso8601String(),
+          },
+        ),
+      ]),
+    );
+    expect(textOf(tester, 't1'), endsWith('Routing skips it until 14:30 UTC.'));
   });
 
   group('a proposal', () {
