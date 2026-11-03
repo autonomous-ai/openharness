@@ -391,4 +391,66 @@ void main() {
       });
     });
   });
+
+  group('Brought: the machines a person brought (contributor view, #2444)', () {
+    final now = DateTime.utc(2026, 11, 3, 12);
+    SwarmScore score(Object? brought) => SwarmScore.fromJson({
+      'personId': 'ken',
+      'points': 13,
+      'rank': 1,
+      'shipped': {'count': 1},
+      'unblocked': {'count': 0, 'agentMs': 0},
+      'lent': {'machines': 1, 'agentMs': 31 * 3600000},
+      'streakDays': 0,
+      'details': {'brought': ?brought},
+    });
+
+    test('puts a line per machine in place of Lent: what shipped, hours for others and each subscription\'s week', () {
+      final resets = now
+          .add(const Duration(days: 3, hours: 2))
+          .millisecondsSinceEpoch;
+      final lines = swarmPersonWeek(
+        score([
+          {
+            'machineId': 'studio',
+            'machineName': 'Mac Studio',
+            'shipped': 5,
+            'busyHours': 31,
+            'subscriptions': [
+              {'engine': 'claude', 'usedPercent': 38, 'resetsAt': resets},
+              {'engine': 'codex', 'usedPercent': null, 'resetsAt': null},
+            ],
+          },
+          {
+            'machineId': 'mbp',
+            'machineName': 'MacBook Pro',
+            'shipped': 0,
+            'busyHours': 0,
+            'subscriptions': <Object>[],
+          },
+        ]),
+        now: now,
+      );
+      expect(
+        lines,
+        contains((
+          'Mac Studio',
+          '5 shipped · 31 h for others\nClaude 38% used, resets in 3d\nCodex not read yet',
+        )),
+      );
+      expect(lines, contains(('MacBook Pro', '0 shipped · 0 h for others')));
+      expect(lines.map((l) => l.$1), isNot(contains('Lent')));
+    });
+
+    test('says so when the person brought nothing', () {
+      final lines = swarmPersonWeek(score(<Object>[]), now: now);
+      expect(lines, contains(('Brought', 'No machines brought yet')));
+      expect(lines.map((l) => l.$1), isNot(contains('Lent')));
+    });
+
+    test('keeps Lent from a server before Brought', () {
+      final lines = swarmPersonWeek(score(null), now: now);
+      expect(lines.map((l) => l.$1), contains('Lent'));
+    });
+  });
 }

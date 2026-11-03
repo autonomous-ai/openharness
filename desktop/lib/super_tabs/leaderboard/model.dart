@@ -236,7 +236,33 @@ class SuperTabPersonDetails {
                   ? (item['busyHours'] as num).toDouble()
                   : 0.0,
             ),
-      ];
+      ],
+      brought = json['brought'] is List
+          ? [
+              for (final item in _list(json['brought']))
+                if (_text(item['machineName']) case final machineName?)
+                  (
+                    machineName: machineName,
+                    shipped: _int(item['shipped']),
+                    busyHours: item['busyHours'] is num
+                        ? (item['busyHours'] as num).toDouble()
+                        : 0.0,
+                    subscriptions: [
+                      for (final sub in _list(item['subscriptions']))
+                        if (_text(sub['engine']) case final engine?)
+                          (
+                            engine: engine,
+                            usedPercent: sub['usedPercent'] is num
+                                ? _int(sub['usedPercent'])
+                                : null,
+                            resetsAt: sub['resetsAt'] is num
+                                ? _int(sub['resetsAt'])
+                                : null,
+                          ),
+                    ],
+                  ),
+            ]
+          : null;
 
   /// Pull requests that merged.
   final List<({String title, String? prUrl})> shipped;
@@ -250,7 +276,20 @@ class SuperTabPersonDetails {
 
   /// Machines whose agents ran, and for how long.
   final List<({String machineName, double busyHours})> lent;
+
+  /// Every machine the person brought (contributor view, #2444): the
+  /// verified requests that shipped on it, its hours on others' work, and
+  /// each subscription's weekly use and reset (null when unknown). Null from
+  /// a server before it, which shows [lent] instead.
+  final List<SuperTabBrought>? brought;
 }
+
+typedef SuperTabBrought = ({
+  String machineName,
+  int shipped,
+  double busyHours,
+  List<({String engine, int? usedPercent, int? resetsAt})> subscriptions,
+});
 
 class SuperTabWaitingPerson {
   SuperTabWaitingPerson.fromJson(Map<String, dynamic> json)

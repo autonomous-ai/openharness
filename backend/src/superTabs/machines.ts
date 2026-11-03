@@ -48,6 +48,9 @@ export interface ContributedMachine {
   lent?: import('./leaderboard/lent.js').LentWeek[]
   /** The same by day, for the board's rolling periods. Only the leaderboard read gets it (model.ts visibleState). */
   lentDays?: import('./leaderboard/lent.js').LentDay[]
+  /** The leaderboard week (Monday 00:00 UTC) its owner was last told someone else's work started here (othersWork.ts): once
+   *  a week. On a Mac, for its Harness Team account too. Kept when the contribution is saved again. */
+  othersToldWeek?: number
   /** The projects whose agents may run here, set by its owner (commands.ts machine.projects, Tony 11-03); absent: every
    *  project, as before. A Mac's Harness Team account keeps none of its own: it follows its Mac's (machineProjectRefusal). */
   projects?: string[]
