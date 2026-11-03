@@ -528,15 +528,11 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
                   ),
                 ] else ...[
                   Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       if (_step == _LockStep.waiting) ...[
-                        const Padding(
-                          padding: EdgeInsets.only(top: 3),
-                          child: SizedBox.square(
-                            dimension: 14,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
+                        const SizedBox.square(
+                          dimension: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
                         ),
                         const SizedBox(width: 10),
                       ],

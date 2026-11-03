@@ -537,6 +537,8 @@ void main() {
       (tester) async {
         await tester.tap(find.byKey(const Key('team-account-lock-continue')));
         await tester.pump();
+        // Far enough into the spinner's turn that its arc shows.
+        await tester.pump(const Duration(milliseconds: 600));
       },
     ),
     (
