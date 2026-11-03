@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -2346,15 +2347,53 @@ class _SuperTabViewState extends State<SuperTabView>
         ],
       );
     }
+    // A phone with too little height keeps its squeezed row as it was.
+    if (_phone) {
+      return ConstrainedBox(
+        constraints: BoxConstraints(
+          minHeight: grid.AppControl.heightFieldScaled,
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(child: field),
+            ...options,
+            attach,
+            send,
+          ],
+        ),
+      );
+    }
+    // The controls stay at the bottom-right as the message grows, level with
+    // its last line (Scholes, 11-03: centred, they drifted up the box). The
+    // field is padded to the row's height, so one line sits where it did,
+    // centred on the controls, and a longer message's last line keeps that
+    // place.
+    final row = grid.AppControl.heightFieldScaled;
+    final line =
+        MediaQuery.textScalerOf(context).scale(DesktopChrome.text().fontSize!) *
+        DesktopChrome.text().height!;
+    final inset = math.max(0.0, (row - line) / 2);
     return ConstrainedBox(
-      constraints: BoxConstraints(minHeight: grid.AppControl.heightFieldScaled),
+      constraints: BoxConstraints(minHeight: row),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          Expanded(child: field),
-          ...options,
-          attach,
-          send,
+          Expanded(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: inset),
+              child: field,
+            ),
+          ),
+          // As tall as the row at least, the controls centred in it as before;
+          // taller with larger text.
+          ConstrainedBox(
+            constraints: BoxConstraints(minHeight: row),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [...options, attach, send],
+            ),
+          ),
         ],
       ),
     );
