@@ -332,7 +332,9 @@ class _RootShellState extends ConsumerState<RootShell>
   /// every platform.
   Future<void> runAppMenuAction(String action) async {
     // The Harness Team account's setup holds the whole window
-    // (super_tabs/team_account_setup.dart); AppKit's own Quit and About stay.
+    // (super_tabs/team_account_setup.dart). AppKit's own Quit and About panel
+    // never come here; every action that does waits, the Linux and Windows
+    // strip's About included.
     if (!mounted || ref.read(appStateProvider).teamSetupLocked) return;
     switch (action) {
       case 'settings':
