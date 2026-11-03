@@ -43,3 +43,12 @@ export async function swarmsIn(db: Transaction, autonomousEnv: string, ids: stri
   if (!ids.length) return []
   return (await readBy(db, 'SuperTab', 'id', [{ $match: { _id: { $in: ids }, autonomousEnv } }, { $project: { _id: 1 } }])).map(row => row._id as string)
 }
+
+/** Up to `limit` live Swarms people at `domain` join by themselves (autoJoin.ts) that `userId` is not in and never declined: one
+ *  read on the auto-join index, which usually matches nothing. The two `$ne` are checked on the few rows of the domain. */
+export async function autoJoinSwarms(db: Transaction, autonomousEnv: string, domain: string, userId: string, limit: number): Promise<string[]> {
+  const rows = await readBy(db, 'SuperTab', 'autoJoin', [
+    { $match: { autonomousEnv, autoJoinDomain: domain, deletedAt: null, memberIds: { $ne: userId }, autoJoinDeclined: { $ne: userId } } },
+    { $limit: limit }, { $project: { _id: 1 } }])
+  return rows.map(row => row._id as string)
+}

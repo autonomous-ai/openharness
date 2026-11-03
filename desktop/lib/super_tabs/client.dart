@@ -752,6 +752,7 @@ class SuperTabClient {
       buddyUnread: -1,
     );
     var seenSelected = controller.selectedId;
+    var seenThread = controller.threadOnScreen;
     controller.addListener(() {
       if (_reading.drawsSaved && generation == _generation) {
         if (controller.accessRevoked) {
@@ -763,8 +764,12 @@ class SuperTabClient {
           _saveViewSoon(id);
         }
       }
-      if (controller.selectedId != seenSelected) {
+      // A thread opened or closed beside the chat is a selection too: the
+      // round dial's face follows it.
+      if (controller.selectedId != seenSelected ||
+          controller.threadOnScreen != seenThread) {
         seenSelected = controller.selectedId;
+        seenThread = controller.threadOnScreen;
         onSelection?.call(controller);
       }
       if (controller.snapshot case final snapshot?) {

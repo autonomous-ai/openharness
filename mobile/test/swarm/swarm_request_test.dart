@@ -20,8 +20,9 @@ import 'swarm_fixture.dart' show changes, firstLoad, groupData, me, tab;
 
 /// How the phone reaches the Swarm: a read goes straight to the backend with
 /// the phone's own sign-in, as the web build's does, and on through a machine
-/// when that says nothing of the person. A command, and a read going on, is
-/// forwarded by one of the account's own machines with its session
+/// when that says nothing of the person. A command uses the phone too, with
+/// a machine fallback for unavailable transport. These fixtures have no write
+/// credentials, so their commands are forwarded by an account machine with its session
 /// (`super_tabs`, `action: backend` in cli/src/superTabs/service.ts). The tests
 /// outside the first group have no sign-in to read with (`FakeApi.swarmRead`),
 /// so their reads all go on through the machines.
@@ -72,7 +73,7 @@ void main() {
       expect(rig.api.swarmReads, ['/api/super-tabs/t/changes?cursor=c1']);
     });
 
-    test('a command never does: a machine forwards it', () async {
+    test('without phone write credentials a machine forwards a command', () async {
       final rig = await signedInWith({'m': []});
       addTearDown(rig.app.dispose);
       rig.api.onSwarmRead = (_) async => fail('a command is not a read');

@@ -120,6 +120,13 @@ describe('the built-in template', () => {
     const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\n +/g, ' ')
     expect(routing).toContain('- When no other account has weekly quota left, the PM\'s account takes work as any other account does.')
   })
+  it('says the route lists every engine on every machine with its weekly quota, which the PM orders by itself', () => {
+    // Ken, 2026-11-03: the route's rows now carry each account's quota, and no account is cut from them.
+    const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\n +/g, ' ')
+    expect(routing).toContain('- The route lists the best new agent and the best idle agent of every engine on every machine, each with its quota: '
+      + 'fits or short, weekly quota left and reset time. Its order does not rank by quota: the PM applies this order itself.')
+    expect(routing).not.toContain('The route\'s lines show')
+  })
 })
 
 describe('role names', () => {

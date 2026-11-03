@@ -11,7 +11,6 @@ import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/swarm_tokens_set_b.dart';
 
-import 'identity.dart';
 import 'model.dart';
 import 'swarm_message_row.dart';
 import 'swarm_session.dart';
@@ -160,7 +159,7 @@ class _SwarmShipRowState extends State<SwarmShipRow> {
     ];
     final credits = [
       if (requester != null)
-        ('Requested by', [(requester.id, superTabPersonName(requester.email))]),
+        ('Requested by', [(requester.id, requester.username)]),
       ('Built by', agents(ship.builderIds)),
       ('Reviewed by', agents(ship.reviewerIds)),
     ].where((credit) => credit.$2.isNotEmpty).toList();

@@ -1,10 +1,11 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { PULL_READ_PERMISSIONS, type GitHubApp } from '../github/app.js'
 import { githubRepository, type GitHubRepository } from '../github/repository.js'
-import { activeWork, type Conversation } from './model.js'
+import { activeWork, type Conversation, type SuperTabState } from './model.js'
 import type { HeadData } from './parts/index.js'
 import type { SuperTabStore } from './store.js'
-import { ARCHIVE_QUIET_MS } from './tidy.js'
+import { projectsOf } from './projects.js'
+import { ARCHIVE_QUIET_MS, archiveWaitsFor } from './tidy.js'
 import { logger } from '../utils/logger.js'
 
 // A finished group archives by itself (roadmap, December: nobody tidies a Swarm by hand): its task done or cancelled, quiet
@@ -89,14 +90,16 @@ export async function markFinishedGroups(db: PrismaClient): Promise<number> {
  *  tidying on, is archived once GitHub says each of its pull requests is merged or closed. Read oldest first by a cursor,
  *  so groups that stay open never hold later ones back. */
 export async function archiveFinishedGroups(db: PrismaClient, store: Pick<SuperTabStore, 'archiveFinished'>, prs: PullRequests, now: number): Promise<number> {
-  const tidy = new Map<string, boolean>()
+  // One head read per Swarm a pass: whether it keeps tidying on, and its projects' repositories (tidy.ts archiveWaitsFor).
+  const heads = new Map<string, Promise<HeadData | undefined>>()
+  const headOf = (tabId: string) => {
+    if (!heads.has(tabId)) heads.set(tabId, db.swarmHead.findUnique({ where: { id: `${tabId}:head` } }).then(row => row?.data as unknown as HeadData | undefined))
+    return heads.get(tabId)!
+  }
+  // A deleted Swarm (deletion.ts) is left alone: none of its pull requests is read.
   const tidyOn = async (tabId: string) => {
-    // A deleted Swarm (deletion.ts) is left alone: none of its pull requests is read.
-    if (!tidy.has(tabId)) {
-      const head = (await db.swarmHead.findUnique({ where: { id: `${tabId}:head` } }))?.data as unknown as HeadData | undefined
-      tidy.set(tabId, head?.tidy !== false && !head?.deletion)
-    }
-    return tidy.get(tabId)!
+    const head = await headOf(tabId)
+    return head?.tidy !== false && !head?.deletion
   }
   // One read per pull request a pass, however many groups link it.
   const states = new Map<string, Promise<PullRequestState>>()
@@ -131,7 +134,11 @@ export async function archiveFinishedGroups(db: PrismaClient, store: Pick<SuperT
           }
           return true
         }
-        const own = group.pullRequestUrls ?? []
+        // Its links, and a "PR #N" its result or check evidence names; none to read it in keeps it open.
+        const head = await headOf(row.tabId)
+        const project = head && projectsOf(head as unknown as SuperTabState).find(p => p.id === (group.projectId ?? 'lead'))
+        const own = archiveWaitsFor(group, project?.repository?.repositoryUrl)
+        if (!own) continue
         if (!step) {
           if (await settled(own) && await archive(row, checked)) archived++
           continue

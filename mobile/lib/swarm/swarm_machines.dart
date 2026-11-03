@@ -8,7 +8,6 @@ import '../shared/theme/app_icon_size.dart';
 import '../shared/theme/app_space.dart';
 import '../shared/theme/app_theme.dart';
 import '../shared/theme/app_type.dart';
-import 'identity.dart';
 import 'model.dart';
 import 'swarm_buddy.dart';
 import 'swarm_machine_menu.dart';
@@ -144,7 +143,7 @@ class _SwarmMachinesSectionState extends State<SwarmMachinesSection> {
           const SizedBox(width: AppSpace.s),
           SwarmAvatar(
             id: owner.id,
-            name: superTabPersonName(owner.email),
+            name: owner.username,
             picture: owner.avatar,
             size: AppIconSize.standalone,
           ),
@@ -271,7 +270,7 @@ class SwarmMachineSheet extends StatelessWidget {
               ),
               _detail('Status', view.status),
               if (view.owner case final owner?)
-                _detail('Owner', superTabPersonName(owner.email)),
+                _detail('Owner', owner.username),
               _heading('Hardware'),
               if (view.dim)
                 _detail('Readings', 'Current readings unavailable')

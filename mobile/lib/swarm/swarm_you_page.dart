@@ -12,7 +12,6 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
-import 'identity.dart';
 import 'model.dart';
 import 'swarm_devices_page.dart';
 import 'swarm_face.dart';
@@ -232,9 +231,7 @@ class _Me extends StatelessWidget {
     AppTheme.watch(context);
     final me = this.me;
     // A Home kept for a cold start holds no email.
-    final name = me == null || me.email.isEmpty
-        ? 'You'
-        : superTabPersonName(me.email);
+    final name = me == null || me.email.isEmpty ? 'You' : me.username;
     return Padding(
       padding: const EdgeInsets.fromLTRB(
         AppSpace.xs,

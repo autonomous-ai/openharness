@@ -26,9 +26,10 @@ class SuperTabPaneLayout extends StatefulWidget {
   static const leftWidth = 300.0;
   static const rightWidth = 280.0;
 
-  /// A thread's default width (Scholes, 10-31): room for its reply box's
-  /// options on one row ("New session" and "Also to chat"). [rightWidth]
-  /// stays the narrowest the pane goes.
+  /// A thread's default width (Scholes, 10-31). Its reply box's Also send
+  /// shares the send row with New session only from about 410px; here it
+  /// takes its own line under the box, in full (11-03). [rightWidth] stays
+  /// the narrowest the pane goes.
   static const threadWidth = 340.0;
 
   /// The roster drawer's share of a narrow window at most. On a phone it filled the screen, leaving no

@@ -54,6 +54,15 @@ describe('the team account\'s engines', () => {
     const linux = engineLines(engines({ claude: { installed: true, signedIn: false }, codex: { installed: true, signedIn: false } }), ago, 'linux').join('\n')
     expect(linux).toContain('open a terminal on this computer\'s Harness Team machine')
     expect(linux).not.toContain('Mac')
+    // A computer used over a terminal has no Harness app to open a terminal in (headless run, 2026-11-03): the same
+    // sign-in, from the terminal the person is already in.
+    expect(linux).toContain('Or from a terminal on this computer, as harnessteam:')
+    expect(linux).toContain('sudo -u harnessteam -H bash -lc claude')
+    expect(lines).toContain('Or from a terminal on this Mac, as harnessteam:')
+    // Windows has no sudo: its sign-in stays the Harness terminal's.
+    expect(engineLines(engines({ claude: { installed: true, signedIn: false } }), ago, 'win32').join('\n')).not.toContain('sudo -u')
+    // Why a server reads "not signed in": the subscription is lent through this computer's own daemon while it runs.
+    expect(linux).toContain('when that is not running (harness start, or harness service install), there is nothing to lend')
     expect(lines).toContain('    claude                      Claude Code')
     expect(lines).not.toContain('codex login')
     expect(lines).toContain('Your own sign-ins are not copied into the team account')

@@ -1,6 +1,11 @@
+import 'dart:async';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/state/harness_attachments.dart';
+import 'package:harness/super_tabs/attachment_upload.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/section_heading.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -24,10 +29,11 @@ void main() {
     WidgetTester tester,
     ConversationServer server, {
     Brightness brightness = Brightness.light,
+    SuperTabUpload? upload,
   }) async {
     await tester.binding.setSurfaceSize(const Size(1280, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final c = server.controller(account: 'peer');
+    final c = server.controller(account: 'peer', upload: upload);
     await c.refresh();
     await tester.pumpWidget(
       MaterialApp(
@@ -425,5 +431,77 @@ void main() {
         await close(tester, c);
       },
     );
+
+    // The check of the chat came after the upload's wait and read the selected
+    // chat, so opening another during it sent the session with no project: it
+    // started as All projects and could not hand work to the project's PM.
+    testWidgets('keeps its project when another chat opens during the upload', (
+      tester,
+    ) async {
+      final server = oneBuddySwarm();
+      giveSwarmBuddy(server);
+      final hold = Completer<void>();
+      final c = await show(
+        tester,
+        server,
+        upload:
+            ({
+              required tabId,
+              required conversationId,
+              required name,
+              required mime,
+              required file,
+              required cancel,
+              required onProgress,
+            }) async {
+              await hold.future;
+              return server.upload(
+                tabId: tabId,
+                conversationId: conversationId,
+                name: name,
+                mime: mime,
+                file: file,
+                cancel: cancel,
+                onProgress: onProgress,
+              );
+            },
+      );
+      await tester.tap(buddyRow);
+      await tester.pumpAndSettle();
+      final buddyChat = c.selectedId;
+      await tester.tap(find.byKey(const ValueKey('super-chat-new-session')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('super-chat-session-project')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('super-chat-session-in-lead')).last,
+      );
+      await tester.pumpAndSettle();
+      c.attachments(buddyChat).add([
+        HarnessAttachment('notes.txt', Uint8List.fromList([104, 105])),
+      ]);
+      await tester.enterText(
+        find.byKey(const ValueKey('super-message-composer')),
+        'Hand this off',
+      );
+      await tester.pump();
+      await tester.tap(find.byTooltip('Send message'));
+      await tester.pump();
+      expect(c.uploading, isTrue);
+
+      await c.select('lead');
+      await tester.pump();
+      expect(c.selectedId, 'lead');
+      hold.complete();
+      await tester.pumpAndSettle();
+
+      final sent = commands(server, 'message.send').last;
+      expect(sent['conversationId'], buddyChat);
+      expect(sent['newSession'], isTrue);
+      expect(sent['sessionProjectId'], 'lead');
+      await close(tester, c);
+    });
   });
 }
