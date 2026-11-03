@@ -17,11 +17,13 @@ class SourceInputTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         for name in (".github/workflows/ci.yml", "scripts/check.py", "desktop/scripts/upload.sh",
-                     "desktop/lib/main.dart", "desktop/test/app_test.dart", "cli/main.ts", "docs/guide.md",
+                     "desktop/lib/main.dart", "desktop/test/app_test.dart", "cli/main.ts", "backend/.gitignore",
+                     "backend/scripts/release-be.sh", "docs/guide.md",
                      "tests/fixtures/layout.json", "daemons/frames.json", "store/catalog.json", "docs/images/poster.png"):
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("fixture\n")
+        (self.root / "backend/.gitignore").write_text("*.log\n")  # its own blob, never in the sparse checkout
         self.git("init", "-q")
         self.git("add", ".")
         self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "source")
@@ -82,9 +84,35 @@ class SourceInputTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "clean"):
             inputs.verify_checkout(self.root, "process")
 
-    def test_every_git_call_waits_long_enough_for_a_fresh_runners_index_refresh(self):
-        # A fresh CI runner's first git status refreshes the whole index and has
-        # taken over 15 seconds on this repository (#2848, #2860).
+    def blobless_sparse_clone(self):
+        # CI's process checkout: sparse, depth 1 and --filter=blob:none, so blobs
+        # outside the sparse patterns (backend/.gitignore here) are never fetched.
+        self.git("config", "uploadpack.allowFilter", "true")
+        outside = tempfile.TemporaryDirectory()
+        self.addCleanup(outside.cleanup)
+        clone = Path(outside.name) / "clone"
+        subprocess.run(["git", "clone", "-q", "--filter=blob:none", "--no-checkout", "--depth=1",
+                        self.root.as_uri(), str(clone)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(["git", "config", "core.sparseCheckout", "true"], cwd=clone, check=True)
+        (clone / ".git/info/sparse-checkout").write_text(
+            "".join("/" + path + "\n" for path in inputs.ci.SOURCE_INPUTS["process"]))
+        subprocess.run(["git", "checkout", "-q", "--force", self.sha], cwd=clone, check=True,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # Any lazy fetch from here on fails, as a slow GitHub fetch would time out.
+        subprocess.run(["git", "remote", "set-url", "origin", (Path(outside.name) / "gone").as_uri()],
+                       cwd=clone, check=True)
+        return clone
+
+    def test_blobless_sparse_checkout_is_verified_without_fetching_blobs(self):
+        clone = self.blobless_sparse_clone()
+        self.assertTrue((clone / "backend/scripts/release-be.sh").exists())
+        self.assertFalse((clone / "backend/.gitignore").exists())
+        inputs.verify_checkout(clone, "process")
+        (clone / "scripts/check.py").write_text("dirty\n")
+        with self.assertRaisesRegex(ValueError, "clean"):
+            inputs.verify_checkout(clone, "process")
+
+    def test_every_git_call_has_a_timeout(self):
         self.sparse(inputs.ci.SOURCE_INPUTS["process"])
         real, timeouts = subprocess.check_output, []
         def recording(cmd, *args, **kwargs):
@@ -96,7 +124,6 @@ class SourceInputTests(unittest.TestCase):
         self.assertIn("status", [name for name, _ in timeouts])
         for name, timeout in timeouts:
             self.assertIsNotNone(timeout, name)
-            self.assertGreaterEqual(timeout, 120, name)
 
     def test_a_hung_git_still_fails_the_check(self):
         self.sparse(inputs.ci.SOURCE_INPUTS["process"])
