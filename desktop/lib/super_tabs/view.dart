@@ -3111,7 +3111,8 @@ class _SuperTabViewState extends State<SuperTabView>
               facts: _facts,
             ),
       author: _shownAuthor(c, message),
-      // A person is named by their username, as they are tagged.
+      // A person is found by their username, as they are tagged, and reads
+      // as the name they set.
       mentions: [
         for (final id in message.mentions)
           if (_people[id] case final person?) person.username,
@@ -3119,6 +3120,11 @@ class _SuperTabViewState extends State<SuperTabView>
       mentionAddresses: {
         for (final id in message.mentions)
           if (_people[id] case final person?) person.username: person.email,
+      },
+      mentionLabels: {
+        for (final id in message.mentions)
+          if (_people[id] case SuperTabPerson(:final username, :final name?))
+            username: name,
       },
       references: _references,
       onOpenGroup: (id) {
@@ -3187,7 +3193,7 @@ class _SuperTabViewState extends State<SuperTabView>
       reactorName: (kind, id) => kind == 'agent'
           ? c.snapshot?.agentName(id) ?? 'Agent'
           : switch (_people[id]) {
-              final person? => person.username,
+              final person? => person.shownName,
               null => 'Someone',
             },
       // An older Buddy chat is kept to read: no reaction there (security review 1 of #2437).

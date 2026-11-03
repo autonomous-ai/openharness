@@ -361,7 +361,7 @@ class _ManageSwarmState extends State<_ManageSwarm> {
       ),
       children: [
         _fact('Name', _value(snapshot.name)),
-        if (owner != null) _fact('Owner', _value(owner.username)),
+        if (owner != null) _fact('Owner', _value(owner.shownName)),
         _fact(
           'People',
           _value('${snapshot.people.length}'),

@@ -59,6 +59,21 @@ describe('restart role lookup through the service', () => {
     expect(await service.port.swarmRole('old-native')).toBeUndefined()
     service.port.stop()
   })
+  // Import an agent (security review of #2783): whether any Swarm lists the harness here, for its owner only; an unreadable
+  // roster answers no `listed`, which Desktop refuses on.
+  it('says whether any Swarm lists a harness on this machine, for the owner only', async () => {
+    const agent = { id: 'agent', machineId: 'machine-1', harnessId: 'kept' }
+    const call = vi.fn<CoreApi['account']['backend']>(async (_method, path) => ({ status: 200, body: { data:
+      path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent, stopRequested: true }])
+        : swarmReply(path, { agents: [agent], conversations: [{ archived: true, agentIds: ['agent'] }] }) } }))
+    const service = superTabService(fakeCore({ account: { backend: call } }))
+    expect(await service.requests.super_tabs({ action: 'swarmListed', harnessId: 'kept' }, owner)).toEqual({ ok: true, listed: true })
+    expect(await service.requests.super_tabs({ action: 'swarmListed', harnessId: 'personal' }, owner)).toEqual({ ok: true, listed: false })
+    expect(await service.requests.super_tabs({ action: 'swarmListed', harnessId: 'kept' }, visitor)).toMatchObject({ error: 'OWNER_REQUIRED' })
+    call.mockRejectedValueOnce(new Error('Offline'))
+    expect(await service.requests.super_tabs({ action: 'swarmListed', harnessId: 'kept' }, owner)).toEqual({ ok: true })
+    service.port.stop()
+  })
   // Project instructions, phase 4 (decision 1): the process answers the core in the wire's values, which a core from before
   // role kinds reads too; a Reviewer's answer keeps its swarm-review file.
   it('answers the core\'s role lookup in the values every core reads', async () => {

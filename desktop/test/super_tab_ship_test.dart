@@ -107,6 +107,17 @@ void main() {
     },
   );
 
+  testWidgets('who asked is named by the name they set (review of #2794)', (
+    tester,
+  ) async {
+    final server = shipServer();
+    ((server.state['people'] as List).first as Map)['name'] = 'Minh Nguyen';
+    await show(tester, server);
+    expect(find.text('Minh Nguyen'), findsOneWidget);
+    expect(find.text('owner'), findsNothing);
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('a fresh celebration throws confetti once, then it is gone', (
     tester,
   ) async {
