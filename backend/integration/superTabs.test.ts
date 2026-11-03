@@ -3668,7 +3668,11 @@ describe('machine removal', () => {
     const preview = (user: AuthUser) => app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/machines/test-host/removal`, headers: { authorization: `Bearer ${user.sub}` } })
     const shown = await preview(host)
     expect(shown.statusCode, shown.body).toBe(200)
-    expect(shown.json().data).toEqual({ blockedBy: null, agents: [{ id: worker, name: 'Worker', projectName: 'Remove' }], hiddenAgentCount: 0,
+    expect(shown.json().data).toEqual({ blockedBy: null, agents: [{ id: worker, name: 'Worker', projectName: 'Remove' }],
+      soleSourceProjects: [] })
+    const current = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/machines/test-host/removal/v2`, headers: { authorization: `Bearer ${host.sub}` } })
+    expect(current.statusCode, current.body).toBe(200)
+    expect(current.json().data).toEqual({ previewVersion: 2, blockedBy: null, agents: [{ id: worker, name: 'Worker', projectName: 'Remove' }], hiddenAgentCount: 0,
       soleSourceProjects: [], hiddenSoleSourceProjectCount: 0 })
     expect((await preview(owner)).statusCode).toBe(403)
     await expect(run(tab, { type: 'machine.remove', machineId: 'test-host' })).rejects.toMatchObject({ code: 'FORBIDDEN' })
@@ -3709,17 +3713,24 @@ describe('machine removal', () => {
     await saveState(tab, state)
     await run(tab, { type: 'work.assign', conversationId: taskConversationId, agentId: workerId })
 
-    const shown = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/machines/test-host/removal`, headers: { authorization: `Bearer ${host.sub}` } })
+    const legacy = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/machines/test-host/removal`, headers: { authorization: `Bearer ${host.sub}` } })
+    expect(legacy.statusCode, legacy.body).toBe(426)
+    expect(legacy.json().message).toBe('Update Harness to remove this machine.')
+    for (const unreadable of [projectId, pmId, workerId, 'Secret Project', 'Secret PM', 'Secret Builder', 'Secret Task', '/secret/repository']) {
+      expect(legacy.body).not.toContain(unreadable)
+    }
+
+    const shown = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/machines/test-host/removal/v2`, headers: { authorization: `Bearer ${host.sub}` } })
     expect(shown.statusCode, shown.body).toBe(200)
     expect(shown.json().data).toEqual({
-      blockedBy: { reason: "A PM of a project you can't see runs here." }, agents: [], hiddenAgentCount: 2,
+      previewVersion: 2, blockedBy: { reason: "A Product Manager of a project you can't see runs on this machine." }, agents: [], hiddenAgentCount: 2,
       soleSourceProjects: [], hiddenSoleSourceProjectCount: 1,
     })
     for (const unreadable of [projectId, pmId, workerId, 'Secret Project', 'Secret PM', 'Secret Builder', 'Secret Task', '/secret/repository']) {
       expect(JSON.stringify(shown.json().data)).not.toContain(unreadable)
     }
     await expect(run(tab, { type: 'machine.remove', machineId: 'test-host' }, host)).rejects.toMatchObject({
-      code: 'LEAD_PROTECTED', message: "A PM of a project you can't see runs here.",
+      code: 'LEAD_PROTECTED', message: "A Product Manager of a project you can't see prevents this action.",
     })
   })
 

@@ -12,7 +12,7 @@ import { modelMatches } from './rules.js'
 import { appendRouting, instructionsHash } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy } from './routingPolicy.js'
-import { NOW, owner as richOwner, richSwarm } from './read/fixture.test-support.js'
+import { NOW, owner as richOwner, peer as richPeer, richSwarm } from './read/fixture.test-support.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 /** What an older client's routing, policy, skill-set or role save answers (project instructions, phase 4). */
@@ -3023,6 +3023,24 @@ describe('machine.remove', () => {
     // Its own row names the agent it took, so no member row repeats it (Echo's review of #2207).
     expect(effects.messages.map(m => m.conversationId)).toEqual([group])
     expect(new Set(effects.messages.map(m => m.id)).size).toBe(effects.messages.length)
+  })
+
+  it('does not return IDs for agents the machine owner cannot read', () => {
+    const s = richSwarm(NOW)
+    s.contribute('host')
+    const hiddenTask = s.group('Secret task', s.secret)
+    const hidden = s.add('hidden-harness', hiddenTask)
+    s.edit(state => {
+      state.agents.find(agent => agent.id === s.lead)!.machineId = 'elsewhere'
+      const machine = state.machines!.find(item => item.machineId === 'host')!
+      machine.contributorId = richPeer.userId
+      machine.membershipGeneration = state.people.find(person => person.id === richPeer.userId)!.generation
+    })
+
+    const result = s.run({ type: 'machine.remove', machineId: 'host' }, richPeer)
+
+    expect(result.removedAgents).not.toContain(hidden)
+    expect(JSON.stringify(result)).not.toContain(hidden)
   })
 
   it('removes a machine that only runs agents, so nothing lists it any more', () => {

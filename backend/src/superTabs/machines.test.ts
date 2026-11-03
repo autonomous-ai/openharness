@@ -315,7 +315,7 @@ it('the removal preview names only the agents and projects its owner reads', () 
   const preview = removalPreview(s.state, peer, 'host')
 
   expect(preview).toEqual({
-    blockedBy: { reason: "A PM of a project you can't see runs here." },
+    blockedBy: { reason: "A Product Manager of a project you can't see runs on this machine." },
     agents: [{ id: s.worker, name: 'worker-harness', projectName: 'Pilot', task: 'Web' }],
     hiddenAgentCount: 2,
     soleSourceProjects: [],
