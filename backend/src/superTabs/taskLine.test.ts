@@ -103,6 +103,20 @@ describe('ordinary task messages and progress replies', () => {
       .toEqual(['Stuck: The build machine is offline. Next: River is looking at it.'])
   })
 
+  it('says the PM is looking at what is stuck when its chat has no coordinator, never the agent that is stuck', () => {
+    const f = fixture()
+    const project = f.run({ type: 'project.create', name: 'Quiet', visibility: 'private', brief: '' }).result.projectId as string
+    const chat = f.state.projects!.find(p => p.id === project)!.leadConversationId
+    expect(f.state.conversations.find(c => c.id === chat)!.leadId ?? null).toBeNull()
+    const id = f.run({ type: 'conversation.create', projectId: project, title: 'Offline drafts', brief: 'Keep drafts.', checks: [] }).result.conversationId as string
+    const root = f.task(id).cards!.line!.messageId
+    const builder = f.add('Kai', id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: builder })
+    f.status(id, builder, 'working', 'Started.')
+    expect(thread(f.status(id, builder, 'blocked', 'The build machine is offline.'), root))
+      .toEqual(['Stuck: The build machine is offline. Next: the PM is looking at it.'])
+  })
+
   it('tags the person a decision waits on, with its default', () => {
     const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId
     const builder = f.add('Kai', id)
