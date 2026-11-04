@@ -14,6 +14,7 @@ import type { SwarmDelta } from './parts/load.js'
 import { startFinished } from './parts/write.js'
 import { projectLightGroup } from './parts/lightSelect.js'
 import { stableId, type AgentStart } from './model.js'
+import { boardGroup, lastActive } from './leaderboard/boardGroups.js'
 
 export interface PatchRule<T> {
   /** The part kinds whose changes this entry holds: a refresh reads only those. */
@@ -150,6 +151,16 @@ export function lightDormantAgentRule(agentId: string): PatchRule<Part<GroupData
  *  (projects.ts groupProject). */
 export function dormantProjectRule(projectId: string): PatchRule<Part<GroupData>[]> {
   return { kinds: ['group'], apply: (held, delta) => applyByKey(held, delta.parts, 'group', p => asleep(p) && ((p.data as GroupData).projectId ?? 'lead') === projectId) }
+}
+
+/** A `board:{floor}:{projects}` entry (leaderboard/read.ts): the projects' quiet conversations last active since `floor`, each
+ *  with the board's fields only (leaderboard/boardGroups.ts), as `loadBoardGroups` loads them; a group stored with no project
+ *  is the default one's. One that wakes, moves project or is removed goes. */
+export function boardRule(projectIds: readonly string[], floor: number): PatchRule<Part<GroupData>[]> {
+  const projects = new Set(projectIds)
+  const keep = (p: Part) => asleep(p) && projects.has((p.data as GroupData).projectId ?? 'lead') && lastActive(p.data as GroupData) >= floor
+  return { kinds: ['group'], apply: (held, delta) => applyByKey(held, delta.parts.map(p => p.kind === 'group' && keep(p) ? boardGroup(p as Part<GroupData>) : p),
+    'group', keep) }
 }
 
 /** A `group:{id}` entry: that live group, dormant or not, or none. */
