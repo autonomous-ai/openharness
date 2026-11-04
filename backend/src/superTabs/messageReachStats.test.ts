@@ -27,17 +27,24 @@ describe('message reach latency', () => {
     stop()
   })
 
-  // A reader offline for hours that catches up is not a slow delivery: counted apart, so it cannot set the p95.
-  it('counts a message older than 10 minutes when it reached its reader as late, outside the percentiles', () => {
+  // A reader that was away and catches up is not a slow delivery: counted apart, so it cannot set the p95. A live app reads
+  // new messages within seconds of a push or its poll (15 s at most, off screen), so a read a minute late is a catch-up (an
+  // app brought back, review of #2995); an agent's delivery includes the time it was busy, so it gets 10 minutes.
+  it('counts a read over a minute old and a delivery over 10 minutes old as late, outside the percentiles', () => {
     const { log, stop } = started()
     recordMessageReach({ reader: 'person', via: 'read' }, 400)
-    recordMessageReach({ reader: 'person', via: 'read' }, LATE_MS + 1)
+    recordMessageReach({ reader: 'person', via: 'read' }, LATE_MS.read + 1)
+    recordMessageReach({ reader: 'person', via: 'read' }, 5 * 60_000)
+    recordMessageReach({ reader: 'agent', via: 'delivery' }, 5 * 60_000)
+    recordMessageReach({ reader: 'agent', via: 'delivery' }, LATE_MS.delivery + 1)
     recordMessageReach({ reader: 'buddy', via: 'read' }, 3 * 3_600_000)
     vi.advanceTimersByTime(60_000)
     expect(log.mock.calls[0]![1].rows).toEqual([
-      { reader: 'person', via: 'read', n: 1, p50: 400, p95: 400, max: 400, late: 1 },
+      { reader: 'person', via: 'read', n: 1, p50: 400, p95: 400, max: 400, late: 2 },
+      { reader: 'agent', via: 'delivery', n: 1, p50: 300_000, p95: 300_000, max: 300_000, late: 1 },
       { reader: 'buddy', via: 'read', n: 0, late: 1 },
     ])
+    expect(LATE_MS).toEqual({ read: 60_000, delivery: 600_000 })
     stop()
   })
 
