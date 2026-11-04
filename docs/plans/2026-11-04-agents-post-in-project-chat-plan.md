@@ -44,7 +44,9 @@ Desktop's terminal button lists `paneAgentIds`, the coordinator alone in a proje
 
 - `postable` must never push the agent into a project chat's `agentIds`; `message.send` must not run `teamJoin` for it.
 - Which assignments count as "a task or step in the project": assigned to this agent, not lost, cancelled or stopped, in a
-  non-archived group of the same project.
+  non-archived group of the same project. A done task counts until it archives with its merged pull request, so its agent
+  posts its result line (decided after both security reviews asked; pinned by a test).
+- A person's answer reaches the agent only while that agent works in the project, rechecked when its host polls and claims.
 
 ## Task 1: a working agent posts in the project chat without joining it
 
@@ -79,3 +81,19 @@ Desktop's terminal button lists `paneAgentIds`, the coordinator alone in a proje
   mark, and the terminal button lists only the coordinator; light and dark screenshots when
   `SUPER_TAB_AGENT_POST_SHOTS` names a folder.
 - [ ] Run it; attach the screenshots to the task.
+
+## Task 4: reactions and a person's answer (River, 2026-11-04, added to #2924)
+
+**Files:** `backend/src/superTabs/commands.ts`, `store.ts`, `parts/light.ts`, `commands.test.ts`,
+`integration/superTabProjectChatWorkers.test.ts`, `cli/src/superTabs/service.ts`, `cli/src/lib/swarmTools.ts`
+
+- [x] Tests: an agent with work reacts in the project chat without joining; refused agents are refused a reaction too.
+- [x] Tests: a person's thread reply to such an agent's line reaches that agent alone; a top-level line right below it
+  reaches that agent and the coordinator (a new ask there may be the coordinator's); after its work ends, the coordinator
+  alone. Lost, stopped, archived refused; done counts until archived; a Team account's post marks nothing.
+- [x] `message.react` uses `worksInProjectChat`; `message.send` routes a person's answer to it without joining it.
+- [x] Store: reads the newest top-level row above a person's top-level post in a project chat (sequence index, at most 20
+  rows); hands such an agent its delivery while it works in the project; a claim loads that agent's groups only when it is
+  not a member of the chat.
+- [x] Integration test: the agent's host claims both answers, and a waiting one is revoked once its work ends; the read
+  above is an index scan examining at most 20 rows.
