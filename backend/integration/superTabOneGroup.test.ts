@@ -21,6 +21,8 @@ import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
+import { buddyChatId } from '../src/superTabs/buddies.js'
+import { storeOldLeads } from '../src/superTabs/leads.test-support.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { PROFILE_STAGES, profileEntry, type ProfileEntry } from './bench/profile.js'
@@ -51,6 +53,7 @@ beforeAll(async () => {
   for (const each of [owner, peer, outsider]) await db.user.create({ data: { id: each.sub, externalId: `fixture-${each.sub}`, email: each.email, autonomousEnv: 'prod' } })
   // The owner's own machine runs the Swarm's agents, so reading as one of them needs no machine share.
   await db.machine.create({ data: { machineId: 'host', userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+  await db.machine.create({ data: { machineId: 'peer-mac', userId: peer.sub, apiKey: 'fixture-only-peer', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
   stamps = new MemoryStamps()
   configureSwarmStamps(stamps, { reads: false })
   const store = new SuperTabStore(db, Date.now, null, { readCache: new SwarmCache(stamps, { delta: readDelta(db) }) })
@@ -143,7 +146,106 @@ const dbMs = (rows: ProfileEntry[]) => rows.reduce((n, r) => n + r.millis, 0)
 const describeRows = (rows: ProfileEntry[]) => rows.filter(r => r.op !== 'getmore').map(r =>
   `  ${r.ns.split('.').at(-1)} ${r.op} ${(r.planSummary ?? '').slice(0, 60)} docs=${r.docsExamined ?? 0} returned=${r.nreturned ?? 0} bytes=${r.responseLength ?? 0}`).join('\n')
 
+/** Every kind of group and reader a read check tells apart: two projects (one private to the owner, one shared with peer), a
+ *  Lead and workers, one stored with no project (28 of 143 agents on prod, 11-04), a Buddy of peer's, a quiet task with
+ *  required machines, a closed Chat with PM, peer's Buddy chat, the removed Leads conversation and quiet work. */
+async function everyKind() {
+  const s = swarm(MIGRATED)
+  s.join(peerActor)
+  s.join(outsiderActor)
+  s.contribute('host')
+  const lead = s.add('lead-harness', 'lead', true, ownerActor, 'host', owner.sub)
+  const secret = s.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).projectId as string
+  const shared = s.run({ type: 'project.create', name: 'Shared', visibility: 'private', brief: '' }).projectId as string
+  s.run({ type: 'project.sharing', projectId: shared, visibility: 'private', memberIds: [peer.sub] })
+  const web = s.group('Web')
+  const worker = s.add('worker-harness', web, false, ownerActor, 'host', owner.sub)
+  s.run({ type: 'work.assign', conversationId: web, agentId: worker })
+  const secretGroup = s.group('Secret work', secret)
+  const secretWorker = s.add('secret-harness', secretGroup, false, ownerActor, 'host', owner.sub)
+  const sharedGroup = s.group('Shared work', shared)
+  const sharedLead = s.add('shared-lead-harness', sharedGroup, false, ownerActor, 'host', owner.sub)
+  const old = s.group('Old work')
+  const unprojected = s.add('old-harness', old, false, ownerActor, 'host', owner.sub)
+  const done = s.group('Done work')
+  const needs = s.group('Needs a machine')
+  const privateId = s.group('Peer and PM')
+  const quietSecret = s.group('Quiet secret', secret)
+  for (const id of [done, needs, quietSecret]) s.run({ type: 'conversation.archive', conversationId: id, archived: true })
+  let buddyChat = ''
+  const buddy = 'peer-buddy'
+  s.edit(state => {
+    const generation = state.people.find(p => p.id === peer.sub)!.generation
+    state.conversations.find(c => c.id === privateId)!.audience = { people: [{ id: peer.sub, generation }] }
+    // An agent stored before agents named their project: its project is its first conversation's (projects.ts agentProjectId).
+    delete (state.agents.find(a => a.id === unprojected) as { projectId?: string }).projectId
+    // The shared project's Lead is this agent (projects.ts ledProject).
+    const sharedProject = state.projects!.find(p => p.id === shared)!
+    state.conversations.find(c => c.id === sharedProject.leadConversationId)!.leadId = sharedLead
+    state.conversations.find(c => c.id === needs)!.task = { goal: 'g', changes: 'c', constraints: 'k', owns: ['o'], requires: { machines: ['host', 'other-mac'] } }
+    const projectId = state.projects![0]!.id
+    buddyChat = buddyChatId(projectId, { id: peer.sub, generation })
+    // On peer's own machine, so peer reads as it; the owner may not.
+    state.agents.push({ ...structuredClone(state.agents.find(a => a.id === worker)!), id: buddy, harnessId: 'buddy-harness', name: 'Buddy', projectId,
+      machineId: 'peer-mac', machineOwnerId: peer.sub, contributorId: peer.sub, membershipGeneration: generation, buddyOf: { personId: peer.sub, generation } })
+    state.conversations.push({ id: buddyChat, kind: 'buddy', projectId, title: 'Buddy', leadId: null, agentIds: [buddy], archived: false,
+      brief: '', checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: peer.sub, generation }] } })
+    storeOldLeads(state, [lead])
+  })
+  const tabId = `tab-${randomUUID()}`
+  const state = { ...structuredClone(s.state), id: tabId } as SuperTabState
+  await writeLegacySwarm(db, { state, revision: 700 })
+  const report = await migrateSwarm(db, tabId, { now: () => MIGRATED })
+  if (!report.ok) throw new Error(report.error)
+  const groups = (await parts.loadAll(db, tabId)).groups.filter(g => !g.deleted).map(g => g.key)
+  return { tabId, groups, readers: [[owner], [peer], [outsider], [owner, lead], [owner, worker], [owner, secretWorker], [owner, sharedLead],
+    [owner, unprojected], [owner, buddy], [peer, buddy], [owner, 'no-such-agent']] as Array<[AuthUser, string?]> }
+}
+
+/** What the whole-Swarm reads say of one group for a reader: its first load's entry for an active group, the dormant list's
+ *  for a quiet one, else nothing; or the refusal both give. */
+async function wholeRead(tabId: string, id: string, as: AuthUser, asAgentId?: string) {
+  const agent = asAgentId ? `asAgentId=${asAgentId}` : ''
+  const get = async (url: string) => {
+    const response = await app.inject({ method: 'GET', url, headers: { authorization: `Bearer ${as.sub}` } })
+    return { status: response.statusCode, body: response.json() as { data: any; error?: { code: string } } }
+  }
+  const first = await get(`/api/super-tabs/${tabId}/parts${agent ? `?${agent}` : ''}`)
+  if (first.status !== 200) return { status: first.status, code: first.body.error?.code }
+  const active = first.body.data.groups.find((g: { key: string }) => g.key === id)
+  if (active) return { status: 200, group: active }
+  for (let before: string | null = null; ;) {
+    const page = await get(`/api/super-tabs/${tabId}/groups?dormant=1${agent ? `&${agent}` : ''}${before ? `&before=${before}` : ''}`)
+    const found = page.body.data.groups.find((g: { key: string }) => g.key === id)
+    if (found) return { status: 200, group: found }
+    if (!(before = page.body.data.next)) return { status: 404, code: 'NOT_FOUND' }
+  }
+}
+
 describe('one group read by id (task #2875)', () => {
+  it('answers every reader of every group as the whole-Swarm reads do, or refuses as they do', async () => {
+    const s = await everyKind()
+    let compared = 0
+    const outcomes = new Map<string, number>()
+    for (const [as, asAgentId] of s.readers) {
+      for (const id of [...s.groups, 'missing']) {
+        const one = await read(s.tabId, id, asAgentId, as)
+        const whole = await wholeRead(s.tabId, id, as, asAgentId)
+        const label = `${id} as ${as.email}${asAgentId ? ` / ${asAgentId}` : ''}`
+        if (whole.status === 200) expect({ status: one.status, group: one.body.data?.group }, label).toEqual(whole)
+        else expect({ status: one.status, code: one.body.error?.code }, label).toEqual(whole)
+        const outcome = whole.status === 200 ? (whole.group.data.dormant ? 'dormant' : 'active') : `${whole.status} ${whole.code}`
+        outcomes.set(outcome, (outcomes.get(outcome) ?? 0) + 1)
+        compared++
+      }
+    }
+    expect(compared).toBe(s.readers.length * (s.groups.length + 1))
+    console.info(`compared ${compared} reads: ${JSON.stringify(Object.fromEntries(outcomes))}`)
+    // Readers and groups the checks tell apart: active and quiet groups read, hidden ones refused, unknown agents refused.
+    expect([...outcomes.keys()].sort()).toEqual(expect.arrayContaining(['active', 'dormant', '404 NOT_FOUND']))
+    expect([...outcomes.keys()].some(o => o.startsWith('403'))).toBe(true)
+  }, 300_000)
+
   it('reads that group and what its read check needs, never the Swarm\'s change feeds, after the Swarm moved', async () => {
     const s = await scene()
     const [quiet] = s.quiet
