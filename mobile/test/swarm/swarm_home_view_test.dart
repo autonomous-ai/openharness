@@ -430,9 +430,16 @@ void main() {
 
     Finder key(String value) => find.byKey(ValueKey(value));
     Finder project_(String id) => key('swarm-project-$tab-$id');
+    Finder inside(Finder of, Finder matching) =>
+        find.descendant(of: of, matching: matching);
     Finder dot() => key('swarm-icon-dot');
+
+    /// Sort and filter, from the Swarm switcher in Home's title (anh Dee,
+    /// 2026-11-04: no filter icon on Home).
     Future<void> open(WidgetTester tester) async {
-      await tester.tap(key('swarm-home-view'));
+      await tester.tap(key('swarm-title-button'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-switch-view'));
       await tester.pumpAndSettle();
     }
 
@@ -484,42 +491,53 @@ void main() {
       expect(key('swarm-view-sort-sections'), findsNothing);
     });
 
-    testWidgets('the icon has a dot, and says in words what is on, only with '
-        'something other than the defaults', (tester) async {
+    testWidgets("the switcher's Sort and filter has a dot, and says in words "
+        'what is on, only with something other than the defaults', (
+      tester,
+    ) async {
       final handle = tester.ensureSemantics();
       final host = await pump(tester, backend());
-      expect(dot(), findsNothing);
-      expect(
-        tester.widget<SwarmIconButton>(key('swarm-home-view')).label,
-        'Sort and filter: Sections, All projects',
-      );
-      await open(tester);
-
-      for (final (openRow, on, off) in [
-        (
-          'swarm-view-sort',
-          'swarm-view-sort-newest',
-          'swarm-view-sort-sections',
-        ),
-        (
-          'swarm-view-sort',
-          'swarm-view-unreads-true',
-          'swarm-view-unreads-false',
-        ),
-        (
-          'swarm-view-filter',
-          'swarm-view-filter-unread',
-          'swarm-view-filter-all',
-        ),
-      ]) {
-        await tapRow(tester, openRow);
-        await tapRow(tester, on);
-        expect(dot(), findsOneWidget, reason: on);
-        await tapRow(tester, off);
-        expect(dot(), findsNothing, reason: off);
-        await tapRow(tester, openRow);
+      Future<void> switcher() async {
+        await tester.tap(key('swarm-title-button'));
+        await tester.pumpAndSettle();
       }
-      expect(host.session!.home.viewChanged, isFalse);
+
+      Finder rowDot() =>
+          find.descendant(of: key('swarm-switch-view'), matching: dot());
+
+      await switcher();
+      expect(rowDot(), findsNothing);
+      expect(
+        find.bySemanticsLabel(
+          RegExp(r'^Sort and filter: Sections, All projects$'),
+        ),
+        findsOneWidget,
+      );
+      await close(tester);
+
+      for (final change in <void Function()>[
+        () => host.session!.home.setSort(SwarmHomeSort.newest),
+        () => host.session!.home.setUnreadsFirst(true),
+        () => host.session!.home.setFilter(SwarmHomeFilter.unread),
+      ]) {
+        change();
+        await tester.pumpAndSettle();
+        await switcher();
+        expect(rowDot(), findsOneWidget);
+        await close(tester);
+        host.session!.home
+          ..setSort(SwarmHomeSort.sections)
+          ..setUnreadsFirst(false)
+          ..setFilter(SwarmHomeFilter.all);
+        await tester.pumpAndSettle();
+      }
+      host.session!.home.setFilter(SwarmHomeFilter.unread);
+      await tester.pumpAndSettle();
+      await switcher();
+      expect(
+        find.bySemanticsLabel(RegExp(r'^Sort and filter: Sections, Unread$')),
+        findsOneWidget,
+      );
       handle.dispose();
     });
 
@@ -567,6 +585,11 @@ void main() {
       await close(tester);
       expect(project_(project), findsOneWidget);
       expect(project_(web), findsNothing);
+      expect(
+        inside(key('swarm-filter-on'), find.text('Unread only')),
+        findsOneWidget,
+        reason: 'with no filter icon on Home, the list says a filter is on',
+      );
 
       // Mark all read, in the same sheet (2026-11-03).
       await open(tester);
@@ -580,51 +603,37 @@ void main() {
       await tester.pumpAndSettle();
       expect(project_(web), findsOneWidget);
       expect(host.session!.home.filter, SwarmHomeFilter.all);
-      expect(dot(), findsNothing);
+      expect(key('swarm-filter-on'), findsNothing);
       await tester.pump(const Duration(seconds: 7));
     });
 
-    /// The caption Sort and filter is at the right of.
-    Finder captionOf(Finder button) =>
-        find.ancestor(of: button, matching: find.byType(SwarmCaption));
+    testWidgets('Home has no Projects caption and no filter icon (anh Dee, '
+        "2026-11-04); the switcher's Sort and filter, under the Swarms, opens "
+        'the sheet: its options, then Mark all read, then Refresh', (
+      tester,
+    ) async {
+      final host = await pump(tester, backend());
+      host.session!.home.pin(tab, project, true);
+      await tester.pumpAndSettle();
+      expect(key('swarm-home-view'), findsNothing);
+      expect(find.text('Projects'), findsNothing);
+      expect(find.text('Pinned'), findsNothing);
+      expect(key('swarm-mark-all-read'), findsNothing);
 
-    testWidgets('Sort and filter is at the right of the Projects caption, '
-        'not on the top bar (Tony, 2026-11-03); no Mark all read: that is in '
-        'the sheet, under its options, with Refresh', (tester) async {
-      await pump(tester, backend());
-      final view = key('swarm-home-view');
+      await tester.tap(key('swarm-title-button'));
+      await tester.pumpAndSettle();
       expect(
-        key('swarm-mark-all-read'),
-        findsNothing,
-        reason: 'not on the screen',
-      );
-      expect(tester.widget<SwarmCaption>(captionOf(view)).text, 'Projects');
-      expect(
-        tester.getTopLeft(view).dy,
-        greaterThanOrEqualTo(tester.getBottomLeft(key('swarm-you-button')).dy),
-        reason: 'under the top bar',
-      );
-      final card = find
-          .ancestor(of: project_(project), matching: find.byType(SwarmGroup))
-          .first;
-      expect(
-        tester.getTopRight(view).dx,
-        closeTo(tester.getTopRight(card).dx, .01),
-        reason: "its target's end on the card's",
+        tester.getTopLeft(key('swarm-switch-$tab')).dy,
+        lessThan(tester.getTopLeft(key('swarm-switch-view')).dy),
       );
       expect(
-        tester.getBottomLeft(view).dy,
-        lessThanOrEqualTo(tester.getTopLeft(card).dy),
-        reason: 'over the card',
+        tester.getSize(key('swarm-switch-view')).height,
+        greaterThanOrEqualTo(44),
       );
-      expect(
-        tester.getCenter(find.text('Projects')).dy,
-        closeTo(tester.getCenter(view).dy, 1),
-        reason: 'on the words',
-      );
+      await tester.tap(key('swarm-switch-view'));
+      await tester.pumpAndSettle();
 
-      await open(tester);
-
+      expect(key('swarm-switch-$tab'), findsNothing, reason: 'it closed');
       expect(key('swarm-mark-all-read'), findsOneWidget);
       expect(key('swarm-home-refresh'), findsOneWidget);
       expect(
@@ -635,20 +644,6 @@ void main() {
         tester.getTopLeft(key('swarm-mark-all-read')).dy,
         lessThan(tester.getTopLeft(key('swarm-home-refresh')).dy),
       );
-    });
-
-    testWidgets('with a project pinned, Sort and filter is on the Pinned '
-        'caption, the first: once, over every project it sorts', (
-      tester,
-    ) async {
-      final host = await pump(tester, backend());
-      host.session!.home.pin(tab, project, true);
-      await tester.pumpAndSettle();
-
-      final view = key('swarm-home-view');
-      expect(view, findsOneWidget);
-      expect(tester.widget<SwarmCaption>(captionOf(view)).text, 'Pinned');
-      expect(find.text('Projects'), findsOneWidget, reason: 'web is unpinned');
     });
 
     testWidgets('Mark all read in the sheet closes it and marks, with its '

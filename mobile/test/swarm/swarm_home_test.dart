@@ -19,6 +19,7 @@ import 'package:harness_mobile/swarm/swarm_leaderboard.dart';
 import 'package:harness_mobile/swarm/swarm_needs_page.dart';
 import 'package:harness_mobile/swarm/swarm_new_message_sheet.dart';
 import 'package:harness_mobile/swarm/swarm_activity_page.dart';
+import 'package:harness_mobile/swarm/swarm_agents.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
@@ -62,6 +63,31 @@ class _Computers extends ChangeNotifier implements SwarmComputers {
 
   @override
   void add(BuildContext context) {}
+}
+
+/// The person's agents as a test sets them: two working.
+class _Agents extends ChangeNotifier implements SwarmAgents {
+  @override
+  int? get working => 2;
+
+  @override
+  List<SwarmAgentRef> get agents => const [];
+
+  var lists = 0;
+
+  @override
+  void openList(BuildContext context) => lists++;
+
+  @override
+  void open(BuildContext context, SwarmAgentRef agent) {}
+}
+
+/// Computers that also have the person's agents, as the app's do.
+class _AgentComputers extends _Computers implements SwarmAgentsSource {
+  _AgentComputers() : super(const [(name: 'MacBook Pro', away: false)]);
+
+  @override
+  final _Agents agents = _Agents();
 }
 
 /// Half an hour after the fixture's parts last changed (epoch milliseconds
@@ -425,6 +451,36 @@ void main() {
       expect(find.text('Join or create a Swarm'), findsNothing);
     });
 
+    testWidgets("the switcher's Agents row opens every agent on the person's "
+        'computers, as the Agents tile did; with no agents to show, none', (
+      tester,
+    ) async {
+      await pump(tester, backend());
+      await openSwitcher(tester);
+      expect(key('swarm-switch-agents'), findsNothing, reason: 'none known');
+      await tester.tapAt(const Offset(195, 40));
+      await tester.pumpAndSettle();
+
+      final computers = _AgentComputers();
+      addTearDown(computers.dispose);
+      await pump(tester, backend(), computers: computers);
+      await openSwitcher(tester);
+      expect(
+        y(tester, 'swarm-switch-$tab'),
+        lessThan(y(tester, 'swarm-switch-agents')),
+      );
+      expect(inside('swarm-switch-agents', find.text('Agents')), findsOne);
+      expect(
+        tester.getSize(key('swarm-switch-agents')).height,
+        greaterThanOrEqualTo(44),
+      );
+
+      await tester.tap(key('swarm-switch-agents'));
+      await tester.pumpAndSettle();
+      expect(computers.agents.lists, 1);
+      expect(key('swarm-switch-$tab'), findsNothing, reason: 'it closed');
+    });
+
     testWidgets("+ asks where the new message goes, over the same "
         "projects' chats; ✕ goes back to Home", (tester) async {
       await pump(tester, backend());
@@ -460,7 +516,7 @@ void main() {
 
       expect(host.session!.inbox.error, unread);
       expect(key('swarm-projects-loading'), findsOneWidget);
-      expect(find.text('Projects'), findsOneWidget);
+      expect(find.text('Projects'), findsNothing, reason: 'no heading');
       expect(find.text(unread), findsNothing);
 
       fake.routes['/api/super-tabs/list'] = listed;
@@ -519,32 +575,6 @@ void main() {
       final line = tester.widget<Text>(key('swarm-too-old'));
       expect(line.data, swarmServerTooOld);
       expect(line.style?.color, isNot(AppColors.danger));
-    });
-  });
-
-  group("Home's first caption", () {
-    bool first(WidgetTester tester, String text) => tester
-        .widget<SwarmCaption>(
-          find.byWidgetPredicate((w) => w is SwarmCaption && w.text == text),
-        )
-        .first;
-
-    testWidgets('under the need-you line, Projects has the usual room', (
-      tester,
-    ) async {
-      await pump(tester, backend());
-
-      expect(find.byKey(const ValueKey('swarm-need-line')), findsOneWidget);
-      expect(first(tester, 'Projects'), isFalse);
-    });
-
-    testWidgets('over Pinned, Projects has the usual room', (tester) async {
-      final host = await pump(tester, backend());
-      host.session!.home.pin(tab, project, true);
-      await tester.pumpAndSettle();
-
-      expect(first(tester, 'Pinned'), isFalse, reason: 'under Threads');
-      expect(first(tester, 'Projects'), isFalse);
     });
   });
 
@@ -1005,31 +1035,29 @@ void main() {
       expect(key('swarm-project-$tab-$project'), findsNothing);
     });
 
-    testWidgets('a long press pins a project at the top, under Pinned; '
-        'Unpin puts it back', (tester) async {
+    testWidgets('a long press pins a project at the top, with no Pinned '
+        'heading (anh Dee, 2026-11-04); Unpin puts it back', (tester) async {
       final host = await pump(tester, backend());
-      expect(find.text('Pinned'), findsNothing);
+      double top(String id) => y(tester, 'swarm-project-$tab-$id');
+      expect(top(web), lessThan(top(project)), reason: 'newer first');
 
-      await tester.longPress(key('swarm-project-$tab-$web'));
+      await tester.longPress(key('swarm-project-$tab-$project'));
       await tester.pumpAndSettle();
       expect(inside('swarm-pin', find.text('Pin to top')), findsOneWidget);
       await tester.tap(key('swarm-pin'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Pinned'), findsOneWidget);
-      expect(
-        y(tester, 'swarm-project-$tab-$web'),
-        lessThan(tester.getTopLeft(find.text('Projects')).dy),
-      );
-      expect(host.session!.home.pinned(tab, web), isTrue);
+      expect(find.text('Pinned'), findsNothing);
+      expect(top(project), lessThan(top(web)));
+      expect(host.session!.home.pinned(tab, project), isTrue);
 
-      await tester.longPress(key('swarm-project-$tab-$web'));
+      await tester.longPress(key('swarm-project-$tab-$project'));
       await tester.pumpAndSettle();
       expect(inside('swarm-pin', find.text('Unpin')), findsOneWidget);
       await tester.tap(key('swarm-pin'));
       await tester.pumpAndSettle();
-      expect(find.text('Pinned'), findsNothing);
-      expect(host.session!.home.pinned(tab, web), isFalse);
+      expect(top(web), lessThan(top(project)));
+      expect(host.session!.home.pinned(tab, project), isFalse);
     });
 
     testWidgets("the prototype's top bar, captions and dots", (tester) async {
@@ -1046,7 +1074,8 @@ void main() {
         reason: 'New message is in the top bar, nothing floats',
       );
       expect(tester.widget<Text>(key('swarm-title')).data, 'Phone Swarm');
-      expect(find.text('Projects'), findsOneWidget, reason: 'sentence case');
+      expect(find.text('Projects'), findsNothing, reason: 'no heading');
+      expect(key('swarm-home-view'), findsNothing, reason: 'no filter icon');
       expect(key('swarm-needs-count'), findsNothing);
       expect(
         inside('swarm-project-$tab-$project', find.byType(SwarmProjectTile)),
@@ -1514,14 +1543,6 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(host.session!.home.pins, {'$second/$project'});
-      expect(
-        y(tester, backendRow),
-        lessThan(tester.getTopLeft(find.text('Projects')).dy),
-      );
-      expect(
-        y(tester, mobileRow),
-        greaterThan(tester.getTopLeft(find.text('Projects')).dy),
-      );
     });
 
     testWidgets('over two Swarms the title is All Swarms; one picked in the '
@@ -2768,7 +2789,7 @@ void main() {
 
       expect(key('swarm-projects-loading'), findsOneWidget);
       expect(find.text('Buddies'), findsNothing);
-      expect(find.text('Projects'), findsOneWidget);
+      expect(find.text('Projects'), findsNothing);
       expect(find.textContaining('Reading'), findsNothing);
       expect(key('swarm-need-line'), findsNothing, reason: 'not known yet');
 
@@ -2897,7 +2918,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(SwarmStartView), findsNothing);
-      expect(find.text('Projects'), findsOneWidget);
+      expect(key('swarm-project-$tab-$project'), findsOneWidget);
     });
 
     testWidgets('with a computer and a Swarm, Home is as it was', (
@@ -2906,7 +2927,7 @@ void main() {
       await pump(tester, backend(), computers: _Computers(const [mac]));
 
       expect(find.byType(SwarmStartView), findsNothing);
-      expect(find.text('Projects'), findsOneWidget);
+      expect(key('swarm-project-$tab-$project'), findsOneWidget);
     });
   });
 }
