@@ -79,12 +79,24 @@ class SuperTabChatFind extends ChangeNotifier {
 
   void clear() => search('');
 
+  /// Steps to the newer match; a read-back under way stops, as the phone's
+  /// does.
   void newer() {
+    if (reading != null) {
+      _search++;
+      reading = null;
+    }
     final at = current == null ? -1 : matches.indexOf(current!);
-    if (at < 0 || at == matches.length - 1) return;
-    current = matches[at + 1];
+    if (at >= 0 && at < matches.length - 1) current = matches[at + 1];
     note = null;
     notifyListeners();
+  }
+
+  /// A read-back under way stops with it: its view or thread is gone.
+  @override
+  void dispose() {
+    _search++;
+    super.dispose();
   }
 
   Future<void> older() async {
@@ -106,7 +118,8 @@ class SuperTabChatFind extends ChangeNotifier {
         note = 'No more matches in the last $superTabFindPages pages';
         break;
       }
-      reading = _pages;
+      // The page on its way counts: "1 of 50" while the first is read.
+      reading = _pages + 1;
       notifyListeners();
       final read = await readOlder();
       if (search != _search) return;
