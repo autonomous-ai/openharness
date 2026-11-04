@@ -340,9 +340,8 @@ void main() {
 
   group("Home's top", () {
     testWidgets('as C1 draws it: the Swarm shown is the title, a button with '
-        'its tile, and nothing at its end; the projects under it, New '
-        "message's + floating over them; no Jump to, no menu, no Needs you, "
-        'no Buddies', (tester) async {
+        "its tile; New message's + in the top bar; the projects under it; no "
+        'Jump to, no menu, no Needs you, no Buddies', (tester) async {
       await pump(tester, backend(buddy: true));
 
       expect(
@@ -369,7 +368,8 @@ void main() {
       );
       expect(
         y(tester, 'swarm-new-message'),
-        greaterThan(y(tester, 'swarm-project-$tab-$project')),
+        lessThan(y(tester, 'swarm-project-$tab-$project')),
+        reason: 'in the top bar',
       );
       expect(
         y(tester, 'swarm-title-button'),
@@ -1041,11 +1041,10 @@ void main() {
         reason: "its ink 8 points in, the tile 4 in from it",
       );
       expect(
-        tester.getBottomRight(key('swarm-new-message')),
-        const Offset(390 - 16, 844 - 16),
-        reason: 'New message floats 16 points in from the corner',
+        middle(tester, key('swarm-new-message')),
+        closeTo(middle(tester, key('swarm-title-button')), 0.5),
+        reason: 'New message is in the top bar, nothing floats',
       );
-      expect(tester.getSize(key('swarm-new-message')), const Size(56, 56));
       expect(tester.widget<Text>(key('swarm-title')).data, 'Phone Swarm');
       expect(find.text('Projects'), findsOneWidget, reason: 'sentence case');
       expect(key('swarm-needs-count'), findsNothing);
