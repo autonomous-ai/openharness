@@ -85,6 +85,9 @@ import 'pane_layout.dart';
 import 'composer_actions.dart';
 import 'view_room.dart';
 import 'voice_recorder.dart';
+import 'voice_row.dart';
+import 'voice_send.dart';
+import 'voice_take.dart';
 import 'swarm_type.dart';
 import 'visible_tick.dart';
 import 'buddy_rows.dart';
@@ -142,8 +145,9 @@ class SuperTabView extends StatefulWidget {
   /// without an [app], a link into another Swarm is not followed.
   final SwarmLinkSwarms? linkSwarms;
 
-  /// What the composer's mic records with; without it, no mic shows.
-  final SuperTabVoiceRecorder? voiceRecorder;
+  /// Makes the microphone the composers' mic records with
+  /// ([superTabVoiceRecorder]: macOS and the web); without it, no mic shows.
+  final SuperTabVoiceRecorder Function()? voiceRecorder;
 
   @override
   State<SuperTabView> createState() => _SuperTabViewState();
@@ -300,6 +304,7 @@ class _SuperTabViewState extends State<SuperTabView>
     WidgetsBinding.instance.addObserver(this);
     _composer.addListener(_composerMoved);
     c.addListener(_changed);
+    c.addListener(_holdVoiceAway);
     c.buddyChatOpener = _openBuddyChat;
     SuperTabChatNotices.of(c).chatShown = _chatShown;
     _registerDial();
@@ -307,6 +312,49 @@ class _SuperTabViewState extends State<SuperTabView>
   }
 
   bool _chatShown() => _chatIsVisible;
+
+  /// The composers' one voice message (voice_take.dart), the main chat's or
+  /// a thread's, for the chat it was recorded in; none without a recorder.
+  late final SuperTabVoiceTake? _voice = switch (widget.voiceRecorder) {
+    final recorder? => SuperTabVoiceTake(
+      recorder: recorder,
+      post: _postVoice,
+    )..addListener(_voiceChanged),
+    null => null,
+  };
+
+  Future<SuperTabVoicePosted> _postVoice(
+    String conversationId,
+    String? root,
+    SuperTabVoiceClip clip,
+  ) => c.sendVoice(
+    conversationId: conversationId,
+    root: root,
+    wav: clip.wav,
+    // The computer's own language; the server hears English in one it does
+    // not serve.
+    lang: WidgetsBinding.instance.platformDispatcher.locale.languageCode,
+  );
+
+  void _voiceChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// A take recording for a chat or thread no longer shown stops and is kept
+  /// for it, Send still there: never sent into the one opened instead.
+  void _holdVoiceAway() {
+    final voice = _voice;
+    if (voice == null ||
+        (voice.state != SuperTabVoiceState.recording &&
+            voice.state != SuperTabVoiceState.starting)) {
+      return;
+    }
+    final root = voice.root;
+    final away = root == null
+        ? c.selectedId != voice.conversationId
+        : c.openedThread?.root != root;
+    if (away) voice.hold();
+  }
 
   @override
   void didChangeDependencies() {
@@ -352,10 +400,14 @@ class _SuperTabViewState extends State<SuperTabView>
       _board = SuperTabProjectBoard(c);
       oldWidget.controller.threadPaneHidden();
       oldWidget.controller.removeListener(_changed);
+      oldWidget.controller.removeListener(_holdVoiceAway);
+      // A take belongs to the Swarm it was recorded in.
+      _voice?.discard();
       if (oldWidget.controller.buddyChatOpener == _openBuddyChat) {
         oldWidget.controller.buddyChatOpener = null;
       }
       c.addListener(_changed);
+      c.addListener(_holdVoiceAway);
       c.buddyChatOpener = _openBuddyChat;
       for (final scroll in _scroll.values) {
         scroll.dispose();
@@ -895,6 +947,8 @@ class _SuperTabViewState extends State<SuperTabView>
     _board.dispose();
     _facts.dispose();
     c.removeListener(_changed);
+    c.removeListener(_holdVoiceAway);
+    _voice?.dispose();
     for (final source in _linkSources) {
       source.removeListener(_linkSourceChanged);
     }
@@ -2690,12 +2744,13 @@ class _SuperTabViewState extends State<SuperTabView>
     required List<Widget> options,
     required List<Widget> trailing,
     required Widget send,
+    Widget? voice,
   }) {
     // Too little height for a second row (a phone on its side with its keyboard
     // up): the actions take the row's end. A narrow phone with so little
     // height gets the squeezed row, which beats a composer that overflows; it
     // has no room for @ Tag there, and an @ typed still opens the list.
-    if (_phone && room < _phoneComposerTwoRowsFrom) {
+    if (_phone && room < _phoneComposerTwoRowsFrom && voice == null) {
       return ConstrainedBox(
         constraints: BoxConstraints(
           minHeight: grid.AppControl.heightFieldScaled,
@@ -2723,21 +2778,23 @@ class _SuperTabViewState extends State<SuperTabView>
           ),
           child: field,
         ),
-        Row(
-          key: const ValueKey('super-message-composer-actions'),
-          children: [
-            attach,
-            tag,
-            Expanded(
-              child: Wrap(
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: options,
-              ),
+        // A voice message under way takes the row's place (#2665).
+        voice ??
+            Row(
+              key: const ValueKey('super-message-composer-actions'),
+              children: [
+                attach,
+                tag,
+                Expanded(
+                  child: Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: options,
+                  ),
+                ),
+                ...trailing,
+                send,
+              ],
             ),
-            ...trailing,
-            send,
-          ],
-        ),
       ],
     );
   }
@@ -3718,7 +3775,7 @@ class _SuperTabViewState extends State<SuperTabView>
             superTabSessionActivity(c, widget.app, session),
         machineName: widget.machineName,
         onScroll: (list) => _threadScroll = list,
-        voiceRecorder: widget.voiceRecorder,
+        voice: _voice,
       ),
     );
   }
@@ -4760,21 +4817,28 @@ class _SuperTabViewState extends State<SuperTabView>
                                   ),
                               ],
                               trailing: [
-                                if (widget.voiceRecorder case final recorder?)
+                                if (_voice case final voice?)
                                   fingerTarget(
                                     enabled: _phone,
                                     SuperTabComposerMic(
                                       key: const ValueKey('super-composer-mic'),
                                       onPressed: writable
-                                          ? () => unawaited(
-                                              recorder.start(
-                                                conversationId: chatId,
-                                              ),
+                                          ? () => voice.start(
+                                              conversationId: chatId,
                                             )
                                           : null,
                                     ),
                                   ),
                               ],
+                              voice: switch (_voice) {
+                                final voice?
+                                    when voice.activeIn(chatId, null) =>
+                                  SuperTabVoiceRow(
+                                    key: const ValueKey('super-voice-row'),
+                                    take: voice,
+                                  ),
+                                _ => null,
+                              },
                               send: ListenableBuilder(
                                 listenable: Listenable.merge([
                                   _composer,
@@ -4801,6 +4865,11 @@ class _SuperTabViewState extends State<SuperTabView>
                               ),
                             ),
                           ),
+                          if (_voice case final voice?)
+                            SuperTabVoiceNotice(
+                              take: voice,
+                              conversationId: chatId,
+                            ),
                         ],
                       ),
                     ),

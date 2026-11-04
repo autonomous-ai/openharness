@@ -17,6 +17,7 @@ import 'sharing.dart';
 import 'swarm_switcher.dart' show PersonalSwarm;
 import 'terminal_unavailable.dart';
 import 'view.dart';
+import 'voice_recorder.dart';
 
 /// Keeps the app's one native canvas alive in the group's middle area.
 /// Switching chat/terminals never constructs a second terminal renderer.
@@ -618,6 +619,8 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                 SuperTabView(
                   key: ValueKey('${controller.accountId}:$id'),
                   controller: controller,
+                  // macOS and the web record; Linux and Windows draw no mic.
+                  voiceRecorder: superTabVoiceRecorder(),
                   onInvite: () =>
                       unawaited(showSuperTabPeople(context, controller)),
                   onAddAgent: widget.onAddAgent,

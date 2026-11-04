@@ -19,7 +19,7 @@
 - The language the words are heard in is the computer's own language (`PlatformDispatcher.locale.languageCode`); the server falls back to English for one it does not serve. No picker (beyond the brief).
 - macOS: `com.apple.security.device.audio-input` in both entitlements (the app runs with the hardened runtime, which needs it for the microphone), and `NSMicrophoneUsageDescription` in Info.plist.
 - Harness Design Language: tokens only (`grid.AppDesktop`, `DesktopChrome`, `AppIcons`), icons through `AppIcons` at weight 400, no hard-coded colours or sizes, nothing explanatory added.
-- Every button is reachable with Tab; Esc in the box discards a take, as X does.
+- Every button is reachable with Tab, X and Send in the row's order.
 - Never run a test that signs the Mac out of the real CLI; Desktop tests use a memory store and a fake sign-in.
 - A real microphone can't be tested on a Team account: the PR says so; the Desktop release candidate check covers it.
 - PR body first line: "Requested by phamngochuy.1989@gmail.com through Harness."
@@ -85,7 +85,7 @@
 - Modify: `desktop/lib/super_tabs/view.dart` (`voiceRecorder` becomes a factory; one `SuperTabVoiceTake` for the main composer; `_composerLayout` takes the row), `desktop/lib/super_tabs/reply_box.dart` (`voiceRow`, `voiceNotice`), `desktop/lib/super_tabs/thread_panel.dart` (its own take), `desktop/lib/super_tabs/composer_actions.dart`, `desktop/lib/super_tabs/workspace.dart` (passes `superTabVoiceRecorder()`), `desktop/lib/shared/theme/app_icons.dart` if a new icon is needed
 - Test: `desktop/test/super_tab_composer_mic_test.dart`; update `super_tab_composer_row_test.dart`
 
-- [ ] **Step 1: Write the failing tests** at 1280x720 with a fake recorder: tapping the mic shows `super-voice-row` in place of the row (X, red dot, time, wave, send) and leaves the typed text; X returns the row and posts nothing; Send posts one voice message to the chat (and to the thread's root from the thread's mic); switching chat holds the take and the other chat shows its normal row; a refused mic shows `super-voice-refused` with "Open System Settings" on macOS; Esc discards; Tab reaches X then Send.
+- [ ] **Step 1: Write the failing tests** at 1280x720 with a fake recorder: tapping the mic shows `super-voice-row` in place of the row (X, red dot, time, wave, send) and leaves the typed text; X returns the row and posts nothing; Send posts one voice message to the chat (and to the thread's root from the thread's mic); switching chat holds the take and the other chat shows its normal row; a refused mic shows `super-voice-refused` with "Open System Settings" on macOS; closing a thread holds its take.
 - [ ] **Step 2: Run and watch them fail. Step 3: Commit.**
 - [ ] **Step 4: Implement. Step 5: Run** the new file, `super_tab_composer_row_test`, `super_tab_reply_box_test`, `super_tab_composer_layout_test`, `super_tab_phone_composer_test`, `super_tab_voice_message_test`, and the guards (`python3 scripts/check-ui-style.py --only desktop/lib/super_tabs`, `python3 desktop/scripts/audit-icons.py`, `icon_catalog_render_test`, `lucide_weight_test`, `laid_out_list_test`). Commit.
 

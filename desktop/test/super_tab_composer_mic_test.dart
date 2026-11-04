@@ -16,6 +16,13 @@ import 'support/voice_server.dart';
 void main() {
   late VoiceServer server;
   late FakeVoiceRecorder mic;
+  late SuperTabController c;
+
+  Future<void> close(WidgetTester tester) async {
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+    c.dispose();
+  }
 
   Finder key(String value) => find.byKey(ValueKey(value));
 
@@ -28,8 +35,7 @@ void main() {
     server.append('The build fails on the second run.');
     server.append('Measure prod CPU', conversationId: 'offline');
     mic = FakeVoiceRecorder();
-    final c = server.controller();
-    addTearDown(c.dispose);
+    c = server.controller();
     await c.refresh();
     await tester.binding.setSurfaceSize(const Size(1280, 720));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -72,11 +78,15 @@ void main() {
       await tester.pump(const Duration(seconds: 3));
       expect(find.text('0:03'), findsOneWidget);
       expect(
-        tester.widget<TextField>(key('super-message-composer')).controller!.text,
+        tester
+            .widget<TextField>(key('super-message-composer'))
+            .controller!
+            .text,
         'half a thought',
       );
       await tester.tap(key('super-voice-discard'));
       await tester.pumpAndSettle();
+      await close(tester);
     });
 
     testWidgets('X throws the take away and sends nothing', (tester) async {
@@ -90,6 +100,7 @@ void main() {
       expect(key('super-message-composer-actions'), findsOneWidget);
       expect(server.uploads, isEmpty);
       expect(server.lastSend(), isNull);
+      await close(tester);
     });
 
     testWidgets('Send posts one voice message to the chat', (tester) async {
@@ -106,12 +117,11 @@ void main() {
       expect(send['replyTo'], isNull);
       expect(key('super-voice-row'), findsNothing);
       expect(key('super-message-composer-actions'), findsOneWidget);
+      await close(tester);
     });
 
-    testWidgets('another chat holds the take for its own chat', (
-      tester,
-    ) async {
-      final c = await show(tester);
+    testWidgets('another chat holds the take for its own chat', (tester) async {
+      await show(tester);
       await tester.tap(key('super-composer-mic'));
       await tester.pump();
       await c.select('offline');
@@ -126,6 +136,7 @@ void main() {
       await tester.tap(key('super-voice-send'));
       await tester.pumpAndSettle();
       expect(server.lastSend()!['conversationId'], 'lead');
+      await close(tester);
     });
 
     testWidgets('a refused microphone says so, with System Settings', (
@@ -150,6 +161,7 @@ void main() {
       );
       await tester.tap(key('super-voice-settings'));
       expect(opened, [superTabMicrophoneSettings]);
+      await close(tester);
     });
   });
 
@@ -167,16 +179,18 @@ void main() {
       expect(send['conversationId'], 'lead');
       expect(send['replyTo'], 'message-1');
       expect(key('super-thread-voice-row'), findsNothing);
+      await close(tester);
     });
 
     testWidgets('closing the thread holds its take', (tester) async {
-      final c = await show(tester, thread: 'message-1');
+      await show(tester, thread: 'message-1');
       await tester.tap(key('super-thread-mic'));
       await tester.pump();
       c.closeThread();
       await tester.pumpAndSettle();
       expect(mic.calls.last, 'stop');
       expect(server.lastSend(), isNull);
+      await close(tester);
     });
   });
 }
