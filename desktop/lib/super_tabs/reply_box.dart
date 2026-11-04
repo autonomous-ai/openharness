@@ -101,22 +101,17 @@ class SuperTabReplyBox extends StatelessWidget {
       key: surfaceKey,
       decoration: BoxDecoration(
         color: DesktopChrome.field,
-        borderRadius: BorderRadius.circular(DesktopChrome.controlRadius),
+        borderRadius: BorderRadius.circular(grid.AppDesktop.composerRadius),
         border: Border.all(color: DesktopChrome.rim),
       ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(
-          grid.AppDesktop.groupGap,
-          grid.AppDesktop.controlGap,
-          grid.AppDesktop.controlGap,
-          grid.AppDesktop.controlGap,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SuperTabComposerChips(controller: controller, files: files),
-            Focus(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SuperTabComposerChips(controller: controller, files: files),
+          Padding(
+            padding: composerFieldInsets(target: grid.AppControl.height),
+            child: Focus(
               onKeyEvent: (_, event) {
                 if (onKey?.call(event) case final handled?) return handled;
                 switch (composerEnter(
@@ -169,17 +164,24 @@ class SuperTabReplyBox extends StatelessWidget {
                 ),
               ),
             ),
-            if (error case final error?)
-              Padding(
-                padding: const EdgeInsets.only(top: grid.AppDesktop.controlGap),
-                child: Text(
-                  error,
-                  key: const ValueKey('super-thread-error'),
-                  style: DesktopChrome.control(),
-                ),
+          ),
+          if (error case final error?)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                grid.AppDesktop.composerSide,
+                0,
+                grid.AppDesktop.composerSide,
+                grid.AppDesktop.controlGap,
               ),
-            const SizedBox(height: grid.AppDesktop.controlGap),
-            Row(
+              child: Text(
+                error,
+                key: const ValueKey('super-thread-error'),
+                style: DesktopChrome.control(),
+              ),
+            ),
+          Padding(
+            padding: composerRowInsets(target: grid.AppControl.height),
+            child: Row(
               children: [
                 FocusTraversalOrder(
                   order: toolsOrder,
@@ -225,8 +227,8 @@ class SuperTabReplyBox extends StatelessWidget {
                 ),
               ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     ),
   );

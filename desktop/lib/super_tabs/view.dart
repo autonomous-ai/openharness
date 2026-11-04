@@ -1887,77 +1887,6 @@ class _SuperTabViewState extends State<SuperTabView>
     return message;
   }
 
-  /// The date pill's choice (day_jump.dart): [id]'s first message on or
-  /// after [from], lit, as a link opens one. The very beginning (null) is
-  /// its first message, and a time after everything said is its newest.
-  /// Older pages are read until one from before [from] is held, at most 50
-  /// as a link reads; past them it says so, and the list stays.
-  Future<void> _jumpToTime(String id, DateTime? from) async {
-    void say(String text) =>
-        ScaffoldMessenger.maybeOf(context)
-            ?.showSnackBar(SnackBar(content: Text(text)));
-    final request = ++_jumpRequest;
-    bool current() =>
-        mounted &&
-        request == _jumpRequest &&
-        c.selectedId == id &&
-        !c.accessRevoked;
-    bool before(SuperTabMessage m) =>
-        from != null && (m.createdAt?.isBefore(from) ?? false);
-    try {
-      if (from == null) {
-        await c.loadBackTo(id, 0);
-      } else {
-        // A copy read back to an early page holds nothing from then on: the
-        // latest first, then back from there.
-        final newest = _shownMessages(id).lastOrNull;
-        if (c.hasNewer(id) && (newest == null || before(newest))) {
-          await c.showLatest(id);
-        }
-        for (var page = 0; !_shownMessages(id).any(before); page++) {
-          if (!current() || !c.hasOlder(id)) break;
-          if (page == 50) {
-            say('That day is too far back to open.');
-            return;
-          }
-          // A read that fails keeps its error and its place: nothing came.
-          final loaded = c.messages(id).length;
-          await c.loadMessages(id, older: true);
-          if (current() && c.messages(id).length == loaded) {
-            say('Couldn’t load earlier messages.');
-            return;
-          }
-        }
-      }
-    } catch (_) {
-      if (current()) say('Messages could not be read.');
-      return;
-    }
-    if (!current()) return;
-    final shown = _shownMessages(id);
-    final target = from == null
-        ? shown.firstOrNull
-        : shown.where((m) => !before(m)).firstOrNull ?? shown.lastOrNull;
-    if (target == null) return;
-    final row = _rowShowing(id, target.id) ?? target.id;
-    setState(() {
-      _target = row;
-      // Stop following the end: that day's message is what to see.
-      _scrollRequest++;
-      _jumpingToEnd = false;
-      _follow(id, false);
-    });
-    _revealTarget(
-      id,
-      0,
-      arrived: (at) {
-        unawaited(Scrollable.ensureVisible(at, alignment: .3));
-        _light(row);
-      },
-    );
-    _focus.requestFocus();
-  }
-
   /// What the reader asked to open by a message link ([SuperTabController.openMessageLink]).
   void _takeMessageRequest() {
     final request = c.messageRequest;
@@ -2712,20 +2641,28 @@ class _SuperTabViewState extends State<SuperTabView>
     // up): the actions take the row's end. A narrow phone with so little
     // height gets the squeezed row, which beats a composer that overflows; it
     // has no room for @ Tag there, and an @ typed still opens the list.
+    final target = _phone ? kFingerTarget : grid.AppControl.height;
+    final row = composerRowInsets(target: target);
     if (_phone && room < _phoneComposerTwoRowsFrom) {
-      return ConstrainedBox(
-        constraints: BoxConstraints(
-          minHeight: grid.AppControl.heightFieldScaled,
+      return Padding(
+        padding: EdgeInsets.only(
+          left: grid.AppDesktop.composerSide,
+          right: row.right,
         ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Expanded(child: field),
-            attach,
-            ...options,
-            ...trailing,
-            send,
-          ],
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            minHeight: grid.AppControl.heightFieldScaled,
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(child: field),
+              attach,
+              ...options,
+              ...trailing,
+              send,
+            ],
+          ),
         ),
       );
     }
@@ -2734,26 +2671,26 @@ class _SuperTabViewState extends State<SuperTabView>
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.only(
-            right: grid.AppDesktop.controlGap,
-            bottom: grid.AppDesktop.controlGap,
-          ),
+          padding: composerFieldInsets(target: target),
           child: field,
         ),
-        Row(
-          key: const ValueKey('super-message-composer-actions'),
-          children: [
-            attach,
-            tag,
-            Expanded(
-              child: Wrap(
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: options,
+        Padding(
+          padding: row,
+          child: Row(
+            key: const ValueKey('super-message-composer-actions'),
+            children: [
+              attach,
+              tag,
+              Expanded(
+                child: Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: options,
+                ),
               ),
-            ),
-            ...trailing,
-            send,
-          ],
+              ...trailing,
+              send,
+            ],
+          ),
         ),
       ],
     );
@@ -4263,8 +4200,6 @@ class _SuperTabViewState extends State<SuperTabView>
                           SuperTabStickyDay(
                             pillKey: const ValueKey('super-day-pill'),
                             hidden: finding != null,
-                            onJump: (from) =>
-                                unawaited(_jumpToTime(c.selectedId, from)),
                             child: NotificationListener<ScrollNotification>(
                               onNotification: (event) {
                                 if (event.depth != 0) return false;
@@ -4665,7 +4600,7 @@ class _SuperTabViewState extends State<SuperTabView>
                 decoration: BoxDecoration(
                   color: DesktopChrome.field,
                   borderRadius: BorderRadius.circular(
-                    DesktopChrome.controlRadius,
+                    grid.AppDesktop.composerRadius,
                   ),
                   border: Border.all(color: DesktopChrome.rim),
                 ),
@@ -4680,147 +4615,141 @@ class _SuperTabViewState extends State<SuperTabView>
                   child: GestureDetector(
                     behavior: HitTestBehavior.translucent,
                     onTap: writable ? _focus.requestFocus : null,
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 3, 4, 3),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          SuperTabComposerChips(controller: c, files: _files),
-                          ViewRoom(
-                            builder: (context, room) => _composerLayout(
-                              room: room,
-                              field: NewHarnessPasteTarget(
-                                key: _composerFieldKey,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        SuperTabComposerChips(controller: c, files: _files),
+                        ViewRoom(
+                          builder: (context, room) => _composerLayout(
+                            room: room,
+                            field: NewHarnessPasteTarget(
+                              key: _composerFieldKey,
+                              attachments: _files,
+                              enabled: writable && !busy,
+                              focusNode: _focus,
+                              child: TextField(
+                                key: const ValueKey('super-message-composer'),
+                                controller: _composer,
+                                focusNode: _focus,
+                                autofocus: !_terminalsVisible,
+                                enabled: writable,
+                                minLines: 1,
+                                // A phone's keyboard takes the height, so
+                                // its height says nothing about the room
+                                // a draft should have (Huy, 2026-11-02).
+                                maxLines: _phone
+                                    ? _phoneComposerLines(room)
+                                    : MediaQuery.sizeOf(context).height < 600
+                                    ? 3
+                                    : 8,
+                                maxLength: kComposerMaxLength,
+                                inputFormatters: [_tagBackspace],
+                                keyboardType: TextInputType.multiline,
+                                textAlignVertical: TextAlignVertical.center,
+                                style: SwarmType.composer(context),
+                                decoration: InputDecoration(
+                                  // The row centers the line. Inheriting a decorated
+                                  // field's minimum height leaves slack below its text.
+                                  isCollapsed: true,
+                                  constraints: const BoxConstraints(),
+                                  visualDensity: VisualDensity.standard,
+                                  hintStyle: SwarmType.composer(
+                                    context,
+                                    color: DesktopChrome.hint,
+                                  ),
+                                  contentPadding: EdgeInsets.zero,
+                                  hintMaxLines: _phone ? 1 : null,
+                                  hintText: _readsFirst && c.snapshot == null
+                                      ? null
+                                      : group == null
+                                      ? 'Loading conversation…'
+                                      : c.canWrite
+                                      ? _messageHint(group)
+                                      : 'Read-only conversation',
+                                  border: InputBorder.none,
+                                  enabledBorder: InputBorder.none,
+                                  focusedBorder: InputBorder.none,
+                                  disabledBorder: InputBorder.none,
+                                  filled: false,
+                                  counterText: '',
+                                ),
+                                onChanged: _composerEdited,
+                              ),
+                            ),
+                            attach: fingerTarget(
+                              enabled: _phone,
+                              NewHarnessAttachButton(
                                 attachments: _files,
                                 enabled: writable && !busy,
-                                focusNode: _focus,
-                                child: TextField(
-                                  key: const ValueKey('super-message-composer'),
-                                  controller: _composer,
-                                  focusNode: _focus,
-                                  autofocus: !_terminalsVisible,
-                                  enabled: writable,
-                                  minLines: 1,
-                                  // A phone's keyboard takes the height, so
-                                  // its height says nothing about the room
-                                  // a draft should have (Huy, 2026-11-02).
-                                  maxLines: _phone
-                                      ? _phoneComposerLines(room)
-                                      : MediaQuery.sizeOf(context).height < 600
-                                      ? 3
-                                      : 8,
-                                  maxLength: kComposerMaxLength,
-                                  inputFormatters: [_tagBackspace],
-                                  keyboardType: TextInputType.multiline,
-                                  textAlignVertical: TextAlignVertical.center,
-                                  style: SwarmType.composer(context),
-                                  decoration: InputDecoration(
-                                    // The row centers the line. Inheriting a decorated
-                                    // field's minimum height leaves slack below its text.
-                                    isCollapsed: true,
-                                    constraints: const BoxConstraints(),
-                                    visualDensity: VisualDensity.standard,
-                                    hintStyle: SwarmType.composer(
-                                      context,
-                                      color: DesktopChrome.hint,
-                                    ),
-                                    contentPadding: EdgeInsets.zero,
-                                    hintMaxLines: _phone ? 1 : null,
-                                    hintText: _readsFirst && c.snapshot == null
-                                        ? null
-                                        : group == null
-                                        ? 'Loading conversation…'
-                                        : c.canWrite
-                                        ? _messageHint(group)
-                                        : 'Read-only conversation',
-                                    border: InputBorder.none,
-                                    enabledBorder: InputBorder.none,
-                                    focusedBorder: InputBorder.none,
-                                    disabledBorder: InputBorder.none,
-                                    filled: false,
-                                    counterText: '',
-                                  ),
-                                  onChanged: _composerEdited,
-                                ),
+                                icon: AppIcons.plus,
                               ),
-                              attach: fingerTarget(
-                                enabled: _phone,
-                                NewHarnessAttachButton(
-                                  attachments: _files,
-                                  enabled: writable && !busy,
-                                  icon: AppIcons.plus,
-                                ),
+                            ),
+                            tag: fingerTarget(
+                              enabled: _phone,
+                              SuperTabComposerTagButton(
+                                key: const ValueKey('super-composer-tag'),
+                                onPressed: writable ? _promptTag : null,
                               ),
-                              tag: fingerTarget(
-                                enabled: _phone,
-                                SuperTabComposerTagButton(
-                                  key: const ValueKey('super-composer-tag'),
-                                  onPressed: writable ? _promptTag : null,
+                            ),
+                            options: [
+                              if (c.offersChatSessions)
+                                Padding(
+                                  padding: const EdgeInsets.only(
+                                    left: grid.AppDesktop.controlGap,
+                                  ),
+                                  child: _chatSessionChoice(writable),
                                 ),
-                              ),
-                              options: [
-                                if (c.offersChatSessions)
-                                  Padding(
-                                    padding: const EdgeInsets.only(
-                                      left: grid.AppDesktop.controlGap,
-                                    ),
-                                    child: _chatSessionChoice(writable),
+                              if (c.offersChatSessions &&
+                                  c.selected?.isSwarmBuddyChat == true &&
+                                  _chatSessions.contains(c.selectedId))
+                                Padding(
+                                  padding: const EdgeInsets.only(
+                                    left: grid.AppDesktop.controlGap,
                                   ),
-                                if (c.offersChatSessions &&
-                                    c.selected?.isSwarmBuddyChat == true &&
-                                    _chatSessions.contains(c.selectedId))
-                                  Padding(
-                                    padding: const EdgeInsets.only(
-                                      left: grid.AppDesktop.controlGap,
-                                    ),
-                                    child: _chatSessionProject(writable),
-                                  ),
-                              ],
-                              trailing: [
-                                if (widget.voiceRecorder case final recorder?)
-                                  fingerTarget(
-                                    enabled: _phone,
-                                    SuperTabComposerMic(
-                                      key: const ValueKey('super-composer-mic'),
-                                      onPressed: writable
-                                          ? () => unawaited(
-                                              recorder.start(
-                                                conversationId: chatId,
-                                              ),
-                                            )
-                                          : null,
-                                    ),
-                                  ),
-                              ],
-                              send: ListenableBuilder(
-                                listenable: Listenable.merge([
-                                  _composer,
-                                  _files,
-                                ]),
-                                builder: (context, _) => fingerTarget(
+                                  child: _chatSessionProject(writable),
+                                ),
+                            ],
+                            trailing: [
+                              if (widget.voiceRecorder case final recorder?)
+                                fingerTarget(
                                   enabled: _phone,
-                                  AppIconButton(
-                                    icon: AppIcons.arrowUp,
-                                    tooltip: 'Send message',
-                                    color: DesktopChrome.accent,
-                                    onPressed:
-                                        writable &&
-                                            !c.uploading &&
-                                            ((!busy && !c.hasPendingAction) ||
-                                                (_files.isEmpty &&
-                                                    c.canQueueText)) &&
-                                            (_composer.text.trim().isNotEmpty ||
-                                                !_files.isEmpty)
-                                        ? () => unawaited(_send())
+                                  SuperTabComposerMic(
+                                    key: const ValueKey('super-composer-mic'),
+                                    onPressed: writable
+                                        ? () => unawaited(
+                                            recorder.start(
+                                              conversationId: chatId,
+                                            ),
+                                          )
                                         : null,
                                   ),
+                                ),
+                            ],
+                            send: ListenableBuilder(
+                              listenable: Listenable.merge([_composer, _files]),
+                              builder: (context, _) => fingerTarget(
+                                enabled: _phone,
+                                AppIconButton(
+                                  icon: AppIcons.arrowUp,
+                                  tooltip: 'Send message',
+                                  color: DesktopChrome.accent,
+                                  onPressed:
+                                      writable &&
+                                          !c.uploading &&
+                                          ((!busy && !c.hasPendingAction) ||
+                                              (_files.isEmpty &&
+                                                  c.canQueueText)) &&
+                                          (_composer.text.trim().isNotEmpty ||
+                                              !_files.isEmpty)
+                                      ? () => unawaited(_send())
+                                      : null,
                                 ),
                               ),
                             ),
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
                   ),
                 ),

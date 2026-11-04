@@ -723,6 +723,9 @@ class SuperTabController extends ChangeNotifier {
   /// When the parts held were last read: how old a [savedView] of them is.
   DateTime? _partsReadAt;
 
+  /// When the Swarm was last read (Manage ▸ Backlog's "Synced", #2774).
+  DateTime? get syncedAt => _partsReadAt;
+
   /// The rows each conversation's messages were read from, kept only to save
   /// the view ([SuperTabReading.drawsSaved]).
   final _rows = <String, Map<String, Map<String, dynamic>>>{};
