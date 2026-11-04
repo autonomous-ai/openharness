@@ -1373,6 +1373,20 @@ class ConversationServer {
             },
         });
         output['conversationId'] = id;
+      } else if (command['type'] == 'lead.claim') {
+        // One start of a project's Lead (backend commands.ts lead.claim):
+        // another machine's claim is the one; the same machine claims again.
+        final project = (state['projects'] as List?)
+            ?.cast<Map<String, dynamic>>()
+            .where((p) => p['id'] == command['projectId'])
+            .firstOrNull;
+        final held = project?['leadClaim'];
+        if (held is Map && held['machineId'] != command['machineId']) {
+          output['leadStart'] = 'waiting';
+        } else {
+          project?['leadClaim'] = {'machineId': command['machineId']};
+          output['leadStart'] = 'start';
+        }
       } else if (command['type'] == 'lead.start') {
         if (leadRefusal case final refusal?) {
           leadRefusal = null;
