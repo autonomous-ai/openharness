@@ -121,3 +121,12 @@ List<SuperTabConversation> superTabProjectTasks(
         g,
   ];
 }
+
+/// A task's priority as its title marks it (task #2774).
+enum SuperTabTaskPriority { urgent, high }
+
+/// [title]'s priority marker and the title without it. Interface only, so
+/// the tests run; the parse follows.
+({SuperTabTaskPriority? priority, String title}) superTabTitlePriority(
+  String title,
+) => (priority: null, title: title);
