@@ -1619,4 +1619,92 @@ void main() {
       });
     });
   });
+
+  // Task #2920 (review of #3021): the app starts the sync of names people chose, on its own triggers.
+  group('names a person chose reach the Swarm on their own', () {
+    Map<String, dynamic> swarmAgent(String machineId, String harnessId) => {
+      'id': 'pm',
+      'name': 'Lead',
+      'displayName': 'cd /Users/macbookpro/proj…',
+      'machineId': machineId,
+      'harnessId': harnessId,
+      'contributorId': 'owner',
+      'machineOwnerId': 'owner',
+      'configuration': {'engine': 'claude'},
+    };
+    String shown(_Backend backend) =>
+        (backend.servers['alpha']!.state['agents'] as List).first['displayName']
+            as String;
+    int renames(_Backend backend) => [
+      for (final post in backend.servers['alpha']!.posts)
+        if ((post['command'] as Map?)?['type'] == 'agent.rename') post,
+    ].length;
+    Map<String, dynamic> frame(String id, {bool? chosen}) => {
+      'id': id,
+      'name': 'Darren PM',
+      'engine': 'claude',
+      'terminal': {'available': true},
+      'nameChosen': ?chosen,
+    };
+
+    Future<(AppNotifier, _Backend)> loaded({
+      String machine = 'm',
+      String harness = 'a0',
+    }) async {
+      final backend = _Backend()..add('alpha', 'Alpha');
+      backend.servers['alpha']!.state['agents'] = [
+        swarmAgent(machine, harness),
+      ];
+      final app = _computer(backend, MemoryStore());
+      // A harness shared to watch is view-only here: its rename is refused.
+      const watched = Machine(
+        machineId: 's',
+        authMode: MachineAuthMode.remote,
+        name: 'Watched',
+        isShared: true,
+      );
+      app.machines = [...app.machines, watched];
+      app.machineStates['s'] = MachineState(watched)
+        ..nodeOnline = true
+        ..connectionStatus = ConnectionStatus.connected;
+      return (app, backend);
+    }
+
+    test('a flagged agent on this person\'s machine is sent when its Swarm '
+        'loads', () async {
+      final (app, backend) = await loaded();
+      app.machineStates['m']!.agents = [
+        Agent.fromJson(frame('a0', chosen: true)),
+      ];
+      await app.superTabs.open('alpha');
+      await _settle();
+      expect(shown(backend), 'Darren PM');
+    });
+
+    test('the same agent on a shared machine sends nothing', () async {
+      final (app, backend) = await loaded(machine: 's', harness: 'x');
+      app.machineStates['s']!.agents = [
+        Agent.fromJson(frame('x', chosen: true)),
+      ];
+      await app.superTabs.open('alpha');
+      await _settle();
+      expect(renames(backend), 0);
+      expect(shown(backend), startsWith('cd /Users'));
+    });
+
+    test('an agent with no flag sends nothing until the flag arrives, then '
+        'it is sent', () async {
+      final (app, backend) = await loaded();
+      app.machineStates['m']!.agents = [Agent.fromJson(frame('a0'))];
+      await app.superTabs.open('alpha');
+      await _settle();
+      expect(renames(backend), 0);
+      await app.handleMachineEventForTest('m', {
+        'type': 'agent_synced',
+        'payload': {'agent': frame('a0', chosen: true)},
+      });
+      await _settle();
+      expect(shown(backend), 'Darren PM');
+    });
+  });
 }
