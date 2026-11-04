@@ -19,7 +19,7 @@ and size; old Swarm tabs become switcher entries. No new left bar.
   project and its name (`:340-348`, `:452-492`).
 - Left out of Personal: Swarm tabs, utility tabs (Store, Companions, Devices), viewer panes, panes on another person's
   or a shared machine, and Team-account panes (`personal_projects.dart:134-150`; utility kinds in
-  `desktop/lib/state/swarm.dart:41-45`).
+  `desktop/lib/state/swarm.dart:42-45`).
 - Split sizes carry over only when a project's panes are exactly one tab's panes, in that tab's order (`soleTab`,
   `personal_projects.dart:246-263`, used at `workspace.dart:234-237`, copied by `app_state.dart:19829`).
 - Personal is created only when the person picks it (`desktop/lib/super_tabs/swarm_switcher.dart:33-35`, `:140-160`).
@@ -38,23 +38,37 @@ working, and what makes going back a single switch with nothing to rebuild.
 
 Each phase ships on its own, waits a week of real use, and moves on only when anh Dee says so.
 
-### Phase 1: fill the gaps, tabs unchanged
+### Phase 1: fill the gaps, existing tabs unchanged
 
-What changes for people: nothing about tabs. Personal's projects get what they need to stand alone later:
+What changes for people: existing tabs stay as they are; a project that starts an agent gets a tab of its own.
+Personal's projects get what they need to stand alone later:
 
-1. A no-repo pane started from a project (its [term] or its chat) joins that project; one started from a tab keeps
-   today's tab project. Only a pane with neither goes to # scratch. (Point 1.)
-2. A project of panes from several tabs gets its own layout, saved the first time the person arranges it, and kept
-   with the project, not the tab. (Point 2.)
-3. Personal remembers the tab order it saw, so its PROJECTS list can start in that order. (Point 5.)
-4. A pane started in a project that has no tab yet is still added to a tab on the desk (the project's tab project,
-   or a new tab named after the project), so the phone and older Desktops see it. (Point 7.)
+1. **A project's own tab.** A pane started from a project (its [term] or its chat) is added to that project's tab on
+   the desk, so the phone and older Desktops see it (point 7). The tab's id is made from the project's id
+   (`project-` and a hash of it, which fits the desk's id rule, `backend/src/lib/desk.ts:16`). That id is the one
+   shared link from tab to project: every computer hashes the projects Personal lists and finds the match, so no
+   computer makes a second project for that tab (today a tab's key is only `tab:<id>`, `personal_projects.dart:85-87`,
+   `:161-164`, and the map from key to project is per computer, `:185-187`). The tab takes the project's name and
+   follows its renames, unless the person renamed the tab. (Points 1 and 7.)
+2. **When the desk is full.** The desk drops a 25th tab and a 10th pane in a tab without an error
+   (`desk.ts:12-13`, `:113`, `:146`). So the Desktop checks first: a project tab with 9 panes gets a second tab
+   ("api 2"), and with 24 tabs on the desk the start is refused before any agent runs. The person reads: "Your tabs
+   are full (24). Close a tab to start another agent." No pane is ever left with no tab.
+3. **A no-repo pane** started from a project joins that project through its tab (item 1). One started from an
+   ordinary tab keeps today's tab project. Only a pane with neither goes to # scratch. (Point 1.)
+4. **A project's own layout.** A project of panes from several tabs gets its own split sizes, saved the first time
+   the person arranges it, on this computer only, next to the project map (`super_tab.repos.<account>`,
+   `personal_projects.dart:185-187`). It is never sent to the server, so "nothing of a pane is sent anywhere"
+   (`personal_projects.dart:24-27`) still holds. Another computer uses the default layout until the person arranges
+   it there. (Point 2.)
+5. Personal remembers the tab order it saw, so its PROJECTS list can start in that order. (Point 5.)
 
-Roll back: these are additions inside Personal. Turning them off leaves tabs exactly as they are; a project's saved
-layout is simply not used.
+Roll back: turn the additions off. Existing tabs stay as they are, and the project tabs Phase 1 added stay on the
+desk as ordinary tabs with their panes, which the person can keep or close. A project's saved layout is simply not
+used.
 
 Data kept: the tab-id project keys (`super_tab.repos.<account>`, `personal_projects.dart:185-187`) and every tab on
-the desk, unchanged.
+the desk.
 
 ### Phase 2: "Use projects instead of tabs", opt-in, off by default
 
@@ -62,12 +76,17 @@ What changes for people who turn it on, on that Desktop only:
 
 - The tab strip is hidden for tabs whose every pane is in a Personal project. A tab holding a pane Personal leaves out
   (point 3) stays visible as a tab. Utility tabs open from their menus as today.
+- Swarm tabs become entries in the Swarm dropdown, as the 10-30 design says: one Swarm tab stays, and every other
+  Swarm tab is hidden. The dropdown already lists every Swarm open in a tab or closed
+  (`desktop/lib/super_tabs/swarm_switcher.dart:321-346`), and picking one shows it in the same tab
+  (`app_state.dart:2800-2807`). Swarm tabs are not on the desk (`app_state.dart:21094-21095`), so this changes
+  nothing on the phone or another computer.
 - The Swarm screen opens on Personal. Cmd-1..9 go to the first nine projects in the PROJECTS list instead of tabs
   (today they follow tab order: `app_state.dart:4155-4158`, `desktop/lib/shortcuts/app_shortcuts.dart:928-938`).
 - Nothing else changes: the panes, their sessions and the desk are the same.
 
-Roll back: turn the setting off. The tab strip comes back as it was, because the desk was never changed. Nothing is
-restored, so nothing can be lost.
+Roll back: turn the setting off. The tab strip and the hidden Swarm tabs come back as they were, because the desk was
+never changed and the Swarm tabs were only hidden. Nothing is restored, so nothing can be lost.
 
 Data kept: the whole desk, unchanged; this window's own tab layout (`terminal_pane_layout`,
 `desktop/lib/state/pane_layout_store.dart:20`) is still written.
@@ -79,7 +98,8 @@ feedback.
 
 What changes for people:
 
-- A new install, or someone who never used tabs, starts in projects mode.
+- A person whose desk held no tab with a pane when this Desktop first joined it (a new account, or one that never
+  opened an agent) starts in projects mode.
 - Anyone else is asked once: "Use projects instead of tabs?" with Keep tabs as a full answer. The setting stays in
   Settings either way.
 
@@ -97,16 +117,18 @@ tabs. The desk is then kept read-only for at least two releases, so a person who
 ## Huy's eight points
 
 1. **No-repo panes.** Today their project comes from their tab's id (`personal_projects.dart:85-87`, `:164`), which
-   works because every pane is in a tab. Phase 1 adds the project the pane was started from as the first source,
-   keeps the tab for panes started in a tab, and uses # scratch only when there is neither. Existing tab projects keep
-   their keys, so nothing moves.
+   works because every pane is in a tab. Phase 1 puts a pane started from a project into that project's own desk
+   tab, whose id is made from the project's id, so every computer reads the same project from it (Phase 1, item 1).
+   A pane started in an ordinary tab keeps that tab's project, and # scratch takes only a pane with neither. Existing
+   tab projects keep their keys, so nothing moves.
 2. **Split layouts.** Sizes come from a tab only when the project is exactly that tab's panes (`soleTab`,
    `personal_projects.dart:246-263`); a project with panes from several tabs gets the default layout today. Phase 1
-   saves each project's own layout once the person arranges it. Until then, [term] keeps pane order (tab order, then
-   each tab's reading order, `personal_projects.dart:134-142`).
+   saves each project's own layout once the person arranges it, on that computer only (Phase 1, item 4). Until then,
+   [term] keeps pane order (tab order, then each tab's reading order, `personal_projects.dart:134-142`).
 3. **Panes left out of Personal.** Viewer panes, panes on another person's or a shared machine, Team-account panes,
-   Swarm tabs and utility tabs (`personal_projects.dart:134-150`). They show where they show today: in their tab. In
-   projects mode a tab holding any of them stays visible. Their home without tabs is a Phase 4 design question.
+   Swarm tabs and utility tabs (`personal_projects.dart:134-150`). Viewer, other-machine and Team-account panes show
+   where they show today: in their tab, which stays visible in projects mode. Swarm tabs become dropdown entries
+   (Phase 2), and utility tabs open from their menus. A home for the rest without tabs is a Phase 4 design question.
 4. **Updating from a version with no Swarm.** On first launch the Desktop joins the desk and seeds it with this
    computer's tabs (`app_state.dart:21194-21198`). Each pane then maps to a project: its repo's, or its tab's project
    named after the tab (`personal_projects.dart:343-348`). Projects mode never starts by itself until Personal exists
@@ -133,16 +155,20 @@ tabs. The desk is then kept read-only for at least two releases, so a person who
 
 ## Design
 
-- Growth: one setting per Desktop, and one saved layout per Personal project, deleted with the project.
-- Concurrency: the setting is per Desktop, so no lock. A project's layout is written by the Desktop that arranged it;
-  last write wins, as tab layouts do on the desk today.
+- Growth: one setting per Desktop; one saved layout per Personal project on each computer, deleted with the project;
+  one desk tab per project that started a pane, closed by the person like any tab.
+- Concurrency: the setting and the layouts are per computer, so no lock. Project tabs change through the desk's
+  existing small idempotent ops (`desk_sync.dart:3-6`, `desk.ts:107`).
 - Read cost: nothing new is read; projects mode reads the desk and Personal it already reads.
-- Scale: at 10x tabs the desk's 24-tab limit (`desk.ts:12`) warns first, since Phase 1 may add a tab for a project
-  with no tab. It is the metric to watch.
+- Scale: the desk's 24 tabs and 9 panes a tab (`desk.ts:12-13`) are reached first, since Phase 1 adds a tab per
+  project. The Desktop refuses a start before them and says why (Phase 1, item 2); the count of those refusals is the
+  metric that warns.
 - Compatibility: older Desktops, the phone and the web keep reading the desk, unchanged (point 7).
 - Migration and rollback: no data is migrated; each phase rolls back with the setting or a default change.
 - Audience: Personal is the person's alone and its projects are created private (`personal_projects.dart:201-214`,
-  `:410`); the server enforces who reads a Swarm, as for every Swarm.
+  `:410`); the server enforces who reads a Swarm, as for every Swarm. The desk is the person's own document and
+  already holds their panes' machine and agent ids; a project tab adds only a hashed project id to it. Project
+  layouts stay on the computer.
 - Identity: Personal and its projects belong to the signed-in account, never the machine owner's login
   (`personal_projects.dart:203-213`).
 - Failure: if Personal can't be made or read, the Desktop stays in tabs and says why (point 4).
@@ -150,6 +176,6 @@ tabs. The desk is then kept read-only for at least two releases, so a person who
 
 ## Decisions for anh Dee
 
-1. Phase 1 (tabs unchanged): yes or no.
+1. Phase 1 (existing tabs unchanged, a tab per project that starts an agent): yes or no.
 2. Phase 2 (opt-in setting): yes or no, and after how long in Phase 1.
 3. Phase 3 and Phase 4 are decided later, on Phase 2's numbers.
