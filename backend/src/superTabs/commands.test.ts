@@ -949,6 +949,11 @@ const candidate = (id: string, patch: Record<string, unknown> = {}) => ({ id, ki
 const record = (patch: Record<string, unknown> = {}) => ({ assessment: { difficulty: 'high', risk: 'low', why: 'Schema change.' },
   candidates: [candidate('c0'), candidate('c1', { model: 'sonnet', quality: 2, cost: 2 })], excluded: [], floor: 3, notes: false,
   pick: 'c0', via: 'jev', p: 0.82, belowFloor: false, why: 'Highest quality within quota.', ...patch })
+/** The route since task #2901 (Ken, 2026-11-04): it names no pick, and the project's Routing instructions choose. */
+const pickless = (patch: Record<string, unknown> = {}) => {
+  const { pick: _pick, ...rest } = record({ via: 'instructions', p: null, floor: 1, why: 'No ranking: the project\'s Routing instructions choose.', ...patch })
+  return rest
+}
 /** What an agent passes to start or assign: a routing decision of `conversationId`. Its pick differs from the call, so it carries a reason. */
 const via = { routeDecisionId: 'd1', overrideReason: 'Test.' }
 const decisionIn = (conversationId = 'lead', patch: Record<string, unknown> = {}) => ({ routeDecision: { id: 'd1', conversationId, record: record(patch), final: null, override: null, assignmentId: null, outcome: null } as unknown as RouteDecision })
@@ -1316,6 +1321,134 @@ describe('decisions linked to work', () => {
     f.state.conversations.find(c => c.id === 'lead')!.assignment = null
     const effects = f.run({ ...assign, overrideReason: 'The opus agent is already warm.' }, f.leadActor, { routeDecision: overridden })
     expect(effects.routeDecisions[0]).toMatchObject({ op: 'final', final, override: { by: 'lead', reason: 'The opus agent is already warm.' } })
+  })
+})
+
+// Task #2901 (Ken, 2026-11-04): PMs took the route's top line, nearly always Opus or Astra, against the Routing instructions'
+// order and quota. The route names no pick now; the coordinator chooses by the instructions, and its start or assignment
+// records which candidate it chose and the rule that chose it.
+describe('a route that names no pick', () => {
+  const open = (patch: Record<string, unknown> = {}) => ({ id: 'd1', conversationId: 'lead', record: pickless(), final: null, override: null, assignmentId: null,
+    outcome: null, ...patch }) as unknown as RouteDecision
+  const request = (patch: Record<string, unknown> = {}) => ({ conversationId: 'lead', machineId: 'machine', engine: 'claude', model: 'sonnet', effort: 'high',
+    name: 'Builder', cwd: '/repo', worktree: false, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false },
+    ...patch }) as Extract<Command, { type: 'agent.start' }>['request']
+  const rule = 'Rule 3: the account resetting soonest.'
+
+  it('is recorded with its id and no chat row, as the coordinator\'s route, whichever candidates it lists', () => {
+    const f = routed(), group = f.group()
+    const buddy = f.add('buddy')
+    f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', generation: 'tab' }
+    const decision = pickless({ candidates: [candidate('c0', { kind: 'member', agentId: buddy }), candidate('c1', { model: 'sonnet' })] })
+    const effects = f.run({ type: 'route.record', conversationId: group, decision } as Command, f.leadActor, { now: 2000 })
+    expect(effects.result.routeDecisionId).toEqual(expect.any(String))
+    expect(effects.routeDecisions).toEqual([{ op: 'create', id: effects.result.routeDecisionId, conversationId: group,
+      record: expect.objectContaining({ via: 'instructions', candidates: decision.candidates }) }])
+    expect((effects.routeDecisions[0] as { record: object }).record).not.toHaveProperty('pick')
+    expect(effects.messages).toEqual([])
+    expect(f.state.conversations.find(c => c.id === group)!.leadAction).toEqual({ kind: 'route', at: 2000 })
+  })
+
+  it('refuses a start or an assignment without the Routing rule that chose it, and says what to send', () => {
+    const f = routed(), task = f.group()
+    f.define(task)
+    for (const run of [
+      () => f.run({ type: 'agent.start', request: request({ conversationId: task }), routeDecisionId: 'd1' }, f.leadActor, { routeDecision: open({ conversationId: task }), contribution: f.contribution }),
+      () => f.run({ type: 'work.assign', conversationId: task, agentId: f.worker, routeDecisionId: 'd1' }, f.leadActor, { routeDecision: open({ conversationId: task }) }),
+    ]) {
+      expect(run).toThrow(expect.objectContaining({ code: 'ROUTE_REASON_REQUIRED', message: expect.stringContaining('overrideReason') }))
+      expect(run).toThrow(expect.objectContaining({ message: expect.stringContaining('Routing rule') }))
+    }
+  })
+
+  // The only candidate that can run needs no rule to choose it: the start gives none and the row says so.
+  it('takes a start of the only candidate without a reason, and says it was the only one', () => {
+    const f = routed(), task = f.group()
+    const only = open({ conversationId: task, record: pickless({ via: 'only', candidates: [candidate('c1', { model: 'sonnet' })] }) })
+    const effects = f.run({ type: 'agent.start', request: request({ conversationId: task }), routeDecisionId: 'd1' }, f.leadActor, { routeDecision: only, contribution: f.contribution })
+    expect(effects.routeDecisions).toEqual([expect.objectContaining({ op: 'final', final: expect.objectContaining({ candidateId: 'c1' }) })])
+    expect(effects.messages.filter(m => m.source?.kind === 'route')).toEqual([expect.objectContaining({
+      source: expect.objectContaining({ via: 'only', why: 'Only candidate that can run this task.', pick: { id: 'c1', title: expect.any(String) } }) })])
+  })
+
+  // Review of #3010: "only candidate" is a reason only for the candidate it names; a start elsewhere still says why.
+  it('refuses a start that matches none of the only-candidate route\'s candidates without a reason', () => {
+    const f = routed(), task = f.group()
+    const only = open({ conversationId: task, record: pickless({ via: 'only', candidates: [candidate('c1', { model: 'opus' })] }) })
+    expect(() => f.run({ type: 'agent.start', request: request({ conversationId: task }), routeDecisionId: 'd1' }, f.leadActor, { routeDecision: only, contribution: f.contribution }))
+      .toThrow(expect.objectContaining({ code: 'ROUTE_REASON_REQUIRED' }))
+  })
+
+  it('records the candidate a start matches, and posts the route row naming it and the rule', () => {
+    const f = routed(), task = f.group()
+    const effects = f.run({ type: 'agent.start', request: request({ conversationId: task }), routeDecisionId: 'd1', overrideReason: rule }, f.leadActor,
+      { routeDecision: open({ conversationId: task }), contribution: f.contribution })
+    expect(effects.routeDecisions).toEqual([{ op: 'final', id: 'd1', final: { kind: 'new', startId: effects.result.startId, machineId: 'machine', engine: 'claude',
+      model: 'sonnet', effort: 'high', candidateId: 'c1' } }])
+    // Released Desktop and phone apps draw a route card from source.pick, so the row carries the candidate chosen as its pick.
+    expect(effects.messages.filter(m => m.source?.kind === 'route')).toEqual([expect.objectContaining({
+      text: `Routed to Title c1 — by the project's Routing instructions · "${rule}"`,
+      source: { kind: 'route', decisionId: 'd1', via: 'instructions', p: null, belowFloor: false, why: rule, pick: { id: 'c1', title: 'Title c1' },
+        alternatives: [{ id: 'c0', title: 'Title c0' }] } })])
+    expect(effects.messages.some(m => m.source?.kind === 'route-override')).toBe(false)
+  })
+
+  it('records a start that matches none of the candidates as the coordinator\'s override, with its reason', () => {
+    const f = routed(), task = f.group()
+    const effects = f.run({ type: 'agent.start', request: request({ conversationId: task, effort: 'xhigh' }), routeDecisionId: 'd1', overrideReason: 'Xhigh is needed here.' },
+      f.leadActor, { routeDecision: open({ conversationId: task }), contribution: f.contribution })
+    expect(effects.routeDecisions).toEqual([{ op: 'final', id: 'd1', final: { kind: 'new', startId: effects.result.startId, machineId: 'machine', engine: 'claude',
+      model: 'sonnet', effort: 'xhigh' }, override: { by: 'lead', actorKey: `agent:${f.lead}`, reason: 'Xhigh is needed here.' } }])
+    expect(effects.messages.filter(m => m.source?.kind?.toString().startsWith('route'))).toEqual([expect.objectContaining({
+      text: 'lead started Builder, which is none of the route\'s candidates. Reason: Xhigh is needed here.',
+      source: { kind: 'route-override', decisionId: 'd1', by: 'lead' } })])
+  })
+
+  it('records the member an assignment matches with the route row, and one that matches none as an override', () => {
+    const f = routed(), task = f.group(), name = f.state.agents.find(a => a.id === f.worker)!.name
+    f.define(task)
+    const members = pickless({ candidates: [candidate('c0'), candidate('c1', { kind: 'member', agentId: f.worker })] })
+    const assigned = f.run({ type: 'work.assign', conversationId: task, agentId: f.worker, routeDecisionId: 'd1', overrideReason: rule }, f.leadActor,
+      { routeDecision: open({ conversationId: task, record: members }) })
+    expect(assigned.routeDecisions).toEqual([{ op: 'final', id: 'd1', final: { kind: 'member', agentId: f.worker, machineId: expect.any(String), candidateId: 'c1' },
+      assignmentId: assigned.result.assignmentId }])
+    expect(assigned.messages.filter(m => m.source?.kind === 'route')).toEqual([expect.objectContaining({
+      text: `Routed to Title c1 — by the project's Routing instructions · "${rule}"`, source: expect.objectContaining({ pick: { id: 'c1', title: 'Title c1' } }) })])
+    f.state.conversations.find(c => c.id === task)!.assignment = null
+    const other = f.run({ type: 'work.assign', conversationId: task, agentId: f.worker, routeDecisionId: 'd1', overrideReason: 'It knows the code.' }, f.leadActor,
+      { routeDecision: open({ conversationId: task }) })
+    expect(other.routeDecisions[0]).toMatchObject({ op: 'final', override: { by: 'lead', reason: 'It knows the code.' } })
+    expect(other.routeDecisions[0]).not.toHaveProperty('final.candidateId')
+    expect(other.messages.filter(m => m.source?.kind?.toString().startsWith('route')).map(m => m.text))
+      .toEqual([`lead assigned ${name}, which is none of the route's candidates. Reason: It knows the code.`])
+  })
+
+  it('links the assignment of the agent its start chose with no reason again and no second route row', () => {
+    const f = routed(), task = f.group()
+    f.define(task)
+    const final = { kind: 'new', startId: f.startedFor(f.worker), machineId: 'machine', engine: 'claude', model: 'sonnet', effort: 'high', candidateId: 'c1' }
+    const effects = f.run({ type: 'work.assign', conversationId: task, agentId: f.worker, routeDecisionId: 'd1' }, f.leadActor, { routeDecision: open({ conversationId: task, final }) })
+    expect(effects.routeDecisions).toEqual([{ op: 'final', id: 'd1', final, assignmentId: effects.result.assignmentId }])
+    expect(effects.messages.some(m => m.source?.kind?.toString().startsWith('route'))).toBe(false)
+  })
+
+  it('takes a person\'s choice with no earlier one as "chose", and refuses choosing the candidate a start already chose', () => {
+    const f = routed()
+    const command = { type: 'route.override', decisionId: 'd1', candidateId: 'c0', reason: 'Opus for the schema.' } as const
+    const effects = f.run(command, undefined, { routeDecision: open() })
+    expect(effects.routeDecisions).toEqual([{ op: 'override', id: 'd1', override: expect.objectContaining({ by: 'person', candidateId: 'c0' }) }])
+    expect(effects.messages[0]!.text).toBe('owner@example.com chose Title c0. Reason: Opus for the schema.')
+    const started = open({ final: { kind: 'new', startId: 's', machineId: 'machine', engine: 'claude', model: 'sonnet', effort: 'high', candidateId: 'c1' } })
+    expect(() => f.run({ ...command, candidateId: 'c1' }, undefined, { routeDecision: started })).toThrow(expect.objectContaining({ code: 'ALREADY_CHOSEN' }))
+    expect(f.run(command, undefined, { routeDecision: started }).messages[0]!.text).toBe('owner@example.com chose Title c0 instead of Title c1. Reason: Opus for the schema.')
+  })
+
+  it('links a start to the candidate a person chose, as before, keeping that candidate in the final', () => {
+    const f = routed(), task = f.group()
+    const chosen = open({ conversationId: task, override: { by: 'person', actorKey: 'person:owner', candidateId: 'c1', reason: 'Sonnet will do.' } })
+    const effects = f.run({ type: 'agent.start', request: request({ conversationId: task }), routeDecisionId: 'd1' }, f.leadActor, { routeDecision: chosen, contribution: f.contribution })
+    expect(effects.routeDecisions).toEqual([{ op: 'final', id: 'd1', final: expect.objectContaining({ model: 'sonnet', candidateId: 'c1' }) }])
+    expect(effects.messages.some(m => m.source?.kind?.toString().startsWith('route'))).toBe(false)
   })
 })
 
@@ -5431,5 +5564,151 @@ describe('assigning an agent whose session was closed', () => {
     resumed.f.state.harnessReservations = [{ machineId: 'host', harnessId: 'worker', generation: 'g2', renewed: true } as never]
     resumed.f.run({ type: 'work.assign', conversationId: resumed.group, agentId: resumed.worker })
     expect(resumed.f.state.conversations.find(c => c.id === resumed.group)!.assignment).toMatchObject({ agentId: resumed.worker })
+  })
+})
+
+describe('agent.rename (renaming a harness renames its agent, task #2912)', () => {
+  const rename = (agentId: string, name: string): Command => ({ type: 'agent.rename', agentId, name })
+  const shownTo = (f: ReturnType<typeof fixture>, reader: Actor, agentId: string) =>
+    visibleState(f.state, reader).agents.find(a => a.id === agentId)!.displayName
+  const peerContributorAgent = (f: ReturnType<typeof fixture>) => { f.invite(); return f.add('mine', 'peer') }
+
+  it('lets the agent\'s contributor rename it, and every reader sees the new name', () => {
+    const f = fixture(), agentId = peerContributorAgent(f)
+    f.run(rename(agentId, '  Darren\'s PM  '), peer)
+    expect(shownTo(f, owner, agentId)).toBe('Darren\'s PM')
+    expect(shownTo(f, peer, agentId)).toBe('Darren\'s PM')
+    // A later command does not hand it a generated name again.
+    f.run({ type: 'conversation.create', title: 'Later', brief: 'Anything.', checks: [] })
+    expect(shownTo(f, owner, agentId)).toBe('Darren\'s PM')
+  })
+
+  it('lets the machine owner rename it', () => {
+    const f = fixture(), agentId = peerContributorAgent(f)
+    f.state.people.push({ id: 'host-owner', email: 'host-owner@example.com', role: 'collaborator', generation: 'g' } as never)
+    f.run(rename(agentId, 'Studio'), { kind: 'person', userId: 'host-owner', email: 'host-owner@example.com' })
+    expect(shownTo(f, owner, agentId)).toBe('Studio')
+  })
+
+  it('refuses a teammate who is neither, the Swarm owner, an agent and a Buddy, writing nothing', () => {
+    const f = fixture(), agentId = peerContributorAgent(f), other = f.add('other', 'owner')
+    const buddyId = f.add('buddy', 'owner')
+    f.state.agents.find(a => a.id === buddyId)!.buddyOf = { personId: 'owner', projectId: 'lead', generation: 'g' } as never
+    const before = JSON.stringify(f.state)
+    for (const [actor, code] of [
+      [owner, 'FORBIDDEN'],
+      [{ kind: 'agent', agentId: other, machineOwnerId: 'host-owner' }, 'FORBIDDEN'],
+      [{ kind: 'agent', agentId, machineOwnerId: 'host-owner' }, 'FORBIDDEN'],
+      [{ kind: 'agent', agentId: buddyId, machineOwnerId: 'host-owner' }, 'BUDDY_FORBIDDEN'],
+    ] as Array<[Actor, string]>) {
+      expect(() => f.run(rename(agentId, 'Stolen'), actor), JSON.stringify(actor)).toThrow(expect.objectContaining({ code }))
+    }
+    expect(JSON.stringify(f.state)).toBe(before)
+  })
+
+  it('refuses a role\'s name, another agent\'s name, an empty or invisible name', () => {
+    const f = fixture(), agentId = f.add('mine'), taken = f.add('taken')
+    f.run(rename(taken, 'Quinn'))
+    for (const name of ['Lead', 'Engineer 2', 'Reviewer', 'quinn', ' ', '​​']) {
+      expect(() => f.run(rename(agentId, name)), name).toThrow(expect.objectContaining({ code: expect.stringMatching(/^(AGENT_NAME_ROLE|AGENT_NAME_TAKEN|INVALID_AGENT_NAME)$/) }))
+    }
+    expect(commandSchema.safeParse(rename(agentId, 'x'.repeat(201))).success).toBe(false)
+    // Its own name again is no conflict.
+    f.run(rename(taken, 'Quinn'))
+  })
+
+  // Security review 2 of #3015: an agent's name passes every rule a person's does, and tells nobody what they cannot read.
+  it('refuses the Swarm\'s own voices, a web address or link, and a blank made of Braille (security review 2)', () => {
+    const f = fixture(), agentId = f.add('mine')
+    for (const name of ['System', 'Harness', 'Admin', 'Everyone', 'You', 'Someone 2', 'Tester', 'www.evil.example', '[Approve](https://ev.il)', '[Approve](//ev.il)',
+      'Lead\u2800', '\u2800', '\u2800\u2800\u2800']) {
+      expect(() => f.run(rename(agentId, name)), name).toThrow(expect.objectContaining({ code: expect.stringMatching(/^(INVALID_AGENT_NAME|AGENT_NAME_ROLE|INVALID_NAME|NAME_RESERVED)$/) }))
+    }
+  })
+
+  it('refuses a name a person here goes by: their name, username or email', () => {
+    const f = fixture(), agentId = f.add('mine')
+    f.invite()
+    f.state.people.find(p => p.id === 'peer')!.name = 'Minh Nguyen'
+    for (const name of ['minh nguyen', 'Ｍinh Nguyen', 'peer', '@Peer', 'peer@example.com', 'owner']) {
+      expect(() => f.run(rename(agentId, name)), name).toThrow(expect.objectContaining({ code: expect.stringMatching(/^(AGENT_NAME_TAKEN|NAME_TAKEN)$/) }))
+    }
+  })
+
+  it('does not tell a reader that an agent they cannot read has a name (security review 2)', () => {
+    const f = fixture()
+    f.invite()
+    const other = f.run({ type: 'project.create', name: 'Other', visibility: 'private', brief: '' }).result
+    const hidden = f.add('hidden', 'owner', other.conversationId as string)
+    f.run(rename(hidden, 'Quinn'))
+    const mine = f.add('mine', 'peer')
+    // The peer reads nothing of the private project: the name is not taken for them, and no refusal says it exists.
+    f.run(rename(mine, 'Quinn'), peer)
+    expect(shownTo(f, peer, mine)).toBe('Quinn')
+    // The owner reads both, so a second Quinn is refused for them.
+    const third = f.add('third', 'owner')
+    expect(() => f.run(rename(third, 'Quinn'))).toThrow(expect.objectContaining({ code: 'AGENT_NAME_TAKEN' }))
+  })
+
+  it('refuses a viewer', () => {
+    const f = fixture()
+    f.invite()
+    const agentId = f.add('mine', 'peer')
+    f.state.people.find(p => p.id === 'peer')!.role = 'viewer'
+    expect(() => f.run(rename(agentId, 'Studio'), peer)).toThrow(expect.objectContaining({ code: 'READ_ONLY' }))
+  })
+
+  it('refuses a non-member and an agent of the machine owner\'s Team account, writing nothing', () => {
+    const f = fixture()
+    f.invite()
+    const agentId = f.add('mine', 'peer')
+    const team = f.add('team-agent', 'owner')
+    const before = JSON.stringify(f.state)
+    // Not a member of this Swarm at all.
+    expect(() => f.run(rename(agentId, 'Studio'), { kind: 'person', userId: 'stranger', email: 'stranger@example.com' }), 'non-member').toThrow()
+    // A Team account's session acts as an agent, here one the machine owner runs: never as the person.
+    expect(() => f.run(rename(agentId, 'Studio'), { kind: 'agent', agentId: team, machineOwnerId: 'host-owner' }), 'team session').toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    expect(JSON.stringify(f.state)).toBe(before)
+  })
+
+  // Task #2912, security review 2: Add agent sends the typed harness name, so it gets the same rules; a name that fails them
+  // gives the agent a member name instead, as a role's name does, and the add still succeeds.
+  it('agent.add gives a member name to a name that is the Swarm\'s voice, a link, a person\'s or another agent\'s', () => {
+    const f = fixture()
+    f.invite()
+    f.state.people.find(p => p.id === 'peer')!.name = 'Minh Nguyen'
+    f.run(rename(f.add('first'), 'Quinn'))
+    const group = f.group()
+    const named = (name: string, harnessId: string) => {
+      const id = f.run({ type: 'agent.add', conversationId: group, machineId: 'host', harnessId, name, configuration: config, lead: false },
+        owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
+      f.run({ type: 'conversation.create', title: `After ${harnessId}`, brief: 'Anything.', checks: [] })
+      return f.state.agents.find(a => a.id === id)!.displayName
+    }
+    for (const [i, name] of ['System', 'Everyone', '[Approve](https://ev.il)', 'minh nguyen', 'peer@example.com', 'quinn', 'Lead\u2800'].entries()) {
+      expect(named(name, `h${i}`), name).not.toBe(name)
+      expect(named(name, `h${i}`)).toBeTruthy()
+    }
+    expect(named('Release notes', 'ok')).toBe('Release notes')
+  })
+
+  // The row Add agent writes in the project chat names the agent as readers see it, never the name the rules refused.
+  it('agent.add in the project chat writes no refused name into its row', () => {
+    const f = fixture()
+    for (const [i, name] of ['[Approve](https://ev.il)', '[Approve](//ev.il)', 'System'].entries()) {
+      const effects = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: `p${i}`, name, configuration: config, lead: false },
+        owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } })
+      const row = effects.messages.find(m => m.text.includes('to the project'))!.text
+      expect(row, name).not.toContain(name)
+      // Both halves name the agent as its readers' lists show it: its member name, not "Agent".
+      const shown = visibleState(f.state, owner).agents.find(a => a.id === effects.result.agentId)!.displayName!
+      expect(row, name).toBe(`owner added "${shown}" to the project. The project chat holds only its coordinator among agents, so "${shown}" works in its tasks.`)
+    }
+  })
+
+  it('cleans credentials out of the name', () => {
+    const github = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_'), removed: CredentialKind[] = []
+    expect(withoutCredentials(rename('a', github), removed)).toMatchObject({ name: CREDENTIAL_MARKER })
+    expect(removed).toEqual(['github'])
   })
 })

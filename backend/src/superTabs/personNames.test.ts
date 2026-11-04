@@ -161,7 +161,7 @@ describe('member.name', () => {
 
   it('refuses a web address as a name, which server lines would show as a link (review 2 of #2794)', () => {
     const f = fixture()
-    for (const name of ['https://ev.il/x', 'ev.il://x', 'www.ev.il', 'WWW.EV.IL']) {
+    for (const name of ['https://ev.il/x', 'ev.il://x', 'www.ev.il', 'WWW.EV.IL', '//ev.il', '[Ken](//ev.il)']) {
       expect(() => f.setName(name), name).toThrow(expect.objectContaining({ code: 'INVALID_NAME' }))
     }
   })

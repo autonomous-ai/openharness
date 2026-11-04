@@ -3133,6 +3133,20 @@ class SuperTabController extends ChangeNotifier {
         null;
   }
 
+  /// Renames the agent [agentId] for everyone in the Swarm (backend
+  /// `agent.rename`): only the person who runs it, or its machine's owner, may.
+  /// Null once the server took it; otherwise why it did not.
+  Future<String?> renameAgent(String agentId, String name) async {
+    final done = await command({
+      'type': 'agent.rename',
+      'agentId': agentId,
+      'name': name.trim(),
+    });
+    return done != null
+        ? null
+        : operationError ?? 'Another change is on its way. Try again.';
+  }
+
   /// Moves [taskId] right after [after] in its project's shared Next up, or to
   /// its top when [after] is null, for everyone (backend taskQueue.ts). Null
   /// once the server took it; otherwise why it did not.
@@ -4038,7 +4052,7 @@ class SuperTabController extends ChangeNotifier {
       try {
         final answer = await request(
           'GET',
-          '$_path/changes?cursor=${Uri.encodeQueryComponent(held.cursor)}',
+          '$_path/changes?${held.changesQuery}',
         );
         if (answer['reload'] != true) {
           final SuperTabPartsChange change;
@@ -4059,7 +4073,14 @@ class SuperTabController extends ChangeNotifier {
           );
         }
       } on SuperTabFailure catch (failure) {
-        if (!const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) rethrow;
+        // A backend rolled back to one without the summary etag refuses it
+        // (#2906): read in full, which holds none.
+        final etagRefused =
+            failure.code == 'VALIDATION_ERROR' && held.derivedEtag != null;
+        if (!etagRefused &&
+            !const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
+          rethrow;
+        }
       }
       _parts = null;
     }

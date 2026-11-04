@@ -359,11 +359,16 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
               ),
             ];
     }
-    final needs = a.needsYou;
-    final due = a.reminders.due;
+    // The one list the menu bar draws too (task #2914), in its order.
+    final notices = a.notices;
+    final due = [for (final n in notices) ?n.reminder];
+    final waiting = [
+      for (final n in notices)
+        if (n.kind == SuperTabNoticeKind.agent) n.need!,
+    ];
     final decided = [
-      for (final n in needs)
-        if (n.decision != null) n,
+      for (final n in notices)
+        if (n.kind == SuperTabNoticeKind.decision) n.need!,
     ];
     // Only these can be left to the PM, and only these the bar speaks of.
     final delegatable = [
@@ -393,7 +398,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
               ),
             ]);
           }();
-    if (needs.isEmpty && due.isEmpty) {
+    if (due.isEmpty && waiting.isEmpty && decided.isEmpty) {
       final handled = a.handledToday;
       final name = a.coordinatorFor(handled);
       return [
@@ -421,8 +426,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
       // decisions, and is not left to the PM.
       for (final reminder in due) _reminder(reminder),
       // An agent waiting has no time of its own: it leads, above the days.
-      for (final n in needs)
-        if (n.decision == null) _need(n),
+      for (final n in waiting) _need(n),
       ..._byDay<SuperTabNeed>(decided, (n) => n.at, _need),
     ];
   }

@@ -566,6 +566,11 @@ stands. Every contributed machine has an entry in `derived.machines`. These are 
 - **The client merges** by `(kind, key)`, keeping the higher `version`. A tombstone removes the part. A dormant stub
   moves the group out of the active list. The client replaces `derived` and moves to the returned `cursor`.
   Overlap duplicates have equal versions and are ignored.
+- **The summary only when it changed** (task #2906, `read/derivedEtag.ts`). Every first load and change read also
+  carries `derivedEtag`, a hash of `derived` without the reader's marks. A client that sends it back as
+  `&derivedEtag=` gets, while it still matches, `derivedUnchanged: true` and a `derived` holding only its moved marks,
+  and keeps the summary it holds. A client that sends none gets `derived` whole. A client refused for the parameter (a
+  backend from before it) reads in full, which holds no etag.
 - **Messages are not in the feed.** A group's `lastMessageSequence` tells the client there is something to read,
   and it pages messages per group as today (4.6).
 
