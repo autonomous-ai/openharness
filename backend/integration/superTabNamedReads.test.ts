@@ -8,7 +8,7 @@ import { listGroupIndexes, NAMED_INDEX, retryStaleIndex } from '../src/superTabs
 import { logger } from '../src/utils/logger.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { SwarmWorkspaces } from '../src/superTabs/workspaceStore.js'
-import { agentOpenDeliveries } from '../src/superTabs/pageReads.js'
+import { agentOpenDeliveries, storedMessages } from '../src/superTabs/pageReads.js'
 import { loadChanged } from '../src/superTabs/parts/index.js'
 import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
 
@@ -360,6 +360,39 @@ describe('the rows a page points at', () => {
     expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(3)
     expect(rows[0]!.keysExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(2 * 3)
     expect(rows[0]!.command?.hint, JSON.stringify(plan(rows))).toEqual(NAMED_INDEX.SuperTabMessage.id)
+  })
+})
+
+// Ken's slow log of 11-04: 8% of the slow SuperTabMessage ops were an `$expr $and[$eq]` read on `_id`, ~101 rows for 1 s: the
+// check of a machine report's or a Lead poll's notices already stored (store.ts writeMessages), sent by Prisma's `id: { in }`.
+describe('the stored notices a time check keeps', () => {
+  it('are read by a plain id match through the id index, examining only the rows it returns', async () => {
+    const tabId = `tab-${randomUUID()}`
+    const author = { kind: 'agent', id: 'lead', name: 'Lead', membershipGeneration: tabId }
+    const ids = Array.from({ length: 101 }, (_, i) => `${tabId}-notice-${i}`)
+    await db.superTabMessage.createMany({ data: [
+      ...ids.map((id, i) => ({ id, tabId, conversationId: `chat-${i % 3}`, sequence: i + 1, text: id, author, recipientIds: [], mentions: [],
+        source: { kind: 'work-lost', worker: `w-${i}` } })),
+      // Rows of the same Swarm the read must not examine.
+      ...Array.from({ length: 50 }, (_, i) => ({ id: `${tabId}-other-${i}`, tabId, conversationId: 'chat-0', sequence: 200 + i, text: 'other', author,
+        recipientIds: [], mentions: [] })),
+    ] })
+    let found: Awaited<ReturnType<typeof storedMessages>> = []
+    const entries = await profiled(db, async () => { found = await storedMessages(db, [...ids, `${tabId}-missing`]) })
+    expect(found.map(m => m.id).sort()).toEqual([...ids].sort())
+    expect(found.find(m => m.id === ids[4])).toEqual({ id: ids[4], tabId, conversationId: 'chat-1', source: { kind: 'work-lost', worker: 'w-4' } })
+    const rows = entries.filter(e => e.ns.endsWith('.SuperTabMessage'))
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(JSON.stringify(rows[0]!.command), 'no $expr').not.toContain('$expr')
+    expect(rows[0]!.planSummary).toBe('IXSCAN { _id: 1 }')
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBe(101)
+    expect(rows[0]!.nreturned).toBe(101)
+    console.info(`stored notices by id: ${JSON.stringify(plan(rows))}`)
+  })
+
+  it('reads nothing for no ids', async () => {
+    const entries = await profiled(db, async () => { expect(await storedMessages(db, [])).toEqual([]) })
+    expect(entries.filter(e => e.ns.endsWith('.SuperTabMessage'))).toEqual([])
   })
 })
 
