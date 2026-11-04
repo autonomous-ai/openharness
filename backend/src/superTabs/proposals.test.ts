@@ -84,6 +84,18 @@ describe('a project\'s open proposals', () => {
     ])
   })
 
+  it('reads a proposal as its owner\'s words in full, and one from before task #2926 without its "Let\'s build: "', async () => {
+    const s = swarm()
+    const words = 'Jumping a chat back a week (Jump to, Last week) freezes the app and then lags for a minute on Huy\'s Mac, every time'
+    // Posted since #2926: the owner's words alone, with no reply under it.
+    const owned: ProposalRoot = { ...root('owned', 20), text: words }
+    const { reads } = chatReads([root('old', 10, 'Offline drafts'), owned], [...rows(root('old', 10, 'Offline drafts'), { author: agent('buddy') })])
+    expect(await openProposals(s.state, s.chat(), reads, NOW)).toEqual([
+      { messageId: 'old', title: 'Offline drafts', personId: 'peer', at: 10 },
+      { messageId: 'owned', title: words, personId: 'peer', at: 20 },
+    ])
+  })
+
   it('keeps the newest 100 open, read in batches, and reads no further once it has them', async () => {
     const s = swarm()
     const roots = Array.from({ length: 250 }, (_, i) => root(`p${i}`, i + 1))
