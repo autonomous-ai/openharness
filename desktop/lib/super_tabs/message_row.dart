@@ -20,6 +20,7 @@ import 'model.dart';
 import 'pull_requests.dart';
 import 'reactions.dart';
 import 'swarm_type.dart';
+import 'voice_length.dart';
 
 /// Presentation only. Message identity and reply routing use backend IDs.
 class SuperTabMessageRow extends StatefulWidget {
@@ -530,11 +531,12 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                         widget.replyAuthor ??
                                         widget.reply?.authorName ??
                                         'Earlier message',
-                                    text:
-                                        widget.reply?.text ??
-                                        (widget.replyGone
-                                            ? 'The original message is no longer in this conversation.'
-                                            : 'The original message isn’t loaded.'),
+                                    text: switch (widget.reply) {
+                                      final reply? => superTabQuoteText(reply),
+                                      null when widget.replyGone => 'The original message is no longer in this conversation.',
+                                      null =>
+                                        'The original message isn’t loaded.',
+                                    },
                                     onTap: widget.onOpenReply == null
                                         ? null
                                         : () => widget.onOpenReply!(context),
