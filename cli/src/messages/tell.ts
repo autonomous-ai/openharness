@@ -103,22 +103,21 @@ export interface RelayCheck {
 export const OWNER_AWAY_TEXT = 'You pass words to your owner\'s harnesses only while they are with you: once they write to you in your chat, on ' +
   'this Mac signed in as them, for an hour. Nothing was sent. Tell your owner in one line.'
 
+/** The one refusal for every harness a Buddy may not reach, or that does not run: which kind it is, or that it exists, is
+ *  no read a Buddy is given (security review 2 of #2626). The CLI says the same for a name it does not find. */
+export const NOT_ONE_TEXT = 'That is not one of your owner\'s harnesses on this Mac, or it no longer runs. Nothing was sent.'
+
 /** Why a Buddy may not pass words to [check.target] here, or null. */
-export function relayRefusal(check: RelayCheck): { code: 'TELL_OFF' | 'OWNER_AWAY' | 'NOT_YOURS' | 'NOT_RUNNING'; message: string } | null {
+export function relayRefusal(check: RelayCheck): { code: 'TELL_OFF' | 'OWNER_AWAY' | 'NOT_YOURS'; message: string } | null {
   if (!check.on) return { code: 'TELL_OFF', message: `Your owner has not allowed agents to give their harnesses work. ${askThePersonFirst('agents-tell-agents', 'tell them what to pass on, and let them do it.')}` }
   if (!check.granted) return { code: 'OWNER_AWAY', message: OWNER_AWAY_TEXT }
   const t = check.target
-  if (!t) return { code: 'NOT_RUNNING', message: 'That harness is no longer running here: it was closed or stopped. Tell your owner.' }
-  const whose = t.self ? 'That is you.'
-    : t.guest ? 'That harness is another person\'s.'
-    : t.swarm ? 'That is a Swarm agent: the Swarm directs it.'
-    : t.startedByAgent ? 'An agent started that harness: only it, or your owner, gives it work.'
-    : t.terminal ? 'That is a terminal, not a harness.' : null
-  return whose ? { code: 'NOT_YOURS', message: `${whose} A Buddy passes words only to harnesses its owner started on this Mac. Nothing was sent.` } : null
+  return !t || t.self || t.guest || t.swarm || t.startedByAgent || t.terminal ? { code: 'NOT_YOURS', message: NOT_ONE_TEXT } : null
 }
 
-/** A relayed message as the harness reads it: from the person's Buddy, their words, and that the Buddy reads no answer. */
+/** A relayed message as the harness reads it: passed on by the person's Buddy, which reads no answer. Never called the
+ *  person's own words: the machine cannot know whose they are (security review 2 of #2626). */
 export function relayedText(message: Message): string {
   const from = message.from
-  return `[from ${shown(from.name)} · ${shown(from.machine)}, your person's Buddy in Harness: their words, passed on. It does not read your answer; your person does.]\n\n${message.text}`
+  return `[from ${shown(from.name)} · ${shown(from.machine)}: passed on by your person's Buddy in Harness. It does not read your answer; your person does.]\n\n${message.text}`
 }
