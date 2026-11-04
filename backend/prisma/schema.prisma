@@ -152,7 +152,7 @@ model User {
   externalId      String    @unique // production SSO subject == SDS `customer_id`; local-prod-* until known
   stagExternalId  String? // staging SSO subject; authentication still keys by email
   passwordHash    String? // legacy only; SSO users have none
-  name            String?
+  name            String? // from SSO once, while empty; later sign-ins never overwrite it (UserService.upsertFromSso)
   role            String    @default("user") // user | admin
   // Which Autonomous account plane this user signs in against. Existing rows are backfilled to
   // staging because they were created while the app used staging globally; new users default prod.
@@ -1374,7 +1374,10 @@ model SuperTabOperation {
   parts        Json?
   createdAt    DateTime @default(now())
 
-  @@index([tabId])
+  /// A Swarm's receipts, and by date: Atlas's Performance Advisor saw a read scan 107 k rows to return 40 (Ken's plan, 2026-11-04). No
+  /// backend read uses the date yet; check on Atlas after the release, and shorten it to tabId if nothing does. It replaces the index on
+  /// tabId alone, its prefix, since this collection gets a write on every command.
+  @@index([tabId, createdAt])
   /// A receipt goes 30 days after createdAt (superTabs/operations.ts ensureOperationExpiry). Declared so db push keeps the index; the
   /// schema step makes it, with its expiry, before the push.
   @@index([createdAt], map: "operation_expiry")

@@ -10,6 +10,7 @@ import '../shared/theme/app_theme.dart';
 import '../shared/theme/app_type.dart';
 import 'model.dart';
 import 'swarm_buddy.dart';
+import 'swarm_machine_details.dart';
 import 'swarm_machine_menu.dart';
 import 'swarm_reader.dart';
 import 'swarm_style.dart';
@@ -230,14 +231,13 @@ class SwarmMachineSheet extends StatelessWidget {
         reader,
         refreshing: refreshing,
       );
-      final r = view.resources;
-      final total = _number(r['memoryTotalBytes']);
-      final used = _number(r['memoryUsedBytes']);
-      final diskTotal =
-          _number(r['projectDiskTotalBytes']) ?? _number(r['diskTotalBytes']);
-      final diskFree = r['projectDiskTotalBytes'] == null
-          ? _number(r['diskFreeBytes'])
-          : _number(r['projectDiskFreeBytes']);
+      final subscriptions = swarmMachineSubscriptions(
+        snapshot,
+        machineId,
+        reading: view.reading,
+        readingDim: view.dim,
+        now: DateTime.now(),
+      );
       final agents = swarmTeamGlance(snapshot).agents.where(
         (a) =>
             snapshot.placeOf(a.agent.machineId) == machineId &&
@@ -268,46 +268,27 @@ class SwarmMachineSheet extends StatelessWidget {
                   ),
                 ],
               ),
-              _detail('Status', view.status),
-              if (view.owner case final owner?)
-                _detail('Owner', owner.shownName),
-              _heading('Hardware'),
-              if (view.dim)
-                _detail('Readings', 'Current readings unavailable')
-              else ...[
-                _detail('CPU', _percent(r['cpuPercent'])),
-                _detail('GPU', _percent(r['gpuPercent'])),
-                _detail(
-                  'RAM',
-                  total == null || used == null
-                      ? 'Unavailable'
-                      : '${_bytes((total - used).clamp(0, total))} free of ${_bytes(total)}',
+              SwarmMachineDetails(
+                name: view.name,
+                owner: view.owner?.shownName,
+                status: view.details,
+                // Details follow the same freshness rule as the row: old readings are not shown as current.
+                resources: view.dim
+                    ? null
+                    : SwarmMachineResources.read(view.resources),
+                engines: subscriptions.engines,
+                allowances: view.dim ? const [] : subscriptions.allowances,
+                footer: SwarmMachineLocalModels(
+                  reader: reader,
+                  machineId: machineId,
                 ),
-                _detail(
-                  'SSD',
-                  diskFree == null
-                      ? 'Unavailable'
-                      : '${_bytes(diskFree)} free${diskTotal == null ? '' : ' of ${_bytes(diskTotal)}'}',
-                ),
-                for (final (label, field) in [
-                  ('Device', 'deviceType'),
-                  ('Chip', 'chip'),
-                  ('System', 'os'),
-                ])
-                  if (r[field] case final String text) _detail(label, text),
-              ],
-              _heading('Model allowances'),
-              if (view.dim)
-                _detail('Allowances', 'Current allowances unavailable')
-              else
-                for (final engine in ['claude', 'codex'])
-                  ..._allowance(view, engine),
-              _heading('Agents'),
+              ),
+              swarmMachineDetailHeading('Agents'),
               if (agents.isEmpty)
-                _detail('Running here', 'No agents running')
+                swarmMachineDetailRow('Running here', 'No agents running')
               else
                 for (final a in agents)
-                  _detail(
+                  swarmMachineDetailRow(
                     a.name,
                     '${snapshot.roleOf(a.agent.id)?.badge ?? 'Dev'} · ${a.label}',
                   ),
@@ -320,85 +301,7 @@ class SwarmMachineSheet extends StatelessWidget {
   );
 }
 
-Widget _heading(String title) => Padding(
-  padding: const EdgeInsets.only(top: AppSpace.xl, bottom: AppSpace.s),
-  child: Text(title, style: AppType.heading(color: AppPalette.textPrimary)),
-);
-
-Widget _detail(String label, String text) => Padding(
-  padding: const EdgeInsets.symmetric(vertical: AppSpace.xs),
-  child: Row(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Expanded(
-        flex: 2,
-        child: Text(
-          label,
-          style: AppType.caption(color: AppPalette.textSecondary),
-        ),
-      ),
-      const SizedBox(width: AppSpace.m),
-      Expanded(
-        flex: 3,
-        child: Text(
-          text,
-          textAlign: TextAlign.right,
-          style: AppType.body(color: AppPalette.textPrimary),
-        ),
-      ),
-    ],
-  ),
-);
-
 double? _number(Object? v) => v is num && v.isFinite ? v.toDouble() : null;
-String _percent(Object? value) => switch (_number(value)) {
-  final n? => '${n.clamp(0, 100).round()}% in use',
-  null => 'Unavailable',
-};
-String _bytes(num bytes) =>
-    '${(bytes / 1073741824).toStringAsFixed(bytes % 1073741824 == 0 ? 0 : 1)} GB';
-
-List<Widget> _allowance(_MachineView view, String engine) {
-  final quota = (view.observation['quotas'] as List? ?? [])
-      .map(superTabMap)
-      .where((q) => q['engine'] == engine)
-      .firstOrNull;
-  final windows = (quota?['windows'] as List? ?? []).map(superTabMap).toList();
-  DateTime? reset(Object? raw) => raw is num
-      ? DateTime.fromMillisecondsSinceEpoch(
-          raw > 100000000000 ? raw.toInt() : (raw * 1000).toInt(),
-        )
-      : raw is String
-      ? DateTime.tryParse(raw)
-      : null;
-  final known =
-      quota?['known'] == true &&
-      windows.isNotEmpty &&
-      windows.every(
-        (w) =>
-            _number(w['usedPercent']) != null &&
-            !(reset(w['resetsAt'])?.isBefore(DateTime.now()) ?? false),
-      );
-  final name = engine == 'claude' ? 'Claude' : 'Codex';
-  if (!known) return [_detail(name, 'Allowance unavailable')];
-  return [
-    for (final w in windows)
-      _detail(
-        name,
-        '${w['name'] ?? 'Allowance'}: ${(100 - _number(w['usedPercent'])!).clamp(0, 100).round()}% left'
-        '${reset(w['resetsAt']) == null ? '' : '\nResets ${_resetIn(reset(w['resetsAt'])!)}'}',
-      ),
-  ];
-}
-
-String _resetIn(DateTime at) {
-  final minutes = at.difference(DateTime.now()).inMinutes;
-  return minutes <= 0
-      ? 'now'
-      : minutes < 60
-      ? 'in ${minutes}m'
-      : 'in ${minutes ~/ 60}h ${minutes % 60}m';
-}
 
 class _MachineView {
   _MachineView(
@@ -420,9 +323,15 @@ class _MachineView {
               (pool?['contributorId'] ?? agents.firstOrNull?.contributorId),
         )
         .firstOrNull;
-    name = pool?['name'] as String? ?? 'Unavailable machine';
-    final reading = snapshot.readingPoolOf(id, reader.accountId);
-    observation = superTabMap(
+    name =
+        pool?['name'] as String? ??
+        // The Swarm knows no name for it, and sharing its own would be new data: it is named by its owner, as Desktop
+        // names it.
+        (pool == null && snapshot.teamPoolOf(id) == null && owner != null
+            ? "${owner!.shownName}'s computer"
+            : 'Unavailable machine');
+    reading = snapshot.readingPoolOf(id, reader.accountId);
+    final observation = superTabMap(
       reading?['observation'] ?? const <String, dynamic>{},
     );
     resources = superTabMap(
@@ -452,13 +361,30 @@ class _MachineView {
         : live
         ? 'Online'
         : 'Late';
+    final paused = reading?['paused'] == true;
+    final removal = pool?['removal'];
+    // What its details say of its state, in Desktop's words (`machines.dart` `_view`): late is still online there.
+    details = removal is Map && removal['state'] == 'cleaning'
+        ? 'Cleaning up'
+        : reader.error != null
+        ? "Can't reach Harness"
+        : refreshing
+        ? 'Refreshing…'
+        : offline
+        ? (paused ? 'Offline, new work paused' : 'Offline')
+        : paused
+        ? 'New work paused'
+        : 'Online';
   }
   final SuperTabSnapshot snapshot;
   final String id;
-  late final String name, status;
+  late final String name, status, details;
   late final SuperTabPerson? owner;
   late final List<SuperTabAgent> agents;
-  late final Map<String, dynamic> observation, resources;
+
+  /// The pool whose reading the row shows ([SuperTabSnapshot.readingPoolOf]).
+  late final Map<String, dynamic>? reading;
+  late final Map<String, dynamic> resources;
   late final bool offline, live, dim;
   bool get laptop =>
       (resources['deviceType'] as String? ?? name).toLowerCase().contains(

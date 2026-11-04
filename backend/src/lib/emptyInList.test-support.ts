@@ -1,7 +1,7 @@
 /**
  * Finds reads that can send an empty `in` list to Prisma on MongoDB (Database optimization roadmap, phase 0.3). Prisma turns
  * `in: []` into `$or: []`, which no index serves: a scan of the whole collection that returns nothing, seen in the slow log on
- * machines, users and SuperTab. A read of one of those models (or a raw `$in`) that names a list held in a variable must test
+ * machines, users and SuperTab, and on the receipts. A read of one of those models (or a raw `$in`) that names a list held in a variable must test
  * that list's `.length` or `.size` first in the same function (an `if`, a `?:` or `&&`), or pass a literal list or a constant.
  * A filter given by name (`where`, a spread, the whole arguments) is read where it is built; one the check cannot see into (a
  * parameter, a call's result, one declared after the read) is flagged rather than passed. Known limits: a list inside a
@@ -15,7 +15,7 @@
 import ts from 'typescript'
 
 /** The collections the slow log names. */
-export const GUARDED_MODELS = new Set(['machine', 'user', 'superTab'])
+export const GUARDED_MODELS = new Set(['machine', 'user', 'superTab', 'productUsageReceipt', 'swarmHead', 'swarmMember', 'swarmWorkspace'])
 
 export interface Unguarded { file: string; line: number; list: string }
 
@@ -54,6 +54,10 @@ function tellsEmpty(condition: ts.Node, list: string): boolean {
 }
 const isListName = (node: ts.Expression): boolean => ts.isIdentifier(node) || (ts.isPropertyAccessExpression(node) && isListName(node.expression))
 const CONSTANT = /^[A-Z][A-Z0-9_]*$/
+/** A list written out in the call: it holds what it names. Not one made only of spreads (`[...new Set(ids)]`), empty when they
+ *  are, unless each spreads a constant. Both lists production scanned with on 2026-11-04 had this form. */
+const fixedList = (node: ts.Node): boolean => ts.isArrayLiteralExpression(node) && !(node.elements.length && node.elements.every(element =>
+  ts.isSpreadElement(element) && !CONSTANT.test(element.expression.getText())))
 
 /** The list a `.map(...)` or `[...new Set(list)]` is as long as; the expression itself for anything else. */
 function listOf(node: ts.Expression): ts.Expression {
@@ -150,7 +154,7 @@ export function unguardedInLists(source: string, file: string): Unguarded[] {
         else if (ts.isShorthandPropertyAssignment(inner) && inner.name.text === 'where') follow(inner.name, true)
         else if (ts.isSpreadAssignment(inner)) visitValue(inner.expression, inner.expression, false)
         if (ts.isPropertyAssignment(inner) && ['in', '$in'].includes(inner.name.getText().replaceAll(/['"]/g, ''))
-          && !ts.isArrayLiteralExpression(inner.initializer) && !(ts.isIdentifier(inner.initializer) && CONSTANT.test(inner.initializer.text))) {
+          && !fixedList(inner.initializer) && !(ts.isIdentifier(inner.initializer) && CONSTANT.test(inner.initializer.text))) {
           const list = inner.initializer.getText()
           if (!(isListName(listOf(inner.initializer)) && guarded(node, inner.initializer))) {
             found.push({ file, line: sf.getLineAndCharacterOfPosition(inner.getStart()).line + 1, list })

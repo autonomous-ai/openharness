@@ -2,6 +2,7 @@ import AVFoundation
 import AudioToolbox
 import AuthenticationServices
 import Flutter
+import NetworkExtension
 import Speech
 import UIKit
 import UserNotifications
@@ -29,6 +30,86 @@ import UserNotifications
     AppBadgeChannel.register(with: engineBridge.pluginRegistry)
     DictationChannel.register(with: engineBridge.pluginRegistry)
     LinkChannel.register(with: engineBridge.pluginRegistry)
+    SetupWifiChannel.register(with: engineBridge.pluginRegistry)
+  }
+}
+
+/// `harness/setup_wifi` — joining a new device's setup hotspot (Dart: `lib/phone/add_device/setup_hotspot.dart`),
+/// as Android does (MainActivity.kt). `join` asks iOS for the open Wi-Fi whose name starts with `prefix`
+/// (`Harness-`, or one device's whole name): iOS finds it and asks "Join Wi-Fi network …?" — the person
+/// no longer goes to Settings ▸ Wi-Fi. It answers `joined` with the address the hotspot gave this phone,
+/// or `unavailable` (cancelled, not found, or iOS stayed on its own Wi-Fi). `leave` forgets the hotspot,
+/// and iOS goes back to the phone's own Wi-Fi by itself.
+enum SetupWifiChannel {
+  /// The hotspot's network (os/setup.py ADDRESS 10.42.0.1): this phone's address there is 10.42.0.x.
+  private static let subnet = "10.42.0."
+
+  static func register(with registry: FlutterPluginRegistry) {
+    guard let messenger = registry.registrar(forPlugin: "HarnessSetupWifi")?.messenger() else { return }
+    let channel = FlutterMethodChannel(name: "harness/setup_wifi", binaryMessenger: messenger)
+    channel.setMethodCallHandler { call, result in
+      switch call.method {
+      case "join":
+        let prefix = (call.arguments as? [String: Any])?["prefix"] as? String ?? ""
+        guard !prefix.isEmpty else { result(["state": "unavailable"]); return }
+        join(prefix: prefix, result: result)
+      case "leave":
+        leave { result(true) }
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+  }
+
+  private static func join(prefix: String, result: @escaping FlutterResult) {
+    // Open: os/setup.py hosts the hotspot with no password. Once: iOS forgets it when the app leaves the
+    // front, so a phone is never left on a network with no Internet.
+    let configuration = NEHotspotConfiguration(ssidPrefix: prefix)
+    configuration.joinOnce = true
+    NEHotspotConfigurationManager.shared.apply(configuration) { error in
+      if let error = error as NSError?, error.code != NEHotspotConfigurationError.alreadyAssociated.rawValue {
+        NSLog("[setup_wifi] join \(prefix): \(error.domain) \(error.code) \(error.localizedDescription)")
+        result(["state": "unavailable"])
+        return
+      }
+      // A join iOS reports is not yet one the phone is on: it can stay on its own Wi-Fi, which has the
+      // Internet the hotspot lacks, and DHCP takes a moment. Only an address on the hotspot's network counts.
+      awaitAddress(deadline: Date().addingTimeInterval(10)) { address in
+        result(address == nil ? ["state": "unavailable"] : ["state": "joined", "address": address!])
+      }
+    }
+  }
+
+  private static func awaitAddress(deadline: Date, done: @escaping (String?) -> Void) {
+    if let address = hotspotAddress() { done(address); return }
+    if Date() > deadline { done(nil); return }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { awaitAddress(deadline: deadline, done: done) }
+  }
+
+  /// This phone's IPv4 address on the hotspot's network, if it has one.
+  private static func hotspotAddress() -> String? {
+    var addresses: UnsafeMutablePointer<ifaddrs>?
+    guard getifaddrs(&addresses) == 0, let first = addresses else { return nil }
+    defer { freeifaddrs(addresses) }
+    for entry in sequence(first: first, next: { $0.pointee.ifa_next }) {
+      guard let socket = entry.pointee.ifa_addr, socket.pointee.sa_family == UInt8(AF_INET) else { continue }
+      var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+      if getnameinfo(socket, socklen_t(socket.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 {
+        let address = String(cString: host)
+        if address.hasPrefix(subnet) { return address }
+      }
+    }
+    return nil
+  }
+
+  /// Forgets every setup hotspot this app joined; iOS then goes back to the phone's own Wi-Fi.
+  private static func leave(done: @escaping () -> Void) {
+    NEHotspotConfigurationManager.shared.getConfiguredSSIDs { names in
+      for name in names where name.hasPrefix("Harness-") {
+        NEHotspotConfigurationManager.shared.removeConfiguration(forSSID: name)
+      }
+      done()
+    }
   }
 }
 

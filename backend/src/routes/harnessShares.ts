@@ -73,13 +73,14 @@ export async function harnessShareRoutes(app: FastifyInstance): Promise<void> {
     }, orderBy: { createdAt: 'asc' }, take: 1000 })
     // All at once: share by share, each loaded its whole Swarm again (prod 2026-10-28, p95 13.4 s).
     const visible = await new SuperTabStore(prisma).openableShares(req.user!, shares)
-    const machines = await prisma.machine.findMany({ where: {
+    // Most people have no share: an empty list would scan all machines (`$or: []`, prod 2026-11-04).
+    const machines = visible.length ? await prisma.machine.findMany({ where: {
       machineId: { in: [...new Set(visible.map(s => s.machineId))] },
       autonomousEnv: req.user!.autonomousEnv, ...machineAlive,
-    } })
+    } }) : []
     const allowed = machines.filter(machineBillingAllowsDataPlane)
-    const owners = await prisma.user.findMany({ where: { id: { in: [...new Set(allowed.map(m => m.userId))] } },
-      select: { id: true, name: true, email: true } })
+    const owners = allowed.length ? await prisma.user.findMany({ where: { id: { in: [...new Set(allowed.map(m => m.userId))] } },
+      select: { id: true, name: true, email: true } }) : []
     const presence = await getAgentPresenceMany(allowed.map(m => m.machineId))
     sendSuccess(reply, { machines: allowed.flatMap(machine => {
       const grants = visible.filter(s => s.machineId === machine.machineId && s.ownerId === machine.userId)
