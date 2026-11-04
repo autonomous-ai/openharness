@@ -42,10 +42,68 @@ class _SuperTabBacklogViewState extends State<SuperTabBacklogView> {
   /// The pull requests watched for their checks: open tasks' alone.
   Set<String> _watched = const {};
 
+  /// Tasks that shipped within the window and have closed since: the controller
+  /// holds few of them, so they are read when the list opens and kept here.
+  final _closed = <SuperTabConversation>[];
+  bool _closedFailed = false;
+
+  /// The read under way; one left behind by a retry or a new Swarm ends.
+  Object? _closedRead;
+
+  @override
+  void initState() {
+    super.initState();
+    _readClosed();
+  }
+
+  @override
+  void didUpdateWidget(SuperTabBacklogView old) {
+    super.didUpdateWidget(old);
+    if (!identical(old.controller, widget.controller)) _readClosed();
+  }
+
   @override
   void dispose() {
+    _closedRead = null;
     widget.facts?.unwatch(_watched);
     super.dispose();
+  }
+
+  Future<void> _readClosed() async {
+    final read = _closedRead = Object();
+    _closed.clear();
+    final now = widget.now();
+    final since = now.subtract(superTabBacklogShippedWindow);
+    _setClosedFailed(false);
+    final c = widget.controller;
+    for (final project in c.snapshot?.projects ?? const <SuperTabProject>[]) {
+      try {
+        await for (final page in c.readClosedSince(project.id, since)) {
+          if (!identical(read, _closedRead)) return;
+          final shipped = [
+            for (final task in page)
+              if (superTabBacklogGroupOf(task, now) != null) task,
+          ];
+          if (shipped.isNotEmpty) setState(() => _closed.addAll(shipped));
+        }
+      } catch (_) {
+        // The controller logged it; the list says so and offers to read again.
+        if (!identical(read, _closedRead)) return;
+        _setClosedFailed(true);
+      }
+    }
+  }
+
+  void _setClosedFailed(bool failed) {
+    if (failed == _closedFailed) return;
+    if (mounted) setState(() => _closedFailed = failed);
+  }
+
+  /// Opens [task]'s chat, reading it first when the controller does not hold it.
+  Future<void> _open(SuperTabConversation task) async {
+    if (await widget.controller.loadGroup(task.id) && mounted) {
+      widget.onOpenConversation(task.id);
+    }
   }
 
   void _watch(Iterable<SuperTabConversation> open) {
@@ -73,11 +131,10 @@ class _SuperTabBacklogViewState extends State<SuperTabBacklogView> {
   Widget _build(BuildContext context) {
     grid.AppTheme.watch(context);
     final c = widget.controller, snapshot = c.snapshot;
-    final all = superTabBacklogTasks(c);
+    final now = widget.now();
     final placed = [
-      for (final task in all)
-        if (superTabBacklogGroupOf(task, widget.now()) case final group?)
-          (task, group),
+      for (final task in superTabBacklogTasks(c, closed: _closed))
+        if (superTabBacklogGroupOf(task, now) case final group?) (task, group),
     ];
     // Watched after the frame: a build changes nothing outside itself.
     final open = [
@@ -87,13 +144,22 @@ class _SuperTabBacklogViewState extends State<SuperTabBacklogView> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _watch(open);
     });
-    final shown = [
+    final matching = [
       for (final (task, group) in placed)
         if ((_project == null || task.projectId == _project) &&
             (!_mine || task.requesterId == c.accountId) &&
             (_group == null || group == _group))
           (task, group),
     ];
+    // Mine with nothing open says so and links to what shipped, whatever else
+    // the reader asked for. All of it is shipped here, or it would be open.
+    final noneOpen =
+        _mine &&
+        _group == null &&
+        matching.every((e) => e.$2 == SuperTabBacklogGroup.shipped);
+    final shown = noneOpen
+        ? const <(SuperTabConversation, SuperTabBacklogGroup)>[]
+        : matching;
     final entries = <Object>[
       for (final group in SuperTabBacklogGroup.values)
         if (shown.where((e) => e.$2 == group).toList() case final tasks
@@ -166,14 +232,57 @@ class _SuperTabBacklogViewState extends State<SuperTabBacklogView> {
             ],
           ),
         ),
+        if (_closedFailed)
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: grid.AppDesktop.groupGap,
+            ),
+            child: Row(
+              children: [
+                Text(
+                  'Some shipped tasks could not be read.',
+                  style: DesktopChrome.metadata(color: DesktopChrome.muted),
+                ),
+                const SizedBox(width: grid.AppDesktop.controlGap),
+                DesktopPill(
+                  key: const ValueKey('super-backlog-shipped-retry'),
+                  label: 'Try again',
+                  quiet: true,
+                  compact: true,
+                  onPressed: _readClosed,
+                ),
+              ],
+            ),
+          ),
         Expanded(
           child: entries.isEmpty
               ? Center(
-                  child: Text(
-                    _mine && all.isNotEmpty
-                        ? 'No tasks you asked for'
-                        : 'No tasks',
-                    style: DesktopChrome.control(color: DesktopChrome.muted),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        noneOpen
+                            ? 'No open tasks of yours'
+                            : _mine
+                            ? 'No tasks you asked for'
+                            : 'No tasks',
+                        style: DesktopChrome.control(
+                          color: DesktopChrome.muted,
+                        ),
+                      ),
+                      if (noneOpen && matching.isNotEmpty)
+                        DesktopPill(
+                          key: const ValueKey('super-backlog-mine-shipped'),
+                          label:
+                              'Your shipped tasks from the last 7 days · '
+                              '${matching.length}',
+                          quiet: true,
+                          compact: true,
+                          onPressed: () => setState(
+                            () => _group = SuperTabBacklogGroup.shipped,
+                          ),
+                        ),
+                    ],
                   ),
                 )
               : LaidOutListView.builder(
@@ -188,8 +297,8 @@ class _SuperTabBacklogViewState extends State<SuperTabBacklogView> {
                       task: task,
                       controller: c,
                       facts: widget.facts,
-                      now: widget.now(),
-                      onOpen: () => widget.onOpenConversation(task.id),
+                      now: now,
+                      onOpen: () => _open(task),
                     ),
                     _ => const SizedBox.shrink(),
                   },
@@ -291,7 +400,8 @@ class _Row extends StatelessWidget {
       snapshot.projectById(task.projectId)?.name,
       if (task.requesterId case final id?) _personName(id),
     ].nonNulls.join(' · ');
-    final changed = controller.groupChangedAt(task.id);
+    // One read for the list alone is not held: when it shipped stands in.
+    final changed = controller.groupChangedAt(task.id) ?? task.shippedAt;
     final muted = DesktopChrome.metadata(color: DesktopChrome.muted);
     return InkWell(
       key: ValueKey('super-backlog-row-${task.id}'),

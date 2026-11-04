@@ -129,6 +129,36 @@ void main() {
     return server;
   }
 
+  /// [server]'s Swarm as Scholes met it: the reader has nothing open, and what
+  /// they asked for shipped and was archived.
+  void nothingOpenWithArchived(ConversationServer server) {
+    final conversations = server.state['conversations'] as List;
+    for (final g in conversations.cast<Map>()) {
+      if (g['requesterId'] == 'owner') g['requesterId'] = 'huy';
+    }
+    final shipped = DateTime(2026, 11, 3, 17).millisecondsSinceEpoch;
+    conversations.addAll(<Map<String, dynamic>>[
+      for (final (i, title) in const [
+        'Thread tags in the sidebar',
+        'Round dial fix',
+        'Machine row menu',
+      ].indexed)
+        {
+          ...conversationFixture('shipped-$i', title),
+          'projectId': 'p0',
+          'number': 2200 - i,
+          'requesterId': 'owner',
+          'archived': true,
+          'agentIds': ['thorne'],
+          'assignment': {'id': 'a-s$i', 'agentId': 'thorne', 'status': 'done'},
+          'shippedAt': shipped,
+          'pullRequestUrls': [
+            'https://github.com/autonomous-ai/openharness/pull/${2600 + i}',
+          ],
+        },
+    ]);
+  }
+
   Future<void> show(
     WidgetTester tester,
     ConversationServer server, {
@@ -166,20 +196,29 @@ void main() {
   }
 
   for (final brightness in Brightness.values) {
-    for (final scene in ['all', 'mine', 'project']) {
+    for (final scene in [
+      'all',
+      'mine',
+      'project',
+      'mine-empty',
+      'mine-shipped',
+    ]) {
       testWidgets('screenshots for review ($scene, ${brightness.name})', (
         tester,
       ) async {
         final picture = GlobalKey();
-        await show(
-          tester,
-          swarm(perProject: 3),
-          brightness: brightness,
-          picture: picture,
-        );
-        if (scene == 'mine') {
+        final server = swarm(perProject: 3);
+        if (scene.startsWith('mine-')) nothingOpenWithArchived(server);
+        await show(tester, server, brightness: brightness, picture: picture);
+        if (scene.startsWith('mine')) {
           await tester.tap(find.byKey(const ValueKey('super-backlog-mine')));
           await tester.pumpAndSettle();
+          if (scene == 'mine-shipped') {
+            await tester.tap(
+              find.byKey(const ValueKey('super-backlog-mine-shipped')),
+            );
+            await tester.pumpAndSettle();
+          }
         } else if (scene == 'project') {
           await tester.tap(find.byKey(const ValueKey('super-backlog-project')));
           await tester.pumpAndSettle();

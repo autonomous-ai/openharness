@@ -59,6 +59,10 @@ String superTabMessageId({
     .join()
     .substring(0, 24);
 
+/// The most pages of closed groups one read goes through (50 a page), so a
+/// Swarm whose old groups all changed lately cannot read without an end.
+const _closedSincePages = 40;
+
 /// Saved for a text still queued when the window closed. Older versions read
 /// and show it; this one knows it by [_unsentKey] and shows Not sent alone.
 const _unsentReason = 'Not sent before this window closed.';
@@ -4000,6 +4004,56 @@ class SuperTabController extends ChangeNotifier {
             '${failure is SuperTabFailure ? '${failure.code} (status ${failure.statusCode})' : failure.runtimeType}',
       );
     }
+  }
+
+  /// [projectId]'s closed groups last active since [since], newest first, a
+  /// page at a time, for a list that keeps them itself: they join no snapshot,
+  /// which is built again on every change, and no project's "Closed" count. By
+  /// project, as only a project's list has an index that serves its order. A
+  /// page whose last group last changed before [since] is the last read, since
+  /// those after it were last active earlier still. Throws when a page cannot
+  /// be read.
+  Stream<List<SuperTabConversation>> readClosedSince(
+    String projectId,
+    DateTime since,
+  ) async* {
+    String? before;
+    for (var page = 0; page < _closedSincePages; page++) {
+      if (_disposed || accessRevoked) return;
+      final Map<String, dynamic> answer;
+      try {
+        answer = await request(
+          'GET',
+          '$_path/groups?dormant=1&projectId=${Uri.encodeQueryComponent(projectId)}'
+              '${before == null ? '' : '&before=${Uri.encodeQueryComponent(before)}'}',
+        );
+      } catch (failure) {
+        if (_isUpdateRequired(failure)) {
+          _requireUpdate();
+          return;
+        }
+        appLog.warn(
+          'swarm',
+          'closed tasks read failed: '
+              '${failure is SuperTabFailure ? '${failure.code} (status ${failure.statusCode})' : failure.runtimeType}',
+        );
+        rethrow;
+      }
+      final groups = answer['groups'] as List;
+      yield [
+        for (final raw in groups)
+          SuperTabConversation.fromJson(superTabMap(superTabMap(raw)['data'])),
+      ];
+      before = answer['next'] as String?;
+      final last = groups.lastOrNull;
+      if (before == null || last == null) return;
+      final changedAt = superTabMap(last)['changedAt'];
+      if (changedAt is num && changedAt < since.millisecondsSinceEpoch) return;
+    }
+    appLog.warn(
+      'swarm',
+      'closed tasks read stopped at $_closedSincePages pages',
+    );
   }
 
   /// Builds the snapshot again from the parts held, after a read on demand.
