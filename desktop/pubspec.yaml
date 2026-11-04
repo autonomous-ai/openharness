@@ -112,12 +112,19 @@ dependencies:
   # local copy of the file. A native plugin, first-party Flutter: AVPlayer on
   # macOS, through its Swift package, so it lands in the macOS SPM package list
   # and GeneratedPluginRegistrant; the browser's own media element on the web.
-  # It has no Linux or Windows implementation, so there the bubble's play
-  # opens the file as a file chip does. See CLAUDE.md on what a plugin costs.
+  # It has no Linux implementation, so there the bubble's play opens the file
+  # as a file chip does. See CLAUDE.md on what a plugin costs.
   video_player: ^2.14.0
   # The composer's mic on macOS and the web, as the phone records (#2665):
   # 16 kHz mono PCM16 streamed into a WAV. Linux and Windows draw no mic.
   record: ^7.1.1
+  # video_player on Windows, through Media Foundation, which plays a voice
+  # message's WAV with no extra codec. BSD-3-Clause. Keep exact: see RELEASE.md.
+  video_player_win: 3.3.1
+  # The web pane on Windows, through WebView2, behind the same webview_flutter
+  # protocol as the Mac. Keep exact: 3.x registers on Linux as well, where it
+  # would replace webview_all_linux. BSD-3-Clause. See RELEASE.md.
+  webview_win_floating: 2.3.2
 
 dev_dependencies:
   flutter_test:

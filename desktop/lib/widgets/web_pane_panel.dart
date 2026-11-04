@@ -9,7 +9,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
 import '../core/open_in_browser.dart';
-import '../core/linux_webview_runtime.dart';
+import '../core/native_webview_runtime.dart';
 import '../core/runtime_platform.dart';
 import '../core/models.dart' show AgentVerdict;
 import '../core/test_run.dart';
@@ -90,8 +90,7 @@ class WebPanePanel extends StatefulWidget {
   static bool get webviewAvailable =>
       webviewAvailableForTest ??
       (!kUnderTest &&
-          (RuntimePlatform.isMacOS ||
-              (RuntimePlatform.isLinux && LinuxWebViewRuntime.available)));
+          (RuntimePlatform.isMacOS || NativeWebViewRuntime.available));
 
   /// A test that installs a fake `WebViewPlatform` mounts the real webview path.
   @visibleForTesting

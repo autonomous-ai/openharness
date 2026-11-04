@@ -7,7 +7,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
 import '../core/dsh_catalog.dart';
-import '../core/linux_webview_runtime.dart';
+import '../core/native_webview_runtime.dart';
 import '../core/runtime_platform.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
@@ -80,7 +80,8 @@ class _StoreDemoDialogState extends State<StoreDemoDialog>
 
   bool get _webviewAvailable =>
       WebViewPlatform.instance != null &&
-      (!RuntimePlatform.isLinux || LinuxWebViewRuntime.available);
+      (!(RuntimePlatform.isLinux || RuntimePlatform.isWindows) ||
+          NativeWebViewRuntime.available);
 
   @override
   void initState() {
