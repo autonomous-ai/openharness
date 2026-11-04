@@ -432,7 +432,9 @@ void main() {
     Finder project_(String id) => key('swarm-project-$tab-$id');
     Finder inside(Finder of, Finder matching) =>
         find.descendant(of: of, matching: matching);
-    Finder dot() => key('swarm-icon-dot');
+
+    /// Home saying a filter is on, where the filter icon's dot was.
+    Finder dot() => key('swarm-filter-on');
 
     /// Sort and filter, from the Swarm switcher in Home's title (anh Dee,
     /// 2026-11-04: no filter icon on Home).
@@ -502,8 +504,7 @@ void main() {
         await tester.pumpAndSettle();
       }
 
-      Finder rowDot() =>
-          find.descendant(of: key('swarm-switch-view'), matching: dot());
+      Finder rowDot() => key('swarm-switch-view-dot');
 
       await switcher();
       expect(rowDot(), findsNothing);

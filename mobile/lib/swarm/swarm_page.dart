@@ -14,6 +14,7 @@ import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 
 import 'swarm_activity.dart' show SwarmActivityFilter;
+import 'swarm_agents.dart';
 import 'swarm_conversation_page.dart' show openSwarmConversation;
 import 'swarm_home_list.dart';
 import 'swarm_home_rows.dart';
@@ -381,7 +382,14 @@ class _SwarmPageState extends State<SwarmPage> {
       titleLabel: listing
           ? 'Loading your Swarm. Switch Swarm'
           : 'Swarm: $title. Switch Swarm',
-      onTitle: () => unawaited(showSwarmSwitcher(context, session)),
+      onTitle: () => unawaited(
+        showSwarmSwitcher(
+          context,
+          session,
+          onView: () => _openView(context, session),
+          agents: swarmAgentsOf(context),
+        ),
+      ),
     );
   }
 
@@ -414,34 +422,21 @@ class _SwarmPageState extends State<SwarmPage> {
     ],
   );
 
-  /// Sort and filter, at the right of the projects' first caption (Tony,
-  /// 2026-11-03): a dot with anything but the defaults on, said in words too.
-  /// Mark all read and Refresh are in its sheet, Mark all read greyed with
-  /// nothing unread in the Swarms shown.
-  Widget _viewButton(BuildContext context, SwarmSession session) {
-    final home = session.home;
-    return SwarmIconButton(
-      key: const ValueKey('swarm-home-view'),
-      icon: LucideIcons.listFilter300,
-      size: 20,
-      label:
-          'Sort and filter: ${swarmHomeSortLabel(home)}, '
-          '${swarmHomeFilterLabel(home.filter)}',
-      dot: home.viewChanged,
-      onPressed: () => unawaited(
-        showSwarmHomeViewSheet(
-          context,
-          session,
-          unread: () => swarmAnyUnread([
-            for (final swarm in _shown(session))
-              ?session.inbox.reader(swarm.id),
-          ]),
-          onMarkAllRead: () => _markAllRead(context, session, _shown(session)),
-          onRefresh: () => unawaited(_refresh(context, session)),
-        ),
-      ),
-    );
-  }
+  /// Sort and filter, from the Swarm switcher (anh Dee, 2026-11-04: no
+  /// filter icon on Home; its row has the dot and the words). Mark all read
+  /// and Refresh are in its sheet, Mark all read greyed with nothing unread
+  /// in the Swarms shown.
+  void _openView(BuildContext context, SwarmSession session) => unawaited(
+    showSwarmHomeViewSheet(
+      context,
+      session,
+      unread: () => swarmAnyUnread([
+        for (final swarm in _shown(session)) ?session.inbox.reader(swarm.id),
+      ]),
+      onMarkAllRead: () => _markAllRead(context, session, _shown(session)),
+      onRefresh: () => unawaited(_refresh(context, session)),
+    ),
+  );
 
   /// Mark all read over the Swarms [shown]: every chat read on this phone at
   /// once, with an Undo while the marks wait to be sent.
@@ -519,14 +514,7 @@ class _SwarmPageState extends State<SwarmPage> {
     final needs = _needLine(context, session, shown, picked, now);
     return [
       ?needs,
-      ..._projects(
-        context,
-        session,
-        shown,
-        now,
-        first: needs == null,
-        view: pushed ? null : _viewButton(context, session),
-      ),
+      ..._projects(context, session, shown, now, first: needs == null),
     ];
   }
 
@@ -582,23 +570,24 @@ class _SwarmPageState extends State<SwarmPage> {
     );
   }
 
-  /// Pinned, then Projects: every project of the Swarms shown, grouped by
-  /// [swarmHomeLists]; a Swarm still to be read has rows on their way, a
-  /// failed read still trying too, as it is in the log. One no read will bring
-  /// says so. The first caption is the screen's [first] thing, with nothing
-  /// over it, and Sort and filter ([view]) at its right.
+  /// Every project of the Swarms shown, the pinned first, grouped by
+  /// [swarmHomeLists], with no Projects or Pinned heading (anh Dee,
+  /// 2026-11-04); a Swarm still to be read has rows on their way, a failed
+  /// read still trying too, as it is in the log. One no read will bring says
+  /// so. A filter on says so first, with Show all, as Home has no filter icon
+  /// to show it. [first]: the screen's first thing, with nothing over it.
   List<Widget> _projects(
     BuildContext context,
     SwarmSession session,
     List<SwarmListing> shown,
     DateTime now, {
     required bool first,
-    Widget? view,
   }) {
     final inbox = session.inbox;
+    final top = SizedBox(height: first ? AppSpace.s : AppSpace.xs);
     if (inbox.swarms.isEmpty) {
       return [
-        SwarmCaption('Projects', first: first),
+        top,
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: AppSpace.xs),
           child: SwarmRow.line(
@@ -686,22 +675,31 @@ class _SwarmPageState extends State<SwarmPage> {
             onTap: () => unawaited(_newProject(session, shown)),
           )
         : null;
+    // Filtered with some listed: what is left out is said, never silent.
+    final filterOn =
+        filter != SwarmHomeFilter.all && !nothingListed && !mentionsFailed
+        ? SwarmRow(
+            key: const ValueKey('swarm-filter-on'),
+            title: mentionsOn ? 'Mentions only' : 'Unread only',
+            trailing: Text(
+              'Show all',
+              style: AppType.label(color: AppPalette.swarmAccent),
+            ),
+            onTap: () => home.setFilter(SwarmHomeFilter.all),
+          )
+        : null;
     return [
-      if (lists.pinned.isNotEmpty) ...[
-        SwarmCaption('Pinned', first: first, trailing: view),
-        SwarmGroup(children: [for (final p in lists.pinned) row(p)]),
-      ],
+      top,
+      if (lists.pinned.isNotEmpty || filterOn != null)
+        SwarmGroup(children: [?filterOn, for (final p in lists.pinned) row(p)]),
       if (lists.recent.isNotEmpty ||
           quiet.isNotEmpty ||
           empty ||
           nothingListed ||
           mentionsFailed ||
           create != null) ...[
-        SwarmCaption(
-          'Projects',
-          first: first && lists.pinned.isEmpty,
-          trailing: lists.pinned.isEmpty ? view : null,
-        ),
+        if (lists.pinned.isNotEmpty || filterOn != null)
+          const SizedBox(height: AppSpace.s),
         SwarmGroup(
           children: [
             if (empty) const SwarmRow(title: 'No project yet', onTap: null),
@@ -738,12 +736,7 @@ class _SwarmPageState extends State<SwarmPage> {
             ?create,
           ],
         ),
-      ] else if (reading.isNotEmpty || failed.isNotEmpty)
-        SwarmCaption(
-          'Projects',
-          first: first && lists.pinned.isEmpty,
-          trailing: lists.pinned.isEmpty ? view : null,
-        ),
+      ],
       // A Swarm still to be read has its skeleton below: one is enough.
       if (mentionsComing && reading.isEmpty) ...[
         const SizedBox(height: 8),
@@ -808,7 +801,7 @@ class _SwarmPageState extends State<SwarmPage> {
 
   /// Home before the list answers: the projects as rows on their way.
   List<Widget> _reading({required bool first}) => [
-    SwarmCaption('Projects', first: first),
+    SizedBox(height: first ? AppSpace.s : AppSpace.xs),
     SwarmSkeletonRows(id: 'swarm-projects-loading', nameOnly: true),
   ];
 }
