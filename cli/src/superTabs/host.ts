@@ -3,7 +3,7 @@ import { ContributedMachines, uncommittedIn, type MachineDeps } from './machines
 import { SwarmGrids } from './swarmGrids.js'
 import { retainContributions } from './retention.js'
 import { configurationObservation } from './configuration.js'
-import { CommandRetries } from './retries.js'
+import { CommandRetries, permanentRefusal } from './retries.js'
 import { NativeRecorder, nativeJournalFile } from './native.js'
 import { attachedFiles, attachmentsOf, formatSize, type FilesInFlight, type Relink } from './attachments.js'
 import { createHash, randomUUID } from 'node:crypto'
@@ -1695,7 +1695,12 @@ export class SuperTabHost {
     } catch (error) {
       // The notice was sent, but its record was lost (a crash, a restart, another daemon) and its group has changed since:
       // the same operation id now names a different request. It was delivered once; record it rather than retry forever.
-      if (!(error instanceof SuperTabHostError) || error.code !== 'OPERATION_REUSED') throw error
+      if (error instanceof SuperTabHostError && error.code === 'OPERATION_REUSED') return true
+      // A notice the Swarm refuses for good is settled, not tried every minute: a Buddy session may post only in its own
+      // thread, so its top-level notice was refused once a minute for as long as it ran (Ken, 11-04: 125
+      // BUDDY_SESSION_THREAD refusals in 32 minutes, #2675).
+      if (!permanentRefusal(error)) throw error
+      this.log(`The skills notice for ${id} was refused (${(error as SuperTabHostError).code}); it is not sent again.`)
     }
     return true
   }
