@@ -408,9 +408,8 @@ void main() {
     await _close(tester, c);
   });
 
-  testWidgets('a new proposal shows once the project chat moves', (
-    tester,
-  ) async {
+  testWidgets('a new proposal shows once the chat moves, at most a read a '
+      'minute', (tester) async {
     final server = tasksServer();
     final c = await _show(tester, server);
     final reads = server.proposalReads.length;
@@ -427,6 +426,15 @@ void main() {
     server.append('Device as your Buddy');
     await c.refresh();
     await tester.pumpAndSettle();
+    // Within a minute of the last read: it waits (PM, 2026-11-04).
+    expect(server.proposalReads.length, reads);
+    expect(_cardsIn(tester, 'proposals'), ['p-old', 'p-new']);
+    server.append('and another');
+    await c.refresh();
+    await tester.pump(const Duration(minutes: 1));
+    await tester.pumpAndSettle();
+    // One read for both moves.
+    expect(server.proposalReads.length, reads + 1);
     expect(_cardsIn(tester, 'proposals'), ['p-old', 'p-new', 'p-newest']);
     await _close(tester, c);
   });
