@@ -3679,31 +3679,30 @@ export class SuperTabStore {
         // Every row of the page refused: no digest, and still seen.
         afterCommit(tx, () => logger.info('[swarm-deliveries] notice digest', { tabId, count: 0, cancelled: refused }))
       }
-      // The built-in schedule (pmSchedule.ts): its slot is recorded in this same write, woken or not, so two racing polls wake
-      // the coordinator once. Its lines go into the update request, else the notice digest, so the PM gets one turn; none while
-      // its last wake is still unread, so a PM deep in a long turn finds one, not one per slot.
+      // The built-in schedule (pmSchedule.ts), only when the sweep has something to do: its slot is recorded in this same write,
+      // woken or held back, so two racing polls wake the coordinator once. Its lines go into the update request, else the notice
+      // digest, so the PM gets one turn; none while its last wake is still unread, so a PM deep in a long turn finds one, not one
+      // per slot.
       const scheduled = led ? scheduleRequest(state, target, this.now()) : null
       if (scheduled) {
         const project = projectOf(state, led!.id)
         let wakeId = project.schedule?.wakeId
-        let placed: 'update' | 'digest' | 'own' | 'skipped-open' | 'nothing-due' = 'nothing-due'
-        if (scheduled.draft) {
-          // The message that carried the last wake, by its delivery's primary key (writeMessages: one row per message and
-          // recipient): still unread is queued, claimed or uncertain.
-          const last = wakeId ? await tx.superTabDelivery.findUnique({ where: { id: stableId(wakeId, agentId) }, select: { status: true } }) : null
-          const open = !!last && ['queued', 'claimed', 'uncertain'].includes(last.status)
-          const into = open ? null : await updateOpen() ? update! : digestDraft ?? null
-          if (open) placed = 'skipped-open'
-          else if (into) {
-            into.text = `${into.text}\n\n${scheduled.draft.text}`
-            into.source = { ...into.source, schedule: scheduled.slot }
-            placed = into === digestDraft ? 'digest' : 'update'
-            wakeId = into.id
-          } else {
-            written.push(scheduled.draft)
-            placed = 'own'
-            wakeId = scheduled.draft.id
-          }
+        let placed: 'update' | 'digest' | 'own' | 'skipped-open'
+        // The message that carried the last wake, by its delivery's primary key (writeMessages: one row per message and
+        // recipient): still unread is queued, claimed or uncertain.
+        const last = wakeId ? await tx.superTabDelivery.findUnique({ where: { id: stableId(wakeId, agentId) }, select: { status: true } }) : null
+        const open = !!last && ['queued', 'claimed', 'uncertain'].includes(last.status)
+        const into = open ? null : await updateOpen() ? update! : digestDraft ?? null
+        if (open) placed = 'skipped-open'
+        else if (into) {
+          into.text = `${into.text}\n\n${scheduled.draft.text}`
+          into.source = { ...into.source, schedule: scheduled.slot }
+          placed = into === digestDraft ? 'digest' : 'update'
+          wakeId = into.id
+        } else {
+          written.push(scheduled.draft)
+          placed = 'own'
+          wakeId = scheduled.draft.id
         }
         project.schedule = { lastSlot: scheduled.slot, ...wakeId ? { wakeId } : {} }
         afterCommit(tx, () => logger.info('[swarm-deliveries] schedule request', { tabId, slot: scheduled.slot, placed }))

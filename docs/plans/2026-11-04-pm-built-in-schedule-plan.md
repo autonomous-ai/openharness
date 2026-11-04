@@ -24,7 +24,7 @@ only, and the CLI appends it to the instructions skill and to the `instructions`
   written, else its own message. The morning digest stays separate.
 - No wake while the last `schedule-request` to that coordinator is `queued`, `claimed` or `uncertain`; the slot is still
   recorded.
-- No wake, slot recorded, when nothing is due (Task 1 `sweepDue`); no wake and nothing recorded in a paused Swarm.
+- No wake and nothing written when nothing is due (Task 1 `sweepDue`; #2946 review: the head stays unchanged); no wake and nothing recorded in a paused Swarm.
 - No on/off switch. Log line: `[swarm-deliveries] schedule request`.
 - No new collection, index or query: the check reads the loaded state; the open-wake check is one `findFirst` on
   `SuperTabDelivery` by `tabId, agentId, messageId, status`, the same shape as the update request's pending check.
@@ -121,7 +121,7 @@ scheduleMessageId(tabId, project.id, previousLastSlot), status: { in: ['queued',
 when there was no previous slot. With none open: append `\n\n` + the draft's text to the update request when this poll
 pushed one and it is not already stored (the existing `merged` check), else to the notice digest message this poll
 pushed, else push the draft. Merged rows keep their `source` and gain `schedule: slot`. Log `[swarm-deliveries]
-schedule request` with `{ tabId, slot, merged: 'update' | 'digest' | 'own' | 'skipped-open' | 'nothing-due' }` after commit.
+schedule request` with `{ tabId, slot, placed: 'update' | 'digest' | 'own' | 'skipped-open' }` after commit (none when nothing is due).
 
 - [ ] **Step 1: Write the failing integration tests** in `superTabPmSchedule.test.ts`, with the swarm setup copied from
   superTabNoticeDigest.test.ts and `wantSchedule()` in each test:
@@ -218,8 +218,7 @@ schedule request` with `{ tabId, slot, merged: 'update' | 'digest' | 'own' | 'sk
 
 - [ ] Ken's go for the backend and CLI release, in the 09:00–16:00 window, in River's batch.
 - [ ] On prod read-only: River's Lead conversation has `schedule-request` messages, at most one per slot, merged where
-  an update request or digest went in the same poll; the log `[swarm-deliveries] schedule request` shows `nothing-due`
-  for idle projects.
+  an update request or digest went in the same poll; idle projects log no `[swarm-deliveries] schedule request` line.
 - [ ] With Ken's go, save the six projects' instructions and read each back. In physical-router, lampos, garage-pod,
   computer and spaceship the whole `## PM schedule` section added on 2026-11-04 goes: the built-in section carries all
   of it. In openharness the progress sync goes from the :07/:37 line (the batch pull request stays), the open-task sweep

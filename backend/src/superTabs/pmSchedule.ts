@@ -65,15 +65,16 @@ export function scheduleText(project: SwarmProject, slot: number): string {
     'Skip a job your project\'s instructions schedule on their own clock. Set no timer of your own for this one, and delete one you set before.'].join('\n')
 }
 
-/** The coordinator's slot when one is due, with its wake when the sweep has something to do (null draft: record the slot,
- *  send nothing). Null in a paused Swarm, which stays due until it resumes, or for an agent that leads no project. The
- *  caller records the slot in the poll's own write, and sends nothing while its last wake is still unread (store.ts). */
-export function scheduleRequest(state: SuperTabState, target: Agent, now: number): { slot: number; draft: MessageDraft | null } | null {
+/** The coordinator's slot and its wake, when a slot is due and the sweep has something to do. Null otherwise, and then nothing
+ *  is recorded: a slot written with no wake would move the Swarm's head, and every reader's copy, each 30 minutes while
+ *  nothing happened (#2946 review, 1), so the slot stays due and the next poll checks again, in memory over the loaded state.
+ *  Null too in a paused Swarm, which stays due until it resumes, or for an agent that leads no project. The caller records
+ *  the slot in the poll's own write, and sends nothing while its last wake is still unread (store.ts). */
+export function scheduleRequest(state: SuperTabState, target: Agent, now: number): { slot: number; draft: MessageDraft } | null {
   if (state.paused) return null
   const project = ledProject(state, target.id)
   const slot = scheduleSlot(now)
-  if (!project || slot <= (project.schedule?.lastSlot ?? -1)) return null
-  if (!sweepDue(state, project.id, now)) return { slot, draft: null }
+  if (!project || slot <= (project.schedule?.lastSlot ?? -1) || !sweepDue(state, project.id, now)) return null
   return { slot, draft: { id: scheduleMessageId(state.id, project.id, slot), conversationId: project.leadConversationId,
     author: author(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }), text: scheduleText(project, slot),
     replyTo: null, recipients: [target.id], source: { kind: 'schedule-request', projectId: project.id, slot } } }

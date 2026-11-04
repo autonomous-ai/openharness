@@ -147,12 +147,17 @@ timer.
   digest's message. Only when nothing else is written does the schedule get a message of its own. The morning digest
   stays its own message: it asks the PM to post to people, a different act.
 - **Nothing to do, no wake.** The sweep is for tasks no agent is moving; a task with an agent working on it is covered by
-  the stalled and lost notices. So a slot is recorded as handled with no message unless the project has an open task
+  the stalled and lost notices. So there is no message, and nothing is recorded, unless the project has an open task
   (a top-level task, not a step: a step belongs to its task's Engineer) that is unassigned or "To do", has lost its agent,
   or is waiting on a person, blocked or needing a human (liveness.ts task state), and no finished group quiet for
   ARCHIVE_QUIET_MS with no pull request linked. *Builder's call (Claude):* this keeps a
   busy project from 48 wakes a day while every task moves; a task parked on a person still wakes the sweep each slot,
-  which is what makes the PM ask or close it.
+  which is what makes the PM ask or close it. A slot with nothing to do writes nothing: `schedule` lives in the Swarm's
+  head, and a write there moves every reader's copy each 30 minutes while nothing happened (#2946 review). The slot stays
+  due, and each later poll checks again in memory over the loaded state; something to sweep later in the slot wakes the
+  PM once. Readers' head leaves `schedule` out, as it leaves `progress`.
+- **Only loaded groups.** The check sees the groups the poll loaded: a finished group with no pull request already asleep
+  (sweeps.ts sleepQuietGroups, after a day of quiet) does not wake the PM. The PM's own sweep still finds it.
 - **One unread wake at a time.** No new wake is written while the last `schedule-request` to the coordinator is still
   open (queued, claimed or uncertain), as the update request does (projectUpdates.ts). The slot is still recorded as
   handled, so a PM deep in a long turn finds one wake, not one per slot, when it comes back. A paused Swarm records nothing and sends nothing; its schedule is due again when
@@ -210,8 +215,8 @@ its own line; the PM then answers the Swarm's wake by skipping that job.
 
 - The schedule is due once per slot; a second poll in the same slot writes nothing; a poll after three missed slots
   writes one wake.
-- No wake, slot recorded, for a project with no open task and no running agent; none and nothing recorded for a paused
-  Swarm.
+- No wake and nothing written (the head's version unchanged) when nothing is due; none and nothing recorded for a paused
+  Swarm. Readers' head carries no `schedule`.
 - One message per poll: merged into an update request, or into a notice digest, when one goes in the same poll.
 - Only the coordinator's instructions read carries `builtIn`; the skill appends it for the coordinator only, and a
   changed `builtIn` rewrites the skill and owes one notice.
