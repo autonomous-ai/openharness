@@ -20,6 +20,7 @@ import 'message_text.dart';
 import 'model.dart';
 import 'pull_requests.dart';
 import 'reactions.dart';
+import 'reminders.dart';
 import 'swarm_type.dart';
 import 'voice_length.dart';
 
@@ -95,6 +96,8 @@ class SuperTabMessageRow extends StatefulWidget {
     this.linkTarget,
     this.onOpenLink,
     this.identity,
+    this.onMarkUnread,
+    this.onRemind,
   });
 
   final SuperTabMessage message;
@@ -178,6 +181,13 @@ class SuperTabMessageRow extends StatefulWidget {
   /// open it. Without them a link stays plain text.
   final SuperTabLinkTarget Function(SwarmMessageLink)? linkTarget;
   final ValueChanged<SwarmMessageLink>? onOpenLink;
+
+  /// The More menu's Mark unread: the chat reads as unread from this message
+  /// on. Null where it is not offered.
+  final VoidCallback? onMarkUnread;
+
+  /// The More menu's Remind me, with when. Null where it is not offered.
+  final ValueChanged<SuperTabRemindIn>? onRemind;
 
   // Routing notes share the message body column, including grouped messages.
   static const horizontalInset = 24.0;
@@ -279,6 +289,34 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
       ),
     );
   }
+
+  /// The More menu's choices, in Slack's order.
+  List<SuperTabMoreAction> get _moreActions => [
+    if (widget.link case final link?)
+      (
+        label: 'Copy link to message',
+        icon: AppIcons.link2,
+        onPressed: () => unawaited(_copyLink(link)),
+        choices: const [],
+      ),
+    if (widget.onMarkUnread case final markUnread?)
+      (
+        label: 'Mark unread',
+        icon: AppIcons.mail,
+        onPressed: markUnread,
+        choices: const [],
+      ),
+    if (widget.onRemind case final remind?)
+      (
+        label: 'Remind me',
+        icon: AppIcons.clock,
+        onPressed: null,
+        choices: [
+          for (final when in SuperTabRemindIn.values)
+            (label: when.label, onPressed: () => remind(when)),
+        ],
+      ),
+  ];
 
   Future<void> _copyLink(SwarmMessageLink link) async {
     await Clipboard.setData(ClipboardData(text: link.url));
@@ -712,21 +750,15 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                 onPressed: _copy,
                               ),
                             ),
-                            if (widget.link case final link?)
+                            if (_moreActions case final actions
+                                when actions.isNotEmpty)
                               fingerTarget(
                                 enabled: phone,
                                 SuperTabMessageMoreMenu(
                                   key: ValueKey(
                                     'super-message-more-${message.id}',
                                   ),
-                                  actions: [
-                                    (
-                                      label: 'Copy link to message',
-                                      icon: AppIcons.link2,
-                                      onPressed: () =>
-                                          unawaited(_copyLink(link)),
-                                    ),
-                                  ],
+                                  actions: actions,
                                 ),
                               ),
                           ],

@@ -68,6 +68,7 @@ import '../state/status_menu.dart';
 import '../widgets/in_window_menu_bar.dart'
     show LinuxTitleBar, linuxTitleBarActions;
 import '../widgets/account_menu.dart';
+import '../widgets/account_profile_sheet.dart';
 import '../widgets/notification_inbox.dart';
 import '../widgets/workspace_notifications_button.dart';
 import '../state/harness_sessions.dart';
@@ -3491,6 +3492,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
     );
     if (!mounted) return;
     switch (choice) {
+      case AccountMenuChoice.profile:
+        await _dialog(
+          () => showAccountProfileSheet(
+            context,
+            app,
+            swarm: accountProfileSwarm(app),
+          ),
+        );
       case AccountMenuChoice.addPhone:
         await _addPhone(from: AddPhoneOpening.account);
       case AccountMenuChoice.devices:

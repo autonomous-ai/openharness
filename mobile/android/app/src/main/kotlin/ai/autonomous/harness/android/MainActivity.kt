@@ -15,6 +15,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.Uri
+import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSpecifier
 import android.os.PatternMatcher
 import android.os.Build
@@ -125,7 +126,7 @@ class MainActivity : FlutterActivity() {
     // `Harness-…`; Android shows its own sheet listing those nearby and the person picks one.
     // The app's traffic is then bound to that Wi-Fi — it has no Internet, and Android would
     // otherwise send 10.42.0.1 over mobile data. `leave` drops it, and the phone
-    // returns to its own Wi-Fi by itself.
+    // returns to its own Wi-Fi by itself. `wifiOn`: whether the phone's Wi-Fi is on.
     MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "harness/setup_wifi")
       .setMethodCallHandler { call, result ->
         when (call.method) {
@@ -134,6 +135,7 @@ class MainActivity : FlutterActivity() {
             joinSetupWifi(prefix, result)
           }
           "leave" -> { leaveSetupWifi(); result.success(true) }
+          "wifiOn" -> result.success(wifiManager().isWifiEnabled)
           else -> result.notImplemented()
         }
       }
@@ -214,6 +216,8 @@ class MainActivity : FlutterActivity() {
     connectivity.bindProcessToNetwork(null)
     try { connectivity.unregisterNetworkCallback(callback) } catch (e: IllegalArgumentException) {}
   }
+
+  private fun wifiManager() = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
 
   /** Plays the Flutter asset [asset] once, as a sonification — the system's own sounds' stream —
    *  and only while the ringer is on: muted means silent, and the haptic Dart plays beside it is

@@ -684,6 +684,7 @@ class SuperTabSnapshot {
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
       activityDigest = row['activityDigest'] as String?,
+      remindersDigest = row['remindersDigest'] as String?,
       chatSettings = Map.unmodifiable({
         if (row['chatSettings'] case final Map settings)
           for (final MapEntry(:key, :value) in settings.entries)
@@ -806,6 +807,11 @@ class SuperTabSnapshot {
   /// Which of the reader's Activity rows are unread, as a digest (backend superTabs/activity.ts); null from a backend
   /// before it. Read as the desktop's model reads it; the phone shows no Activity yet.
   final String? activityDigest;
+
+  /// Which reminders the reader has set and when each is due, as a digest that moves when one is set, replaced or
+  /// cleared; null from a backend before reminders (superTabs/reminders.ts). Read as the desktop's is; the phone
+  /// shows no reminders yet.
+  final String? remindersDigest;
 
   /// The reader's own notification setting by conversation, `all`, `mentions` or `muted` (backend chatSettings.ts).
   /// Read as the desktop's model reads it; the phone does not apply it yet.

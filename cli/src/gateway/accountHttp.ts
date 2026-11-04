@@ -1,4 +1,5 @@
 /** Backend HTTP and the single writer of machines.json, owned by the gateway. */
+import { VERSION } from '../version.js'
 import type { GatewayAccount, GatewayMachines, HttpAnswer } from '../core/api.js'
 import { MachineListCache } from '../device/machineList.js'
 import { AuthSessionError } from '../lib/authSession.js'
@@ -61,8 +62,10 @@ export function createAccountHttp(deps: AccountHttpDeps) {
     try {
       res = await request(`${(deps.base ?? backendHttpBase)()}${path}`, {
         method,
+        // The CLI and its version, as its sockets declare them (lib/declaredClient.ts): the backend's refusal log names the
+        // sender of a refused command with it (#2675, 615 refusals in 32 minutes nobody could attribute).
         headers: { authorization: `Bearer ${accessToken}`, 'x-autonomous-env': deps.account().autonomousEnv ?? deps.environment,
-          ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
+          'x-harness-client': `cli/${VERSION}`, ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
         signal: AbortSignal.timeout(timeoutMs),
       })

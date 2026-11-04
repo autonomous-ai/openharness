@@ -307,6 +307,39 @@ describe('a machine\'s readings for all its Swarms in one call (DB 2.5)', () => 
   })
 })
 
+// A client that asks takes a machine's reading as one line (read/changes.ts); no other client's reply changes.
+describe('the machine lines of a change read', () => {
+  let app: FastifyInstance
+  const changes = vi.fn(async (..._args: unknown[]) => ({ reload: true })), machineReadings = vi.fn(async (..._args: unknown[]) => ({ machines: [] }))
+  beforeEach(async () => {
+    changes.mockClear(); machineReadings.mockClear()
+    app = Fastify()
+    app.setErrorHandler(errorHandler)
+    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
+    await app.register(superTabRoutes, { store: {} as never, github: null, reads: { changes, machineReadings } as never, hosts: {} as never })
+    await app.ready()
+  })
+  afterEach(async () => { await app.close() })
+  const get = (url: string) => app.inject({ method: 'GET', url })
+
+  it('asks for lines only when the client does', async () => {
+    expect((await get('/api/super-tabs/tab1/changes?cursor=abc')).statusCode).toBe(200)
+    expect(changes.mock.calls[0]!.slice(2)).toEqual(['abc', undefined, {}])
+    expect((await get('/api/super-tabs/tab1/changes?cursor=abc&machines=light')).statusCode).toBe(200)
+    expect(changes.mock.calls[1]!.slice(2)).toEqual(['abc', undefined, { lightMachines: true }])
+  })
+
+  it('refuses any other value', async () => {
+    expect((await get('/api/super-tabs/tab1/changes?cursor=abc&machines=all')).statusCode).toBe(400)
+    expect(changes).not.toHaveBeenCalled()
+  })
+
+  it('serves the whole readings on demand, for an agent too', async () => {
+    expect((await get('/api/super-tabs/tab1/machine-readings?asAgentId=agent1')).statusCode).toBe(200)
+    expect(machineReadings.mock.calls[0]!.slice(1)).toEqual(['tab1', 'agent1'])
+  })
+})
+
 // The Tasks view's Proposals (#2569): one project's open Buddy proposals, read by the store as the project chat's reader.
 describe('a project\'s open proposals', () => {
   let app: FastifyInstance

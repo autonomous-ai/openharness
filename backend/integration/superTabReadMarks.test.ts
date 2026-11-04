@@ -172,6 +172,91 @@ describe('read marks (one per person and conversation)', () => {
   })
 })
 
+describe('Mark unread (the one write that moves a mark back)', () => {
+  const unread = (tabId: string, conversationId: string, sequence: number, as: AuthUser = owner, query = '') =>
+    call('POST', `/api/super-tabs/${tabId}/conversations/${conversationId}/unread${query}`, as, { sequence })
+  const changed = async (tabId: string, cursor: string, as: AuthUser = owner) =>
+    (await call('GET', `/api/super-tabs/${tabId}/changes?cursor=${cursor}`, as)).body.data.derived as { readMarks?: Record<string, number>; unreadMarks?: Record<string, number> }
+
+  it('mark unread restores the unread line: the mark goes to just before the message, and the person\'s other device takes it', async () => {
+    const s = await scene()
+    clock = NOW
+    await mark(s.tabId, s.web, 60)
+    // The other device's last read, a minute later (the cursor overlaps the last 30 s, read/cursor.ts).
+    clock = NOW + 60_000
+    const cursor = (await firstLoad(s.tabId, owner)).cursor as string
+    clock = NOW + 62_000
+    expect(await unread(s.tabId, s.web, 41)).toMatchObject({ status: 200, body: { data: { sequence: 40 } } })
+    clock = NOW + 63_000
+    // That device holds 60: `unreadMarks` tells it to take the lower mark instead of keeping the higher one.
+    expect(await changed(s.tabId, cursor)).toMatchObject({ readMarks: { [s.web]: 40 }, unreadMarks: { [s.web]: 40 } })
+    expect((await firstLoad(s.tabId, owner)).derived).toMatchObject({ readMarks: { [s.web]: 40 }, unreadMarks: { [s.web]: 40 } })
+    // Another person's read never carries it.
+    expect((await firstLoad(s.tabId, peer)).derived.unreadMarks).toBeUndefined()
+    clock = NOW
+  })
+
+  it('never moves a mark forward: a chat already unread from earlier stays as it is', async () => {
+    const s = await scene()
+    await mark(s.tabId, s.web, 40)
+    expect((await unread(s.tabId, s.web, 70)).body.data).toEqual({ sequence: 40 })
+    expect(await marksOf(s.tabId, owner)).toEqual({ [s.web]: 40 })
+    expect((await firstLoad(s.tabId, owner)).derived.unreadMarks).toBeUndefined()
+  })
+
+  it('gives a chat never marked read a mark before the message: without one the chat counts as read', async () => {
+    const s = await scene()
+    expect((await unread(s.tabId, s.web, 41)).body.data).toEqual({ sequence: 40 })
+    expect((await firstLoad(s.tabId, owner)).derived).toMatchObject({ readMarks: { [s.web]: 40 }, unreadMarks: { [s.web]: 40 } })
+    expect(await db.superTabReadMark.count({ where: { tabId: s.tabId } })).toBe(1)
+  })
+
+  it('is undone by a later read alone: an older read arriving after it changes nothing, a newer one raises it', async () => {
+    const s = await scene()
+    clock = NOW
+    await mark(s.tabId, s.web, 60)
+    await unread(s.tabId, s.web, 41)
+    expect((await mark(s.tabId, s.web, 30)).body.data).toEqual({ sequence: 40 })
+    expect((await firstLoad(s.tabId, owner)).derived.unreadMarks).toEqual({ [s.web]: 40 })
+    clock = NOW + 60_000
+    const cursor = (await firstLoad(s.tabId, owner)).cursor as string
+    clock = NOW + 62_000
+    expect((await mark(s.tabId, s.web, 60)).body.data).toEqual({ sequence: 60 })
+    clock = NOW + 63_000
+    const derived = await changed(s.tabId, cursor)
+    expect(derived.readMarks).toEqual({ [s.web]: 60 })
+    expect(derived.unreadMarks).toBeUndefined()
+    expect((await firstLoad(s.tabId, owner)).derived.unreadMarks).toBeUndefined()
+    // Even a read in the same millisecond as the Mark unread ends it.
+    await unread(s.tabId, s.web, 51)
+    await mark(s.tabId, s.web, 55)
+    expect((await firstLoad(s.tabId, owner)).derived).toMatchObject({ readMarks: { [s.web]: 55 } })
+    expect((await firstLoad(s.tabId, owner)).derived.unreadMarks).toBeUndefined()
+    clock = NOW
+  })
+
+  it('refuses a chat the person cannot read, a Team session and an agent, storing nothing', async () => {
+    const s = await scene()
+    expect((await unread(s.tabId, s.secretGroup, 10, outsider)).status).toBe(404)
+    expect((await unread(s.tabId, 'no-such-group', 10, outsider)).status).toBe(404)
+    expect((await unread(s.tabId, s.web, 10, ownerTeam)).status).toBe(403)
+    expect((await unread(s.tabId, s.web, 10, owner, '?asAgentId=some-agent')).status).toBe(400)
+    expect(await db.superTabReadMark.count({ where: { tabId: s.tabId } })).toBe(0)
+  })
+
+  it('stops sending an unread mark once the person can no longer read its chat', async () => {
+    const s = await scene()
+    await unread(s.tabId, s.web, 31, peer)
+    expect((await firstLoad(s.tabId, peer)).derived.unreadMarks).toEqual({ [s.web]: 30 })
+    await swarmTransaction(db, async tx => {
+      const current = (await parts.loadActive(tx, s.tabId, { groupIds: [s.web] })).groups.find(g => g.key === s.web)!
+      const data = { ...structuredClone(current.data!), audience: { people: [{ id: owner.sub, generation: 0 }] } } as Conversation
+      await guardedWrite(tx, s.tabId, { op: 'update', kind: 'group', key: s.web, seen: current.version, data }, clock)
+    })
+    expect((await firstLoad(s.tabId, peer)).derived.unreadMarks).toBeUndefined()
+  })
+})
+
 describe('catch-up summary (what the reader missed since their mark)', () => {
   const lead = { kind: 'agent', id: 'lead-agent', name: 'Lead', displayName: 'River', membershipGeneration: 'g' }
   /** Rows written as the store writes them, numbered from 1 in `conversationId`; scenes repeat conversation ids, so the tab names them. */

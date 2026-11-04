@@ -167,7 +167,8 @@ void main() {
       ?.fontWeight;
 
   testWidgets(
-    'a project with an unread task shows its name in bold, with no dot',
+    'a project whose chat is unread shows its name in bold, with no dot; an '
+    'unread task under it does not (task #2638)',
     (tester) async {
       // Not "Offline editing": it waits for a person.
       final server = humansSwarm();
@@ -179,7 +180,12 @@ void main() {
       await controller.select('offline');
       await controller.refresh();
       await tester.pumpAndSettle();
-      // Bold for what its tasks hold.
+      // A task's unread is on its card and in Activity, not on the project.
+      expect(weightOf(tester, project, 'Pilot'), isNot(grid.AppFont.semibold));
+
+      server.append('A question for everyone', conversationId: 'lead');
+      await controller.refresh();
+      await tester.pumpAndSettle();
       expect(weightOf(tester, project, 'Pilot'), grid.AppFont.semibold);
       expect(unreadDot(project), findsNothing);
       await close(tester, controller);
@@ -187,8 +193,8 @@ void main() {
   );
 
   testWidgets(
-    'a screen reader hears a project with an unread task as unread, and a '
-    'read one not',
+    'a screen reader hears a project whose chat is unread as unread, and one '
+    'with only an unread task not',
     (tester) async {
       final semantics = tester.ensureSemantics();
       final server = humansSwarm();
@@ -198,6 +204,11 @@ void main() {
 
       server.append('New work', conversationId: 'g1');
       await controller.select('offline');
+      await controller.refresh();
+      await tester.pumpAndSettle();
+      expect(spoken(tester, project), isNot(contains('Unread messages')));
+
+      server.append('A question for everyone', conversationId: 'lead');
       await controller.refresh();
       await tester.pumpAndSettle();
       expect(spoken(tester, project), contains('Unread messages'));

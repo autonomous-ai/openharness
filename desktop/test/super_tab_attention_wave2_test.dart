@@ -11,9 +11,13 @@ import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/shortcuts/app_keymap.dart';
+import 'package:harness/shortcuts/keymap.dart';
+import 'package:harness/shortcuts/keymap_host.dart';
 
 import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
+import 'keymap_host_test.dart' show MemoryKeymap;
 import 'swarm_state_test.dart' show createApp;
 
 /// Set to a folder to write the PR's wave 2 pictures there.
@@ -190,6 +194,7 @@ Future<(SuperTabController, GlobalKey)> _show(
   WidgetTester tester,
   Brightness brightness, {
   String selected = 'web-lead',
+  bool keymap = false,
   ConversationServer? server,
 }) async {
   final previous = grid.AppTheme.brightness.value;
@@ -218,14 +223,17 @@ Future<(SuperTabController, GlobalKey)> _show(
       home: RepaintBoundary(
         key: picture,
         child: Scaffold(
-          body: SuperTabView(
-            controller: c,
-            app: app,
-            onInvite: () {},
-            onAddAgent: (_) {},
-            onOpenTerminal: (_) {},
-            onNewProject: () {},
-            machineName: (_) => 'Team Mac',
+          body: _keymapped(
+            keymap,
+            SuperTabView(
+              controller: c,
+              app: app,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              onNewProject: () {},
+              machineName: (_) => 'Team Mac',
+            ),
           ),
         ),
       ),
@@ -233,6 +241,27 @@ Future<(SuperTabController, GlobalKey)> _show(
   );
   await tester.pumpAndSettle();
   return (c, picture);
+}
+
+/// [view] under the keymap as the Swarm screen mounts it: its host, then the
+/// quick switcher's Swarm chat region.
+Widget _keymapped(bool keymap, Widget view) {
+  if (!keymap) return view;
+  final map = MemoryKeymap();
+  addTearDown(map.dispose);
+  return KeymapProvider(
+    keymap: map,
+    child: KeymapHost(
+      keymap: map,
+      enabled: () => true,
+      actions: const {},
+      child: KeymapRegion(
+        contextKind: KeymapContext.swarmChat,
+        actions: const {},
+        child: view,
+      ),
+    ),
+  );
 }
 
 Future<void> _done(WidgetTester tester, SuperTabController c) async {
@@ -279,15 +308,13 @@ void main() {
           tester,
           Brightness.dark,
           selected: 'lead',
+          keymap: true,
           server: server,
         );
         // Sidebar order: openharness (lead), roadmap (road-lead, muted), then
         // website (web-lead). Tasks are in the Tasks view, not here.
         expect(c.unreadShown(c.snapshot!.conversation('offline')!), isTrue);
-        expect(
-          c.unreadShown(c.snapshot!.conversation('road-lead')!),
-          isFalse,
-        );
+        expect(c.unreadShown(c.snapshot!.conversation('road-lead')!), isFalse);
         await tester.tap(find.byKey(const ValueKey('super-message-composer')));
         await tester.pumpAndSettle();
         await _keys(tester, [
@@ -310,7 +337,12 @@ void main() {
       'Option+Shift+Down and Up stop at the ends: nothing moves past the '
       'last unread chat or before the first',
       (tester) async {
-        final (c, _) = await _show(tester, Brightness.dark, selected: 'lead');
+        final (c, _) = await _show(
+          tester,
+          Brightness.dark,
+          selected: 'lead',
+          keymap: true,
+        );
         final order = [
           for (final id in ['lead', 'web-lead'])
             if (c.unreadShown(c.snapshot!.conversation(id)!)) id,
@@ -341,6 +373,36 @@ void main() {
         await _done(tester, c);
       },
       variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+    );
+
+    testWidgets(
+      'on Linux, where Alt is the workspace key as on the web, Alt+Shift+Down '
+      'and Up in the Swarm chat open the next and previous unread chat, not '
+      'Move pane',
+      (tester) async {
+        final (c, _) = await _show(
+          tester,
+          Brightness.dark,
+          selected: 'lead',
+          keymap: true,
+        );
+        await tester.tap(find.byKey(const ValueKey('super-message-composer')));
+        await tester.pumpAndSettle();
+        await _keys(tester, [
+          LogicalKeyboardKey.altLeft,
+          LogicalKeyboardKey.shiftLeft,
+        ], LogicalKeyboardKey.arrowDown);
+        // Tasks are in the Tasks view, not the sidebar: the next unread chat is
+        // website's.
+        expect(c.selectedId, 'web-lead');
+        await _keys(tester, [
+          LogicalKeyboardKey.altLeft,
+          LogicalKeyboardKey.shiftLeft,
+        ], LogicalKeyboardKey.arrowUp);
+        expect(c.selectedId, 'lead');
+        await _done(tester, c);
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.linux),
     );
 
     testWidgets('Shift+Esc marks every chat read with an Undo toast; Undo puts '

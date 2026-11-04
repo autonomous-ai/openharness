@@ -152,8 +152,8 @@ void main() {
       await _shot(tester, 'project-read-past-line-$theme');
       expect(find.byKey(_line).hitTestable(), findsNothing);
       expect(position.extentAfter, greaterThan(40));
-      // Seen when the chat opened at it: reading on needs no way back.
-      expect(find.byKey(_jump), findsNothing);
+      // Above the screen now, seen or not: the bar is the way back.
+      expect(find.text('40 new messages · Jump'), findsOne);
       _coversNoMessage(tester, 'lead');
     });
 
@@ -182,7 +182,7 @@ void main() {
       await _wheel(tester, _buddyChat, 700);
       await _shot(tester, 'buddy-read-past-line-$theme');
       expect(find.byKey(_line).hitTestable(), findsNothing);
-      expect(find.byKey(_jump), findsNothing);
+      expect(find.textContaining('new messages · Jump'), findsOne);
       _coversNoMessage(tester, _buddyChat);
     });
 

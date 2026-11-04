@@ -1,3 +1,4 @@
+import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
 import { accountMachineName, expireRemovals, followAccountName, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
 import { readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
@@ -58,7 +59,7 @@ import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachin
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
 import { autoJoinSwarms, machineSwarms, memberSwarms } from './swarmRows.js'
 import type { MachineRename } from './machineRenames.js'
-import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
+import { commitParts, indexesOf, machineContentChanged, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts, ms } from './parts/light.js'
 import { endSteps, ownerOf, stepEndedRows, stepsOf } from './steps.js'
 import { pullRequestEvents, type PullRequestWatch } from './pullRequestEvents.js'
@@ -1322,7 +1323,8 @@ export class SuperTabStore {
     })
   }
 
-  async execute(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string) {
+  async execute(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
+    client?: DeclaredClient) {
     try {
       const done = await this.executeOnce(user, tabId, input, asAgentId, hostMachineId)
       // Buddy thread sessions' first warning (spec Design 4): starts, refusals by code and ends by reason, ids only, in the
@@ -1330,8 +1332,11 @@ export class SuperTabStore {
       if (input.command?.type === 'message.send' && input.command.newSession && done.result.startId) logger.info('Buddy session started', { tabId, startId: done.result.startId })
       return done
     } catch (error) {
-      // Its code and type alone, no values: a Swarm refusing a machine went unseen (MACHINES_FULL, Ken, 2026-11-04).
-      if (error instanceof SuperTabError && input.command?.type) logger.warn('Swarm command refused', { code: error.code, type: input.command.type })
+      // Its code and type, and whose: the Swarm, the agent and the client, never the command's words. A Swarm refusing a machine
+      // went unseen (MACHINES_FULL, Ken, 2026-11-04), then 615 refusals in 32 minutes that nobody could attribute (#2675).
+      if (error instanceof SuperTabError && input.command?.type) {
+        logger.warn('Swarm command refused', refusalLogFields(tabId, input.command, error.code, { asAgentId, client, machineId: hostMachineId }))
+      }
       if (input.command?.type === 'message.send' && input.command.newSession && error instanceof SuperTabError) logger.info('Buddy session refused', { tabId, code: error.code })
       // A refusal for a bot's push rolled its mark back. The mark stays, so a post or a join that reads no GitHub is refused next (review 1 of #2559).
       const pushedOn = input.command && 'conversationId' in input.command ? input.command.conversationId : undefined
@@ -2935,12 +2940,12 @@ export class SuperTabStore {
    *  those asked in its project), still open or answered. A light load: the quiet conversations its decisions are in are
    *  read with them (decisions.ts conversationsOf), never the Swarm's whole history, read again on every change. */
   async decisions(user: AuthUser, tabId: string, state: DecisionList, asAgentId?: string) {
-    return transaction(this.db, async tx => {
-      const { state: tab } = await this.load(tx, user, tabId)
-      const actor = await this.actor(tx, user, tab, asAgentId)
-      author(tab, actor)
-      return await listDecisions(tx, tabId, tab, actor, state)
-    })
+    // Through the read cache, as every read (task #2674): only what the Swarm's stamp says changed is read again. It loaded
+    // the whole active Swarm on every request, ~540 ms a part on prod (Ken's scan, 2026-11-04).
+    const { state: tab } = await this.readLoad(user, tabId)
+    const actor = await this.actor(this.db, user, tab, asAgentId)
+    author(tab, actor)
+    return listDecisions(this.db, tabId, tab, actor, state)
   }
 
   /**
@@ -3266,7 +3271,8 @@ export class SuperTabStore {
     const stamp = clock.next()
     let version: number
     try {
-      version = await swarmTransaction(this.db, tx => guardedWrite(tx, tabId, { op: 'update', kind: 'machine', key: machineId, seen: part.version, data }, stamp))
+      version = await swarmTransaction(this.db, tx => guardedWrite(tx, tabId, { op: 'update', kind: 'machine', key: machineId, seen: part.version, data,
+        ...machineContentChanged(part.data, data) ? { content: true as const } : {} }, stamp))
     } catch (error) {
       // A conflict, or Mongo's transient refusal, is the full report's to retry.
       if (retryable(error)) return null

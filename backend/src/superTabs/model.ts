@@ -238,7 +238,10 @@ export interface Check {
   verdicts?: CheckVerdict[]
 }
 /** One checker's verdict on a check: its actor key (`agent:ID` or `person:ID`), what it found and when. */
-export interface CheckVerdict { by: string; passed: boolean; evidence: string; at: number }
+export interface CheckVerdict { by: string; passed: boolean; evidence: string; at: number
+  /** The checker's name when it gave the verdict: once it leaves the Swarm, the line that clears its failure still names it
+   *  (#2656). Absent on verdicts given before. */
+  name?: string }
 export interface Assignment {
   id: string
   agentId: string
