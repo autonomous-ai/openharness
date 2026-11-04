@@ -847,6 +847,48 @@ it('starts only in the chosen conversation, captures authority, and never assign
   expect(() => f.run({ type: 'agent.start', request, ...via }, actor, { contribution, ...decisionIn(group) })).toThrow('paused')
 })
 
+// Task #2972 (Ken, 2026-11-04): 67 of 71 Codex picks were `default default`, which ran whatever the account's CLI defaulted to
+// (gpt-6-luna on one Mac owner's account). A start that asks Codex for `default` runs the catalog's named default instead.
+describe('a Codex start that asks for default', () => {
+  const stored = (patch: Record<string, unknown>, withVia = false) => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
+    const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
+    const request = { conversationId: group, machineId: 'host', engine: 'codex', name: 'Builder', cwd: '/repo', worktree: true,
+      requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false }, ...patch }
+    f.run({ type: 'agent.start', request, ...(withVia ? { routeDecisionId: 'd1' } : via) } as Command, actor, { contribution, ...decisionIn(group,
+      { candidates: [candidate('c0', { machineId: 'host', engine: 'codex', model: 'default', effort: 'default' }), candidate('c1', { machineId: 'host', engine: 'codex', model: 'gpt-6.1-sol', effort: 'high' })] }) })
+    const { model, effort } = f.state.starts![0]!.request
+    return { model, effort, link: f.state.starts![0] }
+  }
+  it('runs the catalog\'s named default, Sol at high', () => {
+    expect(stored({ model: 'default', effort: 'default' })).toMatchObject({ model: 'gpt-6.1-sol', effort: 'high' })
+    expect(stored({ model: 'default' })).toMatchObject({ model: 'gpt-6.1-sol', effort: 'high' })
+  })
+  it('keeps an effort a person named', () => {
+    expect(stored({ model: 'default', effort: 'xhigh' })).toMatchObject({ model: 'gpt-6.1-sol', effort: 'xhigh' })
+  })
+  it('leaves a named model, a grid model, an unnamed model and Claude as they were', () => {
+    expect(stored({ model: 'gpt-6-astra', effort: 'xhigh' })).toMatchObject({ model: 'gpt-6-astra', effort: 'xhigh' })
+    expect(stored({ model: 'gpt-6-luna', effort: 'high' })).toMatchObject({ model: 'gpt-6-luna', effort: 'high' })
+    expect(stored({ model: 'default', effort: 'default', gridModel: 'kimi', gridName: 'grid' })).toMatchObject({ model: 'default', effort: 'default' })
+    expect(stored({})).toEqual(expect.objectContaining({ model: undefined, effort: undefined }))
+    expect(stored({ engine: 'claude', model: 'default', effort: 'default' })).toMatchObject({ model: 'default', effort: 'default' })
+  })
+  it('still links the start to the route candidate that was asked for, `default default` from an older route or Sol at high', () => {
+    for (const asked of [{ model: 'default', effort: 'default' }, { model: 'gpt-6.1-sol', effort: 'high' }]) {
+      const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
+      const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+      const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
+      const request = { conversationId: group, machineId: 'host', engine: 'codex', name: 'Builder', cwd: '/repo', worktree: true, ...asked,
+        requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
+      const routing = decisionIn(group, { candidates: [candidate('c0', { machineId: 'host', engine: 'codex', ...asked })], pick: undefined, via: 'instructions', p: null })
+      const result = f.run({ type: 'agent.start', request, routeDecisionId: 'd1', overrideReason: 'Routing rule.' } as Command, actor, { contribution, ...routing })
+      expect(result.messages.map(m => m.text).join('\n')).toMatch(/Routed to Title c0/)
+    }
+  })
+})
+
 it.each(['opencode', 'kilo'])('refuses to dispatch a stored legacy %s start before native launch', engine => {
   const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
   const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }

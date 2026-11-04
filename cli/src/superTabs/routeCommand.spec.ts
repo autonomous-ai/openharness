@@ -1945,6 +1945,30 @@ describe('routing by facts', () => {
     expect(shown(old).map(r => r.title)).toContain('New agent · Claude sonnet medium · remote-1')
   })
 
+  // Task #2972: 95% of Codex candidates were `Codex default default` (6,570 against 122 Sol and 116 Astra), and 67 of 71 Codex picks;
+  // it ran whatever the account's CLI defaulted to (gpt-6-luna on one owner's account), which the catalog does not rate.
+  it('offers a Codex machine only the models the catalog rates, never `default default`, and gpt-6-luna only when named', async () => {
+    const catalog = { models: [{ engine: 'claude', model: 'opus', effort: 'high', strength: 3, cost: 3, offered: true },
+      { engine: 'codex', model: 'default', effort: 'default', strength: 3, cost: 2, offered: true },
+      { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', strength: 3, cost: 2, offered: true, engineDefault: true },
+      { engine: 'codex', model: 'gpt-6-astra', effort: 'xhigh', strength: 3, cost: 5, offered: true }],
+      grid: { strength: 1, models: [] }, priors: {}, prices: [] }
+    const both = () => opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [],
+      engines: [{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: true }] }))
+    const context = (extra: Record<string, unknown> = {}) => scoped({ context: { ok: true, value: { agentId: 'lead', tab: tab(), policy: { policy, warnings: [], catalog }, machines: [{ machineId: 'm1', name: 'remote-1' }], ...extra } } })
+    const served = context()
+    await routeTask(input, served, where as never, both(), () => 'op')
+    const codex = shown(served).filter(r => r.title.startsWith('New agent · Codex'))
+    expect(codex.map(r => r.title)).toEqual(['New agent · Codex gpt-6-astra xhigh · remote-1', 'New agent · Codex gpt-6.1-sol high · remote-1'])
+    expect(codex.map(r => r.label).join('\n')).toMatch(/strength 3, cost 5[\s\S]*strength 3, cost 2/)
+    expect(shown(served).map(r => r.title).join('\n')).not.toMatch(/Codex default|luna/)
+    // A person who names the model gets it, unrated: gpt-6-luna is no row of the catalog.
+    const luna = context()
+    await routeTask({ ...input, assessment: { ...input.assessment, model: 'gpt-6-luna' } }, luna, where as never, both(), () => 'op')
+    expect(shown(luna).filter(r => r.title.startsWith('New agent')).map(r => r.title)).toEqual(['New agent · Codex gpt-6-luna default · remote-1'])
+    expect(shown(luna)[0]!.label).toContain('unrated')
+  })
+
   // Final review: a named grid model whose host is down became an unrated Codex candidate; nothing serves it, and the route says
   // why. An unreadable catalog became an empty one without a word: no new agent was offered and nobody heard why.
   it('names no stand-in for a named model whose host is offline, and says why', async () => {
