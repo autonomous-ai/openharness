@@ -136,7 +136,7 @@ The recorder already records PCM WAV, and Deepgram's WAV path is measured per la
   - A plain message's preview is unchanged.
 - [ ] Step 2: run them and expect FAIL.
 - [ ] Step 3: implement.
-- [ ] Step 4: run them, and `npm test` for the backend unit suite, and expect PASS. Commit.
+- [ ] Step 4: run them and the tests of what imports the changed code, and expect PASS. Commit.
 
 ### Task 5: The model and the API (phone)
 
@@ -235,5 +235,5 @@ The recorder already records PCM WAV, and Deepgram's WAV path is measured per la
 
 ### Task 11: Evidence
 
-- [ ] Backend `npm test`, `npx tsc --noEmit`; phone `flutter test test/swarm test/render`; Desktop `flutter test` for the touched files; `flutter analyze` on both apps.
+- [ ] Locally: the changed tests, `npx tsc --noEmit`, and `flutter analyze` on the touched files of both apps. No whole suite runs locally (project instructions, revision 56): the PR's CI runs each touched component's suite once it is marked ready, and its green run is the suite evidence.
 - [ ] A PR comment with red/green per task, and the screenshots in the PR body.
