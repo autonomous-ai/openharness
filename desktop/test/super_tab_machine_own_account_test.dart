@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
@@ -273,6 +274,45 @@ void main() {
         ),
         findsOneWidget,
       );
+      await _done(tester, c);
+    });
+
+    // Review of #2983 (Avocet4): while another action is still being sent, the controller sends nothing; switching back
+    // must say so, never leave the owner thinking it is off.
+    testWidgets('switching back while another action is sending says so', (
+      tester,
+    ) async {
+      final server = ConversationServer();
+      server.state['machines'] = [_machine('studio', allowed: true)];
+      final c = await _mount(tester, server);
+      final hold = Completer<void>();
+      server.holdCommands = hold;
+      final other = c.command({
+        'type': 'machine.pause',
+        'machineId': 'studio',
+        'paused': true,
+      });
+      await tester.pump();
+      await _rightClick(tester, 'studio');
+      await tester.tap(find.byKey(_item));
+      await tester.pumpAndSettle();
+      expect(_ownAccountCommands(server), isEmpty);
+      final bar = find.byKey(
+        const ValueKey('super-machine-own-account-refused'),
+      );
+      expect(bar, findsOneWidget);
+      expect(
+        find.descendant(
+          of: bar,
+          matching: find.text(
+            'Another action is still being sent. Try again in a moment.',
+          ),
+        ),
+        findsOneWidget,
+      );
+      hold.complete();
+      await other;
+      await tester.pumpAndSettle();
       await _done(tester, c);
     });
 
