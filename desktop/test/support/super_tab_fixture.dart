@@ -439,6 +439,10 @@ class ConversationServer {
   /// Messages per page, as the backend pages them.
   int messagePage = 100;
 
+  /// Where the ask at each thread's root stands, by root: what the backend's
+  /// summaries say (threads.ts).
+  final threadAsks = <String, String>{};
+
   /// Whether messages are written with threads, as backends from threads on
   /// write them (backend threads.ts).
   bool threads = false;
@@ -795,6 +799,7 @@ class ConversationServer {
           case final thread when thread.length > 1)
         {
           'id': root,
+          'ask': ?threadAsks[root],
           'replies': thread.length - 1,
           'lastSequence': thread.last['sequence'],
           'lastAt': thread.last['createdAt'],

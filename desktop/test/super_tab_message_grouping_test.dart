@@ -80,27 +80,23 @@ void main() {
   };
 
   group('the rule', () {
-    // Its header is the row's mark that it is a task (#2552), and a message
-    // after it is not part of that task.
-    for (final kind in ['task-line', 'buddy-proposal']) {
-      test('a $kind root stands on its own, on either side', () {
-        final messages = [
-          message(1, start),
-          message(
-            2,
-            start.add(const Duration(minutes: 1)),
-            source: {'kind': kind},
-          ),
-          message(
-            3,
-            start.add(const Duration(minutes: 2)),
-            source: {'kind': kind},
-          ),
-          message(4, start.add(const Duration(minutes: 3))),
-        ];
-        expect(SuperTabMessageRow.consecutiveUpdates(messages), isEmpty);
-      });
-    }
+    // Its header is where its tag shows (#2552), and a message after it is not
+    // part of that ask.
+    test('a tagged row stands on its own, on either side', () {
+      final messages = [
+        message(1, start),
+        message(2, start.add(const Duration(minutes: 1))),
+        message(3, start.add(const Duration(minutes: 2))),
+        message(4, start.add(const Duration(minutes: 3))),
+      ];
+      expect(
+        SuperTabMessageRow.consecutiveUpdates(
+          messages,
+          tagged: (m) => m.id == 'm2',
+        ),
+        {'m4'},
+      );
+    });
 
     test('one sender within five minutes groups at any length', () {
       final long = List.filled(40, 'A long report line.').join(' ');

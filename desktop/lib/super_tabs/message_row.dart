@@ -185,9 +185,6 @@ class SuperTabMessageRow extends StatefulWidget {
         // A message that started a session stands on its own, with its line.
         current.sessionRoot ||
         previous.sessionRoot ||
-        // A task's header marks it as one, and what follows is not part of it.
-        current.postedForAuthor ||
-        previous.postedForAuthor ||
         // An older reply keeps its quote under its own header.
         (current.replyTo != null && !current.threadReply) ||
         (previous.replyTo != null && !previous.threadReply) ||
@@ -478,8 +475,9 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                             context,
                                           ).formatFullDate(time.toLocal()),
                                           child: Text(
-                                            '${TimeOfDay.fromDateTime(time.toLocal()).format(context)}'
-                                            '${message.postedForAuthor ? ' · Task' : ''}',
+                                            TimeOfDay.fromDateTime(
+                                              time.toLocal(),
+                                            ).format(context),
                                             style: SwarmType.time(context),
                                           ),
                                         ),
