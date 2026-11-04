@@ -8,9 +8,10 @@ his team's machines have a real lamp attached for testing. Design only: no produ
 
 Each machine in the Swarm gets an **Access** list: short names people already use ("Lamp", "Fusion 360",
 "Email (dee@)", "Prod DB read-only", "Tony's iPhone"), each in one macOS account (the owner's own, or the Mac's Harness
-Team account). The owner adds them in Machines, or confirms what the machine found. A task says what access it needs;
-the route leaves out every machine and account that does not have it, and says why. Names only, never a password or a
-key. Having access listed never grants a permission: Team accounts still never see the owner's sign-ins, and production
+Team account). The owner adds them in Machines, confirms what the machine found, or just says it in chat and the PM
+records it. A task says what access it needs; the route leaves out every machine and account that does not have it, and
+says why. Never a password or a key; a short note, which only the owner and that account's agents read, may say where
+the connection info lives. Having access listed never grants a permission: Team accounts still never see the owner's sign-ins, and production
 writes still need Ken's go.
 
 ## Worked example: the lamp
@@ -51,19 +52,21 @@ beside `projects` and `ownAccountChoice`), at most 32 entries:
 | `id` | 16 hex, made by the server |
 | `name` | 1 to 60 characters, as people say it: "Lamp", "Email (dee@)", "Fusion 360", "Prod DB read-only", "Tony's iPhone" |
 | `account` | `own` (the owner's macOS account) or `team` (the Mac's Harness Team account). A machine with no Team account has only `own`. |
-| `state` | `ok` or `notWorking` (shown as "not working", with the agent's one-line why: "gmail asks for sign-in", "lamp does not answer") |
+| `state` | `ok`, `notWorking` (shown as "not working", with the agent's one-line why: "gmail asks for sign-in", "lamp does not answer"), or `unconfirmed` (shown as "waiting for Ken": someone other than the owner said it, section 2) |
 | `teammates` | own-account entries only: whether teammates' tasks that need it may run in the owner's account (section 4). Default false. |
 | `production` | true for production systems, so the route notes "Production writes need Ken's go". Default false. |
 | `check` | optional, how the machine can confirm it by itself: a tool on PATH, an MCP server name, a device path pattern (`/dev/cu.usbmodem*`), an app bundle id. Owner-only to read. |
-| `addedBy`, `addedAt` | the person who added or confirmed it; `found: true` when it came from a suggestion |
+| `note` | optional, up to 200 characters: how to use it, such as "connection info in ~/.argocd/config". Only the owner and agents running on that machine in that account read it (section 4). |
+| `addedBy`, `addedAt` | the person who added or confirmed it; `found: true` when it came from a suggestion; `askedIn` when the PM recorded it from a chat message |
+| `stale` | when `notWorking`: which agent said so, when, in which task, and its one-line why |
 
 No kind field (River's review, for less-is-better): a name and where it is are enough, and a suggestion's `check`
 already says what it is.
-| `stale` | when `notWorking`: which agent said so, when, in which task, and its one-line why |
 
-What it never holds: a password, key, token, file path to a secret, account id or email the owner did not type
-themselves. The server refuses a name that looks like a secret (a run of 20+ key-like characters, `user:pass@`, known
-token prefixes such as `sk-`, `ghp_`, `xox`, `AKIA`).
+It never holds the secret itself: no password, key or token, and no account id or email the owner did not write
+themselves. A `note` may say where the connection info lives (a file path, a config or profile name), never what is in
+it. The server refuses a name or note that looks like a secret (a run of 20+ key-like characters, `user:pass@`, known
+token prefixes such as `sk-`, `ghp_`, `xox`, `AKIA`, a `-----BEGIN` block).
 
 A Mac and its Team account are one row in Machines today (naming system: "a Mac and its Harness Team account are one
 row"), so both accounts' entries live on the Mac's own contribution, split by `account`. The Team account's pool
@@ -71,13 +74,42 @@ row"), so both accounts' entries live on the Mac's own contribution, split by `a
 
 ## 2. How entries get there
 
-**The owner adds or confirms them** in Machines > the machine > Configure, the dialog that already holds Agents and
-"Projects that may use it". One new command, `machine.access`, sets the whole list (like `machine.projects`):
+Three ways, one new command, `machine.access`, which adds, changes or removes one entry (one at a time, so the PM and
+the owner never overwrite each other's list):
 
-- Only the machine's owner (`contributorId`), or the project's PM passing on a message the owner wrote in the last day
-  (`askedIn`, exactly as `machine.projects` and `machine.engineResume` do).
+**The owner adds or confirms them** in Machines > the machine > Configure, the dialog that already holds Agents and
+"Projects that may use it".
+
+**The PM records what people say in chat** (Ken, 11-05 review):
+
+- When the machine's owner says it, the PM records it at once with `askedIn` naming their message. The server checks
+  that message the way it does for `machine.projects` (`machineOwnerWord` in `commands.ts`): written by the machine's
+  owner, in a chat the PM leads, in the last day. The entry is ok and the route uses it at once.
+- When someone else says it ("Dee: Ken's Mac has email"), the PM records it as `unconfirmed` and asks the owner in one
+  line (a decision with Confirm and Not right). It never counts for routing until the owner confirms in chat or in
+  Machines. With no answer in 7 days it is removed.
+- The PM picks the account from what was said, and the owner's own account when nothing says Team account. It asks
+  which machine only when the owner has more than one and the message names none.
 - Turning `teammates` on for an own-account entry: the owner's own session only, never through the PM, like turning on
-  `machine.ownAccountWork`.
+  `machine.ownAccountWork`. The PM can't mark an entry `production` off either.
+
+Worked example, Ken's ArgoCD:
+
+```
+ Ken (project chat):  Ken's Mac can reach ArgoCD, connection info in ~/.argocd/config
+ PM (thread):         Added ArgoCD to Ken's Mac, your account. Your tasks that need it run there.
+```
+
+The PM records `{ name: "ArgoCD", account: own, note: "connection info in ~/.argocd/config", askedIn: Ken's message }`.
+A task that needs ArgoCD names it; the route offers Ken's Mac, own account, for Ken's own tasks, and leaves it out for a
+teammate's ("ArgoCD is in Ken's own account, not shared with teammates") until Ken shares it. The agent started there
+reads the note and finds the config itself; no other Swarm member ever sees the path. Ken's chat message is still in the
+chat, so a path you'd rather keep from the chat goes in Machines > Configure instead.
+
+```
+ Dee (project chat):  Ken's Mac has email
+ PM (thread):         I'll add Email to Ken's Mac once Ken confirms. @Ken: right?   [Confirm] [Not right]
+```
 
 **The machine suggests what it finds**, for the owner to Add or dismiss. Each macOS account looks for itself, so the
 Team account's suggestions show what it really has:
@@ -106,6 +138,7 @@ run.
   - "No Lamp here."
   - "Lamp is not working on Gray's Mac (lamp does not answer); Gray was told."
   - "Fusion 360 is in Gray's own account, not shared with teammates."
+  - "Email on Ken's Mac is waiting for Ken to confirm."
 - Entries ride in the machine record every route already reads, so nothing new is fetched. Entries with a `check` are
   confirmed by the machine itself every 10 minutes, the tool probe's cache time (`VERIFIED_TOOL_TTL_MS`), and at each
   start (`start.ts` already asks `capacity` for the start's tools and devices).
@@ -118,14 +151,17 @@ run.
 
 | Who | Sees | Can use |
 | --- | --- | --- |
-| Swarm members who see the machine today | Name, account, state and its why, who added it | Only through tasks routed by the rules below |
-| The machine's owner | Everything, `check` and suggestions included | Their own tasks, any entry |
+| Swarm members who see the machine today | Name, account, state and its why, who added it. Never the note. | Only through tasks routed by the rules below |
+| The machine's owner | Everything, `check`, `note` and suggestions included | Their own tasks, any entry |
+| Agents running on that machine, in that entry's account | Name, state and `note`, through their own read (`harness super-tab access`) and in the delivery of a task that needs it | What their task routes them to |
 | A teammate's task, Team account (the default) | — | Team-account entries only. The Team account never sees the owner's sign-ins, apps' logins or files. |
 | A teammate's task, owner's own account | — | Only when the owner turned on own-account work (#2806, `ownAccountWork`) or that entry's `teammates` |
 | People outside the Swarm, Buddy-only machines | Nothing (`visibleState` already hides both) | Nothing |
 
-- **The server enforces it**: `visibleState` (backend `model.ts`) strips `check` for everyone but the owner; the route
-  and `admitMachineStart` apply the table.
+- **The server enforces it**: `visibleState` (backend `model.ts`) strips `check` for everyone but the owner, and
+  `note` for everyone but the owner and agents whose own machine is that entry's account (the Mac for `own`, its Team
+  account's pool for `team`). The PM that recorded a note reads it back only if it runs there. The route and
+  `admitMachineStart` apply the table.
 - **Sharing one own-account entry** (`teammates`) means teammates' tasks that need it run in the owner's account on
   that Mac, where they can read the owner's files and use their signed-in apps. Turning it on shows the same plain
   warning as own-account work ("Let teammates' work run in your account?"), naming the entry. The route adds the note
@@ -174,6 +210,9 @@ Configure dialog (right-click > Configure), owner only. New: the Access section.
    Your account
      Fusion 360      ok                                     [ ] Teammates may use  ⋯
      Email (dee@)    not working: gmail asks for sign-in    [ ] Teammates may use  ⋯
+     ArgoCD          ok                                     [ ] Teammates may use  ⋯
+       Note: connection info in ~/.argocd/config
+     Slack (dee@)    waiting for you: Dee said it           Confirm   Not right
    Team account
      Lamp            ok                                                            ⋯
      Tony's iPhone   ok                                                            ⋯
@@ -223,7 +262,8 @@ access, and a script that names a path keeps working. Rollback: drop the field; 
 **Phases**, each its own task and pull request:
 
 1. The list, `machine.access`, Configure and the expanded row, `requires.access` and `needs.access` in the route, and
-   the backend start check. Owner adds by hand.
+   the backend start check. The owner adds by hand, and the PM records from chat (owner's word, or unconfirmed until
+   the owner confirms). Notes.
 2. Staleness: `access mark`, the owner's notice, `check` runs every 10 minutes and at start.
 3. Suggestions from the machine.
 
@@ -231,7 +271,10 @@ Each phase starts with failing tests for the risks above: a teammate's task neve
 entry, by the route or by a start; a Team account never counted for an own-account entry; a secret-looking name
 refused; `check` and suggestions never in a non-owner's read or the server's reading; only an agent on that machine and
 account can mark an entry, and never ok; an older CLI's start without `needs.access` refused by the backend; the
-owner told once a day, not per mark.
+owner told once a day, not per mark; the PM's entry from someone other than the owner (or from an owner's message
+older than a day, or in a chat it does not lead) never counts until the owner confirms; the PM can never turn on
+`teammates`; a `note` never in another member's read, nor in an agent's read from another machine or account; a
+secret-looking note refused.
 
 **Open questions**, each with my recommendation:
 
@@ -252,19 +295,20 @@ owner told once a day, not per mark.
 
 ## Design
 
-- **Growth:** at most 32 entries per machine per Swarm; the owner removes them; they go with the machine
-  (`machine.remove`). Stale marks replace each other, one per entry.
+- **Growth:** at most 32 entries per machine per Swarm, unconfirmed ones included; the owner removes them; they go
+  with the machine (`machine.remove`). An unconfirmed entry is removed after 7 days. Stale marks replace each other,
+  one per entry. Notes are at most 200 characters.
 - **Concurrency:** one command on the Swarm's state under its existing write lock, as `machine.projects`.
 - **Read cost:** the list rides in the machine record already read. It changes only when an entry or its state does;
   `check` results go in the reading only when they change (as since #3011).
-- **Scale:** 10x is 320 entries a machine, past the cap; at 10x machines the machines part grows by about 5 KB a
-  machine. The first warning is the machines part's size in the state-parts metrics.
+- **Scale:** 10x is 320 entries a machine, past the cap; at 10x machines the machines part grows by about 12 KB a
+  machine (32 entries with notes). The first warning is the machines part's size in the state-parts metrics.
 - **Compatibility:** an older Desktop shows no Access; an older CLI's route ignores `needs.access`, and the backend
   start check catches it with a reason. Older hosts report no checks: entries stay as the owner set them.
 - **Migration + rollback:** none to move; removing the field restores today (section 7).
 - **Audience:** the server enforces who sees and uses what (section 4).
-- **Identity:** entries record the person who added them and the agent that marked them; no machine owner's login is
-  used for anything here. Signed-in CLI checks read only "signed in or not".
+- **Identity:** entries record the person who added them (or whose message the PM passed on, `askedIn`) and the agent
+  that marked them; no machine owner's login is used for anything here. Signed-in CLI checks read only "signed in or not".
 - **Failure:** a missing entry, a stale one and a refused start each say why in the route or the start's refusal; the
   owner is told of a stale one. A check that cannot run leaves the state as it was, and says so in the row.
 - **Platforms:** macOS gets suggestions first (apps, phones); Linux gets tools, MCP servers, USB devices and CLIs;
