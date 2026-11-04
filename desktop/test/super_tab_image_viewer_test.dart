@@ -252,6 +252,22 @@ void main() {
       expect(closed, [1]);
     });
 
+    // Lynx's test of #2892: minus at 100% closed it, the click falling
+    // through to the veil.
+    testWidgets('a click on the bars, a control at its end included, leaves '
+        'it open', (tester) async {
+      final closed = await open(tester, [_item('a1')]);
+      await tester.tap(button('zoom-out'));
+      await tester.tap(find.text('100%'));
+      await tester.tap(find.text('Huy'));
+      await tester.drag(button('zoom'), const Offset(400, 0));
+      await tester.pumpAndSettle();
+      await tester.tap(button('zoom-in'));
+      await tester.pump();
+      expect(find.text('400%'), findsOneWidget);
+      expect(closed, isEmpty);
+    });
+
     testWidgets('× closes it', (tester) async {
       final closed = await open(tester, [_item('a1')]);
       await tester.tap(button('close'));
