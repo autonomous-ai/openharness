@@ -44,12 +44,12 @@
 
 **Interfaces:** `endedReply(state: SuperTabState, group: Conversation, id: string, fallback?: Author): MessageDraft[]`; `taskLineChats(state: SuperTabState): string[]`.
 
-- [ ] Failing tests (stepsFixture): a task lost by `sweepLiveness` after 120 quiet minutes has exactly one row in the project chat, in `cards.line.messageId`'s thread, `Stuck: <worker> stopped. Next: another engineer takes it over.`; the same through `sweepForLead`; `agent.alert` still posts exactly one. Commit; watch them fail.
-- [ ] Implement `endedReply`; return it from `loseTask`; drop `lost` from `progress()`; load missing line chats in `fullReading` and `fullDeliveries`. Commit; watch them pass.
+- [x] Failing tests (stepsFixture): a task lost by `sweepLiveness` after 120 quiet minutes has exactly one row in the project chat, in `cards.line.messageId`'s thread, `Stuck: <worker> stopped. Next: another engineer takes it over.`; the same through `sweepForLead`; `agent.alert` still posts exactly one. Commit; watch them fail.
+- [x] Implement `endedReply`; return it from `loseTask`; drop `lost` from `progress()`; load missing line chats in `fullReading` and `fullDeliveries`. Commit; watch them pass.
 
 ### Task 2: A host's stop says Not building this in its thread
 
 **Files:** `backend/src/superTabs/store.ts` (`stopped`), `backend/integration/superTabTaskLines.test.ts`
 
-- [ ] Failing test: a stop receipt for an assigned task posts one `Not building this: The execution host confirmed that this harness stopped.` reply in the task's thread, and a repeated receipt adds none. Commit; watch it fail.
-- [ ] Write `endedReply` in `stopped()` with its Stopped notice; load a missing line chat. Commit; watch it pass. Then the full backend unit suite.
+- [x] Failing test: a stop receipt for an assigned task posts one `Not building this: The execution host confirmed that this harness stopped.` reply in the task's thread, and a repeated receipt adds none. Commit; watch it fail.
+- [x] Write `endedReply` in `stopped()` with its Stopped notice; load a missing line chat. Commit; watch it pass. Then the full backend unit suite.
