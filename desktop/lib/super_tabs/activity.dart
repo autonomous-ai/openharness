@@ -166,11 +166,16 @@ class SuperTabActivity extends ChangeNotifier {
   /// reply that lives in a thread) and not marked read. The server resolves a
   /// tag when the reader answers anyone, a Buddy's posts as them included, so
   /// only `read` and `done` say they saw it (Diego, #2887). A tag from a
-  /// server that does not say where it is counts until resolved.
+  /// server that does not say where it is counts until resolved, and so does
+  /// one in a chat the snapshot does not hold (archived, quiet): no read mark
+  /// or Mark read can reach it here, so a resolved one would never clear.
   bool mentionUnread(SuperTabMention mention) {
     if (mention.resolvedBy case 'read' || 'done') return false;
     final sequence = mention.messageSequence;
-    if (sequence == null) return mention.resolvedBy == null;
+    if (sequence == null ||
+        controller.snapshot?.conversation(mention.conversationId) == null) {
+      return mention.resolvedBy == null;
+    }
     return sequence >
         (mention.threadId == null
             ? controller.readMark(mention.conversationId)
