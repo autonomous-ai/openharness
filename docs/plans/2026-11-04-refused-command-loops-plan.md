@@ -57,14 +57,14 @@
 
 **Interfaces:** `declaredHttpClient(headers): { kind: string; version: string | null }`; `refusalLogFields(tabId, command, code, { asAgentId?, client?, machineId? }): Record<string, unknown>`; `SuperTabStore.execute(..., client?)`.
 
-- [ ] Failing test: Swarm/agent/CLI version for a host; command's agent over the acting one; a person's message without its words; header shape.
-- [ ] Run red; implement; run green; `npx tsc --noEmit -p .`; commit.
+- [x] Failing test: Swarm/agent/CLI version for a host; command's agent over the acting one; a person's message without its words; header shape.
+- [x] Run red; implement; run green; `npx tsc --noEmit -p .`; commit.
 
 ### Task 2: The CLI declares itself
 
 **Files:** modify `cli/src/gateway/accountHttp.ts`; test `cli/src/gateway/accountHttp.spec.ts`.
 
-- [ ] Failing test: the request headers carry `x-harness-client: cli/<VERSION>`. Red; add the header; green; commit.
+- [x] Failing test: the request headers carry `x-harness-client: cli/<VERSION>`. Red; add the header; green; commit.
 
 ### Task 3: Configuration reports stop on a permanent refusal
 
@@ -72,21 +72,21 @@
 
 **Interfaces:** `class CommandRetries { constructor(now: () => number); due(key: string): boolean; failed(key: string, error: unknown): void; sent(key: string): void; keep(keys: Iterable<string>): void }`.
 
-- [ ] Failing tests: a permanent refusal is sent once over 12 passes and a new reading once more; a 503 backs off (2–6 sends in two minutes). Red; implement; green; commit.
+- [x] Failing tests: a permanent refusal is sent once over 12 passes and a new reading once more; a 503 backs off (2–6 sends in two minutes). Red; implement; green; commit.
 
 ### Task 4: Alerts stop on a permanent refusal
 
 **Files:** modify `cli/src/superTabs/terminal.ts` `episode`; test `cli/src/superTabs/terminal.spec.ts`.
 
-- [ ] Failing tests: a refused alert is sent once over 20 reads; a 503 backs off (2–8 sends in ten minutes). Red; implement with `CommandRetries` keyed by the episode's operation id; green; commit.
+- [x] Failing tests: a refused alert is sent once over 20 reads; a 503 backs off (2–8 sends in ten minutes). Red; implement with `CommandRetries` keyed by the episode's operation id; green; commit.
 
 ### Task 5: Skill notices stop on a permanent refusal
 
 **Files:** modify `cli/src/superTabs/host.ts` `tellSkill`; test `cli/src/superTabs/host.spec.ts` (built-in skill text).
 
-- [ ] Failing test: a notice refused with `BUDDY_SESSION_THREAD` for one agent is tried once over five minutes of passes, and the other agents are still told. Red; on a permanent refusal `tellSkill` logs it and returns as sent (its record is kept, so nothing resends it); green; commit.
+- [x] Failing test: a notice refused with `BUDDY_SESSION_THREAD` for one agent is tried once over five minutes of passes, and the other agents are still told. Red; on a permanent refusal `tellSkill` logs it and returns as sent (its record is kept, so nothing resends it); green; commit.
 
 ### Task 6: Whole backend suite, CLI tests of what changed, PR evidence
 
-- [ ] `cd backend && npm test` (full unit suite, per the brief); `cd cli && npx vitest run` on the changed specs; `npm run typecheck` in both.
-- [ ] PR body names each sender against its count, with before/after commands per minute from the tests; red/green comment.
+- [x] Backend full unit suite: in PR CI (project instructions rev 56: no local whole suite); `cd cli && npx vitest run` on the changed specs; `npm run typecheck` in both.
+- [x] PR body names each sender against its count, with before/after commands per minute from the tests; red/green comment.
