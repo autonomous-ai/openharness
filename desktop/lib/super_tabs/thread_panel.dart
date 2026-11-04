@@ -119,7 +119,12 @@ class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     final root = widget.root;
     setState(
       () => _find = SuperTabChatFind(
-        rows: () => c.threadMessages(root),
+        // The root counts once no earlier replies are left to read: Up
+        // from the oldest loaded reply reads them first.
+        rows: () => [
+          for (final m in c.threadMessages(root))
+            if (m.id != root || !c.hasEarlierReplies(root)) m,
+        ],
         hasOlder: () => c.hasEarlierReplies(root),
         readOlder: () async {
           final loaded = c.threadMessages(root).length;

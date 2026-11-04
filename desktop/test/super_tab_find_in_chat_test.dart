@@ -310,13 +310,15 @@ void main() {
       );
       await tester.pumpAndSettle();
       // Reply 1, the earliest, not the root above the unread ones.
-      expect(said(), '2 of 3');
+      expect(said(), '2 of 2');
       expect(
         tester
             .widget<SuperTabMessageHighlight>(
               find
                   .ancestor(
-                    of: inThread(row('message-2')),
+                    of: find.byKey(
+                      const ValueKey('super-thread-message-message-2'),
+                    ),
                     matching: find.byType(SuperTabMessageHighlight),
                   )
                   .first,
@@ -324,6 +326,12 @@ void main() {
             .on,
         isTrue,
       );
+      // The root is the thread's earliest page; once it is read, it counts.
+      await tester.tap(
+        inThread(find.byKey(const ValueKey('super-find-older'))),
+      );
+      await tester.pumpAndSettle();
+      expect(said(), '3 of 3');
     });
 
     testWidgets('the chat’s find leaves thread-only replies out', (
