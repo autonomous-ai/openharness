@@ -403,7 +403,7 @@ export function withoutCredentials(command: Command, removed: CredentialKind[]):
 }
 
 /** A message row a group names as its proposal, as the store loads it. */
-export interface ProposalRow { id: string; conversationId: string; author: Author; source: Record<string, unknown> | null }
+interface ProposalRow { id: string; conversationId: string; author: Author; source: Record<string, unknown> | null }
 export interface CommandContext {
   operationId: string
   now: number
