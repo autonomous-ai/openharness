@@ -315,8 +315,10 @@ const JOIN_RETRY_MAX_MS = 30 * 60_000
 const UPDATE_BACKOFF_MS = 60_000
 /** How old the host form may be for the stop check, which runs every 5 s beside the one-second tick that reads it. */
 const STOPS_FRESH_MS = 5_000
-/** Refusals no retry can change while this host runs: the Swarm has all its machines, or this account does not own it. */
-const JOIN_FINAL = new Set(['MACHINES_FULL', 'OWNER_REQUIRED'])
+/** Refusals no retry can change while this host runs: this person has all the machines they may add to the Swarm, or this
+ *  account does not own it. MACHINES_FULL is what backends before #2637 send; it can go 30 days after the backend release
+ *  that removed it (ENGINEERING section 5). */
+const JOIN_FINAL = new Set(['MACHINE_LIMIT_PER_PERSON', 'MACHINES_FULL', 'OWNER_REQUIRED'])
 /** A Lead's reopen that failed (an engine that cannot start, a busy pane) waits this long, doubling up to half an hour, so a
  *  crash loop never spins; one the core took waits a minute for its session to show before it is asked again. */
 /** A delivery poll or claim the backend refused is asked again after 1 s, doubling to 30 s: every host retried each second, which
