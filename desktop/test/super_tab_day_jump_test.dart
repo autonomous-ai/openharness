@@ -314,4 +314,112 @@ void main() {
       expect(lit(tester, 'Today 20'), isFalse);
     });
   });
+
+  group('the thread lands on its first reply from that time', () {
+    final now = DateTime.now();
+    DateTime daysAgo(int days, [int minute = 0]) =>
+        DateTime(now.year, now.month, now.day - days, 10, minute);
+    const pill = ValueKey('super-thread-day-pill');
+    const root = 'Should we cache the reads?';
+
+    /// A thread of 40 replies over three weeks, four to a page: it opens
+    /// with the newest 20, yesterday's.
+    Future<SuperTabController> thread(WidgetTester tester) async {
+      final server = ConversationServer()
+        ..threads = true
+        ..messagePage = 4;
+      server.append(root);
+      server.messages.last['createdAt'] = daysAgo(30).toUtc().toIso8601String();
+      for (final (name, days, count) in [
+        ('Old', 20, 10),
+        ('Week', 7, 10),
+        ('Recent', 1, 20),
+      ]) {
+        for (var i = 1; i <= count; i++) {
+          server.append('$name reply $i');
+          server.messages.last
+            ..['thread'] = 'message-1'
+            ..['replyTo'] = 'message-1'
+            ..['createdAt'] = daysAgo(days, i).toUtc().toIso8601String();
+        }
+      }
+      server.markReadElsewhere('lead', server.messages.length);
+      final c = server.controller();
+      await c.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.light),
+          home: Scaffold(
+            body: SuperTabView(
+              controller: c,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Mac Studio',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      addTearDown(c.dispose);
+      c.openThread('message-1');
+      await tester.pumpAndSettle();
+      return c;
+    }
+
+    Finder inThread(String text) => find.descendant(
+      of: find.byKey(const ValueKey('super-thread-panel')),
+      matching: find.text(text),
+    );
+    bool lit(WidgetTester tester, String text) => tester
+        .widget<SuperTabMessageHighlight>(
+          find
+              .ancestor(
+                of: inThread(text),
+                matching: find.byType(SuperTabMessageHighlight),
+              )
+              .first,
+        )
+        .on;
+    bool onScreen(WidgetTester tester, String text) {
+      final list = tester.getRect(
+        find
+            .descendant(
+              of: find.byKey(const ValueKey('super-thread-panel')),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+      final at = tester.getRect(inThread(text));
+      return at.top >= list.top - 1 && at.top < list.bottom;
+    }
+
+    Future<void> choose(WidgetTester tester, String label) async {
+      await tester.tap(find.byKey(pill));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(label));
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+    }
+
+    testWidgets('Last week reads earlier replies to its first, and lights it', (
+      tester,
+    ) async {
+      await thread(tester);
+      expect(inThread('Week reply 1'), findsNothing);
+      await choose(tester, 'Last week');
+      expect(onScreen(tester, 'Week reply 1'), isTrue);
+      expect(lit(tester, 'Week reply 1'), isTrue);
+      await tester.pumpAndSettle(const Duration(seconds: 3));
+    });
+
+    testWidgets('The very beginning lands on the root', (tester) async {
+      await thread(tester);
+      await choose(tester, 'The very beginning');
+      expect(onScreen(tester, root), isTrue);
+      expect(lit(tester, root), isTrue);
+      await tester.pumpAndSettle(const Duration(seconds: 3));
+    });
+  });
 }
