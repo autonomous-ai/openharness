@@ -949,6 +949,11 @@ const candidate = (id: string, patch: Record<string, unknown> = {}) => ({ id, ki
 const record = (patch: Record<string, unknown> = {}) => ({ assessment: { difficulty: 'high', risk: 'low', why: 'Schema change.' },
   candidates: [candidate('c0'), candidate('c1', { model: 'sonnet', quality: 2, cost: 2 })], excluded: [], floor: 3, notes: false,
   pick: 'c0', via: 'jev', p: 0.82, belowFloor: false, why: 'Highest quality within quota.', ...patch })
+/** The route since task #2901 (Ken, 2026-11-04): it names no pick, and the project's Routing instructions choose. */
+const pickless = (patch: Record<string, unknown> = {}) => {
+  const { pick: _pick, ...rest } = record({ via: 'instructions', p: null, floor: 1, why: 'No ranking: the project\'s Routing instructions choose.', ...patch })
+  return rest
+}
 /** What an agent passes to start or assign: a routing decision of `conversationId`. Its pick differs from the call, so it carries a reason. */
 const via = { routeDecisionId: 'd1', overrideReason: 'Test.' }
 const decisionIn = (conversationId = 'lead', patch: Record<string, unknown> = {}) => ({ routeDecision: { id: 'd1', conversationId, record: record(patch), final: null, override: null, assignmentId: null, outcome: null } as unknown as RouteDecision })
@@ -1316,6 +1321,116 @@ describe('decisions linked to work', () => {
     f.state.conversations.find(c => c.id === 'lead')!.assignment = null
     const effects = f.run({ ...assign, overrideReason: 'The opus agent is already warm.' }, f.leadActor, { routeDecision: overridden })
     expect(effects.routeDecisions[0]).toMatchObject({ op: 'final', final, override: { by: 'lead', reason: 'The opus agent is already warm.' } })
+  })
+})
+
+// Task #2901 (Ken, 2026-11-04): PMs took the route's top line, nearly always Opus or Astra, against the Routing instructions'
+// order and quota. The route names no pick now; the coordinator chooses by the instructions, and its start or assignment
+// records which candidate it chose and the rule that chose it.
+describe('a route that names no pick', () => {
+  const open = (patch: Record<string, unknown> = {}) => ({ id: 'd1', conversationId: 'lead', record: pickless(), final: null, override: null, assignmentId: null,
+    outcome: null, ...patch }) as unknown as RouteDecision
+  const request = (patch: Record<string, unknown> = {}) => ({ conversationId: 'lead', machineId: 'machine', engine: 'claude', model: 'sonnet', effort: 'high',
+    name: 'Builder', cwd: '/repo', worktree: false, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false },
+    ...patch }) as Extract<Command, { type: 'agent.start' }>['request']
+  const rule = 'Rule 3: the account resetting soonest.'
+
+  it('is recorded with its id and no chat row, as the coordinator\'s route, whichever candidates it lists', () => {
+    const f = routed(), group = f.group()
+    const buddy = f.add('buddy')
+    f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', generation: 'tab' }
+    const decision = pickless({ candidates: [candidate('c0', { kind: 'member', agentId: buddy }), candidate('c1', { model: 'sonnet' })] })
+    const effects = f.run({ type: 'route.record', conversationId: group, decision } as Command, f.leadActor, { now: 2000 })
+    expect(effects.result.routeDecisionId).toEqual(expect.any(String))
+    expect(effects.routeDecisions).toEqual([{ op: 'create', id: effects.result.routeDecisionId, conversationId: group,
+      record: expect.objectContaining({ via: 'instructions', candidates: decision.candidates }) }])
+    expect((effects.routeDecisions[0] as { record: object }).record).not.toHaveProperty('pick')
+    expect(effects.messages).toEqual([])
+    expect(f.state.conversations.find(c => c.id === group)!.leadAction).toEqual({ kind: 'route', at: 2000 })
+  })
+
+  it('refuses a start or an assignment without the Routing rule that chose it, and says what to send', () => {
+    const f = routed(), task = f.group()
+    f.define(task)
+    for (const run of [
+      () => f.run({ type: 'agent.start', request: request({ conversationId: task }), routeDecisionId: 'd1' }, f.leadActor, { routeDecision: open({ conversationId: task }), contribution: f.contribution }),
+      () => f.run({ type: 'work.assign', conversationId: task, agentId: f.worker, routeDecisionId: 'd1' }, f.leadActor, { routeDecision: open({ conversationId: task }) }),
+    ]) {
+      expect(run).toThrow(expect.objectContaining({ code: 'ROUTE_REASON_REQUIRED', message: expect.stringContaining('overrideReason') }))
+      expect(run).toThrow(expect.objectContaining({ message: expect.stringContaining('Routing rule') }))
+    }
+  })
+
+  it('records the candidate a start matches, and posts the route row naming it and the rule', () => {
+    const f = routed(), task = f.group()
+    const effects = f.run({ type: 'agent.start', request: request({ conversationId: task }), routeDecisionId: 'd1', overrideReason: rule }, f.leadActor,
+      { routeDecision: open({ conversationId: task }), contribution: f.contribution })
+    expect(effects.routeDecisions).toEqual([{ op: 'final', id: 'd1', final: { kind: 'new', startId: effects.result.startId, machineId: 'machine', engine: 'claude',
+      model: 'sonnet', effort: 'high', candidateId: 'c1' } }])
+    // Released Desktop and phone apps draw a route card from source.pick, so the row carries the candidate chosen as its pick.
+    expect(effects.messages.filter(m => m.source?.kind === 'route')).toEqual([expect.objectContaining({
+      text: `Routed to Title c1 — by the project's Routing instructions · "${rule}"`,
+      source: { kind: 'route', decisionId: 'd1', via: 'instructions', p: null, belowFloor: false, why: rule, pick: { id: 'c1', title: 'Title c1' },
+        alternatives: [{ id: 'c0', title: 'Title c0' }] } })])
+    expect(effects.messages.some(m => m.source?.kind === 'route-override')).toBe(false)
+  })
+
+  it('records a start that matches none of the candidates as the coordinator\'s override, with its reason', () => {
+    const f = routed(), task = f.group()
+    const effects = f.run({ type: 'agent.start', request: request({ conversationId: task, effort: 'xhigh' }), routeDecisionId: 'd1', overrideReason: 'Xhigh is needed here.' },
+      f.leadActor, { routeDecision: open({ conversationId: task }), contribution: f.contribution })
+    expect(effects.routeDecisions).toEqual([{ op: 'final', id: 'd1', final: { kind: 'new', startId: effects.result.startId, machineId: 'machine', engine: 'claude',
+      model: 'sonnet', effort: 'xhigh' }, override: { by: 'lead', actorKey: `agent:${f.lead}`, reason: 'Xhigh is needed here.' } }])
+    expect(effects.messages.filter(m => m.source?.kind?.toString().startsWith('route'))).toEqual([expect.objectContaining({
+      text: 'lead started Builder, which is none of the route\'s candidates. Reason: Xhigh is needed here.',
+      source: { kind: 'route-override', decisionId: 'd1', by: 'lead' } })])
+  })
+
+  it('records the member an assignment matches with the route row, and one that matches none as an override', () => {
+    const f = routed(), task = f.group(), name = f.state.agents.find(a => a.id === f.worker)!.name
+    f.define(task)
+    const members = pickless({ candidates: [candidate('c0'), candidate('c1', { kind: 'member', agentId: f.worker })] })
+    const assigned = f.run({ type: 'work.assign', conversationId: task, agentId: f.worker, routeDecisionId: 'd1', overrideReason: rule }, f.leadActor,
+      { routeDecision: open({ conversationId: task, record: members }) })
+    expect(assigned.routeDecisions).toEqual([{ op: 'final', id: 'd1', final: { kind: 'member', agentId: f.worker, machineId: expect.any(String), candidateId: 'c1' },
+      assignmentId: assigned.result.assignmentId }])
+    expect(assigned.messages.filter(m => m.source?.kind === 'route')).toEqual([expect.objectContaining({
+      text: `Routed to Title c1 — by the project's Routing instructions · "${rule}"`, source: expect.objectContaining({ pick: { id: 'c1', title: 'Title c1' } }) })])
+    f.state.conversations.find(c => c.id === task)!.assignment = null
+    const other = f.run({ type: 'work.assign', conversationId: task, agentId: f.worker, routeDecisionId: 'd1', overrideReason: 'It knows the code.' }, f.leadActor,
+      { routeDecision: open({ conversationId: task }) })
+    expect(other.routeDecisions[0]).toMatchObject({ op: 'final', override: { by: 'lead', reason: 'It knows the code.' } })
+    expect(other.routeDecisions[0]).not.toHaveProperty('final.candidateId')
+    expect(other.messages.filter(m => m.source?.kind?.toString().startsWith('route')).map(m => m.text))
+      .toEqual([`lead assigned ${name}, which is none of the route's candidates. Reason: It knows the code.`])
+  })
+
+  it('links the assignment of the agent its start chose with no reason again and no second route row', () => {
+    const f = routed(), task = f.group()
+    f.define(task)
+    const final = { kind: 'new', startId: f.startedFor(f.worker), machineId: 'machine', engine: 'claude', model: 'sonnet', effort: 'high', candidateId: 'c1' }
+    const effects = f.run({ type: 'work.assign', conversationId: task, agentId: f.worker, routeDecisionId: 'd1' }, f.leadActor, { routeDecision: open({ conversationId: task, final }) })
+    expect(effects.routeDecisions).toEqual([{ op: 'final', id: 'd1', final, assignmentId: effects.result.assignmentId }])
+    expect(effects.messages.some(m => m.source?.kind?.toString().startsWith('route'))).toBe(false)
+  })
+
+  it('takes a person\'s choice with no earlier one as "chose", and refuses choosing the candidate a start already chose', () => {
+    const f = routed()
+    const command = { type: 'route.override', decisionId: 'd1', candidateId: 'c0', reason: 'Opus for the schema.' } as const
+    const effects = f.run(command, undefined, { routeDecision: open() })
+    expect(effects.routeDecisions).toEqual([{ op: 'override', id: 'd1', override: expect.objectContaining({ by: 'person', candidateId: 'c0' }) }])
+    expect(effects.messages[0]!.text).toBe('owner@example.com chose Title c0. Reason: Opus for the schema.')
+    const started = open({ final: { kind: 'new', startId: 's', machineId: 'machine', engine: 'claude', model: 'sonnet', effort: 'high', candidateId: 'c1' } })
+    expect(() => f.run({ ...command, candidateId: 'c1' }, undefined, { routeDecision: started })).toThrow(expect.objectContaining({ code: 'ALREADY_CHOSEN' }))
+    expect(f.run(command, undefined, { routeDecision: started }).messages[0]!.text).toBe('owner@example.com chose Title c0 instead of Title c1. Reason: Opus for the schema.')
+  })
+
+  it('links a start to the candidate a person chose, as before, keeping that candidate in the final', () => {
+    const f = routed(), task = f.group()
+    const chosen = open({ conversationId: task, override: { by: 'person', actorKey: 'person:owner', candidateId: 'c1', reason: 'Sonnet will do.' } })
+    const effects = f.run({ type: 'agent.start', request: request({ conversationId: task }), routeDecisionId: 'd1' }, f.leadActor, { routeDecision: chosen, contribution: f.contribution })
+    expect(effects.routeDecisions).toEqual([{ op: 'final', id: 'd1', final: expect.objectContaining({ model: 'sonnet', candidateId: 'c1' }) }])
+    expect(effects.messages.some(m => m.source?.kind?.toString().startsWith('route'))).toBe(false)
   })
 })
 
