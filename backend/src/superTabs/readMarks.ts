@@ -26,7 +26,7 @@ export interface ThreadMarkWrite extends ReadMarkWrite { threadId: string }
 
 /** The calls `raise` makes, which both mark collections answer alike. */
 interface MarkRows {
-  updateMany(args: { where: { id: string; sequence: { lt: number } }; data: { sequence: number; updatedAt: Date } }): Promise<{ count: number }>
+  updateMany(args: { where: { id: string; sequence: { lt: number } }; data: { sequence: number; updatedAt: Date } & Record<string, unknown> }): Promise<{ count: number }>
   findUnique(args: { where: { id: string }; select: { sequence: true } }): Promise<{ sequence: number } | null>
   create(args: { data: Record<string, unknown> & { id: string } }): Promise<unknown>
 }
@@ -34,11 +34,12 @@ interface MarkRows {
 /** Moves row `id` forward to `sequence` and answers the mark as stored, with whether this call created the row. An older
  *  mark never replaces a newer one: the update matches only a lower mark. When another device's write lands between the
  *  update and the look after it (two first writes racing to create the row, or one raising it), the update runs again;
- *  every retry follows a write that raised the mark, so a few settle it. */
-async function raise(rows: MarkRows, id: string, sequence: number, updatedAt: Date, data: Record<string, unknown>): Promise<{ sequence: number; created: boolean }> {
+ *  every retry follows a write that raised the mark, so a few settle it. `moved` is set on the row with the mark. */
+async function raise(rows: MarkRows, id: string, sequence: number, updatedAt: Date, data: Record<string, unknown>, moved: Record<string, unknown> = {}):
+  Promise<{ sequence: number; created: boolean }> {
   for (let attempt = 0; attempt < 4; attempt++) {
-    const moved = await rows.updateMany({ where: { id, sequence: { lt: sequence } }, data: { sequence, updatedAt } })
-    if (moved.count) return { sequence, created: false }
+    const raised = await rows.updateMany({ where: { id, sequence: { lt: sequence } }, data: { ...moved, sequence, updatedAt } })
+    if (raised.count) return { sequence, created: false }
     const held = await rows.findUnique({ where: { id }, select: { sequence: true } })
     if (held && held.sequence >= sequence) return { sequence: held.sequence, created: false }
     if (held) continue
@@ -52,11 +53,35 @@ async function raise(rows: MarkRows, id: string, sequence: number, updatedAt: Da
   return fail('READ_MARK_BUSY', 'This conversation is being marked read on another device. Try again.', 503)
 }
 
-/** Moves the person's mark of a conversation forward to `sequence` and answers the mark as stored (`raise`). */
+/** Moves the person's mark of a conversation forward to `sequence` and answers the mark as stored (`raise`). A read that moves
+ *  it ends a Mark unread: the mark no longer reads as lowered (lowerReadMark). */
 export async function writeReadMark(db: PrismaClient, mark: ReadMarkWrite): Promise<number> {
   const { tabId, personId, conversationId, sequence } = mark
   return (await raise(db.superTabReadMark as unknown as MarkRows, stableId(tabId, conversationId, personId), sequence, new Date(mark.now),
-    { tabId, personId, conversationId })).sequence
+    { tabId, personId, conversationId }, { loweredAt: null })).sequence
+}
+
+/** The person's Mark unread: moves their mark of a conversation back to `sequence`, never forward (a chat already unread from
+ *  earlier stays as it is), and answers the mark as stored. The one write that lowers a mark. It sets `loweredAt` with
+ *  `updatedAt`, so their other devices, which keep the higher of a mark and the one they hold, take this one instead
+ *  (readMarkRows `lowered`). A chat with no mark counts as read (read/inbox.ts), so it gets one. One conditional update; when
+ *  another device creates or moves the row between it and the look after it, it runs again, as `raise` does. */
+export async function lowerReadMark(db: PrismaClient, mark: ReadMarkWrite): Promise<number> {
+  const { tabId, personId, conversationId, sequence } = mark
+  const id = stableId(tabId, conversationId, personId), at = new Date(mark.now)
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if ((await db.superTabReadMark.updateMany({ where: { id, sequence: { gt: sequence } }, data: { sequence, updatedAt: at, loweredAt: at } })).count) return sequence
+    const held = await db.superTabReadMark.findUnique({ where: { id }, select: { sequence: true } })
+    if (held && held.sequence <= sequence) return held.sequence
+    if (held) continue
+    try {
+      await db.superTabReadMark.create({ data: { id, tabId, personId, conversationId, sequence, updatedAt: at, loweredAt: at } })
+      return sequence
+    } catch (error) {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error
+    }
+  }
+  return fail('READ_MARK_BUSY', 'This conversation is being marked read on another device. Try again.', 503)
 }
 
 /** Moves the person's mark of one thread forward to `sequence` and answers the mark as stored (`raise`). A new mark past
@@ -141,11 +166,20 @@ async function capThreadMarks(db: PrismaClient, tabId: string, personId: string)
   await db.$runCommandRaw({ delete: 'SuperTabThreadMark', deletes: [{ q: { _id: { $in: oldest.map(row => row._id as string) } }, limit: 0 }] })
 }
 
+/** One of the person's read marks; `lowered` when its last move was their Mark unread (lowerReadMark). */
+export interface ReadMarkRow { conversationId: string; sequence: number; lowered: boolean }
+
+/** The person's marks in this tab; with `since`, only those moved at or after it. A Mark unread is its row's last move while
+ *  `loweredAt` equals `updatedAt`: a read since clears it, and one from a backend that did not clear it moves `updatedAt`. */
+export async function readMarkRows(db: PrismaClient, tabId: string, personId: string, since?: number): Promise<ReadMarkRow[]> {
+  const rows = await db.superTabReadMark.findMany({ where: { tabId, personId, ...(since === undefined ? {} : { updatedAt: { gte: new Date(since) } }) },
+    select: { conversationId: true, sequence: true, updatedAt: true, loweredAt: true } })
+  return rows.map(row => ({ conversationId: row.conversationId, sequence: row.sequence, lowered: row.loweredAt?.getTime() === row.updatedAt.getTime() }))
+}
+
 /** The person's marks in this tab, by conversation; with `since`, only those moved at or after it. */
 export async function readMarks(db: PrismaClient, tabId: string, personId: string, since?: number): Promise<Map<string, number>> {
-  const rows = await db.superTabReadMark.findMany({ where: { tabId, personId, ...(since === undefined ? {} : { updatedAt: { gte: new Date(since) } }) },
-    select: { conversationId: true, sequence: true } })
-  return new Map(rows.map(row => [row.conversationId, row.sequence]))
+  return new Map((await readMarkRows(db, tabId, personId, since)).map(row => [row.conversationId, row.sequence]))
 }
 
 /** The person's thread marks in this tab, by conversation then thread root: every one (at most THREAD_MARK_CAP), or with

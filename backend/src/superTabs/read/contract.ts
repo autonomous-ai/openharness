@@ -87,10 +87,19 @@ export interface Derived {
   /** A person only: a digest of which of their Activity rows are unread (activity.ts), moving when one is written, read or
    *  removed. No count and no chat: the client reads its list again when it moves. Absent from an older backend. */
   activityDigest?: string
+  /** A person only: a digest of their reminders and when each is due (reminders.ts), moving when one is set, replaced or
+   *  cleared. No count and no chat: the client reads its reminders again when it moves, and at the `next` time that read
+   *  gave it. Absent from an older backend. */
+  remindersDigest?: string
   /** A person only: their own read marks (readMarks.ts), the newest message sequence read by conversation. A first load has
    *  every one of the conversations it holds; a changes read only those moved since its cursor, kept by the client as the
    *  higher of the two. Never another person's. */
   readMarks?: Record<string, number>
+  /** A person only: those of their `readMarks` whose last move was their own Mark unread (readMarks.ts lowerReadMark), which
+   *  a client takes in place of a higher mark it holds, where it keeps the higher of the two for every other mark. Like
+   *  `readMarks`: a first load has every one of the conversations it holds, a changes read those moved since its cursor; a read
+   *  that raises the mark again ends it. Absent when there are none, and from an older backend. Never another person's. */
+  unreadMarks?: Record<string, number>
   /** A person only: their own thread marks (readMarks.ts), the newest message sequence read by thread root, by conversation.
    *  Like `readMarks`: a first load has those of the conversations it holds, a changes read those moved since its cursor.
    *  Absent when there are none, and from an older backend. Never another person's. */

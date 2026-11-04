@@ -352,6 +352,8 @@ class SuperTabController extends ChangeNotifier {
     devicesSelected = devices;
     if (to != null && to != selectedId) {
       _leftAt[selectedId] = clock.now();
+      // Marked unread while open: once left, it reads as any chat does.
+      _unreadHeld.remove(selectedId);
       selectedId = to;
     }
   }
@@ -3471,6 +3473,7 @@ class SuperTabController extends ChangeNotifier {
     final snapshot = this.snapshot;
     if (_disposed || accessRevoked || snapshot == null) return null;
     _markAll?._commit();
+    _unreadHeld.clear();
     final before = <String, int?>{}, through = <String, int>{};
     for (final group in snapshot.conversations) {
       if (group.dormant || !unreadShown(group)) continue;
@@ -3529,8 +3532,15 @@ class SuperTabController extends ChangeNotifier {
 
   /// A visible transcript passes the boundary it displayed. The loaded messages
   /// are authoritative: snapshots can arrive either before or after their tail.
-  void markRead(String id, {int? through}) {
+  /// While the open chat is held unread ([markUnread]) only an [explicit] read
+  /// (Esc) reads it.
+  void markRead(String id, {int? through, bool explicit = false}) {
     if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
+      return;
+    }
+    if (explicit) {
+      _unreadHeld.remove(id);
+    } else if (_unreadHeld.contains(id)) {
       return;
     }
     final loaded = _loadedMessageSequence(id);
@@ -3540,6 +3550,71 @@ class SuperTabController extends ChangeNotifier {
     _readAt[id] = last;
     _saveSoon();
     _changed();
+  }
+
+  /// The open chat the reader marked unread: nothing reads it again until they
+  /// leave it, as in Slack.
+  final _unreadHeld = <String>{};
+
+  /// Marks [id] unread from [message] on: the read mark goes to just before it
+  /// (backend readMarks.ts lowerReadMark), on every device of the reader, and
+  /// never forward. A message only in its thread has its thread's mark, not
+  /// this one. False when the server did not keep it; this device's mark is
+  /// then as it was.
+  Future<bool> markUnread(String id, SuperTabMessage message) async {
+    if (_disposed ||
+        accessRevoked ||
+        snapshot?.conversation(id) == null ||
+        !message.inMainStream ||
+        message.sequence <= 0) {
+      return false;
+    }
+    final target = message.sequence - 1;
+    if (readMark(id) <= target) return true;
+    final was = _readAt[id], wasServer = snapshot?.readMarks[id];
+    if (id == selectedId) _unreadHeld.add(id);
+    _readAt[id] = target;
+    _parts?.lowerReadMark(id, target);
+    _serverMarks.forget(id);
+    _saveSoon();
+    _redraw();
+    try {
+      final answer = superTabMap(
+        await request(
+          'POST',
+          '$_path/conversations/${Uri.encodeComponent(id)}/unread',
+          body: {'sequence': message.sequence},
+        ),
+      );
+      // A read that raised the held mark while this was sent: the server's
+      // answer is where it stands.
+      if ((answer['sequence'] as num?)?.toInt() case final stored?) {
+        _parts?.lowerReadMark(id, stored);
+        _redraw();
+      }
+      return true;
+    } catch (_) {
+      if (_disposed) return false;
+      _unreadHeld.remove(id);
+      if (was == null) {
+        _readAt.remove(id);
+      } else {
+        _readAt[id] = was;
+      }
+      if (wasServer != null) _parts?.raiseReadMark(id, wasServer);
+      _saveSoon();
+      _redraw();
+      return false;
+    }
+  }
+
+  /// Marks a Mark unread moved back elsewhere: this device's own mark follows.
+  void _takeLowered(Map<String, int> lowered) {
+    for (final MapEntry(key: id, value: sequence) in lowered.entries) {
+      if ((_readAt[id] ?? 0) > sequence) _readAt[id] = sequence;
+      _serverMarks.forget(id);
+    }
+    if (lowered.isNotEmpty) _saveSoon();
   }
 
   /// The zone this app last told the Swarm, or tried to: told once per zone
@@ -3666,6 +3741,7 @@ class SuperTabController extends ChangeNotifier {
           throw const FormatException('A different Swarm was returned.');
         }
         snapshot = next;
+        _takeLowered(parts.takeLowered());
         _reportTimeZone(next);
         _notifyKept.removeWhere((_, kept) => kept.$2 < serial);
         final allowed = next.conversations.map((c) => c.id).toSet();
