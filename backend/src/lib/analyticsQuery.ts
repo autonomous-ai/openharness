@@ -12,7 +12,7 @@
  *   - `AnalyticsDailyMachine.wallClockActiveMs` is summed across machines only under the label
  *     "sum across machines". It is a union within a machine and cannot become a union across them.
  */
-import { prisma } from './prisma.js'
+import { prisma, prismaSecondary } from './prisma.js'
 import { machineAlive } from './prisma.js'
 import {
   MIN_DAYS_FOR_BASELINE,
@@ -131,18 +131,19 @@ export async function analyticsOverview(opts: OverviewOptions): Promise<Analytic
 
   const machineFilter = opts.machineId ? { machineId: opts.machineId } : {}
 
+  // The totals are days of rollups, read on the secondaries (task #2970); which machines are the person's, on the primary.
   const [machineRows, buckets, machineDays, states] = await Promise.all([
     prisma.machine.findMany({
       where: { userId: opts.userId, ...machineFilter, ...machineAlive },
       select: { machineId: true, name: true, hostname: true, authMode: true, billingStatus: true },
     }),
-    prisma.analyticsDailyBucket.findMany({
+    prismaSecondary.analyticsDailyBucket.findMany({
       where: { userId: opts.userId, ...machineFilter, dayUtc: { gte: fromDay, lte: toDay } },
     }),
-    prisma.analyticsDailyMachine.findMany({
+    prismaSecondary.analyticsDailyMachine.findMany({
       where: { userId: opts.userId, ...machineFilter, dayUtc: { gte: fromDay, lte: toDay } },
     }),
-    prisma.analyticsMachineState.findMany({ where: { userId: opts.userId, ...machineFilter } }),
+    prismaSecondary.analyticsMachineState.findMany({ where: { userId: opts.userId, ...machineFilter } }),
   ])
 
   const stateByMachine = new Map(states.map((s) => [s.machineId, s]))
