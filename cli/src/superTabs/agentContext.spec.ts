@@ -220,8 +220,9 @@ describe('a check with several checkers', () => {
   it('shows each checker\'s verdict, a failure first', () => {
     const group = withCheck({ evidence: 'Crashes offline\nlog', passedBy: null,
       verdicts: [verdict('agent:rev1', true, 'Diff reads right', 1), verdict('person:owner', false, 'Crashes offline\nlog', 2)] })
-    const state = swarm([group], { people: [{ id: 'owner', email: 'owner@example.com' }] })
-    expect(taskText(group, state, [], changed({}), NOW)).toContain('✗ Signs in offline — failed by owner@example.com: Crashes offline; passed by Rev1')
+    // A person by username, never email (task #2954).
+    const state = swarm([group], { people: [{ id: 'owner', email: 'owner@example.com', username: 'ken15' }] })
+    expect(taskText(group, state, [], changed({}), NOW)).toContain('✗ Signs in offline — failed by ken15: Crashes offline; passed by Rev1')
   })
 
   it('names every checker that passed it', () => {

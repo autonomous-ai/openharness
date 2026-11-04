@@ -887,12 +887,26 @@ describe('Super Tab native delivery handoff', () => {
     const t = setup({ author: { kind: 'person', id: 'p1', name: 'sam@example.com' }, text: 'How is it going?' })
     await t.open().tick()
     const prompt = vi.mocked(t.core.turns.deliver).mock.calls[0]![1] as string
-    expect(prompt).toContain('Message message from sam@example.com:\nHow is it going?')
+    expect(prompt).toContain('Message message from sam:\nHow is it going?')
     expect(prompt).toContain("post 'lead' 'your message' UNIQUE_OPERATION_ID --reply-to 'message'")
     expect(prompt).toContain('Ask questions and post results in this conversation.')
     expect(prompt).toContain('Answer each message once')
     expect(prompt).not.toContain('email addresses')
     expect(prompt).not.toContain('Report exact revisions')
+  })
+  // Task #2954 (Ken, 11-04): agents copied an author's email into commands and pull requests until a machine's privacy hook
+  // stopped their sessions. A person is named by the name the server gives, and an older server's email never shows.
+  it('names a person by the name the server gives, and never by email', async () => {
+    const named = setup({ author: { kind: 'person', id: 'p1', name: 'sam', displayName: 'Sam Lee' }, text: 'Ship it?' })
+    await named.open().tick()
+    expect(vi.mocked(named.core.turns.deliver).mock.calls[0]![1]).toContain('Message message from Sam Lee:\nShip it?')
+    const older = setup({ author: { kind: 'person', id: 'p1', name: 'sam@example.com' }, text: 'Ship it?',
+      source: { kind: 'native', phase: 'input', operator: { kind: 'person', id: 'p2', name: 'kim@example.com' } } })
+    await older.open().tick()
+    const prompt = vi.mocked(older.core.turns.deliver).mock.calls[0]![1] as string
+    expect(prompt).toContain('opened by kim.')
+    expect(prompt).toContain('Message message from sam:\nShip it?')
+    expect(prompt).not.toContain('@example.com')
   })
   it('only the machine\'s own person\'s message may close its question', async () => {
     const signedIn = (t: ReturnType<typeof setup>, accountId: string | null) =>
@@ -993,6 +1007,15 @@ describe('Super Tab native delivery handoff', () => {
       const prompt = await delivered(t)
       expect(prompt).toContain('In a thread Ken started')
       expect(reads.filter(id => id === 'root')).toHaveLength(1)
+    })
+    it('names a thread\'s people by name, never by email (task #2954)', async () => {
+      const root = { ...ROOT, author: { kind: 'person', id: 'ken', name: 'ken@example.com' } }
+      const { t } = wired({ thread: 'root', replyTo: 'root' }, { root: page([root], [{ id: 'root', replies: 3,
+        authors: [{ kind: 'person', id: 'dee', name: 'dee@example.com' }, { kind: 'person', id: 'sam', name: 'sam', displayName: 'Sam Lee' }] }]) })
+      const prompt = await delivered(t)
+      expect(prompt).toContain('In a thread ken started (2026-11-02 09:15 UTC): "Should we ship today?" — 3 replies so far, from dee, Sam Lee.')
+      expect(prompt).toContain('Replying to ken (2026-11-02 09:15 UTC):')
+      expect(prompt).not.toContain('@example.com')
     })
     it('a thread\'s only reply has no thread line', async () => {
       const { t } = wired({ thread: 'root', replyTo: 'root' }, { root: page([ROOT], [{ id: 'root', replies: 1, authors: [{ name: 'Collaborator' }] }]) })

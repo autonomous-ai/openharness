@@ -30,6 +30,13 @@ describe('SWARM_TOOLS_SKILL', () => {
     expect(SWARM_TOOLS_SKILL).toContain('`routeDecisionId` and `overrideReason`: the Routing rule that chose it')
     expect(SWARM_TOOLS_SKILL).not.toMatch(/ranks the rest|by strength, then price|choose by strength|A pick on|ranks who could/)
   })
+  // Task #2954 (Ken, 11-04): a PM typed --mention with Ken's email and a machine's privacy hook stopped its session.
+  it('says to tag people by username, display name or id, never by email', () => {
+    const tagging = SWARM_TOOLS_SKILL.split('\n').filter(line => /--mention|tags? /.test(line))
+    expect(tagging.join('\n')).toContain('`--mention PERSON` tags a person by the username, display name or id shown in status')
+    for (const line of tagging) expect(line).not.toMatch(/by the id or email|@email/)
+    expect(SWARM_TOOLS_SKILL).toContain('Never type a person\'s email: name them by username.')
+  })
   it('describes the commands the server accepts now', () => {
     expect(SWARM_TOOLS_SKILL).not.toMatch(/Refused to some agents|route first|hard rules|rated 3|rule\.set|project\.skills/)
     for (const part of ['post GROUP', '--to AGENT', 'instructions', 'instructions.save']) expect(SWARM_TOOLS_SKILL).toContain(part)

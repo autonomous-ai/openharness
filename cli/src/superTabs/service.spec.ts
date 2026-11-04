@@ -1287,7 +1287,8 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
 // Lead mentions (spec 2026-10-24-lead-mentions): a post names people by id or email; the backend gets their person ids,
 // and every agent's help offers it (project instructions, phase 4).
 describe('mentions on a post', () => {
-  const people = [{ id: 'person-ken', email: 'Ken@Example.com', role: 'owner' }, { id: 'person-dee', email: 'dee@example.com', role: 'collaborator' }]
+  const people: Array<Record<string, unknown>> = [{ id: 'person-ken', email: 'Ken@Example.com', role: 'owner', username: '0xken15', name: 'Ken' },
+    { id: 'person-dee', email: 'dee@example.com', role: 'collaborator', username: 'dee' }]
   const swarm = (t: ReturnType<typeof setup>, leadId: string | null) => {
     const state = { agents: [t.agent], people, projects: [{ id: 'pilot', name: 'Pilot', leadConversationId: 'pilot' }],
       conversations: [{ id: 'pilot', leadId, agentIds: [t.agentId] }, { id: 'work', projectId: 'pilot', leadId: t.agentId, agentIds: [t.agentId] }] }
@@ -1305,11 +1306,33 @@ describe('mentions on a post', () => {
       command: { type: 'message.send', conversationId: 'pilot', text: 'Please confirm', replyTo: null, recipientIds: [], mentions: ['person-ken', 'person-dee'] } }]])
   })
 
+  // Task #2954 (Ken, 11-04): a PM typed --mention with Ken's email and a machine's privacy hook stopped its session. A post
+  // names people by username or display name; an email still works for older callers.
+  it('sends the person ids of people named by username or display name, in any case and with or without @', async () => {
+    const t = setup()
+    swarm(t, t.agentId)
+    expect(await post(t, ['@0xKen15', 'Dee', ' ken '])).toMatchObject({ ok: true })
+    expect(posted(t).map(([, , body]) => (body as { command: { mentions: string[] } }).command.mentions)).toEqual([['person-ken', 'person-dee']])
+  })
+
+  it('refuses a display name two people go by, naming their usernames, and takes either by username', async () => {
+    const t = setup()
+    people.push({ id: 'person-ken2', email: 'ken@other.example', role: 'collaborator', username: 'kenb', name: 'ken' })
+    try {
+      swarm(t, t.agentId)
+      expect(await post(t, ['Ken'])).toEqual({ error: 'MENTION_AMBIGUOUS',
+        detail: 'Ken is the name of more than one person here (0xken15, kenb). Tag them by username or id.', status: 400 })
+      expect(posted(t)).toEqual([])
+      expect(await post(t, ['kenb', '0xken15'])).toMatchObject({ ok: true })
+      expect(posted(t).map(([, , body]) => (body as { command: { mentions: string[] } }).command.mentions)).toEqual([['person-ken2', 'person-ken']])
+    } finally { people.pop() }
+  })
+
   it('refuses a person who is not in the Swarm before anything is sent', async () => {
     const t = setup()
     swarm(t, t.agentId)
     expect(await post(t, ['dee@example.com', 'someone@example.com'])).toEqual({ error: 'MENTION_UNKNOWN',
-      detail: 'someone@example.com is not a person in this Swarm. Tag a person by the id or email shown in status.', status: 400 })
+      detail: 'someone@example.com is not a person in this Swarm. Tag a person by the username or id shown in status.', status: 400 })
     expect(await post(t, [42])).toMatchObject({ error: 'MENTION_UNKNOWN' })
     expect(posted(t)).toEqual([])
   })
@@ -1333,9 +1356,11 @@ describe('mentions on a post', () => {
     expect(lead.post).toContain(`post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--reply-to MESSAGE_ID] [--attach PATH]... ${mention}:`)
     // 2026-10-30: TEXT - posted a literal dash; help says - reads the message from stdin (command.ts postStdin).
     expect(lead.post).toContain("when it holds quotes, or is only -, put - in its place and send the message on stdin (post GROUP - OPERATION_ID <<'MSG' … MSG); an empty stdin is refused and nothing is posted.")
-    expect(lead.post).toContain('--mention tags a person, by the id or email shown in status (up to 5), when you need them to act or decide; it shows in their notifications.')
+    // By username, display name or id, never email (task #2954).
+    expect(lead.post).toContain('--mention tags a person, by the username, display name or id shown in status (up to 5), when you need them to act or decide; it shows in their notifications.')
     // The server reads tags from the text too (backend mentions.ts).
-    expect(lead.post).toContain('An @username or @email in TEXT tags that person as well, outside code and links.')
+    expect(lead.post).toContain('An @username in TEXT tags that person as well, outside code and links. Never type a person\'s email.')
+    expect(lead.post).not.toMatch(/email shown|@email/)
     expect(String(lead.plan)).toContain('plan [JSON]: the best plan for all your open groups')
     expect(await help(t, { tabId: 'tab', harnessId: 'native' })).toEqual(lead)
     // An agent that coordinates nothing reads the same, and so does help outside a tab or with a caller that cannot be read.
