@@ -781,9 +781,52 @@ describe('machines take agents as memory allows (Dee, 11-04: "remove the limit")
     measured(f, 'owner-mac', 128, 21)
     fill(f, 'owner-mac', 16)
     // 16 running and 21 GiB free: ten more of 2 GiB, not the zero a count of 16 left.
-    expect(availableSlots(f.machine('owner-mac'), machineSlots(f.state, f.machine('owner-mac')))).toBe(10)
+    expect(availableSlots(f.state, f.machine('owner-mac'), machineSlots(f.state, f.machine('owner-mac')))).toBe(10)
     Object.assign(f.machine('owner-mac'), { agents: 'atMost', maxAgents: 18 })
-    expect(availableSlots(f.machine('owner-mac'), machineSlots(f.state, f.machine('owner-mac')))).toBe(2)
+    expect(availableSlots(f.state, f.machine('owner-mac'), machineSlots(f.state, f.machine('owner-mac')))).toBe(2)
+  })
+
+  // Review of #3001: the reading shows no memory for starts not launched yet.
+  it('counts the memory of starts admitted and not yet launched', () => {
+    const f = swarm(), group = f.group()
+    Object.assign(f.machine('owner-mac'), { maxAgents: 16 })
+    measured(f, 'owner-mac', 128, 5)
+    const room = () => availableSlots(f.state, f.machine('owner-mac'), machineSlots(f.state, f.machine('owner-mac')))
+    expect(room()).toBe(2)
+    expect(refusal(() => start(f, group))).toBeNull()
+    expect(room()).toBe(1)
+    expect(refusal(() => start(f, group))).toBeNull()
+    expect(room()).toBe(0)
+    const third = refusal(() => start(f, group))
+    expect(third?.message).toBe('Owner Mac is out of free memory: 1 GB free, and an agent needs 2 GB. Try again when an agent there finishes, or pick another machine.')
+    expect(third?.details).toEqual({ reason: 'memory' })
+  })
+
+  it('counts a Mac and its Team account as one memory', () => {
+    const f = swarm(), group = f.group()
+    Object.assign(f.machine('mate-team'), { hostMachineId: 'mate-mac', name: 'MacBook Pro', cwd: '/team-swarm', maxAgents: 16 })
+    Object.assign(f.machine('mate-mac'), { maxAgents: 16 })
+    measured(f, 'mate-mac', 128, 3)
+    measured(f, 'mate-team', 128, 3)
+    const room = (id: string) => availableSlots(f.state, f.machine(id), machineSlots(f.state, f.machine(id)))
+    expect([room('mate-mac'), room('mate-team')]).toEqual([1, 1])
+    f.member('mine', 'mate-mac', 'mate', f.mine)
+    expect(refusal(() => f.run({ type: 'agent.start', request: { ...f.request(group, 'mate-mac'), requirements: twoGiB } }, owner, f.pooled('mate-mac')))).toBeNull()
+    // The one start holds the 2 GiB both readings show.
+    expect([room('mate-mac'), room('mate-team')]).toEqual([0, 0])
+  })
+
+  it('keeps an owner\'s At most when an older client saves the machine again with the same count', () => {
+    const f = swarm()
+    const save = (extra: Record<string, unknown>) => f.run({ type: 'machine.contribute', machineId: 'owner-mac', name: 'Owner Mac', cwd: '/swarm', scope: 'swarm',
+      engines: ['codex'], maxAgents: 16, ...extra } as Command, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner', machineName: 'Owner Mac' } } as never)
+    save({ agents: 'atMost' })
+    save({})
+    expect(f.machine('owner-mac').agents).toBe('atMost')
+    // A new count from an older client is its own: the setting is read from the number again.
+    f.run({ type: 'machine.contribute', machineId: 'owner-mac', name: 'Owner Mac', cwd: '/swarm', scope: 'swarm', engines: ['codex'], maxAgents: 6 } as Command,
+      owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner', machineName: 'Owner Mac' } } as never)
+    expect(f.machine('owner-mac').agents).toBeUndefined()
   })
 
   it('a Team account follows its Mac\'s setting', () => {
