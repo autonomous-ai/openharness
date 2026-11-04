@@ -21,7 +21,10 @@ enum SuperTabBacklogGroup {
 /// Which group [task] is listed in; null for a cancelled task, which is not
 /// listed. A wait on a person is "Waiting on someone", as the sidebar's groups
 /// read it (task_groups.dart, Huy); the task's own line says on whom.
-SuperTabBacklogGroup? superTabBacklogGroupOf(SuperTabConversation task) {
+SuperTabBacklogGroup? superTabBacklogGroupOf(
+  SuperTabConversation task,
+  DateTime now,
+) {
   if (task.shippedAt != null) return SuperTabBacklogGroup.shipped;
   final assignment = task.assignment;
   final status = assignment?['status'];

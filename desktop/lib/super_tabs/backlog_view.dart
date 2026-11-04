@@ -76,7 +76,8 @@ class _SuperTabBacklogViewState extends State<SuperTabBacklogView> {
     final all = superTabBacklogTasks(c);
     final placed = [
       for (final task in all)
-        if (superTabBacklogGroupOf(task) case final group?) (task, group),
+        if (superTabBacklogGroupOf(task, widget.now()) case final group?)
+          (task, group),
     ];
     // Watched after the frame: a build changes nothing outside itself.
     final open = [
