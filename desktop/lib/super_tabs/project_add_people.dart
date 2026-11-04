@@ -184,7 +184,9 @@ Future<void> showProjectAddPeople(
                           update(() => busy = true);
                           // Read now, not when the dialog opened: a member added elsewhere since is kept.
                           final live = c.snapshot?.projectById(project.id);
-                          if (live == null || !canAdd) {
+                          if (live == null ||
+                              !live.isPrivate ||
+                              live.ownerId != c.accountId) {
                             update(() => busy = false);
                             return;
                           }
