@@ -675,6 +675,37 @@ void main() {
       expect(line(tester), '3 need you', reason: 'done before they left');
     });
 
+    testWidgets('waits for when the app was last left, so the work done is '
+        'never counted from now and then jumps', (tester) async {
+      final now = _halfHourIn();
+      final fake = backend();
+      final store = _HeldStore()
+        ..values['swarm_home.$me'] = jsonEncode({
+          'pins': <Object>[],
+          'seen': now
+              .subtract(const Duration(minutes: 20))
+              .millisecondsSinceEpoch,
+        });
+      moveOn(fake, {
+        'g-after': done('g-after', now.subtract(const Duration(minutes: 10))),
+      });
+      final host = await pump(
+        tester,
+        fake,
+        now: () => now,
+        store: store,
+        settle: false,
+      );
+      await host.session!.inbox.refresh();
+      await frames(tester);
+      expect(line(tester), '3 need you', reason: 'not known yet');
+
+      store.release.complete();
+      await tester.pumpAndSettle();
+
+      expect(line(tester), '3 need you · 1 done');
+    });
+
     testWidgets('with nothing waiting on the person, there is no line', (
       tester,
     ) async {

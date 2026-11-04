@@ -14,12 +14,11 @@ import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 
 import 'swarm_activity.dart' show SwarmActivityFilter;
-import 'swarm_agents.dart';
 import 'swarm_conversation_page.dart' show openSwarmConversation;
 import 'swarm_home_list.dart';
 import 'swarm_home_rows.dart';
 import 'swarm_home_search.dart';
-import 'swarm_home_tiles.dart';
+import 'swarm_home_need_line.dart';
 import 'swarm_home_top.dart';
 import 'swarm_inbox.dart';
 import 'swarm_mark_all.dart';
@@ -35,8 +34,6 @@ import 'swarm_session.dart';
 import 'swarm_start.dart';
 import 'swarm_style.dart';
 import 'swarm_tabs.dart';
-import 'swarm_threads.dart';
-import 'swarm_threads_page.dart';
 import 'swarm_unread.dart';
 import 'swarm_you_page.dart' show SwarmYouButton;
 
@@ -67,9 +64,9 @@ bool swarmHomeListed(SwarmInbox inbox, String swarmId, String projectId) {
 /// switcher to every Swarm, All Swarms and Join or create
 /// ([showSwarmSwitcher]), then Search ([openSwarmSearch]) and the person's
 /// avatar, which opens You ([SwarmYouButton]); a pull down at the top opens
-/// Search too ([SwarmPullToSearch]); a row of tiles ([SwarmHomeTiles]): While
-/// you were away whenever there is a Swarm to report on, Threads, and the
-/// agents on the person's computers; then the projects they pinned on this
+/// Search too ([SwarmPullToSearch]); one line while something needs the
+/// person, "2 need you · 1 done" ([SwarmNeedLine], anh Dee 2026-11-04: less
+/// is better), in place of three tiles; then the projects they pinned on this
 /// phone, one line each, then the others by their latest activity, those
 /// quiet for a day folded under "Other projects" ([swarmHomeLists]), Sort and
 /// filter at the right of their first caption. Every Swarm's, or
@@ -77,9 +74,6 @@ bool swarmHomeListed(SwarmInbox inbox, String swarmId, String projectId) {
 /// right over them: New message (Tony, 10-30: Slack Mobile's;
 /// [showSwarmNewMessage]). What needs the person, and the invitations to a
 /// Swarm, are the Activity tab's.
-///
-/// The Threads tile ([SwarmThreadsTile]): the threads the person follows in
-/// the Swarms shown, bright while one has new replies.
 ///
 /// Pushed over another page it has a back button instead of the switcher.
 /// Reads the account's [SwarmSession] from the shell; with none, its skeleton
@@ -91,7 +85,8 @@ class SwarmPage extends StatefulWidget {
   /// What a project's last move, and the time away, is measured from.
   final DateTime Function() now;
 
-  /// Gone for less, While you were away stays on the time away it was showing.
+  /// Gone for less, the need-you line counts the work done from the time
+  /// the person left before.
   static const awayAfter = Duration(minutes: 5);
 
   @override
@@ -100,10 +95,6 @@ class SwarmPage extends StatefulWidget {
 
 class _SwarmPageState extends State<SwarmPage> {
   SwarmSession? _session;
-
-  /// The Threads tile's threads, over the Swarms Home shows, while it is in
-  /// sight: out of sight, it asks for none.
-  SwarmThreadsMerge? _threads;
 
   /// Kept out of sight under Harness ([OutOfSight]), as it was left: it is no
   /// Swarm screen meanwhile — a notice still tells what arrives — and draws
@@ -115,7 +106,7 @@ class _SwarmPageState extends State<SwarmPage> {
   Timer? _tick;
 
   /// When the person last left the app, as read when Home first drew and
-  /// each time the app came back: what While you were away counts from.
+  /// each time the app came back: what the work done is counted from.
   DateTime? _away;
   bool _awayRead = false;
 
@@ -137,7 +128,7 @@ class _SwarmPageState extends State<SwarmPage> {
         final now = widget.now();
         final left = _session?.home.seenAt;
         // A moment away ends nothing: a phone locked or an app glanced at must
-        // not turn "2h, 9 done" into "now, 0 done" for someone still reading it.
+        // not turn "9 done" into "0 done" for someone still reading it.
         if (_awaySpansTime &&
             left != null &&
             now.difference(left) < SwarmPage.awayAfter) {
@@ -174,14 +165,7 @@ class _SwarmPageState extends State<SwarmPage> {
     _hidden = hidden;
     _tick?.cancel();
     _tick = null;
-    _threads?.dispose();
-    _threads = null;
     if (hidden || session == null) return;
-    _threads = swarmThreadsOf(
-      session,
-      shown: () => _shown(session),
-      changed: session.home,
-    );
     session.enter();
     unawaited(session.inbox.refresh());
     _tick = Timer.periodic(const Duration(minutes: 1), (_) {
@@ -193,7 +177,6 @@ class _SwarmPageState extends State<SwarmPage> {
   void dispose() {
     _lifecycle.dispose();
     _tick?.cancel();
-    _threads?.dispose();
     if (!_hidden) _session?.leave();
     super.dispose();
   }
@@ -513,11 +496,7 @@ class _SwarmPageState extends State<SwarmPage> {
     // was until then. Only a server without the list says so, as no read will
     // ever bring its rows.
     if (!inbox.loaded && inbox.swarms.isEmpty) {
-      final away = swarmHomeListing(inbox)
-          ? _tiles(context, session, const [], null, widget.now())
-          : null;
       return [
-        ?away,
         if (inbox.error == swarmServerTooOld)
           Padding(
             padding: const EdgeInsets.fromLTRB(
@@ -533,7 +512,7 @@ class _SwarmPageState extends State<SwarmPage> {
             ),
           )
         else
-          ..._reading(first: away == null),
+          ..._reading(first: true),
       ];
     }
     final shown = _shown(session);
@@ -541,56 +520,26 @@ class _SwarmPageState extends State<SwarmPage> {
         ? shown.single.id
         : null;
     final now = widget.now();
-    final tiles = _tiles(context, session, shown, picked, now);
+    final needs = _needLine(context, session, shown, picked, now);
     return [
-      ?tiles,
+      ?needs,
       ..._projects(
         context,
         session,
         shown,
         now,
-        first: tiles == null,
+        first: needs == null,
         view: pushed ? null : _viewButton(context, session),
       ),
     ];
   }
 
-  /// The row of tiles over the projects: While you were away ([_awayTile]),
-  /// Threads over the Swarms [shown], and the agents on the person's
-  /// computers, where the app has them; none with none of the three.
-  Widget? _tiles(
-    BuildContext context,
-    SwarmSession session,
-    List<SwarmListing> shown,
-    String? picked,
-    DateTime now,
-  ) {
-    final away = _awayTile(context, session, shown, picked, now);
-    final threads = _threads;
-    final agents = swarmAgentsOf(context);
-    final tiles = [
-      ?away,
-      if (threads != null && shown.isNotEmpty)
-        SwarmThreadsTile(
-          threads: threads,
-          onTap: () => openSwarmThreads(context, swarmId: picked),
-        ),
-      if (agents != null)
-        SwarmAgentsTile(agents: agents, onTap: () => agents.openList(context)),
-    ];
-    if (tiles.isEmpty) return null;
-    return Padding(
-      padding: const EdgeInsets.only(top: AppSpace.xs),
-      child: SwarmHomeTiles(children: tiles),
-    );
-  }
-
-  /// While you were away: the work done in the Swarms shown since the person
-  /// last left the app, or on a first open since it opened, and what needs them
-  /// there now, each a skeleton while the Swarms, or what waits in them, are
-  /// not read. Always there, unless no Swarm is left to report on. A tap opens
-  /// Activity on Needs you.
-  Widget? _awayTile(
+  /// The need-you line over the projects: what needs the person in the
+  /// Swarms shown, and the work done there since they last left the app, or
+  /// on a first open since it opened. None while nothing needs them, or what
+  /// waits is still being read: never "0 need you". A tap opens Activity on
+  /// Needs you.
+  Widget? _needLine(
     BuildContext context,
     SwarmSession session,
     List<SwarmListing> shown,
@@ -602,40 +551,38 @@ class _SwarmPageState extends State<SwarmPage> {
       _away = home.seenAt;
       _awayRead = true;
     }
-    // Not known yet: drawn as "now" for a moment, it would then jump.
-    if (!home.loaded) return null;
-    // Decided at the return: time in the foreground is no time away.
+    final inbox = session.inbox;
+    if (swarmHomeListing(inbox) || shown.isEmpty) return null;
+    final needs = swarmNeedsOf(inbox, picked).length;
+    if (needs == 0) return null;
+    // Decided at the return: time in the foreground is no time away. Not
+    // known yet, the work done is not said, rather than said and then taken
+    // back.
     final back = _back ?? now;
     final since = _away ?? back;
-    final inbox = session.inbox;
-    final listing = swarmHomeListing(inbox);
-    if (!listing && shown.isEmpty) return null;
-    // A Swarm not read leaves the work done unknown; one no read will bring is
-    // left out, or its skeleton would never end.
-    int? done = listing ? null : 0;
-    for (final swarm in listing ? const <SwarmListing>[] : shown) {
+    int? done = home.loaded ? 0 : null;
+    for (final swarm in home.loaded ? shown : const <SwarmListing>[]) {
       final reader = inbox.reader(swarm.id);
       if (reader != null && _ended(reader)) continue;
       final snapshot = reader?.snapshot;
       done = snapshot == null ? null : done! + swarmDoneSince(snapshot, since);
       if (done == null) break;
     }
-    final needs = swarmNeedsOf(inbox, picked).length;
-    return SwarmAwayTile(
-      since: since,
-      back: back,
-      done: done,
-      // None found is not none waiting until all of it is read.
-      needs: !listing && (needs > 0 || _needsRead(inbox, shown)) ? needs : null,
-      onTap: () {
-        if (!showSwarmTab(
-          context,
-          SwarmTab.activity,
-          activity: SwarmActivityFilter.needsYou,
-        )) {
-          openSwarmNeeds(context, swarmId: picked);
-        }
-      },
+    return Padding(
+      padding: const EdgeInsets.only(top: AppSpace.xs),
+      child: SwarmNeedLine(
+        needs: needs,
+        done: done,
+        onTap: () {
+          if (!showSwarmTab(
+            context,
+            SwarmTab.activity,
+            activity: SwarmActivityFilter.needsYou,
+          )) {
+            openSwarmNeeds(context, swarmId: picked);
+          }
+        },
+      ),
     );
   }
 
@@ -881,22 +828,6 @@ const _loadingTile = Skeleton(
 /// the backend needs a newer build, with nothing read before then.
 bool _ended(SwarmReader reader) =>
     reader.snapshot == null && (reader.accessRevoked || reader.updateRequired);
-
-/// Whether what waits on the person in every Swarm [shown] is read: the
-/// Swarm, and what waits in it since it was last read in full. One no read
-/// will bring has nothing more to wait for.
-bool _needsRead(SwarmInbox inbox, List<SwarmListing> shown) => shown.every(
-  (swarm) => switch (inbox.reader(swarm.id)) {
-    final reader? when _ended(reader) => true,
-    SwarmReader(snapshot: _?, accessRevoked: false) => switch (inbox.asks(
-      swarm.id,
-    )) {
-      null => true,
-      final asks => !asks.loading && asks.error == null,
-    },
-    _ => false,
-  },
-);
 
 /// No session: Swarm is off, or nobody is signed in on this phone.
 class _Unavailable extends StatelessWidget {
