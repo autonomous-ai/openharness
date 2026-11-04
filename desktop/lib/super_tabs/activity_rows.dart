@@ -3,32 +3,18 @@ import 'notifications.dart';
 /// Mentions from one author in one chat or thread, folded into the row of the
 /// newest: `+{more} more from {author}`.
 class SuperTabMentionRow {
-  const SuperTabMentionRow({
-    required this.newest,
-    required this.all,
-    required this.unread,
-  });
+  const SuperTabMentionRow({required this.newest, required this.all});
   final SuperTabMention newest;
 
   /// Every mention in the row, in the order given.
   final List<SuperTabMention> all;
-
-  /// Whether any of them is unread.
-  final bool unread;
-
-  /// Whether any of them still waits (not read through Mark read or answered):
-  /// the row can be marked read even when the reader has read past it.
-  bool get unresolved => all.any((m) => m.resolvedBy == null);
   int get more => all.length - 1;
 }
 
 /// Folds neighbours with the same author, chat and thread into one row each.
 /// Only neighbours: a later mention from the same author after someone else's
 /// stays its own row, so the list keeps its order.
-List<SuperTabMentionRow> groupMentions(
-  List<SuperTabMention> mentions,
-  bool Function(SuperTabMention) isUnread,
-) {
+List<SuperTabMentionRow> groupMentions(List<SuperTabMention> mentions) {
   bool sameRow(SuperTabMention a, SuperTabMention b) =>
       (a.leadId ?? a.leadName) == (b.leadId ?? b.leadName) &&
       a.conversationId == b.conversationId &&
@@ -43,11 +29,7 @@ List<SuperTabMentionRow> groupMentions(
   }
   return [
     for (final g in groups)
-      SuperTabMentionRow(
-        newest: g.first,
-        all: List.unmodifiable(g),
-        unread: g.any(isUnread),
-      ),
+      SuperTabMentionRow(newest: g.first, all: List.unmodifiable(g)),
   ];
 }
 

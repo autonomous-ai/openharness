@@ -250,11 +250,15 @@ class SuperTabActivity extends ChangeNotifier {
     ]..sort((a, b) => b.answeredAt!.compareTo(a.answeredAt!));
   }
 
-  /// The tags that wait and the earlier ones (read or answered), newest first,
-  /// folded by author and chat; unread ones are bold, the rest are read rows.
+  /// The unread tags, waiting or answered, newest first, folded by author and
+  /// chat. A read one is not listed: Mentions shows only what is unread
+  /// (Diego, #2887).
   List<SuperTabMentionRow> get mentionRows {
     final epoch = DateTime.fromMillisecondsSinceEpoch(0);
-    final all = [...mentions.waiting, ...mentions.earlier];
+    final all = [
+      ...mentions.waiting,
+      ...mentions.earlier,
+    ].where(mentionUnread).toList();
     // The index breaks ties: `sort` is not stable, and equal times must keep
     // the server's order so neighbours from one author still fold.
     final order = [for (var i = 0; i < all.length; i++) i]
@@ -264,7 +268,7 @@ class SuperTabActivity extends ChangeNotifier {
         );
         return byTime != 0 ? byTime : a.compareTo(b);
       });
-    return groupMentions([for (final i in order) all[i]], mentionUnread);
+    return groupMentions([for (final i in order) all[i]]);
   }
 
   /// The followed threads with news today.

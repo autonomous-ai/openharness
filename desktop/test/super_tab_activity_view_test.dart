@@ -542,7 +542,7 @@ void main() {
       await show(tester, await loaded(tester, server));
       await tester.tap(_key('super-activity-tab-mentions'));
       await tester.pumpAndSettle();
-      // Unreads only, as Mentions opens.
+      // Only the unread ones are listed.
       for (final text in [
         'Answered',
         'Replied',
@@ -647,8 +647,8 @@ void main() {
   });
 
   for (final brightness in Brightness.values) {
-    testWidgets('an unread mention row reads like an unread thread row; a '
-        'read one is quiet ($brightness)', (tester) async {
+    testWidgets('a mention row reads like an unread thread row '
+        '($brightness)', (tester) async {
       final previous = grid.AppTheme.brightness.value;
       grid.AppTheme.brightness.value = brightness;
       addTearDown(() => grid.AppTheme.brightness.value = previous);
@@ -656,18 +656,11 @@ void main() {
         final server = swarm()..followedThreads = null;
         server.tag('message-1', messageSequence: 9, leadId: 'a', text: 'New');
         server.mentions.last['leadName'] = 'Avery';
-        server.tag('message-2', messageSequence: 1, leadId: 'b', text: 'Old');
-        server.mentions.last['leadName'] = 'Blake';
-        server.state['readMarks'] = {
-          'owner': {'lead': 4},
-        };
         await show(
           tester,
           await loaded(tester, server),
           brightness: brightness,
         );
-        await tester.tap(_key('super-activity-unreads-only'));
-        await tester.pumpAndSettle();
         TextStyle? who(String name) =>
             tester.widget<Text>(find.text(name)).style;
         Color? preview(String text) =>
@@ -682,10 +675,6 @@ void main() {
         expect(who('Avery')?.color, DesktopChrome.foreground);
         expect(who('Avery')?.fontWeight, grid.AppFont.semibold);
         expect(preview('New'), DesktopChrome.foreground);
-        expect(dot('mention-2'), findsNothing);
-        expect(who('Blake')?.color, DesktopChrome.muted);
-        expect(who('Blake')?.fontWeight, isNot(grid.AppFont.semibold));
-        expect(preview('Old'), grid.AppPalette.textFaint);
       });
     });
   }
@@ -1043,10 +1032,10 @@ void main() {
       final activity = await _unread(tester, server);
       await tester.runAsync(activity.mentions.load);
       await show(tester, activity);
-      expect(_key('super-activity-unreads-only'), findsOneWidget);
+      expect(find.text('Tag number 0'), findsOneWidget);
       await _tapSending(tester, _key('super-activity-mark-all-read'));
       // Everything is read now; the reader is still where they chose to act.
-      expect(_key('super-activity-unreads-only'), findsOneWidget);
+      expect(find.text('No unread mentions'), findsOneWidget);
     });
   });
 
@@ -1057,9 +1046,9 @@ void main() {
       _tags(server, 2);
       server.failDecisions = true;
       await show(tester, await loaded(tester, server));
-      expect(_key('super-activity-unreads-only'), findsOneWidget);
+      expect(find.text('Tag number 0'), findsOneWidget);
       await _tapSending(tester, _key('super-activity-mark-all-read'));
-      expect(_key('super-activity-unreads-only'), findsOneWidget);
+      expect(find.text('No unread mentions'), findsOneWidget);
     });
   });
 
@@ -1098,8 +1087,8 @@ void main() {
     handle.dispose();
   });
 
-  testWidgets('Mentions lists read and answered ones; Mark read reaches any '
-      'that still waits', (tester) async {
+  testWidgets('Mentions leaves out read ones; Mark all read reads every one '
+      'listed', (tester) async {
     await withClock(Clock.fixed(_now), () async {
       final server = swarm()..followedThreads = null;
       server.tag('message-1', messageSequence: 9, leadId: 'a', text: 'New');
@@ -1108,43 +1097,33 @@ void main() {
       server.mentions.last
         ..['resolvedAt'] = _utc(_now)
         ..['resolvedBy'] = 'done';
+      server.tag('message-4', messageSequence: 8, leadId: 'd', text: 'Answer');
+      server.mentions.last
+        ..['resolvedAt'] = _utc(_now)
+        ..['resolvedBy'] = 'answer';
+      (server.state['conversations'] as List)
+              .cast<Map<String, dynamic>>()
+              .firstWhere((g) => g['id'] == 'lead')['lastMessageSequence'] =
+          20;
       server.state['readMarks'] = {
         'owner': {'lead': 4},
       };
-      await show(tester, await loaded(tester, server));
-      await tester.tap(_key('super-activity-unreads-only'));
-      await tester.pumpAndSettle();
-      for (final id in ['mention-1', 'mention-2', 'mention-3']) {
-        expect(_key('super-activity-row-mention:$id'), findsOneWidget);
-      }
-      await _hover(tester, _key('super-activity-row-mention:mention-3'));
-      expect(find.text('Mark read'), findsNothing);
-      await _hover(tester, _key('super-activity-row-mention:mention-2'));
-      expect(find.text('Mark read'), findsOneWidget);
+      final activity = await loaded(tester, server);
+      await show(tester, activity);
+      expect(_key('super-activity-row-mention:mention-1'), findsOneWidget);
+      expect(_key('super-activity-row-mention:mention-4'), findsOneWidget);
+      expect(_key('super-activity-row-mention:mention-2'), findsNothing);
+      expect(_key('super-activity-row-mention:mention-3'), findsNothing);
       await _tapSending(tester, _key('super-activity-mark-all-read'));
       expect(
         {
           for (final post in server.posts)
             '${post['command']['type']}:${post['command']['mentionId']}',
         },
-        {'mention.done:mention-1', 'mention.done:mention-2'},
+        {'mention.done:mention-1'},
       );
-    });
-  });
-
-  testWidgets('Threads has no Unreads only', (tester) async {
-    await withClock(Clock.fixed(_now), () async {
-      final server = swarm();
-      _thread(server);
-      _tags(server, 1);
-      await show(tester, await loaded(tester, server));
-      await tester.tap(_key('super-activity-tab-threads'));
-      await tester.pumpAndSettle();
-      expect(_key('super-activity-unreads-only'), findsNothing);
-      expect(_key('super-activity-mark-all-read'), findsOneWidget);
-      await tester.tap(_key('super-activity-tab-mentions'));
-      await tester.pumpAndSettle();
-      expect(_key('super-activity-unreads-only'), findsOneWidget);
+      expect(activity.controller.readMark('lead'), 8);
+      expect(find.text('No unread mentions'), findsOneWidget);
     });
   });
 

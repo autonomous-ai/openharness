@@ -62,10 +62,6 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
   /// to be), or as soon as the reader does anything here. Until then more
   /// arriving may still change it; after, it never moves under their hands.
   bool _settled = false;
-
-  /// Mentions opens on what the reader has not read (Diego, #2887): the
-  /// read ones are a switch away.
-  bool _mentionsUnreadOnly = true;
   bool _handledShown = false;
 
   @override
@@ -95,7 +91,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
   /// unread rows, else Needs you.
   _Tab _opening() {
     if (_activity.needsYou.isNotEmpty) return _Tab.needs;
-    if (_activity.mentionRows.any((r) => r.unread)) return _Tab.mentions;
+    if (_activity.mentionRows.isNotEmpty) return _Tab.mentions;
     if (_activity.threadRows.isNotEmpty) return _Tab.threads;
     return _Tab.needs;
   }
@@ -265,25 +261,6 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
       spacing: grid.AppDesktop.groupGap,
       children: children,
     ),
-  );
-
-  Widget _unreadsOnly() => Row(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      Text('Unreads only', style: DesktopChrome.metadata()),
-      const SizedBox(width: grid.AppDesktop.controlGap),
-      Transform.scale(
-        scale: .8,
-        child: Switch(
-          key: const ValueKey('super-activity-unreads-only'),
-          value: _mentionsUnreadOnly,
-          onChanged: (on) => setState(() {
-            _settle();
-            _mentionsUnreadOnly = on;
-          }),
-        ),
-      ),
-    ],
   );
 
   Widget _markAll(VoidCallback? onPressed) => quietDecisionAction(
@@ -481,7 +458,6 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
       final project = _snapshot?.projectFor(need.conversationId);
       return _ActivityRow(
         key: ValueKey('super-activity-row-${need.id}'),
-        unread: true,
         avatarName: need.title,
         who: need.title,
         where: project?.name,
@@ -508,7 +484,6 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
         now.difference(created) < const Duration(days: 8);
     return _ActivityRow(
       key: ValueKey('super-activity-row-${need.id}'),
-      unread: true,
       avatarName: decision.askerName,
       who: decision.askerName,
       where: decision.projectName,
@@ -534,7 +509,6 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
     final text = _oneLine(reminder.text);
     return _ActivityRow(
       key: ValueKey('super-activity-row-reminder:${reminder.id}'),
-      unread: true,
       avatarName: who,
       who: who,
       where: project?.name,
@@ -602,20 +576,9 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
 
   List<Widget> _mentions() {
     final a = _activity;
-    final all = a.mentionRows;
-    final rows = _mentionsUnreadOnly
-        ? [
-            for (final r in all)
-              if (r.unread) r,
-          ]
-        : all;
-    // Every one still waiting, read past or not, and every unread one the
-    // server resolved: Mark read reads them all.
-    final markable = [
-      for (final r in rows)
-        for (final m in r.all)
-          if (m.resolvedBy == null || a.mentionUnread(m)) m,
-    ];
+    // Only the unread ones are listed, and Mark all read reads them all.
+    final rows = a.mentionRows;
+    final listed = [for (final r in rows) ...r.all];
     final people = {
       for (final p in _snapshot?.people ?? const <SuperTabPerson>[]) p.id: p,
     };
@@ -627,19 +590,15 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
     }
 
     return [
-      _bar([
-        _unreadsOnly(),
-        _markAll(markable.isEmpty ? null : () => markRead(markable)),
-      ]),
+      _bar([_markAll(listed.isEmpty ? null : () => markRead(listed))]),
       if (rows.isEmpty)
-        _empty(_mentionsUnreadOnly ? 'No unread mentions' : 'No mentions')
+        _empty('No unread mentions')
       else
         ..._byDay<SuperTabMentionRow>(rows, (r) => r.newest.createdAt, (row) {
           final m = row.newest;
           final name = author(m);
           return _ActivityRow(
             key: ValueKey('super-activity-row-mention:${m.id}'),
-            unread: row.unread,
             avatarName: name,
             who: name,
             where: m.projectName,
@@ -647,9 +606,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
             trailing: m.createdAt == null ? '' : _when(m.createdAt!),
             preview: _oneLine(m.text),
             more: row.more > 0 ? '+${row.more} more from $name' : null,
-            actions: row.unresolved || row.unread
-                ? [(label: 'Mark read', run: () => markRead(row.all))]
-                : const [],
+            actions: [(label: 'Mark read', run: () => markRead(row.all))],
             onTap: () => widget.onOpenMention(m),
           );
         }),
@@ -703,7 +660,6 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
           final root = _oneLine(t.rootText);
           return _ActivityRow(
             key: ValueKey('super-activity-row-thread:${t.key}'),
-            unread: a.attention.isNew(t),
             avatarName: author.isEmpty ? subject : author,
             who: subject.isEmpty ? 'Thread' : subject,
             where: project?.name,
@@ -805,12 +761,12 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
 }
 
 /// One row, Slack's way: an unread dot, an avatar, who and where and when,
-/// then a preview and whatever hangs under it. Hover actions float at the
+/// then a preview and whatever hangs under it. Every row Activity lists is
+/// unread, so there is no read style. Hover actions float at the
 /// right, over the time.
 class _ActivityRow extends StatefulWidget {
   const _ActivityRow({
     super.key,
-    required this.unread,
     required this.avatarName,
     required this.who,
     this.where,
@@ -828,7 +784,6 @@ class _ActivityRow extends StatefulWidget {
     this.actions = const [],
     required this.onTap,
   });
-  final bool unread;
   final String avatarName, who, trailing;
   final String? where;
 
@@ -916,13 +871,9 @@ class _ActivityRowState extends State<_ActivityRow> {
     final text = widget.preview;
     if (text == null) return const SizedBox.shrink();
     final strong = widget.previewStrong;
-    // Unread in the foreground, read faint: muted read too close to faint to
-    // tell apart (Diego, #2887).
-    final base = DesktopChrome.control(
-      color: strong || widget.unread
-          ? DesktopChrome.foreground
-          : grid.AppPalette.textFaint,
-    ).copyWith(fontWeight: strong ? grid.AppFont.semibold : null);
+    // In the foreground: muted read too close to faint (Diego, #2887).
+    final base = DesktopChrome.control(color: DesktopChrome.foreground)
+        .copyWith(fontWeight: strong ? grid.AppFont.semibold : null);
     final lead = widget.previewLead;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -952,10 +903,8 @@ class _ActivityRowState extends State<_ActivityRow> {
 
   @override
   Widget build(BuildContext context) {
-    final unread = widget.unread;
-    final whoStyle = DesktopChrome.control(
-      color: unread ? DesktopChrome.foreground : DesktopChrome.muted,
-    ).copyWith(fontWeight: unread ? grid.AppFont.semibold : null);
+    final whoStyle = DesktopChrome.control(color: DesktopChrome.foreground)
+        .copyWith(fontWeight: grid.AppFont.semibold);
     final actions = widget.actions;
     return Padding(
       padding: const EdgeInsets.symmetric(
@@ -982,7 +931,7 @@ class _ActivityRowState extends State<_ActivityRow> {
                   hoverColor: grid.AppSurface.hoverFill,
                   focusColor: grid.AppSurface.hoverFill,
                   child: Semantics(
-                    label: unread ? 'New' : null,
+                    label: 'New',
                     // The hover actions, for a screen reader that cannot hover.
                     customSemanticsActions: {
                       for (final action in actions)
@@ -998,28 +947,21 @@ class _ActivityRowState extends State<_ActivityRow> {
                         children: [
                           SizedBox(
                             width: grid.AppDesktop.controlGap,
-                            child: unread
-                                ? Column(
-                                    mainAxisAlignment: MainAxisAlignment.start,
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      const SizedBox(height: 13),
-                                      DecoratedBox(
-                                        key: const ValueKey(
-                                          'super-activity-dot',
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: DesktopChrome.accent,
-                                          shape: BoxShape.circle,
-                                        ),
-                                        child: const SizedBox.square(
-                                          dimension: 7,
-                                        ),
-                                      ),
-                                    ],
-                                  )
-                                : null,
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.start,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const SizedBox(height: 13),
+                                DecoratedBox(
+                                  key: const ValueKey('super-activity-dot'),
+                                  decoration: BoxDecoration(
+                                    color: DesktopChrome.accent,
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const SizedBox.square(dimension: 7),
+                                ),
+                              ],
+                            ),
                           ),
                           const SizedBox(width: grid.AppDesktop.controlGap),
                           SuperTabAvatarFace(

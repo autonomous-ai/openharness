@@ -577,8 +577,8 @@ void main() {
 
   group('notifications view', () {
     testWidgets(
-      'the entry counts the unread tag; the Mentions tab bolds what waits '
-      'and Unreads only lists only that',
+      'the entry counts the unread tag; the Mentions tab lists only what is '
+      'unread',
       (tester) async {
         final server = ConversationServer()
           ..append('Earlier ask')
@@ -614,24 +614,13 @@ void main() {
           find.descendant(of: waiting, matching: find.text('Ship it?')),
           findsOneWidget,
         );
-        // Neighbours from one author fold into the newest, the answered one
-        // behind it; Unreads only keeps the row because one of them waits.
-        expect(
-          find.descendant(
-            of: waiting,
-            matching: find.text('+1 more from Wren'),
-          ),
-          findsOneWidget,
-        );
+        // The answered one is read (this server does not say where it is):
+        // it is not listed, nor folded behind the one that waits (#2887).
+        expect(find.textContaining('more from Wren'), findsNothing);
         expect(
           find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
           findsNothing,
         );
-        await tester.tap(
-          find.byKey(const ValueKey('super-activity-unreads-only')),
-        );
-        await tester.pumpAndSettle();
-        expect(waiting, findsOneWidget);
       },
     );
 
@@ -658,31 +647,16 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Mark read'));
       await tester.pumpAndSettle();
-      // Mentions opens on Unreads only (#2887): the read row leaves it.
+      // Mentions lists only unread tags (#2887): the read row leaves it.
       expect(
         find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
         findsNothing,
       );
+      expect(find.text('No unread mentions'), findsOneWidget);
       expect(
         find.descendant(of: notificationsEntry(), matching: find.text('1')),
         findsNothing,
       );
-      await tester.tap(
-        find.byKey(const ValueKey('super-activity-unreads-only')),
-      );
-      await tester.pumpAndSettle();
-      // Listed again as a read row, with nothing left to mark.
-      expect(
-        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
-        findsOneWidget,
-      );
-      await mouse.moveTo(
-        tester.getCenter(
-          find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('Mark read'), findsNothing);
     });
 
     // A task with no worker is a quiet conversation: the state does not hold it until it is asked for (Dee, 2026-10-29).
