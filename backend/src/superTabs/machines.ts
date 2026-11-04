@@ -444,7 +444,9 @@ export function teamPoolOf(state: SuperTabState, pool: ContributedMachine, live?
  */
 export function machineTeamWork(state: SuperTabState, pool: ContributedMachine, now: number, teamMachines: readonly string[],
   otherWorkspaceMachines: readonly string[] = []): TeamWorkRefusal | null {
-  const team = !pool.hostMachineId ? teamPoolOf(state, pool, teamMachines) : undefined
+  // Its owner lets teammates' work run in their own account: starts stay on the Mac, so the Mac itself is what routing reads
+  // (security review 2 of #2981).
+  const team = !pool.hostMachineId && !ownAccountWork(pool) ? teamPoolOf(state, pool, teamMachines) : undefined
   const subject = team ?? pool
   return teamWorkRefusal(subject, now, teamMachines.includes(subject.machineId), teamAccountRequired(), otherWorkspaceMachines.includes(subject.machineId))
 }
@@ -471,8 +473,8 @@ export function productManagerOn(state: SuperTabState, machineId: string): strin
 
 /** Whether [pool]'s owner lets teammates' work run in their own account there (machine.ownAccountWork): a Mac's own entry
  *  only, never its Team account's. */
-export const ownAccountWork = (pool: Pick<ContributedMachine, 'ownAccountChoice' | 'hostMachineId' | 'buddyOnly'> | undefined): boolean =>
-  !!pool && pool.ownAccountChoice?.allowed === true && !pool.hostMachineId && !pool.buddyOnly
+export const ownAccountWork = (pool: Pick<ContributedMachine, 'ownAccountChoice' | 'hostMachineId' | 'buddyOnly' | 'contributorId'> | undefined): boolean =>
+  !!pool && pool.ownAccountChoice?.allowed === true && pool.ownAccountChoice.by === pool.contributorId && !pool.hostMachineId && !pool.buddyOnly
 
 /** What the route and an agent's row say of a machine whose owner lets teammates' work run in their own account there, so
  *  whoever routes a teammate's task to it does so knowingly (River, 11-04). */

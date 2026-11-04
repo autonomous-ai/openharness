@@ -1918,10 +1918,15 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // loosens a privacy guard, so it is set on the Mac's own entry only, and recorded with whose word and when.
       const pool = machineContribution(state, command.machineId) ?? fail('NOT_FOUND', 'This machine has not been contributed.', 404)
       if (pool.buddyOnly) fail('NOT_FOUND', 'This machine has not been contributed.', 404)
-      if (pool.hostMachineId) fail('TEAM_ACCOUNT_ENTRY', 'A Harness Team account always runs teammates\' work. Choose on its Mac.', 400)
       if (!machineOwnerWord(pool, command.askedIn)) {
         fail('OWNER_REQUIRED', "Only the machine's owner, or the Lead passing on a chat message the owner wrote in the last day, chooses where teammates' work runs on it.", 403)
       }
+      // On is informed consent: the owner's own session, where the app warns them first. A Lead may pass on their word only to
+      // turn it off, which tightens the guard (security review 2 of #2981).
+      if (command.allowed && actor.kind !== 'person') {
+        fail('OWNER_SESSION_REQUIRED', "Only the machine's owner can let teammates' work run in their own account, from Harness on their own computer.", 403)
+      }
+      if (pool.hostMachineId) fail('TEAM_ACCOUNT_ENTRY', 'A Harness Team account always runs teammates\' work. Choose on its Mac.', 400)
       if (pool.removal) fail('MACHINE_REMOVED', 'This machine is being removed from the Swarm.')
       pool.ownAccountChoice = { allowed: command.allowed, by: pool.contributorId, at: new Date(context.now).toISOString() }
       break
