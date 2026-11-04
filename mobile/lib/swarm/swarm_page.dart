@@ -185,8 +185,9 @@ class _SwarmPageState extends State<SwarmPage> {
   void _openProject(BuildContext context, String swarmId, String projectId) =>
       openSwarmProject(context, swarmId: swarmId, projectId: projectId);
 
-  /// The projects quiet for a day are listed under Other projects.
-  bool _quietOpen = false;
+  /// The Swarms, by id, whose projects quiet for a day are listed under
+  /// Other projects.
+  final _quietOpen = <String>{};
 
   /// New message is open: a second tap on + opens no second one.
   bool _composing = false;
@@ -570,12 +571,16 @@ class _SwarmPageState extends State<SwarmPage> {
     );
   }
 
-  /// Every project of the Swarms shown, the pinned first, grouped by
-  /// [swarmHomeLists], with no Projects or Pinned heading (anh Dee,
-  /// 2026-11-04); a Swarm still to be read has rows on their way, a failed
-  /// read still trying too, as it is in the log. One no read will bring says
-  /// so. A filter on says so first, with Show all, as Home has no filter icon
-  /// to show it. [first]: the screen's first thing, with nothing over it.
+  /// Every project of the Swarms shown, each Swarm's under one small heading,
+  /// its name, where Home shows several, and none where it shows one: the
+  /// title names it (anh Dee, 2026-11-04: in place of the name on every row,
+  /// and of the Projects and Pinned headings). In each Swarm, as
+  /// [swarmHomeLists] groups them: its pins first, then the rest, those
+  /// quiet for a day folded. A Swarm still to be read has rows on their way
+  /// under its heading, a failed read still trying too, as it is in the log;
+  /// one no read will bring says so. A filter on says so first, with Show
+  /// all, as Home has no filter icon to show it. [first]: the screen's first
+  /// thing, with nothing over it.
   List<Widget> _projects(
     BuildContext context,
     SwarmSession session,
@@ -598,11 +603,13 @@ class _SwarmPageState extends State<SwarmPage> {
       ];
     }
     final several = shown.length > 1;
-    final projects = <SwarmHomeProject>[];
-    final names = <String, String>{};
-    final reading = <String>[];
-    final failed = <(String, String)>[];
+    final home = session.home;
+    final filter = home.filter;
+    final sections = <(SwarmListing, SwarmHomeLists)>[];
+    final reading = <String>{};
+    final failed = <String, String>{};
     final asking = <String>{};
+    var any = false;
     for (final swarm in shown) {
       if (inbox.asks(swarm.id)?.loading ?? false) asking.add(swarm.id);
       switch (inbox.reader(swarm.id)) {
@@ -610,36 +617,40 @@ class _SwarmPageState extends State<SwarmPage> {
           final snapshot = reader.snapshot!;
           final news = swarmProjectNews(reader, inbox.asks(swarm.id));
           final activity = swarmProjectActivity(snapshot, reader.buddies);
-          for (final project in snapshot.projects) {
-            final projectNews = news[project.id];
-            final row = SwarmHomeProject(
-              swarmId: swarm.id,
-              project: project,
-              active: activity[project.id],
-              news: projectNews ?? swarmNoProjectNews,
-            );
-            projects.add(row);
-            names[row.key] = swarm.name;
-          }
+          final projects = [
+            for (final project in snapshot.projects)
+              SwarmHomeProject(
+                swarmId: swarm.id,
+                project: project,
+                active: activity[project.id],
+                news: news[project.id] ?? swarmNoProjectNews,
+              ),
+          ];
+          any = any || projects.isNotEmpty;
+          sections.add((
+            swarm,
+            swarmHomeFiltered(
+              swarmHomeLists(
+                projects,
+                pins: home.pins,
+                now: now,
+                sort: home.sort,
+                unreadsFirst: home.unreadsFirst,
+              ),
+              filter,
+            ),
+          ));
         case final SwarmReader reader
             when _ended(reader) && reader.error != null:
-          failed.add((swarm.id, reader.error!));
+          failed[swarm.id] = reader.error!;
         case _:
           reading.add(swarm.id);
       }
     }
-    final home = session.home;
-    final filter = home.filter;
-    final lists = swarmHomeFiltered(
-      swarmHomeLists(
-        projects,
-        pins: home.pins,
-        now: now,
-        sort: home.sort,
-        unreadsFirst: home.unreadsFirst,
-      ),
-      filter,
-    );
+    bool listsAny(SwarmHomeLists lists) =>
+        lists.pinned.isNotEmpty ||
+        lists.recent.isNotEmpty ||
+        lists.quiet.isNotEmpty;
     // Mentions come from their own read: until it answers, none listed says
     // nothing. A failed one is not none, and says so even over the mentions
     // another Swarm has listed.
@@ -652,22 +663,18 @@ class _SwarmPageState extends State<SwarmPage> {
     // so, and offers them all.
     final nothingListed =
         filter != SwarmHomeFilter.all &&
-        projects.isNotEmpty &&
+        any &&
         reading.isEmpty &&
         !mentionsComing &&
-        lists.pinned.isEmpty &&
-        lists.recent.isEmpty &&
-        lists.quiet.isEmpty;
+        !sections.any((section) => listsAny(section.$2));
     Widget row(SwarmHomeProject project) => SwarmHomeProjectRow(
       key: ValueKey('swarm-project-${project.swarmId}-${project.project.id}'),
       project: project,
-      swarmName: several ? names[project.key] : null,
       tagsLoading: asking.contains(project.swarmId),
       onTap: () => _openProject(context, project.swarmId, project.project.id),
       onLongPress: () => unawaited(_pin(context, session, project)),
     );
-    final quiet = lists.quiet;
-    final empty = projects.isEmpty && reading.isEmpty && failed.isEmpty;
+    final empty = !any && reading.isEmpty && failed.isEmpty;
     // Last, for someone who may write in a Swarm shown: never a viewer.
     final create = shown.any((swarm) => swarmMayCreateProject(inbox, swarm.id))
         ? SwarmNewProjectRow(
@@ -688,70 +695,110 @@ class _SwarmPageState extends State<SwarmPage> {
             onTap: () => home.setFilter(SwarmHomeFilter.all),
           )
         : null;
-    return [
-      top,
-      if (lists.pinned.isNotEmpty || filterOn != null)
-        SwarmGroup(children: [?filterOn, for (final p in lists.pinned) row(p)]),
-      if (lists.recent.isNotEmpty ||
-          quiet.isNotEmpty ||
-          empty ||
-          nothingListed ||
-          mentionsFailed ||
-          create != null) ...[
-        if (lists.pinned.isNotEmpty || filterOn != null)
-          const SizedBox(height: AppSpace.s),
+    final notices = [
+      ?filterOn,
+      if (empty) const SwarmRow(title: 'No project yet', onTap: null),
+      if (mentionsFailed)
+        const SwarmRow(
+          key: ValueKey('swarm-mentions-failed'),
+          title: 'Mentions could not be read.',
+          onTap: null,
+        )
+      else if (nothingListed)
+        SwarmRow(
+          key: const ValueKey('swarm-filter-none'),
+          title: mentionsOn ? 'No mentions.' : 'Nothing unread.',
+          onTap: null,
+        ),
+      if (nothingListed)
+        SwarmRow(
+          key: const ValueKey('swarm-filter-show-all'),
+          title: 'Show all',
+          chevron: null,
+          onTap: () => home.setFilter(SwarmHomeFilter.all),
+        ),
+    ];
+    final listedBy = {for (final (swarm, lists) in sections) swarm.id: lists};
+    bool shows(SwarmListing swarm) => switch (listedBy[swarm.id]) {
+      final lists? => listsAny(lists),
+      null => false,
+    };
+    bool drawn(SwarmListing swarm) =>
+        shows(swarm) ||
+        reading.contains(swarm.id) ||
+        failed.containsKey(swarm.id);
+    final firstDrawn = shown.where(drawn).firstOrNull;
+    // Each Swarm's own: one heading over several, its rows in one card. A
+    // Swarm whose read was taken away is not named: its line says so.
+    List<Widget> section(SwarmListing swarm, List<Widget> body) => [
+      if (several && !(inbox.reader(swarm.id)?.accessRevoked ?? false))
+        SwarmCaption(
+          swarm.name,
+          key: ValueKey('swarm-heading-${swarm.id}'),
+          first: first && notices.isEmpty && swarm == firstDrawn,
+        )
+      else if (notices.isNotEmpty)
+        const SizedBox(height: AppSpace.s),
+      ...body,
+    ];
+    List<Widget> listed(SwarmListing swarm, SwarmHomeLists lists) {
+      final open = _quietOpen.contains(swarm.id);
+      return section(swarm, [
         SwarmGroup(
           children: [
-            if (empty) const SwarmRow(title: 'No project yet', onTap: null),
-            if (mentionsFailed)
-              const SwarmRow(
-                key: ValueKey('swarm-mentions-failed'),
-                title: 'Mentions could not be read.',
-                onTap: null,
-              )
-            else if (nothingListed)
-              SwarmRow(
-                key: const ValueKey('swarm-filter-none'),
-                title: mentionsOn ? 'No mentions.' : 'Nothing unread.',
-                onTap: null,
-              ),
-            if (nothingListed)
-              SwarmRow(
-                key: const ValueKey('swarm-filter-show-all'),
-                title: 'Show all',
-                chevron: null,
-                onTap: () => home.setFilter(SwarmHomeFilter.all),
-              ),
+            for (final p in lists.pinned) row(p),
             for (final p in lists.recent) row(p),
-            if (quiet.isNotEmpty) ...[
+            if (lists.quiet.isNotEmpty) ...[
               SwarmOtherProjectsRow(
-                key: const ValueKey('swarm-other-projects'),
-                count: quiet.length,
-                open: _quietOpen,
-                onTap: () => setState(() => _quietOpen = !_quietOpen),
+                key: ValueKey(
+                  several
+                      ? 'swarm-other-projects-${swarm.id}'
+                      : 'swarm-other-projects',
+                ),
+                count: lists.quiet.length,
+                open: open,
+                onTap: () => setState(
+                  () => open
+                      ? _quietOpen.remove(swarm.id)
+                      : _quietOpen.add(swarm.id),
+                ),
               ),
-              if (_quietOpen)
-                for (final p in quiet) row(p),
+              if (open)
+                for (final p in lists.quiet) row(p),
             ],
-            ?create,
           ],
         ),
-      ],
-      // A Swarm still to be read has its skeleton below: one is enough.
+      ]);
+    }
+
+    return [
+      top,
+      if (notices.isNotEmpty) SwarmGroup(children: notices),
+      for (final swarm in shown)
+        if (shows(swarm))
+          ...listed(swarm, listedBy[swarm.id]!)
+        else if (reading.contains(swarm.id))
+          ...section(swarm, [
+            SwarmSkeletonRows(
+              id: 'swarm-projects-loading-${swarm.id}',
+              nameOnly: true,
+            ),
+          ])
+        else if (failed[swarm.id] case final error?)
+          ...section(swarm, [
+            SwarmGroup(
+              key: ValueKey('swarm-projects-error-${swarm.id}'),
+              children: [SwarmRow(title: error, onTap: null)],
+            ),
+          ]),
+      // A Swarm still to be read has its skeleton: one is enough.
       if (mentionsComing && reading.isEmpty) ...[
-        const SizedBox(height: 8),
+        const SizedBox(height: AppSpace.s),
         SwarmSkeletonRows(id: 'swarm-mentions-loading', nameOnly: true),
       ],
-      for (final (i, id) in reading.indexed) ...[
-        if (projects.isNotEmpty || i > 0) const SizedBox(height: 8),
-        SwarmSkeletonRows(id: 'swarm-projects-loading-$id', nameOnly: true),
-      ],
-      for (final (id, error) in failed) ...[
-        const SizedBox(height: 8),
-        SwarmGroup(
-          key: ValueKey('swarm-projects-error-$id'),
-          children: [SwarmRow(title: error, onTap: null)],
-        ),
+      if (create != null) ...[
+        const SizedBox(height: AppSpace.s),
+        SwarmGroup(children: [create]),
       ],
     ];
   }
