@@ -131,7 +131,8 @@ class SwarmInvitationRow extends StatelessWidget {
 /// One project on Home, on one line as Slack's channels (Tony, 2026-11-03):
 /// its name as a channel's ("#openharness") — bold and bright with something
 /// new in it, quiet otherwise — and at its end the tags
-/// waiting in it ("@2", filled), or a skeleton in their place while what
+/// waiting in it ("@2", filled), else a dot while it is unread (anh Dee,
+/// 2026-11-04), or a skeleton in the tags' place while what
 /// waits is on its way ([tagsLoading]). No dot for how its team is: one on
 /// every row said little, and the name already says what waits on the person
 /// (Tony, 2026-11-03). No second line: who reads it and how long ago it moved
@@ -218,6 +219,20 @@ class SwarmHomeProjectRow extends StatelessWidget {
                   width: 36,
                   height: 20,
                   radius: 10,
+                ),
+              ] else if (news.bold) ...[
+                // Unread, as anh Dee's Home draws it (2026-11-04); heard in
+                // the name's words.
+                const SizedBox(width: 12),
+                SizedBox.square(
+                  key: const ValueKey('swarm-project-unread'),
+                  dimension: AppSpace.s,
+                  child: DecoratedBox(
+                    decoration: ShapeDecoration(
+                      color: AppPalette.textPrimary,
+                      shape: const CircleBorder(),
+                    ),
+                  ),
                 ),
               ],
             ],
