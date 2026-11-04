@@ -230,11 +230,13 @@ class ProjectSidebar extends StatelessWidget {
   }) {
     final project = reading?.project;
     final selected = !_paneCovered && controller.selectedId == group.id;
-    // A project's row is bold for anything in it for a person (#2427), its
-    // tasks' too, never agents' progress alone.
+    // A project's row is bold for its own chat (Huy, 11-04, task #2638): a
+    // person's message or a tag of the reader there, never agents' progress
+    // alone (#2427). A task's unread is on its card and in Activity, and its
+    // tags count in the row's number.
     final unread = reading == null
         ? controller.unreadShown(group)
-        : reading.unread.isNotEmpty;
+        : reading.unread.contains(group.id);
     // Tags in its chat, which opening it clears (Dee, Slack's way), and the
     // tasks that need the reader, so someone in another project still sees
     // them (task #2569). Tags in tasks make it bold, and are in Activity.
