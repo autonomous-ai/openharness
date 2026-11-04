@@ -15,6 +15,7 @@ import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { richSwarm } from '../src/superTabs/read/fixture.test-support.js'
+import { profiled } from './plans.test-support.js'
 
 // A full machine report reads the parts it already holds at their exact version from memory (B3, #2597): what it loads must
 // equal what a server holding nothing loads, after every kind of write a part can take. A fresh loopback replica set; this
@@ -109,5 +110,18 @@ describe('a full report\'s held parts (B3, #2597)', () => {
       expect(await observed(tabId, warm), name).toEqual(fresh)
       expect(await observed(tabId, tiny), name).toEqual(fresh)
     }
+  })
+
+  it('reads the machines\' columns through the Swarm\'s index, examining only what it returns, and whole only the one that changed', async () => {
+    const tabId = await scene()
+    await scene()
+    const held = new HeldParts()
+    await observed(tabId, held)
+    await write(tabId, all => { const m = liveOf(all.machines).find(x => x.key === 'host')!
+      return { op: 'update', kind: 'machine', key: m.key, seen: m.version, data: m.data } })
+    const entries = (await profiled(db, () => observed(tabId, held))).filter(e => e.ns.endsWith('.SwarmMachine'))
+    const live = (await db.swarmMachine.count({ where: { tabId, deleted: false } }))
+    expect(entries.map(e => [e.planSummary?.startsWith('IXSCAN') || e.planSummary === 'IDHACK' || e.planSummary === 'EXPRESS_IXSCAN', e.docsExamined, e.nreturned]))
+      .toEqual([[true, live, live], [true, 1, 1]])
   })
 })
