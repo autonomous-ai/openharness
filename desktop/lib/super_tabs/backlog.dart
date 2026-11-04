@@ -25,9 +25,9 @@ const superTabBacklogShippedWindow = Duration(days: 7);
 /// Whether [task] has shipped (task #2558): a recorded merge of any of its pull
 /// requests (a batch's counts, its own closed), or Done with none to merge. Its
 /// `shippedAt` alone cannot say: the server sets that at the first Done.
-bool _shipped(SuperTabConversation task, Object? status) =>
+bool superTabTaskShipped(SuperTabConversation task) =>
     task.cards.pullRequests.any((card) => card.merged) ||
-    (status == 'done' &&
+    (task.assignment?['status'] == 'done' &&
         task.cards.pullRequests.isEmpty &&
         task.pullRequestUrls.isEmpty);
 
@@ -43,7 +43,7 @@ SuperTabBacklogGroup? superTabBacklogGroupOf(
   final at = task.shippedAt;
   final inWindow =
       at != null && now.difference(at) <= superTabBacklogShippedWindow;
-  if (at != null && _shipped(task, status)) {
+  if (at != null && superTabTaskShipped(task)) {
     if (inWindow) return SuperTabBacklogGroup.shipped;
     // Past the window, unless it is back at work.
     if (task.closed || status == 'done') return null;

@@ -9,6 +9,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 import '../widgets/laid_out_list.dart';
 import 'attention.dart';
+import 'backlog.dart';
 import 'controller.dart';
 import 'machine_status.dart';
 import 'model.dart';
@@ -74,7 +75,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
 
   void _readShipped() => unawaited(
     widget.controller.readClosedShipped(
-      widget.now().subtract(superTabShippedWindow),
+      widget.now().subtract(superTabBacklogShippedWindow),
     ),
   );
 

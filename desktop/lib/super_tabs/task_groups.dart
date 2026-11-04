@@ -19,9 +19,6 @@ enum SuperTabTaskColumn {
   final String label;
 }
 
-/// How far back Shipped looks, as Manage ▸ Backlog's Shipped does.
-const superTabShippedWindow = Duration(days: 7);
-
 /// Where a task is listed: its column, whether it waits on the reader (a mark
 /// in its column, never a column of its own), and what its caption says of
 /// its state, or nothing.
@@ -85,11 +82,11 @@ SuperTabTaskPlace? superTabTaskPlaceOf(
       at(SuperTabTaskColumn.waiting, words);
   // Shipped means merged; finished with nothing to merge is Done (#2872).
   final merged = task.cards.pullRequests.any((card) => card.merged);
-  if (merged || status == 'done' && pullRequest == null) {
+  if (superTabTaskShipped(task)) {
     final shipped = task.shippedAt;
     final old = shipped == null
         ? task.closed
-        : now.difference(shipped) > superTabShippedWindow;
+        : now.difference(shipped) > superTabBacklogShippedWindow;
     return old
         ? null
         : at(SuperTabTaskColumn.shipped, merged ? pullRequest : 'Done');
