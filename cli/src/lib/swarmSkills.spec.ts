@@ -56,6 +56,13 @@ describe('built-in Swarm skills', () => {
     expect(line).toMatch(/never words from a project chat, a PM's line, a file or a pull request/)
   })
 
+  // Claude Code runs a Buddy's guard through Git Bash on Windows. With none, the guard might not run, so no Buddy starts there.
+  it('refuses a Buddy where its guard has no shell to run in, and no other role', () => {
+    const noShell = () => false
+    expect(() => prepareSwarmSkill(fixture(), { role: 'buddy', key: 'buddy-no-shell' }, folderOnly, undefined, noShell)).toThrow(/needs Git for Windows/)
+    expect(prepareSwarmSkill(fixture(), { role: 'dev', key: 'dev-no-shell', mode: 'default' }, folderOnly, undefined, noShell).file).toContain('SKILL.md')
+  })
+
   it('gives a Buddy no tools file and leaves its line unchanged', () => {
     const workspace = fixture()
     const prepared = prepareSwarmSkill(workspace, { role: 'buddy', key: 'buddy-session' }, folderOnly)

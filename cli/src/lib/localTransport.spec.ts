@@ -179,6 +179,14 @@ describe('daemonPipeNow: the daemon\'s pipe for a client that opens at once', ()
     expect(daemonPipeNow(data, 4242)).toEqual({ pipe, token })
   })
 
+  // A Harness Team account on the same PC holds the configured port, so the daemon is given another and `daemonPort` says
+  // that one. Its record keeps the configured port's name: every `harness new` there was told Harness was not running.
+  it('finds the record of a daemon that was given another port than it was configured with', () => {
+    const { data, pipe } = prepared(process.pid)
+    expect(daemonPipeNow(data, 50_000)).toEqual({ pipe, token })
+    expect(daemonPipeNow(data, 50_001)).toBeNull()
+  })
+
   it('is none with no record, no token, or a daemon that has exited', () => {
     expect(daemonPipeNow(prepared(null).data, 4242)).toBeNull()
     expect(daemonPipeNow(prepared(process.pid, false).data, 4242)).toBeNull()

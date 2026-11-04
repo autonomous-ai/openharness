@@ -183,7 +183,9 @@ const startsOf = (row: Record<string, unknown>) => [...list(row.starts), ...list
 /** What this host launches beyond workers, said in its reading (backend leadStart.ts): a project's Product Manager, a
  *  Buddy's thread sessions (spec 2026-10-30-buddy-thread-sessions), and a person's one Buddy for the Swarm in its folder of
  *  project worktrees (spec 2026-10-31-one-buddy-per-swarm), which the backend offers only on a host that says so. */
-const CAPABILITIES = ['leadStart', 'buddySessions', 'swarmBuddy']
+// windowsBuddy: this CLI proves a command's pane from its parents on Windows too (callerPane.ts `windowsRunningPane`), so a
+// Buddy there refuses no other agent's Swarm command. The backend starts no Buddy on a Windows machine without it.
+const CAPABILITIES = ['leadStart', 'buddySessions', 'swarmBuddy', 'windowsBuddy']
 /** What this host does for a Product Manager's switch to another engine or account (spec 2026-11-02-pm-switch-engine-account),
  *  said beside the others: the backend refuses a switch to a host that does not. */
 CAPABILITIES.push('leadSwitch')

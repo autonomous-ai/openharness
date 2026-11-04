@@ -3,6 +3,7 @@ import { ignoreHarnessRuntime } from './harnessRuntimeIgnore.js'
 import { buddyTmpOf } from './agentTmp.js'
 import { buddyGuardCommand, buddyGuardSource, buddyLaunchFile, buddyLaunchWide, buddyReadsOf, buddySandboxSettings, revokeBuddyWide, type BuddyWide } from './buddyGuard.js'
 import { managedNodePath } from './nodeRuntime.js'
+import { dshShellAvailable } from '../dsh/shell.js'
 import { isMessagesCommand } from '../engines/kit/messagesHook.js'
 import { isManagedHook } from '../engines/kit/notifyHooks.js'
 import { homedir } from 'node:os'
@@ -719,8 +720,10 @@ const modeOf = (skill: SwarmSkill, version: string) =>
  * never names one mode while the file holds the other. No project-wide native skill links: two roles may share a workspace. */
 /** [wideOf]: whether a Buddy launched here reads beyond its folder (lib/buddyGuard.ts buddyLaunchWide); tests name it. */
 export function prepareSwarmSkill(workspace: string, saved: SavedSwarmSkill, wideOf: (root: string) => BuddyWide | null = buddyLaunchWide,
-  tmpOf: (root: string) => string | null = buddyTmpOf): { file: string; instructions: string } {
+  tmpOf: (root: string) => string | null = buddyTmpOf, guardShell: () => boolean = dshShellAvailable): { file: string; instructions: string } {
   const skill = skillOf(saved)
+  // Claude Code runs a Buddy's guard through Git Bash on Windows: with none the guard might not run, so no Buddy starts.
+  if (skill.role === 'buddy' && !guardShell()) throw new Error('A Buddy on this computer needs Git for Windows, which was not found. Install it from https://git-scm.com/download/win, then try again.')
   const root = realpathSync(workspace)
   // First, so a skill that cannot be prepared still leaves a Buddy's folder locked (re-check of #1992).
   if (skill.role === 'buddy') lockBuddyFolder(root, skill.key, wideOf(root), tmpOf(root))
