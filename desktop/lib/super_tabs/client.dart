@@ -159,11 +159,39 @@ class SuperTabClient {
   }
 
   /// False while the page or window is hidden: every Swarm tab is away.
+  ///
+  /// Hidden while the server pushes, nothing is read on a clock: a told change is still read at
+  /// once (tags and notices), the safety nets wait (task #2953). Shown again, each open Swarm
+  /// reads once ([SuperTabController.away]) and so does the list, if its safety net came due or
+  /// the server's word came meanwhile.
   set pageVisible(bool visible) {
     if (_pageVisible == visible) return;
     _pageVisible = visible;
     _applyAway();
+    if (!visible) return;
+    final last = _lastDiscovery;
+    if (_toldWhileHidden ||
+        (_pushing &&
+            last != null &&
+            clock.now().difference(last) >= kSwarmDiscoverySafetyNet)) {
+      _toldWhileHidden = false;
+      _discoverWhenAllowed();
+    }
   }
+
+  /// The server's word that it pushes came while the page was hidden: what it asks for is read
+  /// on return.
+  bool _toldWhileHidden = false;
+
+  /// When the server's word that it pushes was last heard.
+  DateTime? _lastPushWord;
+
+  /// How far from [kSwarmPushRepeat] a repeat may land: a hidden window's socket is read late
+  /// (App Nap), and a reconnect inside this window waits, at worst, for the return.
+  static const _pushBeatSlack = Duration(seconds: 30);
+
+  /// Hidden while the server pushes: the reads on a clock rest.
+  bool get _restsHidden => !_pageVisible && _pushing;
 
   bool _isAway(String id) => !_pageVisible || id != _shown;
 
@@ -270,7 +298,9 @@ class SuperTabClient {
         _tagCounts.remove(entry.key);
         _tagDigests.remove(entry.key);
       }
-      entry.value.away = away;
+      entry.value
+        ..pageHidden = !_pageVisible
+        ..away = away;
     }
   }
 
@@ -327,6 +357,24 @@ class SuperTabClient {
     if (_account == null) return;
     final tabId = payload['tabId'], parts = payload['parts'];
     if (tabId == null && parts == null) {
+      // Hidden, the word repeated every 4 minutes renews the lease and reads nothing until the
+      // page shows; once the lease had lapsed the away poll was reading all along. A word off that
+      // beat is a socket that reconnected, the same payload (review of #3035): a push may have been
+      // lost meanwhile, so Desktop reads once, as shown, for the menu bar and notices. The web
+      // reads nothing while away anyway ([SuperTabReading.pausesAway]).
+      final now = clock.now(), last = _lastPushWord;
+      _lastPushWord = now;
+      final onBeat =
+          last != null &&
+          (now.difference(last) - kSwarmPushRepeat).abs() <= _pushBeatSlack;
+      if (_restsHidden && (onBeat || _reading.pausesAway)) {
+        _pushUntil = clock.now().add(kSwarmPushLease);
+        for (final controller in _loaded.values) {
+          controller.pushUntil = _pushUntil;
+        }
+        _toldWhileHidden = true;
+        return;
+      }
       _pushUntil = clock.now().add(kSwarmPushLease);
       // Said on every connect (review of #2121): a daemon that reconnected
       // was not told what changed meanwhile, so each open Swarm and the list
@@ -584,7 +632,7 @@ class SuperTabClient {
         discoveryInterval > Duration.zero) {
       unawaited(refreshTabs());
       _discoveryTimer = Timer.periodic(discoveryInterval, (_) {
-        if (_discoveryDue) unawaited(refreshTabs());
+        if (_discoveryDue && !_restsHidden) unawaited(refreshTabs());
       });
     }
   }
@@ -892,6 +940,7 @@ class SuperTabClient {
             reading: _reading,
             stillListed: onTabs == null ? null : () => _stillListed(id),
           )
+          ..pageHidden = !_pageVisible
           ..away = _isAway(id)
           ..pushUntil = _pushUntil;
     if (_keptFiles.remove(id) case final kept?) controller.adoptFiles(kept);

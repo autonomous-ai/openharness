@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
+import '../super_tabs/visible_tick.dart';
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../shortcuts/keymap_commands.dart';
@@ -73,7 +74,8 @@ enum _ShareRow { access, people, options, expiry, comments, stop, copy, retry }
 
 const maxTabInvites = 8;
 
-class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
+class _ShareHarnessDialogState extends State<ShareHarnessDialog>
+    with WidgetsBindingObserver, VisibleTick<ShareHarnessDialog> {
   final _focus = FocusNode(debugLabel: 'share-form');
   final _emailFocus = FocusNode(debugLabel: 'share-emails');
   final _commentsFocus = FocusNode(debugLabel: 'share-comments');
@@ -93,7 +95,6 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
   int _days = 30;
   Map<String, dynamic>? _link;
   bool _collaboration = false, _manualCopy = false;
-  Timer? _presence;
   int _revision = 0;
   bool _refreshing = false;
   @override
@@ -105,16 +106,22 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
     unawaited(_load());
     // A shared tab's people come from the roster the app already holds; it
     // reads again after each action, so nothing polls while the form is open.
-    if (!widget.tabMode) {
-      _presence = Timer.periodic(const Duration(seconds: 5), (_) {
-        if (!_busy) unawaited(_load(quiet: true));
-      });
-    }
+    // A harness's list is read every 5 seconds while the dialog can be seen.
+    if (!widget.tabMode) visibleTick(const Duration(seconds: 5));
+  }
+
+  @override
+  void onTick() {
+    if (!_busy) unawaited(_load(quiet: true));
+  }
+
+  @override
+  void onScreenChanged(bool onScreen) {
+    if (onScreen && !widget.tabMode) onTick();
   }
 
   @override
   void dispose() {
-    _presence?.cancel();
     _emails.dispose();
     _focus.dispose();
     _emailFocus.dispose();

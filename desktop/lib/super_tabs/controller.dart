@@ -190,6 +190,10 @@ class SuperTabOutgoing {
 /// before.
 const kSwarmPushLease = Duration(minutes: 5);
 
+/// How often a pushing server repeats that word on one socket (backend lib/swarmClientPushes.ts
+/// `PUSHES_REPEAT_MS`). A word off this beat is a socket that (re)connected.
+const kSwarmPushRepeat = Duration(minutes: 4);
+
 /// While the server pushes, a Swarm nothing was said of is still read this
 /// often: the safety net for a push lost on the way.
 const kSwarmPushSafetyNet = Duration(seconds: 60);
@@ -762,6 +766,14 @@ class SuperTabController extends ChangeNotifier {
   /// back reads at once.
   bool get away => _away;
   bool _away = false;
+
+  /// The page or window is hidden ([SuperTabClient.pageVisible]), set before [away]. While the
+  /// server pushes, a hidden Swarm reads only what it is told (task #2953): its safety net waits
+  /// for the return, which reads at once.
+  bool pageHidden = false;
+
+  bool get _restsHidden =>
+      pageHidden && _pushing && !(_toldMain || _toldMachine);
   set away(bool value) {
     if (_away == value) return;
     _away = value;
@@ -2368,7 +2380,7 @@ class SuperTabController extends ChangeNotifier {
     if (_disposed || updateRequired || pollInterval <= Duration.zero) return;
     if (!_policy.adapts) {
       _poll = Timer.periodic(_every, (_) {
-        if (_pollDue) unawaited(refresh());
+        if (_pollDue && !_restsHidden) unawaited(refresh());
         _checkReceipt();
       });
       return;

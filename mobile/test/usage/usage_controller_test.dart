@@ -327,4 +327,43 @@ void main() {
       expect(asked, 2);
     });
   });
+
+  test('paused it asks nothing; resumed, once now and once a minute again', () {
+    fakeAsync((async) {
+      var asked = 0;
+      final usage = UsageController(
+        remote: () async {
+          asked++;
+          return const <MachineUsage>[];
+        },
+        autoStart: false,
+      );
+      // Resumed without a pause first (the app switcher): nothing.
+      usage.resume();
+      async.flushMicrotasks();
+      expect(asked, 0);
+
+      usage.start();
+      async.flushMicrotasks();
+      expect(asked, 1);
+      usage
+        ..pause()
+        ..pause();
+      async.elapse(const Duration(minutes: 3));
+      expect(asked, 1);
+
+      usage.resume();
+      async.flushMicrotasks();
+      expect(asked, 2);
+      usage.resume();
+      async.flushMicrotasks();
+      expect(asked, 2, reason: 'one return, one read');
+      async.elapse(const Duration(seconds: 60));
+      expect(asked, 3, reason: 'one timer, not two');
+
+      usage.dispose();
+      async.elapse(const Duration(minutes: 5));
+      expect(asked, 3);
+    });
+  });
 }
