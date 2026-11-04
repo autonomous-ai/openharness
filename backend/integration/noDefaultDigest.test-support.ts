@@ -22,3 +22,14 @@ vi.mock('../src/superTabs/digest.js', async original => {
     },
   }
 })
+
+// The built-in PM schedule (pmSchedule.ts) stays off alike: its wake would be one more coordinator message on the first poll of
+// every test with an unassigned task. A test about it calls wantSchedule().
+const schedule = vi.hoisted(() => ({ wanted: false }))
+export const wantSchedule = (): void => { schedule.wanted = true }
+beforeEach(() => { schedule.wanted = false })
+
+vi.mock('../src/superTabs/pmSchedule.js', async original => {
+  const real = await original<typeof import('../src/superTabs/pmSchedule.js')>()
+  return { ...real, scheduleRequest: (...args: Parameters<typeof real.scheduleRequest>) => schedule.wanted ? real.scheduleRequest(...args) : null }
+})

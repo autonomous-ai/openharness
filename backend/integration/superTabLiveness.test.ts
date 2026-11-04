@@ -1789,8 +1789,9 @@ describe('the push for a new delivery', () => {
     // The Lead's alone, so it reads their order (people do not read them).
     const page = (await f.timed.messages(host, f.tab, 'lead', {}, f.lead)).messages.filter(row => expectedIds.includes(row.id))
     expect(page).toHaveLength(3)
-    expect(page[1]!.sequence).toBe(page[0]!.sequence + 1)
-    expect(page[2]!.sequence).toBe(page[1]!.sequence + 1)
+    // In conversation order; each loss's Stuck reply in its task's thread is written between them (task #2693).
+    expect(page[1]!.sequence).toBeGreaterThan(page[0]!.sequence)
+    expect(page[2]!.sequence).toBeGreaterThan(page[1]!.sequence)
     expect(first.map(row => row.messageId)).toEqual(page.map(row => row.id))
 
     // Make the tie explicit, and store the rows later sequence first so insertion order cannot stand in for it, then read again.
