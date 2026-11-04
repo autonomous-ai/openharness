@@ -529,7 +529,7 @@ void main() {
   });
 
   testWidgets('a reply from the thread composer goes to the root, and '
-      '"Also post to #Pilot" sends it to both', (tester) async {
+      '"Also send to #Pilot" sends it to both', (tester) async {
     final server = threaded();
     final c = await show(tester, server);
     // The test platform's touch handles sit under a typed reply's end:
@@ -540,7 +540,7 @@ void main() {
     // The label shortens where the test font leaves no room; its hint keeps
     // the full wording (super_tab_reply_box_test.dart covers the label).
     expect(
-      inPanel(find.byTooltip('Also post to #Pilot as well as this thread')),
+      inPanel(find.byTooltip('Also send to #Pilot as well as this thread')),
       findsOneWidget,
     );
     await tester.enterText(

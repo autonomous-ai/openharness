@@ -160,7 +160,7 @@ void main() {
   }
 
   /// Every option sits on the send button's row, vertically centred with it,
-  /// left of attach and send, inside the box.
+  /// left of send, inside the box.
   void expectOneRow(WidgetTester tester, List<Finder> chips) {
     final sendRect = tester.getRect(send);
     final box = tester.getRect(surface);
@@ -168,7 +168,9 @@ void main() {
     for (final chip in chips) {
       final rect = tester.getRect(chip);
       expect((rect.center.dy - sendRect.center.dy).abs(), lessThan(1));
-      expect(rect.right, lessThan(sendRect.left));
+      // Never past send: in a pane narrower than the app allows, New session
+      // ends in "…" against it.
+      expect(rect.right, lessThanOrEqualTo(sendRect.left));
       expect(rect.left, greaterThanOrEqualTo(box.left));
       if (right != null) expect(rect.left, greaterThan(right));
       right = rect.right;
@@ -189,27 +191,18 @@ void main() {
     );
   }
 
-  /// Also send's [label] on its line under the box: whole wherever it
-  /// measures to fit that line in the face drawn (the Mac's face fits it at
-  /// every width the app allows, the screenshots show); in a face too wide
-  /// for even that (the test font on Linux CI), it ends in "…" there and
-  /// nothing overflows.
+  /// Also send's [label] on its line under the box: whole where the face
+  /// drawn has room for it (the Mac's face at every width the app allows, the
+  /// screenshots show); in a face too wide for that (the test font on Linux
+  /// CI), it ends in "…" there and nothing overflows.
   void expectWholeUnderBox(WidgetTester tester, String label) {
-    final room = tester.getRect(surface).width - 16;
-    if (SuperTabComposerToggle.widthOf(tester.element(alsoSend), label) <=
-        room) {
-      expectWhole(tester, alsoSend, label);
-    } else {
-      final text = find.descendant(of: alsoSend, matching: find.text(label));
-      expect(
-        tester.renderObject<RenderParagraph>(text).didExceedMaxLines,
-        isTrue,
-      );
-      expect(
-        tester.getRect(alsoSend).right,
-        lessThanOrEqualTo(tester.getRect(surface).right),
-      );
-    }
+    final text = find.descendant(of: alsoSend, matching: find.text(label));
+    final paragraph = tester.renderObject<RenderParagraph>(text);
+    if (!paragraph.didExceedMaxLines) expectWhole(tester, alsoSend, label);
+    expect(
+      tester.getRect(alsoSend).right,
+      lessThanOrEqualTo(tester.getRect(surface).right),
+    );
   }
 
   /// Also send on its own line under the box, its square under the send
@@ -233,98 +226,43 @@ void main() {
     expect(rect.right, lessThanOrEqualTo(box.right));
   }
 
+  // Huy and Scholes, 11-04: Also send is a small checkbox on its own line
+  // under the box, as in Slack, never on the send row; its wording in full
+  // (Scholes, 11-03: "Also to chat" did not say where the reply goes).
   group('Also send names where it posts', () {
-    testBox('a project thread names the project chat in full', (tester) async {
-      await panel(tester, projectChat(), 'lead', width: 800);
-      expect(box(tester, alsoSend).label, 'Also post to #Pilot');
-      expect(
-        find.byTooltip('Also post to #Pilot as well as this thread'),
-        findsOneWidget,
-      );
-      expectOneRow(tester, [alsoSend]);
-    });
-
-    testBox('a Buddy thread with room says the main chat in full, beside '
-        'New session', (tester) async {
-      await panel(tester, buddyChat(), 'offline', width: 800);
-      expect(box(tester, alsoSend).label, 'Also post to the main chat');
-      expect(
-        find.byTooltip('Also post to the main chat as well as this thread'),
-        findsOneWidget,
-      );
-      expectOneRow(tester, [newSession, alsoSend]);
-    });
-
-    /// The width the send row's options have in a thread pane [pane] wide:
-    /// the pane less the box's insets and attach and send, as laid out.
-    double Function(double pane) roomIn(WidgetTester tester) {
-      final sendRow = tester.getRect(
-        find.byKey(const ValueKey('new-harness-attach')),
-      );
-      final box = tester.getRect(surface);
-      final pane = tester.getRect(find.byType(SuperTabThreadPanel));
-      // The rim is drawn, not laid out: the options start 16 in.
-      final insets = pane.width - (sendRow.left - box.left - 16);
-      return (width) => width - insets;
-    }
-
-    double widthOf(WidgetTester tester, String label) =>
-        SuperTabComposerToggle.widthOf(tester.element(alsoSend), label);
-
-    // Scholes, 11-03: "Also to chat" did not say where the reply goes. The
-    // full wording always shows; where it has no room beside New session,
-    // Also send takes its own line under the box.
     for (final (kind, full, short) in [
-      ('project', 'Also post to #Pilot', 'Also to #Pilot'),
-      ('Buddy', 'Also post to the main chat', 'Also to chat'),
+      ('project', 'Also send to #Pilot', 'Also to #Pilot'),
+      ('Buddy', 'Also send to the main chat', 'Also to chat'),
     ]) {
-      testBox('a $kind thread keeps "$full" on the send row while it fits, '
-          'and moves it, in full, to its own line under the box where it does '
-          'not', (tester) async {
+      testBox('a $kind thread says "$full" on its own line under the box, at '
+          'every width', (tester) async {
         final buddy = kind == 'Buddy';
         ConversationServer server() => buddy ? buddyChat() : projectChat();
         final conversation = buddy ? 'offline' : 'lead';
-        await panel(tester, server(), conversation, width: 800);
-        final room = roomIn(tester);
-        final beside = buddy ? widthOf(tester, 'New session') + 4 : 0.0;
-        final fullFits = widthOf(tester, full) + beside;
-        double paneFor(double needed) => 800 - room(800) + needed;
-        await tester.pumpWidget(const SizedBox());
-        await shown.flush();
-
-        for (final (pane, below) in [
-          (paneFor(fullFits) + 1, false),
-          (paneFor(fullFits) - 1, true),
-          for (final width in [
-            SuperTabPaneLayout.threadWidth,
-            SuperTabPaneLayout.rightWidth,
-          ])
-            (width, paneFor(fullFits) > width),
+        for (final pane in [
+          800.0,
+          SuperTabPaneLayout.threadWidth,
+          SuperTabPaneLayout.rightWidth,
         ]) {
           await panel(tester, server(), conversation, width: pane);
           expect(box(tester, alsoSend).label, full, reason: 'at $pane');
           expect(find.text(short), findsNothing);
-          if (below) {
-            expectWholeUnderBox(tester, full);
-          } else {
-            expectWhole(tester, alsoSend, full);
-          }
           expect(
             find.byTooltip('$full as well as this thread'),
             findsOneWidget,
           );
+          expectUnderBox(tester);
+          if (pane == 800) {
+            expectWhole(tester, alsoSend, full);
+          } else {
+            expectWholeUnderBox(tester, full);
+          }
           if (buddy) {
             expect(box(tester, newSession).label, 'New session');
             expectOneRow(tester, [newSession]);
             expectMark(tester, newSession, on: false);
           }
           expectMark(tester, alsoSend, on: false);
-          if (below) {
-            expectUnderBox(tester);
-          } else {
-            expect(alsoLine, findsNothing, reason: 'at $pane');
-            expectOneRow(tester, [if (buddy) newSession, alsoSend]);
-          }
           expect(tester.takeException(), isNull);
           await tester.pumpWidget(const SizedBox());
           await shown.flush();
@@ -446,8 +384,9 @@ void main() {
       (SuperTabPaneLayout.rightWidth, 2.0),
     ]) {
       testBox('${width.round()}px at ${scale}x: no overflow, New session on '
-          'the send row, both squares showing, Also send in full on the row '
-          'or under the box', (tester) async {
+          'the send row, both squares showing, Also send under the box', (
+        tester,
+      ) async {
         await panel(
           tester,
           buddyChat(),
@@ -459,25 +398,17 @@ void main() {
         expectOneRow(tester, [newSession]);
         expectMark(tester, newSession, on: false);
         expectMark(tester, alsoSend, on: false);
-        expect(box(tester, alsoSend).label, 'Also post to the main chat');
-        if (alsoLine.evaluate().isEmpty) {
-          expectOneRow(tester, [newSession, alsoSend]);
-        } else {
-          expectUnderBox(tester);
-        }
-        if (alsoLine.evaluate().isEmpty) {
-          expectWhole(tester, alsoSend, 'Also post to the main chat');
-        } else {
-          expectWholeUnderBox(tester, 'Also post to the main chat');
-        }
+        expect(box(tester, alsoSend).label, 'Also send to the main chat');
+        expectUnderBox(tester);
+        expectWholeUnderBox(tester, 'Also send to the main chat');
       });
     }
 
-    testBox('a project thread in a wide pane keeps its row with only Also '
-        'send', (tester) async {
+    testBox('a project thread in a wide pane has no New session, and Also '
+        'send under the box', (tester) async {
       await panel(tester, projectChat(), 'lead', width: 800);
       expect(newSession, findsNothing);
-      expectOneRow(tester, [alsoSend]);
+      expectUnderBox(tester);
     });
 
     testBox('in the narrow layout, turning New session on and off never moves '
@@ -507,16 +438,17 @@ void main() {
     });
   });
 
-  // The keyboard order stays as it was wherever Also send sits.
+  // The row's order, then Also send under the box (Huy and Scholes, 11-04).
   for (final width in [800.0, SuperTabPaneLayout.rightWidth]) {
-    testBox('Tab goes from the reply to New session, Also send, attach and '
+    testBox('Tab goes from the reply to +, @ Tag, New session, send and Also '
         'send at ${width.round()}px', (tester) async {
       await panel(tester, buddyChat(), 'offline', width: width);
       final order = [
-        newSession,
-        alsoSend,
         find.byKey(const ValueKey('new-harness-attach')),
+        find.byKey(const ValueKey('super-thread-tag')),
+        newSession,
         send,
+        alsoSend,
       ];
       // Send takes focus only with something to send.
       await tester.enterText(
@@ -543,26 +475,22 @@ void main() {
     });
   }
 
-  // The default width was chosen for "New session" and "Also to chat" on one
-  // row (10-31); the full wording needs about 410px there, so at 340px it
-  // takes its own line, whole.
   testBox('at the thread\'s default width, in the Mac\'s face, a Buddy '
-      'thread shows "New session" on the send row and "Also post to the main '
+      'thread shows "New session" on the send row and "Also send to the main '
       'chat" whole under the box, and a project thread names #openharness in '
-      'full on the row', (tester) async {
+      'full under the box', (tester) async {
     await panel(tester, buddyChat(), 'offline');
     expectWhole(tester, newSession, 'New session');
     expectUnderBox(tester);
-    expectWhole(tester, alsoSend, 'Also post to the main chat');
+    expectWhole(tester, alsoSend, 'Also send to the main chat');
     await tester.pumpWidget(const SizedBox());
     await shown.flush();
 
     final project = projectChat();
     project.state['name'] = 'openharness';
     await panel(tester, project, 'lead');
-    expect(box(tester, alsoSend).label, 'Also post to #openharness');
-    expect(alsoLine, findsNothing);
-    expectOneRow(tester, [alsoSend]);
-    expectWhole(tester, alsoSend, 'Also post to #openharness');
+    expect(box(tester, alsoSend).label, 'Also send to #openharness');
+    expectUnderBox(tester);
+    expectWhole(tester, alsoSend, 'Also send to #openharness');
   }, skip: !systemFace);
 }

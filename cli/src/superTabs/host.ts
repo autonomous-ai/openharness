@@ -283,22 +283,29 @@ function customRole(target: HostAgent): CustomRole | null {
 }
 /** The project instructions the roster names for this agent (project instructions, phase 3), or null: an older backend's row
  *  has no `instructions` key and one in no project has null, and both keep their role files as before. */
-interface RowInstructions { projectId: string; revision: number; hash: string | null; coordinatorName: string; roleName: string }
+interface RowInstructions { projectId: string; revision: number; hash: string | null; coordinatorName: string; roleName: string
+  /** The hash of the Swarm's built-in PM schedule the coordinator's read carries (2026-11-04 PM schedule design): it changes
+   *  with backend builds while the document's revision and hash stay. Null for any other agent, and from an older backend. */
+  builtInHash: string | null }
 function rowInstructions(target: HostAgent): RowInstructions | null {
-  const { projectId, revision, hash, coordinatorName } = object(target.instructions)
+  const { projectId, revision, hash, coordinatorName, builtInHash } = object(target.instructions)
   return identifier(projectId) && Number.isSafeInteger(revision) && (revision as number) >= 0 && (hash === null || typeof hash === 'string')
     && typeof coordinatorName === 'string' && coordinatorName !== '' && typeof target.roleName === 'string' && target.roleName !== ''
-    ? { projectId, revision: revision as number, hash, coordinatorName, roleName: target.roleName } : null
+    ? { projectId, revision: revision as number, hash, coordinatorName, roleName: target.roleName,
+      builtInHash: typeof builtInHash === 'string' ? builtInHash : null } : null
 }
 /** The instructions text held for one project of a tab, shared by its agents here. A Buddy holds its own: the backend may
- *  refuse it a project its member lost while the project's agents still read it. */
+ *  refuse it a project its member lost while the project's agents still read it. So does the coordinator: only its read
+ *  carries the built-in PM schedule (2026-11-04 PM schedule design), which a worker's shared text must not get, nor lack. */
 const instructionsKey = (tabId: string, projectId: string, buddyId?: string) => JSON.stringify(buddyId ? [tabId, projectId, buddyId] : [tabId, projectId])
 /** What a session's skill comes from: its project's instructions at a revision, in its role (a save is acted on at the next
  *  roster, not the next CLI release); else a built-in mode, or a Custom role's version and name (a rename rewrites the front
  *  matter without a fetch), or nothing (a role gone or unusable). */
 function skillSetOf(target: HostAgent): string {
   const doc = rowInstructions(target)
-  if (doc) return JSON.stringify(['instructions', doc.projectId, doc.revision, doc.hash, doc.roleName, doc.coordinatorName, target.lead === true])
+  // The built-in PM schedule's hash only when there is one, so an older backend's rows keep the version they had.
+  if (doc) return JSON.stringify(['instructions', doc.projectId, doc.revision, doc.hash, doc.roleName, doc.coordinatorName, target.lead === true,
+    ...doc.builtInHash ? [doc.builtInHash] : []])
   if (!('role' in target)) return target.skillMode === 'default' ? 'default' : 'orchestration'
   const role = customRole(target)
   return role ? JSON.stringify([role.projectId, role.id, role.version, role.name]) : 'none'
@@ -565,7 +572,7 @@ export class SuperTabHost {
    *  save time once a history read answered (`failedSince`: when it first failed): read again only when the roster's
    *  revision moves, and dropped once no roster row names the project. */
   private readonly instructionTexts = new Map<string, { revision: number; hash: string | null; text: string
-    history: { summary: string | null; savedAt: number | null } | null; failedSince?: number }>()
+    builtInHash: string | null; builtIn: string | null; history: { summary: string | null; savedAt: number | null } | null; failedSince?: number }>()
   private skillsRunning: Promise<void> | null = null
   private missing = new Map<string, number>()
   /** Per Lead harness here: a reopen in progress, its failures, when the next may run, and the reason last logged. */
@@ -1611,12 +1618,12 @@ export class SuperTabHost {
    *  installs nothing and is tried again later, as a Custom role's text. */
   private async refreshInstructions(target: HostAgent, cwd: string, skill: SwarmSkill, doc: RowInstructions, current: () => boolean): Promise<void> {
     const buddy = skill.role === 'buddy', harnessId = target.agent.harnessId
-    const key = instructionsKey(target.tabId, doc.projectId, buddy ? target.agent.id : undefined)
+    const key = instructionsKey(target.tabId, doc.projectId, buddy || target.lead === true ? target.agent.id : undefined)
     const path = `/api/super-tabs/${target.tabId}/projects/${doc.projectId}/instructions`, as = `asAgentId=${target.agent.id}`
     let held = this.instructionTexts.get(key)
     // The hash as well as the revision: a project with nothing saved stays at revision 0 while the template it reads changes
     // with backend builds (2026-11-02: running agents kept the old routing after #2495 until their daemon restarted).
-    if (held?.revision !== doc.revision || held.hash !== doc.hash) {
+    if (held?.revision !== doc.revision || held.hash !== doc.hash || held.builtInHash !== doc.builtInHash) {
       const answer = object(await backend(this.core, 'GET', `${path}?${as}`))
       // A newer roster's refresh reads its own revision: this one installs and says nothing.
       if (!current()) { this.skillChecks.delete(harnessId); return }
@@ -1624,7 +1631,8 @@ export class SuperTabHost {
         throw new Error(`The project's instructions read back are not revision ${doc.revision}, which this machine was told to install. Trying again later.`)
       }
       // A Buddy reads no history: it names who asked for what. Revision 0 is the built-in template: nothing was saved.
-      held = { revision: doc.revision, hash: doc.hash, text: answer.text, history: buddy || !doc.revision ? { summary: null, savedAt: null } : null }
+      held = { revision: doc.revision, hash: doc.hash, text: answer.text, builtInHash: doc.builtInHash,
+        builtIn: typeof answer.builtIn === 'string' && answer.builtIn ? answer.builtIn : null, history: buddy || !doc.revision ? { summary: null, savedAt: null } : null }
       this.instructionTexts.set(key, held)
     }
     // Task 4's review: a failed history read kept for the revision's life left every notice without its summary and gave each
@@ -1646,7 +1654,7 @@ export class SuperTabHost {
     if (!current()) { this.skillChecks.delete(harnessId); return }
     if (unread && this.now() - held.failedSince! < HISTORY_WAIT_MS) { this.skillChecks.set(harnessId, this.now() + SKILL_RETRY_MS); return }
     const { summary, savedAt } = held.history ?? { summary: null, savedAt: null }
-    const refresh = refreshProjectSkills(cwd, skill, { revision: doc.revision, text: held.text, summary, savedAt,
+    const refresh = refreshProjectSkills(cwd, skill, { revision: doc.revision, text: held.text, builtIn: held.builtIn, summary, savedAt,
       roleName: doc.roleName, coordinatorName: doc.coordinatorName, coordinator: target.lead === true })
     if (!refresh?.owed) return
     if (await this.tellSkill(target, refresh, current)) recordProjectSkillsNotice(cwd, skill, refresh)

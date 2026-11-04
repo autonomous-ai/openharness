@@ -37,6 +37,7 @@ abstract final class AppIcons {
   static const arrowUp = LucideIcons.arrowUp400;
   static const arrowDown = LucideIcons.arrowDown400;
   static const arrowUpRight = LucideIcons.arrowUpRight400;
+  static const atSign = LucideIcons.atSign400;
   static const bell = LucideIcons.bell400;
   static const bellOff = LucideIcons.bellOff400;
   static const bellRing = LucideIcons.bellRing400;
@@ -143,6 +144,7 @@ abstract final class AppIcons {
   static const messagesSquare = LucideIcons.messagesSquare400;
   static const messageSquare = LucideIcons.messageSquare400;
   static const messageSquareText = LucideIcons.messageSquareText400;
+  static const mic = LucideIcons.mic400;
   static const minimize = LucideIcons.minimize400;
   static const minus = LucideIcons.minus400;
   static const monitor = LucideIcons.monitor400;

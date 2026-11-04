@@ -20,6 +20,7 @@ import 'model.dart';
 import 'thread_scroll.dart';
 import '../widgets/laid_out_list.dart';
 import 'swarm_type.dart';
+import 'voice_recorder.dart';
 
 /// One thread beside the chat (Dee, 2026-10-29): its root, a "N replies"
 /// divider, the replies, and a composer whose reply goes to the root.
@@ -33,6 +34,7 @@ class SuperTabThreadPanel extends StatefulWidget {
     this.sessionActivity,
     this.machineName,
     this.onScroll,
+    this.voiceRecorder,
   });
 
   final SuperTabController controller;
@@ -54,6 +56,9 @@ class SuperTabThreadPanel extends StatefulWidget {
   /// Given the thread's list while the panel lives (null once it is gone),
   /// so a device scrolling this Swarm scrolls the thread, not the chat.
   final ValueChanged<ScrollController?>? onScroll;
+
+  /// What the reply box's mic records with; without it, no mic shows.
+  final SuperTabVoiceRecorder? voiceRecorder;
 
   @override
   State<SuperTabThreadPanel> createState() => _SuperTabThreadPanelState();
@@ -252,7 +257,8 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
 
   /// Where "Also send" also puts the reply, always in full (Scholes, 11-03:
   /// "Also to chat" did not say where): the project chat as its sidebar row
-  /// names it, else the main chat.
+  /// names it, else the main chat. "Send", as the phone and Slack say it
+  /// (Huy and Scholes, 11-04).
   String get _alsoSendLabel {
     final group = c.selected, snapshot = c.snapshot;
     String? channel;
@@ -260,16 +266,11 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
       channel = snapshot.projectFor(group.id)?.name;
     }
     return channel == null
-        ? 'Also post to the main chat'
-        : 'Also post to #$channel';
+        ? 'Also send to the main chat'
+        : 'Also send to #$channel';
   }
 
   String get _alsoSendHint => '$_alsoSendLabel as well as this thread';
-
-  /// Whether Also send sits on its own line under the box: its full label
-  /// has no room beside New session on the send row. Set from the send row's
-  /// width once it is laid out ([_choices]).
-  bool _alsoBelow = false;
 
   // An older Buddy chat is kept to read: no thread reply there either (security review 1 of #2437).
   bool get _writable =>
@@ -353,6 +354,13 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     _tagIndex.value = 0;
     _focus.requestFocus();
     setState(() {});
+  }
+
+  /// @ Tag: `@` at the caret, reported as an edit so the tag list opens.
+  void _promptTag() {
+    _composer.value = superTabTagPrompt(_composer.value);
+    _edited(_composer.text);
+    _focus.requestFocus();
   }
 
   void _moveTag(int index) {
@@ -642,6 +650,13 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     onEdited: _edited,
     onSend: () => unawaited(_send()),
     options: _choices(_writable),
+    onTag: _promptTag,
+    onMic: switch (widget.voiceRecorder) {
+      final recorder? => () => unawaited(
+        recorder.start(conversationId: _conversationId, root: widget.root),
+      ),
+      null => null,
+    },
     // `@` in the reply: the open completion list takes its keys first.
     onKey: (event) {
       final composing = _composer.value.composing;
@@ -661,10 +676,11 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     inputFormatters: [_tagBackspace],
   );
 
-  /// What sits under the box: Also send on its own line where it has no room
-  /// on the send row, and the muted note while the reply starts a session.
-  /// They never show together, so they share one place; each keeps its place
-  /// while hidden, so the box never moves as New session is toggled.
+  /// What sits under the box: Also send, a small checkbox on its own line as
+  /// in Slack (Huy and Scholes, 11-04), and the muted note while the reply
+  /// starts a session. They never show together, so they share one place;
+  /// each keeps its place while hidden, so the box never moves as New session
+  /// is toggled.
   Widget? _underBox() {
     final note = _offersSession
         ? Padding(
@@ -682,8 +698,8 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
             ),
           )
         : null;
-    if (!(_alsoSendPossible && _alsoBelow)) return note;
-    // Its square under the send row's first one: the box's inset.
+    if (!_alsoSendPossible) return note;
+    // Its square under the row's first button: the box's inset.
     final line = Visibility(
       visible: _offersAlsoSend,
       maintainSize: true,
@@ -704,54 +720,21 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     return note == null ? line : Stack(children: [line, note]);
   }
 
-  /// The send row's options, left of attach and send (Scholes, 11-03): New
-  /// session, then Also send in full where both fit; where they do not, Also
-  /// send moves to its own line under the box ([_alsoBelow]), never to a
-  /// shorter label. The choice rests on the row's width alone, so it settles
-  /// after one frame, in which Also send is drawn in neither place.
-  Widget _choices(bool writable) => LayoutBuilder(
-    builder: (context, constraints) {
-      double width(String label) =>
-          SuperTabComposerToggle.widthOf(context, label);
-      final session = _offersSession ? _sessionLabel : null;
-      // Measured whether or not New session is on, so the place stays put.
-      final also = _alsoSendPossible ? _alsoSendLabel : null;
-      final needed =
-          (session == null ? 0 : width(session)) +
-          (session != null && also != null ? _choiceGap : 0) +
-          (also == null ? 0 : width(also));
-      final below = also != null && needed > constraints.maxWidth;
-      final inline = _offersAlsoSend && !below && !_alsoBelow;
-      if (below != _alsoBelow) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && below != _alsoBelow) {
-            setState(() => _alsoBelow = below);
-          }
-        });
-      }
-      final sessionChoice = FocusTraversalOrder(
-        order: const NumericFocusOrder(SuperTabReplyBox.optionsOrder),
-        child: _sessionChoice(writable),
-      );
-      return Row(
-        children: [
-          // Its own width beside Also send, which then fits; alone it may end
-          // in "…" in a pane narrower than the app allows.
-          if (session != null)
-            inline ? sessionChoice : Flexible(child: sessionChoice),
-          if (inline) ...[
-            if (session != null) const SizedBox(width: _choiceGap),
-            Flexible(child: _alsoSendChoice(writable)),
-          ],
-        ],
-      );
-    },
-  );
+  /// The row's options, between @ Tag and the mic: New session, ending in "…"
+  /// in a pane narrower than the app allows.
+  Widget? _choices(bool writable) => _offersSession
+      ? Align(
+          alignment: Alignment.centerLeft,
+          child: FocusTraversalOrder(
+            order: const NumericFocusOrder(SuperTabReplyBox.optionsOrder),
+            child: _sessionChoice(writable),
+          ),
+        )
+      : null;
 
-  /// Also send, on the send row or on its own line under the box; after New
-  /// session in the Tab order either way.
+  /// Also send, on its own line under the box: after send in the Tab order.
   Widget _alsoSendChoice(bool writable) => FocusTraversalOrder(
-    order: const NumericFocusOrder(SuperTabReplyBox.optionsOrder + .1),
+    order: SuperTabReplyBox.underOrder,
     child: SuperTabComposerToggle(
       key: const ValueKey('super-thread-also-send'),
       on: _alsoSend,
@@ -761,7 +744,6 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     ),
   );
 
-  static const _choiceGap = 4.0;
   static const _sessionLabel = 'New session';
 
   /// New session, left of Also send: on and locked once the thread's session

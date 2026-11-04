@@ -190,9 +190,8 @@ void main() {
   Map<String, dynamic> lastCommand(ConversationServer server) =>
       Map<String, dynamic>.from(server.posts.last['command'] as Map);
 
-  testSessions('New session sits beside Also send, hides it, and is sent', (
-    tester,
-  ) async {
+  testSessions('New session sits on the row above Also send, hides it, and '
+      'is sent', (tester) async {
     final server = buddyChat();
     final c = await show(tester, server);
     await openThread(tester, c, 'message-1');
@@ -200,14 +199,10 @@ void main() {
     expect(newSession, findsOneWidget);
     expect(alsoSend, findsOneWidget);
     expect(box(tester, newSession).on, isFalse);
-    // Left of Also send on one row, or above it where Also send takes its
-    // own line under the box (Scholes, 11-03).
+    // On the box's row; Also send on its own line under the box (Huy and
+    // Scholes, 11-04).
     final a = tester.getRect(newSession), b = tester.getRect(alsoSend);
-    expect(
-      (a.top == b.top && a.left < b.left) ||
-          (b.top > a.bottom && (a.left - b.left).abs() < .5),
-      isTrue,
-    );
+    expect(b.top, greaterThan(a.bottom));
     expect(
       find.byTooltip('Starts a separate Buddy session for this thread'),
       findsOneWidget,
@@ -246,9 +241,9 @@ void main() {
     expect(box(tester, newSession).label, 'New session');
     // Always the full wording (Scholes, 11-03): with no room beside New
     // session, it takes its own line under the box.
-    expect(box(tester, alsoSend).label, 'Also post to the main chat');
+    expect(box(tester, alsoSend).label, 'Also send to the main chat');
     expect(
-      find.byTooltip('Also post to the main chat as well as this thread'),
+      find.byTooltip('Also send to the main chat as well as this thread'),
       findsOneWidget,
     );
     // New session sits on the send row, left of its buttons; Also send on

@@ -10,7 +10,11 @@ import { hostLocalGrid, machineContribution, type MachineCleanup } from '../mach
 import { agentProjectId, agentSetRole, canWatchAgent, isConfidential, groupProject, ledProject, projectsOf, skillModeOf, startProject, skillSetOf, watchClosed } from '../projects.js'
 import type { HostAgentRow, HostPool, HostRosterRow, HostTabRows } from './contract.js'
 import { hostEtag } from './hostEtag.js'
-import { coordinatorNameOf, FIRST_INSTRUCTIONS, roleNameOf } from '../instructions.js'
+import { coordinatorNameOf, FIRST_INSTRUCTIONS, instructionsHash, roleNameOf } from '../instructions.js'
+import { PM_SCHEDULE_TEXT } from '../pmSchedule.js'
+
+/** The built-in PM schedule's hash, once: it changes only with a backend release. */
+const BUILT_IN_HASH = instructionsHash(PM_SCHEDULE_TEXT)
 
 export interface HostLookups {
   /** The Swarm's people with their account emails (observers). */
@@ -86,7 +90,7 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     // running daemons read the text again (2026-11-02: agents kept the old routing after #2495, as revision 0 never moves).
     instructions: home ? { projectId: home.id, revision: home.instructionsRevision ?? 0,
       hash: home.instructionsHash ?? (home.instructionsRevision ? null : FIRST_INSTRUCTIONS.instructionsHash),
-      coordinatorName: coordinatorNameOf(home) } : null,
+      coordinatorName: coordinatorNameOf(home), ...ledProject(state, target.id)?.id === home.id ? { builtInHash: BUILT_IN_HASH } : {} } : null,
     ...(custom ? { role: chosen && { ...chosen, projectId: custom.id } } : {}),
     lead: !!ledProject(state, target.id),
     // Removed (model.ts leadsRemoved); an older CLI still reads the field, so it stays, always empty.

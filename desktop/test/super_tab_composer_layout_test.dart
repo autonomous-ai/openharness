@@ -34,9 +34,10 @@ void main() {
 
   for (final brightness in Brightness.values) {
     for (final scale in [1.0, 2.0]) {
-      testWidgets('composer text centers in ${brightness.name} at ${scale}x', (
-        tester,
-      ) async {
+      // Huy and Scholes, 11-04: the text has its own line above the row of
+      // actions, as on the phone; the caret and the hint centre on it.
+      testWidgets('composer text sits on its line above the actions in '
+          '${brightness.name} at ${scale}x', (tester) async {
         final previousBrightness = grid.AppTheme.brightness.value;
         grid.AppTheme.brightness.value = brightness;
         addTearDown(() {
@@ -116,12 +117,17 @@ void main() {
             });
           }
           debugPrint('Composer $name: ${measurements[name]}');
-          expect(editableRect.center.dy, closeTo(rect.center.dy, .75));
-          expect(caret.center.dy, closeTo(rect.center.dy, .75));
+          final actions = tester.getRect(
+            find.byKey(const ValueKey('super-message-composer-actions')),
+          );
+          expect(editableRect.top, greaterThan(rect.top));
+          expect(editableRect.bottom, lessThanOrEqualTo(actions.top));
+          expect(actions.bottom, lessThanOrEqualTo(rect.bottom));
+          expect(caret.center.dy, closeTo(editableRect.center.dy, .75));
           if (name == 'empty') {
             expect(
               tester.getRect(hint).center.dy,
-              closeTo(rect.center.dy, .75),
+              closeTo(editableRect.center.dy, .75),
             );
           }
         }

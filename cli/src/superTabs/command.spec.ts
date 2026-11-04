@@ -647,6 +647,18 @@ it('prints the instructions as text with the header and the coordinator\'s notes
   expect(JSON.parse(print.mock.calls.at(-1)![0])).toMatchObject({ error: 'INSTRUCTIONS_UNAVAILABLE' })
 })
 
+// 2026-11-04 PM schedule design: the coordinator's read carries the Swarm's built-in PM schedule, printed after the document so
+// a new PM session reads it at launch, and before the notes.
+it('prints the built-in schedule after the document', async () => {
+  const print = vi.fn(), close = vi.fn()
+  const request = vi.fn(async () => ({ ok: true, value: { projectId: 'p1', revision: 2, text: 'Work by this.', template: false, coordinatorName: 'Ana',
+    builtIn: '## Built-in PM schedule (from the Swarm)\n\nB', notes: [{ id: 'n1', text: 'Be quick', askedBy: 'ken', at: 0, expiresAt: null }] } }))
+  const deps = { where: () => where, pane: undefined, open: async () => ({ request, close, machineId: 'machine' }), print }
+  expect(await superTabCommand([...prefix, 'instructions'], deps)).toBe(0)
+  expect(print).toHaveBeenLastCalledWith(['Instructions of project p1, revision 2', '', 'Work by this.', '', '## Built-in PM schedule (from the Swarm)\n\nB', '',
+    "Ana's notes:", '- Be quick (note n1, asked by ken, 1970-01-01T00:00:00.000Z)'].join('\n'))
+})
+
 it('parses a Buddy\'s propose OPERATION_ID JSON as its proposal command, whatever type the JSON names', () => {
   const prefix = ['--tab', 'tab', '--agent', 'buddy']
   const proposal = { conversationId: 'chat', ownerMessageId: 'asked', goal: 'Offline sync', scope: 'Desktop only', priority: 'normal' }

@@ -144,6 +144,87 @@ describe('installation tokens', () => {
     await expect(app.createToken(77, repo)).rejects.toMatchObject({ code: 'GITHUB_UNAVAILABLE', status: 502 })
   })
 
+  // Scholes, task #2755 (Ken approved): an agent's token also pushes workflow files and writes issues, where the
+  // installation has granted them. Asking for one it has not granted would refuse every token on it.
+  const today = { contents: 'write', pull_requests: 'write', checks: 'read', actions: 'read', metadata: 'read' } as const
+  const minted = (github: ReturnType<typeof fakeGitHub>) => github.calls.filter(c => c.path.endsWith('/access_tokens')).map(c => c.body)
+
+  it('asks for workflows and issues on an agent\'s token, for its one repository, where the installation granted them', async () => {
+    const { app, github } = setup()
+    github.grants.set(77, { ...today, workflows: 'write', issues: 'write' })
+    expect((await app.createToken(77, repo)).token).toBe('ghs_fixture_1')
+    expect(minted(github)).toEqual([{ repositories: ['app'], permissions: { ...today, workflows: 'write', issues: 'write' } }])
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(1)
+  })
+
+  it('asks for no more than each granted level, and only what is granted', async () => {
+    const { app, github } = setup()
+    github.grants.set(77, { ...today, issues: 'read', administration: 'write' })
+    await app.createToken(77, repo)
+    expect(minted(github)).toEqual([{ repositories: ['app'], permissions: { ...today, issues: 'read' } }])
+  })
+
+  it('asks for today\'s set where workflows and issues are not granted, and still gets its token', async () => {
+    const { app, github } = setup()
+    github.grants.set(77, { ...today })
+    expect((await app.createToken(77, repo)).token).toBe('ghs_fixture_1')
+    expect(minted(github)).toEqual([{ repositories: ['app'], permissions: today }])
+  })
+
+  it('asks for today\'s set when GitHub does not say what the installation granted', async () => {
+    const { app, github } = setup()
+    // The fake answers 404 for an installation it lists no grants for.
+    expect((await app.createToken(77, repo)).token).toBe('ghs_fixture_1')
+    expect(minted(github)).toEqual([{ repositories: ['app'], permissions: today }])
+  })
+
+  it('remembers an installation\'s grant ten minutes', async () => {
+    const { app, github, time } = setup()
+    github.grants.set(77, { ...today, workflows: 'write' })
+    await app.createToken(77, repo)
+    await app.createToken(77, repo)
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(1)
+    github.grants.set(77, { ...today, workflows: 'write', issues: 'write' })
+    time.advance(10 * 60_000 + 1)
+    await app.createToken(77, repo)
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(2)
+    expect(minted(github).at(-1)).toEqual({ repositories: ['app'], permissions: { ...today, workflows: 'write', issues: 'write' } })
+  })
+
+  it('reads the grant again after a permission refusal, and asks once more with what is granted now', async () => {
+    const { app, github } = setup()
+    github.grants.set(77, { ...today, workflows: 'write', issues: 'write' })
+    await app.createToken(77, repo)
+    // An owner takes workflows away inside the ten minutes: the remembered grant is wrong.
+    github.grants.set(77, { ...today, issues: 'write' })
+    expect((await app.createToken(77, repo)).token).toBe('ghs_fixture_2')
+    expect(minted(github).slice(1)).toEqual([
+      { repositories: ['app'], permissions: { ...today, workflows: 'write', issues: 'write' } },
+      { repositories: ['app'], permissions: { ...today, issues: 'write' } }])
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(2)
+    // The fresh grant is remembered.
+    await app.createToken(77, repo)
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(2)
+  })
+
+  it('still refuses, asking once, when even today\'s set is not granted and the fresh grant changes nothing', async () => {
+    const { app, github } = setup()
+    github.grants.set(77, { contents: 'read', metadata: 'read' })
+    await expect(app.createToken(77, repo)).rejects.toMatchObject({ code: 'GITHUB_APP_PERMISSIONS', status: 409 })
+    expect(minted(github)).toHaveLength(1)
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(2)
+  })
+
+  it('never widens a narrow token, whatever the installation granted', async () => {
+    const { app, github } = setup()
+    github.grants.set(77, { ...today, workflows: 'write', issues: 'write' })
+    await app.createToken(77, repo, PULL_READ_PERMISSIONS)
+    await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
+    await app.createToken(77, repo, ACTIONS_READ_PERMISSIONS)
+    expect(minted(github).map(b => (b as { permissions: unknown }).permissions)).toEqual([PULL_READ_PERMISSIONS, PULL_WATCH_PERMISSIONS, ACTIONS_READ_PERMISSIONS])
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(0)
+  })
+
   it('leaves the install link out when no app name is configured', async () => {
     const { app } = setup({ slug: null })
     expect(app.installUrl()).toBeNull()
