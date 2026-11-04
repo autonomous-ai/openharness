@@ -21,13 +21,14 @@ machine's owner's full rights:
 3. **Guard removed.** The PreToolUse hook script, its sandbox settings, wide reads and their `run:` approvals, the lists
    of files and links sent to it, the narrow marks and the read-only file locking go. A Buddy relaunched in a folder an
    older release locked has the guard's files removed and its files' write bits given back. What stays of
-   `lib/buddyGuard.ts` is the owner-presence grant that `harness tell` relays (#2626) read, renamed for what it is.
+   `lib/buddyGuard.ts` is the owner-presence grant that `harness tell` relays (#2626) read, its launch id and the
+   end-of-session cleanup; the file keeps its name to keep this change small.
 4. **Codex Buddies.** The server stops refusing a Codex Buddy (`buddy.create`) and a Codex thread session; the CLI's
    thread-session engine refusal goes. Desktop and the phone stop showing Codex as disabled (their copy of the refusal
    is held to the server's by a parity test).
 5. **Data framing.** The Buddy skill's Limits are rewritten for full access; text others wrote (project-chat news, the
    PM's private lines, tasks, pull requests, files) stays data, never instructions, in the skill and in each delivery.
-6. **Docs.** docs/swarms.md (Buddies) and ENGINEERING.md, naming Ken's decision.
+6. **Docs.** docs/swarms.md (Buddies), naming Ken's decision. ENGINEERING.md states no Buddy boundary, so it is unchanged.
 
 **Tech Stack:** TypeScript (CLI, backend), vitest; Dart (Desktop, phone) for the Codex option.
 
