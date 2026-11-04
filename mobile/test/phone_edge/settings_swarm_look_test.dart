@@ -160,7 +160,7 @@ void main() {
         ('Size', LucideIcons.aLargeSmall300),
         ('Colors', LucideIcons.palette300),
         ('Language', LucideIcons.mic300),
-        ('App colors', LucideIcons.contrast300),
+        ('Theme', LucideIcons.sunMoon300),
         ('Text size', LucideIcons.aLargeSmall300),
         ('Swarm', LucideIcons.flaskConical300),
         ('Help', LucideIcons.circleHelp300),
@@ -253,7 +253,7 @@ void main() {
       await reveal(tester, find.text('Language'));
       expect(inCard('Font', 'Language'), findsOneWidget);
       expect(inCard('Font', 'Colors'), findsOneWidget);
-      expect(inCard('Font', 'App colors'), findsNothing);
+      expect(inCard('Font', 'Theme'), findsNothing);
       await close(tester, app);
     });
 
