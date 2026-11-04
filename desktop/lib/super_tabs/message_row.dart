@@ -154,14 +154,20 @@ class SuperTabMessageRow extends StatefulWidget {
   /// the rows shown (view.dart).
   static const groupLimit = 20;
 
+  static bool _untagged(SuperTabMessage _) => false;
+
   /// The messages that join the one above them under its header: like Slack,
   /// one sender's messages within five minutes of each other, whatever their
   /// length (Huy, 2026-11-03, #2419), up to [groupLimit] to a group.
-  static Set<String> consecutiveUpdates(List<SuperTabMessage> messages) {
+  static Set<String> consecutiveUpdates(
+    List<SuperTabMessage> messages, {
+    bool Function(SuperTabMessage) tagged = _untagged,
+  }) {
     final joined = <String>{};
     var first = 0;
     for (var i = 1; i < messages.length; i++) {
-      if (i - first < groupLimit && groupsWith(messages[i], messages[i - 1])) {
+      if (i - first < groupLimit &&
+          groupsWith(messages[i], messages[i - 1], tagged: tagged)) {
         joined.add(messages[i].id);
       } else {
         first = i;
@@ -173,15 +179,19 @@ class SuperTabMessageRow extends StatefulWidget {
   /// Whether [current] joins [previous]'s header: the same sender, within five
   /// minutes on the same day. In the chat, a thread reply shown there stands
   /// on its own with its Replied in thread line; [inThread], replies group. A
-  /// line that draws its own row has no header to share, on either side.
+  /// line that draws its own row has no header to share, on either side, and
+  /// a [tagged] row's header is where its tag shows.
   static bool groupsWith(
     SuperTabMessage current,
     SuperTabMessage? previous, {
     bool inThread = false,
+    bool Function(SuperTabMessage) tagged = _untagged,
   }) {
     if (previous == null ||
         current.drawsOwnRow ||
         previous.drawsOwnRow ||
+        tagged(current) ||
+        tagged(previous) ||
         // A message that started a session stands on its own, with its line.
         current.sessionRoot ||
         previous.sessionRoot ||
@@ -480,6 +490,11 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                             ).format(context),
                                             style: SwarmType.time(context),
                                           ),
+                                        ),
+                                      if (widget.thread?.askTag case final tag?)
+                                        Text(
+                                          tag,
+                                          style: SwarmType.time(context),
                                         ),
                                     ],
                                   ),

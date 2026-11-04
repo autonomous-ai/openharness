@@ -1281,7 +1281,8 @@ class SuperTabDelivery {
 class SuperTabThread {
   /// A thread with no reply yet: a session's, started from the main chat.
   SuperTabThread.empty(this.id)
-    : replies = 0,
+    : ask = null,
+      replies = 0,
       lastSequence = 0,
       lastAt = null,
       authors = const [],
@@ -1289,6 +1290,7 @@ class SuperTabThread {
 
   SuperTabThread.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
+      ask = row['ask'] as String?,
       replies = (row['replies'] as num).toInt(),
       lastSequence = (row['lastSequence'] as num).toInt(),
       lastAt = DateTime.tryParse(row['lastAt'] as String? ?? ''),
@@ -1299,8 +1301,20 @@ class SuperTabThread {
         (row['people'] as List? ?? const []).whereType<String>(),
       );
   final String id;
+
+  /// Where the ask at its root stands (backend threads.ts).
+  final String? ask;
   final int replies, lastSequence;
   final DateTime? lastAt;
+
+  /// What its root's row says after the time; null for a message that is no
+  /// ask, and for a state this app does not know.
+  String? get askTag => switch (ask) {
+    'proposal' => '✋ Proposal',
+    'on-it' => '● On it',
+    'shipped' => '✓ Shipped',
+    _ => null,
+  };
 
   /// The newest distinct reply authors, newest first: the first wrote the
   /// last reply.
