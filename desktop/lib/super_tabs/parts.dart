@@ -455,6 +455,9 @@ class SuperTabParts {
     if (_derived['decisionsDigest'] case final String digest) {
       state['decisionsDigest'] = digest;
     }
+    if (_derived['remindersDigest'] case final String digest) {
+      state['remindersDigest'] = digest;
+    }
     if (_derived['activityDigest'] case final String digest) {
       state['activityDigest'] = digest;
     }

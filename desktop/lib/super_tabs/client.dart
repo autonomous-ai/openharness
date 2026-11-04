@@ -13,6 +13,7 @@ import 'controller.dart';
 import 'decisions.dart';
 import 'model.dart';
 import 'notifications.dart';
+import 'reminders.dart';
 import 'parts.dart';
 import 'reading.dart';
 import 'saved_view.dart';
@@ -37,6 +38,7 @@ class SuperTabClient {
     this.onSelection,
     this.onMention,
     this.onChatMessage,
+    this.onReminder,
     this.onTagCounts,
     this.onNotices,
     this.upload = refuseUpload,
@@ -73,6 +75,9 @@ class SuperTabClient {
   /// ([SuperTabChatNotices]), with the Swarm, the chat and how far it goes.
   final void Function(String tabId, SuperTabConversation group, int sequence)?
   onChatMessage;
+
+  /// A reminder the reader set came due in Swarm `tabId` ([SuperTabReminders]).
+  final void Function(String tabId, SuperTabReminder reminder)? onReminder;
 
   /// The waiting tags of a Swarm that is not open changed ([waitingTags]).
   final void Function()? onTagCounts;
@@ -798,6 +803,10 @@ class SuperTabClient {
     if (onChatMessage case final told?) {
       SuperTabChatNotices.of(controller).onMessage = (group, sequence) =>
           told(id, group, sequence);
+    }
+    if (onReminder case final told?) {
+      SuperTabReminders.of(controller).onArrived = (reminder) =>
+          told(id, reminder);
     }
     if (onNotices case final changed?) {
       SuperTabMentions.of(controller).addListener(changed);

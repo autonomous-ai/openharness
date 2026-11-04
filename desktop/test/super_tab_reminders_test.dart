@@ -57,6 +57,12 @@ void main() {
 
   Finder row(String id) => find.byKey(ValueKey('super-message-$id'));
 
+  /// Past every reminder set: the timer waiting for the next one ends.
+  Future<void> passReminders(WidgetTester tester) async {
+    await tester.pump(const Duration(days: 2));
+    await tester.pumpAndSettle();
+  }
+
   Future<void> remind(WidgetTester tester, String id, String choice) async {
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: Offset.zero);
@@ -105,6 +111,7 @@ void main() {
       );
       // The menu closes after a choice.
       expect(find.text('In 20 minutes'), findsNothing);
+      await passReminders(tester);
     });
 
     testWidgets('In 1 hour and Tomorrow at 09:00 are in the reader\'s time', (
@@ -124,6 +131,7 @@ void main() {
         tomorrow.toLocal(),
         DateTime(asked.year, asked.month, asked.day + 1, 9),
       );
+      await passReminders(tester);
     });
   });
 

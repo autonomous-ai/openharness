@@ -19,6 +19,7 @@ import 'message_text.dart';
 import 'model.dart';
 import 'pull_requests.dart';
 import 'reactions.dart';
+import 'reminders.dart';
 import 'swarm_type.dart';
 
 /// Presentation only. Message identity and reply routing use backend IDs.
@@ -61,6 +62,7 @@ class SuperTabMessageRow extends StatefulWidget {
     this.linkTarget,
     this.onOpenLink,
     this.onMarkUnread,
+    this.onRemind,
   });
 
   final SuperTabMessage message;
@@ -144,6 +146,9 @@ class SuperTabMessageRow extends StatefulWidget {
   /// The More menu's Mark unread: the chat reads as unread from this message
   /// on. Null where it is not offered.
   final VoidCallback? onMarkUnread;
+
+  /// The More menu's Remind me, with when. Null where it is not offered.
+  final ValueChanged<SuperTabRemindIn>? onRemind;
 
   // Routing notes share the message body column, including grouped messages.
   static const horizontalInset = 24.0;
@@ -253,9 +258,25 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
         label: 'Copy link to message',
         icon: AppIcons.link2,
         onPressed: () => unawaited(_copyLink(link)),
+        choices: const [],
       ),
     if (widget.onMarkUnread case final markUnread?)
-      (label: 'Mark unread', icon: AppIcons.mail, onPressed: markUnread),
+      (
+        label: 'Mark unread',
+        icon: AppIcons.mail,
+        onPressed: markUnread,
+        choices: const [],
+      ),
+    if (widget.onRemind case final remind?)
+      (
+        label: 'Remind me',
+        icon: AppIcons.clock,
+        onPressed: null,
+        choices: [
+          for (final when in SuperTabRemindIn.values)
+            (label: when.label, onPressed: () => remind(when)),
+        ],
+      ),
   ];
 
   Future<void> _copyLink(SwarmMessageLink link) async {

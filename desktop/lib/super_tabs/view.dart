@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart'
@@ -37,6 +38,7 @@ import 'composer_newline.dart';
 import 'composer_tags.dart';
 import 'composer_toggle.dart';
 import 'activity.dart';
+import 'reminders.dart';
 import 'activity_view.dart';
 import 'attention.dart';
 import 'controller.dart';
@@ -1916,8 +1918,43 @@ class _SuperTabViewState extends State<SuperTabView>
   /// is held is looked in first, then what arrived after it, then older pages,
   /// until the message is among them; one that is not found says so, and the
   /// list stays.
-  Future<void> _openMention(SuperTabMention mention) async {
-    final id = mention.conversationId;
+  Future<void> _openMention(SuperTabMention mention) =>
+      _openAtMessage(mention.conversationId, mention.messageId, answer: true);
+
+  /// More ▸ Remind me: the message comes back in Activity at [when].
+  Future<void> _remind(SuperTabMessage message, SuperTabRemindIn when) async {
+    final at = when.from(clock.now());
+    final kept = await SuperTabReminders.of(c).set(message, at);
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: Text(
+          kept
+              ? 'Reminder set for ${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(at))}'
+              : "Couldn't set the reminder",
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  /// A due reminder opened from Activity: its message, which clears it.
+  Future<void> _openReminder(SuperTabReminder reminder) async {
+    unawaited(SuperTabReminders.of(c).open(reminder));
+    await _openAtMessage(
+      reminder.conversationId,
+      reminder.messageId,
+      answer: false,
+    );
+  }
+
+  /// Opens conversation [id] at message [messageId], from Activity; [answer]
+  /// replies to it (a tag).
+  Future<void> _openAtMessage(
+    String id,
+    String messageId, {
+    required bool answer,
+  }) async {
     final request = ++_jumpRequest;
     // A closed or quiet conversation is asked for by id, as a message link does: the tag of a task with no worker is in one,
     // and a row that did nothing left the reader not knowing why it was there.
@@ -1929,7 +1966,7 @@ class _SuperTabViewState extends State<SuperTabView>
           ?.showSnackBar(const SnackBar(content: Text('Message unavailable')));
       return;
     }
-    final message = await _findMessage(id, mention.messageId);
+    final message = await _findMessage(id, messageId);
     if (!mounted || request != _jumpRequest) return;
     if (message == null) {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
@@ -1953,7 +1990,8 @@ class _SuperTabViewState extends State<SuperTabView>
       if (!message.inMainStream) return;
     }
     setState(() {
-      if (c.canWrite &&
+      if (answer &&
+          c.canWrite &&
           c.selected?.archived == false &&
           message.thread == null) {
         _replies[id] = message;
@@ -3169,6 +3207,7 @@ class _SuperTabViewState extends State<SuperTabView>
       onMarkUnread: inThread || !message.inMainStream
           ? null
           : () => unawaited(_markUnread(message)),
+      onRemind: (when) => unawaited(_remind(message, when)),
       // A message with a thread is answered there; one from before threads
       // keeps the inline reply.
       onReply: !writable || inThread
@@ -4504,6 +4543,8 @@ class _SuperTabViewState extends State<SuperTabView>
                                       unawaited(_openMention(mention)),
                                   onOpenThread: _openThreadFromList,
                                   onOpenConversation: _openConversation,
+                                  onOpenReminder: (reminder) =>
+                                      unawaited(_openReminder(reminder)),
                                 )
                               : const SizedBox.shrink(),
                           _manageVisible

@@ -107,7 +107,7 @@ import '../super_tabs/join_machine.dart';
 import '../super_tabs/identity.dart' show superTabMachineName;
 import '../super_tabs/view_store.dart';
 import '../super_tabs/notifications.dart'
-    show superTabChatNotice, superTabMentionNotice;
+    show superTabChatNotice, superTabMentionNotice, superTabReminderNotice;
 import '../measurement/setup_preference_store.dart';
 import '../devices/device_hosts.dart';
 import '../stats/harness_stats.dart';
@@ -1925,6 +1925,7 @@ class AppNotifier extends ChangeNotifier {
         : uploadAvatarWith(() => api)(tabId: tabId, png: png),
     onMention: superTabMentionNotice(systemNotifications),
     onChatMessage: superTabChatNotice(systemNotifications),
+    onReminder: superTabReminderNotice(systemNotifications),
     onTagCounts: notifyListeners,
     onNotices: notifyListeners,
     discoveryInterval: kUnderTest ? Duration.zero : const Duration(seconds: 15),
@@ -5040,9 +5041,9 @@ class AppNotifier extends ChangeNotifier {
       // the view's _syncThreadPane calls threadPaneShown when it is.
       controller.openThread(root, shown: false);
     }
-    bool holds() => controller
-        .messages(id)
-        .any((m) => m.id == root || m.thread == root);
+
+    bool holds() =>
+        controller.messages(id).any((m) => m.id == root || m.thread == root);
     if (!holds()) await controller.refresh();
     bool superseded() =>
         _disposed ||

@@ -8,6 +8,7 @@ import 'controller.dart';
 import 'decisions.dart';
 import 'model.dart';
 import 'notifications.dart';
+import 'reminders.dart';
 
 /// What one row of Needs you is.
 enum SuperTabNeedKind { decision, agent, mention }
@@ -44,6 +45,7 @@ class SuperTabNeed {
 ///
 /// * Needs you: decisions asked of them, agents waiting on them and their
 ///   tags. Its length is Activity's number.
+/// * Reminders: messages they asked to come back to, once due.
 /// * New replies: the followed threads with replies they have not read.
 /// * Done today: tasks that shipped today.
 ///
@@ -53,11 +55,13 @@ class SuperTabActivity extends ChangeNotifier {
   SuperTabActivity._(this.controller)
     : mentions = SuperTabMentions.of(controller),
       decisions = SuperTabDecisions.of(controller),
-      attention = SuperTabAttention.of(controller) {
+      attention = SuperTabAttention.of(controller),
+      reminders = SuperTabReminders.of(controller) {
     controller.addListener(notifyListeners);
     controller.onDispose(dispose);
     mentions.addListener(notifyListeners);
     decisions.addListener(notifyListeners);
+    reminders.addListener(notifyListeners);
   }
 
   @visibleForTesting
@@ -72,6 +76,7 @@ class SuperTabActivity extends ChangeNotifier {
   final SuperTabMentions mentions;
   final SuperTabDecisions decisions;
   final SuperTabAttention attention;
+  final SuperTabReminders reminders;
   bool _open = false, _disposed = false;
 
   SuperTabSnapshot? get _snapshot =>
@@ -194,7 +199,7 @@ class SuperTabActivity extends ChangeNotifier {
 
   /// The Activity row's red number: what needs the reader, and nothing else.
   /// A tag counts until it is read, a decision or an agent waiting until it
-  /// is answered. Before the tags are read the server's count stands in.
+  /// is answered, a due reminder until it is opened. Before the tags are read the server's count stands in.
   int get count {
     final snapshot = _snapshot;
     if (snapshot == null) return 0;
@@ -203,6 +208,7 @@ class SuperTabActivity extends ChangeNotifier {
         ? snapshot.mentionsWaiting
         : _tags.length;
     return tags +
+        reminders.due.length +
         snapshot.decisionsWaiting +
         snapshot.conversations
             .where((g) => _waiting(snapshot, g, decided))
@@ -243,6 +249,7 @@ class SuperTabActivity extends ChangeNotifier {
     controller.removeListener(notifyListeners);
     mentions.removeListener(notifyListeners);
     decisions.removeListener(notifyListeners);
+    reminders.removeListener(notifyListeners);
     super.dispose();
   }
 }
