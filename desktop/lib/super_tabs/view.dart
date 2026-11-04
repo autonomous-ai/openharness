@@ -183,6 +183,10 @@ class _SuperTabViewState extends State<SuperTabView>
   /// requests does for a task.
   bool _showTasks = false;
 
+  /// The card the board shows selected (task #2948): the task or proposal
+  /// last opened from it, or the task whose chat the board was opened from.
+  String? _tasksSelectedId;
+
   bool _showNotifications = false;
 
   /// Manage holds the main pane; [_manageTab] is which of its pages, but for
@@ -2997,6 +3001,7 @@ class _SuperTabViewState extends State<SuperTabView>
       unawaited(c.select(project.leadConversationId));
     }
     setState(() {
+      if (group.id != project.leadConversationId) _tasksSelectedId = group.id;
       _showTasks = true;
       _showPullRequests = false;
     });
@@ -3031,9 +3036,15 @@ class _SuperTabViewState extends State<SuperTabView>
       project: project,
       storage: widget.app?.localStore,
       needsHuman: (g) => _needsHuman(g).length,
-      onOpenTask: (id) => unawaited(_openTask(id)),
-      onOpenProposal: (id) =>
-          _openThreadFromList(project.leadConversationId, id),
+      selectedId: _tasksSelectedId,
+      onOpenTask: (id) {
+        _tasksSelectedId = id;
+        unawaited(_openTask(id));
+      },
+      onOpenProposal: (id) {
+        _tasksSelectedId = id;
+        _openThreadFromList(project.leadConversationId, id);
+      },
     );
   }
 
