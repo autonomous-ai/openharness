@@ -68,9 +68,9 @@ moves that net to the server, where it costs one read for all machines instead o
 `backend/src/lib/swarmDeliveryPushes.test.ts`.
 **Interfaces:** `SwarmDeliveriesMsg` gains `| { pushes: true }`; `relaySwarmDeliveries` unchanged in signature.
 
-- [ ] Failing test: after 4 minutes the repeat reaches the socket only through the machine's channel; a channel that
+- [x] Failing test: after 4 minutes the repeat reaches the socket only through the machine's channel; a channel that
       delivers nothing stops the repeat (and it is logged).
-- [ ] Code: publish `{ pushes: true }` on the machine's channel every 4 minutes; the subscriber turns it into `tell({})`.
+- [x] Code: publish `{ pushes: true }` on the machine's channel every 4 minutes; the subscriber turns it into `tell({})`.
 
 ## Task 2: the server repeats pushes for queued deliveries (backend)
 
@@ -78,39 +78,39 @@ moves that net to the server, where it costs one read for all machines instead o
 `backend/src/superTabs/deliveryRepush.test.ts`.
 **Interfaces:** `repushQueuedDeliveries(db, tell, now): Promise<number>`; `startDeliveryRepush(db, tell, everyMs = 15_000)`.
 
-- [ ] Failing test: queued deliveries waiting ≥ 10 s are told once per machine and agent; fresh, claimed and other rows are not.
-- [ ] Code: one `(status, _id)` read of queued rows (500 max), filter by `updatedAt`, tell `deliveriesWaiting` per pair;
+- [x] Failing test: queued deliveries waiting ≥ 10 s are told once per machine and agent; fresh, claimed and other rows are not.
+- [x] Code: one `(status, _id)` read of queued rows (500 max), filter by `updatedAt`, tell `deliveriesWaiting` per pair;
       started in the singleton worker next to the settle pass.
 
 ## Task 3: a sender's wait repeats the terminal push (backend)
 
 **Files:** `backend/src/superTabs/store.ts` (`terminalResult`), test `backend/integration/superTabs.test.ts`.
 
-- [ ] Failing test: a request still pending at the sender's recheck is announced again to its machine; a claimed or
+- [x] Failing test: a request still pending at the sender's recheck is announced again to its machine; a claimed or
       answered one is not.
-- [ ] Code: on each recheck of a pending request (not the first read), call `terminalWaiting` for its machine and agent.
+- [x] Code: on each recheck of a pending request (not the first read), call `terminalWaiting` for its machine and agent.
 
 ## Task 4: an idle worker's list is read only when told (CLI)
 
 **Files:** `cli/src/superTabs/host.ts`, test `cli/src/superTabs/host.spec.ts`.
 
-- [ ] Failing test: with the push lease, an idle worker's list is read once over 3 minutes; the Lead's every 30 s; a pushed
+- [x] Failing test: with the push lease, an idle worker's list is read once over 3 minutes; the Lead's every 30 s; a pushed
       delivery is read and typed in the same tick; a failed read is retried after its backoff.
-- [ ] Code: `due` keeps the timer only for Lead rows; a list with a pending read retry is due once its backoff ends.
+- [x] Code: `due` keeps the timer only for Lead rows; a list with a pending read retry is due once its backoff ends.
 
 ## Task 5: terminal pickups only when told (CLI)
 
 **Files:** `cli/src/superTabs/terminal.ts`, test `cli/src/superTabs/terminal.spec.ts`.
 
-- [ ] Failing test: with the push lease, no pickup over a minute unless `__terminal_waiting` arrives, then at once; without
+- [x] Failing test: with the push lease, no pickup over a minute unless `__terminal_waiting` arrives, then at once; without
       the lease every 3 s as today.
-- [ ] Code: drop the 8 s pushed poll.
+- [x] Code: drop the 8 s pushed poll.
 
 ## Task 6: measure
 
 **Files:** `backend/integration/superTabEmptyPolls.test.ts` (new), `cli/src/superTabs/emptyPolls.spec.ts` (new).
 
-- [ ] DB operations per empty worker list read (full and quiet), per empty terminal pickup, and per repush pass, under
+- [x] DB operations per empty worker list read (full and quiet), per empty terminal pickup, and per repush pass, under
       MongoDB's profiler on a seeded Swarm.
-- [ ] Requests per idle worker, per Lead and per machine per minute over 10 simulated minutes, before (main) and after.
-- [ ] Before/after table in the pull request.
+- [x] Requests per idle worker, per Lead and per machine per minute over 10 simulated minutes, before (main) and after.
+- [x] Before/after table in the pull request.
