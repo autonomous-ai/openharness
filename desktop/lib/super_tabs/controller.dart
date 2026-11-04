@@ -16,6 +16,7 @@ import 'message_link.dart';
 import 'identity.dart' show superTabMachineName;
 import 'machine_status.dart' show kSuperTabMachineOfflineAfter;
 import 'model.dart';
+import 'task_groups.dart';
 import 'buddy_chat.dart';
 import 'project_github.dart';
 import 'parts.dart';

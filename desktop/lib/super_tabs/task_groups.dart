@@ -6,6 +6,22 @@ import 'controller.dart';
 import 'identity.dart';
 import 'model.dart';
 
+/// A Buddy proposal in a project's chat that the PM has not answered yet, as
+/// the proposals read answers it (backend proposals.ts), not part of the
+/// Swarm's state: its root message, its title, and the person it was sent for.
+class SuperTabProposal {
+  SuperTabProposal.fromJson(Map<String, dynamic> answer)
+    : messageId = answer['messageId'] as String,
+      title = answer['title'] as String? ?? '',
+      personId = answer['personId'] as String?,
+      at = DateTime.fromMillisecondsSinceEpoch(
+        (answer['at'] as num? ?? 0).toInt(),
+      );
+  final String messageId, title;
+  final String? personId;
+  final DateTime at;
+}
+
 /// The columns of a project's Tasks view, in this order (Dee, task #2569):
 /// where each ask is on its way from proposal to shipped.
 enum SuperTabTaskColumn {

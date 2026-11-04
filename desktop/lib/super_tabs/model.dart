@@ -550,21 +550,6 @@ class SuperTabProject {
   final Map<String, dynamic>? repository;
 }
 
-/// A Buddy proposal in a project's chat that the PM has not answered yet: its
-/// root message, its title, and the person it was sent for.
-class SuperTabProposal {
-  SuperTabProposal.fromJson(Map<String, dynamic> row)
-    : messageId = _text(row, 'messageId'),
-      title = _text(row, 'title'),
-      personId = row['personId'] as String?,
-      at = DateTime.fromMillisecondsSinceEpoch(
-        (row['at'] as num? ?? 0).toInt(),
-      );
-  final String messageId, title;
-  final String? personId;
-  final DateTime at;
-}
-
 /// A project's status card text: one per project, replaced by each report
 /// (`project.report` with text), never posted to its chat.
 class SuperTabProjectStatus {
