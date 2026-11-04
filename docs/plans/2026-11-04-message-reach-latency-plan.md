@@ -10,8 +10,10 @@ already reads (`cpu by kind`, `route latency`, `messages by reader`).
 **Architecture:** A new in-memory module, `superTabs/messageReachStats.ts`, like `messageReadStats.ts`: callers record one
 duration per message reaching one reader, keyed by the reader's kind and the way it reached them. Every minute it logs
 `message reach latency` with the pod, the window and, per key, the count, p50, p95 and max in ms (a bounded reservoir
-sample per key, as `route latency` keeps). A message older than 10 minutes when it reaches its reader (a reader that was
-offline catching up) is counted as `late`, outside the percentiles. Two places record:
+sample per key, as `route latency` keeps). A message that reaches its reader late (a read over a minute old: an app brought
+back or opened; a delivery over 10 minutes old, which includes the time its agent was busy) is counted as `late`, outside the
+percentiles (review of #2995). A person's reads count per reading app: Desktop and the phone both open count a message
+twice. Two places record:
 
 1. **An agent:** its host's acknowledgement that a delivery was typed (`store.ts delivery`, `ack` not uncertain, the first
    time the row gets `deliveredAt`): now − the delivery's creation, which is written with its message. Recorded after the
@@ -47,8 +49,8 @@ offline catching up) is counted as `late`, outside the percentiles. Two places r
 
 ## Review Focus
 
-1. Each message reaches each reader once in the count: no double count from retried transactions, re-reads or the
-   reader's own messages.
+1. Each message reaches each reading app or agent once in the count: no double count from retried transactions, re-reads or
+   the reader's own messages.
 2. No id, text or email can reach the line.
 3. No added reads or awaits on the hot paths.
 
