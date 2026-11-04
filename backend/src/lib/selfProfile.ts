@@ -58,12 +58,18 @@ export function frameKind(prefix: string, type: unknown, known: ReadonlySet<stri
   return `${prefix} ${typeof type === 'string' && known.has(type) ? type : 'other'}`
 }
 
+/** Every kind of channel the bus subscribes to (lib/bus.ts), the name before its first `:`; a test keeps the two in step. */
+export const BUS_CHANNEL_KINDS: ReadonlySet<string> = new Set(['amsg', 'amsg-share', 'appdown', 'appup', 'connvault', 'desk', 'devctl', 'deve2eepair',
+  'devkeys', 'devmachines', 'devstatus', 'down', 'harness-share', 'machine-share', 'mgr', 'mgrreply', 'status', 'swarm-access', 'swarm-deliveries',
+  'swarm-host', 'swarm-member', 'swarm-stamp', 'termdown', 'terminal-answer', 'termpod', 'termup', 'tui', 'up', 'uppod', 'zoo'])
+
 /** A Redis message's kind: `bus <subscriber> <channel kind>`, the channel's name before its first `:` (`termup:<machine>` is
- *  `termup`), never the id after it. A name that is not one of the bus's own counts as `other`. Before these were named, a
- *  sixth of prod's CPU ran under `untagged` (2026-10-31): Redis deliveries, the daemons' sockets and the share sockets. */
+ *  `termup`), never the id after it. Only the bus's own kinds are named, and anything else counts as `other`, so a bare id
+ *  sent as a channel name never becomes a log key or a Prometheus label. Before these were named, a sixth of prod's CPU ran
+ *  under `untagged` (2026-10-31): Redis deliveries, the daemons' sockets and the share sockets. */
 export function busKind(subscriber: string, channel: string): string {
   const name = channel.split(':', 1)[0]!
-  return `bus ${subscriber} ${/^[a-z0-9-]{1,24}$/.test(name) ? name : 'other'}`
+  return `bus ${subscriber} ${BUS_CHANNEL_KINDS.has(name) ? name : 'other'}`
 }
 
 /** Every HTTP request is named by its route pattern, never its URL (no ids). */
