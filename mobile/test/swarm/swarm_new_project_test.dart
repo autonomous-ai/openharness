@@ -265,7 +265,10 @@ void main() {
         leadPool('mac-1', name: 'Studio', engines: ['claude']),
       ]);
       expect(swarmLeadMachineRefusal(listed, 'mac-1'), isNull);
-      expect(swarmLeadMachineRefusal(listed, 'mac-1', engine: 'claude'), isNull);
+      expect(
+        swarmLeadMachineRefusal(listed, 'mac-1', engine: 'claude'),
+        isNull,
+      );
       expect(
         swarmLeadMachineRefusal(listed, 'mac-1', engine: 'codex'),
         'Studio can’t run Codex: Codex isn’t offered here. '
@@ -460,13 +463,16 @@ void main() {
     SwarmOutgoingFile file(String name) =>
         SwarmOutgoingFile(name, Uint8List.fromList([1, 2, 3]));
 
-    test('starts its Product Manager with the engine the person chose', () async {
-      await run(SwarmNewProjectSteps.of(reader), engine: 'codex');
-      expect(
-        (swarm.commands('lead.start').single['command'] as Map)['engine'],
-        'codex',
-      );
-    });
+    test(
+      'starts its Product Manager with the engine the person chose',
+      () async {
+        await run(SwarmNewProjectSteps.of(reader), engine: 'codex');
+        expect(
+          (swarm.commands('lead.start').single['command'] as Map)['engine'],
+          'codex',
+        );
+      },
+    );
 
     test('an engine the machine no longer runs on a fresh read is refused '
         'with why, and no start is sent; another engine starts it on the '
@@ -503,9 +509,10 @@ void main() {
         files: [file('spec.pdf'), file('build.log')],
       );
       expect(uploads.names, ['spec.pdf', 'build.log']);
-      expect({for (final u in uploads.asked) u.conversationId}, {
-        'project-$made',
-      });
+      expect(
+        {for (final u in uploads.asked) u.conversationId},
+        {'project-$made'},
+      );
       expect({for (final u in uploads.asked) u.tabId}, {tab});
       expect(swarm.commands('message.send').single['command'], {
         'type': 'message.send',
@@ -568,6 +575,31 @@ void main() {
         ['id-a.log', 'id-b.log'],
       );
       expect(swarm.commands('project.create'), hasLength(1));
+    });
+
+    test('no file starts going up once the sheet has gone, and a Create later '
+        'keeps what went up', () async {
+      uploads.answersAtOnce = false;
+      var live = true;
+      final steps = SwarmNewProjectSteps.of(reader);
+      final files = [file('a.log'), file('b.log'), file('c.log')];
+      final running = run(steps, files: files, live: () => live);
+      for (var i = 0; i < 50 && uploads.asked.isEmpty; i++) {
+        await settle();
+      }
+      expect(uploads.names, ['a.log']);
+      live = false;
+      uploads.asked.single.answer.complete({
+        'attachment': {'id': 'id-a'},
+      });
+      await expectLater(running, throwsA(isA<SwarmNewProjectGone>()));
+      await settle();
+      expect(uploads.names, ['a.log'], reason: 'b.log and c.log never started');
+      expect(swarm.commands('message.send'), isEmpty);
+
+      uploads.answersAtOnce = true;
+      await run(steps, files: files);
+      expect(uploads.names, ['a.log', 'b.log', 'c.log']);
     });
 
     test('an upload that fails without the backend\'s words says so in the '
@@ -2229,7 +2261,11 @@ void main() {
         await tap(tester, 'swarm-new-project-create');
         final start = swarm.commands('lead.start').single['command'] as Map;
         expect(start['engine'], 'claude');
-        expect(start.containsKey('model'), isFalse, reason: 'the Swarm fills it');
+        expect(
+          start.containsKey('model'),
+          isFalse,
+          reason: 'the Swarm fills it',
+        );
         expect(
           swarm.commands('message.send'),
           isEmpty,
@@ -2585,10 +2621,7 @@ void main() {
         // Its files scroll with the form, a scroll away, and Create stays.
         for (final name in ['spec.pdf', 'build.log']) {
           expect(
-            find.descendant(
-              of: scroll,
-              matching: key('swarm-outgoing-$name'),
-            ),
+            find.descendant(of: scroll, matching: key('swarm-outgoing-$name')),
             findsOneWidget,
           );
         }
