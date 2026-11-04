@@ -222,7 +222,16 @@ fn set_app_running(app: &mut App, running: bool) {
     if !running { reconnected(app); announce(app, true); app.announce_focus() }
 }
 
+/// The desktop app's process on Windows: `harness-desktop.exe`, which `harness.exe`, the command, is not.
+#[cfg(windows)]
+async fn app_running() -> bool {
+    let name = "harness-desktop.exe";
+    let list = tokio::process::Command::new("tasklist").args(["/FI", &format!("IMAGENAME eq {name}"), "/NH"]).stderr(std::process::Stdio::null()).output().await;
+    list.is_ok_and(|out| String::from_utf8_lossy(&out.stdout).to_ascii_lowercase().contains(name))
+}
+
 /// The desktop app's process: `Harness` (the macOS bundle's executable), `harness` on Linux.
+#[cfg(unix)]
 async fn app_running() -> bool {
     let name = if cfg!(target_os = "macos") { "Harness" } else { "harness" };
     tokio::process::Command::new("pgrep").args(["-x", name]).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())

@@ -556,7 +556,7 @@ fn open_browser(app: &mut App, url: String) {
     { let _ = (app, url); }
     #[cfg(not(test))]
     app.spawn(async move {
-        let mut command = tokio::process::Command::new(if cfg!(target_os = "macos") { "open" } else { "xdg-open" });
+        let mut command = crate::sys::url_opener();
         command
             .arg(url).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
             .kill_on_drop(true);

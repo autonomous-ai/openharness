@@ -6859,7 +6859,8 @@ pub fn full_hostname() -> String {
 pub fn hostname() -> String {
     static HOST: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     HOST.get_or_init(|| {
-        let raw = std::process::Command::new("hostname").arg("-s").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+        // (Windows' `hostname` takes no -s: it answers with an error about setting the name.)
+        let raw = if cfg!(windows) { crate::sys::hostname() } else { std::process::Command::new("hostname").arg("-s").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default() };
         if raw.is_empty() { "this computer".into() } else { raw }
     }).clone()
 }

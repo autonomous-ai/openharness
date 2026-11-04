@@ -218,6 +218,19 @@ pub fn running(pid: u64) -> bool {
     }
 }
 
+/// The command that opens a link in the person's browser, given the link as its last word. On Windows not `cmd /c start`, which would
+/// read a link's `&` as a command.
+pub fn url_opener() -> tokio::process::Command {
+    #[cfg(windows)]
+    {
+        let mut command = tokio::process::Command::new("rundll32");
+        command.arg("url.dll,FileProtocolHandler");
+        command
+    }
+    #[cfg(unix)]
+    { tokio::process::Command::new(if cfg!(target_os = "macos") { "open" } else { "xdg-open" }) }
+}
+
 /// This computer's name.
 pub fn hostname() -> String {
     #[cfg(unix)]

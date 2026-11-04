@@ -990,6 +990,10 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
 }
 
 /// The local timezone's offset, in hours (for message times), without a date crate.
+#[cfg(windows)]
+fn local_offset_hours() -> u64 { (24 + crate::sys::utc_offset() / 3600).rem_euclid(24) as u64 }
+/// The local timezone's offset, in hours (for message times), without a date crate.
+#[cfg(unix)]
 fn local_offset_hours() -> u64 {
     let out = std::process::Command::new("date").arg("+%z").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
     let sign = if out.starts_with('-') { -1 } else { 1 };
