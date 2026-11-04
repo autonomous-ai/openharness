@@ -721,6 +721,7 @@ void main() {
     ) async {
       final f = await project(tester, private: false);
       expect(add, findsNothing);
+      expect(find.byTooltip('Invite people'), findsOneWidget);
       await tester.tap(find.byTooltip('Invite people'));
       await tester.pumpAndSettle();
       expect(find.text('Add people to openharness'), findsNothing);
@@ -731,6 +732,18 @@ void main() {
       tester,
     ) async {
       final f = await project(tester, private: true, account: 'dee');
+      expect(add, findsNothing);
+      await f.close(tester);
+    });
+
+    testWidgets('a read-only owner gets no picker', (tester) async {
+      final f = await project(tester, private: true);
+      (f.server.state['people'] as List).firstWhere(
+        (p) => p['id'] == 'owner',
+      )['role'] = 'viewer';
+      await f.controller.refresh();
+      await f.show(tester);
+      expect(f.controller.canWrite, isFalse);
       expect(add, findsNothing);
       await f.close(tester);
     });

@@ -9,6 +9,14 @@ import 'model.dart';
 /// How the Swarm shows a person: their name, else their username.
 String projectPersonName(SuperTabPerson p) => p.name ?? p.username;
 
+/// Whether [p] is a member of [project] now: listed, and not a person who left and rejoined since (another
+/// generation; a missing one on either side counts as the same).
+bool projectHolds(SuperTabProject project, SuperTabPerson p) {
+  if (!project.memberIds.contains(p.id)) return false;
+  final stored = project.memberGenerations[p.id];
+  return stored == null || p.generation == null || stored == p.generation;
+}
+
 /// The Add people picker's two lists (Diego, 2026-11-04): the Swarm's people who can be added to [project], by name,
 /// and those already in it, the owner first. [query] narrows both, as a case-insensitive substring of name,
 /// username or email.
@@ -27,7 +35,7 @@ projectPeopleLists(
         p.email,
       ].any((s) => s.toLowerCase().contains(q));
   bool isIn(SuperTabPerson p) =>
-      p.id == project.ownerId || project.memberIds.contains(p.id);
+      p.id == project.ownerId || projectHolds(project, p);
   final shown = people.where(matches).toList();
   return (
     addable: shown.where((p) => !isIn(p)).toList()
@@ -67,9 +75,14 @@ Future<void> showProjectAddPeople(
             final current = c.snapshot?.projectById(project.id) ?? project;
             final people = c.snapshot?.people ?? const <SuperTabPerson>[];
             final lists = projectPeopleLists(people, current, query);
-            final count = ticked
-                .where((id) => people.any((p) => p.id == id))
-                .length;
+            final addableIds = {
+              for (final p in projectPeopleLists(people, current, '').addable)
+                p.id,
+            };
+            final count = ticked.where(addableIds.contains).length;
+            final live = c.snapshot?.projectById(project.id);
+            final canAdd =
+                live != null && live.isPrivate && live.ownerId == c.accountId;
             Widget heading(String text) => Padding(
               padding: const EdgeInsets.only(top: 12, bottom: 4),
               child: Text(text, style: DesktopChrome.metadata()),
@@ -144,6 +157,11 @@ Future<void> showProjectAddPeople(
                         const SizedBox(height: 12),
                         Text(c.operationError!),
                       ],
+                      if (c.hasPendingAction)
+                        TextButton(
+                          onPressed: c.saving ? null : c.retry,
+                          child: const Text('Check pending action'),
+                        ),
                     ],
                   ),
                 ),
@@ -155,26 +173,35 @@ Future<void> showProjectAddPeople(
                 ),
                 FilledButton(
                   key: const ValueKey('project-add-confirm'),
-                  onPressed: busy || c.saving || count == 0
+                  onPressed:
+                      busy ||
+                          c.saving ||
+                          c.hasPendingAction ||
+                          !canAdd ||
+                          count == 0
                       ? null
                       : () async {
                           update(() => busy = true);
                           // Read now, not when the dialog opened: a member added elsewhere since is kept.
                           final live = c.snapshot?.projectById(project.id);
-                          final swarm = {
-                            for (final p
-                                in c.snapshot?.people ??
-                                    const <SuperTabPerson>[])
-                              p.id,
+                          if (live == null || !canAdd) {
+                            update(() => busy = false);
+                            return;
+                          }
+                          final people =
+                              c.snapshot?.people ?? const <SuperTabPerson>[];
+                          final inNow = {
+                            for (final p in people)
+                              if (projectHolds(live, p)) p.id,
                           };
                           final result = await c.command({
                             'type': 'project.sharing',
                             'projectId': project.id,
                             'visibility': 'private',
                             'memberIds': {
-                              ...?live?.memberIds,
-                              ...ticked.where(swarm.contains),
-                            }.where((id) => id != project.ownerId).toList(),
+                              ...inNow,
+                              ...ticked.where(addableIds.contains),
+                            }.where((id) => id != live.ownerId).toList(),
                           });
                           if (!context.mounted) return;
                           if (result != null) {

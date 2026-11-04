@@ -15,14 +15,17 @@ SuperTabPerson _person(String id, {String? name}) => SuperTabPerson.fromJson({
   'name': ?name,
 });
 
-SuperTabProject _project(List<String> members) => SuperTabProject.fromJson({
+SuperTabProject _project(
+  List<String> members, {
+  Map<String, String> generations = const {},
+}) => SuperTabProject.fromJson({
   'id': 'lead',
   'name': 'test private',
   'ownerId': 'owner',
   'leadConversationId': 'lead',
   'visibility': 'private',
   'members': [
-    for (final id in members) {'id': id},
+    for (final id in members) {'id': id, 'generation': ?generations[id]},
   ],
 });
 
@@ -53,6 +56,33 @@ void main() {
       expect(byEmail.addable, hasLength(2));
     });
 
+    test(
+      'a member who left and rejoined is not in; a missing side is same',
+      () {
+        final rejoined = [
+          _person('owner'),
+          SuperTabPerson.fromJson({
+            'id': 'dee',
+            'email': 'dee@example.com',
+            'role': 'collaborator',
+            'generation': 'g2',
+          }),
+          SuperTabPerson.fromJson({
+            'id': 'tony',
+            'email': 'tony@example.com',
+            'role': 'collaborator',
+          }),
+        ];
+        final lists = projectPeopleLists(
+          rejoined,
+          _project(['dee', 'tony'], generations: {'dee': 'g1', 'tony': 'g1'}),
+          '',
+        );
+        expect(lists.addable.map((p) => p.id), ['dee']);
+        expect(lists.inProject.map((p) => p.id), ['owner', 'tony']);
+      },
+    );
+
     test('no one to add', () {
       final lists = projectPeopleLists(
         people,
@@ -74,6 +104,7 @@ void main() {
       WidgetTester tester, {
       List<String> members = const ['dee'],
       List<String> people = const ['dee', 'tony'],
+      Map<String, Object?> project = const {},
     }) async {
       final server = ConversationServer();
       (server.state['people'] as List).addAll([
@@ -86,6 +117,7 @@ void main() {
           'members': [
             for (final id in members) {'id': id},
           ],
+          ...project,
         },
       ];
       final c = server.controller(account: 'owner');
@@ -157,15 +189,122 @@ void main() {
     });
 
     testWidgets('drops a ticked person who left the Swarm', (tester) async {
-      final (server, c) = await open(tester);
+      final (server, c) = await open(tester, people: ['dee', 'tony', 'ana']);
       await tester.tap(tick('tony'));
+      await tester.tap(tick('ana'));
       await tester.pumpAndSettle();
       (server.state['people'] as List).removeWhere((p) => p['id'] == 'tony');
       await c.refresh();
       await tester.pumpAndSettle();
       await tester.tap(confirm);
       await tester.pumpAndSettle();
-      expect(members(server), ['dee']);
+      expect(members(server).toSet(), {'dee', 'ana'});
+    });
+
+    testWidgets('a member no longer in the Swarm is not sent', (tester) async {
+      final (server, c) = await open(tester, members: ['dee', 'gone']);
+      await tester.tap(tick('tony'));
+      await tester.pumpAndSettle();
+      await tester.tap(confirm);
+      await tester.pumpAndSettle();
+      expect(members(server).toSet(), {'dee', 'tony'});
+    });
+
+    testWidgets('a member with a stale generation is added only when ticked', (
+      tester,
+    ) async {
+      final (server, c) = await open(
+        tester,
+        members: ['dee', 'ana'],
+        people: ['dee', 'tony', 'ana'],
+      );
+      (server.state['projects'] as List).first['members'] = [
+        {'id': 'dee', 'generation': 'old'},
+        {'id': 'ana', 'generation': 'old'},
+      ];
+      (server.state['people'] as List).firstWhere(
+        (p) => p['id'] == 'dee',
+      )['generation'] = 'new';
+      (server.state['people'] as List).firstWhere(
+        (p) => p['id'] == 'ana',
+      )['generation'] = 'new';
+      await c.refresh();
+      await tester.pumpAndSettle();
+      expect(tick('dee'), findsOneWidget);
+      await tester.tap(tick('tony'));
+      await tester.pumpAndSettle();
+      await tester.tap(confirm);
+      await tester.pumpAndSettle();
+      expect(members(server), ['tony']);
+    });
+
+    testWidgets('Add waits on a pending action and offers to check it', (
+      tester,
+    ) async {
+      final (server, c) = await open(tester);
+      await tester.tap(tick('tony'));
+      await tester.pumpAndSettle();
+      server.loseReply = true;
+      await c.command({
+        'type': 'project.rename',
+        'projectId': 'lead',
+        'name': 'x',
+      });
+      await tester.pumpAndSettle();
+      expect(c.hasPendingAction, isTrue);
+      expect(tester.widget<FilledButton>(confirm).onPressed, isNull);
+      await tester.tap(find.widgetWithText(TextButton, 'Check pending action'));
+      await tester.pumpAndSettle();
+      expect(c.hasPendingAction, isFalse);
+      expect(tester.widget<FilledButton>(confirm).onPressed, isNotNull);
+    });
+
+    testWidgets('Add stops when the project turned public', (tester) async {
+      final (server, c) = await open(tester);
+      await tester.tap(tick('tony'));
+      await tester.pumpAndSettle();
+      (server.state['projects'] as List).first['visibility'] = 'public';
+      await c.refresh();
+      await tester.pumpAndSettle();
+      expect(tester.widget<FilledButton>(confirm).onPressed, isNull);
+    });
+
+    testWidgets(
+      'Add stops when the project is gone or no longer the reader\'s',
+      (tester) async {
+        final (server, c) = await open(tester);
+        await tester.tap(tick('tony'));
+        await tester.pumpAndSettle();
+        (server.state['projects'] as List).first['ownerId'] = 'dee';
+        await c.refresh();
+        await tester.pumpAndSettle();
+        expect(tester.widget<FilledButton>(confirm).onPressed, isNull);
+      },
+    );
+
+    testWidgets('the owner is never sent as a member', (tester) async {
+      final (server, c) = await open(tester, members: ['dee', 'owner']);
+      await tester.tap(tick('tony'));
+      await tester.pumpAndSettle();
+      await tester.tap(confirm);
+      await tester.pumpAndSettle();
+      expect(members(server).toSet(), {'dee', 'tony'});
+    });
+
+    testWidgets('the count is of ticked people who can still be added', (
+      tester,
+    ) async {
+      final (server, c) = await open(tester, people: ['dee', 'tony', 'ana']);
+      await tester.tap(tick('tony'));
+      await tester.tap(tick('ana'));
+      await tester.pumpAndSettle();
+      (server.state['projects'] as List).first['members'] = [
+        {'id': 'dee'},
+        {'id': 'tony'},
+      ];
+      await c.refresh();
+      await tester.pumpAndSettle();
+      expect(find.text('Add 1 person'), findsOneWidget);
     });
 
     testWidgets('a refused Add stays open with its error', (tester) async {
@@ -196,6 +335,14 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('No one matches'), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const ValueKey('project-add-search')),
+        'tony',
+      );
+      await tester.pumpAndSettle();
+      expect(tick('tony'), findsOneWidget);
+      expect(find.text('Already in'), findsNothing);
+      expect(find.text('Project owner'), findsNothing);
     });
 
     testWidgets('everyone already in says so', (tester) async {
