@@ -4952,7 +4952,7 @@ class _SuperTabViewState extends State<SuperTabView>
                             conversationId: chatId,
                             padding: const EdgeInsets.fromLTRB(
                               grid.AppDesktop.composerSide,
-                              0,
+                              grid.AppDesktop.controlGap,
                               grid.AppDesktop.composerSide,
                               grid.AppDesktop.controlGap,
                             ),
