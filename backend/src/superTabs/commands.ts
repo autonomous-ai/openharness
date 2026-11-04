@@ -45,7 +45,8 @@ import { assignedNotice, tellBuddies } from './buddyNews.js'
 import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged } from './cards.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, setTimeZone, statusSchema, type AvatarUpload } from './profile.js'
 import { cancelledTags, cancelReason, switchExpired, unfinishedWork } from './tidy.js'
-import { BUILT_IN_ROLE_DEFAULTS, agentProjectId, audienceOf, groupRepositoryUrl, canReadAgent, canReadProject, deleteProject, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
+import { namedDefault } from './catalog.js'
+import { BUILT_IN_ROLE_DEFAULTS,agentProjectId, audienceOf, groupRepositoryUrl, canReadAgent, canReadProject, deleteProject, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { recordClosing, sessionClosed } from './closedAgents.js'
 import { declinedWith, declinedWithout } from './sharing.js'
 import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRows.js'
@@ -2397,7 +2398,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // An older client starts in a kind or a custom role, kept on the start for older readers and read by no command: the
       // role name it means rides on the start to the agent (instructions.ts legacyRoleName).
       const roleName = command.request.roleName ?? legacyRoleName(home, command.request)
-      const named = roleName ? { ...command.request, roleName } : command.request
+      // A start that asks Codex for `default` runs the catalog's named default, never whatever the account's CLI defaults to
+      // (task #2972). A named effort is kept; none, or `default`, takes the row's.
+      const catalogDefault = command.request.model === 'default' && !command.request.gridModel ? namedDefault(command.request.engine) : null
+      const asked = catalogDefault
+        ? { ...command.request, model: catalogDefault.model, effort: !command.request.effort || command.request.effort === 'default' ? catalogDefault.effort : command.request.effort }
+        : command.request
+      const named = roleName ? { ...asked, roleName } : asked
       // The Lead's account has machines the Swarm never prepared (no clone of the project), so a Lead may start only where the
       // Swarm already lists a machine: a contributed one, or one an agent of the Swarm runs on. A person's start may name any
       // machine of theirs, because the first Lead is created before anything is listed.

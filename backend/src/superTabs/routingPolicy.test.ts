@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, priorFor, routingOverrideSaveSchema, routingOverrideSchema, routingPolicySaveSchema, routingPolicySchema } from './routingPolicy.js'
 import type { PriorsTable } from './benchmarkPriors/priors.js'
 
+/** The `default default` Codex row policies saved before task #2972 hold; the catalog no longer has it, and a saved policy's Codex
+ *  switch is still read off it (effectivePolicy). */
+const SAVED_CODEX_DEFAULT = { engine: 'codex' as const, model: 'default', effort: 'default', quality: 3, cost: 2, enabled: true }
+
 describe('routing policy', () => {
   it('ships a valid default that needs no setup', () => {
     expect(routingPolicySchema.parse(DEFAULT_ROUTING_POLICY)).toEqual(DEFAULT_ROUTING_POLICY)
@@ -81,7 +85,7 @@ describe('routing policy', () => {
     const opusCosts = DEFAULT_ROUTING_POLICY.models.filter(m => m.model === 'opus').map(m => m.cost)
     expect(astra.cost).toBeGreaterThan(Math.max(...opusCosts))
     // A policy saved before the row reads it.
-    const before = { ...DEFAULT_ROUTING_POLICY, models: DEFAULT_ROUTING_POLICY.models.filter(m => m.model !== 'gpt-6-astra') }
+    const before = { ...DEFAULT_ROUTING_POLICY, models: [...DEFAULT_ROUTING_POLICY.models.filter(m => m.model !== 'gpt-6-astra'), SAVED_CODEX_DEFAULT] }
     expect(effectivePolicy(before, null).policy.models.filter(m => m.model === 'gpt-6-astra')).toEqual([astra])
     // An owner's own Astra row wins over the built-in one, on or off, and is never doubled (review of #2271).
     const owned = { ...before, models: [...before.models, { ...astra, effort: 'high', quality: 2, cost: 9, enabled: false }] }
@@ -90,7 +94,7 @@ describe('routing policy', () => {
 
   describe('a built-in row added on read (review of #2271 at 1d9499646)', () => {
     const sol = DEFAULT_ROUTING_POLICY.models.find(m => m.model === 'gpt-6.1-sol')!
-    const codexDefault = DEFAULT_ROUTING_POLICY.models.find(m => m.engine === 'codex' && m.model === 'default')!
+    const codexDefault = SAVED_CODEX_DEFAULT
     const claudeRows = DEFAULT_ROUTING_POLICY.models.filter(m => m.engine === 'claude')
     const solOf = (models: Array<{ engine: string; model: string; enabled: boolean }>) => models.find(m => m.model === 'gpt-6.1-sol')
 
