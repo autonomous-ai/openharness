@@ -25,6 +25,7 @@ class SuperTabNeed {
     this.at,
     this.decision,
     this.question,
+    this.agentId,
   });
   final SuperTabNeedKind kind;
 
@@ -40,6 +41,10 @@ class SuperTabNeed {
   /// What an agent row asks: the question the task is waiting on, else the
   /// task's title. Null for a decision, which has its own.
   final String? question;
+
+  /// The agent waiting on the reader, for an agent row: its terminal opens
+  /// beside the task (#2792).
+  final String? agentId;
 }
 
 /// The reader's Activity in one Swarm: the one place for everything new for
@@ -110,6 +115,7 @@ class SuperTabActivity extends ChangeNotifier {
               '${_agentName(snapshot, group.assignment!['agentId'] as String)} is waiting on you',
           conversationId: group.id,
           question: _askedBy(group),
+          agentId: group.assignment!['agentId'] as String,
         ),
     ];
   }

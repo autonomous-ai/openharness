@@ -484,7 +484,16 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
         privateWhere: project?.isPrivate == true,
         trailing: 'Open',
         preview: _oneLine(need.question ?? ''),
-        onTap: () => widget.onOpenConversation(need.conversationId),
+        onTap: () {
+          widget.onOpenConversation(need.conversationId);
+          // At its prompt, beside the task (Huy, #2792).
+          if (need.agentId case final agentId?) {
+            _activity.controller.openAgentTerminal(
+              agentId,
+              conversationId: need.conversationId,
+            );
+          }
+        },
       );
     }
     final now = widget.now(), created = decision.createdAt;
