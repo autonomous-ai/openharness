@@ -395,3 +395,36 @@ describe('a machine\'s readings for all its Swarms in one call (DB 2.5)', () => 
     for (const f of swarms) expect(((await f.part()).data as unknown as MachineData).contribution!.observation!.receivedAt).toBe(clock.now)
   })
 })
+
+describe('a full report reads only the parts that changed since this server last read them (B3, #2597)', () => {
+  /** What MongoDB sent back from the machine and conversation collections while [run] ran (its profiler's replies). */
+  async function partBytes(run: () => Promise<unknown>): Promise<{ SwarmMachine: number; SwarmGroup: number }> {
+    await db.$runCommandRaw({ profile: 2 })
+    const since = new Date()
+    try {
+      await run()
+      const rows = await db.$runCommandRaw({ find: 'system.profile', filter: { ts: { $gte: { $date: since.toISOString() } },
+        ns: { $regex: '\\.Swarm(Group|Machine)$' } }, projection: { _id: 0, ns: 1, responseLength: 1 }, batchSize: 10_000 }) as
+        { cursor: { firstBatch: Array<{ ns: string; responseLength?: number }> } }
+      const bytes = { SwarmMachine: 0, SwarmGroup: 0 }
+      for (const { ns, responseLength } of rows.cursor.firstBatch) bytes[ns.slice(ns.lastIndexOf('.') + 1) as keyof typeof bytes] += Number(responseLength ?? 0)
+      return bytes
+    } finally {
+      await db.$runCommandRaw({ profile: 0 })
+    }
+  }
+
+  it('reads under half the machine and conversation bytes on its next full report', async () => {
+    const f = await swarm()
+    await f.execute({ type: 'machine.contribute', machineId: 'spare-host', name: 'Spare Mac', cwd: '/repo', engines: ['codex'], maxAgents: 4 }, host)
+    // A server that remembers no report: every reading runs in full.
+    const forgetful = f.store(never)
+    const first = await partBytes(() => f.beat({}, forgetful))
+    f.clock.now += BEAT
+    const second = await partBytes(() => f.beat({}, forgetful))
+    expect(first.SwarmMachine).toBeGreaterThan(0)
+    expect(first.SwarmGroup).toBeGreaterThan(0)
+    expect(second.SwarmMachine).toBeLessThan(first.SwarmMachine / 2)
+    expect(second.SwarmGroup).toBeLessThan(first.SwarmGroup / 2)
+  })
+})
