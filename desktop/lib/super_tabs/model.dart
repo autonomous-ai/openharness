@@ -476,7 +476,8 @@ class SuperTabConversation {
   /// task, and from a server that does not say.
   final String? requesterId;
 
-  /// When it shipped (its first Done); null until it has, and from a server
+  /// Its first Done, or its merge once one is recorded: not proof that it merged
+  /// (a pull request card's `merged` is); null until then, and from a server
   /// that does not say.
   final DateTime? shippedAt;
   final Map<String, dynamic>? assignment;
@@ -1281,7 +1282,8 @@ class SuperTabDelivery {
 class SuperTabThread {
   /// A thread with no reply yet: a session's, started from the main chat.
   SuperTabThread.empty(this.id)
-    : replies = 0,
+    : ask = null,
+      replies = 0,
       lastSequence = 0,
       lastAt = null,
       authors = const [],
@@ -1289,6 +1291,7 @@ class SuperTabThread {
 
   SuperTabThread.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
+      ask = row['ask'] as String?,
       replies = (row['replies'] as num).toInt(),
       lastSequence = (row['lastSequence'] as num).toInt(),
       lastAt = DateTime.tryParse(row['lastAt'] as String? ?? ''),
@@ -1299,8 +1302,20 @@ class SuperTabThread {
         (row['people'] as List? ?? const []).whereType<String>(),
       );
   final String id;
+
+  /// Where the ask at its root stands (backend threads.ts).
+  final String? ask;
   final int replies, lastSequence;
   final DateTime? lastAt;
+
+  /// What its root's row says after the time; null for a message that is no
+  /// ask, and for a state this app does not know.
+  String? get askTag => switch (ask) {
+    'proposal' => '✋ Proposal',
+    'on-it' => '● On it',
+    'shipped' => '✓ Shipped',
+    _ => null,
+  };
 
   /// The newest distinct reply authors, newest first: the first wrote the
   /// last reply.
@@ -1310,11 +1325,28 @@ class SuperTabThread {
   final List<String> people;
 }
 
+/// The source kinds of a task's root in the project chat.
+const _taskRootKinds = {'task-line', 'buddy-proposal'};
+
+/// What a task's root posted before #2867 reads ahead of its title. Stored rows
+/// keep it, so this stays for as long as rows from before 2026-11-04 are kept.
+const _oldTaskRootPrefix = "Let's build: ";
+
+String _messageText(Map<String, dynamic> row) {
+  final text = _text(row, 'text');
+  return _taskRootKinds.contains(
+            superTabMap(row['source'] ?? const {})['kind'],
+          ) &&
+          text.startsWith(_oldTaskRootPrefix)
+      ? text.substring(_oldTaskRootPrefix.length)
+      : text;
+}
+
 class SuperTabMessage {
   SuperTabMessage.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
       conversationId = _text(row, 'conversationId'),
-      text = _text(row, 'text'),
+      text = _messageText(row),
       replyTo = row['replyTo'] as String?,
       thread = row['thread'] as String?,
       alsoInChat = row['alsoInChat'] == true,
@@ -1389,11 +1421,10 @@ class SuperTabMessage {
   SuperTabRoute? get route => SuperTabRoute.fromSource(source);
   bool get routeOverride => source['kind'] == 'route-override';
 
-  /// A "Let's build" root the server posted in its person's name (plain chat,
-  /// #2294): theirs to read, not their own writing, so it reads nothing
-  /// before it and is unread for them as anyone else's message is.
-  bool get postedForAuthor =>
-      source['kind'] == 'task-line' || source['kind'] == 'buddy-proposal';
+  /// A task's root the server posted in its person's name (plain chat, #2294):
+  /// theirs to read, not their own writing, so it reads nothing before it and
+  /// is unread for them as anyone else's message is.
+  bool get postedForAuthor => _taskRootKinds.contains(source['kind']);
 
   /// The agent a "waiting at a prompt" note is about; null for any other row.
   String? get promptAlertAgentId =>

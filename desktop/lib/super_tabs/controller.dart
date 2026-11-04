@@ -4011,8 +4011,8 @@ class SuperTabController extends ChangeNotifier {
     }
   }
 
-  /// Closed tasks read for the Backlog that shipped since the read's window
-  /// began, by id. Kept here so an open of the tab reads nothing again: a task
+  /// Closed tasks read for the Backlog whose `shippedAt` falls in the read's
+  /// window, by id; the Backlog places them, as some wait for their merge. Kept here so an open of the tab reads nothing again: a task
   /// that closes later is one this reader holds, and [snapshot] keeps it. They
   /// join no snapshot, which is built again on every change, and no project's
   /// "Closed" count.

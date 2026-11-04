@@ -402,6 +402,8 @@ export function withoutCredentials(command: Command, removed: CredentialKind[]):
   return copy
 }
 
+/** A message row a group names as its proposal, as the store loads it. */
+interface ProposalRow { id: string; conversationId: string; author: Author; source: Record<string, unknown> | null }
 export interface CommandContext {
   operationId: string
   now: number
@@ -441,7 +443,9 @@ export interface CommandContext {
    *  store (buddies.ts chosenBuddyName): a command loads only the chats it names. */
   buddyNames?: import('./buddies.js').ChosenBuddyName[]
   /** The proposal a new group names as its origin (conversation.create proposalMessageId), loaded from this tab by the store. */
-  proposal?: { id: string; conversationId: string; author: Author; source: Record<string, unknown> | null }
+  proposal?: ProposalRow & {
+    /** When the named row is a reply with no source of its own: the row it replies to (proposalNamed). */
+    root?: ProposalRow }
   /** The chat message a new group names as its request (conversation.create requestMessageId), loaded from this tab by the store. */
   request?: { id: string; conversationId: string; author: Author; source: unknown; replyTo: string | null }
   /** The message a Buddy's proposal names as its owner's request, loaded from this tab by the store. */
@@ -712,9 +716,15 @@ function askedByOf(state: SuperTabState, project: SwarmProject, personId: string
   }
   return member.id
 }
+/** The proposal a group names. The PM is delivered the reply holding its details, not its root, so naming that reply means the
+ *  proposal (Scholes, 11-04): only the Buddy's own reply under its own proposal does; proposalOf judges the root it returns. */
+function proposalNamed(named: CommandContext['proposal']): ProposalRow | undefined {
+  const root = named?.root
+  return root && !named.source && named.author.kind === 'agent' && named.author.id === root.source?.buddyId ? root : named
+}
 /** The Buddy whose proposal a new group comes from: the message must be a Buddy's proposal posted in the project's chat. Its
  *  row is the Swarm's own (buddy.propose), so a Buddy removed since still earns for it. */
-function proposalOf(state: SuperTabState, project: SwarmProject, proposal: CommandContext['proposal']): { buddyId: string; messageId: string; personId?: string } {
+function proposalOf(state: SuperTabState, project: SwarmProject, proposal: ProposalRow | undefined): { buddyId: string; messageId: string; personId?: string } {
   const author = proposal?.author
   const buddyId = author?.kind === 'agent' ? author.id : typeof proposal?.source?.buddyId === 'string' ? proposal.source.buddyId : undefined
   const buddy = buddyId ? state.agents.find(a => a.id === buddyId) : undefined
@@ -1978,7 +1988,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (command.step && isStep(reviewed)) fail('STEP_OF_STEP', 'A step belongs to a task, not to another step.', 400)
       }
       // Who asked: the person named, else the one a Buddy's proposal was sent for, else a person opening it themselves.
-      const proposal = command.proposalMessageId ? proposalOf(state, project, context.proposal) : undefined
+      const proposal = command.proposalMessageId ? proposalOf(state, project, proposalNamed(context.proposal)) : undefined
       if (command.requestMessageId && (command.proposalMessageId || command.reviewOf || command.audience)) {
         fail('INVALID_REQUEST', 'A request message opens a task of its own: leave out proposalMessageId, reviewOf and audience.', 400)
       }
@@ -2285,7 +2295,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       chat.proposals = [...chat.proposals ?? [], command.ownerMessageId].slice(-MAX_PROPOSAL_ASKS)
       const project = readProject(state, actor, command.projectId ?? agentProjectId(state, self)), home = conversation(state, project.leadConversationId)
       const name = owner.email.split('@')[0]!
-      message(home.id, `Let's build: ${proposalTitle(command)}`, [], null,
+      message(home.id, proposalTitle(command), [], null,
         { kind: 'buddy-proposal', personId: owner.id, buddyId: self.id, ownerMessageId: command.ownerMessageId })
       const root = effects.messages.at(-1)!
       root.author = { kind: 'person', id: owner.id, name: owner.email, membershipGeneration: owner.generation }

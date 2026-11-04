@@ -1838,6 +1838,11 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       _held.value,
       answered.join(','),
       _lineAt,
+      // A reply can move a row's tag, and so its grouping, with no new row.
+      [
+        for (final m in messages)
+          if (c.thread(m.id)?.askTag != null) m.id,
+      ].join(','),
     );
     if (from != _madeFrom) {
       // Read back: the messages after the newest shown then wait below, and
@@ -1858,6 +1863,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         shown,
         asks,
         hasOlder: c.hasOlder,
+        tagged: (m) => c.thread(m.id)?.askTag != null,
         lineAt: _lineAt,
       ).reversed.toList();
       // Every message read, for the quotes.
@@ -1975,6 +1981,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               name: name,
               look: look,
               role: role,
+              askTag: line?.askTag,
               pm: coordinator,
               mentions: view.mentions,
               tagged: tagged.keys.toList(),
@@ -2756,9 +2763,10 @@ List<_Entry> _timeline(
   List<SuperTabMessage> messages,
   List<SwarmDecisionNeed> asks, {
   required bool hasOlder,
+  required bool Function(SuperTabMessage) tagged,
   String? lineAt,
 }) {
-  final grouped = swarmGroupedMessages(messages);
+  final grouped = swarmGroupedMessages(messages, tagged: tagged);
   final oldest = messages.map((m) => m.createdAt).nonNulls.firstOrNull;
   bool before(DateTime? asked, DateTime? at) =>
       asked != null && at != null && asked.isBefore(at);
@@ -2868,8 +2876,13 @@ String swarmDayLabel(DateTime day, DateTime now) {
 /// before: the same author within five minutes on the same day, short, with
 /// no question, line break or reply, and at most three to a run — the
 /// desktop's `SuperTabMessageRow.groupsWith`.
-Set<String> swarmGroupedMessages(List<SuperTabMessage> messages) {
+Set<String> swarmGroupedMessages(
+  List<SuperTabMessage> messages, {
+  bool Function(SuperTabMessage)? tagged,
+}) {
   bool joins(SuperTabMessage current, SuperTabMessage previous) {
+    // A tagged row's header is where its tag shows.
+    if (tagged != null && (tagged(current) || tagged(previous))) return false;
     bool plain(SuperTabMessage m) =>
         m.source['kind'] != 'ship' &&
         m.route == null &&

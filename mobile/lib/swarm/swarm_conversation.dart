@@ -1211,6 +1211,7 @@ class SwarmConversation extends ChangeNotifier
   /// What a thread's line draws, the same in [a] as in [b].
   static bool _sameThread(SuperTabThread a, SuperTabThread b) =>
       a.replies == b.replies &&
+      a.ask == b.ask &&
       a.lastSequence == b.lastSequence &&
       a.lastAt == b.lastAt &&
       listEquals(

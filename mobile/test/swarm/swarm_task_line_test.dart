@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_message_row.dart';
@@ -45,6 +46,7 @@ FakeSwarm taskLineBackend(
   List<Map<String, dynamic>> page, {
   bool target = true,
   List<Map<String, dynamic>>? replies,
+  String? ask,
 }) {
   final fake = FakeSwarm();
   final root = page.firstWhere(
@@ -71,6 +73,7 @@ FakeSwarm taskLineBackend(
   ];
   final summary = {
     'id': rootId,
+    'ask': ?ask,
     'replies': thread.length,
     'lastSequence': 3,
     'authors': <Object>[],
@@ -183,6 +186,7 @@ Future<void> pumpRow(
   double width = 390,
   double scale = 1,
   VoidCallback? onReply,
+  String? askTag,
 }) async {
   await tester.binding.setSurfaceSize(Size(width, 844));
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -205,6 +209,7 @@ Future<void> pumpRow(
                   : 'River',
               look: (picture: null, status: null),
               role: 'PM',
+              askTag: askTag,
               readerId: readerId,
               mentions: SwarmMentions(const []),
               grouped: false,
@@ -247,7 +252,7 @@ void main() {
       expect(avatar.name, 'Dee');
       expect(avatar.id, me);
       expect(avatar.agent, isFalse);
-      expect(find.text("Let's build: Offline drafts"), findsOneWidget);
+      expect(find.text('Offline drafts'), findsOneWidget);
       expect(find.text('Old metadata title'), findsNothing);
       await tester.tap(find.byKey(const ValueKey('swarm-reply-line-1')));
       expect(replies, 1);
@@ -315,7 +320,7 @@ void main() {
         );
         expect(find.text('1 reply'), findsOneWidget);
         if (openWith == 'Reply') {
-          await tester.tap(find.text("Let's build: Offline drafts"));
+          await tester.tap(find.text('Offline drafts'));
           await tester.pumpAndSettle();
           expect(find.text('Reply in thread'), findsOneWidget);
           await tester.tap(find.byKey(const ValueKey('swarm-reply-line-1')));
@@ -373,7 +378,7 @@ void main() {
     expect(find.text('Shipped: task-1'), findsOneWidget);
   });
 
-  test('task source follows ordinary same-author grouping', () {
+  test('a task root with no tag follows ordinary same-author grouping', () {
     final line = taskLine(sequence: 1);
     final normal = {
       ...taskLine(id: 'normal', sequence: 2),
@@ -387,5 +392,160 @@ void main() {
       ]),
       {'normal'},
     );
+  });
+
+  // Its header is where its tag shows (#2552), and a message after it is not
+  // part of that ask.
+  test('a tagged row stands on its own, on either side', () {
+    Map<String, dynamic> plain(String id, int sequence) => {
+      ...taskLine(id: id, sequence: sequence),
+      'source': {'kind': 'message'},
+      'text': 'A normal message',
+    };
+    expect(
+      swarmGroupedMessages(
+        [
+          plain('m1', 1),
+          plain('m2', 2),
+          plain('m3', 3),
+          plain('m4', 4),
+        ].map(SuperTabMessage.fromJson).toList(),
+        tagged: (m) => m.id == 'm2',
+      ),
+      {'m4'},
+    );
+  });
+
+  // Dee, 2026-11-04 (#2552): an ask's row reads as its title alone, with where
+  // it stands after the time; older rows still carry the old prefix.
+  group('an ask row', () {
+    for (final kind in ['task-line', 'buddy-proposal']) {
+      for (final text in ["Let's build: Offline drafts", 'Offline drafts']) {
+        testWidgets('$kind "$text" shows the title alone', (tester) async {
+          await pumpRow(tester, {
+            ...taskLine(),
+            'text': text,
+            'source': {'kind': kind},
+          });
+          expect(find.text('Offline drafts'), findsOneWidget);
+          expect(find.textContaining("Let's build"), findsNothing);
+        });
+      }
+    }
+
+    test('a state this app does not know draws no tag', () {
+      SuperTabThread thread(Object? ask) => SuperTabThread.fromJson({
+        'id': 'root',
+        'replies': 1,
+        'lastSequence': 2,
+        'ask': ask,
+      });
+      expect(thread('someday').askTag, isNull);
+      expect(thread(null).askTag, isNull);
+    });
+
+    for (final (ask, tag) in [
+      ('proposal', '✋ Proposal'),
+      ('on-it', '● On it'),
+      ('shipped', '✓ Shipped'),
+    ]) {
+      testWidgets('$ask shows $tag after the time in the project chat', (
+        tester,
+      ) async {
+        final root = {
+          ...taskLine(),
+          'text': 'Offline drafts',
+          'author': {'kind': 'person', 'id': me, 'name': 'Dee'},
+          'thread': 'line-1',
+          'source': {'kind': 'buddy-proposal'},
+        };
+        await pumpTaskChat(tester, taskLineBackend([root], ask: ask));
+        final shown = find.text(tag);
+        expect(shown, findsOneWidget);
+        expect(tester.widget<Text>(shown).style?.color, AppPalette.textFaint);
+        final time = find.textContaining(RegExp(r'^\d\d:\d\d$'));
+        expect(
+          tester.getTopLeft(time).dx,
+          lessThan(tester.getTopLeft(shown).dx),
+        );
+      });
+    }
+
+    testWidgets('has no tag once the PM has replied with no task', (
+      tester,
+    ) async {
+      final root = {
+        ...taskLine(),
+        'text': 'Offline drafts',
+        'author': {'kind': 'person', 'id': me, 'name': 'Dee'},
+        'thread': 'line-1',
+        'source': {'kind': 'buddy-proposal'},
+      };
+      await pumpTaskChat(tester, taskLineBackend([root]));
+      for (final tag in ['Proposal', 'On it', 'Shipped', 'Task']) {
+        expect(find.textContaining(tag), findsNothing);
+      }
+    });
+
+    testWidgets('tags a person\'s own message a task was opened from', (
+      tester,
+    ) async {
+      final root = {
+        ...taskLine(),
+        'text': 'can we save drafts offline?',
+        'author': {'kind': 'person', 'id': me, 'name': 'Dee'},
+        'thread': 'line-1',
+        'source': null,
+      };
+      await pumpTaskChat(tester, taskLineBackend([root], ask: 'on-it'));
+      expect(find.text('● On it'), findsOneWidget);
+    });
+
+    testWidgets('a message that is no ask keeps its words and has no tag', (
+      tester,
+    ) async {
+      await pumpRow(tester, {
+        ...taskLine(),
+        'text': "Let's build: a shed",
+        'source': {'kind': 'message'},
+      });
+      expect(find.text("Let's build: a shed"), findsOneWidget);
+      expect(find.textContaining('On it'), findsNothing);
+    });
+
+    testWidgets('the role badge stays after the name, before the tag', (
+      tester,
+    ) async {
+      await pumpRow(tester, {
+        ...taskLine(),
+        'text': 'Offline drafts',
+      }, askTag: '● On it');
+      double left(Finder within) => tester.getTopLeft(within).dx;
+      final badge = find.byType(SwarmRoleBadge);
+      expect(left(find.text('River')), lessThan(left(badge)));
+      expect(left(badge), lessThan(left(find.text('● On it'))));
+    });
+
+    testWidgets('keeps its header when the same person wrote just before', (
+      tester,
+    ) async {
+      final author = {'kind': 'person', 'id': me, 'name': 'Dee'};
+      final before = {
+        ...taskLine(id: 'before', sequence: 1),
+        'text': 'A word first',
+        'author': author,
+        'source': {'kind': 'message'},
+      };
+      final root = {
+        ...taskLine(sequence: 2),
+        'text': 'Offline drafts',
+        'author': author,
+        'thread': 'line-1',
+        'source': {'kind': 'buddy-proposal'},
+      };
+      await pumpTaskChat(tester, taskLineBackend([before, root], ask: 'on-it'));
+      expect(find.text('● On it'), findsOneWidget);
+      expect(find.text('dee'), findsNWidgets(2));
+    });
   });
 }
