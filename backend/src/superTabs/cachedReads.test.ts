@@ -212,10 +212,10 @@ describe('light and host state derived from held entries (spec 2026-11-02 poll c
     expect(light.groups.find(x => x.key === 'run')!.data!.brief).toBe('')
   })
 
-  it('host state takes the machine\'s agents\' dormant conversations from dormant:agent entries', async () => {
-    const { view, names } = stub({ 'dormant:agent:a1': [g('old', { agentIds: ['a1'] }, true)] })
+  it('host state takes the machine\'s agents\' dormant conversations from light-dormant:agent entries (B4)', async () => {
+    const { view, names } = stub({ 'light-dormant:agent:a1': [g('old', { agentIds: ['a1'] }, true)] })
     const light = await deriveLight(db, view, 't', { groups: 'working', machineId: 'm1' })
-    expect(names).toContain('dormant:agent:a1')
+    expect(names).toContain('light-dormant:agent:a1')
     expect(light.groups.map(x => x.key).sort()).toEqual(['idle', 'old', 'run'])
   })
 
@@ -239,7 +239,7 @@ describe('light and host state derived from held entries (spec 2026-11-02 poll c
   it('a machine whose agents all left derives no conversation of theirs', async () => {
     const { view, names } = stub()
     const light = await deriveLight(db, view, 't', { groups: 'working', machineId: 'gone' })
-    expect(names.filter(n => n.startsWith('dormant:agent:'))).toEqual([])
+    expect(names.filter(n => n.startsWith('light-dormant:agent:'))).toEqual([])
     expect(light.groups.map(x => x.key)).toEqual(['run'])
   })
 })
