@@ -142,7 +142,7 @@ describe('one Buddy chat per person per Swarm', () => {
 
 describe('the one Buddy sends a proposal to a project its person reads (Scholes, 11-02)', () => {
   const propose = (f: Swarm, chat: string, ownerMessageId: string, projectId: string | undefined, as: string, extra: Record<string, unknown> = {}, user = peer) =>
-    f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId, text: 'Send it', ...(projectId ? { projectId } : {}), goal: 'Offline sync', scope: 'Web only', priority: 'normal', ...extra } as Command, user, as)
+    f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId, text: 'Send it to the web PM', ...(projectId ? { projectId } : {}), goal: 'Offline sync', scope: 'Web only', priority: 'normal', ...extra } as Command, user, as)
   const ask = async (f: Swarm, chat: string, text = 'Send it to the web PM') => String((await send(f, chat, text)).result.messageId)
   const upload = async (f: Swarm, chat: string, name: string, as?: string) =>
     (await f.store.upload(peer, f.tab, chat, { name, mime: 'text/plain', body: Readable.from([Buffer.from(name)]) }, as)).attachment.id
@@ -153,7 +153,7 @@ describe('the one Buddy sends a proposal to a project its person reads (Scholes,
     const sent = String((await propose(f, chat, await ask(f, chat), f.web.projectId, main)).result.messageId)
     const row = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, id: sent } })
     // Its person's own words, the one row the PM is woken for, with the goal and scope kept for the PM (task #2926).
-    expect(row).toMatchObject({ conversationId: f.web.conversationId, recipientIds: [f.pms.web], author: { kind: 'person', id: peer.sub }, text: 'Send it',
+    expect(row).toMatchObject({ conversationId: f.web.conversationId, recipientIds: [f.pms.web], author: { kind: 'person', id: peer.sub }, text: 'Send it to the web PM',
       source: { kind: 'buddy-proposal', personId: peer.sub, goal: 'Offline sync', scope: 'Web only', priority: 'normal' } })
     expect(await db.superTabMessage.count({ where: { tabId: f.tab, replyTo: sent } })).toBe(0)
     expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: sent, agentId: f.pms.web } })).toBe(1)
@@ -231,7 +231,7 @@ describe('the one Buddy sends a proposal to a project its person reads (Scholes,
     const { thread, agentId } = await projectSession(f, chat, f.web.projectId)
     const inThread = String((await send(f, chat, 'Send it', { replyTo: thread })).result.messageId)
     await expect(propose(f, chat, inThread, f.secret.projectId, agentId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
-    await expect(propose(f, chat, inThread, f.web.projectId, agentId)).resolves.toBeDefined()
+    await expect(propose(f, chat, inThread, f.web.projectId, agentId, { text: 'Send it' })).resolves.toBeDefined()
     // The owner's own chat, named by peer's Buddy; and peer's Buddy for a message the owner wrote.
     const theirs = String((await f.execute({ type: 'buddy.chat' }, owner)).result.conversationId)
     const theirAsk = String((await send(f, theirs, 'Send it', {}, owner)).result.messageId)
@@ -414,7 +414,7 @@ describe('a project session', () => {
     // Not for a message in the main chat.
     await expect(f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: mainAsk, text: 'Send it', goal: 'G', scope: 'S', priority: 'normal' }, peer, agentId))
       .rejects.toMatchObject({ code: 'PROPOSAL_UNASKED' })
-    const sentId = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, text: 'Send it', goal: 'Offline sync', scope: 'Web only',
+    const sentId = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, text: 'Send it to the PM', goal: 'Offline sync', scope: 'Web only',
       priority: 'normal' }, peer, agentId)).result.messageId)
     const row = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, id: sentId } })
     expect(row).toMatchObject({ conversationId: f.web.conversationId, recipientIds: [f.pms.web], source: { kind: 'buddy-proposal', personId: peer.sub } })
@@ -426,7 +426,7 @@ describe('a project session', () => {
     const { chat, main } = await buddy(f)
     const { thread, agentId } = await projectSession(f, chat, f.web.projectId, 'Let us plan web offline sync')
     const ask = String((await send(f, chat, 'Send it to the PM', { replyTo: thread })).result.messageId)
-    const proposal = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, text: 'Send it', goal: 'Offline sync', scope: 'Web only',
+    const proposal = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, text: 'Send it to the PM', goal: 'Offline sync', scope: 'Web only',
       priority: 'normal' }, peer, agentId)).result.messageId)
     // Sessions end by themselves after 30 idle minutes, so the PM often opens the group after the session is gone.
     if (endBeforeOpen) await f.execute({ type: 'buddy.sessionEnd', conversationId: chat, thread, reason: 'ended' }, peer)

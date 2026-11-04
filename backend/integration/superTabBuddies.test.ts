@@ -210,17 +210,17 @@ describe('a Buddy through the store', () => {
     const f = await swarm()
     const { chat, agentId } = await buddy(f)
     const ask = String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Send it to the PM', replyTo: null, recipientIds: [] }, peer)).result.messageId)
-    const propose = () => f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, text: 'Send it', goal: 'Offline sync', scope: 'Desktop only',
+    const propose = () => f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, text: 'Send it to the PM', goal: 'Offline sync', scope: 'Desktop only',
       priority: 'normal' }, peer, agentId)
     const sent = await propose()
     const row = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, id: String(sent.result.messageId) } })
     // Its owner's own words, delivered to the PM, with the goal and scope kept for the PM and no reply from the Buddy (task #2926).
-    expect(row).toMatchObject({ conversationId: 'lead', recipientIds: [f.lead], author: { kind: 'person', id: peer.sub }, text: 'Send it',
+    expect(row).toMatchObject({ conversationId: 'lead', recipientIds: [f.lead], author: { kind: 'person', id: peer.sub }, text: 'Send it to the PM',
       source: { kind: 'buddy-proposal', personId: peer.sub, buddyId: agentId, ownerMessageId: ask, goal: 'Offline sync', scope: 'Desktop only', priority: 'normal' } })
     expect(await db.superTabMessage.count({ where: { tabId: f.tab, replyTo: row.id } })).toBe(0)
     expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: row.id, agentId: f.lead } })).toBe(1)
     const page = await f.store.messages(owner, f.tab, 'lead', {})
-    expect(page.messages.find(m => m.id === row.id)).toMatchObject({ text: 'Send it' })
+    expect(page.messages.find(m => m.id === row.id)).toMatchObject({ text: 'Send it to the PM' })
     await expect(propose()).rejects.toThrow('already sent')
     await expect(f.execute({ type: 'message.send', conversationId: 'lead', text: 'Hi PM', replyTo: null, recipientIds: [] }, peer, agentId))
       .rejects.toThrow('A Buddy posts only in its own chat')
@@ -230,7 +230,7 @@ describe('a Buddy through the store', () => {
     const f = await swarm()
     const { chat, agentId } = await buddy(f)
     const ask = String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Send it to the PM', replyTo: null, recipientIds: [] }, peer)).result.messageId)
-    const sent = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, text: 'Send it', goal: 'Offline sync', scope: 'Desktop only',
+    const sent = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, text: 'Send it to the PM', goal: 'Offline sync', scope: 'Desktop only',
       priority: 'normal' }, peer, agentId)).result.messageId)
     // Written with the proposal itself, before anything reads it.
     expect(await db.superTabOpenProposal.findMany({ where: { tabId: f.tab }, select: { id: true, conversationId: true } })).toEqual([{ id: sent, conversationId: 'lead' }])
@@ -430,7 +430,7 @@ describe('a Buddy through the store', () => {
     const unsent = await upload('draft.txt', 'text/plain', Buffer.from('not for the PM'), chat, false)
     const ask = async () => String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Send it to the PM with the plan', replyTo: null, recipientIds: [] }, peer)).result.messageId)
     const propose = async (attachmentIds: string[], ownerMessageId?: string) => f.execute({ type: 'buddy.propose', conversationId: chat,
-      ownerMessageId: ownerMessageId ?? await ask(), text: 'Send it', goal: 'Offline sync', scope: 'Desktop only', priority: 'normal', attachmentIds }, peer, agentId)
+      ownerMessageId: ownerMessageId ?? await ask(), text: 'Send it to the PM with the plan', goal: 'Offline sync', scope: 'Desktop only', priority: 'normal', attachmentIds }, peer, agentId)
 
     await expect(propose([plan, unsent])).rejects.toThrow('Upload this file again')
     await expect(propose([plan, 'a'.repeat(24), 'b'.repeat(24), 'c'.repeat(24), 'd'.repeat(24), 'e'.repeat(24)])).rejects.toThrow('at most 5 files')
@@ -490,7 +490,7 @@ describe('a Buddy through the store', () => {
       remove.mockRestore()
     }
     const ask = String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Send it to the PM', replyTo: null, recipientIds: [] }, peer)).result.messageId)
-    const propose = (attachmentIds: string[]) => f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, text: 'Send it', goal: 'Offline sync',
+    const propose = (attachmentIds: string[]) => f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, text: 'Send it to the PM', goal: 'Offline sync',
       scope: 'Desktop only', priority: 'normal', attachmentIds }, peer, agentId)
     await expect(propose([owners])).rejects.toThrow('Upload this file again')
     await expect(propose([own])).rejects.toThrow('Upload this file again')
@@ -797,7 +797,7 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
     const f = await swarm()
     const { chat, agentId: proposer, main: agentId, swarmChat } = await buddy(f)
     const ask = String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Send it to the PM', replyTo: null, recipientIds: [] }, peer)).result.messageId)
-    const proposal = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, text: 'Send it', goal: 'Offline sync', scope: 'Desktop only',
+    const proposal = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, text: 'Send it to the PM', goal: 'Offline sync', scope: 'Desktop only',
       priority: 'normal' }, peer, proposer)).result.messageId)
     const pm = (text: string, extra: { replyTo?: string; mentions?: string[] } = {}) => f.execute({ type: 'message.send', conversationId: 'lead', text,
       replyTo: extra.replyTo ?? null, recipientIds: [], ...extra.mentions ? { mentions: extra.mentions } : {} }, owner, f.lead)

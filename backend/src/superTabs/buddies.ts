@@ -217,11 +217,22 @@ export function proposalBrief(source: Record<string, unknown> | null | undefined
  *  its spaces doubled is the same line; any other change is not. */
 const comparable = (text: string): string => text.normalize('NFKC').replace(/\s+/gu, ' ').trim()
 
-/** Whether [words] are what the owner okayed (anh Dee, task #2926): their own, inside the message that asked, or inside a line
- *  their Buddy showed them just before it (shownBefore). Nothing else of their private chat may go out as them. */
+/** The whole lines a message offers to post: all of it, all after its lead-in ("I'll post this as you: …", "Send this to the PM:
+ *  …"), and each quoted line in it, quotes trimmed. Never a piece of one (security review 1 of #3024): a fragment of a shown line
+ *  can change what it says, though each word was seen. */
+function wholeLines(said: string): string[] {
+  const unquoted = (text: string) => text.replace(/^["“”']+|["“”']+$/gu, '').trim()
+  const colon = said.indexOf(':')
+  const quoted = [...said.matchAll(/“([^“”]+)”|"([^"]+)"/gu)].map(match => match[1] ?? match[2]!)
+  return [said, ...colon >= 0 ? [unquoted(said.slice(colon + 1))] : [], ...quoted].map(comparable).filter(Boolean)
+}
+
+/** Whether [words] are what the owner okayed (anh Dee, task #2926): the whole of their own message that asked, or of a line
+ *  their Buddy showed them just before it (shownBefore), as wholeLines reads them. Nothing else of their private chat may go out
+ *  as them. */
 export function okayedWords(words: string, ask: { text?: string; shown?: readonly string[] }): boolean {
   const wanted = comparable(words)
-  return !!wanted && [ask.text ?? '', ...ask.shown ?? []].some(said => comparable(said).includes(wanted))
+  return !!wanted && [ask.text ?? '', ...ask.shown ?? []].some(said => wholeLines(said).includes(wanted))
 }
 
 /** One row of a Buddy chat as the store reads it for a proposal, newest first. */
