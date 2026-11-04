@@ -579,13 +579,18 @@ describe('a person\'s followed threads (GET /threads)', () => {
     return { ...s, roots, member: roots.filter((_, i) => i % 3 !== 2) }
   }
 
-  it('counts the person in a thread they wrote or were tagged in long before their mark, from summaries as from rows', async () => {
+  it('counts the person in a thread they wrote or were tagged in long before their mark, once the Swarm\'s summaries are backfilled', async () => {
     const s = await memberScene()
+    // Before the backfill: each thread's newest 100 rows before the mark, as before, so a long thread's early rows are not seen.
+    const long = new Set(s.roots.slice(0, 10))
     const before = (await threads(s.tabId, peer)).body.data
-    expect(before.unread.map((t: any) => t.rootId).sort()).toEqual([...s.member].sort())
+    expect(before.unread.map((t: any) => t.rootId).sort()).toEqual(s.member.filter(r => !long.has(r)).sort())
     await backfillThreads(db, Date.now())
     resetThreadsReads()
-    expect((await threads(s.tabId, peer)).body.data).toEqual(before)
+    const after = (await threads(s.tabId, peer)).body.data
+    expect(after.unread.map((t: any) => t.rootId).sort()).toEqual([...s.member].sort())
+    // Every thread listed before is listed the same way after.
+    expect(after.unread.filter((t: any) => !long.has(t.rootId))).toEqual(before.unread)
   }, 120_000)
 
   it('learns whether the person is in each unread thread from its summary, in one read, never from its messages', async () => {
@@ -593,6 +598,8 @@ describe('a person\'s followed threads (GET /threads)', () => {
     await backfillThreads(db, Date.now())
     const { reply, rows } = await profiledThreads(s.tabId)
     const messages = rows.filter(r => r.ns.endsWith('.SuperTabMessage')), summaries = rows.filter(r => r.ns.endsWith('.SuperTabThread'))
+    console.info(`threads cost, 60 unread candidates (10 of 300 rows): ${rows.filter(r => r.op !== 'getmore').length} reads\n` +
+      rows.map(r => `  ${r.ns.split('.').at(-1)} ${r.op} ${(r.planSummary ?? '').slice(0, 80)} docs=${r.docsExamined ?? 0}`).join('\n'))
     expect(rows.filter(r => r.planSummary === 'COLLSCAN')).toEqual([])
     // No message read by the thread index: the chat's rows past the mark, and the 60 roots by id.
     expect(messages.filter(r => /thread/.test(r.planSummary ?? '')), JSON.stringify(messages)).toEqual([])
