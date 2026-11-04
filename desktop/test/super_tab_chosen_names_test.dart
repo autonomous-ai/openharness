@@ -144,6 +144,73 @@ void main() {
       expect(renames(server), 0);
     });
 
+    // Review of #3021 (Sage): it must not scan every Swarm on every change.
+    test('a sync for one harness looks up only that harness', () async {
+      final (client, _) = await opened();
+      final looked = <String>[];
+      final sent = await client.syncChosenNames(
+        (machineId, harnessId) {
+          looked.add('$machineId/$harnessId');
+          return Agent.fromJson({
+            'id': harnessId,
+            'name': 'Darren PM',
+            'nameChosen': true,
+          });
+        },
+        machineId: 'm',
+        harnessId: 'elsewhere',
+      );
+      expect(sent, 0);
+      expect(looked, isEmpty);
+      expect(
+        await client.syncChosenNames(
+          local({'nameChosen': true}),
+          machineId: 'm',
+          harnessId: 'native-pm',
+        ),
+        1,
+      );
+    });
+
+    test(
+      'a Swarm\'s agents are looked at again only when they changed',
+      () async {
+        final (client, server) = await opened();
+        expect(client.agentNamesChanged('tab'), isTrue);
+        expect(client.agentNamesChanged('tab'), isFalse);
+        (server.state['agents'] as List)[0]['displayName'] = 'Someone else';
+        await (await client.open('tab')).refresh();
+        expect(client.agentNamesChanged('tab'), isTrue);
+        expect(client.agentNamesChanged('tab'), isFalse);
+      },
+    );
+
+    test('spacing alone is no difference: the Swarm keeps one space', () async {
+      final (client, server) = await opened();
+      (server.state['agents'] as List)[0]['displayName'] = 'Darren PM';
+      await (await client.open('tab')).refresh();
+      final sent = await client.syncChosenNames(
+        local({'name': 'Darren  PM', 'nameChosen': true}),
+      );
+      expect(sent, 0);
+      expect(renames(server), 0);
+    });
+
+    test(
+      'a Buddy is left alone: its name is set in its own settings',
+      () async {
+        final (client, server) = await opened();
+        (server.state['agents'] as List)[0]['buddyOf'] = {
+          'personId': 'owner',
+          'projectId': 'lead',
+          'generation': 'g',
+        };
+        await (await client.open('tab')).refresh();
+        expect(await client.syncChosenNames(local({'nameChosen': true})), 0);
+        expect(renames(server), 0);
+      },
+    );
+
     test('a harness this machine does not know is left alone', () async {
       final (client, server) = await opened();
       expect(await client.syncChosenNames((_, _) => null), 0);
