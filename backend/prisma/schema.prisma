@@ -1352,6 +1352,11 @@ model SuperTabAttachment {
   @@index([tabId, actorKey, createdAt])
   /// Unfinished uploads by age, for the pending-upload sweep (lib/pendingUploadSweep.ts).
   @@index([purpose, createdAt])
+  /// Unused uploads by age, for the hourly unused-upload sweep (lib/attachmentSweep.ts): its claim (usedBy and proposedBy
+  /// null, purpose, createdAt) and its remove step (usedBy alone). Performance Advisor's suggestion of 11-04 with its first
+  /// two keys swapped, so the remove step's read is bounded too (#2676). Built by the backend release's schema push: a
+  /// production write that needs Ken's go.
+  @@index([usedBy, proposedBy, purpose, createdAt])
 }
 
 /// One per sender per Swarm while it asks for upload links (superTabs/store.ts uploadLink): each link request writes it in the
