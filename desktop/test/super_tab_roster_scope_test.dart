@@ -70,10 +70,11 @@ void main() {
     _Memory? store,
     bool open = true,
     bool board = true,
+    String account = 'owner',
   }) async {
     await tester.binding.setSurfaceSize(const Size(280, 760));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final f = RosterFixture();
+    final f = RosterFixture(account: account);
     f.storage = store;
     await f.initialize();
     addTearDown(f.dispose);
@@ -675,5 +676,63 @@ void main() {
       await choose(tester, 'All projects');
     }
     await f.close(tester);
+  });
+
+  group("People's +", () {
+    Future<RosterFixture> project(
+      WidgetTester tester, {
+      required bool private,
+      String account = 'owner',
+    }) async {
+      final f = await swarm(tester, board: false, account: account);
+      final row = (f.server.state['projects'] as List).first as Map;
+      row['visibility'] = private ? 'private' : 'public';
+      row['members'] = [
+        {'id': 'dee'},
+        {'id': account},
+      ];
+      await f.controller.refresh();
+      await f.show(tester);
+      await choose(tester, 'This project');
+      return f;
+    }
+
+    final add = find.byTooltip('Add people to this project');
+
+    testWidgets(
+      "the project owner adds people to a private project from People's +",
+      (tester) async {
+        final f = await project(tester, private: true);
+        expect(add, findsOneWidget);
+        await tester.tap(add);
+        await tester.pumpAndSettle();
+        expect(find.text('Add people to openharness'), findsOneWidget);
+        await tester.tap(find.byKey(const ValueKey('project-add-person-tony')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('project-add-confirm')));
+        await tester.pumpAndSettle();
+        expect(person('tony'), findsOneWidget);
+        await f.close(tester);
+      },
+    );
+
+    testWidgets("a public project keeps the Swarm invite on People's +", (
+      tester,
+    ) async {
+      final f = await project(tester, private: false);
+      expect(add, findsNothing);
+      await tester.tap(find.byTooltip('Invite people'));
+      await tester.pumpAndSettle();
+      expect(find.text('Add people to openharness'), findsNothing);
+      await f.close(tester);
+    });
+
+    testWidgets('someone who does not own the private project gets no picker', (
+      tester,
+    ) async {
+      final f = await project(tester, private: true, account: 'dee');
+      expect(add, findsNothing);
+      await f.close(tester);
+    });
   });
 }
