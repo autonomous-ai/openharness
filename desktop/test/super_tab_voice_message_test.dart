@@ -342,7 +342,7 @@ void main() {
       expect(find.byTooltip('Hide words'), findsOneWidget);
       expect(
         tester.getTopLeft(find.text(_words)).dy,
-        greaterThan(tester.getBottomLeft(bubble).dy),
+        greaterThan(tester.getBottomLeft(toggle).dy),
       );
       await tester.tap(toggle);
       await tester.pumpAndSettle();
