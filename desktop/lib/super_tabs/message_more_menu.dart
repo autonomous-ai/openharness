@@ -50,9 +50,10 @@ class _SuperTabMessageMoreMenuState extends State<SuperTabMessageMoreMenu> {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    return MenuAnchor(
+    return AppDropdown(
       controller: _menu,
       childFocusNode: _focus,
+      width: 200,
       // Opened from the keyboard (More had the focus), the first choice is
       // the next key's target; a pointer opens it with none focused.
       onOpen: () {
@@ -61,43 +62,29 @@ class _SuperTabMessageMoreMenuState extends State<SuperTabMessageMoreMenu> {
           (_) => _first.requestFocus(),
         );
       },
-      consumeOutsideTap: true,
-      alignmentOffset: const Offset(0, grid.AppControl.menuGap),
-      style: grid.AppMenu.style(minWidth: 200),
-      menuChildren: [
+      children: [
         for (final (index, action) in widget.actions.indexed)
           if (action.choices.isEmpty)
             AppMenuItem(
               focusNode: index == 0 ? _first : null,
               label: action.label,
               icon: action.icon,
-              expandLabel: true,
-              onPressed: () {
-                _menu.close();
-                action.onPressed?.call();
-              },
+              onPressed: action.onPressed,
             )
           else
-            SubmenuButton(
-              key: ValueKey('super-message-more-${action.label}'),
+            AppSubmenuItem(
+              itemKey: ValueKey('super-message-more-${action.label}'),
               focusNode: index == 0 ? _first : null,
-              leadingIcon: Icon(action.icon, size: AppIcons.inlineSize),
-              submenuIcon: const WidgetStatePropertyAll(
-                Icon(AppIcons.chevronRight, size: AppIcons.inlineSize),
+              icon: action.icon,
+              label: action.label,
+              trailing: const Icon(
+                AppIcons.chevronRight,
+                size: AppIcons.inlineSize,
               ),
-              menuStyle: grid.AppMenu.style(minWidth: 180),
               menuChildren: [
                 for (final choice in action.choices)
-                  AppMenuItem(
-                    label: choice.label,
-                    expandLabel: true,
-                    onPressed: () {
-                      _menu.close();
-                      choice.onPressed();
-                    },
-                  ),
+                  AppMenuItem(label: choice.label, onPressed: choice.onPressed),
               ],
-              child: Text(action.label),
             ),
       ],
       builder: (context, menu, _) => AppIconButton(

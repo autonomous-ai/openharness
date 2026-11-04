@@ -93,9 +93,7 @@ class HarnessCustomizePane extends StatelessWidget {
                               side: WidgetStateProperty.resolveWith(
                                 (states) => BorderSide(
                                   width: 1.5,
-                                  color: states.contains(WidgetState.focused)
-                                      ? DesktopChrome.accent
-                                      : Colors.transparent,
+                                  color: Colors.transparent,
                                 ),
                               ),
                             ),
@@ -179,12 +177,7 @@ class _CustomizeTabLabel extends StatelessWidget {
   Widget build(BuildContext context) => DecoratedBox(
     decoration: BoxDecoration(
       borderRadius: BorderRadius.circular(DesktopChrome.controlRadius),
-      border: Border.all(
-        width: 1.5,
-        color: Focus.of(context).hasFocus
-            ? DesktopChrome.accent
-            : Colors.transparent,
-      ),
+      border: Border.all(width: 1.5, color: Colors.transparent),
     ),
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),

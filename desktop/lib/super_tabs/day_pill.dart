@@ -374,9 +374,10 @@ class _SuperTabDayJumpState extends State<_SuperTabDayJump> {
     grid.AppTheme.watch(context);
     final today = DateUtils.dateOnly(DateTime.now());
     final day = widget.day.isAfter(today) ? today : widget.day;
-    return MenuAnchor(
+    return AppDropdown(
       controller: _menu,
       childFocusNode: _focus,
+      width: _picking ? _calendar.width : 220,
       // Opened from the keyboard, the first choice is the next key's target;
       // a click leaves none lit, with the keys on the pill, so Esc still
       // closes it.
@@ -389,15 +390,12 @@ class _SuperTabDayJumpState extends State<_SuperTabDayJump> {
       onClose: () {
         if (mounted) setState(() => _picking = false);
       },
-      consumeOutsideTap: true,
-      alignmentOffset: const Offset(0, grid.AppControl.menuGap),
       style: grid.AppMenu.style(
-        minWidth: 220,
         maxHeight: _picking
             ? _calendar.height + grid.AppMenu.panelPadding.vertical
             : null,
       ),
-      menuChildren: _picking
+      children: _picking
           ? [
               SizedBox.fromSize(
                 size: _calendar,
@@ -428,14 +426,14 @@ class _SuperTabDayJumpState extends State<_SuperTabDayJump> {
                 AppMenuItem(
                   focusNode: index == 0 ? _first : null,
                   label: choice.label,
-                  expandLabel: true,
                   onPressed: () =>
                       _jump(superTabJumpStart(choice, DateTime.now())),
                 ),
               const AppMenuDivider(),
               AppMenuItem(
                 label: 'Jump to a specific date',
-                expandLabel: true,
+                // Stays open: the panel turns into the calendar.
+                closesMenu: false,
                 onPressed: () => setState(() => _picking = true),
               ),
             ],

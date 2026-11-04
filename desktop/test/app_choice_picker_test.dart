@@ -87,7 +87,7 @@ void main() {
       find.descendant(of: more, matching: find.byType(AnimatedContainer)).first,
     );
     expect(
-      ((container.decoration! as BoxDecoration).border! as Border).top.color,
+      (container.decoration! as BoxDecoration).color,
       isNot(Colors.transparent),
       reason: 'The returned keyboard focus stays visible without selecting it',
     );

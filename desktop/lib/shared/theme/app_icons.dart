@@ -134,6 +134,10 @@ abstract final class AppIcons {
   static const logOut = LucideIcons.logOut400;
   static const maximize = LucideIcons.maximize400;
   static const menu = LucideIcons.menu400;
+
+  /// The Windows workspace's app-menu button: one vertical frame line with its
+  /// shortcut notch, the drawing the owner picked for the tab strip.
+  static const galleryVerticalEnd = LucideIcons.galleryVerticalEnd400;
   static const messageCircleQuestionMark =
       LucideIcons.messageCircleQuestionMark400;
   static const messagesSquare = LucideIcons.messagesSquare400;

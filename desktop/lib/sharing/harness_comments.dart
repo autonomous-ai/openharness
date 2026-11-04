@@ -349,7 +349,7 @@ class _HarnessCommentsState extends State<HarnessComments> {
               hintText: 'Leave a comment…',
               hintStyle: DesktopChrome.text(
                 size: 13,
-                color: DesktopChrome.muted,
+                color: DesktopChrome.hint,
               ),
               border: border,
               enabledBorder: border,

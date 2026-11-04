@@ -15,6 +15,7 @@ import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/theme/status_line_style.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_icon_button.dart';
+import '../shared/widgets/app_menu.dart';
 import '../state/app_state.dart';
 import '../state/harness_activity.dart';
 import '../terminal/terminal_theme.dart';
@@ -25,6 +26,7 @@ import '../widgets/finger_target.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/harness_activity_mark.dart';
+import '../widgets/pane_menu.dart' show showContextMenuAt;
 import '../widgets/workspace_subscription_usage.dart';
 import 'add_computers.dart';
 import 'agent_details.dart';
@@ -1807,23 +1809,24 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     BrowserMenuGuard.hold(hold);
     final String? choice;
     try {
-      choice = await showMenu<String>(
+      choice = await showContextMenuAt<String>(
         context: context,
-        position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx, at.dy),
-        items: [
-          const PopupMenuItem(value: 'details', child: Text('Details')),
+        at: at,
+        children: (close) => [
+          AppMenuItem(
+            label: 'Details',
+            leadingSlot: false,
+            onPressed: () => close('details'),
+          ),
           if (_canRemove(view.id))
-            PopupMenuItem(
-              key: ValueKey('super-machine-menu-remove'),
-              value: 'remove',
-              enabled: _removeReason(view.id) == null,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Remove from Swarm'),
-                  if (_removeReason(view.id) case final reason?) Text(reason),
-                ],
-              ),
+            AppMenuItem(
+              key: const ValueKey('super-machine-menu-remove'),
+              label: 'Remove from Swarm',
+              detail: _removeReason(view.id),
+              leadingSlot: false,
+              onPressed: _removeReason(view.id) == null
+                  ? () => close('remove')
+                  : null,
             ),
         ],
       );

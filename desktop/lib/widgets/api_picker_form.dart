@@ -759,7 +759,7 @@ class ApiPickerFormState extends State<ApiPickerForm> {
                                           hintText: _example(id),
                                           hintStyle: DesktopChrome.text(
                                             size: 13,
-                                            color: DesktopChrome.muted,
+                                            color: DesktopChrome.hint,
                                           ),
                                           helperText: id == 'key'
                                               ? 'Stored only on ${controller.hostLabel}.'

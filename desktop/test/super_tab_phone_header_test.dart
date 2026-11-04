@@ -5,6 +5,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/shared/widgets/app_icon_button.dart';
 import 'package:harness/super_tabs/roster.dart';
 
@@ -54,7 +55,7 @@ void main() {
 
     await tester.tap(_menu);
     await tester.pumpAndSettle();
-    final row = find.widgetWithText(MenuItemButton, 'Pull requests');
+    final row = find.widgetWithText(AppMenuItem, 'Pull requests');
     expect(tester.getSize(row).height, greaterThanOrEqualTo(44));
     await tester.tap(row);
     await tester.pumpAndSettle();
@@ -109,7 +110,7 @@ void main() {
     expect(_openView, findsNothing, reason: 'the chat is the default view');
     await tester.tap(_menu);
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(MenuItemButton, 'Pull requests'));
+    await tester.tap(find.widgetWithText(AppMenuItem, 'Pull requests'));
     await tester.pumpAndSettle();
     expect(tester.widget<Text>(_openView).data, 'Pull requests');
     await unmountPhoneSuperTab(tester, chat);

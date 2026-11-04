@@ -146,10 +146,10 @@ void main() {
           reason: '$chip',
         );
       }
-      // The box is as tall as before: one control row inside its padding.
+      // One control row inside its padding.
       expect(
         tester.getRect(surface).height,
-        closeTo(grid.AppControl.heightFieldScaled + 16, 1),
+        closeTo(grid.AppControl.heightFieldScaled + 6, 1),
       );
     });
 

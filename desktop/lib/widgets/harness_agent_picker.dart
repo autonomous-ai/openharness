@@ -62,9 +62,10 @@ class _HarnessAgentPickerState extends State<HarnessAgentPicker> {
               ?.copyWith(color: AppColors.textSoft),
         ),
       if (widget.showPrefix) const SizedBox(width: 4),
-      MenuAnchor(
+      AppDropdown(
         controller: _menu,
         childFocusNode: _trigger,
+        consumeOutsideTap: false,
         onOpen: () {
           _unregister = registerTransientMenu(_menu.close);
           WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -81,17 +82,14 @@ class _HarnessAgentPickerState extends State<HarnessAgentPicker> {
           _unregister?.call();
           _unregister = null;
         },
-        menuChildren: [
+        children: [
           for (final choice in widget.engines)
             AppMenuItem(
               label: HarnessAgentPicker.label(choice),
               leading: EngineMark(engine: choice),
               selected: widget.engine == choice,
               focusNode: _choice(choice),
-              onPressed: () {
-                _menu.close();
-                widget.onSelected?.call(choice);
-              },
+              onPressed: () => widget.onSelected?.call(choice),
             ),
         ],
         builder: (context, controller, child) => TextButton(
