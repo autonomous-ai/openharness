@@ -283,8 +283,16 @@ void main() {
 
   group('a restart refuses reads for a while (task #2647)', () {
     const refusals = [
-      SuperTabFailure('NOT_FOUND', 'This Super Tab is unavailable.', statusCode: 404),
-      SuperTabFailure('FORBIDDEN', 'You cannot read this Swarm.', statusCode: 403),
+      SuperTabFailure(
+        'NOT_FOUND',
+        'This Super Tab is unavailable.',
+        statusCode: 404,
+      ),
+      SuperTabFailure(
+        'FORBIDDEN',
+        'You cannot read this Swarm.',
+        statusCode: 403,
+      ),
     ];
 
     test('while the list still has the Swarm, or cannot be read, it stays '
@@ -319,7 +327,8 @@ void main() {
           for (final refusal in refusals) {
             daemon.failure = refusal;
             async.elapse(const Duration(seconds: 4));
-            final when = '${refusal.code}, list ${unreadable ? 'unreadable' : 'has it'}';
+            final when =
+                '${refusal.code}, list ${unreadable ? 'unreadable' : 'has it'}';
             expect(c.accessRevoked, isFalse, reason: when);
             expect(c.snapshot?.name, 'autonomous.ai', reason: when);
             expect(c.backendUnreachable, isTrue, reason: when);
@@ -357,7 +366,11 @@ void main() {
         expect(c.snapshot, isNull);
         final reads = daemon.states;
         async.elapse(const Duration(seconds: 30));
-        expect(daemon.states, reads, reason: 'a Swarm taken away reads nothing');
+        expect(
+          daemon.states,
+          reads,
+          reason: 'a Swarm taken away reads nothing',
+        );
         c.dispose();
       });
     });

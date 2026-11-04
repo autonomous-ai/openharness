@@ -903,7 +903,11 @@ void main() {
         'This Super Tab is unavailable.',
         statusCode: 404,
       ),
-      SuperTabFailure('FORBIDDEN', 'You cannot read this Swarm.', statusCode: 403),
+      SuperTabFailure(
+        'FORBIDDEN',
+        'You cannot read this Swarm.',
+        statusCode: 403,
+      ),
     ];
 
     /// Alpha shown in a tab, Personal picked here before, as on Dee's Mac:
@@ -923,9 +927,7 @@ void main() {
     testWidgets('a Harness restart, then reads that drop and are refused while '
         'the list still has the Swarm (or cannot be read), keep it open in its '
         'tab under its own name, saying Reconnecting; it reads again once the '
-        'backend is back', (
-      tester,
-    ) async {
+        'backend is back', (tester) async {
       late AppNotifier app;
       late _Backend backend;
       late String tab;

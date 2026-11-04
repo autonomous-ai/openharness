@@ -59,11 +59,24 @@ backend restarted twice and CLI v0.5.35 restarted daemons.
   false once a list read that succeeded leaves it out; a throw means it cannot be told.
 - `SuperTabClient.stillListed(String id)`: reads the list (joining a read in flight) and answers as above.
 
-- [ ] Failing test (controller): reads drop, then are refused `NOT_FOUND` and `FORBIDDEN` for a while, with the list
+- [x] Failing test (controller): reads drop, then are refused `NOT_FOUND` and `FORBIDDEN` for a while, with the list
   still naming the Swarm (and unreadable for part of it): the Swarm keeps its snapshot and name, says Reconnecting,
   is never revoked, and shows the backend's state again when reads answer.
-- [ ] Failing test (controller): the same refusal with the list no longer naming the Swarm revokes it.
-- [ ] Failing test (app): Swarm "autonomous.ai" open in a tab, the fake backend drops and refuses its reads for a while:
+- [x] Failing test (controller): the same refusal with the list no longer naming the Swarm revokes it.
+- [x] Failing test (app): Swarm "autonomous.ai" open in a tab, the fake backend drops and refuses its reads for a while:
   the tab stays, bound to the Swarm, the dropdown's label and the Swarm menu say "autonomous.ai" throughout, never
   "Swarm", and it is not moved to Personal.
-- [ ] Watch them fail; implement; watch them pass; run the tests of the files changed and of their importers.
+- [x] Watch them fail; implement; watch them pass; run the tests of the files changed and of their importers.
+
+## Task 2: a Swarm tab never shows an agent's folder, project or type as its name
+
+River (2026-11-04): never show a fallback folder name as a Swarm's name.
+
+**Files:**
+- Modify: `desktop/lib/state/workspace_status.dart` (`workspaceTabNames`), `desktop/lib/state/app_state.dart`
+  (agent titles: `_syncAgentName` and the two first-agent titles)
+- Test: `desktop/test/workspace_status_test.dart`
+
+- [x] Failing test: a tab bound to Swarm "autonomous.ai", not marked as named by hand, holding a Lead whose folder is
+  `~/harnesses/swarms`, is named "code" by the vote today; a restarted daemon's agent rename would retitle it.
+- [x] A tab bound to a Swarm is named by the Swarm alone: it takes no part in the vote, and agent titles skip it.
