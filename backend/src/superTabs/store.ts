@@ -1562,10 +1562,13 @@ export class SuperTabStore {
       }
       if (command.type === 'conversation.create' && command.proposalMessageId) {
         // By id within this tab: the proposal a new group comes from (leaderboard/record.ts recordProposal).
-        const proposal = await tx.superTabMessage.findFirst({ where: { id: command.proposalMessageId, tabId },
-          select: { id: true, conversationId: true, author: true, source: true } })
-        if (proposal) context.proposal = { id: proposal.id, conversationId: proposal.conversationId, author: proposal.author as unknown as Author,
-          source: proposal.source as Record<string, unknown> | null }
+        const fields = { id: true, conversationId: true, author: true, source: true } as const
+        const proposal = await tx.superTabMessage.findFirst({ where: { id: command.proposalMessageId, tabId }, select: { ...fields, replyTo: true } })
+        // A reply with no source may be the proposal's details: the row it replies to is what commands.ts proposalNamed judges.
+        const root = proposal?.replyTo && !proposal.source ? await tx.superTabMessage.findFirst({ where: { id: proposal.replyTo, tabId }, select: fields }) : null
+        const row = (found: NonNullable<typeof root>) => ({ id: found.id, conversationId: found.conversationId, author: found.author as unknown as Author,
+          source: found.source as Record<string, unknown> | null })
+        if (proposal) context.proposal = { ...row(proposal), ...root ? { root: row(root) } : {} }
       }
       if (command.type === 'conversation.create' && command.requestMessageId) {
         // By id within this tab: the person's chat message the new group answers (commands.ts requestOf checks where it is).
