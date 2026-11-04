@@ -48,7 +48,9 @@ file behind and the delete fails. Two parts:
 - The bounded wait in `memoryHomeCache`'s teardown: real time, and harmless when a fake clock froze the save.
 - The retry gives up and rethrows, so a folder that cannot be deleted for another reason is still seen.
 - The other temp-folder teardowns in mobile/test were audited: every write into them is awaited by the test, except
-  the shared test home, which takes the retry.
+  the shared test home and the picture tests' folder (swarm_attachment_test.dart: "a narrow message makes the box
+  narrower" ends with its fetch released but not waited for), which take the retry. The rest keep a plain
+  `deleteSync`.
 
 ## Task 1: the Home's folder goes only after the saves under way
 
@@ -61,14 +63,16 @@ file behind and the delete fails. Two parts:
 
 ## Task 2: a folder still being written into goes once the writing stops
 
-**Files:** mobile/test/temp_folder.dart, mobile/test/temp_folder_test.dart, mobile/test/flutter_test_config.dart
+**Files:** mobile/test/temp_folder.dart, mobile/test/temp_folder_test.dart, mobile/test/flutter_test_config.dart,
+mobile/test/swarm/swarm_attachment_test.dart
 
 **Interfaces:** `Future<void> deleteTempFolder(Directory folder)`.
 
 - [ ] Test: another isolate writing files into a folder while `deleteTempFolder` runs; the delete does not fail and the
       folder is gone.
 - [ ] Run red ("Directory not empty"), commit; implement; run green, commit.
-- [ ] `flutter_test_config.dart`'s `tearDownAll` deletes the test home with it.
+- [ ] `flutter_test_config.dart`'s `tearDownAll` deletes the test home with it, and swarm_attachment_test.dart's
+      `tearDown` its folder.
 
 ## Evidence
 
