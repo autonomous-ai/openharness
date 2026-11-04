@@ -150,6 +150,35 @@ void main() {
     expect(find.text('0:40'), findsOneWidget);
   });
 
+  testWidgets('fits a narrow message column, its waveform drawn narrower', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.dark),
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 280,
+              child: SwarmVoiceBubble(
+                file: clip,
+                voice: clip.voice!,
+                words: '',
+                fileRef: SwarmFileRef(clip),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    expect(tester.takeException(), isNull);
+    expect(
+      tester.getSize(key('swarm-voice-bars')).width,
+      lessThan(48 * (SwarmVoiceBars.bar + SwarmVoiceBars.gap)),
+    );
+    expect(find.text('1:21'), findsOneWidget);
+  });
+
   testWidgets('a file that cannot be had plays nothing', (tester) async {
     local = null;
     await pump(tester);
