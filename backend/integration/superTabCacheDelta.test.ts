@@ -161,6 +161,32 @@ describe('the patched cache answers as reads with no cache do', () => {
     expect(delta.mock.calls.length).toBeGreaterThan(30)
   })
 
+  it('a host state reads its agents\' quiet conversations light, as the host rows read them (B4, #2597)', async () => {
+    const { tabId } = await scene()
+    // A quiet conversation of an agent on the host, with the brief and checks a whole read would carry.
+    const all = await parts.loadAll(db, tabId)
+    const agent = liveOf(all.agents).find(a => (a.data as { machineId: string }).machineId === 'host')!.key
+    const quiet = liveOf(all.groups).find(g => g.key !== 'lead' && g.data!.agentIds.includes(agent))!
+    expect(await write(tabId, () => ({ op: 'update', kind: 'group', key: quiet.key, seen: quiet.version,
+      data: { ...quiet.data!, dormant: true, brief: 'b'.repeat(20_000), checks: [{ id: 'c1', description: 'd'.repeat(5_000), independent: false, status: 'pending' }] } }))).toBe(true)
+    const cache = new SwarmCache(stamps, { delta: readDelta(db) })
+    await db.$runCommandRaw({ profile: 2 })
+    const since = new Date()
+    let state: Awaited<ReturnType<typeof deriveLight>>
+    try {
+      state = await deriveLight(db, await cache.at([tabId]), tabId, { groups: 'working', machineId: 'host' })
+    } finally {
+      await db.$runCommandRaw({ profile: 0 })
+    }
+    const rows = await db.$runCommandRaw({ find: 'system.profile', filter: { ts: { $gte: { $date: since.toISOString() } }, ns: { $regex: '\\.SwarmGroup$' },
+      'command.pipeline.0.$match.agentIds': { $exists: true } }, projection: { _id: 0, responseLength: 1 } }) as { cursor: { firstBatch: Array<{ responseLength: number }> } }
+    expect(state!.groups.map(g => g.key)).toContain(quiet.key)
+    // The agent's read: light, so well under the brief it would carry whole.
+    const bytes = rows.cursor.firstBatch.reduce((n, r) => n + r.responseLength, 0)
+    expect(bytes).toBeGreaterThan(0)
+    expect(bytes).toBeLessThan(10_000)
+  })
+
   it('a write committed after the load but stamped 20 s earlier is in the next patch', async () => {
     const { tabId, web } = await scene()
     const cache = new SwarmCache(stamps, { delta: readDelta(db) })
