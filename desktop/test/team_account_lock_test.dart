@@ -492,7 +492,10 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(seconds: 6));
       await tester.pump();
-      expect(find.byKey(const Key('team-account-lock-confirm')), findsOneWidget);
+      expect(
+        find.byKey(const Key('team-account-lock-confirm')),
+        findsOneWidget,
+      );
       await tester.tap(find.byKey(const Key('team-account-lock-remove-back')));
       await tester.pump();
       expect(find.byKey(const Key('team-account-lock-confirm')), findsNothing);
@@ -514,56 +517,70 @@ void main() {
   // Scholes, 2026-11-04: the new member's setup did finish, after about 7
   // minutes on a screen that showed no progress. It says the step and the
   // time so far, and which step can take minutes.
-  testWidgets('while it waits, it says the step setup is on and how long it has run', (
-    tester,
-  ) async {
-    daemon.statuses
-      ..clear()
-      ..addAll([
-        {'ok': true, 'state': 'running', 'step': 'password', 'elapsedMs': 1500},
-        {'ok': true, 'state': 'running', 'step': 'engines', 'elapsedMs': 125000},
-      ]);
-    await window(tester, app);
-    await lock(tester);
-    await tester.tap(find.byKey(const Key('team-account-lock-continue')));
-    await tester.pump();
-    await tester.pump(const Duration(seconds: 2));
-    expect(
-      outcome(tester),
-      'macOS is asking for your password in a window titled “osascript”. '
-      'Setup then takes a minute or two, and Harness opens when it is done.',
-    );
-    expect(find.text('1 s so far.'), findsOneWidget);
-    await tester.pump(const Duration(seconds: 2));
-    expect(
-      outcome(tester),
-      'Installing Claude Code and Codex for Harness Team. '
-      'On a new Mac this can take several minutes.',
-    );
-    expect(
-      find.text('Step 5 of 8 · 2 min 5 s so far. Harness opens when it is done.'),
-      findsOneWidget,
-    );
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
-    expect(find.byKey(const Key('team-account-lock-retry')), findsOneWidget);
-  });
+  testWidgets(
+    'while it waits, it says the step setup is on and how long it has run',
+    (tester) async {
+      daemon.statuses
+        ..clear()
+        ..addAll([
+          {
+            'ok': true,
+            'state': 'running',
+            'step': 'password',
+            'elapsedMs': 1500,
+          },
+          {
+            'ok': true,
+            'state': 'running',
+            'step': 'engines',
+            'elapsedMs': 125000,
+          },
+        ]);
+      await window(tester, app);
+      await lock(tester);
+      await tester.tap(find.byKey(const Key('team-account-lock-continue')));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 2));
+      expect(
+        outcome(tester),
+        'macOS is asking for your password in a window titled “osascript”. '
+        'Setup then takes a minute or two, and Harness opens when it is done.',
+      );
+      expect(find.text('1 s so far.'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 2));
+      expect(
+        outcome(tester),
+        'Installing Claude Code and Codex for Harness Team. '
+        'On a new Mac this can take several minutes.',
+      );
+      expect(
+        find.text(
+          'Step 5 of 8 · 2 min 5 s so far. Harness opens when it is done.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(find.byKey(const Key('team-account-lock-retry')), findsOneWidget);
+    },
+  );
 
-  testWidgets('Try again while it waits opens the app once the account is made', (
-    tester,
-  ) async {
-    await window(tester, app);
-    await lock(tester);
-    await tester.tap(find.byKey(const Key('team-account-lock-continue')));
-    await tester.pump();
-    daemon.statuses
-      ..clear()
-      ..add({'ok': true, 'state': 'exists'});
-    await tester.tap(find.byKey(const Key('team-account-lock-retry')));
-    await tester.pump();
-    await tester.pump();
-    expect(daemon.asked.where((a) => a == 'teamSetup'), hasLength(1));
-    expect(find.byKey(const Key('team-account-lock')), findsNothing);
-  });
+  testWidgets(
+    'Try again while it waits opens the app once the account is made',
+    (tester) async {
+      await window(tester, app);
+      await lock(tester);
+      await tester.tap(find.byKey(const Key('team-account-lock-continue')));
+      await tester.pump();
+      daemon.statuses
+        ..clear()
+        ..add({'ok': true, 'state': 'exists'});
+      await tester.tap(find.byKey(const Key('team-account-lock-retry')));
+      await tester.pump();
+      await tester.pump();
+      expect(daemon.asked.where((a) => a == 'teamSetup'), hasLength(1));
+      expect(find.byKey(const Key('team-account-lock')), findsNothing);
+    },
+  );
 
   testWidgets('Harness unreachable says so, with Try again', (tester) async {
     daemon.run = {'error': 'SERVICE_UNAVAILABLE'};

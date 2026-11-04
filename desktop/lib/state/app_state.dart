@@ -2644,6 +2644,15 @@ class AppNotifier extends ChangeNotifier {
   /// cancel, `{state: failed, detail}`, `running`, `exists` or `none`. Null
   /// when it cannot say: not this Mac's to set up, or a daemon too old.
   Future<({String state, String? detail})?> teamSetupStatus() async {
+    final read = await teamSetupProgress();
+    return read == null ? null : (state: read.state, detail: read.detail);
+  }
+
+  /// [teamSetupStatus], and while setup runs, [step]: the step it is on, and
+  /// [elapsed]: how long it has run, when the daemon says (the setup lock's
+  /// waiting step, Scholes 2026-11-04).
+  Future<({String state, String? detail, String? step, Duration? elapsed})?>
+  teamSetupProgress() async {
     final here = _teamAccountHere();
     if (here == null) return null;
     try {
@@ -2653,7 +2662,16 @@ class AppNotifier extends ChangeNotifier {
       final state = answer['state'];
       if (state is! String) return null;
       final detail = answer['detail'];
-      return (state: state, detail: detail is String ? detail : null);
+      final step = answer['step'];
+      final elapsedMs = answer['elapsedMs'];
+      return (
+        state: state,
+        detail: detail is String ? detail : null,
+        step: step is String ? step : null,
+        elapsed: elapsedMs is num && elapsedMs >= 0
+            ? Duration(milliseconds: elapsedMs.round())
+            : null,
+      );
     } catch (_) {
       return null;
     }
