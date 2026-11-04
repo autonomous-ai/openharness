@@ -5559,6 +5559,17 @@ describe('agent.rename (renaming a harness renames its agent, task #2912)', () =
     expect(named('Release notes', 'ok')).toBe('Release notes')
   })
 
+  // The row Add agent writes in the project chat names the agent as readers see it, never the name the rules refused.
+  it('agent.add in the project chat writes no refused name into its row', () => {
+    const f = fixture()
+    for (const [i, name] of ['[Approve](https://ev.il)', 'System'].entries()) {
+      const row = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: `p${i}`, name, configuration: config, lead: false },
+        owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).messages.find(m => m.text.includes('to the project'))!.text
+      expect(row, name).toContain('added')
+      expect(row, name).not.toContain(name)
+    }
+  })
+
   it('cleans credentials out of the name', () => {
     const github = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_'), removed: CredentialKind[] = []
     expect(withoutCredentials(rename('a', github), removed)).toMatchObject({ name: CREDENTIAL_MARKER })
