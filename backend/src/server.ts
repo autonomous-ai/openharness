@@ -30,6 +30,7 @@ import { startMemoryStats } from './lib/memoryStats.js'
 import { readDelta } from './superTabs/cachedReads.js'
 import { watchGroupIndexes } from './superTabs/parts/indexed.js'
 import { startMessageReadStats } from './superTabs/messageReadStats.js'
+import { startMessageReachStats } from './superTabs/messageReachStats.js'
 import { useSharedSsoProfileStore } from './lib/ssoAuth.js'
 import { useSharedRateCounter } from './lib/rateLimit.js'
 import { createRouteRateLimit } from './middlewares/routeRateLimit.js'
@@ -167,6 +168,8 @@ async function start(): Promise<void> {
   const stopRouteLatency = startRouteLatency(registerRouteLatency(app))
   // Every minute: who reads messages how, with the rows each page decoded and showed (superTabs/messageReadStats.ts).
   const stopMessageReadStats = startMessageReadStats()
+  // Every minute: how long messages took to reach their readers, p50/p95 per reader kind (superTabs/messageReachStats.ts).
+  const stopMessageReachStats = startMessageReachStats()
   // Every minute: how each frame an adapter sends for one viewer reached it, and how many processes each publish woke.
   const stopRelayStats = startRelayStats()
   // Frames for one viewer go to the process holding it (lib/terminalRoute.ts), unless TERMINAL_POD_ROUTES=off.
@@ -261,6 +264,7 @@ async function start(): Promise<void> {
       stopRouteLatency()
       stopMachineReportLog()
       stopMessageReadStats()
+      stopMessageReachStats()
       stopRelayStats()
       stopPodRoutes()
       // The database stays connected through the drain, for the requests still being served (lib/prisma.ts).
