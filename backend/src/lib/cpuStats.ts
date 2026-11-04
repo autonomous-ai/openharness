@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { constants, performance, PerformanceObserver } from 'node:perf_hooks'
+import type { FastifyInstance } from 'fastify'
 import { logger } from '../utils/logger.js'
 
 /**
@@ -159,4 +160,26 @@ export function startCpuStats({ everyMs = 60_000, log = (message, context) => lo
     flush,
     stop() { clearInterval(timer); const stop = stopGc; stopGc = undefined; stop?.() },
   }
+}
+
+/**
+ * Every object reply's JSON, timed: what `JSON.stringify` of big replies costs the main thread. Fastify's own serializer
+ * for a route without a response schema is that same `JSON.stringify` (fastify/lib/reply.js serialize), so the bytes do
+ * not change. A response schema would be bypassed by this serializer, so a route declaring one is refused at startup;
+ * none has one. Replies sent as strings or buffers are not serialized and not counted. Size is in characters, not bytes,
+ * to keep the count free.
+ */
+export function registerReplyJsonTiming(app: FastifyInstance, stats: Pick<CpuStats, 'replyJson'>): void {
+  app.addHook('onRoute', route => {
+    if (route.schema?.response) {
+      throw new Error(`${String(route.method)} ${route.url}: a response schema would be bypassed by the timed reply serializer ` +
+        '(lib/cpuStats.ts registerReplyJsonTiming); serialize in the handler instead')
+    }
+  })
+  app.setReplySerializer(payload => {
+    const start = performance.now()
+    const text = JSON.stringify(payload)
+    stats.replyJson(performance.now() - start, text.length)
+    return text
+  })
 }

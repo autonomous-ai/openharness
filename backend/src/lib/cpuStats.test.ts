@@ -124,14 +124,19 @@ describe('reply JSON timing', () => {
     await app.inject({ method: 'GET', url: '/text' })
     expect(replies).toHaveLength(1)
     expect(replies[0]![0]).toBeGreaterThanOrEqual(0)
-    expect(replies[0]![1]).toBe(Buffer.byteLength(JSON.stringify(payload)))
+    expect(replies[0]![1]).toBe(JSON.stringify(payload).length)
     await app.close()
   })
 
   it('refuses at startup a route whose response schema the timed serializer would bypass', async () => {
     const app = Fastify()
     registerReplyJsonTiming(app, { replyJson: () => {} })
-    app.get('/schema', { schema: { response: { 200: { type: 'object', properties: { ok: { type: 'boolean' } } } } } }, async () => ({ ok: true }))
-    await expect(app.ready()).rejects.toThrow(/response schema/)
+    const schema = { response: { 200: { type: 'object', properties: { ok: { type: 'boolean' } } } } }
+    expect(() => app.get('/schema', { schema }, async () => ({ ok: true }))).toThrow(/response schema/)
+    // In a plugin, the same refusal fails the server's start.
+    const plugin = Fastify()
+    registerReplyJsonTiming(plugin, { replyJson: () => {} })
+    plugin.register(async child => { child.get('/schema', { schema }, async () => ({ ok: true })) })
+    await expect(plugin.ready()).rejects.toThrow(/response schema/)
   })
 })
