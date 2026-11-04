@@ -1311,6 +1311,8 @@ export class SuperTabStore {
       if (input.command?.type === 'message.send' && input.command.newSession && done.result.startId) logger.info('Buddy session started', { tabId, startId: done.result.startId })
       return done
     } catch (error) {
+      // Its code and type alone, no values: a Swarm refusing a machine went unseen (MACHINES_FULL, Ken, 2026-11-04).
+      if (error instanceof SuperTabError && input.command?.type) logger.warn('Swarm command refused', { code: error.code, type: input.command.type })
       if (input.command?.type === 'message.send' && input.command.newSession && error instanceof SuperTabError) logger.info('Buddy session refused', { tabId, code: error.code })
       // A refusal for a bot's push rolled its mark back. The mark stays, so a post or a join that reads no GitHub is refused next (review 1 of #2559).
       const pushedOn = input.command && 'conversationId' in input.command ? input.command.conversationId : undefined
