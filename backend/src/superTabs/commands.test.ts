@@ -5484,6 +5484,47 @@ describe('agent.rename (renaming a harness renames its agent, task #2912)', () =
     f.run(rename(taken, 'Quinn'))
   })
 
+  // Security review 2 of #3015: an agent's name passes every rule a person's does, and tells nobody what they cannot read.
+  it('refuses the Swarm\'s own voices, a web address or link, and a blank made of Braille (security review 2)', () => {
+    const f = fixture(), agentId = f.add('mine')
+    for (const name of ['System', 'Harness', 'Admin', 'Everyone', 'You', 'Someone 2', 'Tester', 'www.evil.example', '[Approve](https://ev.il)',
+      'Lead\u2800', '\u2800', '\u2800\u2800\u2800']) {
+      expect(() => f.run(rename(agentId, name)), name).toThrow(expect.objectContaining({ code: expect.stringMatching(/^(INVALID_AGENT_NAME|AGENT_NAME_ROLE|INVALID_NAME|NAME_RESERVED)$/) }))
+    }
+  })
+
+  it('refuses a name a person here goes by: their name, username or email', () => {
+    const f = fixture(), agentId = f.add('mine')
+    f.invite()
+    f.state.people.find(p => p.id === 'peer')!.name = 'Minh Nguyen'
+    for (const name of ['minh nguyen', 'Ｍinh Nguyen', 'peer', '@Peer', 'peer@example.com', 'owner']) {
+      expect(() => f.run(rename(agentId, name)), name).toThrow(expect.objectContaining({ code: expect.stringMatching(/^(AGENT_NAME_TAKEN|NAME_TAKEN)$/) }))
+    }
+  })
+
+  it('does not tell a reader that an agent they cannot read has a name (security review 2)', () => {
+    const f = fixture()
+    f.invite()
+    const other = f.run({ type: 'project.create', name: 'Other', visibility: 'private', brief: '' }).result
+    const hidden = f.add('hidden', 'owner', other.conversationId as string)
+    f.run(rename(hidden, 'Quinn'))
+    const mine = f.add('mine', 'peer')
+    // The peer reads nothing of the private project: the name is not taken for them, and no refusal says it exists.
+    f.run(rename(mine, 'Quinn'), peer)
+    expect(shownTo(f, peer, mine)).toBe('Quinn')
+    // The owner reads both, so a second Quinn is refused for them.
+    const third = f.add('third', 'owner')
+    expect(() => f.run(rename(third, 'Quinn'))).toThrow(expect.objectContaining({ code: 'AGENT_NAME_TAKEN' }))
+  })
+
+  it('refuses a viewer', () => {
+    const f = fixture()
+    f.invite()
+    const agentId = f.add('mine', 'peer')
+    f.state.people.find(p => p.id === 'peer')!.role = 'viewer'
+    expect(() => f.run(rename(agentId, 'Studio'), peer)).toThrow(expect.objectContaining({ code: 'READ_ONLY' }))
+  })
+
   it('cleans credentials out of the name', () => {
     const github = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_'), removed: CredentialKind[] = []
     expect(withoutCredentials(rename('a', github), removed)).toMatchObject({ name: CREDENTIAL_MARKER })
