@@ -30,7 +30,7 @@ const STATES: ReadonlySet<string> = new Set(['ask', 'stuck', 'work', 'done'])
 const CHATS: ReadonlySet<string> = new Set(['lead', 'pm', 'group', 'buddy'])
 /** The Lead's notice comes from its Lead or Buddy chat, the Buddy's quiet one from its chat alone: an older dial reads only
  *  the first, so the Buddy's words never reach it. */
-const NOTICE_CHATS: ReadonlySet<string> = new Set(['lead', 'pm'])
+const NOTICE_CHATS: ReadonlySet<string> = new Set(['lead', 'pm', 'group'])
 const BUDDY_NOTICE_CHATS: ReadonlySet<string> = new Set(['buddy'])
 /** Desktop's pattern is the 15 half bits of a 5×5 grid (superTabs/buddyAvatar.ts). */
 const MAX_CELLS = 0x7fff

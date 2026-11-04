@@ -31,10 +31,11 @@ import { threadSummaries } from '../threads.js'
 import { sessionReadsRow } from '../buddySessions.js'
 import { readMarks, readThreadMarkRows, type ThreadMarkRow } from '../readMarks.js'
 import { voiceLabel } from '../voiceMessages.js'
-import { readBy } from '../parts/indexed.js'
+import { READ_BATCH, readBy } from '../parts/indexed.js'
 import { logger } from '../../utils/logger.js'
 import { ms } from '../parts/light.js'
 import type { SuperTabStore } from '../store.js'
+import { chatTop, chatVersion, rangeCache, rangeKey } from './rangeCache.js'
 
 /** Rows past the read mark read per chat: the newest ones, so the latest replies are always counted. */
 export const UNREAD_SCAN = 100
@@ -150,15 +151,45 @@ export async function perRange(db: PrismaClient, pipelines: Prisma.InputJsonValu
   const rows: Row[] = []
   for (let i = 0; i < pipelines.length; i += CHATS_PER_READ) {
     const [first, ...rest] = pipelines.slice(i, i + CHATS_PER_READ)
+    // Every row in the first reply (READ_BATCH, as readBy asks): Mongo's default first batch of 101 left the rest of 30 chats'
+    // scans to a getMore, 32% of the slow message ops in Ken's log of 11-04 (~419 rows each).
     const raw = await db.superTabMessage.aggregateRaw({ pipeline: [...first!,
-      ...rest.map(pipeline => ({ $unionWith: { coll: 'SuperTabMessage', pipeline } }))] }) as unknown as Array<Record<string, unknown>>
+      ...rest.map(pipeline => ({ $unionWith: { coll: 'SuperTabMessage', pipeline } }))], options: { batchSize: READ_BATCH } }) as unknown as Array<Record<string, unknown>>
     rows.push(...raw.map(row))
   }
   return rows
 }
 
-/** One thread's rows in a sequence range. */
-export interface ThreadRange { conversationId: string; thread: string; sequence: Record<string, number> }
+/** One thread's rows in a sequence range. With `version` (its chat's chatVersion) and bounds no new row can enter (at most
+ *  the chat's chatTop), its rows are kept and a re-read of it reads nothing (rangeCache.ts). */
+export interface ThreadRange { conversationId: string; thread: string; sequence: Record<string, number>; version?: number }
+
+/** The ranges this process kept (rangeCache.ts): chats' scans and previews, and threads' ranges. */
+const kept = rangeCache<Row>()
+
+/** Each chat's `limit` newest rows in its range, newest first, chat by chat, as perRange of each chat's newestIn answers: a range
+ *  kept since its chat last changed is not read again, and only the others are, in one perRange. `fields` names the projection
+ *  in the key. Each range must be bounded by its chat's chatTop. */
+async function chatRanges(db: PrismaClient, tabId: string, of: ReadonlyArray<{ group: Conversation; sequence: Record<string, number> }>,
+  limit: number, fields: 'scan' | 'preview'): Promise<Row[]> {
+  const keyed = of.map(c => ({ ...c, key: rangeKey(tabId, c.group.id, null, c.sequence, limit, chatVersion(c.group), fields) }))
+  const held = new Map<string, Row[]>()
+  const misses = keyed.filter(c => {
+    const rows = kept.get(c.key)
+    if (rows) held.set(c.key, rows)
+    return !rows
+  })
+  if (misses.length) {
+    const read = groupBy(await perRange(db, misses.map(c => newestIn(tabId, c.group.id, c.sequence, limit, fields === 'scan' ? SCAN_FIELDS : FIELDS))),
+      m => m.conversationId)
+    for (const c of misses) {
+      const rows = read.get(c.group.id) ?? []
+      kept.set(c.key, rows)
+      held.set(c.key, rows)
+    }
+  }
+  return keyed.flatMap(c => held.get(c.key)!)
+}
 
 /**
  * Each range's newest `limit` rows, newest first, range by range, as `perRange` of each thread's own pipeline answers, or only those
@@ -168,7 +199,26 @@ export interface ThreadRange { conversationId: string; thread: string; sequence:
  * so past a cap of a quarter of what the ranges' limits allow, a batch of long threads takes the union instead, which bounds each one.
  */
 export async function newestInThreads(db: PrismaClient, tabId: string, ranges: ThreadRange[], limit: number, namedBy?: string): Promise<Row[]> {
-  const rows: Row[] = []
+  // A range kept since its chat last changed is not read again (rangeCache.ts); only the others go to the database.
+  const keyOf = (r: ThreadRange) => r.version === undefined ? undefined : rangeKey(tabId, r.conversationId, r.thread, r.sequence, limit, r.version, 'scan', namedBy)
+  const held = new Map<ThreadRange, Row[]>()
+  const misses = ranges.filter(r => {
+    const key = keyOf(r), rows = key === undefined ? undefined : kept.get(key)
+    if (rows) held.set(r, rows)
+    return !rows
+  })
+  const read = misses.length ? await readThreadRanges(db, tabId, misses, limit, namedBy) : new Map<string, Row[]>()
+  for (const r of misses) {
+    const rows = read.get(threadKey(r.conversationId, r.thread)) ?? [], key = keyOf(r)
+    if (key !== undefined) kept.set(key, rows)
+    held.set(r, rows)
+  }
+  return ranges.flatMap(r => held.get(r)!)
+}
+
+/** newestInThreads' reads, each thread's rows by threadKey. */
+async function readThreadRanges(db: PrismaClient, tabId: string, ranges: ThreadRange[], limit: number, namedBy?: string): Promise<Map<string, Row[]>> {
+  const rows = new Map<string, Row[]>()
   const named = namedBy === undefined ? [] : [{ $match: { $or: [{ 'author.kind': 'person', 'author.id': namedBy }, { mentions: namedBy }] } }]
   for (let i = 0; i < ranges.length; i += CHATS_PER_READ) {
     const batch = ranges.slice(i, i + CHATS_PER_READ)
@@ -185,12 +235,12 @@ export async function newestInThreads(db: PrismaClient, tabId: string, ranges: T
       Array<{ _id: { conversationId: string; thread: string }; seen: number; newest: Array<Record<string, unknown>> }>
     if (found.reduce((seen, thread) => seen + Number(thread.seen), 0) > cap) {
       logger.info('[inbox] a batch of thread ranges passed its cap and read by union', { ranges: batch.length, limit })
-      rows.push(...await perRange(db, batch.map(r => [{ $match: { tabId, conversationId: r.conversationId, thread: r.thread, sequence: r.sequence } },
-        { $sort: { sequence: -1 } }, { $limit: limit }, ...named, { $project: { ...SCAN_FIELDS, conversationId: 1 } }] as Prisma.InputJsonValue[])))
+      const each = await perRange(db, batch.map(r => [{ $match: { tabId, conversationId: r.conversationId, thread: r.thread, sequence: r.sequence } },
+        { $sort: { sequence: -1 } }, { $limit: limit }, ...named, { $project: { ...SCAN_FIELDS, conversationId: 1 } }] as Prisma.InputJsonValue[]))
+      for (const [key, found] of groupBy(each, m => threadKey(m.conversationId, m.thread!))) rows.set(key, found)
       continue
     }
-    const byThread = new Map(found.map(thread => [threadKey(thread._id.conversationId, thread._id.thread), thread.newest]))
-    for (const r of batch) rows.push(...(byThread.get(threadKey(r.conversationId, r.thread)) ?? []).map(row))
+    for (const thread of found) rows.set(threadKey(thread._id.conversationId, thread._id.thread), thread.newest.map(row))
   }
   return rows
 }
@@ -217,8 +267,12 @@ export async function namedInThreads(db: PrismaClient, tabId: string, state: Sup
     for (const t of summed) if (naming.has(`${t.conversationId}\u0000${t.thread}`)) named.add(threadKey(t.conversationId, t.thread))
   }
   if (scanned.length) {
-    const rows = await newestInThreads(db, tabId, scanned.map(t => ({ conversationId: t.conversationId, thread: t.thread, sequence: { $lte: t.sequence } })),
-      MEMBER_SCAN, personId)
+    const groups = new Map(state.conversations.map(g => [g.id, g]))
+    const rows = await newestInThreads(db, tabId, scanned.map(t => {
+      const group = groups.get(t.conversationId)
+      return { conversationId: t.conversationId, thread: t.thread, ...group
+        ? { sequence: { $lte: Math.min(t.sequence, chatTop(group)) }, version: chatVersion(group) } : { sequence: { $lte: t.sequence } } }
+    }), MEMBER_SCAN, personId)
     for (const m of await readable(db, tabId, rows, state)) named.add(threadKey(m.conversationId, m.thread!))
   }
   return named
@@ -232,14 +286,14 @@ const newestIn = (tabId: string, conversationId: string, sequence: Record<string
  *  before it only for a chat where that row is not one (an older chat's newest row may be a thread reply or a hidden copy).
  *  `more` when such a chat has none in that range. */
 export async function latestIn(db: PrismaClient, tabId: string, state: SuperTabState, chats: Conversation[]): Promise<{ latest: Map<string, Row>; more: boolean }> {
-  const tops = chats.flatMap(g => { const top = g.lastMainSequence ?? g.lastMessageSequence; return top ? [{ id: g.id, top }] : [] })
+  const tops = chats.flatMap(g => { const top = g.lastMainSequence ?? g.lastMessageSequence; return top ? [{ id: g.id, top, group: g }] : [] })
   const pick = async (rows: Row[]) => {
     const shown = (await readable(db, tabId, rows, state)).filter(isMain)
     const newest = new Map<string, Row>()
     for (const m of shown) if (!newest.has(m.conversationId)) newest.set(m.conversationId, m)
     return newest
   }
-  const read = (of: typeof tops, limit: number) => perRange(db, of.map(c => newestIn(tabId, c.id, { $lte: c.top }, limit, FIELDS)))
+  const read = (of: typeof tops, limit: number) => chatRanges(db, tabId, of.map(c => ({ group: c.group, sequence: { $lte: Math.min(c.top, chatTop(c.group)) } })), limit, 'preview')
   const latest = await pick(await read(tops, 1))
   const missing = tops.filter(c => !latest.has(c.id))
   if (!missing.length) return { latest, more: false }
@@ -277,8 +331,14 @@ async function threadsIn(db: PrismaClient, tabId: string, state: SuperTabState, 
   const own = (a: Pick<Author, 'kind' | 'id'>) => a.kind === 'person' && a.id === personId
   const inIt = (m: Row) => own(m.author) || m.mentions.includes(personId)
   const lagging = behind.slice(0, BEHIND_THREADS)
-  const [scanned, past] = await Promise.all([perRange(db, chats.map(g => newestIn(tabId, g.id, { $gt: marks.get(g.id)! }, UNREAD_SCAN + 1, SCAN_FIELDS))),
-    newestInThreads(db, tabId, lagging.map(r => ({ conversationId: r.conversationId, thread: r.threadId, sequence: { $gt: r.sequence } })), UNREAD_SCAN + 1)])
+  // Each range bounded by its chat's newest row and kept (rangeCache.ts): a re-read reads only the chats that moved.
+  const chatOf = new Map(readableChats.map(g => [g.id, g]))
+  const [scanned, past] = await Promise.all([chatRanges(db, tabId, chats.map(g => ({ group: g, sequence: { $gt: marks.get(g.id)!, $lte: chatTop(g) } })),
+    UNREAD_SCAN + 1, 'scan'),
+    newestInThreads(db, tabId, lagging.map(r => {
+      const group = chatOf.get(r.conversationId)!
+      return { conversationId: r.conversationId, thread: r.threadId, sequence: { $gt: r.sequence, $lte: chatTop(group) }, version: chatVersion(group) }
+    }), UNREAD_SCAN + 1)])
   const byChat = groupBy(scanned, m => m.conversationId)
   const pastByThread = groupBy(past, m => threadKey(m.conversationId, m.thread!))
   // A chat or thread whose newest UNREAD_SCAN rows do not reach its mark: older unread replies are not counted.

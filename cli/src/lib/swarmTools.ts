@@ -29,13 +29,16 @@ Every command starts \`harness super-tab --tab TAB\` (your tab id is in your lau
 \`post GROUP TEXT OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]...\`
 - Answer a message once, where it was asked: \`--answers MESSAGE_ID\` puts your answer right below a message in the main chat; \`--reply-to MESSAGE_ID\` puts it in the thread of a message that is in one. Open a thread yourself only for a back-and-forth on one topic, or to answer something far up the chat. Post with neither only to start a new topic.
 - \`--attach PATH\` sends a file (a screenshot, a log; up to 10 files of 256 MB each); TEXT may then be empty.
-- \`--mention PERSON\` tags a person by the id or email shown in status (up to 5), when you need them to act or decide; an @username or @email in TEXT tags too, outside code and links. Nobody is tagged who cannot read the conversation.
+- \`--mention PERSON\` tags a person by the username, display name or id shown in status (up to 5), when you need them to act or decide; an @username in TEXT tags too, outside code and links. Nobody is tagged who cannot read the conversation.
+- Never type a person's email: name them by username. A machine's privacy check stops a session whose command holds its owner's email until a person approves it.
 - Quote TEXT so the shell keeps it one argument.
 
 ### Who a post reaches
 - \`--to AGENT\` names the agents it reaches: any agent of this project, by id from status, up to 16. Named agents are told and join the conversation if they are not in it. A post reaches exactly the agents you name, no others.
-- With no \`--to\`, an agent's post reaches the project's coordinator; the coordinator's post in a task reaches the task's assigned agent. Name the agent whenever you answer one.
-- Nothing is dropped: a post that names no one still goes to its default addressee.
+- \`@Name\` in TEXT names an agent of this conversation the same way, when only one agent there goes by that name and no person does.
+- A reply (\`--reply-to\`) also reaches the agent who wrote the message it answers.
+- A post that names no one reaches no agent, except in a task or step, where it reaches the agent assigned there unless that is you. It stays readable in its conversation, and the people it tags are still told; its result says when it reached no agent.
+- The coordinator gets a post only when it is named: your status (done, needs_human, blocked) is how it hears your work, so never post it a result, a verdict, a Ready or an acknowledgement.
 - In the project chat, an agent with a task or step in the project posts and reacts without joining it, and a person's answer to its line reaches it; \`--to\` there adds no agent, so name only the coordinator.
 - A post stays inside your project. Private chats and Buddy chats keep their own members.
 

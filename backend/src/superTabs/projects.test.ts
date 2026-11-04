@@ -643,7 +643,8 @@ describe('whom a group\'s work is for', () => {
 
 // Security review 2 of #2492: the line comes with each task, from that task's requester, never once at the agent's start.
 describe('whom a task\'s pull requests are for', () => {
-  const line = (email: string) => `Start each pull request body with: Requested by ${email} through Harness.`
+  // By name, never email (task #2954): agents copied the email into pull requests and a privacy hook stopped them.
+  const line = (name: string) => `Start each pull request body with: Requested by ${name} through Harness.`
   it('ends each task\'s message with its own requester, for an Engineer reused across two people\'s tasks', () => {
     const f = setup()
     f.state.people.push({ id: 'third', email: 'third@example.com', role: 'collaborator', generation: 'first' })
@@ -657,11 +658,12 @@ describe('whom a task\'s pull requests are for', () => {
       f.run({ type: 'work.assign', conversationId: group, agentId: worker })
       return f.messages.find(m => m.conversationId === group && m.recipients?.includes(worker))!.text
     }
-    expect(assigned(first)).toBe(`Work for peer\n\nAcceptance checks:\n- Done\n\n${line('peer@example.com')}`)
+    expect(assigned(first)).toBe(`Work for peer\n\nAcceptance checks:\n- Done\n\n${line('peer')}`)
     f.run({ type: 'work.cancel', conversationId: first, assignmentId: f.state.conversations.find(c => c.id === first)!.assignment!.id, reason: 'Next one' })
     const text = assigned(second)
-    expect(text.endsWith(line('third@example.com'))).toBe(true)
-    expect(text).not.toContain('peer@example.com')
+    expect(text.endsWith(line('third'))).toBe(true)
+    expect(text).not.toContain('peer')
+    expect(text).not.toContain('@')
   })
 
   it('is the owner\'s for a group nobody asked for, and absent on the owner\'s own machine and for a review', () => {
@@ -671,7 +673,14 @@ describe('whom a task\'s pull requests are for', () => {
     const review = String(f.run({ type: 'conversation.create', title: 'Review', brief: '', checks: [], reviewOf: plain }).conversationId)
     const group = (id: string) => f.state.conversations.find(c => c.id === id)!
     const project = projectOf(f.state, 'lead'), agentOf = (owner: string) => ({ ...f.state.agents.find(a => a.id === worker)!, machineOwnerId: owner })
-    expect(requestedByLine(f.state, project, group(plain), agentOf('host'))).toBe(line('owner@example.com'))
+    expect(requestedByLine(f.state, project, group(plain), agentOf('host'))).toBe(line('owner'))
+    // The name they show, written as plain words (personNames.ts writtenNameOf).
+    f.state.people.find(p => p.id === 'owner')!.name = 'Ken *15*'
+    expect(requestedByLine(f.state, project, group(plain), agentOf('host'))).toBe(line('Ken \\*15\\*'))
+    // Never an email, even one they took as their name.
+    f.state.people.find(p => p.id === 'owner')!.name = 'owner@example.com'
+    expect(requestedByLine(f.state, project, group(plain), agentOf('host'))).toBe(line('owner'))
+    delete f.state.people.find(p => p.id === 'owner')!.name
     expect(requestedByLine(f.state, project, group(plain), agentOf('owner'))).toBeNull()
     expect(requestedByLine(f.state, project, group(review), agentOf('host'))).toBeNull()
     // An owner with no email on their row: no line, as the start gave none.

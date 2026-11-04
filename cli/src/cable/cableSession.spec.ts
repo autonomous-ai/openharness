@@ -5413,6 +5413,30 @@ describe('swarm cards', () => {
         } finally { await session.stop() }
       })
 
+      // A tag in a task thread (#2965): sent once, as `group` with its thread; a second card with that tag sends nothing, and
+      // one that arrives while the window has that thread open is read there.
+      it('a task thread\'s tag is sent once, and not while the window has that thread open', async () => {
+        const tagged = (id: string) => ({ chat: 'group' as const, chatId: 'g1', id, text: 'Sam: @diego look', at: 1792560000, thread: 'r1' })
+        const state: Parameters<typeof cardHost>[0] = { cards: [card('st1', [lead(1, { chat: pmChat })])] }
+        const { session, port } = await connect(cardHost(state))
+        try {
+          port.say(ROUND_THREAD)
+          await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+          state.cards = [card('st1', [lead(1, { chat: pmChat, notice: tagged('msg1') })])]
+          await session.syncSwarmCards()
+          await vi.waitFor(() => expect(ofType(port, 'supertab.notice')).toEqual([
+            { t: 'supertab.notice', tab: 'st1', lead: 'lead1', chat: 'group', chatId: 'g1', id: 'msg1', text: 'Sam: @diego look', at: 1792560000, thread: 'r1' }]))
+          await session.syncSwarmCards()
+          await new Promise((r) => setTimeout(r, 350))
+          expect(ofType(port, 'supertab.notice')).toHaveLength(1)
+          state.open = { superTabId: 'st1', projectId: 'proj1', conversationId: 'g1', threadRoot: 'r1', fromDevice: false }
+          state.cards = [card('st1', [lead(1, { chat: pmChat, notice: tagged('msg2') })])]
+          await session.syncSwarmCards()
+          await new Promise((r) => setTimeout(r, 350))
+          expect(ofType(port, 'supertab.notice')).toHaveLength(1)
+        } finally { await session.stop() }
+      })
+
       it('a dial without swarmThread gets today\'s frame for a thread notice', async () => {
         const state: Parameters<typeof cardHost>[0] = { cards: [card('st1', [lead(1, { chat: pmChat })])], open: { superTabId: 'st1', projectId: 'proj1', conversationId: 'pm1', fromDevice: false } }
         const { session, port } = await connect(cardHost(state))

@@ -389,9 +389,33 @@ class SwarmLeaderboardReader extends ChangeNotifier {
 
   /// Reads now, and every [every] after while the app is in front.
   void start() {
+    _arm();
+    unawaited(refresh());
+  }
+
+  void _arm() {
+    if (_disposed) return;
     _timer ??= Timer.periodic(every, (_) {
       if (inFront()) unawaited(refresh());
     });
+  }
+
+  bool _paused = false;
+
+  /// The app went into a pocket: no tick until [resume].
+  void pause() {
+    if (_disposed || _timer == null) return;
+    _paused = true;
+    _timer?.cancel();
+    _timer = null;
+  }
+
+  /// Back in front after [pause]: the board missed while away is read at once, and every [every]
+  /// from now. Without a [pause] first — a moment on the app switcher — nothing.
+  void resume() {
+    if (_disposed || !_paused) return;
+    _paused = false;
+    _arm();
     unawaited(refresh());
   }
 
