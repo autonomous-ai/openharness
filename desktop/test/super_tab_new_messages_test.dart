@@ -95,6 +95,21 @@ void main() {
     return top >= list.top && top < list.bottom;
   }
 
+  /// Down from the New messages line in view in wheel steps, as a reader
+  /// scrolls: past it, and short of the end, where the bar goes.
+  Future<void> readOn(WidgetTester tester, {String chat = 'lead'}) async {
+    final list = tester.getCenter(
+      find.byKey(PageStorageKey('super-messages-tab-$chat')),
+    );
+    for (var step = 0; step < 5; step++) {
+      tester.binding.handlePointerEvent(
+        PointerScrollEvent(position: list, scrollDelta: const Offset(0, 100)),
+      );
+      await tester.pump();
+    }
+    await tester.pumpAndSettle();
+  }
+
   testWidgets('opens at a New messages line just above the first unread '
       'message', (tester) async {
     final server = _server(40)..markReadElsewhere('lead', 30);
@@ -476,9 +491,7 @@ void main() {
     // Seen as the chat opened at it: the bar shows only once it is above.
     expect(onScreen(tester, find.byKey(_line)), isTrue);
     expect(find.byKey(_jump), findsNothing);
-    final position = scroll(tester);
-    position.jumpTo(position.maxScrollExtent);
-    await tester.pumpAndSettle();
+    await readOn(tester);
     expect(onScreen(tester, find.byKey(_line)), isFalse);
     expect(find.byKey(_jump), findsOneWidget);
     expect(
@@ -508,16 +521,68 @@ void main() {
     expect(find.byKey(_jump), findsNothing);
   });
 
+  // Huy's report of 11-04 (#2743): '7 new messages · Jump' stayed at the end
+  // of a chat he had read.
+  testWidgets('read through to the bottom, the bar goes for the visit and '
+      'the line stays', (tester) async {
+    final server = _server(60)..markReadElsewhere('lead', 20);
+    await show(tester, server);
+    final position = scroll(tester);
+    await readOn(tester);
+    expect(find.byKey(_jump), findsOneWidget);
+    position.jumpTo(position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    expect(find.byKey(_jump), findsNothing);
+    // Back up, the line still above, read through: still no bar, and the
+    // line is where the reader started.
+    position.jumpTo(position.pixels - 300);
+    await tester.pumpAndSettle();
+    expect(find.byKey(_jump), findsNothing);
+    await tester.dragUntilVisible(
+      find.byKey(_line),
+      find.byKey(const PageStorageKey('super-messages-tab-lead')),
+      const Offset(0, 200),
+    );
+    await tester.pumpAndSettle();
+    expect(onScreen(tester, find.byKey(_line)), isTrue);
+    expect(find.byKey(_jump), findsNothing);
+  });
+
+  testWidgets('at the end of the messages held while newer pages wait, the '
+      'bar stays', (tester) async {
+    final server = _server(200)..messagePage = 20;
+    server.markReadElsewhere('lead', 5);
+    final c = await show(tester, server);
+    await readOn(tester);
+    expect(find.byKey(_jump), findsOneWidget);
+    // Newer pages load as the reader nears the end: hold them.
+    final hold = server.holdReads = Completer<void>();
+    final position = scroll(tester);
+    position.jumpTo(position.maxScrollExtent);
+    for (var frame = 0; frame < 4; frame++) {
+      await tester.pump();
+    }
+    expect(c.hasNewer('lead'), isTrue);
+    expect(find.byKey(_jump), findsOneWidget);
+    server.holdReads = null;
+    hold.complete();
+    await tester.pumpAndSettle();
+    // Reading on saves the read mark a moment later (controller.dart `_saveSoon`).
+    await tester.pump(const Duration(milliseconds: 300));
+  });
+
   testWidgets('with the message list focused, Esc dismisses the bar and '
       'reads the chat', (tester) async {
     final server = _server(60)..markReadElsewhere('lead', 20);
     final c = await show(tester, server);
-    final position = scroll(tester);
-    position.jumpTo(position.maxScrollExtent);
-    await tester.pumpAndSettle();
+    await readOn(tester);
     expect(find.byKey(_jump), findsOneWidget);
     // Focus leaves the composer for the messages.
-    await tester.tap(find.text('Update 59'));
+    await tester.tapAt(
+      tester.getCenter(
+        find.byKey(const PageStorageKey('super-messages-tab-lead')),
+      ),
+    );
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.context?.widget.key,
@@ -536,9 +601,7 @@ void main() {
       'is above again', (tester) async {
     final server = _server(60)..markReadElsewhere('lead', 20);
     final c = await show(tester, server);
-    final position = scroll(tester);
-    position.jumpTo(position.maxScrollExtent);
-    await tester.pumpAndSettle();
+    await readOn(tester);
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     addTearDown(mouse.removePointer);
     await mouse.addPointer(location: tester.getCenter(find.byKey(_jump)));
@@ -546,8 +609,7 @@ void main() {
     await mouse.up();
     await tester.pumpAndSettle();
     expect(onScreen(tester, find.byKey(_line)), isTrue);
-    position.jumpTo(position.maxScrollExtent);
-    await tester.pumpAndSettle();
+    await readOn(tester);
     expect(find.byKey(_jump), findsOneWidget);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
@@ -578,9 +640,7 @@ void main() {
     expect(onScreen(tester, find.byKey(_line)), isTrue);
     expect(find.byKey(_jump), findsNothing);
     // Seen, and still the bar comes once the line is above the screen.
-    final position = scroll(tester);
-    position.jumpTo(position.maxScrollExtent);
-    await tester.pumpAndSettle();
+    await readOn(tester);
     expect(onScreen(tester, find.byKey(_line)), isFalse);
     expect(find.byKey(_jump), findsOneWidget);
   });
@@ -722,11 +782,14 @@ void main() {
         )
         .controller!
         .position;
-    position.jumpTo(position.maxScrollExtent);
-    await tester.pumpAndSettle();
+    await readOn(tester, chat: 'offline');
     // Read on past it, the line is above: the bar takes the pill's place.
     expect(find.byKey(_jump), findsOneWidget);
     expect(find.textContaining('new messages · Jump'), findsOneWidget);
+    // Seen and read through to the bottom: no way back is needed.
+    position.jumpTo(position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    expect(find.byKey(_jump), findsNothing);
   });
 
   testWidgets('opened at a linked message above the line, the pill points '
