@@ -264,6 +264,10 @@ describe('the devices\' Swarm card requests to the Super Tab service', () => {
     expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', chatId: 'pm1', reviewed: true })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chatId: 'pm1', reviewed: true })
     expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', chatId: 'pm1', reviewed: 'yes' })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chatId: 'pm1' })
     expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', chatId: 7 })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it' })
+    // A swarmThread dial's words carry the thread on the face as it began (null: none) and whether they may start one (#2756).
+    expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'b0', thread: 'm9', threaded: true })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'b0', thread: 'm9', threaded: true })
+    expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', thread: null })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it', thread: null })
+    expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', thread: 7, threaded: 'yes' })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it' })
     expect((await devices.answer('super_tabs', { action: 'cardSide', tabId: 't1', side: 'buddy', leadId: 'l1', text: 'x' })).echoed).toEqual({ action: 'cardSide', tabId: 't1', side: 'buddy' })
   })
 })
