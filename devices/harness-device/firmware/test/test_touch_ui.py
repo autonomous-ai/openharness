@@ -2289,6 +2289,34 @@ static void swarm_thread_notice_checks(void) {
     assert(ui_supertab_notice("s1", "T1", HT_CHAT_PM, "pm1", "m9", "Flashed.", 1792560005u));
     puts("Swarm thread notices: read at once only on that thread's face, a beep on the main chat or another thread, main-stream notices as before PASS");
 }
+// A tag in a task chat (#2965, Diego 2026-11-04): it alerts as a Lead's notice does, read at once only while the face shows
+// that very chat and thread, else it beeps and wakes. The daemon sends each tag once.
+static void group_lead(const char *id, const char *thread) {
+    ht_lead_in_t in = {.id = id, .project = "web", .engine = "claude", .local = "", .state = "work", .order = card.lead_n, .since = -1,
+                       .chat = "group", .chat_id = "g1", .chat_name = "Fix login", .thread = thread,
+                       .thread_title = thread[0] ? "Fix login on Safari" : "", .thread_replies = -1};
+    assert(ht_supertab_lead_add(&card, &in));
+}
+static void swarm_tag_notice_checks(void) {
+    reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); fake_ms = 100000;
+    desk_open();
+    const char ids[1][ID_MAX] = {"s1"};
+    ui_supertabs_ids(ids, 1);
+    card_begin("s1", "t1", "openharness"); group_lead("G0", "r1"); thread_lead("G1", "firmware", "", "", -1); assert(!card_send());
+    enter_at("s1", "G0"); scene_take();
+    assert(!strcmp(sw.lead, "G0"));
+    // The face is in that task chat's thread r1: the tag there is read at once, with no beep.
+    assert(!ui_supertab_notice("s1", "G0", HT_CHAT_GROUP, "g1", "r1", "Sam: @diego look", 1792560001u));
+    int e = swarm_entry("G0"); assert(e >= 0 && s.notice[e].read_on_dial);
+    // Another thread of the chat on the face beeps and stays unread; its main stream is that chat's, read at once.
+    assert(ui_supertab_notice("s1", "G0", HT_CHAT_GROUP, "g1", "r2", "Sam: @diego and here", 1792560002u));
+    e = swarm_entry("G0"); assert(e >= 0 && !s.notice[e].read_on_dial && !strcmp(s.notice[e].summary, "Sam: @diego and here"));
+    assert(!ui_supertab_notice("s1", "G0", HT_CHAT_GROUP, "g1", "", "Sam: @diego main", 1792560003u));
+    // Another project's task chat, off the face: it beeps and is that Lead's one entry, named for the Swarm.
+    assert(ui_supertab_notice("s1", "G1", HT_CHAT_GROUP, "g9", "", "River: @diego merged?", 1792560004u));
+    e = swarm_entry("G1"); assert(e >= 0 && !s.notice[e].read_on_dial && !strcmp(s.notice[e].summary, "River: @diego merged?"));
+    puts("Swarm tag notices: a task chat's tag is read at once only on that chat and thread's face, else it beeps PASS");
+}
 static void swarm_buddy_checks(const char *dir) {
     // 7a the PM side: today's face and two dots, the upper one lit.
     buddy_setup();
@@ -4076,6 +4104,7 @@ int main(int argc, char **argv) {
     swarm_buddy_checks(argc>1 ? argv[1] : NULL);
     swarm_thread_checks(argc>1 ? argv[1] : NULL);
     swarm_thread_notice_checks();
+    swarm_tag_notice_checks();
 }
 '''
 extra_sources = []
