@@ -17,6 +17,7 @@ import 'machine_status.dart';
 import 'model.dart';
 import 'pull_request_facts.dart';
 import 'task_status.dart';
+import 'visible_tick.dart';
 
 /// How many shipped tasks show before "Show N more shipped" (Scholes's
 /// mockup, task #2774).
@@ -85,7 +86,8 @@ class SuperTabBacklogView extends StatefulWidget {
   State<SuperTabBacklogView> createState() => _SuperTabBacklogViewState();
 }
 
-class _SuperTabBacklogViewState extends State<SuperTabBacklogView> {
+class _SuperTabBacklogViewState extends State<SuperTabBacklogView>
+    with WidgetsBindingObserver, VisibleTick<SuperTabBacklogView> {
   String? _project;
   bool _mine = false;
   String _query = '';
@@ -109,8 +111,33 @@ class _SuperTabBacklogViewState extends State<SuperTabBacklogView> {
 
   @override
   void dispose() {
-    widget.facts?.unwatch(_watched);
+    if (_watching) widget.facts?.unwatch(_watched);
     super.dispose();
+  }
+
+  /// Whether the rows' pull requests are watched: only while on screen, as live cards do, so a
+  /// hidden window asks GitHub nothing for them (task #2953).
+  bool _watching = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _hold(onScreen);
+  }
+
+  @override
+  void onScreenChanged(bool onScreen) => _hold(onScreen);
+
+  void _hold(bool onScreen) {
+    if (onScreen == _watching) return;
+    _watching = onScreen;
+    final facts = widget.facts;
+    if (facts == null) return;
+    if (onScreen) {
+      facts.watch(_watched);
+    } else {
+      facts.unwatch(_watched);
+    }
   }
 
   void _readClosed() => unawaited(
@@ -131,9 +158,11 @@ class _SuperTabBacklogViewState extends State<SuperTabBacklogView> {
     if (facts == null) return;
     final next = {for (final task in open) ?_pullRequest(task)};
     if (const SetEquality<String>().equals(next, _watched)) return;
-    facts
-      ..watch(next.difference(_watched))
-      ..unwatch(_watched.difference(next));
+    if (_watching) {
+      facts
+        ..watch(next.difference(_watched))
+        ..unwatch(_watched.difference(next));
+    }
     _watched = next;
   }
 

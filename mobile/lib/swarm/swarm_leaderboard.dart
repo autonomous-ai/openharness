@@ -204,7 +204,8 @@ class SwarmLeaderboardPage extends StatefulWidget {
   State<SwarmLeaderboardPage> createState() => _SwarmLeaderboardPageState();
 }
 
-class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
+class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage>
+    with WidgetsBindingObserver {
   SwarmSession? _session;
 
   /// The Swarm's reader, for the members' names; null until it is listed.
@@ -223,6 +224,31 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
 
   /// The week picker, while it is up: it goes with the board.
   ModalRoute<void>? _picker;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  /// The app is in a pocket: a board started meanwhile waits for it too.
+  bool _away = false;
+
+  /// In a pocket (`hidden`, `paused`) the board is not read; back in front it is read once at once,
+  /// then on its interval ([SwarmLeaderboardReader.resume]). `inactive` changes nothing.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.hidden || AppLifecycleState.paused:
+        _away = true;
+        _board?.pause();
+      case AppLifecycleState.resumed:
+        _away = false;
+        _board?.resume();
+      case AppLifecycleState.inactive || AppLifecycleState.detached:
+        break;
+    }
+  }
 
   @override
   void didUpdateWidget(SwarmLeaderboardPage old) {
@@ -285,6 +311,7 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
       inFront: () => session.inbox.shown,
     )..addListener(_changed);
     _board!.start();
+    if (_away) _board!.pause();
   }
 
   void _changed() {
@@ -349,6 +376,7 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
     _session?.leave();
     _swarm?.removeListener(_swarmChanged);
     _board?.dispose();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
