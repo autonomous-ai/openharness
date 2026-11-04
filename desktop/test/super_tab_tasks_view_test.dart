@@ -342,6 +342,33 @@ void main() {
     await _close(tester, c);
   });
 
+  testWidgets('an empty column says No tasks in the caption color', (
+    tester,
+  ) async {
+    final server = tasksServer();
+    (server.state['conversations'] as List).removeWhere(
+      (g) => (g as Map)['id'] == 'tag',
+    );
+    final c = await _show(tester, server);
+    final empty = find.descendant(
+      of: _column('working'),
+      matching: find.text('No tasks'),
+    );
+    expect(empty, findsOneWidget);
+    expect(
+      tester.widget<Text>(empty).style?.color,
+      grid.AppPalette.textSecondary,
+    );
+    for (final name in ['proposals', 'nextUp', 'waiting', 'shipped']) {
+      expect(
+        find.descendant(of: _column(name), matching: find.text('No tasks')),
+        findsNothing,
+        reason: name,
+      );
+    }
+    await _close(tester, c);
+  });
+
   testWidgets('a project with no tasks says so', (tester) async {
     final c = await _show(tester, tasksServer(empty: true));
     expect(find.text('No tasks yet'), findsOneWidget);
