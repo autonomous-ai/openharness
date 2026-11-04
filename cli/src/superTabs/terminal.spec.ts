@@ -8,13 +8,16 @@ import { capScreen, limitOf, modelFailing, TerminalHost, typedKeys } from './ter
 const row = (agentId = 'a1', harnessId = 'h1', over: Record<string, unknown> = {}) => ({ tabId: 'tab', agent: { id: agentId, harnessId, machineId: 'm1' }, ...over })
 type Sent = { path: string; body: Record<string, any> }
 
-function setup(options: { live?: string[]; screen?: (harnessId: string) => SuperTabScreen; requests?: unknown[] } = {}) {
+function setup(options: { live?: string[]; screen?: (harnessId: string) => SuperTabScreen; requests?: unknown[];
+  refuse?: (command: Record<string, any>) => { status: number; code: string } | null } = {}) {
   let clock = 1_000_000
   const sent: Sent[] = []
   let pending = options.requests ?? []
   const backend: CoreApi['account']['backend'] = vi.fn(async (method, path, body) => {
     if (path === '/api/super-tabs/hosts/m1/terminal') { const rows = pending; pending = []; return { status: 200, body: { success: true, data: rows } } }
     sent.push({ path, body: body as Record<string, any> })
+    const refused = options.refuse?.((body as Record<string, any>).command)
+    if (refused) return { status: refused.status, body: { success: false, error: { code: refused.code, message: 'Refused.' } } }
     return { status: 200, body: { success: true, data: { result: {} } } }
   })
   let screen = options.screen ?? (() => ({ ok: true as const, text: '> ', hold: null }))
@@ -191,6 +194,27 @@ describe('terminal requests the server pushes', () => {
 describe('the stuck and usage-limit alerts', () => {
   const prompt = (): SuperTabScreen => ({ ok: true, text: 'Do you want to proceed?\n❯ 1. Yes\n  2. No', hold: 'permission_open' })
   const idle = (): SuperTabScreen => ({ ok: true, text: '> ', hold: null })
+
+  // Ken's prod scan (11-04): 116 agent.alert refusals in 32 minutes, AGENT_UNAVAILABLE: an alert the Swarm will never take
+  // (its agent gone or to be shared again) was tried again on every 15-second read.
+  it('does not send again an alert the Swarm refused for good (#2675)', async () => {
+    const t = setup({ screen: prompt, refuse: command => command.type === 'agent.alert' ? { status: 400, code: 'AGENT_UNAVAILABLE' } : null })
+    await t.host.tick([row()])
+    t.wait(180_000); await t.host.tick([row()])
+    expect(t.alerts()).toHaveLength(1)
+    for (let i = 0; i < 20; i++) { t.wait(15_000); await t.host.tick([row()]) }
+    expect(t.alerts()).toHaveLength(1)
+  })
+
+  it('backs off an alert the backend could not take for now (#2675)', async () => {
+    const t = setup({ screen: prompt, refuse: command => command.type === 'agent.alert' ? { status: 503, code: 'BACKEND_UNAVAILABLE' } : null })
+    await t.host.tick([row()])
+    t.wait(180_000); await t.host.tick([row()])
+    // Ten minutes of reads: 40 tries at the old pace.
+    for (let i = 0; i < 40; i++) { t.wait(15_000); await t.host.tick([row()]) }
+    expect(t.alerts().length).toBeGreaterThanOrEqual(2)
+    expect(t.alerts().length).toBeLessThanOrEqual(8)
+  })
 
   it('alerts once when a prompt has waited 3 minutes, and ends the episode when it is answered', async () => {
     const t = setup({ screen: prompt })

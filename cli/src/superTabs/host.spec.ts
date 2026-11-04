@@ -577,6 +577,53 @@ describe('Super Tab native delivery handoff', () => {
     host.stop(); release()
     await Promise.resolve()
   })
+  // Ken's prod scan (11-04): 615 agent.configuration refusals in 32 minutes, AGENT_UNAVAILABLE, about 19 a minute: a host
+  // re-posts every 5 s an observation the Swarm will never take (an agent that must be shared again, or is gone).
+  describe('a configuration report the Swarm refuses (#2675)', () => {
+    const refusing = (t: ReturnType<typeof setup>, status: number, code: string) => {
+      vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', engine: 'claude' } as never)
+      vi.mocked(t.core.agents.runtimeProfile).mockReturnValue('runtime-v1:harness:claude:sonnet@high')
+      const original = vi.mocked(t.call).getMockImplementation()!
+      const sent: string[] = []
+      vi.mocked(t.call).mockImplementation(async (...args) => {
+        const body = args[2] as { operationId?: string; command?: { type?: string } } | undefined
+        if (args[1].endsWith('/commands') && body?.command?.type === 'agent.configuration') {
+          sent.push(body.operationId!)
+          return { status, body: { success: false, error: { code, message: 'Refused.' } } }
+        }
+        return original(...args)
+      })
+      return sent
+    }
+    const passes = async (host: SuperTabHost, t: ReturnType<typeof setup>, count: number) => {
+      for (let i = 0; i < count; i++) {
+        await host.tick()
+        await new Promise(resolve => setImmediate(resolve))
+        t.wait(5_000)
+      }
+    }
+
+    it('is not sent again after a permanent refusal, and a new reading is reported once', async () => {
+      const t = setup(), host = t.open()
+      const sent = refusing(t, 400, 'AGENT_UNAVAILABLE')
+      await passes(host, t, 12)
+      expect(sent).toHaveLength(1)
+      vi.mocked(t.core.agents.runtimeProfile).mockReturnValue('runtime-v1:harness:claude:opus@high')
+      await passes(host, t, 12)
+      expect(sent).toHaveLength(2)
+      expect(new Set(sent).size).toBe(2)
+    })
+
+    it('backs off after a passing failure instead of sending every 5 seconds', async () => {
+      const t = setup(), host = t.open()
+      const sent = refusing(t, 503, 'BACKEND_UNAVAILABLE')
+      // Two minutes of passes: 24 at the old pace.
+      await passes(host, t, 24)
+      expect(sent.length).toBeGreaterThanOrEqual(2)
+      expect(sent.length).toBeLessThanOrEqual(6)
+    })
+  })
+
   it('retires a human-resolved journal entry without resubmitting its native input', async () => {
     const t = setup(), host = t.open()
     await host.tick(); t.event('unknown', 'lost acknowledgement'); await host.tick()
@@ -3282,7 +3329,7 @@ describe('built-in skill text after a CLI update', () => {
     let inFlight = 0
     /** A notice the backend refuses (an older backend, an outage), and every refused request. */
     let refuse: ((request: any) => { status: number; body: Record<string, unknown> } | undefined) | undefined
-    const refused: Array<{ operationId: string; command: Record<string, any> }> = []
+    const refused: Array<{ operationId: string; asAgentId?: string; command: Record<string, any> }> = []
     t.core.agents.byAgent = vi.fn(id => sessions[id] as never)
     t.core.agents.terminalAvailable = vi.fn(() => true)
     t.core.account.backend = vi.fn(async (method, path, body) => {
@@ -3464,6 +3511,18 @@ describe('built-in skill text after a CLI update', () => {
     await f.pass(host, 5_000)
     await f.pass()
     expect(f.sent).toHaveLength(3)
+  })
+
+  // Ken's prod scan (11-04): 125 message.send refused with BUDDY_SESSION_THREAD in 32 minutes. A Buddy session's notice is
+  // a top-level post the backend refuses (a session answers only in its own thread), and the host tried it every minute.
+  it('stops a skill notice the Swarm refuses for good, and still tells the other agents (#2675)', async () => {
+    const f = syncFixture()
+    f.setRefuse(request => request.asAgentId === 'a-builder' ? { status: 403, body: { success: false,
+      error: { code: 'BUDDY_SESSION_THREAD', message: 'Answer only in your own thread: post with --reply-to a message in it.' } } } : undefined)
+    const host = await f.pass()
+    for (let i = 1; i <= 5; i++) await f.pass(host, 60_000)
+    expect(f.refused.filter(r => r.asAgentId === 'a-builder')).toHaveLength(1)
+    expect(f.sent.map(s => s.asAgentId).sort()).toEqual(['a-lead', 'a-reviewer'])
   })
 
   it('drops the skills mark, once, when a backend refuses it, and keeps the notice agent-only', async () => {
