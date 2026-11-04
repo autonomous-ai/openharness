@@ -2061,7 +2061,8 @@ describe('any agent of the project', () => {
         [archive.agentId, 'FORBIDDEN'], [outsider, 'NOT_FOUND'], [buddy, 'BUDDY_FORBIDDEN'], [stopping, 'FORBIDDEN']]
       for (const [agentId, code] of refusals) {
         expect(() => f.run(post('Hello room.'), actorOf(agentId))).toThrow(expect.objectContaining({ code }))
-        expect(() => f.run({ type: 'message.react', conversationId: 'lead', messageId: 'm1', emoji: 'eyes', on: true }, actorOf(agentId)))
+        expect(() => f.run({ type: 'message.react', conversationId: 'lead', messageId: 'm1', emoji: 'eyes', on: true }, actorOf(agentId),
+          { reaction: { messageId: 'm1', reacted: false } }))
           .toThrow(expect.objectContaining({ code }))
       }
       // Naming an agent that is not in it, or adding one, is refused as before (#2207), the working Engineer's post too.
@@ -2103,7 +2104,8 @@ describe('any agent of the project', () => {
       const asked = f.run(post('Can someone check the login bug?')).messages[0]!
       const members = [...chat().agentIds]
       for (const agentId of [engineer, reviewer]) {
-        expect(f.run({ type: 'message.react', conversationId: 'lead', messageId: asked.id, emoji: 'eyes', on: true }, actorOf(agentId)).result.changed).toBe(true)
+        expect(f.run({ type: 'message.react', conversationId: 'lead', messageId: asked.id, emoji: 'eyes', on: true }, actorOf(agentId),
+          { reaction: { messageId: asked.id, reacted: false } }).result.changed).toBe(true)
       }
       expect(chat().agentIds).toEqual(members)
     })
