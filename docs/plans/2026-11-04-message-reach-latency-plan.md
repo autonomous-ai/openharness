@@ -59,25 +59,25 @@ offline catching up) is counted as `late`, outside the percentiles. Two places r
 **Interfaces:** `recordMessageReach({ reader, via }, ms)`, `startMessageReachStats({ everyMs, pod, maxSamples, random, log })`,
 `LATE_MS`.
 
-- [ ] Failing tests: the minute line's shape and percentiles, late rows, silent empty minutes, bounded samples, stop.
-- [ ] Code.
+- [x] Failing tests: the minute line's shape and percentiles, late rows, silent empty minutes, bounded samples, stop.
+- [x] Code.
 
 ## Task 2: an agent's delivery receipt records
 
 **Files:** `backend/src/superTabs/store.ts` (`delivery`), test `backend/integration/superTabs.test.ts`.
 
-- [ ] Failing test: an ack records once with the delivery's age; a second ack, an uncertain ack and a claim record nothing.
-- [ ] Code: `afterCommit` on the first `deliveredAt`.
+- [x] Failing test: an ack records once with the delivery's age; a second ack, an uncertain ack and a claim record nothing.
+- [x] Code: `afterCommit` on the first `deliveredAt`.
 
 ## Task 3: a person's read of new messages records
 
 **Files:** `backend/src/superTabs/store.ts` (`messages`), test `backend/integration/superTabs.test.ts`.
 
-- [ ] Failing test: an `after` read records each returned message others wrote; the person's own message, a latest page and
+- [x] Failing test: an `after` read records each returned message others wrote; the person's own message, a latest page and
       an agent's read record nothing.
-- [ ] Code.
+- [x] Code.
 
 ## Task 4: measure
 
-- [ ] Per call before/after on a seeded Swarm: an `after` read and a delivery ack, timed over many calls on main and on the
+- [x] Per call before/after on a seeded Swarm: an `after` read and a delivery ack, timed over many calls on main and on the
       branch. A sample log line in the PR.

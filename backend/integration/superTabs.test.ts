@@ -1385,6 +1385,32 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(await reaches(() => store.messages(host, tab, 'lead', { after: tail }, lead))).toEqual([])
   })
 
+  // Task #2840's measure: what timing costs a read of new messages and a delivery acknowledgement, per call, on a seeded
+  // Swarm (run against main's store.ts for the before numbers), and the minute's line those calls make. Printed for the PR.
+  it('measures an after read and a delivery ack per call, and prints the minute line', async () => {
+    const { tab, lead } = await fixture()
+    const tail = (await store.messages(owner, tab, 'lead', {})).messages.at(-1)!.sequence
+    for (let i = 0; i < 20; i++) await run(tab, message(`Update ${i}.`), host, lead)
+    const log = vi.fn()
+    const stop = startMessageReachStats({ everyMs: 3_600_000, pod: 'api-7f9c-pod:1', log })
+    const reads = 200
+    for (let i = 0; i < 20; i++) await store.messages(owner, tab, 'lead', { after: tail })
+    let started = performance.now()
+    for (let i = 0; i < reads; i++) await store.messages(owner, tab, 'lead', { after: tail })
+    const readMs = (performance.now() - started) / reads
+    const acks = 20
+    for (let i = 0; i < acks; i++) await run(tab, message(`Task ${i}.`))
+    const open = await store.deliveries(host, tab, lead)
+    for (const d of open) await store.delivery(host, tab, lead, d.id, { type: 'claim', claimId: `c-${d.id}` })
+    started = performance.now()
+    for (const d of open) await store.delivery(host, tab, lead, d.id, { type: 'ack', claimId: `c-${d.id}`, receipt: 'typed', uncertain: false })
+    const ackMs = (performance.now() - started) / open.length
+    stop()
+    process.stderr.write(`[#2840 measure] per call: after read (20 rows) ${readMs.toFixed(2)} ms over ${reads}, delivery ack ${ackMs.toFixed(2)} ms over ${open.length}\n`)
+    process.stderr.write(`[#2840 sample] message reach latency ${JSON.stringify(log.mock.calls[0]?.[1] ?? null)}\n`)
+    expect(open.length).toBeGreaterThan(0)
+  }, 120_000)
+
   it('records a claimed delivery hold for the claim holder only and posts nothing in the conversation', async () => {
     const { tab, lead } = await fixture()
     await run(tab, message('Please start.'))
