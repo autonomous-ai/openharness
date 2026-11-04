@@ -3,7 +3,9 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+const team = vi.hoisted(() => ({ value: false }))
+vi.mock('../team/config.js', async (original) => ({ ...await original<object>(), isTeamAccount: () => team.value }))
 import { SWARM_TOOLS_SKILL } from './swarmTools.js'
 import { prepareSwarmSkill, parseSwarmSkill, recordSwarmSkillNotice, refreshSwarmSkill, roleFromWire, skillFile } from './swarmSkills.js'
 import { agentLaunchArgs } from './agentAttribution.js'
@@ -911,6 +913,18 @@ describe('a Buddy\'s folder', () => {
     expect(launch).toMatch(/^[0-9a-f-]{36}$/)
     prepareSwarmSkill(workspace, { role: 'buddy', key: 'relaunched' })
     expect(buddyLaunchOf(realpathSync(workspace))).not.toBe(launch)
+  })
+
+  // Security review 1 of #2832: a relaunch never passes through the start's own-machine check, so a Buddy saved in a Harness
+  // Team account, which is never its owner's, is held there before anything launches.
+  it('refuses to prepare a Buddy in a Harness Team account, and leaves its folder as it was', () => {
+    const workspace = fixture()
+    team.value = true
+    try {
+      expect(() => prepareSwarmSkill(workspace, { role: 'buddy', key: 'session' })).toThrow('A Buddy runs only on its owner\'s own machine')
+      expect(existsSync(join(workspace, '.claude'))).toBe(false)
+      expect(() => prepareSwarmSkill(workspace, { role: 'dev', key: 'session' })).not.toThrow()
+    } finally { team.value = false }
   })
 
   it('leaves every other role\'s folder as it is', () => {
