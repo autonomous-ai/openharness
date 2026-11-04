@@ -96,6 +96,18 @@ describe('operation receipts by Swarm and date', () => {
     expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(5)
     expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ tabId: 1, createdAt: 1/)
   })
+
+  // A write on every command: the index on tabId alone is a prefix of this one, so it would only add write cost (review of #2888).
+  it('keeps one index for reads by Swarm, which still use it', async () => {
+    const listed = await db.$runCommandRaw({ listIndexes: 'SuperTabOperation' }) as unknown as { cursor: { firstBatch: Array<{ key: Record<string, number> }> } }
+    expect(listed.cursor.firstBatch.map(index => Object.keys(index.key).join(',')).filter(key => key.startsWith('tabId'))).toEqual(['tabId,createdAt'])
+    const tab = randomUUID()
+    await db.superTabOperation.create({ data: { id: randomUUID(), tabId: tab, actorKey: 'person:x', requestHash: 'h', revision: 0, result: {} } })
+    const entries = await profiled(db, () => db.superTabOperation.aggregateRaw({ pipeline: [{ $match: { tabId: tab } }, { $project: { _id: 1 } }] }))
+    const rows = reads(entries, 'SuperTabOperation', ['tabId'])
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ tabId: 1, createdAt: 1/)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBe(1)
+  })
 })
 
 describe('the owner\'s grid poll', () => {
