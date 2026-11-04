@@ -1040,16 +1040,14 @@ void main() {
     final lock = key('swarm-project-private');
     final name = key('swarm-project-name');
 
-    testWidgets('a private project has a lock at the end of its one line, '
-        'heard as Private project', (tester) async {
+    testWidgets('a private project has a lock in the # mark\'s place, before '
+        'its name, heard as Private project', (tester) async {
       final semantics = tester.ensureSemantics();
       await row(tester, visibility: 'private');
       expect(lock, findsOneWidget);
-      expect(
-        tester.getTopLeft(lock).dx,
-        greaterThan(tester.getTopRight(name).dx),
-      );
-      expect(tester.getTopRight(lock).dx, 390 - AppSpace.l);
+      expect(tester.getTopLeft(lock).dx, AppSpace.l);
+      expect(tester.getTopRight(lock).dx, lessThan(tester.getTopLeft(name).dx));
+      expect(find.textContaining('#'), findsNothing);
       expect(
         tester.getCenter(lock).dy,
         moreOrLessEquals(tester.getCenter(name).dy, epsilon: 1),
@@ -1061,18 +1059,19 @@ void main() {
       );
       // Heard with the row's name, as one button.
       expect(
-        find.bySemanticsLabel(RegExp(r'#Mobile\nPrivate project')),
+        find.bySemanticsLabel(RegExp(r'Private project\nMobile')),
         findsOneWidget,
       );
       semantics.dispose();
     });
 
-    testWidgets('a public one has none', (tester) async {
+    testWidgets('a public one has none, and keeps its #', (tester) async {
       await row(tester, visibility: 'public');
       expect(lock, findsNothing);
+      expect(find.textContaining('#Mobile'), findsOneWidget);
     });
 
-    testWidgets('after the tags waiting in it, as the desktop marks it', (
+    testWidgets('the row\'s right side holds only its notifications', (
       tester,
     ) async {
       await row(
@@ -1082,10 +1081,8 @@ void main() {
       );
       final tags = find.byType(SwarmTags);
       expect(tags, findsOneWidget);
-      expect(
-        tester.getTopLeft(lock).dx,
-        greaterThan(tester.getTopRight(tags).dx),
-      );
+      expect(tester.getTopRight(lock).dx, lessThan(tester.getTopLeft(name).dx));
+      expect(tester.getTopRight(tags).dx, 390 - AppSpace.l);
     });
 
     testWidgets('a long name and its Swarm ellipsize and keep the lock in '
@@ -1099,8 +1096,9 @@ void main() {
       );
       expect(tester.takeException(), isNull);
       final rect = tester.getRect(lock);
-      expect(rect.right, lessThanOrEqualTo(240));
-      expect(rect.left, greaterThanOrEqualTo(tester.getTopRight(name).dx));
+      expect(rect.left, AppSpace.l);
+      expect(rect.right, lessThan(tester.getTopLeft(name).dx));
+      expect(tester.getTopRight(name).dx, lessThanOrEqualTo(240));
     });
   });
 
