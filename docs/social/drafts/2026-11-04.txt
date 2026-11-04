@@ -1,0 +1,7 @@
+Where is my work?
+
+Now it's one page. The Backlog tab in Harness Desktop lists every task your crew has: waiting for a machine, working, in review, ready to merge, shipped.
+
+Search it by title, number or agent. Mine or Everyone.
+
+github.com/autonomous-ai/openharness
