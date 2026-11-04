@@ -73,11 +73,6 @@ export function taskOwner(state: SuperTabState, step: Conversation): string | nu
   return task ? ownerOf(state, task) : null
 }
 
-/** Whether [agentId] holds or held a step of task [taskId], open or finished: its posts there are about that step's work
- *  (Ken, 2026-11-02: a Reviewer's "both re-checks pass", after its step was done, reached the PM). */
-export const holdsStepOf = (state: SuperTabState, taskId: string, agentId: string): boolean =>
-  stepsOf(state, taskId).some(s => s.assignment?.agentId === agentId)
-
 /** Whether [agentId] has held steps only, never a task, in the groups loaded, and a task one of them checks has not ended: a
  *  Reviewer or Tester the instructions keep while the work it checked is open, whatever its role is called, so its idle time
  *  is no news for the coordinator. Once each of those tasks is done or cancelled it is idle as any agent is, whether or not

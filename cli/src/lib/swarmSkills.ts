@@ -163,7 +163,8 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 - When talking to people, call the roles Product Manager, Engineer and Reviewer.
 
 ## Who a post reaches
-- A post reaches only the agents you name with --to <agent id>, any agent of this project; they join the group if they are not in it. Your post in a task that names no one reaches its assigned agent.
+- A post reaches only the agents you name, with --to <agent id> or @Name in its text, any agent of this project; they join the group if they are not in it. A reply also reaches the agent whose message it answers. A post in a task or step that names no one reaches its assigned agent, and anywhere else no agent.
+- Agents report to you through their status; their posts reach you only when they name you.
 
 ## Reactions
 - Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.
@@ -299,8 +300,9 @@ Record each acceptance check with the exact command, revision and observed resul
 - Print little to save quota. Keep progress and blockers in the group chat.
 
 ## Who a post reaches
-- A post reaches only the agents you name with --to <agent id>, any agent of this project; they join the group if they are not in it. A post that names no one reaches the Lead.
+- A post reaches only the agents you name, with --to <agent id> or @Name in its text, any agent of this project; they join the group if they are not in it. A reply also reaches the agent whose message it answers. A post in a task or step that names no one reaches its assigned agent, and anywhere else no agent.
 - Answer your Reviewer, and tell it a fix is pushed, with --to its agent id.
+- The Lead hears your work through your status (done, stuck, needs a human): never post it a result, a verdict, a Ready or an acknowledgement.
 
 ## Reactions
 - Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.
@@ -376,8 +378,9 @@ Review only the changes since the revision you reviewed. Mark each finding fixed
 Mark your review assignment done with the verdict and revision. Print little.
 
 ## Who a post reaches
-- A post reaches only the agents you name with --to <agent id>, any agent of this project; they join the group if they are not in it. A post that names no one reaches the Lead.
+- A post reaches only the agents you name, with --to <agent id> or @Name in its text, any agent of this project; they join the group if they are not in it. A reply also reaches the agent whose message it answers. A post in a task or step that names no one reaches its assigned agent, and anywhere else no agent.
 - Send your verdict and findings to the Builder with --to its agent id.
+- The Lead hears your work through your status (done, stuck, needs a human): never post it a result, a verdict, a Ready or an acknowledgement.
 
 ## Reactions
 - Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.
@@ -485,7 +488,8 @@ When the project owner asks in chat to switch this project's skills (Default or 
 - Answer a message where it was asked: one in the main chat right below it, with post --answers that message; one in a thread inside that thread, with post --reply-to it. Open a thread yourself only for a back-and-forth on one topic, or to answer something far up the chat. Post with neither only to start a new topic.
 
 ## Who a post reaches
-- A post reaches only the agents you name with --to <agent id>, any agent of this project; they join the group if they are not in it. Your post in a task that names no one reaches its assigned agent.
+- A post reaches only the agents you name, with --to <agent id> or @Name in its text, any agent of this project; they join the group if they are not in it. A reply also reaches the agent whose message it answers. A post in a task or step that names no one reaches its assigned agent, and anywhere else no agent.
+- Agents report to you through their status; their posts reach you only when they name you.
 
 ## Reactions
 - Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.
@@ -551,8 +555,9 @@ You finish one group's work completely, inside its brief, as if nobody will come
 - Write to people in their language, without commands or internal ids. Call the roles Product Manager, Engineer and Reviewer.
 
 ## Who a post reaches
-- A post reaches only the agents you name with --to <agent id>, any agent of this project; they join the group if they are not in it. A post that names no one reaches the Lead.
+- A post reaches only the agents you name, with --to <agent id> or @Name in its text, any agent of this project; they join the group if they are not in it. A reply also reaches the agent whose message it answers. A post in a task or step that names no one reaches its assigned agent, and anywhere else no agent.
 - Answer your Reviewer, and tell it a fix is pushed, with --to its agent id.
+- The Lead hears your work through your status (done, stuck, needs a human): never post it a result, a verdict, a Ready or an acknowledgement.
 
 ## Reactions
 - Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.
@@ -601,8 +606,9 @@ Start within 30 minutes of being asked; oldest ready work first. If you cannot, 
 Mark your review done with the verdict and revision.
 
 ## Who a post reaches
-- A post reaches only the agents you name with --to <agent id>, any agent of this project; they join the group if they are not in it. A post that names no one reaches the Lead.
+- A post reaches only the agents you name, with --to <agent id> or @Name in its text, any agent of this project; they join the group if they are not in it. A reply also reaches the agent whose message it answers. A post in a task or step that names no one reaches its assigned agent, and anywhere else no agent.
 - Send your verdict and findings to the Builder with --to its agent id.
+- The Lead hears your work through your status (done, stuck, needs a human): never post it a result, a verdict, a Ready or an acknowledgement.
 
 ## Reactions
 - Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.

@@ -566,11 +566,13 @@ describe('messages from an agent whose task moved', () => {
     String((await f.execute({ type: 'message.send', conversationId: f.group, text, replyTo: extra.replyTo ?? null, recipientIds: extra.recipientIds ?? [] },
       host, agentId)).result.messageId)
 
-  it('reach the Lead once the task is lost, its alarm and its reply to the Lead\'s question alike, while its status stays refused', async () => {
+  // Since #2963 a post reaches the Lead when it names it or answers it; an unnamed one reaches no agent.
+  it('reach the Lead once the task is lost, its alarm naming it and its reply to the Lead\'s question alike, while its status stays refused', async () => {
     const f = await swarm()
     await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
     expect((await f.assignment()).status).toBe('lost')
-    const alarm = await post(f, f.worker, 'Severe, prod: the backend worker has been down for 44 minutes.')
+    expect(await deliveredTo(await post(f, f.worker, 'Is anyone there?'))).toEqual([])
+    const alarm = await post(f, f.worker, 'Severe, prod: the backend worker has been down for 44 minutes.', { recipientIds: [f.lead] })
     const question = await post(f, f.lead, 'Is it still down?', { recipientIds: [f.worker] })
     const answer = await post(f, f.worker, 'Still down at 22:50.', { replyTo: question })
     expect(await deliveredTo(alarm)).toEqual([f.lead])
@@ -590,7 +592,9 @@ describe('messages from an agent whose task moved', () => {
     const neighbour = await f.add(elsewhere, 'test-host', randomUUID(), 'Neighbour')
     const otherProject = String((await f.execute({ type: 'project.create', name: 'Other', visibility: 'public', brief: '' })).result.conversationId)
     const outsider = await f.add(otherProject, 'test-host', randomUUID(), 'Outsider')
-    expect(await deliveredTo(await post(f, f.worker, 'The worker is down.'))).toEqual([f.lead])
+    // An unnamed post reaches the task's assignee now, the Lead when it names it (#2963).
+    expect(await deliveredTo(await post(f, f.worker, 'The worker is down.'))).toEqual([other])
+    expect(await deliveredTo(await post(f, f.worker, 'The worker is down.', { recipientIds: [f.lead] }))).toEqual([f.lead])
     // A post that names its agents reaches only them, never a copy to the Lead (project instructions, phase 1).
     expect(await deliveredTo(await post(f, f.worker, 'Over to you.', { recipientIds: [other] }))).toEqual([other])
     const stored = await db.superTabMessage.count({ where: { tabId: f.tab } })
@@ -599,8 +603,9 @@ describe('messages from an agent whose task moved', () => {
     expect(await db.superTabDelivery.count({ where: { tabId: f.tab, agentId: outsider } })).toBe(0)
     // An agent of the same project in another task is named directly, and joins the group to answer there.
     expect(await deliveredTo(await post(f, f.worker, 'Can you look?', { recipientIds: [neighbour] }))).toEqual([neighbour])
-    // The new worker and the Lead talk as before; the Lead's plain post reaches the new worker, not the old one.
-    expect(await deliveredTo(await post(f, other, 'Taking over.'))).toEqual([f.lead])
+    // The new worker names the Lead; the Lead's plain post reaches the new worker, not the old one.
+    expect(await deliveredTo(await post(f, other, 'Taking over.'))).toEqual([])
+    expect(await deliveredTo(await post(f, other, 'Taking over.', { recipientIds: [f.lead] }))).toEqual([f.lead])
     expect(await deliveredTo(await post(f, f.lead, 'Go ahead.'))).toEqual([other])
     await expect(f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: null }, host, f.worker))
       .rejects.toMatchObject({ code: 'ASSIGNMENT_LOST' })
@@ -611,7 +616,8 @@ describe('messages from an agent whose task moved', () => {
     const f = await swarm()
     await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
     await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Not needed any more' }, host, f.lead)
-    expect(await deliveredTo(await post(f, f.worker, 'Stopping; the last check was clean.'))).toEqual([f.lead])
+    expect(await deliveredTo(await post(f, f.worker, 'Stopping; the last check was clean.'))).toEqual([])
+    expect(await deliveredTo(await post(f, f.worker, 'Stopping; the last check was clean.', { recipientIds: [f.lead] }))).toEqual([f.lead])
   })
 
   // Review of #2243: only the current assignment and the latest lost attempt were recognized.
@@ -620,7 +626,7 @@ describe('messages from an agent whose task moved', () => {
     await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Moving it' }, host, f.lead)
     const other = await f.add(f.group, 'test-host', f.harness.other, 'Other')
     await f.execute({ type: 'work.assign', conversationId: f.group, agentId: other })
-    expect(await deliveredTo(await post(f, f.worker, 'Severe: the worker is down.'))).toEqual([f.lead])
+    expect(await deliveredTo(await post(f, f.worker, 'Severe: the worker is down.', { recipientIds: [f.lead] }))).toEqual([f.lead])
     await expect(f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: null }, host, f.worker))
       .rejects.toMatchObject({ code: 'STALE_ASSIGNMENT' })
   })
@@ -633,8 +639,8 @@ describe('messages from an agent whose task moved', () => {
     // The first worker is back and running; only the second's session stopped.
     await f.observe('test-host', [f.harness.worker], { stoppedHarnessIds: [f.harness.other] })
     expect(await f.assignment()).toMatchObject({ id: next, status: 'lost' })
-    expect(await deliveredTo(await post(f, f.worker, 'Severe: the worker is down.'))).toEqual([f.lead])
-    expect(await deliveredTo(await post(f, other, 'Lost my session.'))).toEqual([f.lead])
+    expect(await deliveredTo(await post(f, f.worker, 'Severe: the worker is down.', { recipientIds: [f.lead] }))).toEqual([f.lead])
+    expect(await deliveredTo(await post(f, other, 'Lost my session.', { recipientIds: [f.lead] }))).toEqual([f.lead])
     await expect(f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: null }, host, f.worker))
       .rejects.toMatchObject({ code: 'STALE_ASSIGNMENT' })
     await expect(f.execute({ type: 'work.status', conversationId: f.group, assignmentId: next, status: 'working', result: null }, host, other))
@@ -1878,9 +1884,9 @@ describe('the push for a new delivery', () => {
       const forWorker = await claimedFor(f, f.worker, 'For the worker', 'claim-worker')
       await claimedFor(f, f.lead, 'For the lead', 'claim-lead')
       waiting.length = 0
-      await f.execute({ type: 'message.send', conversationId: f.group, text: 'Done.', replyTo: forWorker, recipientIds: [] }, host, f.worker)
+      await f.execute({ type: 'message.send', conversationId: f.group, text: 'Done.', replyTo: forWorker, recipientIds: [f.lead] }, host, f.worker)
       expect(waiting).toContainEqual({ machineId: 'test-host', tabId: f.tab, agentId: f.worker })
-      // The reply is itself a new delivery for the Lead, told once for it: not told again for the claim it holds.
+      // The reply, naming the Lead (#2963), is itself a new delivery for the Lead, told once for it: not told again for the claim it holds.
       expect(waiting.filter(w => w.agentId === f.lead)).toHaveLength(1)
     })
 

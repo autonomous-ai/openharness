@@ -1,4 +1,4 @@
-import { applyPushOrigin, failPushUnknown, failTeamWritten, hasStep, mainAccountMembers, markTeamWritten, requireNameable, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
+import { applyPushOrigin, failPushUnknown, failTeamWritten, hasStep, mainAccountMembers, markTeamWritten, mayName, requireNameable, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
 import { admitByRoom, admitMachineStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, movedToTeamAccount, type ContributedMachine } from './machines.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
@@ -13,13 +13,13 @@ import {
   type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type BuddySessionEntry, type WorkTask, type Agent, type Author, type Check, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
 import { jobKindOf } from './evidence/jobKind.js'
-import { endSteps, stepEndedRows, holdsStepOf, isStep, ownerOf, taskOwner } from './steps.js'
+import { endSteps, stepEndedRows, isStep, taskOwner } from './steps.js'
 import { recordCheckVerdict } from './checkVerdicts.js'
 import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
 import { askedInSchema, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
-import { checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
+import { agentsNamedIn, checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { leadOf, TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest, workedAgain } from './terminal.js'
 import { changesRequested, engineerAnswered, leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, revisionReady, toldEngineer, waitingForReview } from './liveness.js'
@@ -566,20 +566,9 @@ export interface CommandContext {
   teamAccountsIdle?: boolean
 }
 
-/** Messages in a row between the Lead and its worker after which the Lead's message is no longer delivered automatically. */
-export const PAIR_CHAIN_LIMIT = 6
-
-/** A Lead's automatic delivery to the assigned worker answers the worker's post. Worker posts reach the Lead automatically, so
- * without a bound the two agents would keep answering each other. Count the messages in a row between the pair, newest first,
- * until one is anyone else's or is not addressed to the other (a person's message, a notice, a message to someone else). A normal
- * exchange (brief, plan, approval, report) stays well under the limit; an unattended loop stops at it. Explicit recipients still
- * deliver, so the Lead can always continue on purpose. */
-function leadWorkerBounced(recent: CommandContext['recent'] = [], leadId: string, workerId: string): boolean {
-  const sentToPartner = (m: NonNullable<CommandContext['recent']>[number]) => m.author.kind === 'agent'
-    && (m.author.id === leadId ? m.recipients.includes(workerId) : m.author.id === workerId && m.recipients.includes(leadId))
-  const run = recent.findIndex(m => !sentToPartner(m))
-  return (run < 0 ? recent.length : run) >= PAIR_CHAIN_LIMIT
-}
+/** What an agent's post that reached no agent tells its sender, in the result every CLI prints (Egret6's review of #2963):
+ *  since #2963 an unnamed post outside a task's assignee reaches no one, and a sender that meant someone to act would not know. */
+export const REACHED_NO_AGENT = 'This post reached no agent; people read it in the conversation. Name an agent with --to or @Name when it must act.'
 
 /** Messages in a row between two agents after which their project's Lead is told, once (project instructions, phase 1:
  *  agents talk to each other directly, so nothing else would notice two of them answering each other for ever). */
@@ -1039,7 +1028,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     if (!projectsOf(state).some(p => p.leadConversationId === group.id)) return
     if (agentId && (agentId === group.leadId || group.agentIds.includes(agentId))) return
     fail('PROJECT_CHAT_COORDINATOR_ONLY', post
-      ? `The project chat holds only its coordinator among agents: a post here reaches the coordinator. Tell ${name} in its task.`
+      ? `The project chat holds only its coordinator among agents: a post here reaches no other agent. Tell ${name} in its task.`
       : `The project chat holds only its coordinator among agents, so ${name} cannot join it. Its work and announcements go in its task.`, 403)
   }
   /** An agent starts or assigns only what the route chose; a person may still do either by hand. */
@@ -3226,48 +3215,25 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         fail('INVALID_ANSWER', command.replyTo ? 'Answer a message right below it or reply in its thread, not both.' : 'Answer a message in this conversation.', 400)
       }
       const replyAgent = context.reply?.author.kind === 'agent' ? context.reply.author.id : null
-      // An assigned worker's own post in its group reaches the Lead. Workers reported results as plain posts, which went to no
-      // one: the Lead heard only at the next scheduled consolidation, and the owner saw no summary of finished work for up to
-      // 19 minutes (2026-10-21/22). The Lead's message reaches the worker the same way (#1549), except for a reply to someone
-      // else and a message that would continue an automatic round trip (leadWorkerBounced), so agents cannot loop.
-      // An agent is never delivered its own message, except its note to itself: naming only
-      // itself, its post is unnamed (final review of phase 1).
-      const addressed = command.agentOnly || actor.kind !== 'agent' ? command.recipientIds : command.recipientIds.filter(id => id !== actor.agentId)
+      // An agent's post reaches the agents it names, by --to or by @Name, the agent whose message it answers, and, when it names
+      // no one in a task or step, that conversation's current assignee, who owns the room (River's ruling on #2963). Nothing
+      // else: an unnamed post stays readable in its conversation. Until 11-04 an unnamed post went to the coordinator, the task's
+      // owner or the assignee by five rules, and in a day 402 of 437 agent posts reached the PM as their only recipient though
+      // only 1 named it (Ken, #2963). The PM hears an agent's work through its status. An agent is never delivered its own
+      // message, except its note to itself: naming only itself, its post is unnamed (final review of phase 1).
+      // @Name never turns a post into a refusal: an agent the sender may not name with --to is left out (mayName).
+      const poster = actor.kind === 'agent' ? agent(state, actor.agentId) : null
+      const textNamed = poster && !command.agentOnly
+        ? agentsNamedIn(state, group, command.text, names).filter(id => mayName(state, group, poster, agent(state, id))) : []
+      const addressed = command.agentOnly || !poster ? command.recipientIds
+        : [...new Set([...command.recipientIds, ...textNamed])].filter(id => id !== poster.id)
       const assigned = activeWork(group) ? group.assignment!.agentId : null
-      const leadToWorker = actor.kind === 'agent' && actor.agentId === group.leadId && assigned && assigned !== group.leadId
-        && group.agentIds.includes(assigned) && (!context.reply || replyAgent === assigned)
-        && !leadWorkerBounced(context.recent, group.leadId, assigned) ? assigned : null
-      // A step's agent tells its task's owner, as its status does (task steps design); with no owner, the coordinator.
-      const stepOwner = actor.kind === 'agent' && isStep(group) ? taskOwner(state, group) : null
-      const workerToLead = actor.kind === 'agent' && activeWork(group) && group.assignment?.agentId === actor.agentId
-        && stepOwner && stepOwner !== actor.agentId ? stepOwner
-        : actor.kind === 'agent' && activeWork(group) && group.assignment?.agentId === actor.agentId
-        && group.leadId && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? group.leadId : null
-      // The task's owner talks to its step's agent the same way (Diego, 2026-11-02: an Engineer's "fixed, please re-check" in its
-      // Review step woke the PM and the Reviewer never heard it). Its unnamed post there reaches that agent alone, never the
-      // coordinator. A reply to someone else, or a post leadWorkerBounced holds back, falls back to the coordinator as before:
-      // nothing is dropped.
-      const ownerToStepAgent = actor.kind === 'agent' && isStep(group) && assigned && assigned !== actor.agentId
-        && taskOwner(state, group) === actor.agentId && group.agentIds.includes(assigned) && (!context.reply || replyAgent === assigned)
-        && !leadWorkerBounced(context.recent, actor.agentId, assigned) ? assigned : null
-      const agentRecipient = leadToWorker ?? workerToLead ?? ownerToStepAgent
-      // Any other agent's unnamed post in the group reaches its Lead: an agent whose task here was lost, moved or cancelled has
-      // its status and results refused, so its posts are all the Lead hears from it. They reached no one until 10-29, when a
-      // moved prod-watch agent's "the backend worker is down" alarm and its answers to the Lead's questions had no delivery,
-      // and the worker stayed down 4 h 50 min. Membership, not a record of past attempts, decides (Lead's ruling on #2243).
-      // A post that names its agents reaches only them: copying every one to the Lead filled its terminal (Ken, 10-30: 198 of
-      // the 486 messages it got in a day were such copies). The assigned worker keeps its own rule above; a note to itself
-      // stays its own.
-      // In a task, an agent holding one of its open steps reaches the task's owner instead (task steps design).
-      const owner = ownerOf(state, group)
-      const ownerHere = actor.kind === 'agent' && owner && owner !== actor.agentId && holdsStepOf(state, group.id, actor.agentId) ? owner : null
-      // In a step, any agent but the coordinator talks to the task's owner: its own agent after its work ended too (a lost or
-      // done step's agent, 2026-11-02, reached the PM).
-      const stepTold = actor.kind === 'agent' && isStep(group) && actor.agentId !== group.leadId ? taskOwner(state, group) : null
-      const ownerInStep = actor.kind === 'agent' && stepTold && stepTold !== actor.agentId ? stepTold : null
-      const memberToLead = actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && (ownerHere ?? ownerInStep) ? [(ownerHere ?? ownerInStep)!]
-        : actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned !== actor.agentId && !ownerToStepAgent && group.leadId
-        && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? [group.leadId] : []
+      const toAssignee = actor.kind === 'agent' && !command.agentOnly && !addressed.length && assigned && assigned !== actor.agentId
+        && group.agentIds.includes(assigned) ? assigned : null
+      // An agent with work in the project posts in its project chat without joining it (worksInProjectChat): an answer to its
+      // line reaches it there too.
+      const answeredAgent = actor.kind === 'agent' && !command.agentOnly && !isBuddyChat(group) && replyAgent && replyAgent !== actor.agentId
+        && (group.agentIds.includes(replyAgent) || worksInProjectChat(state, group, replyAgent)) ? replyAgent : null
       // Buddy thread sessions (buddySessions.ts): a session thread's replies reach its session alone and stay in its thread; the
       // main Buddy hears the rest. Decided here from the thread, so every client, an old one or the phone, is routed alike.
       const session = isBuddyChat(group) ? routeBuddySession(group) : undefined
@@ -3285,17 +3251,17 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const below = !command.replyTo && context.above?.author.kind === 'agent' ? chatWorker(context.above.author.id) : null
       // A Buddy chat has no Lead: its owner talks to its Buddy.
       const automatic = actor.kind === 'person' ? (isBuddyChat(group) ? (session?.inSession ? session.to : mainBuddyOf(state, group)?.id ?? null)
-        : answered ?? (replyAgent && group.agentIds.includes(replyAgent) ? replyAgent : group.leadId)) : agentRecipient
-      const recipients = [...new Set([...addressed, ...memberToLead, ...(addressed.length ? [] : [below, automatic].filter((id): id is string => !!id))])]
+        : answered ?? (replyAgent && group.agentIds.includes(replyAgent) ? replyAgent : group.leadId)) : toAssignee
+      const recipients = [...new Set([...addressed, ...answeredAgent ? [answeredAgent] : [], ...(addressed.length ? [] : [below, automatic].filter((id): id is string => !!id))])]
       for (const id of recipients) {
         const target = agent(state, id)
         // Naming an agent asks it to act, and a re-test is asked this way: a post's default addressee is only told (audit H2).
-        if (actor.kind === 'agent' && addressed.includes(id)) requireNameable(state, group, agent(state, actor.agentId), target)
+        if (poster && addressed.includes(id)) requireNameable(state, group, poster, target)
         // In a Buddy chat a session hears its own thread alone, and the main Buddy none of it.
         if (session && (session.inSession ? id !== session.to : !!target.buddySession)) fail('INVALID_RECIPIENT', 'Choose an agent in this conversation.', 400)
         // An agent of this project that another agent names from outside the group joins it, so it can read and answer there
         // (joinsProject). A person's message adds nobody: a person adds an agent to a task with conversation.agent.
-        if (!group.agentIds.includes(id) && id !== answered && id !== below) {
+        if (!group.agentIds.includes(id) && id !== answered && id !== below && id !== answeredAgent) {
           // Named only when it is of this chat's project: another's is refused below without its name (Orion's review).
           if (agentProjectId(state, target) === groupProject(state, group).id) projectChatJoin(group, id, target.displayName ?? target.name, true)
           if (actor.kind !== 'agent' || !joinsProject(state, group, id)) fail('INVALID_RECIPIENT', 'Choose an agent in this conversation.', 400)
@@ -3312,6 +3278,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       message(group.id, text, recipients, command.replyTo, command.agentOnly ? { ...AGENT_ONLY, ...command.notice ? { notice: command.notice } : {} } : undefined, attachments, mentions, command.mentionsIfNoWorker)
       // After the person's message: nobody answers it, so its person is told why (Dee, review of #2447).
       if (buddyDown) buddyDownLine(group, buddyDown)
+      if (poster && !command.agentOnly && !recipients.length) effects.result.reachedNoAgent = REACHED_NO_AGENT
       // A Personal Swarm project chat with no Lead: the message waits for the Lead its person's Desktop starts (task #2633).
       // A Team Swarm's says Not sent, as before.
       const unled = actor.kind === 'person' && !recipients.length && !isBuddyChat(group) && isPersonalSwarm(state) ? groupProject(state, group) : undefined
@@ -3319,7 +3286,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         leadWaits(unled, operationId, context.now)
       }
       // The message that makes it LOOP_NOTICE_AT in a row between two agents tells their Lead, once; delivery is never held.
-      const speaker = actor.kind === 'agent' ? agent(state, actor.agentId) : null
+      const speaker = poster
       const partner = speaker && recipients.length === 1 && recipients[0] !== speaker.id ? agent(state, recipients[0]!) : null
       const pairLead = speaker && leadOf(state, speaker)
       if (speaker && partner && pairLead && pairLead.id !== partner.id && pairLoop(context.recent, speaker.id, partner.id, context.now) + 1 === LOOP_NOTICE_AT) {
