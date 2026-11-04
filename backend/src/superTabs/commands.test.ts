@@ -1371,6 +1371,14 @@ describe('a route that names no pick', () => {
       source: expect.objectContaining({ via: 'only', why: 'Only candidate that can run this task.', pick: { id: 'c1', title: expect.any(String) } }) })])
   })
 
+  // Review of #3010: "only candidate" is a reason only for the candidate it names; a start elsewhere still says why.
+  it('refuses a start that matches none of the only-candidate route\'s candidates without a reason', () => {
+    const f = routed(), task = f.group()
+    const only = open({ conversationId: task, record: pickless({ via: 'only', candidates: [candidate('c1', { model: 'opus' })] }) })
+    expect(() => f.run({ type: 'agent.start', request: request({ conversationId: task }), routeDecisionId: 'd1' }, f.leadActor, { routeDecision: only, contribution: f.contribution }))
+      .toThrow(expect.objectContaining({ code: 'ROUTE_REASON_REQUIRED' }))
+  })
+
   it('records the candidate a start matches, and posts the route row naming it and the rule', () => {
     const f = routed(), task = f.group()
     const effects = f.run({ type: 'agent.start', request: request({ conversationId: task }), routeDecisionId: 'd1', overrideReason: rule }, f.leadActor,
