@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_attachment_store.dart';
 import 'package:harness_mobile/swarm/swarm_file_download.dart';
@@ -160,6 +161,18 @@ void main() {
     expect(viewer, findsNothing);
     expect(chip, findsOneWidget);
     await closed(tester);
+  });
+
+  testWidgets('source text follows the terminal setting, with no size of its '
+      'own', (tester) async {
+    storage.bytes = utf8.encode('fn main() {}\n');
+    await open(tester, attachment('main.txt'));
+
+    final context = tester.element(key('swarm-file-text'));
+    expect(
+      tester.widget<Text>(find.text('fn main() {}')).style,
+      Tty.of(context).style(),
+    );
   });
 
   testWidgets('a Markdown file is rendered, and Show source shows it as '
