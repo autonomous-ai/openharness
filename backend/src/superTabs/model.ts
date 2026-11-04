@@ -20,6 +20,9 @@ export interface Person {
   generation: string
   /** Their own short status (profile.ts); only Swarm members read it. */
   status?: import('./profile.js').PersonStatus
+  /** Their time zone's IANA name ("Asia/Ho_Chi_Minh"), as their own app reports it (profile.ts); absent until it has.
+   *  Only Swarm members read it, for the local time on a person's card. */
+  timeZone?: string
   /** Their own avatar (profile.ts); only Swarm members read it. */
   avatar?: import('./profile.js').Avatar
   /** The name they chose (usernames.ts), or one kept for them; absent, readers work out their default. Only members read it. */

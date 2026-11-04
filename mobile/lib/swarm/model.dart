@@ -54,6 +54,10 @@ class SuperTabPerson {
       joinedVia = row['joinedVia'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       status = SuperTabPersonStatus.fromJson(row['status']),
+      timeZone = switch (row['timeZone']) {
+        final String zone when zone.trim().isNotEmpty => zone,
+        _ => null,
+      },
       chosenUsername = row['username'] as String?,
       name = switch (row['name']) {
         final String name when name.trim().isNotEmpty => name,
@@ -70,11 +74,16 @@ class SuperTabPerson {
       joinedVia = person.joinedVia,
       avatar = person.avatar,
       status = person.status,
+      timeZone = person.timeZone,
       chosenUsername = person.chosenUsername,
       name = person.name;
   final String id, email, role;
   final SuperTabAvatarPicture? avatar;
   final SuperTabPersonStatus? status;
+
+  /// Their time zone's IANA name, as their own app told the Swarm (Desktop's
+  /// local_time_zone.dart); null until it has. The phone shows no card yet.
+  final String? timeZone;
 
   /// How the Swarm tags them (`@username`), as the server sends it; from an
   /// older server, their default ([superTabUsernames]). Desktop's rule.

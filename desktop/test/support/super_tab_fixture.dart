@@ -872,6 +872,8 @@ class ConversationServer {
             ...row,
             if (command['type'] == 'member.status')
               'status': command['status']
+            else if (command['type'] == 'member.timeZone')
+              'timeZone': command['timeZone']
             else if (command['type'] == 'member.username')
               'username': (command['username'] as String?)?.toLowerCase()
             else if (command['type'] == 'member.name')
@@ -1133,6 +1135,7 @@ class ConversationServer {
           output['startId'] = operationId;
         }
       } else if (command['type'] == 'member.status' ||
+          command['type'] == 'member.timeZone' ||
           command['type'] == 'member.username' ||
           command['type'] == 'member.name' ||
           command['type'] == 'member.avatar' ||

@@ -23,6 +23,7 @@ import 'parts.dart';
 import 'read_marks.dart';
 import 'reading.dart';
 import 'linked_tasks.dart';
+import 'local_time_zone.dart';
 import 'task_steps.dart';
 
 /// A messages read started beside a state read, and what it asked for.
@@ -3540,6 +3541,36 @@ class SuperTabController extends ChangeNotifier {
     _changed();
   }
 
+  /// The zone this app last told the Swarm, or tried to: told once per zone
+  /// and session, so an older backend's refusal is not sent again.
+  String? _zoneTold;
+
+  /// Tells the Swarm the reader's time zone when it differs from the one it
+  /// keeps for them (backend `member.timeZone`), for the local time on their
+  /// card. Quietly: a refusal (an older backend) leaves their card without a
+  /// time, which is what it shows anyway.
+  void _reportTimeZone(SuperTabSnapshot next) {
+    final zone = superTabLocalTimeZone();
+    if (zone == null || zone == _zoneTold) return;
+    final me = next.people.where((p) => p.id == accountId).firstOrNull;
+    if (me == null || me.timeZone == zone) return;
+    _zoneTold = zone;
+    unawaited(
+      request(
+        'POST',
+        '/api/super-tabs/${Uri.encodeComponent(tabId)}/commands',
+        body: {
+          'operationId': superTabOperationId(),
+          'command': {'type': 'member.timeZone', 'timeZone': zone},
+        },
+      ).then<void>(
+        (_) {},
+        onError: (Object error) =>
+            appLog.debug('swarm', 'time zone not told: $error'),
+      ),
+    );
+  }
+
   Future<void> refresh() {
     if (_disposed || accessRevoked || updateRequired) return Future.value();
     return _refreshing ??= _read().whenComplete(() {
@@ -3634,6 +3665,7 @@ class SuperTabController extends ChangeNotifier {
           throw const FormatException('A different Swarm was returned.');
         }
         snapshot = next;
+        _reportTimeZone(next);
         _notifyKept.removeWhere((_, kept) => kept.$2 < serial);
         final allowed = next.conversations.map((c) => c.id).toSet();
         // What this device keeps of a group goes with the group itself (a
