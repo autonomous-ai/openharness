@@ -27,6 +27,7 @@ export interface ReservationBook {
   reserve(input: Json, closed?: AbortSignal): Promise<Json>
   observe(creationId: unknown, closed?: AbortSignal): Promise<Json>
   giveBack(creationId: unknown, closed?: AbortSignal): Promise<Json>
+  ended(creationId: unknown, closed?: AbortSignal): Promise<Json>
   creationOf(harnessId: string): string | null
   stop(): void
 }
@@ -240,6 +241,21 @@ export class CapacityReservations implements ReservationBook {
     if (native?.state !== 'missing') return { error: 'CREATION_PRESENT', detail: 'This start may still launch on the machine, so its reservation stays.' }
     return this.transaction(() => {
       const gone = this.db.prepare('DELETE FROM reservations WHERE creation_id = ? AND released = 0 AND harness_id IS NULL').run(creationId) as { changes?: number }
+      return { ok: true, reservationId: creationId, returned: gone?.changes === 1 }
+    }, closed)
+  }
+
+  /** Ends the reservation of a start the Swarm failed with no agent, which its host read from the Swarm (machines.ts): River on
+   *  task #2890, a start failed at 3 minutes held its memory for the whole launch deadline. Whatever its creation reads, as
+   *  the Swarm will not take its agent now; one that launched keeps its row, released when its host stops that agent. */
+  async ended(creationId: unknown, closed?: AbortSignal): Promise<Json> {
+    if (!creationIdValid(creationId)) return { error: 'INVALID_REQUEST' }
+    this.check(closed)
+    await this.reconcile(this.rows().filter(row => row.creation_id === creationId), closed)
+    return this.transaction(() => {
+      const row = this.db.prepare('SELECT memory_bytes FROM reservations WHERE creation_id = ? AND released = 0 AND harness_id IS NULL').get(creationId)
+      const gone = this.db.prepare('DELETE FROM reservations WHERE creation_id = ? AND released = 0 AND harness_id IS NULL').run(creationId) as { changes?: number }
+      if (gone?.changes === 1) this.log(`Gave back the ${gibibytes(Number(row?.memory_bytes ?? 0))} of memory reserved for start receipt ${creationId}: the Swarm failed its start.`)
       return { ok: true, reservationId: creationId, returned: gone?.changes === 1 }
     }, closed)
   }

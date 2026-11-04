@@ -235,6 +235,9 @@ export class ContributedMachines {
   private readonly heldSince = new Map<string, number>()
   /** Starts this host launched whose engine has not yet recorded its session: the agent each created, by start id. */
   private readonly unconfirmed = new Map<string, Unconfirmed>()
+  /** Starts dispatched here whose creation has no agent yet, by start id ([failedEarly]). In memory only: after a restart the
+   *  ledger's launch deadline frees them (reservations.ts LAUNCH_DEADLINE_MS). */
+  private readonly agentless = new Map<string, Agentless>()
   /** Removals cleaned and acknowledged by this host, and the one in progress per removal. */
   private readonly cleaned = new Set<string>()
   private readonly cleaning = new Map<string, Promise<void>>()
@@ -495,6 +498,7 @@ export class ContributedMachines {
     for (const id of this.heldSince.keys()) if (!pendingIds.has(id)) this.heldSince.delete(id)
     this.loadUnconfirmed()
     for (const [id, launch] of this.unconfirmed) if (!pendingIds.has(id) && !launch.checking) void this.abandoned(id, launch)
+    for (const [id, launch] of this.agentless) if (!pendingIds.has(id) && !launch.checking) void this.failedEarly(id, launch, where)
     for (const tab of this.published.keys()) if (!pools.some(row => row.tabId === tab)) this.published.delete(tab)
     for (const tab of this.lastSent.keys()) if (!pools.some(row => row.tabId === tab)) this.lastSent.delete(tab)
     for (const tab of this.readingFailures.keys()) if (!pools.some(row => row.tabId === tab)) this.readingFailures.delete(tab)
@@ -717,6 +721,10 @@ export class ContributedMachines {
               if ((result.error === 'START_PENDING' || typeof result.refused === 'string') && identifier(result.harnessId) && identifier(result.creationId)) {
                 this.remember(String(start.id), { path, harnessId: result.harnessId, creationId: result.creationId, tries: 0, checking: false })
               } else this.forget(String(start.id))
+              // Dispatched here with a creation and no agent yet: should the Swarm fail it, [failedEarly] frees its memory at once.
+              if (result.ok !== true && !identifier(result.harnessId) && identifier(result.creationId)) {
+                this.agentless.set(String(start.id), { path, creationId: result.creationId, tries: this.agentless.get(String(start.id))?.tries ?? 0, checking: false })
+              } else this.agentless.delete(String(start.id))
               const held = result.error === 'START_PENDING' && result.state === 'pending' ? object(result.held) : {}
               if (typeof held.detail !== 'string' || held.service === 'install') this.heldSince.delete(start.id)
               else {
@@ -960,6 +968,30 @@ export class ContributedMachines {
     } catch (error) {
       if (++launch.tries >= ABANDONED_TRIES) this.forget(startId)
       this.log(`Could not stop the agent a failed start launched (start ${startId}): ${error instanceof Error ? error.message : String(error)}`)
+    } finally { launch.checking = false }
+  }
+
+  /**
+   * A start dispatched here with no agent that the backend no longer lists as pending: when the backend says it failed (its
+   * machine did not start it within 3 minutes, say) and no agent joined, this machine's ledger ends its reservation at once
+   * rather than at its launch deadline (River on task #2890, issue #2989). A status the backend cannot give now is asked
+   * again on later passes, a few times; a daemon that cannot end it keeps the row until that deadline.
+   */
+  private async failedEarly(startId: string, launch: Agentless, where: Parameters<MachineDeps['open']>[0]): Promise<void> {
+    launch.checking = true
+    try {
+      const status = object(await this.deps.backend(this.core, 'GET', launch.path))
+      if (identifier(status.harnessId) || !status.error) { this.agentless.delete(startId); return }
+      this.agentless.delete(startId)
+      const local = await this.deps.open(where)
+      try {
+        const ended = object(await local.request('super_tabs', { action: 'endCapacity', creationId: launch.creationId }, 10_000))
+        if (ended.ok === true) this.log(`Freed the memory of start ${startId}, which the Swarm failed: ${String(status.error)}`)
+        else this.log(`Could not free the memory of failed start ${startId}: ${String(ended.error ?? 'no answer')}; its launch deadline frees it.`)
+      } finally { local.close() }
+    } catch (error) {
+      if (++launch.tries >= ABANDONED_TRIES) this.agentless.delete(startId)
+      this.log(`Could not free the memory of failed start ${startId}: ${error instanceof Error ? error.message : String(error)}`)
     } finally { launch.checking = false }
   }
 
@@ -1311,6 +1343,8 @@ const SWARM_GRID = /^swarm-[0-9a-f]{12}$/
 
 /** A start this host launched whose engine has not recorded its session yet (ContributedMachines `abandoned`). */
 interface Unconfirmed { path: string; harnessId: string; creationId: string; tries: number; checking: boolean }
+/** A start dispatched here whose creation has no agent yet (ContributedMachines `failedEarly`). */
+interface Agentless { path: string; creationId: string; tries: number; checking: boolean }
 /** How many passes ask about an abandoned start before it is let go. */
 const ABANDONED_TRIES = 5
 

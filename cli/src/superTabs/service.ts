@@ -420,6 +420,9 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'reserveCapacity') return await reservations().reserve(payload, closed)
         if (payload.action === 'observeCapacity') return await reservations().observe(payload.creationId, closed)
         if (payload.action === 'returnCapacity') return await reservations().giveBack(payload.creationId, closed)
+        // Only this machine's own host, which read the Swarm's verdict for its start (machines.ts): a relayed caller could
+        // otherwise free memory a start still holds (issue #2989).
+        if (payload.action === 'endCapacity') return asker.local ? await reservations().ended(payload.creationId, closed) : { error: 'OWNER_REQUIRED' }
         // A backend-issued context scopes provenance only. Existing machine
         // control is still required to open/write the native terminal itself.
         if (payload.action === 'prepareNative' || payload.action === 'renewNative') {

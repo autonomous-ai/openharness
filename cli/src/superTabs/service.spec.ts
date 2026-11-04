@@ -552,7 +552,7 @@ it('keeps host capacity separate from account authority and closes it on disconn
   const reserve = vi.fn(async () => ({ ok: true, reservationId: 'native-creation-id' }))
   const observe = vi.fn(async () => ({ ok: true, released: true }))
   const giveBack = vi.fn(async () => ({ ok: true, reservationId: 'native-creation-id', returned: true }))
-  const stop = vi.fn(), factory = vi.fn(() => ({ reserve, observe, giveBack, creationOf: vi.fn(() => null), stop }))
+  const stop = vi.fn(), factory = vi.fn(() => ({ reserve, observe, giveBack, ended: vi.fn(), creationOf: vi.fn(() => null), stop }))
   const service = superTabService(core, { reservations: factory })
   const closed = new AbortController().signal
   expect(factory).not.toHaveBeenCalled()
@@ -590,7 +590,7 @@ it('ends a failed start\'s reservation only for a caller on this machine', async
 it('gives the host this machine\'s record of the Swarm starts, to close a session the backend ends', async () => {
   const core = fakeCore()
   const creationOf = vi.fn((harnessId: string) => harnessId === 'harness' ? 'super-0123456789abcdef' : null)
-  const factory = vi.fn(() => ({ reserve: vi.fn(), observe: vi.fn(), giveBack: vi.fn(), creationOf, stop: vi.fn() }))
+  const factory = vi.fn(() => ({ reserve: vi.fn(), observe: vi.fn(), giveBack: vi.fn(), ended: vi.fn(), creationOf, stop: vi.fn() }))
   let options: SuperTabHostOptions = {}
   const host = vi.fn((_core: unknown, _machine: string, given: SuperTabHostOptions) => {
     options = given
