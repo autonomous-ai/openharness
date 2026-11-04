@@ -1,6 +1,6 @@
 /**
- * What the metrics cost: per request (the onResponse histogram) and per query (the Prisma timing
- * extension, against a throwaway local replica set). Plain and measured alternate so drift in the
+ * What the metrics cost: per request (the onResponse histogram and the last-hour ring) and per query (the
+ * histogram on main's one query hook, lib/queryStats.ts, against a throwaway local replica set). Plain and measured alternate so drift in the
  * machine hits both alike; the median of each is reported.
  *
  *   npx tsx scripts/metrics-overhead.ts
@@ -13,7 +13,8 @@ import { tmpdir } from 'node:os'
 import Fastify from 'fastify'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
-import { createMetrics, registerRequestMetrics, withQueryTiming } from '../src/lib/metrics.js'
+import { createMetrics, registerRequestMetrics } from '../src/lib/metrics.js'
+import { withQueryStats } from '../src/lib/queryStats.js'
 
 const ROUNDS = 7
 const median = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)]!
@@ -54,10 +55,12 @@ async function queries() {
   const uri = replica.getUri(`metrics_overhead_${randomUUID().replaceAll('-', '_')}`)
   try {
     await promisify(execFile)(join(process.cwd(), 'node_modules/.bin/prisma'), ['db', 'push', '--skip-generate'], { env: { ...process.env, DATABASE_URL: uri }, timeout: 60000 })
-    const base = new PrismaClient({ datasources: { db: { url: uri } } })
-    const timed = withQueryTiming(base, createMetrics())
+    const client = new PrismaClient({ datasources: { db: { url: uri } } })
+    // Both sides have the hook main already runs; the measured one also feeds the histogram.
+    const base = withQueryStats(client)
+    const timed = withQueryStats(client, undefined, undefined, createMetrics().observeQuery)
     const id = randomUUID().replaceAll('-', '').slice(0, 24)
-    await base.user.create({ data: { id, externalId: `bench-${id}`, email: `${id}@example.com`, autonomousEnv: 'prod' } })
+    await client.user.create({ data: { id, externalId: `bench-${id}`, email: `${id}@example.com`, autonomousEnv: 'prod' } })
     const find = (db: PrismaClient) => () => db.user.findUnique({ where: { id } })
     await microsPerCall(500, find(base))
     await microsPerCall(500, find(timed))
@@ -68,7 +71,7 @@ async function queries() {
       a.push(await microsPerCall(1, find(base)))
       b.push(await microsPerCall(1, find(timed)))
     }
-    await base.$disconnect()
+    await client.$disconnect()
     return { plain: median(a), measured: median(b) }
   } finally {
     await replica.stop()

@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
-import { createMetrics, withQueryTiming } from '../src/lib/metrics.js'
+import { createMetrics } from '../src/lib/metrics.js'
+import { withQueryStats } from '../src/lib/queryStats.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -34,7 +35,7 @@ async function queryCounts(metrics: ReturnType<typeof createMetrics>) {
 describe('Prisma query timing against a real database', () => {
   it('times model queries, raw commands and queries inside an interactive transaction', async () => {
     const metrics = createMetrics()
-    const db = withQueryTiming(base, metrics)
+    const db = withQueryStats(base, () => undefined, undefined, metrics.observeQuery)
     const id = randomUUID().replaceAll('-', '').slice(0, 24)
     await db.user.create({ data: { id, externalId: `fixture-${id}`, email: `${id}@example.com`, autonomousEnv: 'prod' } })
     await db.$transaction(async (tx) => {

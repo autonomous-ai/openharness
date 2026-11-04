@@ -311,14 +311,17 @@ export function startQueryStats(options: QueryStatsOptions & { reportMs?: number
   }
 }
 
-/** The client with one query hook that times every operation, model calls and raw commands alike, for `db by shape`.
- *  Query extensions keep the client's types, so it is still a PrismaClient to its callers. A failure of the stats never
- *  reaches the query: it is warned about once per client, and the query's own result or error goes back unchanged. */
+/** The client with one query hook that times every operation, model calls and raw commands alike, for `db by shape` and
+ *  for `observe` (the Prometheus histogram, lib/metrics.ts; `raw` for a call without a model). Query extensions keep the
+ *  client's types, so it is still a PrismaClient to its callers. A failure of either never reaches the query: it is warned
+ *  about once per client, and the query's own result or error goes back unchanged. */
 export function withQueryStats(client: PrismaClient, stats: () => QueryStats | undefined = () => active,
-  warn: (message: string, context: Record<string, unknown>) => void = (m, c) => logger.warn(m, c)): PrismaClient {
+  warn: (message: string, context: Record<string, unknown>) => void = (m, c) => logger.warn(m, c),
+  observe?: (model: string, operation: string, seconds: number) => void): PrismaClient {
   let warned = false
   const note = (model: string | undefined, operation: string, args: unknown, ms: number, result: unknown, failed: boolean) => {
     try {
+      observe?.(model ?? 'raw', operation, ms / 1000)
       stats()?.record(model, operation, args, ms, result, failed)
     } catch (error) {
       if (warned) return
