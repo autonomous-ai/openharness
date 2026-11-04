@@ -3381,6 +3381,49 @@ class _SuperTabViewState extends State<SuperTabView>
         ?.showSnackBar(SnackBar(content: Text(failure)));
   }
 
+  /// More ▸ Edit message, saved: a refusal says why, and the row keeps the
+  /// text it had.
+  Future<void> _editMessage(SuperTabMessage message, String text) async {
+    final failure = await c.editMessage(message, text);
+    if (failure == null || !mounted) return;
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(SnackBar(content: Text(failure)));
+  }
+
+  /// More ▸ Delete message: asks first, and only Delete sends it.
+  Future<void> _deleteMessage(SuperTabMessage message) async {
+    final confirmed = await showAppDialog<bool>(
+      context: context,
+      builder: (context) => SuperTabDialogScope(
+        controller: c,
+        conversationId: message.conversationId,
+        child: AlertDialog(
+          title: const Text('Delete message?'),
+          content: Text("This can't be undone.", style: DesktopChrome.text()),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              key: const ValueKey('super-message-delete-confirm'),
+              style: FilledButton.styleFrom(
+                backgroundColor: grid.AppPalette.dangerFill,
+              ),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Delete'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final failure = await c.deleteMessage(message);
+    if (failure == null || !mounted) return;
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(SnackBar(content: Text(failure)));
+  }
+
   SuperTabMessage _outgoingMessage(SuperTabOutgoing sent) {
     final id = sent.conversationId;
     final person = c.snapshot?.people
@@ -3612,6 +3655,13 @@ class _SuperTabViewState extends State<SuperTabView>
           ? null
           : () => unawaited(_markUnread(message)),
       onRemind: (when) => unawaited(_remind(message, when)),
+      // Only the author's own plain message (the server decides).
+      onEdit: c.canChange(message)
+          ? (text) => _editMessage(message, text)
+          : null,
+      onDelete: c.canChange(message)
+          ? () => unawaited(_deleteMessage(message))
+          : null,
       // A message with a thread is answered there; one from before threads
       // keeps the inline reply.
       onReply: !writable || inThread

@@ -50,13 +50,20 @@ void main() {
   );
   Finder field(String id) => find.byKey(ValueKey('super-message-edit-$id'));
 
-  Future<TestGesture> hover(WidgetTester tester, String id) async {
-    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-    await mouse.addPointer(location: Offset.zero);
-    addTearDown(mouse.removePointer);
-    await mouse.moveTo(tester.getCenter(row(id)));
+  // One mouse for a whole test, moved from row to row.
+  TestGesture? mouse;
+  setUp(() => mouse = null);
+
+  Future<void> hover(WidgetTester tester, String id) async {
+    if (mouse == null) {
+      final added = mouse = await tester.createGesture(
+        kind: PointerDeviceKind.mouse,
+      );
+      await added.addPointer(location: Offset.zero);
+      addTearDown(added.removePointer);
+    }
+    await mouse!.moveTo(tester.getCenter(row(id)));
     await tester.pumpAndSettle();
-    return mouse;
   }
 
   Future<void> openMore(WidgetTester tester, String id) async {
