@@ -409,8 +409,10 @@ function escapes(part) {
 
 // A word that names a place out of the folder: itself, what follows "=" or ":" (--file=/x, HEAD:../x), and for a short
 // option what follows each of its letters, since a value may be glued on (-S/x, -f../x, -fout/x). A range such as
-// main..HEAD has no ".." part.
-const outward = (word) => word.split(/[=:]/).some(escapes)
+// main..HEAD has no ".." part. On Windows a drive names a place with or without a slash after it (D:x, ls C:), which the
+// split at ":" would hide.
+const OS_WINDOWS = process.platform === 'win32'
+const outward = (word) => (OS_WINDOWS && /(^|=)[A-Za-z]:/.test(word)) || word.split(/[=:]/).some(escapes)
   || (/^-[^-]/.test(word) && [...word].some((_, at) => at >= 2 && escapes(word.slice(at))))
 
 const short = (word) => /^-[^-]/.test(word)

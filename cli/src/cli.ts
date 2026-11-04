@@ -2846,8 +2846,8 @@ switch (cmd) {
     break
   }
   case 'mcp': {
-    const pane = process.env.TMUX_PANE
-    mcpCommand({ run: harnessRunner(SCRIPT_PATH), inPane: !!pane && !!paneOwner(pane) }).then(code => { process.exitCode = code }).catch(onError)
+    const pane = sendPane(process.env)
+    mcpCommand({ run: harnessRunner(SCRIPT_PATH), inPane: !!pane && (!pane.startsWith('%') || !!paneOwner(pane)) }).then(code => { process.exitCode = code }).catch(onError)
     break
   }
   case 'show':

@@ -1,5 +1,5 @@
-import { expect, it, vi } from 'vitest'
-import { buddyRefusal, paneBuddy, WINDOWS_BUDDY } from './buddyPane.js'
+import { describe, expect, it, vi } from 'vitest'
+import { buddyRefusal, paneBuddy } from './buddyPane.js'
 
 const where = { port: 14001, dataDir: '/fixture', machineId: 'machine' }
 const BUDDY = 'A Buddy talks with its owner in its own chat: it may not send to, start, tell or close other sessions.'
@@ -56,14 +56,51 @@ it('refuses a command that names another pane than the one it runs in, and finds
   expect(await buddyRefusal(daemon(swarm(true)).deps, 'darwin')).toBe(BUDDY)
 })
 
-// Windows has no cheap check of a pty host pane: while a Buddy runs on that computer, an agent's shell may not.
-it('fails closed on Windows while this computer runs a Buddy, for an agent\'s shell, and leaves a person\'s terminal alone', async () => {
-  const agentShells = [{ HARNESS_PANE: 'p1:%3' }, { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's' }, { CODEX_THREAD_ID: 't' }]
-  for (const env of agentShells) {
-    expect(await buddyRefusal({ ...daemon(swarm(false, true)).deps, env }, 'win32')).toBe(WINDOWS_BUDDY)
-    expect(await buddyRefusal({ ...daemon(swarm(false, false)).deps, env }, 'win32')).toBeNull()
+// Windows proves a pane from the command's parents, as a Mac does. A Buddy there used to refuse every agent's shell on that
+// computer, because nothing could tell its pane from theirs (security review of #2093).
+describe('on Windows', () => {
+  // This command (process.pid) under the pane's process 700, under the PTY host 600.
+  const rows = (host = 'harness-pty.exe') => async () => [
+    { pid: process.pid, parentPid: 700, executable: 'node.exe', startMarker: 'w:30', args: '' },
+    { pid: 700, parentPid: 600, executable: 'claude.exe', startMarker: 'w:20', args: '' },
+    { pid: 600, parentPid: 1, executable: host, startMarker: 'w:10', args: '' },
+  ]
+  const windows = (buddy: boolean, buddiesHere = buddy) => {
+    const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}) => {
+      if (type === 'agents_list') {
+        return { agents: [{ id: 'pane-harness', engine: 'claude', tmuxPane: '%3', status: 'active',
+          terminal: { runtimes: [{ backend: 'ptyhost', instance: 'p1', paneId: '%3' }] } }] }
+      }
+      if (type === 'super_tabs' && payload.action === 'buddyCheck') return swarm(buddy, buddiesHere)(payload)
+      if (type === 'terminal_info') return { command: 'claude', path: 'C:\\work', pid: 700 }
+      return { error: 'UNSUPPORTED' }
+    })
+    return { where: () => where, open: async () => ({ request, close: vi.fn(), machineId: 'machine' }) }
   }
-  expect(await buddyRefusal({ ...daemon(swarm(false, true)).deps, env: {} }, 'win32')).toBeNull()
+
+  it('refuses a Buddy\'s own pane', async () => {
+    expect(await buddyRefusal({ ...windows(true), env: { HARNESS_PANE: 'p1:%3' }, readProcesses: rows() }, 'win32')).toBe(BUDDY)
+  })
+
+  it('leaves another agent\'s pane alone while this computer runs a Buddy', async () => {
+    expect(await buddyRefusal({ ...windows(false, true), env: { HARNESS_PANE: 'p1:%3' }, readProcesses: rows() }, 'win32')).toBeNull()
+  })
+
+  it('leaves an agent outside Harness and a person\'s terminal alone', async () => {
+    const outside = async () => [{ pid: process.pid, parentPid: 1, executable: 'node.exe', startMarker: 'w:30', args: '' }]
+    for (const env of [{ CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's' }, { CODEX_THREAD_ID: 't' }, {}]) {
+      expect(await buddyRefusal({ ...windows(false, true), env, readProcesses: outside }, 'win32')).toBeNull()
+    }
+  })
+
+  it('refuses a command naming a pane it does not run in, and one under the PTY host that names none', async () => {
+    const elsewhere = windows(false, true)
+    const other = async () => [{ pid: process.pid, parentPid: 1, executable: 'node.exe', startMarker: 'w:30', args: '' }]
+    expect(await buddyRefusal({ ...elsewhere, env: { HARNESS_PANE: 'p1:%3' }, readProcesses: other }, 'win32'))
+      .toBe('This command does not run in the Harness pane it names, so it did not run. Run it as your harness gave it, in its own pane.')
+    expect(await buddyRefusal({ ...elsewhere, env: {}, readProcesses: rows() }, 'win32'))
+      .toBe('Harness could not tell which pane this command runs in, so it did not run it. Run it as your harness gave it, in its own pane.')
+  })
 })
 
 // Re-check 1 of #2093 (minor 7): with the Swarm on, an error on the harness's own question read as "no Buddy".

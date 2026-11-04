@@ -193,7 +193,7 @@ describe('keeping gh\'s token fresh', () => {
   it('keeps the folder of a session still starting, and of one not read just now, until it is 15 minutes untouched', async () => {
     const dataDir = mkdtempSync(join(root, 'starting-'))
     const core = fakeCore({ dataDir, agents: { live: vi.fn(() => []), all: vi.fn(() => []), byAgent: vi.fn(() => undefined) } })
-    swarmGitHubLaunch('harness-codex-starting', { dataDir, command: '/bin/true', port: 1, machineId: 'machine-1' }, 'darwin')
+    swarmGitHubLaunch('harness-codex-starting', { dataDir, command: '/bin/true', port: 1, machineId: 'machine-1' })
     const dir = swarmGitHubSessionDir(dataDir, 'harness-codex-starting')!
     expect(existsSync(dir)).toBe(true)
     await new GitHubTokenRefresher(core, () => ({}) as never).tick()

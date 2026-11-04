@@ -12,14 +12,14 @@ import { keyName } from './terminal.js'
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { isatty } from 'node:tty'
-import { inDaemonPane, NOT_IN_PANE, runningPane, type PaneProbe } from './callerPane.js'
+import { inDaemonPane, NOT_IN_PANE, runningPane, windowsRunningPane, type PaneProbe, type RunningPane } from './callerPane.js'
+import type { ProcessRow } from '../lib/processTable.js'
 // cli.ts's way to it: this file is its door to the Swarm's code (architecture.spec.ts SWARM_DOORS).
 export { buddyRefusal } from './buddyPane.js'
-import { agentShell, buddiesHere, paneBuddy, WINDOWS_BUDDY } from './buddyPane.js'
+import { paneBuddy } from './buddyPane.js'
 import { sendPane } from '../messages/command.js'
 
-/** A frame with its terminals, as agents_list sends them: a pty host pane is named by its instance and pane (Windows). */
-type PaneFrame = Frame & { terminal?: { runtimes?: Array<{ backend?: string; instance?: string; paneId?: string }> } }
+type PaneFrame = Frame
 /** Whether [pane] is a harness's here: a tmux pane as `callerOf` finds it, or a pty host's `<instance>:%N`. */
 function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolean {
   const pty = /^([^:]+):(%\d+)$/.exec(pane)
@@ -131,15 +131,13 @@ class WantsStdin { constructor(readonly what: string) {} }
 /** Whether the harness in this pane is a Buddy, by this computer's launch record (service.ts `buddyCheck`, what turns its
  *  guard on), for a refusal's wording alone. Asked of this computer's daemon, never one named with --machine. Anything it
  *  cannot tell is no Buddy: the guard still refuses what a Buddy may not send. */
-async function buddyHere(open: typeof openDaemon, local: Where, pane: string | undefined, env: NodeJS.ProcessEnv, platform: NodeJS.Platform): Promise<boolean> {
-  // Windows has no cheap check of a pty host pane (buddyPane.ts): an agent's shell on a computer that runs a Buddy.
-  if (platform !== 'win32' && !pane) return false
+async function buddyHere(open: typeof openDaemon, local: Where, pane: string | undefined): Promise<boolean> {
+  if (!pane) return false
   try {
     const daemon = await open(local)
     try {
-      if (platform === 'win32') return agentShell(env) && await buddiesHere(daemon) === true
       // The guard's own steps (buddyPane.ts paneBuddy), without its pane check: a wording, not a refusal.
-      return await paneBuddy(daemon, pane!, local.machineId) === 'buddy'
+      return await paneBuddy(daemon, pane, local.machineId) === 'buddy'
     } finally { daemon.close() }
   } catch { return false }
 }
@@ -304,6 +302,7 @@ async function parse(argv: readonly string[], local: Where, stdin: () => string 
 export async function superTabCommand(argv: readonly string[], deps: {
   where?: () => Where; open?: typeof openDaemon; print?: (text: string) => void; pane?: string; probe?: PaneProbe; fetch?: typeof fetch; env?: NodeJS.ProcessEnv
   platform?: NodeJS.Platform; stdin?: () => string | Promise<string>; terminal?: () => boolean
+  readProcesses?: () => Promise<ProcessRow[] | null>
 } = {}): Promise<number> {
   let daemon: Daemon | null = null
   let operationId: unknown
@@ -311,37 +310,31 @@ export async function superTabCommand(argv: readonly string[], deps: {
   try {
     const platform = deps.platform ?? process.platform, env = deps.env ?? process.env, open = deps.open ?? openDaemon
     // The pane this runs in, from its processes: TMUX_PANE is what the command says, and it may not name another harness's.
-    const running = 'pane' in deps ? { pane: deps.pane } : runningPane(env, deps.probe, platform)
+    const running: RunningPane = 'pane' in deps ? { pane: deps.pane }
+      : platform === 'win32' ? await windowsRunningPane(sendPane(env), deps.readProcesses)
+      : runningPane(env, deps.probe, platform)
     if (running.refused) throw new Error(running.refused)
     const pane = running.pane
     const local = (deps.where ?? (() => whereFor(pane)))()
     const request = await parse(argv, local, deps.stdin ?? (() => readStdin(process.stdin)), deps.terminal)
       .catch(async error => {
-        if (error instanceof UsageError && await buddyHere(open, local, pane, env, platform)) throw new Error(error.words(true))
+        if (error instanceof UsageError && await buddyHere(open, local, pane)) throw new Error(error.words(true))
         throw error
       })
     operationId = request.payload.operationId
     // A harness reaches the Swarm through this computer's Harness alone (second review of #2087: a Buddy's --machine reached
     // the owner's other Mac, which knew no pane there). The daemon refuses an agent's request from another computer as well.
     const elsewhere = request.where.port !== local.port || request.where.machineId !== local.machineId
-    // Windows has no cheap check of a pty host pane, so its pane is the one the shell names, for the refusal below alone; and
-    // while this computer runs a Buddy, an agent's shell there names no agent. Both are asked of this computer's daemon,
-    // never the other machine's (re-check of #2093: --machine asked the other one, which does not answer for this computer).
-    const asking = pane ?? (platform === 'win32' ? sendPane(env) : undefined)
-    const windowsAgent = platform === 'win32' && !!request.payload.agentId && agentShell(env)
-    const checks = async (home: Daemon) => {
-      if (elsewhere && asking) {
-        const listed = await home.request('agents_list')
-        if (harnessIn(Array.isArray(listed.agents) ? listed.agents as PaneFrame[] : [], asking, local.machineId)) throw new Error(ELSEWHERE)
-      }
-      if (windowsAgent && await buddiesHere(home)) throw new Error(WINDOWS_BUDDY)
-    }
-    if (elsewhere && (asking || windowsAgent)) {
+    // Asked of this computer's daemon, never the other machine's (re-check of #2093: --machine asked the other one, which does
+    // not answer for this computer).
+    if (elsewhere && pane) {
       const home = await open(local)
-      try { await checks(home) } finally { home.close() }
+      try {
+        const listed = await home.request('agents_list')
+        if (harnessIn(Array.isArray(listed.agents) ? listed.agents as PaneFrame[] : [], pane, local.machineId)) throw new Error(ELSEWHERE)
+      } finally { home.close() }
     }
     daemon = await open(request.where)
-    if (!elsewhere) await checks(daemon)
     const owners = request.payload.action === 'backend' || request.payload.action === 'setMachineAgents'
     if (owners) {
       // The owner's own acts: removal deletes this machine's Swarm folders, and no agent raises its own machine's room
