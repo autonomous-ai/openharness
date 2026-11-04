@@ -20,6 +20,7 @@ import 'swarm_attachment.dart';
 import 'swarm_code_block.dart';
 import 'swarm_file_links.dart';
 import 'swarm_message_text.dart';
+import 'swarm_voice_bubble.dart';
 import 'swarm_message_style.dart';
 import 'swarm_face.dart';
 import 'swarm_ship_row.dart';
@@ -364,6 +365,15 @@ class SwarmMessageRow extends StatelessWidget {
       messageId: message.id,
       reader: SwarmFiles.of(context),
     );
+    // A voice message's clip is its bubble, its words behind →A.
+    if (file.voice case final voice?) {
+      return SwarmVoiceBubble(
+        file: file,
+        voice: voice,
+        words: message.text,
+        fileRef: ref,
+      );
+    }
     final link = ref.current;
     return SwarmAttachment(
       file: file,
@@ -432,23 +442,25 @@ class SwarmMessageRow extends StatelessWidget {
         if (lit) SizedBox(key: ValueKey('swarm-lit-${message.id}')),
         ?quote,
         ?swarmTerminalNote(message),
-        for (final part in swarmTextParts(message.text))
-          if (part.code)
-            SwarmCodeBlock(code: part.text, name: part.name, onTap: onTap)
-          else
-            Padding(
-              padding: const EdgeInsets.only(top: SwarmMessageFrame.bodyGap),
-              child: SwarmMessageText(
-                text: part.text,
-                mentionNames: mentions.names,
-                references: references,
-                tagged: tagged,
-                addresses: taggedAddresses,
-                labels: taggedLabels,
-                onTap: onTap,
-                onOpenConversation: onOpenConversation,
+        // A voice message's text is its words: under its bubble, on →A.
+        if (!message.attachments.any((file) => file.voice != null))
+          for (final part in swarmTextParts(message.text))
+            if (part.code)
+              SwarmCodeBlock(code: part.text, name: part.name, onTap: onTap)
+            else
+              Padding(
+                padding: const EdgeInsets.only(top: SwarmMessageFrame.bodyGap),
+                child: SwarmMessageText(
+                  text: part.text,
+                  mentionNames: mentions.names,
+                  references: references,
+                  tagged: tagged,
+                  addresses: taggedAddresses,
+                  labels: taggedLabels,
+                  onTap: onTap,
+                  onOpenConversation: onOpenConversation,
+                ),
               ),
-            ),
         ?swarmCutShort(message),
         for (final file in message.attachments) _attachment(context, file),
         ?card,

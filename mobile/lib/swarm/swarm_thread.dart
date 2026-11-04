@@ -703,6 +703,7 @@ class SwarmThread extends ChangeNotifier
         operationId: operationId,
       ),
       files: [clip],
+      voice: voice,
     );
     final outcome = await _outbox.add(post);
     _answered(post, outcome, current);

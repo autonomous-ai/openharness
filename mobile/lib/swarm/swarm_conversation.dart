@@ -989,6 +989,7 @@ class SwarmConversation extends ChangeNotifier
         operationId: operationId,
       ),
       files: [clip],
+      voice: voice,
     );
     _replyingTo = null;
     error = null;

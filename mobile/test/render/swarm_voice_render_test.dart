@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
@@ -17,9 +18,10 @@ import 'package:harness_mobile/swarm/swarm_session.dart';
 import '../voice_fakes.dart';
 import '../swarm/swarm_fixture.dart';
 
-/// Renders a phone Swarm chat's mic — at rest, listening, with what was heard
-/// in the box, and refused — in light and dark, at iPhone 14 size in the
-/// system fonts, to PNGs a reviewer can look at without a phone.
+/// Renders a phone Swarm chat's voice messages (task #2584) — the mic at
+/// rest, a take recording, a voice message with its words hidden and shown,
+/// and the mic refused — in light and dark, at iPhone 14 size in the system
+/// fonts, to PNGs a reviewer can look at without a phone.
 ///
 /// Skipped unless PHONE_RENDER_DIR names a directory to write into:
 ///
@@ -80,7 +82,7 @@ void main() {
           title: 'Login crash on iPhone',
           agentIds: ['agent-lead', 'agent-builder'],
           status: 'working',
-          lastMessageSequence: 1,
+          lastMessageSequence: 2,
         ),
       ],
     );
@@ -102,6 +104,38 @@ void main() {
           'attachments': <Object>[],
           'reactions': <Object>[],
           'createdAt': DateTime.utc(2026, 10, 28, 4, 1).toIso8601String(),
+        },
+        {
+          'id': 'm2',
+          'conversationId': 'g1',
+          'text':
+              'Yes, ship it today, and tell me when the build is up so I '
+              'can try the login on my phone.',
+          'sequence': 2,
+          'author': {'kind': 'person', 'id': me, 'name': 'dee'},
+          'attachments': [
+            {
+              'id': 'clip',
+              'name': 'Voice message.wav',
+              'mime': 'audio/wav',
+              'size': 2592044,
+              'url': 'https://cdn.example.test/super-tabs/$tab/a/clip.wav',
+              'voice': {
+                'durationMs': 81000,
+                'waveform': [
+                  for (var i = 0; i < 48; i++)
+                    (6 +
+                            20 *
+                                (0.5 + 0.5 * math.sin(i * 0.7)) *
+                                (i % 5 == 0 ? 0.4 : 1))
+                        .round(),
+                ],
+                'transcribed': true,
+              },
+            },
+          ],
+          'reactions': <Object>[],
+          'createdAt': DateTime.utc(2026, 10, 28, 4, 3).toIso8601String(),
         },
       ],
       'next': null,
@@ -127,7 +161,6 @@ void main() {
     Future<GlobalKey> chat(
       WidgetTester tester,
       _MeteredRecorder recorder,
-      FakeTranscriber stt,
     ) async {
       await tester.runAsync(_loadFonts);
       // A palette carries its brightness: a light one is how the app goes light.
@@ -194,37 +227,35 @@ void main() {
       }
     }
 
-    testWidgets('mic at rest ($look)', skip: skip, (tester) async {
-      final key = await chat(tester, _MeteredRecorder(), FakeTranscriber());
-      await shoot(tester, key, 'swarm-voice-rest-$look');
+    testWidgets('mic at rest, a voice message ($look)', skip: skip, (
+      tester,
+    ) async {
+      final key = await chat(tester, _MeteredRecorder());
+      await shoot(tester, key, 'swarm-voice-message-$look');
     });
 
-    testWidgets('listening ($look)', skip: skip, (tester) async {
-      final recorder = _MeteredRecorder();
-      final key = await chat(tester, recorder, FakeTranscriber());
-      await tapMic(tester);
-      recorder.meter.value = 0.7;
-      await tester.pump(const Duration(milliseconds: 400));
-      await shoot(tester, key, 'swarm-voice-listening-$look');
-    });
-
-    testWidgets('heard into the box ($look)', skip: skip, (tester) async {
-      final stt = FakeTranscriber()
-        ..replies.add('Yes, ship it today and tell me when it is up.');
-      final key = await chat(tester, _MeteredRecorder(), stt);
-      await tapMic(tester);
-      // Stop: the words land in the box, unsent.
-      await tester.tap(find.byKey(const ValueKey('swarm-voice-stop')));
+    testWidgets('a voice message\'s words open ($look)', skip: skip, (
+      tester,
+    ) async {
+      final key = await chat(tester, _MeteredRecorder());
+      await tester.tap(find.byKey(const ValueKey('swarm-voice-words-toggle')));
       await tester.pumpAndSettle();
-      await shoot(tester, key, 'swarm-voice-heard-$look');
+      await shoot(tester, key, 'swarm-voice-words-$look');
+    });
+
+    testWidgets('recording ($look)', skip: skip, (tester) async {
+      final recorder = _MeteredRecorder();
+      final key = await chat(tester, recorder);
+      await tapMic(tester);
+      for (var i = 0; i < 40; i++) {
+        recorder.meter.value = const [0.2, 0.6, 0.9, 0.4, 0.7, 0.3][i % 6];
+        await tester.pump(const Duration(milliseconds: 350));
+      }
+      await shoot(tester, key, 'swarm-voice-recording-$look');
     });
 
     testWidgets('mic refused ($look)', skip: skip, (tester) async {
-      final key = await chat(
-        tester,
-        _MeteredRecorder()..permitted = false,
-        FakeTranscriber(),
-      );
+      final key = await chat(tester, _MeteredRecorder()..permitted = false);
       await tapMic(tester);
       await tester.pumpAndSettle();
       await shoot(tester, key, 'swarm-voice-refused-$look');
