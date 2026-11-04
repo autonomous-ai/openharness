@@ -161,6 +161,64 @@ void main() {
       expect(find.byType(CalendarDatePicker), findsNothing);
     });
 
+    testWidgets(
+      'Enter and Space open it from the keyboard, at its first choice',
+      (tester) async {
+        await _list(tester, (_) {});
+        final pill = tester
+            .widget<Focus>(
+              find.descendant(
+                of: find.byKey(_pill),
+                matching: find.byType(Focus),
+              ),
+            )
+            .focusNode!;
+        for (final key in [
+          LogicalKeyboardKey.enter,
+          LogicalKeyboardKey.space,
+        ]) {
+          pill.requestFocus();
+          await tester.pump();
+          await tester.sendKeyEvent(key);
+          await tester.pumpAndSettle();
+          expect(find.text('Jump to…'), findsOneWidget);
+          expect(
+            FocusManager.instance.primaryFocus?.debugLabel,
+            'Swarm day pill first choice',
+          );
+          await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+          await tester.pumpAndSettle();
+          expect(find.text('Jump to…'), findsNothing);
+        }
+      },
+    );
+
+    testWidgets(
+      'a click lights no choice, and the calendar shows its whole month',
+      (tester) async {
+        await _list(tester, (_) {});
+        await tester.tap(find.byKey(_pill));
+        await tester.pumpAndSettle();
+        expect(
+          FocusManager.instance.primaryFocus?.debugLabel,
+          'Swarm day pill',
+        );
+        await tester.tap(find.text('Jump to a specific date'));
+        await tester.pumpAndSettle();
+        // October 2026 ends on a Saturday, in its sixth week: its last day is
+        // inside the panel.
+        final panel = tester.getRect(
+          find
+              .ancestor(
+                of: find.byType(CalendarDatePicker),
+                matching: find.byType(SizedBox),
+              )
+              .first,
+        );
+        expect(panel.contains(tester.getCenter(find.text('31'))), isTrue);
+      },
+    );
+
     testWidgets('Esc closes the menu, and nothing jumps', (tester) async {
       final jumped = <DateTime?>[];
       await _list(tester, jumped.add);
@@ -325,6 +383,114 @@ void main() {
       expect(onScreen(tester, 'Today 20'), isTrue);
       expect(lit(tester, 'Today 20'), isFalse);
     });
+  });
+
+  group('a read that fails on the way back', () {
+    final now = DateTime.now();
+    DateTime daysAgo(int days, [int minute = 0]) =>
+        DateTime(now.year, now.month, now.day - days, 10, minute);
+
+    Future<(SuperTabController, ConversationServer)> open(
+      WidgetTester tester,
+      ConversationServer server,
+    ) async {
+      final c = server.controller();
+      await c.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.light),
+          home: Scaffold(
+            body: SuperTabView(
+              controller: c,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Mac Studio',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      addTearDown(c.dispose);
+      return (c, server);
+    }
+
+    Future<void> choose(WidgetTester tester, Key pill, String label) async {
+      await tester.tap(find.byKey(pill));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(label));
+      await tester.pumpAndSettle();
+    }
+
+    bool anyLit(WidgetTester tester) => tester
+        .widgetList<SuperTabMessageHighlight>(
+          find.byType(SuperTabMessageHighlight),
+        )
+        .any((h) => h.on);
+
+    testWidgets(
+      'in the chat, it says so after the one read, lighting nothing',
+      (tester) async {
+        final server = ConversationServer()..messagePage = 20;
+        for (var i = 1; i <= 60; i++) {
+          server.append('Update $i');
+          server.messages.last['createdAt'] = daysAgo(
+            i <= 40 ? 20 : 0,
+            i,
+          ).toUtc().toIso8601String();
+        }
+        server.markReadElsewhere('lead', 60);
+        await open(tester, server);
+        final reads = <String>[];
+        server
+          ..failReadsOf = 'before='
+          ..onRead = reads.add;
+        await choose(tester, _pill, 'Last week');
+        expect(find.text('Couldn’t load earlier messages.'), findsOneWidget);
+        expect(find.text('That day is too far back to open.'), findsNothing);
+        expect(reads.where((r) => r.contains('before=')), hasLength(1));
+        expect(anyLit(tester), isFalse);
+      },
+    );
+
+    testWidgets(
+      'in a thread, it says so after the one read, lighting nothing',
+      (tester) async {
+        final server = ConversationServer()
+          ..threads = true
+          ..messagePage = 4;
+        server.append('Should we cache the reads?');
+        server.messages.last['createdAt'] = daysAgo(30)
+            .toUtc()
+            .toIso8601String();
+        for (var i = 1; i <= 40; i++) {
+          server.append('Reply $i');
+          server.messages.last
+            ..['thread'] = 'message-1'
+            ..['replyTo'] = 'message-1'
+            ..['createdAt'] = daysAgo(
+              i <= 20 ? 20 : 1,
+              i,
+            ).toUtc().toIso8601String();
+        }
+        server.markReadElsewhere('lead', server.messages.length);
+        final (c, _) = await open(tester, server);
+        c.openThread('message-1');
+        await tester.pumpAndSettle();
+        final reads = <String>[];
+        server
+          ..failReadsOf = 'before='
+          ..onRead = reads.add;
+        await choose(
+          tester,
+          const ValueKey('super-thread-day-pill'),
+          'Last week',
+        );
+        expect(find.text('Couldn’t load earlier replies.'), findsOneWidget);
+        expect(reads.where((r) => r.contains('before=')), hasLength(1));
+        expect(anyLit(tester), isFalse);
+      },
+    );
   });
 
   group('the thread lands on its first reply from that time', () {
