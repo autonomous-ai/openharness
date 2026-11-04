@@ -406,7 +406,7 @@ void main() {
     }
 
     Future<void> openProfile(WidgetTester tester) async {
-      await tester.tap(key('swarm-you-name'));
+      await tester.tap(key('swarm-you-profile'));
       await tester.pumpAndSettle();
       expect(key('swarm-name-field'), findsOneWidget);
     }
@@ -422,15 +422,17 @@ void main() {
       await settle(tester);
     }
 
-    testWidgets('with a name: You heads with it, a Name row above Username '
-        'shows it with Change, and Username keeps the handle', (tester) async {
+    testWidgets('with a name: You heads with it, the Profile row above '
+        'Username shows it with Change, and Username keeps the handle', (
+      tester,
+    ) async {
       await pump(tester, name: 'Minh Nguyen');
       expect(inside('swarm-you-me', find.text('Minh Nguyen')), findsOne);
-      expect(inside('swarm-you-name', find.text('Minh Nguyen')), findsOne);
-      expect(inside('swarm-you-name', find.text('Change')), findsOne);
+      expect(inside('swarm-you-profile', find.text('Minh Nguyen')), findsOne);
+      expect(inside('swarm-you-profile', find.text('Change')), findsOne);
       expect(inside('swarm-you-username', find.text('tony')), findsOne);
       expect(
-        tester.getTopLeft(key('swarm-you-name')).dy,
+        tester.getTopLeft(key('swarm-you-profile')).dy,
         lessThan(tester.getTopLeft(key('swarm-you-username')).dy),
       );
     });
@@ -441,7 +443,7 @@ void main() {
       await pump(tester);
       expect(inside('swarm-you-me', find.text('tony')), findsOne);
       expect(inside('swarm-you-username', find.text('tony')), findsOne);
-      expect(inside('swarm-you-name', find.text('Change')), findsOne);
+      expect(inside('swarm-you-profile', find.text('Change')), findsOne);
     });
 
     testWidgets('the Name field sits above Username, and a name saves '
@@ -470,7 +472,7 @@ void main() {
       await tester.tap(key('swarm-profile-close'));
       await tester.pumpAndSettle();
       expect(inside('swarm-you-me', find.text('Minh Nguyen')), findsOne);
-      expect(inside('swarm-you-name', find.text('Minh Nguyen')), findsOne);
+      expect(inside('swarm-you-profile', find.text('Minh Nguyen')), findsOne);
     });
 
     testWidgets('an emptied field clears it with null, and the username '

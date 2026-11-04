@@ -126,8 +126,9 @@ class SwarmYouButton extends StatelessWidget {
 /// You, as Tony's prototype C4 draws it (2026-10-30), opened from the avatar
 /// on Home and Activity since it stopped being a tab (2026-11-03):
 /// who they are in the Swarm Home shows — their face, their name and that
-/// Swarm — then their status, their name and their username, each with Change for their
-/// profile, where it is set ([showSwarmProfile]); Your models, with how many of their own machines'
+/// Swarm — then their name with their status under it in one row ([_Profile]),
+/// and their username, each with Change for their profile, where it is set
+/// ([showSwarmProfile]); Your models, with how many of their own machines'
 /// models the Swarms can use now, and Your devices, with how many of their
 /// own computers are online; and Settings. Only what is theirs counts: not a
 /// teammate's, not one shared with them, not a Harness Team account's (#2253's
@@ -213,26 +214,12 @@ class SwarmYouPage extends StatelessWidget {
         me: me,
         swarm: me == null ? null : you!.name,
       ),
-      const SwarmCaption('Status'),
+      const SwarmCaption('Profile'),
       SwarmGroup(
         children: [
-          _Status(
-            key: const ValueKey('swarm-you-status'),
+          _Profile(
+            key: const ValueKey('swarm-you-profile'),
             me: me,
-            onTap: profile,
-          ),
-        ],
-      ),
-      const SwarmCaption('Name'),
-      SwarmGroup(
-        children: [
-          SwarmRow(
-            key: const ValueKey('swarm-you-name'),
-            leading: const SwarmRowGlyph(LucideIcons.user300),
-            // How the Swarm shows them, the username until they set one;
-            // nothing of a Swarm before it is read, or once it is taken away.
-            title: me == null ? 'Name' : me.name ?? 'Add your name',
-            trailing: profile == null ? null : const _Change(),
             onTap: profile,
           ),
         ],
@@ -395,10 +382,13 @@ class _Me extends StatelessWidget {
   }
 }
 
-/// The person's status, Active while none is set, and Change for their
-/// profile; "Set a status" and no way in before they are read.
-class _Status extends StatelessWidget {
-  const _Status({super.key, required this.me, required this.onTap});
+/// The person's name and status in one row, both set in their profile
+/// (Tony 2026-11-04: a Status row and a Name row opened the same sheet). The
+/// name the Swarm shows them by, "Add your name" until they set one; under it
+/// their status after a dot, Active while none is set; Change for their
+/// profile. "Name" and "Set a status", with no way in, before they are read.
+class _Profile extends StatelessWidget {
+  const _Profile({super.key, required this.me, required this.onTap});
 
   final SuperTabPerson? me;
   final VoidCallback? onTap;
@@ -407,21 +397,25 @@ class _Status extends StatelessWidget {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final me = this.me;
-    Widget row(String title, {required bool known}) => SwarmRow(
-      leading: SizedBox(
-        width: SwarmRowGlyph.width,
-        child: Center(
-          child: Container(
-            width: 10,
-            height: 10,
+    Widget row(String status, {required bool known}) => SwarmRow(
+      leading: const SwarmRowGlyph(LucideIcons.user300),
+      // Nothing of a Swarm before it is read, or once it is taken away.
+      title: me == null ? 'Name' : me.name ?? 'Add your name',
+      detail: Row(
+        key: const ValueKey('swarm-you-status'),
+        children: [
+          Container(
+            width: 8,
+            height: 8,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: known ? AppColors.success : AppPalette.textFaint,
             ),
           ),
-        ),
+          const SizedBox(width: AppSpace.s),
+          Flexible(child: SwarmRow.line(status)),
+        ],
       ),
-      title: title,
       trailing: onTap == null ? null : const _Change(),
       onTap: onTap,
     );
