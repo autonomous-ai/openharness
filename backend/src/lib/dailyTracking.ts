@@ -8,7 +8,6 @@ import { utcDayKey } from '../types/analytics.js'
 import { releaseBucket } from '../types/productHealthContract.js'
 import { markActivity, recordRelayUsage, type RelayUsageMetric } from './productUsage.js'
 import { prisma } from './prisma.js'
-import { stableId } from '../superTabs/model.js'
 import { logger } from '../utils/logger.js'
 
 export interface PresenceTouchOpts { isNewConnection: boolean; countryCode?: string }
@@ -34,12 +33,14 @@ export async function touchMachineOnlineDay(userId: string, machineId: string, n
   ])
 }
 /** Which daily mark a turn sets: `worked` is only the person's own sessions' turns; a Swarm agent's turn on their Mac is
- *  `hosting` (Dee, 2026-11-04). A Swarm agent's id is made from its machine and session (superTabs/commands.ts). A removed
- *  one is only the owner's session now. A Team account runs only Swarm agents, so its turns read nothing. */
+ *  `hosting` (Dee, 2026-11-04). A Swarm agent is found by its machine and current terminal, not its id: a rebound one keeps
+ *  the id of its first terminal (superTabs/commands.ts agent.rebind). A removed one, or a terminal one left, is only the
+ *  owner's session now. A Team account runs only Swarm agents, so its turns read nothing. */
 export async function turnMark(machineId: string, agentId: string, team: boolean): Promise<{ worked: true } | { hosting: true }> {
   if (team) return { hosting: true }
-  const agent = await prisma.swarmAgent.findFirst({ where: { key: stableId(machineId, agentId), deleted: false }, select: { id: true } })
-  return agent ? { hosting: true } : { worked: true }
+  // A plain $match: Prisma has no filter inside `data`. Reads only this machine's live agents ([machineId, deleted]).
+  const rows = await prisma.swarmAgent.aggregateRaw({ pipeline: [{ $match: { machineId, deleted: false, 'data.harnessId': agentId } }, { $limit: 1 }, { $project: { _id: 1 } }] }) as unknown as unknown[]
+  return rows.length ? { hosting: true } : { worked: true }
 }
 export async function recordTurnStarted(userId: string, machineId: string, agentId: string, now: Date, team = false): Promise<void> {
   // Started together: a failed read costs this turn's mark, never its total. Neither mark when it cannot tell whose turn it is.

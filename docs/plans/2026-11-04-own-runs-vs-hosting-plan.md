@@ -6,8 +6,9 @@ choose an execution mode. Steps use checkboxes.
 **Goal:** `people_working` and its returns count only agent turns a person's own sessions started. A Swarm agent's turn on
 their Mac sets a separate hosting mark, counted once a day as `people_hosting`.
 
-**Architecture:** A turn's agent is a Swarm agent when a live `SwarmAgent` row has the key `stableId(machineId, agentId)`,
-or when the turn comes from a Mac's Team account, which runs only Swarm agents. `recordTurnStarted` picks the mark from
+**Architecture:** A turn's agent is a Swarm agent when a live `SwarmAgent` row on that machine has it as its current terminal
+(`data.harnessId`), or when the turn comes from a Mac's Team account, which runs only Swarm agents. The agent's id will not
+do: a rebound agent keeps the id of its first terminal (review of this plan's first version). `recordTurnStarted` picks the mark from
 that, and `markActivity` writes it on the person's existing 10-day activity row. The rollup counts the new mark and keeps
 it out of `worked`.
 
@@ -27,7 +28,8 @@ it out of `worked`.
 
 - A lookup that fails: credits neither mark, warns, and still counts the turn in the relay total.
 - A removed Swarm agent's tombstone: reads as not a Swarm agent, since the session on the Mac is now only the owner's.
-- The same session id on another machine: not a Swarm agent, since the key includes the machine.
+- The same session id on another machine: not a Swarm agent, since the read is by machine.
+- A rebound Swarm agent: hosting on its current terminal; the terminal it left is only the owner's session.
 - An old row with no `hosting` field: the rollup reads it as not hosting.
 - A person with both kinds of turn in a day: marked for both, because the once-a-day memory keeps the two marks apart.
 
@@ -37,9 +39,10 @@ it out of `worked`.
   row). The existing 10-day TTL removes it, and `people_hosting` adds one row a day to `product_usage_totals`, which keeps
   its existing expiry. 1,255 activity rows and 461 KB in production on 2026-11-04.
 - **Concurrency:** the same single-row upsert as every activity mark. Marks only ever set a field to true, so races agree.
-- **Read cost:** one indexed `SwarmAgent` read by `[key, deleted]` per counted turn, returning one row. Team-account turns
-  read nothing. Production has 10–12k turns a day, about 0.14 a second, and each already writes a relay total.
-- **Scale:** at 10x, about 1.4 reads a second on an index of 1,374 rows. The metric that warns first is backend Mongo read
+- **Read cost:** one indexed `SwarmAgent` read by `[machineId, deleted]` per counted turn, examining only that machine's live
+  agents. Team-account turns read nothing. Production has 10–12k turns a day, about 0.14 a second, and each already writes a
+  relay total.
+- **Scale:** at 10x, about 1.4 reads a second, each bounded by one machine's agents. The metric that warns first is backend Mongo read
   latency. The rate cap per socket (`allowTurnWrite`) still bounds a looping machine.
 - **Compatibility:** no client changes; the frame's `agentId` is what the backend already reads. Older pods during a rollout
   keep writing `worked`, which only prolongs today's behavior for those turns. `usage:daily` gains a `hosting` field.
@@ -85,7 +88,7 @@ it out of `worked`.
 - Consumes: the `hosting` field from Task 1.
 - Produces: `markActivity(userId, now, { surface?, worked?, hosting? })`, `turnMark(machineId, agentId, team): Promise<{ worked: true } | { hosting: true }>`, `recordTurnStarted(userId, machineId, agentId, now, team = false)`.
 
-- [x] Write failing tests for each Review Focus line, the Swarm-turn and own-turn cases, the adapter passing `team`, and the read's plan (`IXSCAN` on `key, deleted`).
+- [x] Write failing tests for each Review Focus line, the Swarm-turn and own-turn cases, the adapter passing `team`, and the read's plan (`IXSCAN` on `machineId, deleted`).
 - [x] Run them and watch them fail; commit.
 - [x] Implement; run them green; commit.
 - [x] Run `npm test`; post red/green in a PR comment; mark the PR ready; add one review step.
