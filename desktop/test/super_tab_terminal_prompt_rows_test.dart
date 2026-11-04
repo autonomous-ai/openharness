@@ -68,8 +68,8 @@ void main() {
     expect(c.unreadCount(lead), 0);
   });
 
-  testWidgets('reading to the last row drawn reads a terminal\'s prompt after '
-      'it too, so other devices show the chat read', (tester) async {
+  test('reading to the last row drawn reads a terminal\'s prompt after it '
+      'too, so other devices show the chat read', () async {
     final server = project([row('m1', 1, 'Hello'), _typed(2)]);
     final c = server.controller();
     await c.refresh();
