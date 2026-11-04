@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'package:harness_mobile/shared/theme/app_icon_size.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
@@ -257,12 +258,14 @@ bool swarmLeadModelOn(Map<String, dynamic>? answer) {
   final policy = answer['policy'] is Map ? superTabMap(answer['policy']) : null;
   final named = <String, bool>{};
   for (final row in policy?['models'] as List? ?? const []) {
-    if (row case {
-      'engine': 'claude',
-      'model': final String model,
-      'effort': final String effort,
-      'enabled': final bool on,
-    } when model == _leadModel.model) {
+    if (row
+        case {
+          'engine': 'claude',
+          'model': final String model,
+          'effort': final String effort,
+          'enabled': final bool on,
+        }
+        when model == _leadModel.model) {
       named[effort] = (named[effort] ?? false) || on;
     }
   }
@@ -841,7 +844,7 @@ class SwarmNewProjectSteps with ChangeNotifier {
       if (_brief == null) {
         // Up once, to its chat, before the message they go with: written
         // with their ids, it is repeated as it is.
-        final ids = await _upload(attached);
+        final ids = await _upload(attached, live);
         check();
         _brief = {
           'operationId': superTabOperationId(),
@@ -972,8 +975,11 @@ class SwarmNewProjectSteps with ChangeNotifier {
 
   /// Uploads each of [files] not up yet to the project's chat and answers
   /// their ids, those up kept for the next run. A failure says why in the
-  /// chat's words ([swarmUploadError]).
-  Future<List<String>> _upload(List<SwarmOutgoingFile> files) async {
+  /// chat's words ([swarmUploadError]). No file starts once [live] says no.
+  Future<List<String>> _upload(
+    List<SwarmOutgoingFile> files,
+    bool Function() live,
+  ) async {
     if (files.isEmpty) return const [];
     final uploads = _uploads ??= SwarmUploads(
       reader,
@@ -982,7 +988,9 @@ class SwarmNewProjectSteps with ChangeNotifier {
       onChanged: notifyListeners,
       onProgress: notifyListeners,
     );
-    final up = await uploads.upload(files);
+    final up = await uploads.upload(files, live: live);
+    // Gone meanwhile: its caller's check ends the run.
+    if (!live()) return const [];
     if (up.ids case final ids?) return ids;
     final failure = up.failure;
     if (failure is SuperTabFailure) throw failure;
@@ -2253,10 +2261,11 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
         // the machine chosen (or, before one is, the Swarm's model list)
         // rules out says why.
         Widget option(String engine) {
-          final why = (machine?.engineRefusals ?? _modelListOf(swarmId))[engine];
+          final why =
+              (machine?.engineRefusals ?? _modelListOf(swarmId))[engine];
           return _Option(
             key: ValueKey('swarm-new-project-pick-agent-$engine'),
-            leading: EngineMark(engine: engine, size: 20),
+            leading: EngineMark(engine: engine, size: AppIconSize.besideText),
             title: swarmLeadEngineLabel(engine),
             detail:
                 why ?? swarmLeadModelLabel(engine, leadModelOn: _leadModelOn),
