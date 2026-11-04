@@ -4054,6 +4054,65 @@ class SuperTabController extends ChangeNotifier {
     );
   }
 
+  /// Each project's Buddy proposals the PM has not answered, oldest first, as
+  /// last read (backend proposals read, #2867's rule, task #2569), and the
+  /// project chat's last sequence that read saw: the next read waits for the
+  /// chat to move, as only a message there can answer or add one.
+  final _proposals = <String, List<SuperTabProposal>>{};
+  final _proposalsAt = <String, int>{};
+  final _proposalReads = <String, Future<void>>{};
+
+  List<SuperTabProposal> proposalsOf(String projectId) =>
+      _proposals[projectId] ?? const [];
+
+  /// Reads [projectId]'s open proposals once its chat has moved since the last
+  /// read; joins a read under way. A failed read keeps what was shown and is
+  /// tried again when the chat next moves.
+  Future<void> readProposals(String projectId) {
+    final project = snapshot?.projectById(projectId);
+    if (_disposed || accessRevoked || project == null) return Future.value();
+    final at =
+        snapshot!
+            .conversation(project.leadConversationId)
+            ?.lastMessageSequence ??
+        0;
+    if (_proposalsAt[projectId] == at) return Future.value();
+    if (_proposalReads[projectId] case final reading?) return reading;
+    late final Future<void> reading;
+    reading = _readProposals(projectId, at).whenComplete(() {
+      if (identical(_proposalReads[projectId], reading)) {
+        _proposalReads.remove(projectId);
+      }
+    });
+    return _proposalReads[projectId] = reading;
+  }
+
+  Future<void> _readProposals(String projectId, int at) async {
+    _proposalsAt[projectId] = at;
+    try {
+      final answer = await request(
+        'GET',
+        '$_path/proposals?projectId=${Uri.encodeQueryComponent(projectId)}',
+      );
+      if (_disposed || accessRevoked) return;
+      _proposals[projectId] = List.unmodifiable([
+        for (final raw in answer['proposals'] as List? ?? const [])
+          if (raw is Map && raw['messageId'] is String)
+            SuperTabProposal.fromJson(superTabMap(raw)),
+      ]);
+      _changed();
+    } catch (failure) {
+      if (_disposed) return;
+      if (_isUpdateRequired(failure)) return _requireUpdate();
+      // A backend from before the read has none to give (404): said once.
+      appLog.warn(
+        'swarm',
+        'proposals read failed: '
+            '${failure is SuperTabFailure ? '${failure.code} (status ${failure.statusCode})' : failure.runtimeType}',
+      );
+    }
+  }
+
   void _forgetClosedShipped() {
     _closedShippedEpoch++;
     _closedShippedRead = null;

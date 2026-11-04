@@ -147,6 +147,10 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
             .firstOrNull ??
         widget.project;
     final now = widget.now();
+    // After the frame: a build changes nothing outside itself.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(c.readProposals(project.id));
+    });
     final board = superTabProjectBoard(
       c,
       project,

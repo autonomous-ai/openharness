@@ -235,7 +235,7 @@ Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabProjectBoard(
           if (g.projectId == project.id) g,
       ],
     ),
-    proposals: project.openProposals,
+    proposals: c.proposalsOf(project.id),
     readerId: c.accountId,
     now: now,
     mentions: (task) => tags.mentionsIn(task.id),

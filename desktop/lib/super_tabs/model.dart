@@ -521,11 +521,6 @@ class SuperTabProject {
       ],
       updateMinutes = (row['updateMinutes'] as num?)?.toInt() ?? 5,
       status = SuperTabProjectStatus.read(row['status']),
-      openProposals = List.unmodifiable([
-        for (final proposal in row['openProposals'] as List? ?? const [])
-          if (proposal is Map && proposal['messageId'] is String)
-            SuperTabProposal.fromJson(superTabMap(proposal)),
-      ]),
       repository = row['repository'] is Map
           ? Map.unmodifiable(superTabMap(row['repository']))
           : null;
@@ -552,10 +547,6 @@ class SuperTabProject {
   /// status card at the top of its chat; null from an older backend and
   /// before the first report.
   final SuperTabProjectStatus? status;
-
-  /// Buddy proposals in its chat the PM has not answered, oldest first; none
-  /// from a backend before them (task #2569).
-  final List<SuperTabProposal> openProposals;
   final Map<String, dynamic>? repository;
 }
 
