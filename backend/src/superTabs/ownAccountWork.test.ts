@@ -117,9 +117,35 @@ describe('teammates\' work in a Mac owner\'s own account', () => {
       expect(['OWNER_REQUIRED', 'BUDDY_FORBIDDEN']).toContain(refusal(() => f.choose(true, actor, 'gray-mac', context, askedIn))?.code)
     }
     expect(f.machine('gray-mac').ownAccountChoice).toBeUndefined()
-    f.choose(true, f.leadActor, 'gray-mac', said('gray'), askedIn)
-    // Recorded as Gray's choice, whose word it is.
-    expect(f.machine('gray-mac').ownAccountChoice).toEqual({ allowed: true, by: 'gray', at: new Date(NOW).toISOString() })
+    // Turning it on loosens a privacy guard: only the owner's own session, which shows the warning (security review 2 of
+    // #2981). A Lead passing on even the owner's own message cannot.
+    expect(refusal(() => f.choose(true, f.leadActor, 'gray-mac', said('gray'), askedIn))?.code).toBe('OWNER_SESSION_REQUIRED')
+    expect(f.machine('gray-mac').ownAccountChoice).toBeUndefined()
+    f.choose(true)
+    // Turning it off only tightens it: the Lead may, on the owner's own message. Recorded as Gray's choice, whose word it is.
+    f.choose(false, f.leadActor, 'gray-mac', said('gray'), askedIn)
+    expect(f.machine('gray-mac').ownAccountChoice).toEqual({ allowed: false, by: 'gray', at: new Date(NOW).toISOString() })
+  })
+
+  it('counts only a choice recorded as the machine owner\'s', () => {
+    const f = swarm()
+    f.machine('gray-mac').ownAccountChoice = { allowed: true, by: 'mate', at: new Date(NOW).toISOString() }
+    f.start(f.group())
+    expect(f.state.starts![0]!.request.machineId).toBe('gray-team')
+  })
+
+  it('reads the Mac itself, not its Team account, for routing once it is on', () => {
+    const f = swarm()
+    // A stale privacy check on the Team account refuses teammates there; with the owner's choice on, starts run on the Mac.
+    f.machine('gray-team').observation = { ...reading('team', PASSED), privacy: { ...PASSED, seenAt: NOW - 24 * 60 * 60_000 } }
+    expect(machineTeamWork(f.state, f.machine('gray-mac'), NOW, ['gray-team'])?.code).toBe('PRIVACY_CHECK_STALE')
+    f.choose(true)
+    expect(machineTeamWork(f.state, f.machine('gray-mac'), NOW, ['gray-team'])).toBeNull()
+  })
+
+  it('checks the owner before saying an entry is a Team account\'s', () => {
+    const f = swarm()
+    expect(refusal(() => f.choose(true, mate, 'gray-team'))?.code).toBe('OWNER_REQUIRED')
   })
 
   it('is set only on a Mac\'s own entry: not on its Team account, a machine being removed, or one not in the Swarm', () => {
