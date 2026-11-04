@@ -262,6 +262,11 @@ describe('which reviews nobody reviews may close', () => {
     expect(reviewCloseLine(state, review(state), { [PR]: 'merged', [SECOND]: 'closed' }, quiet)).toMatchObject({ conversationId: 'r1', recipients: [],
       author: { kind: 'agent', id: 'L' }, source: { kind: 'auto-archive' }, text: 'Closed: #2288 merged, #2290 closed; no Swarm review is needed now.' })
   })
+
+  it('says a pull request GitHub does not know was not found', () => {
+    const state = reviewState({}, [PR])
+    expect(reviewCloseLine(state, review(state), { [PR]: 'missing' }, quiet)?.text).toBe('Closed: #2288 not found; no Swarm review is needed now.')
+  })
 })
 
 describe('staleSwitches', () => {

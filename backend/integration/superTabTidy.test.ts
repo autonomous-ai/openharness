@@ -17,6 +17,8 @@ import { archiveFinishedGroups, markFinishedGroups, type PullRequestState } from
 import { settleStuckDeliveries } from '../src/superTabs/deliverySettle.js'
 import { SuperTabError } from '../src/superTabs/model.js'
 import { logger } from '../src/utils/logger.js'
+import { fakeApp, fakeGitHub, throwawayKey } from '../src/github/fakeGitHub.js'
+import { appPullRequests } from '../src/superTabs/archive.js'
 
 // Nobody tidies a Swarm by hand: an agent idle for 15 minutes is told to its coordinator on its poll, and finished groups
 // archive. A fresh loopback replica set, created here.
@@ -299,6 +301,42 @@ describe('a finished group', () => {
     await archiveFinishedGroups(db, f.timed, prs, f.clock.now)
     expect(prs.read).not.toContain('https://github.com/acme/app/pull/2716')
     expect(await isArchived(f, task)).toBe(true)
+  })
+
+  it('archives when a pull request it names is not found in its project\'s repository', async () => {
+    const f = await swarm()
+    const task = await cancelledIn(f, 'Merged PR #40. Ported from PR #2716.')
+    f.clock.now += 40 * MINUTE
+    const key = throwawayKey(), fake = fakeGitHub({ publicKey: key.publicKey, appId: '424242' })
+    fake.installed.set('acme/app', 77)
+    fake.pulls.set('acme/app#40', { state: 'closed', merged_at: '2026-10-27T08:00:00Z' })
+    await archiveFinishedGroups(db, f.timed, appPullRequests(fakeApp(key.privateKey, fake)), f.clock.now)
+    expect(fake.calls.map(c => c.path)).toContain('/repos/acme/app/pulls/2716')
+    expect(await isArchived(f, task)).toBe(true)
+  })
+
+  it('logs once a pass that holds a group only for pull requests GitHub cannot read', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    try {
+      const held = (group: string) => warn.mock.calls.filter(([, meta]) => (meta as { group?: string } | undefined)?.group === group)
+      const f = await swarm()
+      await linkPr(f)
+      f.clock.now += 40 * MINUTE
+      await archiveFinishedGroups(db, f.timed, github({ [PR]: null }), f.clock.now)
+      expect(held(f.group)).toEqual([['[swarm-archive] group held for pull requests GitHub cannot read', { tabId: f.tab, group: f.group, pullRequests: [PR] }]])
+      // An open one holds it, as it should, with nothing to say.
+      warn.mockClear()
+      await archiveFinishedGroups(db, f.timed, github({ [PR]: 'open' }), f.clock.now)
+      expect(held(f.group)).toEqual([])
+      // A number with no repository to read it in.
+      const handed = String((await f.execute({ type: 'conversation.create', title: 'Sidebar', brief: 'Ship it', checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
+      const worker = await f.add(handed, 'test-host', randomUUID(), 'Sidebar')
+      const work = String((await f.execute({ type: 'work.assign', conversationId: handed, agentId: worker })).result.assignmentId)
+      await f.execute({ type: 'work.cancel', conversationId: handed, assignmentId: work, reason: 'PR #1868 is in the merge queue' })
+      f.clock.now += 40 * MINUTE
+      await archiveFinishedGroups(db, f.timed, github({}), f.clock.now)
+      expect(held(handed)).toEqual([['[swarm-archive] group held: it names PR #N and its project has no GitHub repository', { tabId: f.tab, group: handed }]])
+    } finally { warn.mockRestore() }
   })
 
   it('stays open when its work names "PR #N" and the project has no repository to read it in', async () => {
