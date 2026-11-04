@@ -15,17 +15,19 @@
 - A live checker's failure still stands: a later pass by anyone else, the PM and owners included, doesn't erase it.
 - A departed checker's failure is never dropped by itself: only an accountable checker's pass clears it. Anyone else's pass leaves the check failed.
 - A failure from before verdicts were kept names no checker, so nothing here changes it.
+- A cleared failure stays on the record: a line in the task's chat names the departed checker (each verdict keeps its checker's name), its evidence's first line and who cleared it (security reviews 1 and 2).
+- Someone accountable can stop a live Reviewer and then clear its failure. That gives nobody new power, since owners and the coordinator can already merge past a check, and the line in the task records it.
 - The CLI names a departed checker by its last known name, not a bare id.
 - Swarm code stays out of cli/src/core. The backend unit suite and the Super Tab integration suite run in PR CI.
 - PR body begins `Requested by diego@autonomous.ai through Harness.`
 
 ## Design
 
-- Growth: N/A because nothing new is stored; a cleared verdict is removed from the check's list, which shrinks.
+- Growth: one short name on each verdict, and one chat line per cleared failure; a cleared verdict leaves the check's list.
 - Concurrency: N/A because it runs inside the existing command transaction, as every verdict does.
 - Read cost: N/A because no new read; the departed test reads the state the command already holds.
 - Scale: one pass looks up each of the check's verdicts in the Swarm's agents and people, a handful per check.
-- Compatibility: no new field. Older clients read `passedBy` and `evidence` as before.
+- Compatibility: one optional field on a verdict (`name`), which older readers ignore. Older clients read `passedBy` and `evidence` as before.
 - Migration + rollback: none. A rollback leaves cleared checks passed, which is what they then were.
 - Audience: the server decides who may clear: the task's PM or an owner, by the actor the command runs as.
 - Identity: the actor's own key, never the machine owner's.
