@@ -3209,7 +3209,7 @@ describe('adding the machine its own Lead runs on to the Swarm', () => {
     await t.pass(0)
     expect(t.prepare).toHaveBeenCalledExactlyOnceWith(t.core, { tabId: 'own', scope: 'swarm' }, { reads: expect.any(SwarmReads) })
     expect(t.commands).toEqual([{ path: '/api/super-tabs/own/commands', operationId: expect.any(String), command: { type: 'machine.contribute',
-      machineId: 'machine-1', name: 'Ken Mac', cwd: '/data/swarm-projects/own', scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 3, ifMissing: true } }])
+      machineId: 'machine-1', name: 'Ken Mac', cwd: '/data/swarm-projects/own', scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 3, agents: 'memory', ifMissing: true } }])
     await t.pass(59_000)
     t.rows[0]!.joinSwarm = false
     await t.pass(120_000)
