@@ -11,6 +11,7 @@ import 'controller.dart';
 import 'identity.dart';
 import 'machine_status.dart' show superTabAgo;
 import 'model.dart';
+import 'private_project_lock.dart';
 import 'reminders.dart';
 import 'section_heading.dart';
 import '../widgets/laid_out_list.dart';
@@ -382,9 +383,16 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
     // chat, and is named so; every other place by its title.
     final c = widget.mentions.controller;
     final hidden = c.snapshot?.conversation(mention.conversationId);
-    final place = hidden == null || !c.hiddenByBuddies(hidden)
+    final legacyChannel = hidden != null && c.hiddenByBuddies(hidden);
+    final project = c.snapshot?.projects
+        .where((p) => p.id == mention.projectId)
+        .firstOrNull;
+    final privateProject = legacyChannel && project?.isPrivate == true;
+    final place = !legacyChannel
         ? mention.conversationTitle
-        : '#${c.snapshot?.projects.where((p) => p.id == mention.projectId).firstOrNull?.name ?? mention.projectName}';
+        : privateProject
+        ? project!.name
+        : '#${project?.name ?? mention.projectName}';
     // A person who tagged the reader is named as they are now.
     final person = c.snapshot?.people
         .where((p) => p.id == mention.leadId)
@@ -445,8 +453,21 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
                           ],
                         ],
                       ),
-                      Text(
-                        '${mention.projectName} · $place',
+                      Text.rich(
+                        TextSpan(
+                          children: [
+                            TextSpan(text: '${mention.projectName} · '),
+                            if (privateProject)
+                              WidgetSpan(
+                                alignment: PlaceholderAlignment.middle,
+                                child: PrivateProjectLock(
+                                  size: 12,
+                                  color: DesktopChrome.muted,
+                                ),
+                              ),
+                            TextSpan(text: privateProject ? ' $place' : place),
+                          ],
+                        ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: DesktopChrome.metadata(),

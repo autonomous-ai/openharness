@@ -24,6 +24,7 @@ class SuperTabNeed {
     this.at,
     this.decision,
     this.mention,
+    this.privateProjectName,
   });
   final SuperTabNeedKind kind;
 
@@ -31,12 +32,16 @@ class SuperTabNeed {
   final String id;
 
   /// What the row says: the question, `<agent> is waiting on you`, or
-  /// `<author> mentioned you in # <project>`.
+  /// `<author> mentioned you in # <project>`; a private project carries its
+  /// name separately for the lock mark.
   final String title;
   final String conversationId;
   final DateTime? at;
   final SuperTabDecision? decision;
   final SuperTabMention? mention;
+
+  /// When a mention names a private project, its lock replaces the textual #.
+  final String? privateProjectName;
 }
 
 /// The reader's Activity in one Swarm: the one place for everything new for
@@ -87,6 +92,12 @@ class SuperTabActivity extends ChangeNotifier {
   List<SuperTabNeed> get needsYou {
     final snapshot = _snapshot;
     if (snapshot == null) return const [];
+    bool isPrivateProject(String projectId) =>
+        snapshot.projects
+            .where((p) => p.id == projectId)
+            .firstOrNull
+            ?.isPrivate ==
+        true;
     final epoch = DateTime.fromMillisecondsSinceEpoch(0);
     final asked = decisions.open;
     final decided = {for (final d in asked) d.conversationId};
@@ -119,10 +130,14 @@ class SuperTabActivity extends ChangeNotifier {
           kind: SuperTabNeedKind.mention,
           id: 'mention:${m.id}',
           title:
-              '${people[m.leadId]?.shownName ?? m.leadName} mentioned you in # ${m.projectName}',
+              '${people[m.leadId]?.shownName ?? m.leadName} mentioned you in '
+              '${isPrivateProject(m.projectId) ? '' : '# ${m.projectName}'}',
           conversationId: m.conversationId,
           at: m.createdAt,
           mention: m,
+          privateProjectName: isPrivateProject(m.projectId)
+              ? m.projectName
+              : null,
         ),
     ];
   }

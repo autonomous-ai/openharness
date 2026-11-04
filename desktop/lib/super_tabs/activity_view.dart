@@ -12,6 +12,7 @@ import 'decisions_view.dart';
 import 'machine_status.dart' show superTabAgoShort;
 import 'model.dart';
 import 'notifications.dart';
+import 'private_project_lock.dart';
 import 'reminders.dart';
 import 'section_heading.dart';
 
@@ -121,6 +122,7 @@ class _SuperTabActivityViewState extends State<SuperTabActivityView> {
       glyph: need.kind == SuperTabNeedKind.mention ? '@' : null,
       mark: need.kind == SuperTabNeedKind.mention ? null : AppIcons.circleDot,
       title: need.title,
+      privateProjectName: need.privateProjectName,
       unread: true,
       trailing: switch (need.kind) {
         SuperTabNeedKind.decision => 'Answer',
@@ -278,6 +280,7 @@ class _Row extends StatefulWidget {
     this.mark,
     this.glyph,
     required this.title,
+    this.privateProjectName,
     required this.unread,
     required this.trailing,
     required this.onTap,
@@ -286,6 +289,7 @@ class _Row extends StatefulWidget {
   final IconData? mark;
   final String? glyph;
   final String title;
+  final String? privateProjectName;
   final bool unread;
   final String trailing;
   final VoidCallback onTap;
@@ -345,12 +349,33 @@ class _RowState extends State<_Row> {
                       ),
                     ),
                     Expanded(
-                      child: Text(
-                        widget.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: style,
-                      ),
+                      child: widget.privateProjectName == null
+                          ? Text(
+                              widget.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: style,
+                            )
+                          : Text.rich(
+                              TextSpan(
+                                children: [
+                                  TextSpan(text: widget.title),
+                                  WidgetSpan(
+                                    alignment: PlaceholderAlignment.middle,
+                                    child: PrivateProjectLock(
+                                      size: 14,
+                                      color: style.color,
+                                    ),
+                                  ),
+                                  TextSpan(
+                                    text: ' ${widget.privateProjectName}',
+                                  ),
+                                ],
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: style,
+                            ),
                     ),
                     const SizedBox(width: grid.AppDesktop.groupGap),
                     if (action != null && _hovered)
