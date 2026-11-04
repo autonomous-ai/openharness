@@ -2292,9 +2292,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (existing && (existing.hostGrant ?? null) !== (grant.hostGrant ?? null)) {
         fail('CONTRIBUTION_REVOKED', 'Reconcile and remove this old contribution before adding it under the new machine share.', 403)
       }
-      if (sharedHere && !existing) message(group.id, `${who} added ${quotedName(addedName)} to the project. The project chat holds only its coordinator among agents, so ${quotedName(command.name)} works in its tasks.`, [], null, SYSTEM_ROW,
-        undefined, undefined, undefined, stableId(operationId, 'shared-to-project'))
-      else if (!group.agentIds.includes(agentId)) group.agentIds.push(agentId)
+      // Named as readers' lists show it, never the name the rules refused (security review 2 of #3015).
+      if (sharedHere && !existing) {
+        const shown = quotedName(agentDisplayName(state.agents, agentId) ?? addedName)
+        message(group.id, `${who} added ${shown} to the project. The project chat holds only its coordinator among agents, so ${shown} works in its tasks.`, [], null, SYSTEM_ROW,
+          undefined, undefined, undefined, stableId(operationId, 'shared-to-project'))
+      } else if (!group.agentIds.includes(agentId)) group.agentIds.push(agentId)
       if (command.lead) {
         keepLead(group, agentId)
         if (group.leadId && group.leadId !== agentId && activeWork(group)) fail('WORK_ACTIVE', 'Reconcile active work before replacing its lead.')
