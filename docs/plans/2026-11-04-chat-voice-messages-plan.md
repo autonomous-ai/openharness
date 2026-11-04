@@ -40,7 +40,7 @@ The recorder already records PCM WAV, and Deepgram's WAV path is measured per la
 - **Concurrency:** one attachment row. The first call claims it with a conditional write (`voice` not set yet, then set to `{ state: 'transcribing', since }`). A second call made while the first runs gets `VOICE_TRANSCRIBING`, 409, and the phone retries it after a second, at most 30 times. A claim older than 2 minutes counts as lost, and the next call takes it over. The quota reservation is keyed by `voice:<attachmentId>`, so a retake is never charged twice.
 - **Read cost:** the transcription request reads the file's own bytes once, at most 19.3 MB, held within the existing process-wide voice memory budget (`reserveVoice`). `message.send` reads the `voice` field alongside the attachment fields it already loads. Message pages get one more small field per voice attachment.
 - **Scale:** at 10× (hundreds of voice messages a day), Deepgram calls and bucket reads grow linearly. The voice memory budget refuses work beyond what the process can hold, with `VOICE_BUSY`. The first warning is the `super-tab voice` log line's `ms` and `outcome` counts.
-- **Compatibility:** old Desktop and CLI releases ignore `voice`. They show the words as the message text plus a `Voice message.wav` file chip, and agents of an old CLI get the words with the file. New clients against an old server: the voice route is missing (404). The phone then sends the take as a plain WAV file with no words and says "Update the server to send voice messages". Messages without `voice` render as today.
+- **Compatibility:** old Desktop and CLI releases ignore `voice`. They show the words as the message text plus a `Voice message.wav` file chip, and agents of an old CLI get the words with the file. New clients against an old server (the backend ships first, so only briefly): the voice route answers 404, and the phone keeps the take, sends nothing and says "Voice messages need a newer server". Messages without `voice` render as today.
 - **Migration + rollback:** one new optional `Json` field, `voice`, on `SuperTabAttachment`. MongoDB needs no migration. After a rollback the old server keeps the field and ignores it, and sent messages keep their text and file.
 - **Audience:** the voice route allows only the actor that uploaded the file, while that actor may still post in its conversation, and only for an unused file with no `purpose`. A sent message's words are read through the same message reads as its text, under the existing guards. Buddies get the row through `rowForBuddy` as today.
 - **Identity:** transcription is charged to the uploading person's own daily voice quota (`voiceQuotaService.reserveForUser`). Only people send voice messages: an agent caller (`asAgentId`) is refused.
@@ -181,7 +181,7 @@ The recorder already records PCM WAV, and Deepgram's WAV path is measured per la
 - [ ] Step 1: write failing tests:
   - A sent take posts `message.send` with the uploaded file id and empty text, after one voice read.
   - `VOICE_TRANSCRIBING` is retried.
-  - A 404 from an old server sends the plain file with a notice.
+  - A 404 from an old server keeps the take, sends nothing and says "Voice messages need a newer server".
   - `failure: 'limit'` shows "Today's voice limit is used; sent without words".
   - The draft in the box stays.
 - [ ] Step 2: run them and expect FAIL.
