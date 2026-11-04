@@ -809,6 +809,28 @@ void main() {
         );
       });
 
+      testWidgets('a reload forgets what the reader may no longer read', (
+        tester,
+      ) async {
+        final server = swarm();
+        server.parts.clock = now;
+        add(server, [archived('recent', 30), archived('kept', 31)]);
+        final c = await show(tester, server, today: at);
+        expect(row('recent'), findsOneWidget);
+        (server.state['conversations'] as List).cast<Map>().firstWhere(
+          (g) => g['id'] == 'recent',
+        )['audience'] = {
+          'people': [
+            {'id': 'pilot'},
+          ],
+        };
+        server.parts.epoch++;
+        await c.refresh();
+        await tester.pumpAndSettle();
+        expect(row('recent'), findsNothing);
+        expect(row('kept'), findsOneWidget);
+      });
+
       testWidgets('a page that reaches past 7 days ends the read', (
         tester,
       ) async {
