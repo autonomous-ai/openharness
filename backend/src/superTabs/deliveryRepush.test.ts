@@ -26,7 +26,7 @@ describe('the server repeats the push of a delivery still queued (task #2800)', 
       { id: 'd3', status: 'queued', tabId: 't', agentId: 'a2', machineId: 'm2', updatedAt: NOW - 3_600_000 },
     ])
     const tell = vi.fn()
-    expect(await repushQueuedDeliveries(db, tell, NOW)).toBe(2)
+    expect(await repushQueuedDeliveries(db, tell, NOW)).toEqual({ told: 2, read: 3 })
     expect(tell.mock.calls).toEqual([[{ machineId: 'm1', tabId: 't', agentId: 'a1' }], [{ machineId: 'm2', tabId: 't', agentId: 'a2' }]])
   })
 
@@ -34,7 +34,7 @@ describe('the server repeats the push of a delivery still queued (task #2800)', 
   it('leaves a delivery queued under 10 s to its own push', async () => {
     const { db } = fakeDb([{ id: 'd1', status: 'queued', tabId: 't', agentId: 'a1', machineId: 'm1', updatedAt: NOW - REPUSH_AFTER_MS + 1 }])
     const tell = vi.fn()
-    expect(await repushQueuedDeliveries(db, tell, NOW)).toBe(0)
+    expect(await repushQueuedDeliveries(db, tell, NOW)).toEqual({ told: 0, read: 1 })
     expect(tell).not.toHaveBeenCalled()
   })
 
@@ -45,18 +45,20 @@ describe('the server repeats the push of a delivery still queued (task #2800)', 
       { id: 'd2', status: 'uncertain', tabId: 't', agentId: 'a1', machineId: 'm1', updatedAt: NOW - 60_000 },
     ])
     const tell = vi.fn()
-    expect(await repushQueuedDeliveries(db, tell, NOW)).toBe(0)
+    expect(await repushQueuedDeliveries(db, tell, NOW)).toEqual({ told: 0, read: 0 })
     expect(pipelines[0]).toContainEqual({ $match: { status: 'queued' } })
     expect(pipelines[0]).toContainEqual({ $sort: { _id: 1 } })
   })
 
-  // Ids are hashes, not times: a first page of old rows on machines that are away must not hide a newer one behind it.
-  it('reads every page, so a delivery after 500 old ones is told too', async () => {
+  // Ids are hashes, not times: a first page of old rows on machines that are away must not hide a newer one behind it. The
+  // pass's cost is the rows it reads, so that is what it reports (review of #2977: agents told stays small while an offline
+  // machine's queue grows).
+  it('reads every page, so a delivery after 500 old ones is told too, and reports the rows it read', async () => {
     const rows = Array.from({ length: 501 }, (_, i) => ({ id: `d${String(i).padStart(4, '0')}`, status: 'queued', tabId: 't',
       agentId: i === 500 ? 'late' : 'away', machineId: i === 500 ? 'm2' : 'm1', updatedAt: NOW - 60_000 }))
     const { db, pipelines } = fakeDb(rows)
     const tell = vi.fn()
-    expect(await repushQueuedDeliveries(db, tell, NOW)).toBe(2)
+    expect(await repushQueuedDeliveries(db, tell, NOW)).toEqual({ told: 2, read: 501 })
     expect(pipelines).toHaveLength(2)
     expect(tell).toHaveBeenCalledWith({ machineId: 'm2', tabId: 't', agentId: 'late' })
   })
