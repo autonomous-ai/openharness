@@ -1462,6 +1462,10 @@ class SuperTabMessage {
   String get authorId => author['id'] as String? ?? '';
   bool get fromAgent => author['kind'] == 'agent';
   bool get fromTerminal => source['kind'] == 'native';
+
+  /// What was typed into an agent's terminal, a scheduled prompt too: no chat
+  /// row (Ken 11-04, task #2849; the desktop's). Its answer still is one.
+  bool get terminalPrompt => fromTerminal && source['phase'] == 'prompt';
   SuperTabRoute? get route => SuperTabRoute.fromSource(source);
   bool get routeOverride => source['kind'] == 'route-override';
 

@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/core/harness_file_store.dart';
 
+import 'temp_folder.dart';
+
 /// Runs before every test file under `test/`.
 ///
 /// ⚠️ **Every default path points into a throwaway home.** The app's stores,
@@ -16,9 +18,9 @@ Future<void> testExecutable(FutureOr<void> Function() testMain) async {
   HttpOverrides.global = _NoNetwork();
   final home = Directory.systemTemp.createTempSync('harness-test-home-');
   HarnessFileStore.homeForTest = home.path;
-  tearDownAll(() {
-    if (home.existsSync()) home.deleteSync(recursive: true);
-  });
+  // Hosts built without a Home or kept chats of their own keep them here, in
+  // the background, so the last test's can still be landing.
+  tearDownAll(() => deleteTempFolder(home));
   await testMain();
 }
 

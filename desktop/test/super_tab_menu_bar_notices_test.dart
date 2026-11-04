@@ -8,6 +8,8 @@ import 'package:harness/notify/system_notifications.dart';
 import 'package:harness/state/status_menu.dart';
 import 'package:harness/super_tabs/controller.dart' show SuperTabFailure;
 import 'package:harness/super_tabs/decisions.dart';
+import 'package:harness/super_tabs/message_link.dart'
+    show swarmMessageLinkInbox;
 import 'package:harness/super_tabs/activity_view.dart';
 import 'package:harness/super_tabs/notifications.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -554,6 +556,31 @@ void main() {
         expect(f.app.activeSwarmId, swarmTab);
         expect(c.selectedId, 'offline');
         await tester.pump(const Duration(seconds: 1));
+        await tester.pumpWidget(const SizedBox());
+        f.dispose();
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+    );
+
+    // Task #2745: a reply's notice opens the reply in its thread, as its
+    // message link does (message_link_host.dart opens what waits).
+    testWidgets(
+      'a click on a reply\'s notification hands its message link over',
+      (tester) async {
+        final f = SuperTabLaunchFixture(
+          connectionFactory: TwoSwarms.new,
+          systemNotifications: clicks(),
+        );
+        await tester.runAsync(() => openWithNotices(f));
+        final click = await clicker(tester, f);
+        final url = 'harness://swarm/$tabId/offline/message-1';
+        addTearDown(() {
+          for (final link in [...swarmMessageLinkInbox.pending]) {
+            swarmMessageLinkInbox.complete(link);
+          }
+        });
+        await click(url, machine: SystemNotifications.messageNoticeMachine);
+        expect(swarmMessageLinkInbox.pending.map((l) => l.url), [url]);
         await tester.pumpWidget(const SizedBox());
         f.dispose();
       },

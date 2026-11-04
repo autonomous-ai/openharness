@@ -8,7 +8,6 @@ import 'package:cryptography/dart.dart' show DartSha256;
 import 'package:dio/dio.dart' show CancelToken;
 import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/attachment_upload.dart';
-import 'package:harness/super_tabs/buddies.dart' show kBuddyEngineRefusals;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/reading.dart';
 
@@ -550,6 +549,10 @@ class ConversationServer {
   /// `{unread, read, more}`; null answers 404, as a server before it does,
   /// and the inbox ([inbox]) is read instead.
   Map<String, dynamic>? followedThreads;
+
+  /// Refuses the followed-threads read's `read` query, as a backend before
+  /// task #2835 does.
+  bool refuseThreadsRead = false;
 
   /// The inbox read's answer (backend read/inbox.ts): `{threads, latest,
   /// more}`; null answers 404.
@@ -1373,14 +1376,6 @@ class ConversationServer {
         // buddy.create since 10-31): its chat is in no project.
         final swarm = command['projectId'] == null;
         final projectId = command['projectId'] as String? ?? '';
-        // As the backend: no Codex Buddy for now (security review 1 of #2087).
-        if (command['engine'] == 'codex') {
-          throw SuperTabFailure(
-            'BUDDY_ENGINE',
-            kBuddyEngineRefusals['codex']!,
-            statusCode: 403,
-          );
-        }
         bool mine(Object? a) =>
             a is Map &&
             (a['buddyOf'] as Map?)?['personId'] == person &&
@@ -1794,6 +1789,14 @@ class ConversationServer {
           'OFFLINE',
           'No connection.',
           statusCode: threadListStatus,
+        );
+      }
+      // A backend before task #2835: its strict query refuses `read`.
+      if (refuseThreadsRead && uri.queryParameters.containsKey('read')) {
+        throw const SuperTabFailure(
+          'VALIDATION_ERROR',
+          'Unrecognized key: "read"',
+          statusCode: 400,
         );
       }
       final answer = uri.pathSegments.last == 'threads'

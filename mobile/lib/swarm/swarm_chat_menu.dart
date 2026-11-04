@@ -123,8 +123,8 @@ Future<void> showSwarmNotifySheet(
   }
 }
 
-/// At the end of a chat's header: ⋮, whose sheet holds Add agent
-/// ([swarmCanAddAgent]), Rename and Archive where the person may
+/// At the end of a chat's header: ⋮, whose sheet holds Find in chat where
+/// the chat's page offers it ([onFind]), Add agent ([swarmCanAddAgent]), Rename and Archive where the person may
 /// ([swarmChatManage]) and the chat's Notifications
 /// ([swarmNotifySection]), as the desktop's chat menu does for every chat a
 /// person reads, a viewer's too. Nothing while the chat is not
@@ -135,10 +135,15 @@ class SwarmChatMenuButton extends StatefulWidget {
     super.key,
     required this.reader,
     required this.chatId,
+    this.onFind,
   });
 
   final SwarmReader reader;
   final String chatId;
+
+  /// Opens find in the chat (swarm_chat_find.dart), after Work details;
+  /// null offers no Find in chat.
+  final VoidCallback? onFind;
 
   @override
   State<SwarmChatMenuButton> createState() => _SwarmChatMenuButtonState();
@@ -206,6 +211,12 @@ class _SwarmChatMenuButtonState extends State<SwarmChatMenuButton> {
             reader: widget.reader,
             chatId: widget.chatId,
           ),
+        ),
+      if (widget.onFind case final find?)
+        PhoneSheetAction(
+          icon: LucideIcons.search300,
+          label: 'Find in chat',
+          onTap: find,
         ),
       ...swarmAddAgentActions(context, widget.reader, widget.chatId),
       ...swarmChatManageActions(context, widget.reader, widget.chatId),
