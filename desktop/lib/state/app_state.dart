@@ -1892,7 +1892,7 @@ class AppNotifier extends ChangeNotifier {
   /// views; Settings ▸ Account's Clear now clears it with them.
   final browserCopies = BrowserCopies();
 
-  late final superTabs = SuperTabClient(
+  late final SuperTabClient superTabs = SuperTabClient(
     storage: localStore ?? HarnessFileStore.shared,
     viewStorage: swarmViewStore(beside: localStore),
     upload:
@@ -1991,6 +1991,11 @@ class AppNotifier extends ChangeNotifier {
           _workspaceCleanup != null ||
           controller.accountId != currentUser?.id) {
         return;
+      }
+      // Only when this Swarm's agents or their names changed: a message in it
+      // is not a reason to look (review of #3021).
+      if (superTabs.agentNamesChanged(controller.tabId)) {
+        _syncChosenNames(tabId: controller.tabId);
       }
       var shown = false;
       for (final tab in swarms.where((s) => s.superTabId == controller.tabId)) {
@@ -11391,6 +11396,7 @@ class AppNotifier extends ChangeNotifier {
           prev.lastActivityAt != agent.lastActivityAt ||
           prev.createdAt != agent.createdAt ||
           prev.closeSupported != agent.closeSupported ||
+          prev.nameChosen != agent.nameChosen ||
           prev.closePlanState != agent.closePlanState ||
           prev.closePlanDetail != agent.closePlanDetail ||
           prev.lastOpenedAt != agent.lastOpenedAt ||
@@ -14061,6 +14067,9 @@ class AppNotifier extends ChangeNotifier {
       _cancelTurnActivity(machine.machine.machineId, agentId);
     }
     machine.agents = agents;
+    for (final agent in agents) {
+      _syncChosenName(machine, agent, previous[agent.id]);
+    }
     _watchHeldLaunches(machine);
     for (final agent in agents) {
       _reconcileAgentActivity(machine, agent, previous[agent.id]);
@@ -14160,6 +14169,7 @@ class AppNotifier extends ChangeNotifier {
     } else {
       machine.agents = [...machine.agents]..[index] = agent;
     }
+    _syncChosenName(machine, agent, previous);
     _reconcileAgentActivity(machine, agent, previous);
     if (previous?.name != agent.name) _recordAgentName(machine, agent);
     _syncAgentName(machine, agent);
@@ -14210,6 +14220,55 @@ class AppNotifier extends ChangeNotifier {
       }
     }
     return true;
+  }
+
+  bool _syncingChosenNames = false, _chosenNamesAgain = false;
+
+  /// An agent that arrives flagged as having a chosen name, or whose chosen
+  /// name changed: the only machine-side news worth a look (task #2920).
+  void _syncChosenName(MachineState machine, Agent agent, Agent? previous) {
+    if (agent.nameChosen != true) return;
+    if (previous?.nameChosen == true && previous?.name == agent.name) return;
+    _syncChosenNames(machineId: machine.machine.machineId, harnessId: agent.id);
+  }
+
+  /// Sends the names people chose for their agents, as the daemon says, to the
+  /// Swarms that show something else (task #2920): an agent renamed before
+  /// the rename reached the Swarm shows its name with no second rename. Runs
+  /// for one Swarm when its agents change, and for one harness when it arrives
+  /// flagged; each name goes once. Only this person's own machines: a harness
+  /// shared to watch is view-only.
+  void _syncChosenNames({String? tabId, String? machineId, String? harnessId}) {
+    if (_disposed) return;
+    if (_syncingChosenNames) {
+      // Something changed while names were going out: look everywhere again after.
+      _chosenNamesAgain = true;
+      return;
+    }
+    _syncingChosenNames = true;
+    unawaited(
+      superTabs
+          .syncChosenNames(
+            (machineId, harnessId) {
+              final machine = machineStates[machineId];
+              if (machine == null || machine.machine.isShared) return null;
+              return machine.agents
+                  .where((agent) => agent.id == harnessId)
+                  .firstOrNull;
+            },
+            tabId: tabId,
+            machineId: machineId,
+            harnessId: harnessId,
+          )
+          .then((_) {}, onError: (Object _) {})
+          .whenComplete(() {
+            _syncingChosenNames = false;
+            if (_chosenNamesAgain) {
+              _chosenNamesAgain = false;
+              _syncChosenNames();
+            }
+          }),
+    );
   }
 
   bool _renameAgent(MachineState machine, String agentId, String name) {

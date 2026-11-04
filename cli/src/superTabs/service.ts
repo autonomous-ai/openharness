@@ -40,12 +40,12 @@ import { createPullRequestsStatusReader } from '../lib/pullRequestsStatus.js'
 import { buddyArchived, buddyStatus, isBuddyIn, isSwarmBuddyIn, projectNamed, type BuddyStatusDeps } from './buddyStatus.js'
 import { startSubscriptionRelay } from '../lib/subscriptionRelay.js'
 
-const POST_ABOUT = 'reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with --reply-to its ID. --attach sends a file (a screenshot, a log; up to 10 files of 256 MB each), and TEXT may then be empty. --to names the agents it reaches (any agent of this project, by id from status; up to 16): they join the conversation if they are not in it. With no --to or @Name it reaches no agent, except the agent a reply answers and, in a task or step, its assignee. Your status tells the PM your work: never post it results, verdicts or acknowledgements. In the project chat, an agent with a task or step in the project posts and reacts without joining it, and a person\'s answer to its line reaches it; --to there adds no agent, so name only the PM.'
+const POST_ABOUT = 'reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with its ID: --answers puts your answer right below that message, in the main chat; --reply-to puts it in that message\'s thread. --attach sends a file (a screenshot, a log; up to 10 files of 256 MB each), and TEXT may then be empty. --to names the agents it reaches (any agent of this project, by id from status; up to 16): they join the conversation if they are not in it. With no --to or @Name it reaches no agent, except the agent a reply answers and, in a task or step, its assignee. Your status tells the PM your work: never post it results, verdicts or acknowledgements. In the project chat, an agent with a task or step in the project posts and reacts without joining it, and a person\'s answer to its line reaches it; --to there adds no agent, so name only the PM.'
 const POST_HELP = `${POST_ABOUT} TEXT is one argument: when it holds quotes, or is only -, put - in its place and send the message on stdin (post GROUP - OPERATION_ID <<'MSG' … MSG); an empty stdin is refused and nothing is posted.`
 /** A Buddy's guard refuses TEXT - (#2358): on stdin its message would skip the secret check. A Buddy that followed the stdin
  *  hint was refused and tried again, so its help passes the message in quotes, as the guard's refusal says. */
 const BUDDY_POST_HELP = `${POST_ABOUT} TEXT is one argument, the message itself in quotes: 'your message', or "it's done" when it holds an apostrophe. A Buddy never passes - for TEXT: its message is checked for secrets, so one read from stdin is refused and nothing is posted.`
-const POST_FLAGS = '[--to AGENT]... [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]...'
+const POST_FLAGS = '[--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]...'
 const MENTION_HELP = ' --mention tags a person, by the id or email shown in status (up to 5), when you need them to act or decide; it shows in their notifications. An @username or @email in TEXT tags that person as well, outside code and links. Nobody is tagged who cannot read the conversation.'
 /** What the command entry says after how its JSON is passed, the same for everyone. A task's review plan (#2382) is said in
  *  its brief (backend superTabs/model.ts renderWorkTask), for whoever opens its review (project instructions, phase 4). */
@@ -254,12 +254,14 @@ function markAnswered(page: unknown, later: unknown[], agentId: string): unknown
   const body = object(page)
   if (!Array.isArray(body.messages)) return page
   const mine = new Set([...body.messages, ...later].map(object).filter(m => object(m.author).id === agentId && typeof m.replyTo === 'string').map(m => m.replyTo))
+  // An answer right below a message has no replyTo (task #2929): the caller's delivery of the message says it was answered.
+  const settled = (m: Record<string, unknown>) => Array.isArray(m.deliveries) && m.deliveries.map(object).some(d => d.agentId === agentId && d.status === 'answered')
   return { ...body, messages: body.messages.map(object).map(row => {
     // `thread` is named on a thread reply only: a top-level message is its own thread's root, and an older row has none.
     const { thread, ...m } = row
     const reply = typeof thread === 'string' && thread !== m.id ? { ...m, thread } : m
     const asked = Array.isArray(m.recipientIds) && m.recipientIds.includes(agentId) && object(m.author).id !== agentId
-    return asked ? { ...reply, answered: mine.has(m.id) } : reply
+    return asked ? { ...reply, answered: mine.has(m.id) || settled(m) } : reply
   }) }
 }
 
@@ -794,6 +796,12 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
               && error.code === 'VALIDATION_ERROR' && /Unrecognized key[^"]*"step"/.test(error.message)) {
               const { step: _step, ...plain } = command
               return { ok: true, operationId: payload.operationId, value: await send(plain) }
+            }
+            // A backend from before answers below (task #2929) refuses the field: the answer goes as a reply, which settles it there.
+            if (command.answers && command.type === 'message.send' && error instanceof SuperTabHostError && error.status === 400
+              && error.code === 'VALIDATION_ERROR' && /Unrecognized key[^"']*["']answers["']/.test(error.message)) {
+              const { answers, ...reply } = command
+              return { ok: true, operationId: payload.operationId, value: await send({ ...reply, replyTo: answers }) }
             }
             // A backend from before cost records refuses the totals; the status itself still goes.
             if (command.tokens && error instanceof SuperTabHostError && error.status === 400 && error.code === 'VALIDATION_ERROR' && /"tokens"|'tokens'/.test(error.message)) {

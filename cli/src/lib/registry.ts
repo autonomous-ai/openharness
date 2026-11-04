@@ -360,6 +360,13 @@ export function projectDisplayName(s: RegisteredSession): string {
 }
 
 
+/** Whether a person chose [s]'s name: they renamed it (kept in agent-names.json), as against the name it was created with
+ *  or the engine's session title, which `projectDisplayName` falls back to. The agent frame carries it (`nameChosen`), so
+ *  a client sends only a chosen name to the Swarm and never a title (task #2920). */
+export function isNameChosen(s: RegisteredSession): boolean {
+  return !!(NAME_OVERRIDES.get(s.sessionId) || NAME_OVERRIDES.get(s.agentId))
+}
+
 /** The engine's own name for this session, or null while it has none worth showing. */
 export function sessionDisplayTitle(s: RegisteredSession): string | null {
   return namingTitle(titleDisplayName(s.title), { engine: s.engine, cwd: s.cwd, defaultName: s.defaultName })

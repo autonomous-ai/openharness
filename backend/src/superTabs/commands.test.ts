@@ -5,7 +5,7 @@ import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
 import { sweepLiveness } from './liveness.js'
 import { SWITCH_UNCLAIMED_MS } from './tidy.js'
 import { defaultProfileId, hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
-import { activeWork, agentOnly, agentRole, createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
+import { activeWork, agentOnly, agentRole, createSuperTab, visibleState, type Actor, type AgentConfiguration, type Author } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
 import { startFinished } from './parts/write.js'
 import { modelMatches } from './rules.js'
@@ -628,6 +628,35 @@ describe('Super Tab collaboration policy', () => {
         reply: { id: personMessage.id, conversationId: group, author: personMessage.author, createdAt: 0 },
       }).messages[0]!
       expect(reply.recipients).toEqual([worker])
+    })
+
+    // Answers go right below, not in a thread (anh Dee, 2026-11-04; task #2929): an answer is routed as a reply to the same
+    // message is, and its row opens no thread.
+    it('routes an answer below a message as a reply to it, in the main flow', () => {
+      const { f, lead, group, worker, as, post } = setup()
+      f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+      const answer = (answers: { id: string; author: Author }) => f.run({ type: 'message.send', conversationId: group, text: 'Done.', replyTo: null,
+        answers: answers.id, recipientIds: [] }, as(lead), { reply: { id: answers.id, conversationId: group, author: answers.author, createdAt: 0 } }).messages[0]!
+      const report = post(worker)
+      const below = answer(report)
+      expect(below).toMatchObject({ replyTo: null, recipients: [worker] })
+      expect(below.thread).toBeUndefined()
+      const personMessage = f.run({ type: 'message.send', conversationId: group, text: 'Status?', replyTo: null, recipientIds: [] }).messages[0]!
+      // Answering a person reaches the task's assignee, as any unnamed post in a task does (#2963), and as a reply to them does.
+      expect(answer(personMessage).recipients).toEqual([worker])
+    })
+
+    it('refuses an answer to a message it cannot find here, and an answer that is also a reply', () => {
+      const { f, lead, group, as } = setup()
+      const asked = f.run({ type: 'message.send', conversationId: group, text: 'Status?', replyTo: null, recipientIds: [] }).messages[0]!
+      const reply = { id: asked.id, conversationId: group, author: asked.author, createdAt: 0 }
+      const send = (fields: { replyTo?: string | null; answers?: string }, context: Partial<CommandContext>) => () =>
+        f.run({ type: 'message.send', conversationId: group, text: 'Done.', replyTo: null, recipientIds: [], ...fields } as Command, as(lead), context)
+      expect(send({ answers: asked.id }, {})).toThrow(expect.objectContaining({ code: 'INVALID_ANSWER' }))
+      expect(send({ answers: asked.id }, { reply: { ...reply, conversationId: 'lead' } })).toThrow(expect.objectContaining({ code: 'INVALID_ANSWER' }))
+      expect(send({ answers: asked.id, replyTo: asked.id }, { reply })).toThrow(expect.objectContaining({ code: 'INVALID_ANSWER' }))
+      expect(send({ answers: asked.id }, { reply }))
+        .not.toThrow()
     })
 
     it('delivers the Lead\'s approval of the worker\'s plan after the Lead\'s own brief (#1549)', () => {
