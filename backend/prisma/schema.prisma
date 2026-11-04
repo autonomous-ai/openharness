@@ -543,7 +543,8 @@ model ProductUsagePreference {
   @@map("product_usage_preferences")
 }
 
-/// Only fleet-wide counters. Never add an account, machine, agent, location or event timestamp.
+/// Only fleet-wide counters. Never add an account, machine, agent, location or event timestamp. So no index on `machineId`
+/// either, as the Atlas advisor suggested on 2026-11-04 (task #2841): no row has one, and no backend read asks for it.
 model ProductUsageTotal {
   id     String   @id @default(auto()) @map("_id") @db.ObjectId
   dayUtc DateTime
@@ -1912,6 +1913,9 @@ model SwarmGroup {
   /// written before it (markFinishedGroups).
   workFinished       Boolean   @default(false)
 
+  /// Not indexed on `data.kind` (Atlas advisor, 2026-11-04, task #2841): no backend read filters by it, the only one that
+  /// does is the rollback script scripts/buddy-sessions/end-all.ts, across every Swarm; and every hot read keeps its plan
+  /// with such an index (the numbers are in task #2841's pull request). The top-level `kind` holds the same value.
   @@unique([tabId, key])
   @@index([tabId, changedAt])
   @@index([tabId, dormant, changedAt])
