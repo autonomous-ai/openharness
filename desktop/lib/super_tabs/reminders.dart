@@ -167,7 +167,7 @@ class SuperTabReminders extends ChangeNotifier {
   Future<bool> set(SuperTabMessage message, DateTime at) async {
     try {
       await controller.request(
-        'PUT',
+        'POST',
         '$_path/conversations/${Uri.encodeComponent(message.conversationId)}'
             '/messages/${Uri.encodeComponent(message.id)}/reminder',
         body: {'at': at.toUtc().toIso8601String()},
@@ -185,10 +185,12 @@ class SuperTabReminders extends ChangeNotifier {
     due = List.unmodifiable(due.where((r) => r.id != reminder.id));
     notifyListeners();
     try {
+      // A time of none clears it: the daemon and the web send only GET and POST.
       await controller.request(
-        'DELETE',
+        'POST',
         '$_path/conversations/${Uri.encodeComponent(reminder.conversationId)}'
             '/messages/${Uri.encodeComponent(reminder.messageId)}/reminder',
+        body: {'at': null},
       );
     } catch (_) {
       if (_disposed) return;

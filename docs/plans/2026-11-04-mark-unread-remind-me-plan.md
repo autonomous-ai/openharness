@@ -125,14 +125,15 @@
   the person's read), `backend/src/superTabs/read/contract.ts`, `backend/src/superTabs/read/views.ts`
 - Modify: `backend/src/superTabs/sweeps.ts` (the hourly pass runs `sweepReminders`)
 - Modify: `backend/src/routes/superTabs.ts`: `GET /api/super-tabs/:tabId/reminders`,
-  `PUT|DELETE /api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/reminder` (PUT body `{ at }`)
+  `POST /api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/reminder` (body `{ at }`; `at` null
+  clears it: the daemon's relay and the web's transport send only GET and POST)
 - Test: `backend/integration/superTabReminders.test.ts`
 
 **Interfaces:**
 - Produces: `GET …/reminders` → `{ due: ReminderItem[], next: string | null }`; `ReminderItem = { id, conversationId,
   conversationTitle, projectName, messageId, messageSequence, threadId, author: { kind, id, name }, text, dueAt }`.
-  `PUT …/reminder { at }` → `{ id, dueAt }`; `at` in the future and at most 30 days ahead. `DELETE …/reminder` →
-  `{ cleared: boolean }`. `Derived.remindersDigest?: string`.
+  `POST …/reminder { at }` → `{ id, dueAt }`; `at` in the future and at most 30 days ahead. `POST …/reminder
+  { at: null }` → `{ cleared: boolean }`. `Derived.remindersDigest?: string`.
 
 - [ ] Write failing tests: a reminder set for +20 min is not listed before then and `next` names its time; at its time
       it is listed once (two reads give the same one row); another person, an agent and a Team session never read,
@@ -180,7 +181,7 @@
 
 - [ ] Write failing tests: Remind me → In 20 minutes sends the time 20 minutes on (fake clock); Tomorrow at 09:00 sends
       the next day's 09:00 local; when the fake clock reaches `next` the list is read and the row shows once under
-      Reminders with its time, the notice fires once, two reads racing still show one row; opening it clears it (DELETE)
+      Reminders with its time, the notice fires once, two reads racing still show one row; opening it clears it
       and opens its chat at the message.
 - [ ] Run `flutter test test/super_tab_reminders_test.dart` and see it fail.
 - [ ] Implement, run it and see it pass. Commit each step.
