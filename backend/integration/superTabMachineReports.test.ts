@@ -416,7 +416,13 @@ describe('a full report reads only the parts that changed since this server last
 
   it('reads under half the machine and conversation bytes on its next full report', async () => {
     const f = await swarm()
-    await f.execute({ type: 'machine.contribute', machineId: 'spare-host', name: 'Spare Mac', cwd: '/repo', engines: ['codex'], maxAgents: 4 }, host)
+    // Eight machines, as a Swarm has: one reports, the others' parts stay as they are.
+    for (let i = 0; i < 6; i++) {
+      const machineId = `idle-${randomUUID()}`
+      await db.machine.create({ data: { machineId, userId: host.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+      await db.machineShare.create({ data: { machineId, ownerId: host.sub, autonomousEnv: 'prod', emails: [owner.email] } })
+      await f.execute({ type: 'machine.contribute', machineId, name: `Idle ${i}`, cwd: '/repo', engines: ['codex'], maxAgents: 4 }, host)
+    }
     // A server that remembers no report: every reading runs in full.
     const forgetful = f.store(never)
     const first = await partBytes(() => f.beat({}, forgetful))
