@@ -1572,6 +1572,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     String? contributor,
   ) {
     if (c.snapshot?.hasTeammates != true) return null;
+    // Its owner let teammates' work run in their own account (#2806): the Swarm's sentence says so to everyone.
+    if (shared?['teamWork'] case {'ownAccount': final String own}
+        when own.trim().isNotEmpty) {
+      return own.trim();
+    }
     final work = (team ?? shared)?['teamWork'];
     if (work is! Map || work['allowed'] != false) return null;
     final code = work['code'];
@@ -1612,6 +1617,134 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     final removal = pool?['removal'];
     return pool?['contributorId'] == c.accountId &&
         (removal is! Map || superTabMap(removal)['state'] != 'cleaning');
+  }
+
+  /// Whether the signed-in person may choose where teammates' work runs on [machineId] (backend
+  /// `machine.ownAccountWork`, #2806): only on the Mac they added themselves, never on a Harness Team account's own
+  /// entry (it names its Mac as its host) and never while the machine is being removed.
+  bool _canChooseOwnAccount(String machineId) {
+    if (!c.canWrite) return false;
+    final pool = c.snapshot?.pool(machineId);
+    return pool != null &&
+        pool['contributorId'] == c.accountId &&
+        pool['hostMachineId'] == null &&
+        pool['removal'] == null;
+  }
+
+  /// The owner's choice on [machineId]: teammates' work may run in their own account. Absent until they choose: off.
+  bool _ownAccountOn(String machineId) =>
+      switch (c.snapshot?.pool(machineId)?['ownAccountChoice']) {
+        {'allowed': true} => true,
+        _ => false,
+      };
+
+  /// Turns teammates' work in the owner's own account on, after the one warning, or off at once. A refusal says its
+  /// reason in one line: in the warning while it is open, otherwise below the screen.
+  Future<void> _setOwnAccount(_MachineView v, {required bool allowed}) async {
+    final id = v.id;
+    if (!_canChooseOwnAccount(id)) return;
+    Future<Map<String, dynamic>?> send() => c.command({
+      'type': 'machine.ownAccountWork',
+      'machineId': id,
+      'allowed': allowed,
+    });
+    if (!allowed) {
+      void say(String line) => ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          key: const ValueKey('super-machine-own-account-refused'),
+          content: Text(line, maxLines: 1, overflow: TextOverflow.ellipsis),
+        ),
+      );
+      // The controller sends nothing while another action is being sent or waits to be confirmed: say so rather than
+      // leave the owner thinking it is off (review of #2983).
+      if (c.saving || c.hasPendingAction) {
+        say('Another action is still being sent. Try again in a moment.');
+        return;
+      }
+      final result = await send();
+      if (!mounted || result != null) return;
+      say(c.operationError ?? 'Could not switch it back. Try again.');
+      return;
+    }
+    final name = superTabMachineName(v.name);
+    var busy = false, attempted = false;
+    await showAppDialog<void>(
+      context: context,
+      builder: (context) => SuperTabDialogScope(
+        controller: c,
+        child: StatefulBuilder(
+          builder: (context, update) => ListenableBuilder(
+            listenable: c,
+            builder: (context, _) {
+              // This change's reply never came: Retry checks it, as Remove's does.
+              final checking =
+                  c.pendingCommand?['type'] == 'machine.ownAccountWork' &&
+                  c.pendingCommand?['machineId'] == id;
+              return PopScope(
+                canPop: !busy,
+                child: AlertDialog(
+                  key: const ValueKey('super-machine-own-account-confirm'),
+                  title: const Text("Let teammates' work run in your account?"),
+                  content: SizedBox(
+                    width: 400,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          "Teammates' agents will run as you on $name. They can read your files, your keychain and your "
+                          'signed-in apps. Agents already running are not moved.',
+                        ),
+                        if (attempted && !busy && c.operationError != null) ...[
+                          const SizedBox(height: 12),
+                          Text(
+                            c.operationError!,
+                            key: const ValueKey(
+                              'super-machine-own-account-reason',
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  actions: [
+                    TextButton(
+                      autofocus: true,
+                      onPressed: busy ? null : () => Navigator.pop(context),
+                      child: const Text('Cancel'),
+                    ),
+                    FilledButton(
+                      key: const ValueKey('super-machine-own-account-allow'),
+                      onPressed:
+                          busy || c.saving || (!checking && c.hasPendingAction)
+                          ? null
+                          : () async {
+                              update(() {
+                                busy = true;
+                                attempted = true;
+                              });
+                              final result = checking
+                                  ? await c.retry()
+                                  : await send();
+                              if (!context.mounted) return;
+                              if (result != null) {
+                                Navigator.pop(context);
+                              } else {
+                                update(() => busy = false);
+                              }
+                            },
+                      child: Text(checking ? 'Retry' : 'Let them run'),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
   }
 
   Future<_RemovalPreview> _removalPreview(String machineId) async {
@@ -1801,7 +1934,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     );
   }
 
-  /// A machine row's right-click: its details, and Remove from Swarm for whoever may.
+  /// A machine row's right-click: its details, for its owner where teammates' work runs (#2806), and Remove from Swarm
+  /// for whoever may.
   Future<void> _menu(_MachineView view, Offset at) async {
     // The menu's barrier takes the pointer from the row, so a second right-click would bring up the browser's menu
     // over this one. Off until it closes; dispose lets go too, for a screen that goes with the menu still up.
@@ -1813,12 +1947,25 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       choice = await showContextMenuAt<String>(
         context: context,
         at: at,
+        // Wide enough for "Run teammates' work only in the Team account" on one line.
+        width: _canChooseOwnAccount(view.id) ? 340 : 240,
         children: (close) => [
           AppMenuItem(
             label: 'Details',
             leadingSlot: false,
             onPressed: () => close('details'),
           ),
+          if (_canChooseOwnAccount(view.id))
+            AppMenuItem(
+              key: const ValueKey('super-machine-menu-own-account'),
+              label: _ownAccountOn(view.id)
+                  ? "Run teammates' work only in the Team account"
+                  : "Let teammates' work run in my account",
+              leadingSlot: false,
+              onPressed: () => close(
+                _ownAccountOn(view.id) ? 'own-account-off' : 'own-account-on',
+              ),
+            ),
           if (_canRemove(view.id))
             AppMenuItem(
               key: const ValueKey('super-machine-menu-remove'),
@@ -1837,6 +1984,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     }
     if (!mounted) return;
     if (choice == 'details') await _openDetails(view);
+    if (choice == 'own-account-on' || choice == 'own-account-off') {
+      await _setOwnAccount(view, allowed: choice == 'own-account-on');
+    }
     if (choice == 'remove' &&
         _canRemove(view.id) &&
         _removeReason(view.id) == null) {
