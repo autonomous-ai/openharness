@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
 
@@ -71,6 +72,12 @@ void main() {
     server.tag(reply, threadId: root, messageSequence: sequence as int);
   }
 
+  /// Lets Activity's next re-read run out, so no timer outlives the test.
+  Future<void> settle(WidgetTester tester) async {
+    await tester.pump(SuperTabAttention.quietGap);
+    await tester.pumpAndSettle();
+  }
+
   Finder bar() => find.byKey(const ValueKey('super-thread-tag-bar'));
   Finder panel() => find.byKey(const ValueKey('super-thread-panel'));
   Finder line(String root) => find.byKey(ValueKey('super-thread-line-$root'));
@@ -88,7 +95,7 @@ void main() {
 
   group('the thread tags of a chat', () {
     testWidgets('list oldest first, and leave out read ones, main-stream '
-        'tags and muted chats', (tester) async {
+        'tags and other chats', (tester) async {
       final server = threads(2);
       tagIn(server, 'message-4', 'message-3');
       tagIn(server, 'message-2', 'message-1');
@@ -105,6 +112,7 @@ void main() {
         'message-4',
       ]);
       expect(attention.threadTagsIn('other'), isEmpty);
+      await settle(tester);
     });
   });
 }
