@@ -47,6 +47,49 @@ class SuperTabNeed {
   final String? agentId;
 }
 
+/// What one notice of [SuperTabActivity.notices] is: a reminder that is due,
+/// an agent waiting on the reader, a decision asked of them, or a tag of them
+/// they have not read.
+enum SuperTabNoticeKind { reminder, agent, decision, mention }
+
+/// One thing Activity lists for the reader, as the menu bar's Swarm section
+/// lists it too (task #2914).
+class SuperTabNotice {
+  const SuperTabNotice.reminder(SuperTabReminder this.reminder)
+    : kind = SuperTabNoticeKind.reminder,
+      need = null,
+      mention = null;
+  SuperTabNotice.need(SuperTabNeed this.need)
+    : kind = need.decision == null
+          ? SuperTabNoticeKind.agent
+          : SuperTabNoticeKind.decision,
+      reminder = null,
+      mention = null;
+  const SuperTabNotice.mention(SuperTabMention this.mention)
+    : kind = SuperTabNoticeKind.mention,
+      reminder = null,
+      need = null;
+
+  final SuperTabNoticeKind kind;
+  final SuperTabReminder? reminder;
+  final SuperTabNeed? need;
+  final SuperTabMention? mention;
+
+  /// What opens it: the reminder's, decision's or tag's id; the chat's for an
+  /// agent waiting.
+  String get id => switch (kind) {
+    SuperTabNoticeKind.reminder => reminder!.id,
+    SuperTabNoticeKind.agent => need!.conversationId,
+    SuperTabNoticeKind.decision => need!.decision!.id,
+    SuperTabNoticeKind.mention => mention!.id,
+  };
+
+  String get conversationId =>
+      reminder?.conversationId ??
+      need?.conversationId ??
+      mention!.conversationId;
+}
+
 /// The reader's Activity in one Swarm: the one place for everything new for
 /// them (Quiet Swarm design, screens 6 and 11b). Three lists over what the
 /// Swarm already holds, no feed of its own:
@@ -274,6 +317,25 @@ class SuperTabActivity extends ChangeNotifier {
         return byTime != 0 ? byTime : a.compareTo(b);
       });
     return groupMentions([for (final i in order) all[i]]);
+  }
+
+  /// Everything [count] counts, once each, in the order Activity draws it:
+  /// Needs you (the due reminders, the agents waiting on the reader, then the
+  /// decisions newest first), then every unread tag, newest first. The menu
+  /// bar's Swarm section lists exactly this (task #2914), so its rows and
+  /// Activity's red number agree once the lists are read.
+  List<SuperTabNotice> get notices {
+    if (_snapshot == null) return const [];
+    final needs = needsYou;
+    return [
+      for (final r in reminders.due) SuperTabNotice.reminder(r),
+      for (final n in needs)
+        if (n.decision == null) SuperTabNotice.need(n),
+      for (final n in needs)
+        if (n.decision != null) SuperTabNotice.need(n),
+      for (final row in mentionRows)
+        for (final m in row.all) SuperTabNotice.mention(m),
+    ];
   }
 
   /// The followed threads with news today.

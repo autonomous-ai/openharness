@@ -302,13 +302,18 @@ void main() {
       return f;
     }
 
-    test('leaves the menu at once, though its lists still hold it', () async {
+    test('with its lists still holding it, it is in the menu as in '
+        'Activity: both or neither (#2914)', () async {
       final f = await askedInOffline();
       final c = f.app.superTabs.peek(tabId)!;
       await c.refresh();
       expect(c.snapshot!.conversation('offline'), isNull);
-      expect(SuperTabMentions.of(c).waiting, isNotEmpty);
-      expect(statusMenuSwarmEntries(f.app), isEmpty);
+      final activity = SuperTabActivity.of(c);
+      expect(activity.count, 2);
+      expect(menuRows(f), [
+        for (final n in activity.notices) (n.kind.name, n.id),
+      ]);
+      expect(menuRows(f), hasLength(2));
     });
 
     test('stays out while the new lists are slow to come', () async {
