@@ -247,6 +247,36 @@ class SuperTabAttention extends ChangeNotifier {
     ];
   }
 
+  /// Marks [thread] read through its newest reply, as opening it does, so it
+  /// stops showing as new before the next read says so.
+  void markRead(SuperTabFollowedThread thread) {
+    _markRead(thread);
+    notifyListeners();
+  }
+
+  /// [markRead] for each of [threads], telling listeners once.
+  void markAllRead(Iterable<SuperTabFollowedThread> threads) {
+    threads.forEach(_markRead);
+    notifyListeners();
+  }
+
+  void _markRead(SuperTabFollowedThread thread) {
+    controller.markThreadRead(
+      thread.conversationId,
+      thread.rootId,
+      thread.lastReplySequence,
+    );
+    // Moved to read now; the next read of the server agrees.
+    if (unread.any((t) => t.key == thread.key)) {
+      unread = [
+        for (final t in unread)
+          if (t.key != thread.key) t,
+      ];
+      read = [thread, ...read];
+    }
+    _newThisVisit.remove(thread.key);
+  }
+
   /// The Threads view opened: reads now, and what is new stays new until
   /// [closed].
   void opened() {

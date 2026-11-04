@@ -1547,6 +1547,12 @@ void main() {
           await tester.tap(find.byKey(const ValueKey('super-activity')));
           await tester.pumpAndSettle();
 
+          // Tags live in the Mentions tab, not in Needs you.
+          await tester.tap(
+            find.byKey(const ValueKey('super-activity-tab-mentions')),
+          );
+          await tester.pumpAndSettle();
+
           expect(find.textContaining('Chat with PM'), findsNothing);
           await tester.tap(
             find.byKey(const ValueKey('super-activity-row-mention:mention-1')),

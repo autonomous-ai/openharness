@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:clock/clock.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/activity.dart';
@@ -34,13 +36,13 @@ Map<String, dynamic> _group(ConversationServer server, String id) =>
         .cast<Map<String, dynamic>>()
         .firstWhere((g) => g['id'] == id);
 
-/// The task in `offline` waiting on its requester, the default reader.
-void wait(ConversationServer server, {String requester = 'owner'}) {
-  _group(server, 'offline')['requesterId'] = requester;
+/// The task in `offline` whose agent asked [askedOf], the default reader, by name.
+void wait(ConversationServer server, {String askedOf = 'owner'}) {
   _group(server, 'offline')['assignment'] = {
     'id': 'a1',
     'agentId': 'kestrel',
     'status': 'needs_human',
+    'askedOf': askedOf,
   };
 }
 
@@ -91,8 +93,8 @@ final _evening = DateTime(2026, 11, 2, 20, 30);
 
 void main() {
   group('Needs you', () {
-    test('lists the decisions asked of the reader, the agents waiting on them '
-        'and their tags, in that order, and counts each', () async {
+    test('lists the decisions asked of the reader and the agents waiting on '
+        'them, in that order, and counts each; a tag is not listed', () async {
       final server = swarm()..followedThreads = null;
       server.ask(['Ship it?']);
       wait(server);
@@ -100,21 +102,13 @@ void main() {
       final activity = await load(server);
       expect(
         [for (final n in activity.needsYou) n.kind],
-        [
-          SuperTabNeedKind.decision,
-          SuperTabNeedKind.agent,
-          SuperTabNeedKind.mention,
-        ],
+        [SuperTabNeedKind.decision, SuperTabNeedKind.agent],
       );
       expect(
         [for (final n in activity.needsYou) n.title],
-        [
-          'Ship it?',
-          'Kestrel is waiting on you',
-          'Wren mentioned you in # web-project',
-        ],
+        ['Ship it?', 'Kestrel is waiting on you'],
       );
-      expect(activity.count, 3);
+      expect(activity.count, 2);
     });
 
     test(
@@ -165,50 +159,46 @@ void main() {
       return server;
     }
 
-    test('a task waiting on nobody named is for its requester alone', () async {
+    test('a task waiting on nobody named is for no one, not its requester '
+        'or the owner', () async {
       final server = twoPeople();
-      wait(server, requester: 'peer');
-      final other = await load(server);
-      expect(other.needsYou, isEmpty);
-      expect(other.count, 0);
-      expect(other.unread, isFalse);
-      final requester = await load(server, account: 'peer');
-      expect(
-        [for (final n in requester.needsYou) n.kind],
-        [SuperTabNeedKind.agent],
-      );
-      expect(requester.count, 1);
+      wait(server);
+      _group(server, 'offline')
+        ..['requesterId'] = 'peer'
+        ..['assignment'].remove('askedOf');
+      for (final account in ['owner', 'peer']) {
+        final activity = await load(server, account: account);
+        expect(activity.needsYou, isEmpty);
+        expect(activity.count, 0);
+        expect(activity.unread, isFalse);
+      }
     });
 
     test('a task asked of one person is for that person alone', () async {
       final server = twoPeople();
-      wait(server, requester: 'owner');
-      _group(server, 'offline')['assignment']['askedOf'] = 'peer';
+      wait(server, askedOf: 'peer');
       expect((await load(server)).count, 0);
       expect((await load(server, account: 'peer')).count, 1);
     });
 
-    test(
-      'a tag in a thread the reader does not follow is still Needs you',
-      () async {
-        final server = swarm();
-        server.tag('message-2', threadId: 'message-1', messageSequence: 2);
-        server.followedThreads = {'unread': [], 'read': [], 'more': false};
-        final activity = await load(server);
-        expect(
-          [for (final n in activity.needsYou) n.kind],
-          [SuperTabNeedKind.mention],
-        );
-        expect(activity.count, 1);
-        expect(activity.newReplies, isEmpty);
-      },
-    );
+    test('a tag in a thread the reader does not follow is a mention, not Needs you', () async {
+      final server = swarm();
+      server.tag('message-2', threadId: 'message-1', messageSequence: 2);
+      server.followedThreads = {'unread': [], 'read': [], 'more': false};
+      final activity = await load(server);
+      expect(activity.needsYou, isEmpty);
+      expect(activity.count, 0);
+      expect(activity.mentionRows, hasLength(1));
+      expect(activity.unread, isTrue);
+      expect(activity.newReplies, isEmpty);
+    });
   });
 
   group('the number', () {
-    test('counts only Needs you: new replies, done work and replies to the '
-        'reader add nothing', () async {
+    test('counts only Needs you: tags, new replies, done work and replies to '
+        'the reader add nothing', () async {
       final server = swarm();
+      server.ask(['Ship it?']);
       server.tag('message-1');
       server.followedThreads = {
         'unread': [unreadThread('message-1')],
@@ -241,7 +231,6 @@ void main() {
         final activity = await load(server);
         expect(activity.count, 1);
         expect(activity.newReplies, hasLength(1));
-        expect(activity.doneToday, hasLength(1));
       });
     });
 
@@ -277,7 +266,7 @@ void main() {
     }
 
     test(
-      'a tag counts until its chat is read past it, then it leaves Needs you',
+      'a tag is bold until its chat is read past it; it never counts',
       () async {
         final server = swarm()..followedThreads = null;
         server.tag('message-1', messageSequence: 5);
@@ -285,17 +274,15 @@ void main() {
           'owner': {'lead': 4},
         };
         final activity = await load(server);
-        expect(activity.count, 1);
-        expect(
-          [for (final n in activity.needsYou) n.kind],
-          [SuperTabNeedKind.mention],
-        );
+        expect(activity.count, 0);
+        expect(activity.needsYou, isEmpty);
+        expect(activity.unread, isTrue);
         server.state['readMarks'] = {
           'owner': {'lead': 5},
         };
         await reload(activity, server);
         expect(activity.count, 0);
-        expect(activity.needsYou, isEmpty);
+        expect(activity.unread, isFalse);
       },
     );
 
@@ -326,29 +313,25 @@ void main() {
       expect(activity.needsYou, isEmpty);
     });
 
-    test(
-      'a tag in a thread-only reply is Needs you and a new reply',
-      () async {
-        final server = swarm();
-        server.tag(
-          'message-2',
-          conversationId: 'offline',
-          threadId: 'message-1',
-          messageSequence: 2,
-        );
-        server.followedThreads = {
-          'unread': [unreadThread('message-1')],
-          'read': [],
-          'more': false,
-        };
-        final activity = await load(server);
-        expect(activity.needsYou, hasLength(1));
-        expect(activity.needsYou.single.kind, SuperTabNeedKind.mention);
-        expect(activity.needsYou.single.conversationId, 'offline');
-        expect(activity.count, 1);
-        expect(activity.newReplies.map((t) => t.rootId), ['message-1']);
-      },
-    );
+    test('a tag in a thread-only reply is a mention and a new reply, not Needs you', () async {
+      final server = swarm();
+      server.tag(
+        'message-2',
+        conversationId: 'offline',
+        threadId: 'message-1',
+        messageSequence: 2,
+      );
+      server.followedThreads = {
+        'unread': [unreadThread('message-1')],
+        'read': [],
+        'more': false,
+      };
+      final activity = await load(server);
+      expect(activity.needsYou, isEmpty);
+      expect(activity.mentionRows.single.newest.conversationId, 'offline');
+      expect(activity.count, 0);
+      expect(activity.newReplies.map((t) => t.rootId), ['message-1']);
+    });
   });
 
   group('New replies', () {
@@ -370,57 +353,68 @@ void main() {
     );
   });
 
-  group('Done today', () {
-    test(
-      'lists what shipped today, newest first, not yesterday, not a step',
-      () async {
-        final server = swarm()..followedThreads = null;
-        finish(server, DateTime(2026, 11, 2, 8, 8));
-        (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
-          {
-            ...conversationFixture('later', 'Commits read Harness'),
-            'projectId': 'lead',
-            'assignment': {'id': 'a2', 'agentId': 'kestrel', 'status': 'done'},
-            'shippedAt': DateTime(2026, 11, 2, 8, 28).millisecondsSinceEpoch,
-          },
-          {
-            ...conversationFixture('yesterday', 'Shipped yesterday'),
-            'projectId': 'lead',
-            'assignment': {'id': 'a3', 'agentId': 'kestrel', 'status': 'done'},
-            'shippedAt': DateTime(2026, 11, 1, 23, 50).millisecondsSinceEpoch,
-          },
-          {
-            ...conversationFixture('review', 'Review: Windows credential fix'),
-            'projectId': 'lead',
-            'reviewOf': 'offline',
-            'assignment': {'id': 'a4', 'agentId': 'kestrel', 'status': 'done'},
-            'shippedAt': DateTime(2026, 11, 2, 9).millisecondsSinceEpoch,
-          },
-        ]);
-        await withClock(Clock.fixed(_evening), () async {
-          final activity = await load(server);
-          expect(
-            [for (final g in activity.doneToday) g.title],
-            ['Commits read Harness', 'Windows credential fix'],
-          );
-        });
-      },
-    );
+  group('batch actions', () {
+    test('mark all read keeps going past a failure', () async {
+      final server = swarm()
+        ..tag('message-1')
+        ..tag('message-2')
+        ..tag('message-3');
+      var done = 0;
+      server.unknownCommand = (command) =>
+          command['type'] == 'mention.done' && ++done == 2;
+      final activity = await load(server);
+      final mentions = activity.mentions;
+      final reads = server.mentionReads;
+      final posts = server.posts.length;
 
-    test(
-      'is empty from a server that does not say when work shipped',
-      () async {
-        final server = swarm()..followedThreads = null;
-        _group(server, 'offline')['assignment'] = {
-          'id': 'a1',
-          'agentId': 'kestrel',
-          'status': 'done',
-        };
-        await withClock(Clock.fixed(_evening), () async {
-          expect((await load(server)).doneToday, isEmpty);
-        });
-      },
-    );
+      final marked = await mentions.doneAll(mentions.waiting);
+
+      expect(marked, 2);
+      expect(server.posts.length - posts, 3);
+      expect(mentions.error, 'Could not mark some as read. Try again.');
+      // The one read after: waiting and earlier are two lists.
+      expect(server.mentionReads - reads, 2);
+      expect(mentions.waiting.length, 1);
+    });
+
+    test('mark all read sends two at a time, never more', () async {
+      final server = swarm();
+      for (var i = 1; i <= 5; i++) {
+        server.tag('message-$i');
+      }
+      final activity = await load(server);
+      final before = server.posts.length;
+      final hold = server.holdCommands = Completer<void>();
+
+      final marked = activity.mentions.doneAll(activity.mentions.waiting);
+      await pumpEventQueue();
+      expect(server.posts.length - before, 2);
+
+      hold.complete();
+      expect(await marked, 5);
+      expect(server.posts.length - before, 5);
+    });
+
+    test('mark read moves the thread mark to its newest reply', () async {
+      final server = swarm();
+      server.followedThreads = {
+        'unread': [unreadThread('message-1')],
+        'read': [],
+        'more': false,
+      };
+      final activity = await load(server);
+      final attention = activity.attention;
+      final thread = attention.unread.single;
+      expect(attention.isNew(thread), isTrue);
+
+      attention.markRead(thread);
+
+      expect(
+        activity.controller.threadReadMark(thread.rootId),
+        thread.lastReplySequence,
+      );
+      expect(attention.isNew(thread), isFalse);
+    });
   });
 
   group('leaving', () {

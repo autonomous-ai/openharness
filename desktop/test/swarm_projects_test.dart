@@ -194,8 +194,14 @@ void main() {
       ];
       final group = (server.state['conversations'] as List)[1] as Map;
       group['agentIds'] = ['worker'];
-      group['assignment'] = {'status': 'needs_human', 'agentId': 'worker'};
+      group['assignment'] = {
+        'status': 'needs_human',
+        'agentId': 'worker',
+        // Activity holds a waiting task only when it asked the reader by name.
+        'askedOf': 'owner',
+      };
       await mount(tester, c);
+      await SuperTabActivity.of(c).decisions.load();
       expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
       expect(
         find.descendant(
