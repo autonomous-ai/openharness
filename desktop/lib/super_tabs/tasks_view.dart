@@ -424,14 +424,21 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       _moving = ids;
       _moveError = null;
     });
-    // The column lifts what needs the reader, so the card shown above is not
-    // always its neighbour in the shared order: it goes right before the card
-    // under it (review of #2883), or last.
+    // The column lifts what needs the reader, so its neighbours on screen are
+    // not its neighbours in the shared order: it goes right before the first
+    // card under it that is not lifted, or last (reviews of #2883).
     final queue = [
       for (final task in superTabQueueOrder([for (final e in ordered) e.task!]))
         if (task.id != id) task.id,
     ];
-    final below = to + 1 < ids.length ? ids[to + 1] : null;
+    final lifted = {
+      for (final e in ordered)
+        if (e.needsYou) e.task!.id,
+    };
+    final below = ids
+        .skip(to + 1)
+        .where((other) => !lifted.contains(other))
+        .firstOrNull;
     final at = below == null ? queue.length : queue.indexOf(below);
     final refused = await widget.controller.queueTask(
       id,
