@@ -174,11 +174,8 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.descendant(
-        of: _key('super-lead-start-folder'),
-        matching: find.textContaining('/Users/huy/harness-monitor'),
-      ),
-      findsOneWidget,
+      tester.widget<Text>(_key('super-lead-start-folder')).data,
+      'Folder: /Users/huy/harness-monitor',
     );
     expect(find.widgetWithText(FilledButton, 'Start Lead'), findsOneWidget);
     // Show panes stays, under the card.
@@ -200,11 +197,8 @@ void main() {
     PersonalLeadStarter.launchForTest = (_, _, plan) async => plans.add(plan);
     await _show(tester, f);
     expect(
-      find.descendant(
-        of: _key('super-lead-start-folder'),
-        matching: find.text('A new folder in your Harness projects folder'),
-      ),
-      findsOneWidget,
+      tester.widget<Text>(_key('super-lead-start-folder')).data,
+      'A new folder in your Harness projects folder',
     );
     await tester.tap(find.widgetWithText(FilledButton, 'Start Lead'));
     await _settle(tester);
