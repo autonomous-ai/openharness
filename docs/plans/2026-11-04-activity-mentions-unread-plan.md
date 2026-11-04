@@ -16,8 +16,12 @@ passed it) or `done` (Mark read) (backend/src/superTabs/mentions.ts). Only `read
 - `mentionUnread` changes: `read` and `done` are read. Any other tag, waiting or resolved, is unread until the reader's
   chat mark passes its message (the thread mark for a reply that lives only in its thread). A tag from a server that
   does not send `messageSequence` keeps today's rule: unread until resolved.
-- The red number, the badges and the menu bar are unchanged. They read the server's waiting tags (`mentions.waiting`,
-  attention.dart, `_tags`), and a waiting tag has no `resolvedBy`, so the new rule only matters for Earlier.
+- Activity's red number counts the unread tags too, so it always agrees with the Mentions tab (Diego's addition to the
+  task, 11-04): `count` = Needs you (open decisions, tasks that asked the reader by name, due reminders) + the unread
+  tags, each tag once (a folded row with `+2 more` adds 3). Needs you's own tab badge keeps Needs you alone
+  (`needsCount`), and the Mentions tab shows the same unread tag count. Before the tags are read, the server's
+  `mentionsWaiting` stands in, as the sidebar did before #2929. The chat badges, menu bar, phone and dial are unchanged:
+  they read the server's waiting tags (`mentions.waiting`, attention.dart).
 - Mark read on a row (and Mark all read) sends `mention.done` for each tag that still waits, as now. For each tag the
   server resolved that is still unread, it moves the read mark through that message:
   `SuperTabController.markThreadRead` for a thread reply, and a new `SuperTabController.markReadThrough(id, sequence)`
@@ -97,6 +101,18 @@ desktop/test/super_tab_activity_view_test.dart
 
 - [ ] Test: a thread rooted by a person recorded with their email shows the name they set in the preview and avatar,
       and never the email.
+- [ ] Run red, commit; implement; run green, commit.
+
+## Task 5: Activity's number counts unread tags, as the Mentions tab does
+
+**Files:** desktop/lib/super_tabs/activity.dart, desktop/lib/super_tabs/activity_view.dart,
+desktop/lib/super_tabs/project_sidebar.dart, desktop/test/super_tab_activity_test.dart
+
+**Interfaces:** `SuperTabActivity.needsCount`, `SuperTabActivity.mentionsUnread`.
+
+- [ ] Test: one unread tag and no decisions gives Activity 1 and Mentions 1; Mark read gives 0 on both; a tag resolved
+      as answered but not read past still counts 1; three folded tags count 3; before the tags are read the sidebar
+      shows decisions waiting + mentions waiting.
 - [ ] Run red, commit; implement; run green, commit.
 
 ## Finish
