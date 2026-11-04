@@ -14,7 +14,7 @@ import 'composer_toggle.dart';
 import 'day_pill.dart';
 import 'reply_box.dart';
 import 'controller.dart';
-import 'message_row.dart' show SuperTabMessageHighlight, SuperTabMessageRow;
+import 'message_row.dart' show SuperTabMessageRow;
 import 'jump_to_latest.dart';
 import 'model.dart';
 import 'thread_scroll.dart';
@@ -94,86 +94,13 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
 
   SuperTabController get c => widget.controller;
 
-  // The day pill's jump (Huy 11-04): the row it lands on, and the one lit.
-  final _targetKey = GlobalKey();
-  String? _target, _lit;
-  Timer? _litTimer;
-  int _jumps = 0;
-
   /// [row] with its message's time, for the day pill over the list. Keyed
   /// by the message, so the list keeps each row's place as replies arrive.
   Widget _dated(SuperTabMessage message, Widget row) => SuperTabDayMark(
     key: ValueKey('super-thread-day-${message.id}'),
     time: message.createdAt,
-    child: KeyedSubtree(
-      key: message.id == _target ? _targetKey : null,
-      child: SuperTabMessageHighlight(on: message.id == _lit, child: row),
-    ),
+    child: row,
   );
-
-  /// The day pill's choice, as in the chat: the first of the root and its
-  /// replies on or after [from], lit; the root for the very beginning (null),
-  /// the newest reply for a time after everything said. Earlier replies are
-  /// read until one from before [from] is held, at most 50 pages.
-  Future<void> _jumpToTime(DateTime? from) async {
-    final jump = ++_jumps;
-    bool before(SuperTabMessage m) =>
-        from == null || (m.createdAt?.isBefore(from) ?? false);
-    List<SuperTabMessage> held() => c.threadMessages(widget.root);
-    void say(String text) =>
-        ScaffoldMessenger.maybeOf(context)
-            ?.showSnackBar(SnackBar(content: Text(text)));
-    // They read on from the row they land on, not the newest.
-    _scroll.holdPlace();
-    // The root is always held, at the top: the very beginning reads nothing.
-    for (var page = 0; from != null; page++) {
-      final reached = held().any((m) => m.id != widget.root && before(m));
-      if (reached || !c.hasEarlierReplies(widget.root)) break;
-      if (page == 50) {
-        say('That day is too far back to open.');
-        return;
-      }
-      // A read that fails keeps its error and its place: nothing came.
-      final loaded = held().length;
-      await c.loadThread(earlier: true);
-      if (!mounted || jump != _jumps) return;
-      if (held().length == loaded) {
-        say('Couldn’t load earlier replies.');
-        return;
-      }
-    }
-    final messages = held();
-    final target = from == null
-        ? messages.firstOrNull
-        : messages.where((m) => !before(m)).firstOrNull ?? messages.lastOrNull;
-    if (target == null) return;
-    _litTimer?.cancel();
-    setState(() => _target = _lit = target.id);
-    _litTimer = Timer(const Duration(seconds: 2), () {
-      if (mounted) setState(() => _lit = null);
-    });
-    _reveal(jump, messages.indexOf(target) / messages.length, 0);
-  }
-
-  /// The list is lazy: jump near the target's place ([at], its share of the
-  /// thread) until its row is built, then bring it into view.
-  void _reveal(int jump, double at, int attempt) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || jump != _jumps || !_scroll.hasClients) return;
-      if (_targetKey.currentContext case final row?) {
-        unawaited(Scrollable.ensureVisible(row, alignment: .3));
-        return;
-      }
-      if (attempt > 20) return;
-      final position = _scroll.position;
-      _scroll.jumpTo(
-        position.minScrollExtent +
-            at * (position.maxScrollExtent - position.minScrollExtent),
-      );
-      _reveal(jump, at, attempt + 1);
-    });
-    WidgetsBinding.instance.scheduleFrame();
-  }
 
   /// The conversation this thread is in.
   String get _conversationId => c.openedThread?.conversationId ?? c.selectedId;
@@ -208,7 +135,6 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
 
   @override
   void dispose() {
-    _litTimer?.cancel();
     widget.onScroll?.call(null);
     _scroll.dispose();
     _composer.dispose();
@@ -479,7 +405,6 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                 children: [
                   SuperTabStickyDay(
                     pillKey: const ValueKey('super-thread-day-pill'),
-                    onJump: (from) => unawaited(_jumpToTime(from)),
                     // As in the chat, a message's text can be selected and
                     // copied.
                     child: SelectionArea(
