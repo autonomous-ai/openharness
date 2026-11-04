@@ -589,6 +589,14 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// Brings [id]'s New messages line into view near the top, and stops
   /// following the end there: what came since the reader's mark is below.
+  /// The bar or the pill clicked: the line, with typing back in the composer,
+  /// as after Jump to latest. A click outside the composer takes its focus,
+  /// and a later Esc then reached nothing in the chat.
+  void _jumpToUnreadLine(String id) {
+    _focus.requestFocus();
+    _revealUnreadLine(id);
+  }
+
   void _revealUnreadLine(String id) {
     final messageId = _unread.lineAt(id);
     if (messageId == null) return;
@@ -3765,7 +3773,7 @@ class _SuperTabViewState extends State<SuperTabView>
                           ? SuperTabUnreadBar(
                               count: _newFromLine(c.selectedId),
                               more: c.hasNewer(c.selectedId),
-                              onPressed: () => _revealUnreadLine(c.selectedId),
+                              onPressed: () => _jumpToUnreadLine(c.selectedId),
                             )
                           : _unread.offersDown(c.selectedId)
                           ? Padding(
@@ -3778,7 +3786,7 @@ class _SuperTabViewState extends State<SuperTabView>
                               child: Center(
                                 child: SuperTabJumpToUnread(
                                   onPressed: () =>
-                                      _revealUnreadLine(c.selectedId),
+                                      _jumpToUnreadLine(c.selectedId),
                                 ),
                               ),
                             )
