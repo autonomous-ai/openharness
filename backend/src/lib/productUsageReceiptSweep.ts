@@ -18,18 +18,26 @@ import { notAuthorized } from './db/indexes.js'
  * again once its receipt is gone. Its receipt write and its totals share one transaction, so with the rule it counts nothing
  * and its client retries later. No server's presence is inferred: the rule holds whatever runs. Mongo applies a rule to
  * writes from then on only (receipts are never updated), so installing it reads no existing receipt.
+ *
+ * Production's app user may not install the rule (no collMod), and the sweep then removes without it (Ken, 2026-11-04): a
+ * server from before 2026-10-29 is no longer deployed, and only a rollback to one could count a retried report twice.
  */
 const COLLECTION = 'product_usage_receipts'
 const DAY = 86_400_000
 const OLD_EXPIRY_DAYS = 36
-/** About 2,000 a minute, in four deletes with a pause between them: the backlog clears in about a day. While the database
- *  refuses the rule, the worker asks again once an hour. */
-export const RECEIPT_SWEEP = { chunk: 500, chunks: 4, pauseMs: 250, everyMs: 60_000, refusedEveryMs: 3_600_000 } as const
+/** One delete of 500 every 30 s, about 1,000 a minute. On production's M20 a delete of 500 old receipts took 12–17 s (cold
+ *  index pages, read from disk; 2026-11-04), so the database spends about half its time on them at most, and a pass still
+ *  running when the next is due skips it. The ~4M old receipts take about 3 days, against 2026-12-04 by expiry alone. */
+export const RECEIPT_SWEEP = { chunk: 500, chunks: 1, pauseMs: 0, everyMs: 30_000 } as const
 
 /** Every receipt write must carry its life; old receipts, never written again, are not checked. */
 export const RECEIPT_RULE = { validator: { $jsonSchema: { required: ['life'] } }, validationLevel: 'strict', validationAction: 'error' } as const
 
-export interface SweepOptions { chunk: number; chunks: number; pauseMs: number }
+export interface SweepOptions {
+  chunk: number; chunks: number; pauseMs: number
+  /** Removes without installing [RECEIPT_RULE] first: the database user may not (production's, no collMod). */
+  withoutRule?: boolean
+}
 export interface SweepPass {
   removed: number
   /** No old receipt is left that this sweep would ever remove. */
@@ -78,23 +86,26 @@ export async function lastOldReceipt(db: PrismaClient, now: Date): Promise<Date 
   return newest ? dateOf(newest.expiresAt) : null
 }
 
-/** One chunk: up to [chunk] old receipts in expiresAt order, then exactly those, their range checked again. */
+/** One chunk: up to [chunk] old receipts in expiresAt order (a first batch holds only 101 unless asked for more), then exactly
+ *  those, their range checked again. */
 async function removeChunk(db: PrismaClient, now: Date, chunk: number): Promise<number> {
   const range = { expiresAt: { $gt: oldFloor(now),
     $lte: date(now.getTime() + (OLD_EXPIRY_DAYS - PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS) * DAY) } }
   const found = await db.$runCommandRaw({ find: COLLECTION, filter: range, projection: { _id: 1 }, sort: { expiresAt: 1 },
-    hint: 'product_usage_expiry', limit: chunk, singleBatch: true } as never) as { cursor: { firstBatch: Array<{ _id: string }> } }
+    hint: 'product_usage_expiry', limit: chunk, batchSize: chunk, singleBatch: true } as never) as { cursor: { firstBatch: Array<{ _id: string }> } }
   const ids = found.cursor.firstBatch.map(receipt => receipt._id)
   if (!ids.length) return 0
-  const answer = await db.$runCommandRaw({ delete: COLLECTION, deletes: [{ q: { _id: { $in: ids }, ...range }, limit: 0 }] } as never) as
+  // By _id: on both _id and the range Mongo planned the expiry index and examined every old receipt (~4M, ~17 s a delete, 11-04).
+  const answer = await db.$runCommandRaw({ delete: COLLECTION, deletes: [{ q: { _id: { $in: ids }, ...range }, limit: 0, hint: { _id: 1 } }] } as never) as
     { n?: number; writeErrors?: unknown[] }
   if (answer.writeErrors?.length) throw new Error('The database refused some receipt removals')
   return answer.n ?? 0
 }
 
-/** One pass: the rule, then at most [chunks] × [chunk] receipts. Safe to repeat, and from two processes at once. */
+/** One pass: the rule unless [SweepOptions.withoutRule], then at most [chunks] × [chunk] receipts. Safe to repeat, and from
+ *  two processes at once. */
 export async function sweepOldReceipts(db: PrismaClient, now = new Date(), options: SweepOptions = RECEIPT_SWEEP): Promise<SweepPass> {
-  await ensureReceiptRule(db)
+  if (!options.withoutRule) await ensureReceiptRule(db)
   let removed = 0
   for (let i = 0; i < options.chunks; i++) {
     if (i) await delay(options.pauseMs)
@@ -105,19 +116,17 @@ export async function sweepOldReceipts(db: PrismaClient, now = new Date(), optio
   return { removed, done: !await lastOldReceipt(db, now) }
 }
 
-/** Runs a pass a minute in the singleton worker until nothing is left to remove, then stops; a restart checks once more.
- *  While the database refuses the rule, nothing is removed: each hourly check logs an error saying so and when the old receipts
- *  expire by themselves (a single warning at start went unseen from 10-29 to 11-03, task #2488), and once none is left the
- *  sweep stops, rule or not: Mongo's expiry has done its work. */
-export function startReceiptSweep(db: PrismaClient, settings: Partial<SweepOptions & { everyMs: number; refusedEveryMs: number;
-  now: () => Date; log: Pick<typeof logger, 'info' | 'warn' | 'error'> }> = {}): () => void {
-  const { everyMs, refusedEveryMs, now, log, ...options } = { ...RECEIPT_SWEEP, now: () => new Date(), log: logger, ...settings }
-  let running = false, total = 0, refusedUntil = 0
+/** Runs a pass every [RECEIPT_SWEEP.everyMs] in the singleton worker until nothing is left to remove, then stops; a restart
+ *  checks once more. A database user that may not install the rule is asked once: the sweep says so once and goes on without. */
+export function startReceiptSweep(db: PrismaClient, settings: Partial<SweepOptions & { everyMs: number;
+  now: () => Date; log: Pick<typeof logger, 'info' | 'warn'> }> = {}): () => void {
+  const { everyMs, now, log, ...options } = { ...RECEIPT_SWEEP, now: () => new Date(), log: logger, ...settings }
+  let running = false, total = 0, withoutRule = options.withoutRule ?? false
   const run = async () => {
-    if (running || now().getTime() < refusedUntil) return
+    if (running) return
     running = true
     try {
-      const pass = await sweepOldReceipts(db, now(), options)
+      const pass = await sweepOldReceipts(db, now(), { ...options, withoutRule })
       total += pass.removed
       if (pass.removed) log.info('[usage-receipts] pass', { removed: pass.removed, removedSinceStart: total })
       if (pass.done) {
@@ -126,17 +135,12 @@ export function startReceiptSweep(db: PrismaClient, settings: Partial<SweepOptio
       }
     } catch (error) {
       if (error instanceof ReceiptRuleRefused) {
-        refusedUntil = now().getTime() + refusedEveryMs
-        const last = await lastOldReceipt(db, now()).catch(() => undefined)
-        if (last === null) {
-          stop()
-          log.info('[usage-receipts] done: no old receipts left', { removedSinceStart: total })
-          return
-        }
-        log.error(`[usage-receipts] stuck: the database user may not install the receipt rule (collMod), so nothing is removed. The old receipts expire by themselves by ${last ? last.toISOString().slice(0, 10) : 'a date it could not read'}; grant collMod to finish sooner. Checking hourly.`)
+        withoutRule = true
+        log.warn('[usage-receipts] the database user may not install the receipt rule (collMod): removing the old receipts without it '
+          + '(Ken, 2026-11-04). A server from before 2026-10-29, were one rolled back, could count a retried report twice.')
         return
       }
-      log.warn('[usage-receipts] pass failed; retrying next minute', { error: error instanceof Error ? error.message : String(error) })
+      log.warn('[usage-receipts] pass failed; retrying next pass', { error: error instanceof Error ? error.message : String(error) })
     } finally {
       running = false
     }
