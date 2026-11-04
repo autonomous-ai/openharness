@@ -314,7 +314,9 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   restored, only where the guard's script shows Harness locked it. A Buddy saved in the older modes relaunches in full
   mode, and the Codex sandbox and thread-session refusals that existed only because Codex had no guard are gone.
 - Swarm-side nothing changed: a Buddy talks only with its owner, in their Buddy chat, sends only the proposals they ask for,
-  and is never assigned work; the server refuses every other command, and who reads or talks to a Buddy is as above.
+  and is never assigned work; who reads or talks to a Buddy is as above. The Swarm knows it as a Buddy by the pane it runs
+  in, and refuses every other command from there. With full access it could run a command from another shell, where
+  Harness reads it as its owner's terminal, as their own session can; its skill tells it never to.
 - **Where it may run.** Because it runs with its owner's full rights, a Buddy launches only where those rights are its
   owner's own. The server adds it only on its owner's own machine, in their own account (`BUDDY_OWN_MACHINE`). The
   machine checks again before anything is reserved or launched: its own host dispatched the start (every Buddy start is a

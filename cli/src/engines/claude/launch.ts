@@ -12,7 +12,7 @@ const permissionModes = {
   full: ['--dangerously-skip-permissions'],
   // An older Buddy's saved mode, from when a guard held it read-only. A Buddy is its owner's right hand now (Ken, 11-04, task
   // #2832): relaunched like their own session, in full mode. After `full`, so a process's argv reads back as `full`
-  // (lib/processTable.ts).
+  // (lib/processTable.ts). Remove after 2026-12-04, once every Buddy saved before #2832 has started again.
   buddy: ['--dangerously-skip-permissions'],
   // Code a Harness Team agent wrote, in a Team account (backend superTabs/teamWritten.ts, audit H2): full mode, and nothing the
   // branch carries. `user` and not `local`: a branch can commit `.claude/settings.local.json`. Harness's hooks are in the user

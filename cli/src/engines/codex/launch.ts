@@ -7,6 +7,7 @@ const permissionModes = {
   full: ['--dangerously-bypass-approvals-and-sandbox'],
   // An older Codex Buddy's saved mode, from when it read in a read-only sandbox. A Buddy is its owner's right hand now (Ken,
   // 11-04, task #2832): relaunched with full access, as their own session. After `full`, so argv reads back as `full`.
+  // Remove after 2026-12-04, once every Buddy saved before #2832 has started again.
   readOnlyAsk: ['--dangerously-bypass-approvals-and-sandbox'],
   // Code a Harness Team agent wrote, in a Team account (backend superTabs/teamWritten.ts, audit H2). Codex has no flag for it: a
   // worktree takes its main repository's trust, and `-c projects...` does not turn it off (0.165.0, tried). The start gives
