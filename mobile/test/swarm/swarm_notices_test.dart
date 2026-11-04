@@ -84,8 +84,33 @@ void main() {
       conversationId: 'g9',
       messageId: null,
       decisionId: 'd1',
+      threadId: null,
     ));
     keepsItsContent(notice, ['Ship it', 'Yes', 'Fix login']);
+  });
+
+  test('a tag in a thread opens that thread at the tag', () {
+    final notice = swarmNotice(
+      SwarmMentionNeed(
+        'tab-b',
+        SuperTabMention.fromJson({
+          'id': 'm2',
+          'projectName': 'Mobile',
+          'conversationId': 'g9',
+          'messageId': 'msg-2',
+          'threadId': 'root-1',
+          'leadName': 'River',
+          'text': 'In the thread',
+        }),
+      ),
+    );
+    expect(notice.target, (
+      swarmId: 'tab-b',
+      conversationId: 'g9',
+      messageId: 'msg-2',
+      decisionId: null,
+      threadId: 'root-1',
+    ));
   });
 
   test("a tag says who tagged, not the Lead's words", () {
@@ -215,11 +240,13 @@ void main() {
       expect(notice.title, 'Mia replied in a thread');
       expect(notice.subtitle, 'Mobile');
       expect(notice.body, 'Open Harness to read it.');
+      // A reply only in its thread is found there: the tap opens the thread.
       expect(notice.target, (
         swarmId: 'tab-b',
         conversationId: 'g9',
         messageId: 'msg-a1',
         decisionId: null,
+        threadId: 'root-1',
       ));
       keepsItsContent(notice, ['sounds good', 'ship the copy']);
     });
@@ -415,6 +442,7 @@ void main() {
         conversationId: 'g9',
         messageId: 'm/7',
         decisionId: null,
+        threadId: null,
       ));
     });
     test('a decision tap retains its card through the OS payload', () {
@@ -423,6 +451,7 @@ void main() {
         conversationId: 'g9',
         messageId: null,
         decisionId: 'd1',
+        threadId: null,
       ));
     });
 
@@ -432,6 +461,7 @@ void main() {
         conversationId: 'g9',
         messageId: null,
         decisionId: null,
+        threadId: null,
       );
       final payload = encodeSwarmPayload(target);
 

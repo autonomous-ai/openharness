@@ -591,6 +591,7 @@ void main() {
         conversationId: leadChat,
         messageId: 'reply-r2',
         decisionId: null,
+        threadId: 'root-1',
       ));
 
       await swarmMoves(session, fake, () => digest);
