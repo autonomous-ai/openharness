@@ -22,7 +22,11 @@ void main() {
       take = SuperTabVoiceTake(
         recorder: () => mic,
         post: (conversationId, root, clip) async {
-          posted.add((conversationId: conversationId, root: root, wav: clip.wav));
+          posted.add((
+            conversationId: conversationId,
+            root: root,
+            wav: clip.wav,
+          ));
           return answer;
         },
       );
@@ -37,6 +41,7 @@ void main() {
       expect(take.conversationId, 'c1');
       expect(take.root, 'r1');
       expect(mic.calls, ['allowed', 'start']);
+      take.discard();
     });
 
     testWidgets('send stops the take and posts its clip once', (tester) async {
@@ -101,6 +106,7 @@ void main() {
       await tester.pump();
       expect(take.denied, isFalse);
       expect(take.state, SuperTabVoiceState.recording);
+      take.discard();
     });
 
     testWidgets('a mic that cannot start says so', (tester) async {
