@@ -152,7 +152,7 @@ model User {
   externalId      String    @unique // production SSO subject == SDS `customer_id`; local-prod-* until known
   stagExternalId  String? // staging SSO subject; authentication still keys by email
   passwordHash    String? // legacy only; SSO users have none
-  name            String?
+  name            String? // from SSO once, while empty; later sign-ins never overwrite it (UserService.upsertFromSso)
   role            String    @default("user") // user | admin
   // Which Autonomous account plane this user signs in against. Existing rows are backfilled to
   // staging because they were created while the app used staging globally; new users default prod.

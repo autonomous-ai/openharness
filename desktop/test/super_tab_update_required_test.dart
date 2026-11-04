@@ -83,7 +83,6 @@ void main() {
     );
     reads = [];
     await c.refresh();
-    c.toggleProject('lead');
     await c.loadDormant('lead');
     expect(c.updateRequired, isTrue);
     expect(c.error, update);
