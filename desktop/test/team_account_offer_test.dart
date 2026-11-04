@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/super_tabs/machines.dart' show superTabTeamSetupAction, superTabTeamSetupLine;
 import 'package:harness/super_tabs/team_account_setup.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
@@ -476,6 +477,38 @@ void main() {
       'Teammates\' agents in your Swarms run on this computer in a separate '
       'account, Harness Team. They cannot read your files or use your GitHub login. '
       'They use this computer\'s Claude Code and Codex subscriptions, so nobody signs in again.';
+
+  testWidgets('a half-made account: the dialog says what is missing and offers Repair, which runs setup again (#2765)', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () => showTeamAccountSetup(context, app, operatingSystem: 'macos', missing: 'the team daemon is not running'),
+            child: const Text('open'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    expect(find.text('Repair Harness Team on this Mac'), findsOneWidget);
+    expect(find.text('Harness Team is not finished on this Mac: the team daemon is not running. Repair runs its setup again.'), findsOneWidget);
+    expect(find.text('Continue'), findsNothing);
+    expect(find.text('Harness Team is already set up on this Mac.'), findsNothing);
+    daemon.answer = {'ok': true, 'state': 'started'};
+    await tester.tap(find.byKey(const Key('team-account-setup-continue')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('team-account-setup-outcome')), findsOneWidget);
+    expect(daemon.asked.where((p) => p['action'] == 'teamSetup').map((p) => p['reason']), ['manual']);
+  });
+
+  test('the machine row names the missing part and offers Repair (#2765)', () {
+    expect(superTabTeamSetupLine((state: 'incomplete', detail: 'the team daemon is not running')),
+        "Teammates' agents paused: Harness Team is not finished (the team daemon is not running)");
+    expect(superTabTeamSetupAction((state: 'incomplete', detail: 'x')), 'Repair');
+    expect(superTabTeamSetupAction((state: 'failed', detail: null)), 'Set up');
+    expect(superTabTeamSetupAction(null), 'Set up');
+  });
 
   testWidgets('on a Mac the dialog says what it always said', (tester) async {
     await open(tester);
