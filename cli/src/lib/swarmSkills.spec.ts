@@ -63,6 +63,20 @@ describe('built-in Swarm skills', () => {
     expect(prepareSwarmSkill(fixture(), { role: 'dev', key: 'dev-no-shell', mode: 'default' }, folderOnly, undefined, noShell).file).toContain('SKILL.md')
   })
 
+  it('offers a Buddy no PowerShell on Windows, where its guard would refuse every call, and leaves other systems as they were', () => {
+    const settings = (root: string) => JSON.parse(readFileSync(join(root, '.claude', 'settings.local.json'), 'utf8')).permissions.deny as string[]
+    const here = fixture()
+    prepareSwarmSkill(here, { role: 'buddy', key: 'buddy-here' }, folderOnly)
+    expect(settings(here)).not.toContain('PowerShell')
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    try {
+      const windows = fixture()
+      prepareSwarmSkill(windows, { role: 'buddy', key: 'buddy-windows' }, folderOnly, undefined, () => true)
+      expect(settings(windows)).toContain('PowerShell')
+    } finally { Object.defineProperty(process, 'platform', platform) }
+  })
+
   it('gives a Buddy no tools file and leaves its line unchanged', () => {
     const workspace = fixture()
     const prepared = prepareSwarmSkill(workspace, { role: 'buddy', key: 'buddy-session' }, folderOnly)

@@ -21,6 +21,9 @@ export const fieldRefused = (error: unknown) => error instanceof SuperTabHostErr
 /** How long a field an older backend refused is left out. */
 export const FIELD_REFUSED_MS = 10 * 60_000
 
+export const REQUEST_BLOCKED = 'REQUEST_BLOCKED'
+export const REQUEST_BLOCKED_MESSAGE = 'The server\'s firewall refused this. It refuses text naming a sensitive system file, such as /etc/passwd or win.ini. Say it another way and try again.'
+
 /** The core signs each request. Neither the service nor its journal holds an account credential. HTTP 426 is a server that no
  *  longer serves this client's reads: whatever it says, the person is told to update Harness (design 4.11, 5.1). */
 export async function backend(core: CoreApi, method: string, path: string, body?: unknown): Promise<unknown> {
@@ -28,6 +31,8 @@ export async function backend(core: CoreApi, method: string, path: string, body?
   if (reply.status === 426) throw new SuperTabHostError(UPDATE_REQUIRED, UPDATE_MESSAGE, 426)
   if (reply.status < 200 || reply.status >= 300 || reply.body.success === false) {
     const error = object(reply.body.error)
+    // No answer of ours in a 403: the firewall in front of the server refused the request by what it says, not "unavailable".
+    if (reply.status === 403 && error.code === undefined && reply.body.code === undefined) throw new SuperTabHostError(REQUEST_BLOCKED, REQUEST_BLOCKED_MESSAGE, 403)
     throw new SuperTabHostError(String(error.code ?? reply.body.code ?? 'BACKEND_UNAVAILABLE'),
       String(error.message ?? reply.body.message ?? 'Could not reach this Super Tab.'), reply.status)
   }

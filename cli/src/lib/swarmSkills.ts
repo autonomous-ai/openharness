@@ -757,7 +757,8 @@ export function prepareSwarmSkill(workspace: string, saved: SavedSwarmSkill, wid
  *  mode, engines/claude/launch.ts `buddy`): its guard answers every tool call, allowing only reads and its Super Tab
  *  commands (lib/buddyGuard.ts), editing is denied outright, and Harness's own hooks come with them. */
 const buddyClaudeSettings = (guard: string, sandbox: Record<string, unknown> | null) => ({
-  permissions: { defaultMode: 'dontAsk', deny: ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'] },
+  // Not offered PowerShell on Windows either: its guard judges Bash alone, and a real Buddy lost its first turns to refusals there.
+  permissions: { defaultMode: 'dontAsk', deny: ['Edit', 'Write', 'MultiEdit', 'NotebookEdit', ...(process.platform === 'win32' ? ['PowerShell'] : [])] },
   // No memory file at all. The local settings source still loads a CLAUDE.local.md, and a committed one importing files
   // from outside the folder (@/x, @~/x) stopped an interactive Buddy at "Allow external CLAUDE.md file imports?", which
   // nobody answers, while a yes would read those files past its guard. CLAUDE_CODE_DISABLE_CLAUDE_MDS did not stop it;

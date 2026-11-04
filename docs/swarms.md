@@ -259,10 +259,8 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   manager puts nothing there it would not say in the project chat.
 - Each person may add one Buddy per project. They choose the project, one of their own machines in the Swarm's Machines
   list, and Claude Code (a Codex Buddy is refused for now; see below). A Buddy runs only on its owner's own machine, in their own
-  account: never on a machine shared with them, and never in a Harness Team account. A Buddy can't be added on a
-  Windows machine yet: Harness can't yet tell a Buddy's window from another agent's there. As a backstop, while a Buddy
-  runs on a Windows computer, agents there may not send to, start, tell or close other sessions, or speak as a named
-  agent.
+  account: never on a machine shared with them, and never in a Harness Team account. On a Windows machine it needs Git for Windows, which
+  runs its guard, and reads its own folder only.
 - A Buddy's machine checks every Swarm command against the window it runs in. An agent speaks only as itself, only
   through its own computer's Harness, never through another machine. From a Buddy's window, `harness send`, `new`,
   `tell` and `close` are refused. A command that can't prove which window it runs in is refused. The window's agent is
