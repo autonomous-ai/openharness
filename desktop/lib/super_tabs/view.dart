@@ -787,13 +787,9 @@ class _SuperTabViewState extends State<SuperTabView>
   Future<void> _markUnread(SuperTabMessage message) async {
     final id = message.conversationId;
     final kept = c.markUnread(id, message);
-    void place() => setState(() {
-      _unread.forget(id);
-      _unread.decide(id, _ownShown(id), c.readMark(id), own: c.isOwn);
-    });
-    if (c.selectedId == id) place();
+    if (c.selectedId == id) setState(() => _unread.placeAt(id, message.id));
     if (await kept || !mounted) return;
-    if (c.selectedId == id) place();
+    if (c.selectedId == id) setState(() => _unread.clear(id));
     ScaffoldMessenger.maybeOf(context)
         ?.showSnackBar(const SnackBar(content: Text("Couldn't mark unread")));
   }
