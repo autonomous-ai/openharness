@@ -36,8 +36,10 @@ project, no separate backfill, same answers).
 - compatibility: the endpoint and its answer are unchanged. Old pods during the rollout write roots without rows; the
   30-minute re-seed window covers them.
 - migration + rollback: none to run. The schema push creates the collection and index. A rollback leaves the
-  collection unused, and a later re-release re-seeds within 30 minutes of each chat's mark (or not at all for marks
-  older than that: write-path rows keep them current).
+  collection unused, but the release rolled back to writes proposal roots with no row. So before releasing this again
+  after a rollback, the release owner deletes the seed marks (`_id` starting with `seeded:`), and each chat re-seeds
+  on its next read (review of #2968). Without that step, proposals sent during the rollback never show in Tasks
+  (they stay in the chat).
 - audience: unchanged. The store checks the reader may read the project chat before the read (`proposalChat`).
 - identity: N/A because nothing here acts as a person.
 - failure: a failed set write fails the proposal's transaction (it is retried, as any write); a failed read fails the
@@ -47,6 +49,8 @@ project, no separate backfill, same answers).
 ## Global Constraints
 
 - Answers equal today's for every chat (seed path is today's algorithm; set path applies the same rule to the same roots).
+  Two bounds differ, both far above today's under 10 open per project: the seed keeps the newest 100 open (today's
+  answer), so an older open one past those is not kept; and the set is not limited to the newest 1,000 roots.
 - Production: no access; the collection and its index come with the release's schema push (no TTL index, so no
   pre-push step).
 - Backend rules (backend/AGENTS.md): the model names what removes it; the new query gets an integration plan test (IXSCAN
