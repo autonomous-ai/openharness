@@ -79,6 +79,6 @@ own reads of machines.
 
 **Interfaces:** Consumes `Part.contentAt`. Produces `changesFor(view, changed, actor, light?: { since })`, `MachineReading { key, version, receivedAt }`, `SwarmReads.machineReadings(user, tabId, asAgentId?)`.
 
-- [ ] Write the failing tests for both tasks; watch them fail; commit.
-- [ ] Implement both; watch them pass; commit.
-- [ ] Post red/green and the bytes; mark the PR ready; add one review step.
+- [x] Write the failing tests for both tasks; watch them fail; commit.
+- [x] Implement both; watch them pass; commit.
+- [x] Post red/green and the bytes; mark the PR ready; add one review step.

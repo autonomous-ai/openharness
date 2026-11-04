@@ -77,7 +77,7 @@ const workspaceJoin = z.object({ operationId: id }).strict()
 const personOnly = (user: AuthUser) => { if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403) }
 const listQuery = z.object({ after: id.optional(), mentions: z.literal('1').optional() }).strict()
 const cursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/)
-const changesQuery = agentQuery.extend({ cursor })
+const changesQuery = agentQuery.extend({ cursor, machines: z.literal('light').optional() })
 const costsQuery = z.object({ days: z.coerce.number().int().min(1).max(MAX_DAYS).default(DEFAULT_DAYS), asAgentId: id.optional() }).strict()
 const leaderboardQuery = z.object({ projectId: id, week: z.coerce.number().int().nonnegative().safe().optional(), period: z.enum(PERIODS).optional(), scope: z.literal('all').optional() }).strict()
   .refine(query => query.week === undefined || query.period === undefined, 'Ask for a week or a period, not both.')
@@ -495,7 +495,12 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     (req, reply) => respond(reply, () => reads.firstLoad(req.user!, req.params.tabId, req.query.asAgentId)))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof changesQuery> }>('/api/super-tabs/:tabId/changes',
     { preHandler: [validateParams(tabParams), validateQuery(changesQuery)] },
-    (req, reply) => respond(reply, noting(req, () => reads.changes(req.user!, req.params.tabId, req.query.cursor, req.query.asAgentId), nothingChanged)))
+    (req, reply) => respond(reply, noting(req, () => reads.changes(req.user!, req.params.tabId, req.query.cursor, req.query.asAgentId,
+      req.query.machines === 'light' ? { lightMachines: true } : {}), nothingChanged)))
+  // The whole readings on demand, for a client that takes lines in its changes (read/changes.ts).
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/machine-readings',
+    { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] },
+    (req, reply) => respond(reply, () => reads.machineReadings(req.user!, req.params.tabId, req.query.asAgentId)))
   // A person's unread threads and each chat's latest message (read/inbox.ts): read when the change feed moves, never on a timer.
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery> }>('/api/super-tabs/:tabId/inbox',
     { preHandler: [validateParams(tabParams), validateQuery(noQuery)] }, async (req, reply) => {

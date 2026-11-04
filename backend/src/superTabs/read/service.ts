@@ -31,7 +31,7 @@ import { LEDGER_WEEKS } from '../leaderboard/record.js'
 import type { PeriodName } from '../leaderboard/rolling.js'
 import { leaderboard } from '../leaderboard/stats.js'
 import { WEEK_MS } from '../leaderboard/week.js'
-import { READ_FORMAT, SWARM_MIGRATING, type Changes, type Derived, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
+import { READ_FORMAT, SWARM_MIGRATING, type Changes, type Derived, type MachineReadings, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
 import { AvatarLinks } from '../avatarLinks.js'
 import { cursorFor, readCursor } from './cursor.js'
 import { changesFor } from './changes.js'
@@ -141,7 +141,18 @@ export class SwarmReads {
     return Object.keys(avatars).length ? { ...view.derived, avatars } : view.derived
   }
 
-  async changes(user: AuthUser, tabId: string, cursor: string, asAgentId?: string): Promise<Changes> {
+  /** Every machine the reader sees, whole: what a client that asks for lines in its changes reads when it needs more than liveness. */
+  async machineReadings(user: AuthUser, tabId: string, asAgentId?: string): Promise<MachineReadings> {
+    const t0 = this.now()
+    return this.read(user, tabId, async (tx, cached) => {
+      const base = await readLight(tx, cached, tabId, LIGHT)
+      const read = await this.load(tx, cached, user, tabId, asAgentId, t0, {}, async () => base)
+      // A Buddy reads no machines (read/changes.ts).
+      return { format: READ_FORMAT, serverTime: t0, machines: isBuddyReader(read.view.state, read.actor) ? [] : read.view.parts.machines }
+    })
+  }
+
+  async changes(user: AuthUser, tabId: string, cursor: string, asAgentId?: string, options: { lightMachines?: boolean } = {}): Promise<Changes> {
     const t0 = this.now()
     return this.read(user, tabId, async (tx, cached) => {
       // Light (parts/light.ts): changed parts come whole from the change feed; the rest is read only to check visibility and
@@ -171,7 +182,7 @@ export class SwarmReads {
       const read = await this.load(tx, cached, user, tabId, asAgentId, t0, {},
         async () => withStarts(withGroups(base, await readLightGroups(tx, cached, tabId, named)), extra))
       return { format: READ_FORMAT, reload: false, cursor: cursorFor(t0, read.parts.visibilityEpoch), serverTime: t0, lastChangedAt: read.lastChangedAt,
-        epoch: read.parts.visibilityEpoch, ...changesFor(read.view, changed, read.actor),
+        epoch: read.parts.visibilityEpoch, ...changesFor(read.view, changed, read.actor, options.lightMachines ? { since: from.since } : undefined),
         derived: { ...await this.withAvatars(read.view, t0), ...readableMarks(read, marks, threadMarks, settings) } }
     })
   }

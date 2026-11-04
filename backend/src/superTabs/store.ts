@@ -54,7 +54,7 @@ import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachin
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
 import { autoJoinSwarms, machineSwarms, memberSwarms } from './swarmRows.js'
 import type { MachineRename } from './machineRenames.js'
-import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
+import { commitParts, indexesOf, machineContentChanged, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts, ms } from './parts/light.js'
 import { endSteps, ownerOf, stepEndedRows, stepsOf } from './steps.js'
 import { pullRequestEvents, type PullRequestWatch } from './pullRequestEvents.js'
@@ -3131,7 +3131,8 @@ export class SuperTabStore {
     const stamp = clock.next()
     let version: number
     try {
-      version = await swarmTransaction(this.db, tx => guardedWrite(tx, tabId, { op: 'update', kind: 'machine', key: machineId, seen: part.version, data }, stamp))
+      version = await swarmTransaction(this.db, tx => guardedWrite(tx, tabId, { op: 'update', kind: 'machine', key: machineId, seen: part.version, data,
+        ...machineContentChanged(part.data, data) ? { content: true as const } : {} }, stamp))
     } catch (error) {
       // A conflict, or Mongo's transient refusal, is the full report's to retry.
       if (retryable(error)) return null
