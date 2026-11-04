@@ -146,6 +146,8 @@ export function startGateway(host: GatewayHost): StartedGateway {
     computer: { id: host.computerId, name: host.machineName, hostname: host.hostname }, environment: host.autonomousEnv,
     changed: host.machines,
     reachable: (ids) => { reachable = ids ? new Set(ids) : null },
+    // Called on a list read, never while this is built: the pool below exists by then.
+    offline: (ids) => { relayPool.listed(ids) },
     listed: (body) => {
       if (!body) { machineKinds.clear(); return }
       machineKinds.adopt(body)
@@ -200,6 +202,7 @@ export function startGateway(host: GatewayHost): StartedGateway {
     relayPeers,
     {
       onSessionReady: (machineId) => groupSyncer?.sessionOpened(machineId),
+      recheckList: (maxAgeMs) => { void accountHttp.recheck(maxAgeMs).catch(() => { /* the next held select asks again */ }) },
       // A machine the account's device key log names under this very key will trust us as soon as it
       // reads the log: keep its pin through a few denials, and nudge it (and us) to read.
       expectsTrust: (machineId, pub) => {

@@ -292,8 +292,8 @@ export interface RemoteRelayPoolOptions {
   now?: () => number
   /** Shared record of the machines the account's machine list last showed offline (LISTED_RECHECK_MS). */
   listedOffline?: ListedOffline
-  /** Ask the machine list again (at most LISTED_RECHECK_MS old): a held select may be of a machine back since. */
-  recheckList?: () => void
+  /** Ask the machine list again unless it was read within `maxAgeMs`: a held select may be of a machine back since. */
+  recheckList?: (maxAgeMs: number) => void
 }
 
 /** The machines the account's machine list last showed offline, when it was read, and when a held select last asked
@@ -323,7 +323,7 @@ export class RemoteRelayPool {
   private readonly refusals: Map<string, Refusal>
   private readonly now: () => number
   private readonly listedOffline: ListedOffline
-  private readonly recheckList: (() => void) | null
+  private readonly recheckList: ((maxAgeMs: number) => void) | null
   /** Warm background pools per machine, each holding one lingering session nobody is attached to —
    *  see acquireIsolated(). A pool is either here (idle) or in a client's hands, never both. */
   private readonly idleIsolated = new Map<string, RemoteRelayPool[]>()
@@ -372,7 +372,7 @@ export class RemoteRelayPool {
     if (!listed.at || !listed.ids.has(machineId) || this.now() - listed.at >= LISTED_TRUST_MS) return false
     if (this.now() - listed.asked >= LISTED_RECHECK_MS) {
       listed.asked = this.now()
-      try { this.recheckList?.() } catch { /* the next held select asks again */ }
+      try { this.recheckList?.(LISTED_RECHECK_MS) } catch { /* the next held select asks again */ }
     }
     return true
   }
