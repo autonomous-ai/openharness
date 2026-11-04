@@ -91,8 +91,13 @@ export function createRouteLatency({ pod = `${hostname()}:${process.pid}`, maxSa
   return { record, flush }
 }
 
-/** Records every response's time under its route pattern. Returns the recorder, for a flush on shutdown. */
-export function registerRouteLatency(app: FastifyInstance, options: RouteLatencyOptions = {}): RouteLatency {
+/** Each response, by method, route pattern (`unrouted` without one) and status: the Prometheus histogram and the last
+ *  hour (lib/metrics.ts), fed from this one hook so a request is timed once. */
+export type ObserveResponse = (method: string, route: string, status: number, seconds: number) => void
+
+/** Records every response's time under its route pattern, and hands it to `observe`. Returns the recorder, for a flush
+ *  on shutdown. */
+export function registerRouteLatency(app: FastifyInstance, { observe, ...options }: RouteLatencyOptions & { observe?: ObserveResponse } = {}): RouteLatency {
   const latency = createRouteLatency(options)
   app.addHook('onSend', (request, _reply, payload, done) => {
     const bytes = typeof payload === 'string' ? Buffer.byteLength(payload) : Buffer.isBuffer(payload) ? payload.length : 0
@@ -101,8 +106,10 @@ export function registerRouteLatency(app: FastifyInstance, options: RouteLatency
   })
   app.addHook('onResponse', (request, reply, done) => {
     const asAgent = typeof (request.query as Record<string, unknown> | undefined)?.asAgentId === 'string'
-    latency.record(`${request.method} ${request.routeOptions.url ?? 'unrouted'}`, reply.elapsedTime, clientKind(request.headers['user-agent'], asAgent),
+    const route = request.routeOptions.url ?? 'unrouted'
+    latency.record(`${request.method} ${route}`, reply.elapsedTime, clientKind(request.headers['user-agent'], asAgent),
       { empty: nothingNew.has(request), bytes: replyBytes.get(request) })
+    observe?.(request.method, route, reply.statusCode, reply.elapsedTime / 1000)
     done()
   })
   return latency
