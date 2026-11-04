@@ -2683,8 +2683,15 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed || !machine.needsLink) return;
     // Kept across refusals: the wait is from the first, not reset by every redial.
     machine.keyAwaitedSince ??= DateTime.now();
-    _keyWatch ??= Timer.periodic(keyWatchEvery, (_) => _watchAwaitedKeys());
+    _armKeyWatch();
     notifyListeners();
+  }
+
+  /// Starts [_keyWatch] unless it runs already — or the app is in a pocket, where nobody is looking
+  /// ([handleAppPaused]): [handleAppResumed] starts it then ([_resumeBackgroundPolls]).
+  void _armKeyWatch() {
+    if (_pausedAt != null) return;
+    _keyWatch ??= Timer.periodic(keyWatchEvery, (_) => _watchAwaitedKeys());
   }
 
   void _watchAwaitedKeys() {
@@ -3058,6 +3065,8 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     if (_offlineRetryTimers.containsKey(machineId)) return;
+    // In a pocket, nothing polls: [handleAppResumed] starts it again ([_resumeBackgroundPolls]).
+    if (_pausedAt != null) return;
     _offlineRetryTimers[machineId] = Timer.periodic(
       offlineRetryInterval,
       (_) => unawaited(_pollOfflineMachine(machineId)),
@@ -3078,6 +3087,9 @@ class AppNotifier extends ChangeNotifier {
 
   void _startAgentSyncTimer(String machineId) {
     if (_agentSyncTimers.containsKey(machineId)) return;
+    // A machine that connects while the app is in a pocket has its first list read all the same
+    // ([_onConnectionStatus]); its safety net waits for the app to come back ([_resumeBackgroundPolls]).
+    if (_pausedAt != null) return;
     _agentSyncTimers[machineId] = Timer.periodic(
       agentSyncInterval,
       (_) => _agentSyncTick(machineId, DateTime.now()),
@@ -11426,6 +11438,41 @@ class AppNotifier extends ChangeNotifier {
     // The zoo too, for the same reason: a `zoo_changed` sent while the phone
     // was in a pocket reached nobody.
     if (status == AppStatus.authenticated) unawaited(zoo.refresh());
+    // Only back from a pocket: a moment on the app switcher (`inactive`) stopped nothing.
+    if (pausedAt != null && status == AppStatus.authenticated) {
+      _resumeBackgroundPolls();
+    }
+  }
+
+  /// Back from a pocket: the periodic reads [handleAppPaused] stopped start again, each with one
+  /// read now — and never a second beside a read this return already makes.
+  ///
+  /// - **Agent lists**, per connected machine: the safety net's tick, at once. It reads now a list
+  ///   older than its interval and waits for a fresher one to come due ([_agentSyncTick]) — a list
+  ///   costs the machine a second or two of the queue its keystrokes wait in. A socket lost while
+  ///   away is not connected yet, and reads its whole list when it is ([_onConnectionStatus]).
+  /// - **An offline machine something waits on**: its poll, unless the machine list is being read
+  ///   again already ([_rereadMachinesWhileDeaf], above), which answers the same question.
+  /// - **The key watch**: only started again — the device log was just read ([handleAppResumed]'s
+  ///   `ensureRegistered`).
+  void _resumeBackgroundPolls() {
+    final now = DateTime.now();
+    for (final machine in machineStates.values.toList()) {
+      final machineId = machine.machine.machineId;
+      if (machine.connectionStatus == ConnectionStatus.connected) {
+        _startAgentSyncTimer(machineId);
+        _agentSyncTick(machineId, now);
+      }
+      if (machine.nodeOnline == false &&
+          machine.pendingOfflineAgentId != null &&
+          !_offlineRetryTimers.containsKey(machineId)) {
+        _startOfflineRetry(machine);
+        if (_machineReread == null) unawaited(_pollOfflineMachine(machineId));
+      }
+    }
+    if (machineStates.values.any((m) => m.keyAwaitedSince != null)) {
+      _armKeyWatch();
+    }
   }
 
   /// The app went into a pocket: stop the reads that only make sense in front
@@ -11444,6 +11491,10 @@ class AppNotifier extends ChangeNotifier {
     _pausedAt ??= DateTime.now();
     _desk.pause();
     _stopDeafPoll();
+    // And every other read on a timer: Android keeps an app in a pocket running, and it would go on
+    // asking — the agent lists, an offline machine, the device log while a key is awaited. A read
+    // already under way still lands. [handleAppResumed] starts them again ([_resumeBackgroundPolls]).
+    _pauseBackgroundPolls();
     // A socket waiting on a machine that is off stops dialling it while nobody is looking;
     // [handleAppResumed]'s reconnectAll asks again the moment the phone is back
     // ([WsConn.pauseParkedRecheck]).
@@ -11458,6 +11509,25 @@ class AppNotifier extends ChangeNotifier {
 
   /// When the app last went into the background ([handleAppPaused]); null while it is in front.
   DateTime? _pausedAt;
+
+  /// [handleAppPaused]'s half of [_resumeBackgroundPolls]: the timers go, what they counted stays
+  /// (timeouts, a poll in flight) — a pocket is not the machine going.
+  void _pauseBackgroundPolls() {
+    for (final timer in _agentSyncTimers.values) {
+      timer.cancel();
+    }
+    _agentSyncTimers.clear();
+    for (final hold in _agentSyncHolds.values) {
+      hold.cancel();
+    }
+    _agentSyncHolds.clear();
+    for (final timer in _offlineRetryTimers.values) {
+      timer.cancel();
+    }
+    _offlineRetryTimers.clear();
+    _keyWatch?.cancel();
+    _keyWatch = null;
+  }
 
   /// How long the app has to have been away before [handleAppResumed] stops trusting an open
   /// socket that heard nothing from its machine in that time.
@@ -11638,11 +11708,17 @@ class AppNotifier extends ChangeNotifier {
 
   /// Read the machine list again because something other than the person asked; reads under way are
   /// shared, and a failure is left to the next one.
+  ///
+  /// [rereadMachines] is the same read, for a screen that watches the list.
   void _rereadMachines() {
     _machineReread ??= refreshMachines()
         .catchError((Object _) {})
         .whenComplete(() => _machineReread = null);
   }
+
+  /// The machine list read again, joining a read already under way — for a screen waiting on a
+  /// computer to join, back in front, beside [handleAppResumed]'s own read (`ComputerWatch`).
+  void rereadMachines() => _rereadMachines();
 
   /// What the local CLI closing this machine's socket with [code] does to the
   /// model — the `WsPool.onLocalFailure` path, without a socket.

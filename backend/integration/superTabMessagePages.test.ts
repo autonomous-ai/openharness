@@ -222,3 +222,26 @@ describe('receipts read the same live or compacted (spec 5 A3)', () => {
     for (const reply of replies) expect(JSON.stringify(reply)).not.toMatch(/"receipts"|"deliveryIds"|"deliveryId"|"machineOwnerId"|"claimId"/)
   })
 })
+
+// Task #2954 (Ken, 11-04): a person's message is stored with their email as its author's name; agents copied it into
+// commands and pull request bodies until a machine's privacy hook stopped their sessions for a person to approve.
+describe('a person author as an agent reads it (task #2954)', () => {
+  it('names the person, never their email, in a claim, a page, a one-message read and a thread; a person reads the row as stored', async () => {
+    const f = await fixture()
+    const root = String((await run(f.tab, { type: 'message.send', conversationId: 'lead', text: 'Ship it?', replyTo: null, recipientIds: [] })).result.messageId)
+    const reply = String((await run(f.tab, { type: 'message.send', conversationId: 'lead', text: 'Today, please.', replyTo: root, recipientIds: [] })).result.messageId)
+    const named = { kind: 'person', id: owner.sub, name: 'owner', displayName: 'owner' }
+    const delivery = (await store.deliveries(host, f.tab, f.lead)).find(d => d.messageId === reply)!
+    const claimed = await store.delivery(host, f.tab, f.lead, delivery.id, { type: 'claim', claimId: 'claim-2954' })
+    expect(claimed.message!.author).toMatchObject(named)
+    const reads = [claimed, await store.messages(host, f.tab, 'lead', {}, f.lead), await store.messages(host, f.tab, 'lead', { messageId: root }, f.lead),
+      await store.messages(host, f.tab, 'lead', { thread: root }, f.lead)]
+    for (const read of reads) expect(JSON.stringify(read)).not.toContain(owner.email)
+    const page = await store.messages(host, f.tab, 'lead', {}, f.lead)
+    expect(page.messages.find(m => m.id === root)!.author).toMatchObject(named)
+    expect(page.threads.find(t => t.id === root)!.authors).toEqual([expect.objectContaining(named)])
+    // People's apps match a person author by the stored row (Desktop superTabPersonName): theirs is unchanged.
+    const theirs = await store.messages(owner, f.tab, 'lead', {})
+    expect(theirs.messages.find(m => m.id === root)!.author).toEqual({ kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: expect.any(String) })
+  })
+})

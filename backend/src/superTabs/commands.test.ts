@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { storeOldLeads } from './leads.test-support.js'
-import { applyCommand, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, PAIR_CHAIN_LIMIT, swarmGridName, withoutCredentials, type Command, type CommandContext } from './commands.js'
+import { applyCommand, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, swarmGridName, withoutCredentials, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
 import { sweepLiveness } from './liveness.js'
 import { SWITCH_UNCLAIMED_MS } from './tidy.js'
@@ -102,7 +102,7 @@ describe('five-part tasks', () => {
     const delivery = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).messages[0]!
     // The worker runs on another person's machine (host-owner's): the task names whom its pull requests are for (projects.ts
     // requestedByLine, security review 2 of #2492).
-    expect(delivery.text).toBe(`${brief}\n\nAcceptance checks:\n- Reconnect preserves edits\n\nStart each pull request body with: Requested by owner@example.com through Harness.`)
+    expect(delivery.text).toBe(`${brief}\n\nAcceptance checks:\n- Reconnect preserves edits\n\nStart each pull request body with: Requested by owner through Harness.`)
     expect(delivery.recipients).toEqual([worker])
   })
 
@@ -282,8 +282,8 @@ describe('Super Tab collaboration policy', () => {
     const worker = f.add('worker')
     const posted = f.run({ type: 'message.send', conversationId: 'lead', text: 'Which behavior?', replyTo: null, recipientIds: [] },
       { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' }).messages[0]!
-    // Any agent in a group reaches its Lead (review of #2243).
-    expect(posted.recipients).toEqual([lead])
+    // An agent's post reaches only who it names (#2963).
+    expect(posted.recipients).toEqual([])
     const reply = f.run({ type: 'message.send', conversationId: 'lead', text: 'Keep the local copy.', replyTo: posted.id, recipientIds: [] }, owner,
       { reply: { id: posted.id, conversationId: 'lead', author: posted.author, createdAt: 0 } })
     expect(reply.messages[0]!.recipients).toEqual([worker])
@@ -314,7 +314,7 @@ describe('Super Tab collaboration policy', () => {
     expect(inline.alsoInChat).toBeUndefined()
   })
 
-  it('delivers an assigned worker\'s own post to its Lead, or to the agents it names instead', () => {
+  it('delivers an assigned worker\'s own post to the agents it names alone, and the Lead\'s unnamed one to the worker', () => {
     const f = fixture()
     const lead = f.add('lead', 'owner', 'lead', true)
     const group = f.group(), worker = f.add('worker', 'owner', group), other = f.add('other', 'owner', group)
@@ -322,15 +322,17 @@ describe('Super Tab collaboration policy', () => {
     const post = (actor: Actor, recipientIds: string[] = []) => f.run({ type: 'message.send', conversationId: group, text: 'PR is green.',
       replyTo: null, recipientIds }, actor).messages[0]!.recipients
     f.run({ type: 'work.assign', conversationId: group, agentId: worker })
-    expect(post(as(worker))).toEqual([lead])
+    expect(post(as(worker))).toEqual([])
     expect(post(as(worker), [other])).toEqual([other])
+    expect(post(as(worker), [lead])).toEqual([lead])
     expect(post(as(lead))).toEqual([worker])
     f.run({ type: 'work.status', conversationId: group, assignmentId: f.state.conversations[1]!.assignment!.id, status: 'blocked', result: 'Stuck.' }, as(worker))
-    expect(post(as(worker))).toEqual([lead])
+    expect(post(as(worker))).toEqual([])
   })
 
-  // 10-29: a moved agent's alarm and answers reached no one, and the backend worker stayed down 4 h 50 min.
-  it('delivers any other agent\'s unnamed post in the group to its Lead, and a named one only to the agents it names', () => {
+  // 10-29: a moved agent's alarm and answers reached no one, and the backend worker stayed down 4 h 50 min. Since #2963 an
+  // alarm names the PM: an unnamed post reaches the assignee at most.
+  it('delivers another agent\'s unnamed post in the group to its assignee alone, and a named one only to the agents it names', () => {
     const f = fixture()
     const lead = f.add('lead', 'owner', 'lead', true)
     const group = f.group(), worker = f.add('worker', 'owner', group), other = f.add('other', 'owner', group)
@@ -338,13 +340,13 @@ describe('Super Tab collaboration policy', () => {
     const post = (actor: Actor, recipientIds: string[] = [], agentOnly?: boolean) => f.run({ type: 'message.send', conversationId: group,
       text: 'Severe: the worker is down.', replyTo: null, recipientIds, ...(agentOnly ? { agentOnly } : {}) }, actor).messages[0]!.recipients
     const assignment = () => f.state.conversations.find(c => c.id === group)!.assignment!
-    expect(post(as(worker))).toEqual([lead])
+    expect(post(as(worker))).toEqual([])
     expect(post(as(lead))).toEqual([])
     f.run({ type: 'work.assign', conversationId: group, agentId: worker })
-    expect(post(as(other))).toEqual([lead])
-    expect(post(as(other), [worker])).toEqual([worker])
+    expect(post(as(other))).toEqual([worker])
+    expect(post(as(other), [lead])).toEqual([lead])
     f.run({ type: 'work.cancel', conversationId: group, assignmentId: assignment().id, reason: 'Duplicate of another task' })
-    expect(post(as(worker))).toEqual([lead])
+    expect(post(as(worker))).toEqual([])
     expect(post(as(worker), [other])).toEqual([other])
     expect(post(as(worker), [lead])).toEqual([lead])
     // A note to itself stays its own.
@@ -352,7 +354,7 @@ describe('Super Tab collaboration policy', () => {
     expect(post(as(lead))).toEqual([])
     f.run({ type: 'work.assign', conversationId: group, agentId: other })
     f.run({ type: 'work.status', conversationId: group, assignmentId: assignment().id, status: 'stopped', result: null }, owner, { confirmedStopped: true })
-    expect(post(as(other))).toEqual([lead])
+    expect(post(as(other))).toEqual([])
     expect(() => post(as(other), ['not-an-agent'])).toThrow()
   })
 
@@ -447,12 +449,13 @@ describe('Super Tab collaboration policy', () => {
       expect(ping(exchanged(LOOP_NOTICE_AT - 1).map(m => ({ ...m, createdAt: 1000 - 31 * 60_000 })))).toHaveLength(1)
     })
 
-    it('treats a post that names only its sender as unnamed, so it still reaches the Lead', () => {
+    it('treats a post that names only its sender as unnamed, so it reaches the assignee', () => {
       const f = fixture()
-      const lead = f.add('lead', 'owner', 'lead', true)
+      f.add('lead', 'owner', 'lead', true)
       const group = f.group(), worker = f.add('worker', 'owner', group)
-      f.add('other', 'owner', group)
-      expect(send(f, as(worker), group, [worker]).recipients).toEqual([lead])
+      const other = f.add('other', 'owner', group)
+      f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+      expect(send(f, as(other), group, [other]).recipients).toEqual([worker])
     })
 
     it('does not count its own loop notice as a break, so an endless pair is reported once', () => {
@@ -473,12 +476,12 @@ describe('Super Tab collaboration policy', () => {
       expect(ping(forty)).toHaveLength(1)
     })
 
-    it('copies nothing to the Lead when an agent names its recipients, and still delivers an unnamed post to it', () => {
+    it('copies nothing to the Lead, named or unnamed', () => {
       const f = fixture()
-      const lead = f.add('lead', 'owner', 'lead', true)
+      f.add('lead', 'owner', 'lead', true)
       const group = f.group(), worker = f.add('worker', 'owner', group), other = f.add('other', 'owner', group)
       expect(send(f, as(other), group, [worker]).recipients).toEqual([worker])
-      expect(send(f, as(other), group, []).recipients).toEqual([lead])
+      expect(send(f, as(other), group, []).recipients).toEqual([])
     })
 
     // A linked task takes any agent, a Reviewer-kind one too (project instructions, phase 4): joining it hands it no work.
@@ -493,11 +496,11 @@ describe('Super Tab collaboration policy', () => {
       expect(f.state.conversations.find(c => c.id === review)!.agentIds).toEqual(expect.arrayContaining([engineer, reviewer]))
       const other = f.run({ type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: f.group(),
         checks: [{ description: 'Verdict', independent: false }] }, as(lead)).result.conversationId as string
-      expect(send(f, as(reviewer), other, []).recipients).toEqual([lead])
+      expect(send(f, as(reviewer), other, []).recipients).toEqual([])
       expect(f.state.conversations.find(c => c.id === other)!.agentIds).toContain(reviewer)
       // The project chat is the people's: an agent is not named or posted into it.
       expect(() => send(f, as(engineer), 'lead', [])).toThrow('does not participate')
-      expect(() => send(f, as(lead), 'lead', [engineer])).toThrow('The project chat holds only its coordinator among agents: a post here reaches the coordinator.')
+      expect(() => send(f, as(lead), 'lead', [engineer])).toThrow('The project chat holds only its coordinator among agents: a post here reaches no other agent.')
     })
 
     it('never delivers an agent its own message, except its note to itself', () => {
@@ -576,7 +579,7 @@ describe('Super Tab collaboration policy', () => {
       const post = (agentId: string, recipientIds: string[] = [], replyTo: string | null = null) => {
         const reply = history.find(m => m.id === replyTo)
         const sent = f.run({ type: 'message.send', conversationId: group, text: 'Update.', replyTo, recipientIds }, as(agentId), {
-          recent: history.slice().reverse().slice(0, PAIR_CHAIN_LIMIT).map(m => ({ author: m.author as never, recipients: m.recipients })),
+          recent: history.slice().reverse().map(m => ({ author: m.author as never, recipients: m.recipients })),
           ...(reply ? { reply: { id: reply.id, conversationId: group, author: reply.author as never, createdAt: 0 } } : {}),
         }).messages[0]!
         history.push({ author: { kind: 'agent', id: agentId }, recipients: sent.recipients, id: sent.id })
@@ -606,7 +609,7 @@ describe('Super Tab collaboration policy', () => {
       const { f, lead, group, worker, post } = setup()
       f.run({ type: 'work.assign', conversationId: group, agentId: worker })
       const report = post(worker)
-      expect(report.recipients).toEqual([lead])
+      expect(report.recipients).toEqual([])
       expect(post(lead, [], report.id).recipients).toEqual([worker])
     })
 
@@ -614,16 +617,17 @@ describe('Super Tab collaboration policy', () => {
       const { f, lead, group, worker, other, as, post, history } = setup()
       f.run({ type: 'work.assign', conversationId: group, agentId: worker })
       expect(post(lead, [other]).recipients).toEqual([other])
+      // Another agent's unnamed post reaches the assignee, and a reply to it reaches its author (#2963).
       const aside = post(other)
-      expect(aside.recipients).toEqual([lead])
-      expect(post(lead, [], aside.id).recipients).toEqual([])
+      expect(aside.recipients).toEqual([worker])
+      expect(post(lead, [], aside.id).recipients).toEqual([other, worker])
       const personMessage = f.run({ type: 'message.send', conversationId: group, text: 'Status?', replyTo: null, recipientIds: [] }).messages[0]!
       history.push({ author: { kind: 'person', id: 'owner' }, recipients: personMessage.recipients, id: personMessage.id })
       expect(personMessage.recipients).toEqual([lead])
       const reply = f.run({ type: 'message.send', conversationId: group, text: 'Ask the worker', replyTo: personMessage.id, recipientIds: [] }, as(lead), {
         reply: { id: personMessage.id, conversationId: group, author: personMessage.author, createdAt: 0 },
       }).messages[0]!
-      expect(reply.recipients).toEqual([])
+      expect(reply.recipients).toEqual([worker])
     })
 
     // Answers go right below, not in a thread (anh Dee, 2026-11-04; task #2929): an answer is routed as a reply to the same
@@ -638,8 +642,8 @@ describe('Super Tab collaboration policy', () => {
       expect(below).toMatchObject({ replyTo: null, recipients: [worker] })
       expect(below.thread).toBeUndefined()
       const personMessage = f.run({ type: 'message.send', conversationId: group, text: 'Status?', replyTo: null, recipientIds: [] }).messages[0]!
-      // Answering a person does not wake the worker, as a reply to them does not.
-      expect(answer(personMessage).recipients).toEqual([])
+      // Answering a person reaches the task's assignee, as any unnamed post in a task does (#2963), and as a reply to them does.
+      expect(answer(personMessage).recipients).toEqual([worker])
     })
 
     it('refuses an answer to a message it cannot find here, and an answer that is also a reply', () => {
@@ -660,19 +664,21 @@ describe('Super Tab collaboration policy', () => {
         const { lead, worker, post, assign } = setup()
         expect(assign(assigner).recipients).toEqual([worker])
         const plan = post(worker)
-        expect(plan.recipients).toEqual([lead])
-        expect(post(lead).recipients).toEqual([worker])
-        expect(post(worker, [], plan.id).recipients).toEqual([lead])
+        expect(plan.recipients).toEqual([])
+        const approval = post(lead)
+        expect(approval.recipients).toEqual([worker])
+        expect(post(worker, [], approval.id).recipients).toEqual([lead])
         expect(post(lead, [], plan.id).recipients).toEqual([worker])
       }
     })
 
-    it('stops an unattended Lead and worker loop, and a person message or explicit recipients start a new one', () => {
-      const { f, lead, group, worker, post, assign, history } = setup()
+    // #2963: the worker's unnamed post reaches no one, so no automatic round trip is left to bound.
+    it('has no automatic round trip between the Lead and its worker', () => {
+      const { lead, worker, post, assign } = setup()
       assign('lead')
       const hops: string[][] = []
       let speaker = worker
-      // Each agent answers every message it receives, the worst case for a loop.
+      // Each agent answers every message it receives with an unnamed post, the worst case for a loop.
       for (let turn = 0; turn < 50; turn++) {
         const sent = post(speaker)
         hops.push(sent.recipients)
@@ -680,13 +686,9 @@ describe('Super Tab collaboration policy', () => {
         if (!next) break
         speaker = next
       }
-      expect(hops.slice(0, -1).every(recipients => recipients.length === 1)).toBe(true)
-      expect(hops.at(-1)).toEqual([])
-      expect(hops).toHaveLength(PAIR_CHAIN_LIMIT)
-      expect(post(lead, [worker]).recipients).toEqual([worker])
-      const person = f.run({ type: 'message.send', conversationId: group, text: 'Carry on.', replyTo: null, recipientIds: [worker] }).messages[0]!
-      history.push({ author: { kind: 'person', id: 'owner' }, recipients: person.recipients, id: person.id })
+      expect(hops).toEqual([[]])
       expect(post(lead).recipients).toEqual([worker])
+      expect(post(worker).recipients).toEqual([])
     })
   })
 
@@ -1224,7 +1226,8 @@ describe('route.record and route.override', () => {
     expect(effects.routeDecisions).toEqual([{ op: 'override', id: 'd1', override: expect.objectContaining({ by: 'person', candidateId: 'c1', reason: 'Opus quota is needed elsewhere.' }) }])
     expect(effects.messages[0]!.recipients).toEqual([f.lead])
     // What happened and why, never the next step (project instructions, phase 4).
-    expect(effects.messages[0]!.text).toBe('owner@example.com chose Title c1 instead of Title c0. Reason: Opus quota is needed elsewhere.')
+    // By name, never email: the PM reads this row and copied the email into a tag (review of #2954).
+    expect(effects.messages[0]!.text).toBe('owner chose Title c1 instead of Title c0. Reason: Opus quota is needed elsewhere.')
     expect(effects.messages[0]!.source).toEqual({ kind: 'route-override', decisionId: 'd1', by: 'person' })
   })
   it('refuses an override by an agent, of a closed decision, or of the current choice', () => {
@@ -1508,10 +1511,10 @@ describe('a route that names no pick', () => {
     const command = { type: 'route.override', decisionId: 'd1', candidateId: 'c0', reason: 'Opus for the schema.' } as const
     const effects = f.run(command, undefined, { routeDecision: open() })
     expect(effects.routeDecisions).toEqual([{ op: 'override', id: 'd1', override: expect.objectContaining({ by: 'person', candidateId: 'c0' }) }])
-    expect(effects.messages[0]!.text).toBe('owner@example.com chose Title c0. Reason: Opus for the schema.')
+    expect(effects.messages[0]!.text).toBe('owner chose Title c0. Reason: Opus for the schema.')
     const started = open({ final: { kind: 'new', startId: 's', machineId: 'machine', engine: 'claude', model: 'sonnet', effort: 'high', candidateId: 'c1' } })
     expect(() => f.run({ ...command, candidateId: 'c1' }, undefined, { routeDecision: started })).toThrow(expect.objectContaining({ code: 'ALREADY_CHOSEN' }))
-    expect(f.run(command, undefined, { routeDecision: started }).messages[0]!.text).toBe('owner@example.com chose Title c0 instead of Title c1. Reason: Opus for the schema.')
+    expect(f.run(command, undefined, { routeDecision: started }).messages[0]!.text).toBe('owner chose Title c0 instead of Title c1. Reason: Opus for the schema.')
   })
 
   it('links a start to the candidate a person chose, as before, keeping that candidate in the final', () => {
@@ -2030,9 +2033,9 @@ describe('any agent of the project', () => {
     // A person sharing there a session already in the Swarm.
     expect(() => f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'reviewer', name: 'reviewer', configuration: config, lead: false },
       owner, { contribution: f.contribution })).toThrow(refused)
-    // A post naming it still reaches nobody new: the refusal says the coordinator hears posts here, and where to tell it.
+    // A post naming it still reaches nobody new: the refusal says no other agent hears posts here, and where to tell it.
     expect(() => f.run({ type: 'message.send', conversationId: 'lead', text: 'Announce the review.', replyTo: null, recipientIds: [reviewer] }, f.leadActor))
-      .toThrow(expect.objectContaining({ code: 'PROJECT_CHAT_COORDINATOR_ONLY', message: expect.stringContaining('reaches the coordinator') }))
+      .toThrow(expect.objectContaining({ code: 'PROJECT_CHAT_COORDINATOR_ONLY', message: expect.stringContaining('reaches no other agent') }))
     expect(f.state).toEqual(before)
     // An agent stored there before is named as before (it stays until removed); the coordinator and a new one are still set.
     f.run({ type: 'message.send', conversationId: 'lead', text: 'Your turn.', replyTo: null, recipientIds: [f.worker] }, f.leadActor)
@@ -2079,16 +2082,17 @@ describe('any agent of the project', () => {
       return { f, task, step, engineer, reviewer, chat, assigned }
     }
 
-    it('posts a top-level line and a thread reply there, joins nothing, and reaches the coordinator as before', () => {
+    it('posts a top-level line and a thread reply there, joins nothing, and reaches the coordinator only by name (#2963)', () => {
       const { f, engineer, reviewer, chat } = working()
       const members = [...chat().agentIds]
       const asked = f.run(post('Can someone check the login bug?')).messages[0]!
       for (const agentId of [engineer, reviewer]) {
         const line = f.run(post('I am on it.'), actorOf(agentId)).messages.at(-1)!
-        expect(line).toMatchObject({ conversationId: 'lead', author: { kind: 'agent', id: agentId }, replyTo: null, recipients: [f.lead] })
+        expect(line).toMatchObject({ conversationId: 'lead', author: { kind: 'agent', id: agentId }, replyTo: null, recipients: [] })
         const reply = f.run(post('Found it: the token expired.', asked.id), actorOf(agentId),
           { reply: { id: asked.id, conversationId: 'lead', author: asked.author, createdAt: 0, thread: asked.id } }).messages.at(-1)!
-        expect(reply).toMatchObject({ conversationId: 'lead', replyTo: asked.id, thread: asked.id, recipients: [f.lead] })
+        expect(reply).toMatchObject({ conversationId: 'lead', replyTo: asked.id, thread: asked.id, recipients: [] })
+        expect(f.run(post('Need a ruling.', null, [f.lead]), actorOf(agentId)).messages.at(-1)!.recipients).toEqual([f.lead])
       }
       expect(chat().agentIds).toEqual(members)
       expect(chat().agentIds).not.toContain(engineer)
@@ -4278,7 +4282,7 @@ describe('credentials in Swarm chat', () => {
     f.run({ type: 'conversation.agent', conversationId: group, agentId: lead, present: true, lead: true })
     f.run({ type: 'work.assign', conversationId: group, agentId: worker })
     const posted = f.run(send(`npm publish failed: //registry.npmjs.org/:_authToken=${github}`, group), { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' })
-    expect(posted.messages).toEqual([expect.objectContaining({ text: `npm publish failed: //registry.npmjs.org/:_authToken=${CREDENTIAL_MARKER}`, recipients: [lead] })])
+    expect(posted.messages).toEqual([expect.objectContaining({ text: `npm publish failed: //registry.npmjs.org/:_authToken=${CREDENTIAL_MARKER}`, recipients: [] })])
     expect(posted.result.credentialNotice).toBe('Removed a credential (GitHub token) before saving. Revoke or rotate it.')
   })
 
@@ -4833,12 +4837,12 @@ describe('checks are information', () => {
     f.run(commandSchema.parse({ type: 'work.define', conversationId: group, brief: 'Fix the install docs.', checks: [] }), f.leadActor)
     f.run({ type: 'conversation.agent', conversationId: group, agentId: f.worker, present: true, lead: false }, f.leadActor)
     const assigned = f.run({ type: 'work.assign', conversationId: group, agentId: f.worker })
-    expect(assigned.messages.find(m => m.recipients.includes(f.worker))!.text).toBe('Fix the install docs.\n\nStart each pull request body with: Requested by owner@example.com through Harness.')
+    expect(assigned.messages.find(m => m.recipients.includes(f.worker))!.text).toBe('Fix the install docs.\n\nStart each pull request body with: Requested by owner through Harness.')
     // A task with no brief at all is assigned too: its title is what its agent reads.
     const bare = f.run({ type: 'conversation.create', title: 'Look into the flaky test', brief: '', checks: [] }, f.leadActor).result.conversationId as string
     const other = f.add('other', 'owner', bare)
     expect(f.run({ type: 'work.assign', conversationId: bare, agentId: other }).messages.find(m => m.recipients.includes(other))!.text)
-      .toBe('Look into the flaky test\n\nStart each pull request body with: Requested by owner@example.com through Harness.')
+      .toBe('Look into the flaky test\n\nStart each pull request body with: Requested by owner through Harness.')
   })
 
   it('keeps a failed check as a finding', () => {
@@ -5508,6 +5512,12 @@ describe('lead.switch', () => {
     const told = done(s).messages.filter(m => (m.source as { kind?: string } | undefined)?.kind === 'pm-switch-notice')
     expect(told).toEqual([expect.objectContaining({ conversationId: s.f.state.conversations.find(c => c.kind === 'swarm-buddy')!.id,
       text: 'owner moved the PM of Pilot on Studio to your Codex account "Work".', source: { kind: 'pm-switch-notice', machineId: 'host' } })])
+    // The owner's Buddy reads it: never an email, even one the asker took as their name (review of #2954).
+    const named = lent()
+    named.f.state.people.find(p => p.id === 'owner')!.name = 'owner@example.com'
+    named.f.run(named.request)
+    expect(done(named).messages.find(m => (m.source as { kind?: string } | undefined)?.kind === 'pm-switch-notice')!.text)
+      .toBe('owner moved the PM of Pilot on Studio to your Codex account "Work".')
     const def = lent()
     def.f.run({ ...def.request, profileId: 'default' })
     expect(done(def).messages).toHaveLength(1)

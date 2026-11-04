@@ -78,7 +78,8 @@ export const TEMPLATE_WORKFLOW = `## Workflow
    and the evidence in its result: that status is how the PM hears, once. A Reviewer or Tester is heard the same way,
    through its step's result. No agent sends the PM any other message besides a task that needs a person (Workflow 6)
    or the answer to a question the PM asked: no progress notes, no "ready for review", no separate verdict or "done"
-   message, and no acknowledgement such as "understood", "on it" or "stopped".
+   message, and no acknowledgement such as "understood", "on it" or "stopped". A verdict goes to the Engineer by name
+   (--to, or a reply to its request); a result reaches the PM through status, never by a post to the PM.
 5. The PM checks CI on the pull requests that passed, merges them, and tells the people who asked.
 6. A task that needs a person, or a machine that is down, goes to the PM at once, by name.
 7. Idle Engineers are stopped. Reviewers and Testers are kept while the work they checked is open.

@@ -112,7 +112,8 @@ describe('built-in Swarm skills', () => {
   const local = '- Local models: when the Swarm serves one (a member\'s model, a shared API, a model shared with a member), the route may pick it for low-difficulty, well-specified work; it costs no subscription. Set "local":true in the route only when a person asks for a local model. When a person names a model, set "model" to their words ("deepseek 4.1 flash"): the route then offers that model alone. Start the pick with the gridModel and gridName the route gives, never a model or effort.\n'
   const localDefault = '- Local models: the route may pick one for low-difficulty, well-specified work; set "local":true only when a person asks for one, set "model" to a model a person names, and start it with the route\'s gridModel and gridName.\n'
   // The approved mention line (spec/2026-10-24-lead-mentions.md, call 5), the Lead's alone, in both modes.
-  const mention = '- When you need a person to act or decide, tag them in the message.\n'
+  // By @username or id, never email (task #2954).
+  const mention = '- When you need a person to act or decide, tag them in the message by @username or id, never by email.\n'
   // The lost-work and checkpoint lines (Lead's brief for v1 liveness, 2026-10-26; docs: swarm-never-stops): the Lead's and
   // the Builder's alone, in both modes.
   const lost = '- When you are told a task is lost, hand it on at once: route it and assign it to another agent, avoiding what failed (another machine if its machine died, another account or engine if it hit a usage limit). The new brief tells the successor to continue from the lost attempt\'s pushed branch and last result, not to start over.\n'
@@ -222,9 +223,11 @@ describe('built-in Swarm skills', () => {
   // Before a section that is last: after a blank line, without its own.
   const reactionsBefore = (role: 'lead' | 'dev' | 'review') => `\n${reactions(role).trimEnd()}\n`
   // Who a post reaches (project instructions, phase 1): every role, in both modes, in a section of its own right before Reactions.
-  const reaches = '- A post reaches only the agents you name with --to <agent id>, any agent of this project; they join the group if they are not in it.'
-  const whoReaches = (role: 'lead' | 'dev' | 'review') => `## Who a post reaches\n${reaches}${role === 'lead' ? ' Your post in a task that names no one reaches its assigned agent.\n'
-    : ` A post that names no one reaches the Lead.\n${role === 'dev' ? '- Answer your Reviewer, and tell it a fix is pushed, with --to its agent id.\n' : '- Send your verdict and findings to the Builder with --to its agent id.\n'}`}\n`
+  // Task #2963 (Ken, 2026-11-04): a post that names no one no longer reaches the Lead.
+  const reaches = '- A post reaches only the agents you name, with --to <agent id> or @Name in its text, any agent of this project; they join the group if they are not in it. A reply also reaches the agent whose message it answers. A post in a task or step that names no one reaches its assigned agent, and anywhere else no agent.\n'
+  const status = '- The Lead hears your work through your status (done, stuck, needs a human): never post it a result, a verdict, a Ready or an acknowledgement.\n'
+  const whoReaches = (role: 'lead' | 'dev' | 'review') => `## Who a post reaches\n${reaches}${role === 'lead' ? '- Agents report to you through their status; their posts reach you only when they name you.\n'
+    : `${role === 'dev' ? '- Answer your Reviewer, and tell it a fix is pushed, with --to its agent id.\n' : '- Send your verdict and findings to the Builder with --to its agent id.\n'}${status}`}\n`
   // The Builder's 👀 replaces its "say that you took it" line, in both modes.
   const took = '- React 👀 to the message that assigned it and mark it working; your first post is your plan or a first result, never that you took it.\n'
   // The task's review plan (nightly reflection 10-30): a new bullet right after each Lead's review line, nothing replaced.
@@ -243,13 +246,13 @@ describe('built-in Swarm skills', () => {
       expect(text, `${mode} ${role}`).not.toContain('that you took it and')
     }
   })
-  // Project instructions, phase 1: agents talk to each other by name; only an unnamed post goes to the Lead.
+  // Project instructions, phase 1: agents talk to each other by name; since #2963 an unnamed post never goes to the Lead.
   it('tells every role who a post reaches, the Builder to answer its Reviewer and the Reviewer its Builder by name', () => {
     for (const mode of ['orchestration', 'default'] as const) for (const role of ['lead', 'dev', 'review'] as const) {
       const text = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')
       expect(text.split('## Who a post reaches\n'), `${mode} ${role}`).toHaveLength(2)
-      expect(text, `${mode} ${role}`).toContain('A post reaches only the agents you name with --to <agent id>, any agent of this project')
-      expect(text, `${mode} ${role}`).toContain(role === 'lead' ? 'Your post in a task that names no one reaches its assigned agent.' : 'A post that names no one reaches the Lead.')
+      expect(text, `${mode} ${role}`).toContain(reaches)
+      expect(text, `${mode} ${role}`).not.toContain('names no one reaches the Lead')
       expect(text, `${mode} ${role}`).toContain(`\n\n${whoReaches(role)}## Reactions\n`)
     }
   })
@@ -995,8 +998,8 @@ describe('a Buddy\'s folder', () => {
 // Project instructions, phase 4 (decision 1): a session is a coordinator, an agent or a Buddy. Its role file stays the
 // built-in text it launched with, for a Swarm with no instructions, and a row an older CLI saved relaunches onto its own.
 describe('role kinds keep their role files', () => {
-  /** The whole file a Reviewer's launch writes in each mode, byte for byte, as before role kinds. */
-  const REVIEW = { orchestration: '7b9273ef8d7a5f4dd7fd2133c7048aa734e29d3b3a700b5e26f46b4c04b20711', default: '594c0f21ba60582624c0a141d64bc2aa6751dbd2a0f3ed81fb1b65cd20fdde82' }
+  /** The whole file a Reviewer's launch writes in each mode, byte for byte, as before role kinds (its post rules as of #2963). */
+  const REVIEW = { orchestration: '4270fcbf17355c8df6a65c6977b70bcc6064c2d3210533dc99fdf3b16af5d2d9', default: '2704930e91c7861d47c95f1c19ec7383edf23220eb720bed09ab1acbe7d34034' }
   const folder = (workspace: string, key: string, name: string) =>
     join(realpathSync(workspace), '.harness', 'runtime', sha256(key), 'swarm', 'skills', name)
   it('keeps each session\'s role file', () => {

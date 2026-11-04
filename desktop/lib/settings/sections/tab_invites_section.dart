@@ -13,6 +13,7 @@ import '../../shared/widgets/section_scaffold.dart';
 import '../../shared/widgets/setting_row.dart';
 import '../../state/app_state.dart';
 import '../../super_tabs/model.dart';
+import '../../super_tabs/visible_tick.dart';
 
 /// Settings ▸ Tab invites: the invitations to shared tabs waiting for an
 /// answer, and the tabs whose owner's computer has a new key.
@@ -25,12 +26,12 @@ class TabInvitesSection extends StatefulWidget {
   State<TabInvitesSection> createState() => _TabInvitesSectionState();
 }
 
-class _TabInvitesSectionState extends State<TabInvitesSection> {
+class _TabInvitesSectionState extends State<TabInvitesSection>
+    with WidgetsBindingObserver, VisibleTick<TabInvitesSection> {
   List<Map<String, dynamic>> _superInvites = [], _superTabs = [];
   String? _superError, _accepting;
   final _accepts = SwarmInviteAccepts();
   bool _loadingSuper = true;
-  Timer? _refreshTimer;
   int _read = 0;
   @override
   void initState() {
@@ -38,16 +39,16 @@ class _TabInvitesSectionState extends State<TabInvitesSection> {
     // Read when the panel opens, so an invitation that arrived a moment ago is here.
     unawaited(widget.notifier.sharedTabs.refresh());
     unawaited(_refreshSuper());
-    _refreshTimer = Timer.periodic(
-      const Duration(seconds: 15),
-      (_) => unawaited(_refreshSuper()),
-    );
+    // Again every 15 seconds while the panel can be seen, and once as it is seen again.
+    visibleTick(const Duration(seconds: 15));
   }
 
   @override
-  void dispose() {
-    _refreshTimer?.cancel();
-    super.dispose();
+  void onTick() => unawaited(_refreshSuper());
+
+  @override
+  void onScreenChanged(bool onScreen) {
+    if (onScreen) unawaited(_refreshSuper());
   }
 
   Future<void> _refreshSuper() async {

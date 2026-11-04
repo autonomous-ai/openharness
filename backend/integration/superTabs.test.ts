@@ -5282,7 +5282,7 @@ describe('Swarm parts under concurrent writes', () => {
     const { tab, lead } = await fixture()
     const groups = await Promise.all(['North', 'South', 'East'].map(title => workGroup(tab, title)))
     for (const { group, worker } of groups) {
-      for (let i = 0; i < 2; i++) await run(tab, { type: 'message.send', conversationId: group, text: `Report ${i}`, replyTo: null, recipientIds: [] }, host, worker)
+      for (let i = 0; i < 2; i++) await run(tab, { type: 'message.send', conversationId: group, text: `Report ${i}`, replyTo: null, recipientIds: [lead] }, host, worker)
     }
     const waiting = await store.deliveries(host, tab, lead)
     expect(waiting.length).toBeGreaterThanOrEqual(6)
@@ -5327,7 +5327,7 @@ describe('Swarm parts under concurrent writes', () => {
   it('serializes a claim against revoking an agent sender', async () => {
     const { tab, lead } = await fixture()
     const { group, worker } = await workGroup(tab, 'Revoked')
-    await run(tab, { type: 'message.send', conversationId: group, text: 'Report for the Lead.', replyTo: null, recipientIds: [] }, host, worker)
+    await run(tab, { type: 'message.send', conversationId: group, text: 'Report for the Lead.', replyTo: null, recipientIds: [lead] }, host, worker)
     const delivery = (await store.deliveries(host, tab, lead)).find(d => d.authorId === worker)!
     await run(tab, { type: 'work.cancel', conversationId: group, assignmentId: (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!.id,
       reason: 'Withdrawing the worker' })

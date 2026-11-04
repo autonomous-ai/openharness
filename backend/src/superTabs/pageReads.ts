@@ -176,6 +176,17 @@ export async function messagesById(tx: Transaction, tabId: string, conversationI
   })
 }
 
+/**
+ * The stored rows with these ids, whichever Swarm or conversation holds them: what a machine report's or a Lead poll's time
+ * check compares its notices with before it writes them (store.ts writeMessages keepStored). A plain `_id` match through the id
+ * index; Prisma's `id: { in }` sent it as `$expr` (8% of the slow message reads in Ken's log of 11-04, ~1 s for 101 rows).
+ */
+export async function storedMessages(tx: Transaction, ids: string[]): Promise<Array<{ id: string; tabId: string; conversationId: string; source: unknown }>> {
+  if (!ids.length) return []
+  const rows = await readBy(tx, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: ids } } }, { $project: { tabId: 1, conversationId: 1, source: 1 } }])
+  return rows.map(row => ({ id: row._id as string, tabId: row.tabId as string, conversationId: row.conversationId as string, source: row.source ?? null }))
+}
+
 /** The Lead's notices that leave a copy in a task's chat when the Lead hears them in its own chat (terminal.ts toLead). */
 const LEAD_COPY_KINDS = new Set<unknown>(['work-lost', 'work-resumed'])
 
@@ -227,14 +238,23 @@ export interface ThreadFacet {
  * still examines each of the threads' rows.
  */
 export async function threadFacet(tx: Transaction, tabId: string, conversationId: string, roots: string[]): Promise<ThreadFacet> {
+  // No $sort: it makes the planner walk the conversation's sequence index instead.
+  return summed(tx, 'thread', { tabId, conversationId, thread: { $in: roots } })
+}
+
+/** threadFacet of the rows `ids` alone, read by `_id`: what a reply's rows add to their threads' summaries (foldReplies). */
+async function rowsFacet(tx: Transaction, tabId: string, conversationId: string, ids: string[]): Promise<ThreadFacet> {
+  return summed(tx, 'id', { _id: { $in: ids }, tabId, conversationId })
+}
+
+async function summed(tx: Transaction, index: 'thread' | 'id', match: Prisma.InputJsonObject): Promise<ThreadFacet> {
   const root = { $eq: ['$_id', '$thread'] }
   const part = { thread: '$thread', root, kind: '$source.kind', only: '$source.recipientsOnly', ask: '$source.ask',
     to: { $gt: [{ $size: { $ifNull: ['$recipientIds', []] } }, 0] }, author: { kind: '$author.kind', id: '$author.id' },
     session: { $eq: ['$buddySession', true] } }
   // (sequence, id) lead each place, so the database's min and max order rows as threadReplies sorts them (ids are ASCII).
   const place = { s: '$sequence', i: '$_id', at: '$createdAt', author: '$author' }
-  // No $sort: it makes the planner walk the conversation's sequence index instead.
-  const [found] = await readBy(tx, 'SuperTabMessage', 'thread', [{ $match: { tabId, conversationId, thread: { $in: roots } } },
+  const [found] = await readBy(tx, 'SuperTabMessage', index, [{ $match: match },
     { $facet: {
       parts: [{ $group: { _id: part, count: { $sum: 1 }, oldest: { $min: place }, newest: { $max: place },
         // A root is its part's only row: what deliveredCopies reads of it.
@@ -359,19 +379,72 @@ export async function refreshThreads(tx: Transaction, tabId: string, conversatio
   return facet
 }
 
-/** Refreshes the summaries of the threads that `rows`, just inserted, reply in (refreshThreads), and answers each thread's facet
- *  by its root, which the same transaction's Activity reads instead of the thread's rows (activity.ts writeReplyActivity). A row
- *  that is its own thread's root, or has none (written before threads), changes no summary. */
+/** A part's or tag's key by value, whatever its fields' order: the database groups by the whole key. */
+const keyOf = (key: unknown): string => JSON.stringify(key, (_, value: unknown) => value && typeof value === 'object' && !Array.isArray(value)
+  ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : value)
+/** Places in the order the database's $min and $max give them: by sequence, then id, then a tag's slot. */
+const before = (a: ThreadPlace, b: ThreadPlace) => Number(a.s) - Number(b.s) || (a.i < b.i ? -1 : a.i > b.i ? 1 : 0) || (a.slot ?? 0) - (b.slot ?? 0)
+
+/** A thread's summary with the rows `added` sums up folded in, as threadFacet gives every row of both: each part's count adds,
+ *  its oldest row is the older and its newest the newer; each person's first tag in a part is the earlier. */
+export function foldFacet(stored: ThreadFacet, added: ThreadFacet): ThreadFacet {
+  const parts = new Map(stored.parts.map(p => [keyOf(p._id), { ...p }]))
+  for (const p of added.parts) {
+    const kept = parts.get(keyOf(p._id))
+    if (!kept) parts.set(keyOf(p._id), { ...p })
+    else Object.assign(kept, { count: kept.count + p.count, oldest: before(p.oldest, kept.oldest) < 0 ? p.oldest : kept.oldest,
+      newest: before(p.newest, kept.newest) > 0 ? p.newest : kept.newest })
+  }
+  const mentions = new Map(stored.mentions.map(m => [keyOf(m._id), { ...m }]))
+  for (const m of added.mentions) {
+    const kept = mentions.get(keyOf(m._id))
+    if (!kept || before(m.first, kept.first) < 0) mentions.set(keyOf(m._id), { ...m })
+  }
+  return { parts: [...parts.values()], mentions: [...mentions.values()] }
+}
+
+/**
+ * Folds the rows `ids`, just inserted in this transaction and replying in threads of one conversation, into those threads'
+ * stored summaries (foldFacet): it reads each summary by root id and only the new rows by `_id`, never the threads' other
+ * rows, so a reply in a 500-reply thread examines a few documents, not 500 (task #2974). A thread with no summary yet (its
+ * first reply, or a Swarm not backfilled) is counted whole once (refreshThreads). Two replies at once both write the same
+ * summary, so one transaction meets a write conflict and runs again, reading the summary the other committed. Answers the
+ * threads' whole facets, as refreshThreads does.
+ */
+export async function foldReplies(tx: Transaction, tabId: string, conversationId: string,
+  rows: ReadonlyArray<{ id: string; thread: string }>): Promise<ThreadFacet> {
+  const roots = [...new Set(rows.map(row => row.thread))]
+  const stored = new Map((await readBy(tx, 'SuperTabThread', 'id', [{ $match: { _id: { $in: roots } } },
+    { $project: { tabId: 1, conversationId: 1, parts: 1, mentions: 1 } }]) as unknown as Array<ThreadFacet & { _id: string; tabId: string; conversationId: string }>)
+    .filter(t => t.tabId === tabId && t.conversationId === conversationId).map(t => [t._id, t]))
+  const whole = await refreshThreads(tx, tabId, conversationId, roots.filter(root => !stored.has(root)))
+  const folding = rows.filter(row => stored.has(row.thread))
+  if (!folding.length) return whole
+  const added = await rowsFacet(tx, tabId, conversationId, folding.map(row => row.id))
+  const updatedAt = { $date: new Date().toISOString() }
+  const folded = [...new Set(folding.map(row => row.thread))].map(root => {
+    const summary = stored.get(root)!
+    return { root, ...foldFacet(summary, { parts: added.parts.filter(p => p._id.thread === root), mentions: added.mentions.filter(m => m._id.thread === root) }) }
+  })
+  // Raw, as refreshThreads writes it: the stored parts read back as the $facet returns them, dates as dates.
+  await tx.$runCommandRaw({ update: 'SuperTabThread', updates: folded.map(({ root, parts, mentions }) =>
+    ({ q: { _id: root, tabId, conversationId }, u: { $set: { parts, mentions, updatedAt } } })) as unknown as Prisma.InputJsonArray })
+  return { parts: [...whole.parts, ...folded.flatMap(f => f.parts)], mentions: [...whole.mentions, ...folded.flatMap(f => f.mentions)] }
+}
+
+/** Folds the rows `rows`, just inserted, into the summaries of the threads they reply in (foldReplies), and answers each
+ *  thread's facet by its root, which the same transaction's Activity reads instead of the thread's rows (activity.ts
+ *  writeReplyActivity). A row that is its own thread's root, or has none (written before threads), changes no summary. */
 export async function refreshReplies(tx: Transaction, tabId: string,
   rows: ReadonlyArray<{ id: string; conversationId: string; thread?: string | null }>): Promise<Map<string, ThreadFacet>> {
-  const roots = new Map<string, Set<string>>()
+  const replies = new Map<string, Array<{ id: string; thread: string }>>()
   for (const row of rows) {
-    if (row.thread && row.thread !== row.id) roots.set(row.conversationId, (roots.get(row.conversationId) ?? new Set()).add(row.thread))
+    if (row.thread && row.thread !== row.id) replies.set(row.conversationId, [...replies.get(row.conversationId) ?? [], { id: row.id, thread: row.thread }])
   }
   const facets = new Map<string, ThreadFacet>()
-  for (const [conversationId, threads] of roots) {
-    const facet = await refreshThreads(tx, tabId, conversationId, [...threads])
-    for (const root of threads) {
+  for (const [conversationId, list] of replies) {
+    const facet = await foldReplies(tx, tabId, conversationId, list)
+    for (const root of new Set(list.map(row => row.thread))) {
       facets.set(root, { parts: facet.parts.filter(p => p._id.thread === root), mentions: facet.mentions.filter(m => m._id.thread === root) })
     }
   }
