@@ -27,6 +27,9 @@ export const DIRECT = new CacheView(null, null)
 
 /** A miss loads the feed from this long before its reader's cursor, so readers polling a few seconds apart share it. */
 const FEED_SLACK_MS = 15_000
+/** ... and from at least this long before the read, so a phone (5 s), a background window (15 s) or a CLI reading a minute
+ *  or two after the poller that loaded it reads the held feed too, not every changed part itself (#2783). */
+export const FEED_REACH_MS = 120_000
 
 /** A Swarm's live machine parts, held at both stamps: a machine's reading moves only the machine stamp. */
 export const readMachines = (db: Prisma.TransactionClient, view: CacheView, tabId: string) =>
@@ -211,7 +214,7 @@ export async function readChanged(db: Db, view: CacheView, tabId: string, since:
   const direct = async () => (await store.loadChanged(db, [tabId], new Date(since))).get(tabId) ?? []
   if (!view.available) return direct()
   const load = (kinds: readonly PartKind[]) => async () => {
-    const from = since - FEED_SLACK_MS
+    const from = Math.min(since - FEED_SLACK_MS, view.at - FEED_REACH_MS)
     return { from, parts: (await store.loadChanged(db, [tabId], new Date(from), kinds)).get(tabId) ?? [] }
   }
   const [main, machines] = await Promise.all([view.get(tabId, 'feed', 'main', load(FEED_MAIN_KINDS), feedRule),
