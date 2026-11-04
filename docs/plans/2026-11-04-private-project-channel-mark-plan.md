@@ -25,7 +25,7 @@
 - Public projects must retain the existing `#` mark.
 - Private projects must not retain a second lock at the row's trailing edge.
 - Notification badges and muted bells must remain the only project-row trailing marks.
-- Header, Activity, and a project's Buddy detail line must identify private projects with a lock.
+- Header, project menu, Activity, Buddy detail, and legacy Notifications/Decisions channel references must identify private projects with a lock.
 - Accessibility labels and composer hints must still name the project clearly.
 
 ---
@@ -39,19 +39,20 @@
 - Modify: `desktop/lib/super_tabs/buddies.dart`
 - Modify: `desktop/lib/super_tabs/activity.dart`
 - Modify: `desktop/lib/super_tabs/activity_view.dart`
-- Test: `desktop/test/super_tab_sidebar_test.dart`, `desktop/test/super_tab_view_test.dart`, `desktop/test/super_tab_activity_view_test.dart`, and `desktop/test/super_tab_buddies_test.dart`
+- Modify: `desktop/lib/super_tabs/decisions_view.dart` and `desktop/lib/super_tabs/notifications.dart`
+- Test: `desktop/test/super_tab_sidebar_test.dart`, `desktop/test/super_tab_view_test.dart`, `desktop/test/super_tab_activity_view_test.dart`, `desktop/test/super_tab_buddies_test.dart`, `desktop/test/super_tab_private_legacy_channel_test.dart`, and `desktop/test/super_tab_quiet_polish_test.dart`
 - Test: `desktop/test/super_tab_project_rows_shots_test.dart`
 
 **Interfaces:**
 - Consumes: `SuperTabProject.isPrivate`, `AppIcons.lock`, existing Desktop typography and row composition.
 - Produces: visible private-project lock marks at the same position as public `#` marks; notification marks remain trailing.
 
-- [ ] Write failing widget tests for private leading lock/no trailing lock, public `#`, and right-side mention badge/muted bell.
-- [ ] Run the focused sidebar test and confirm the new assertions fail against the current placement.
-- [ ] Write failing view, Activity, and Buddy tests for private channel marks in the header, Activity, and Buddy detail line; ensure the composer hint has no textual `#`.
-- [ ] Run the focused view/Activity/Buddy tests and confirm they fail because private project labels still use `#`.
-- [ ] Move the sidebar lock into the leading mark column, retaining its tooltip and semantics; remove the trailing lock.
-- [ ] Render a lock beside private channel labels in the header, Activity, and Buddy detail line; keep composer hint text descriptive.
-- [ ] Capture light and dark sidebar screenshots showing private and public rows with a mention badge.
-- [ ] Run the focused widget tests, `check-ui-style`, and `laid_out_list_test`; record red/green evidence and screenshots in the PR.
-- [ ] Commit the implementation and tests.
+- [x] Write failing widget tests for private leading lock/no trailing lock, public `#`, and right-side mention badge/muted bell.
+- [x] Run the focused sidebar test and confirm the new assertions fail against the current placement.
+- [x] Write failing view, Activity, Buddy, and legacy Notifications/Decisions tests for private channel marks; ensure the composer hint has no textual `#`.
+- [x] Run the focused tests and confirm they fail because private project labels still use `#`.
+- [x] Move the sidebar lock into the leading mark column, retaining its tooltip and semantics; remove the trailing lock.
+- [x] Render lock marks for private labels in the header, project menu, Activity, Buddy detail, and legacy Notifications/Decisions; keep composer hint text descriptive.
+- [x] Capture light and dark sidebar screenshots showing private and public rows with a mention badge.
+- [x] Run focused private legacy-channel and quiet-polish widget tests, `check-ui-style`, and `laid_out_list_test`; record red/green evidence and screenshots in the PR.
+- [x] Commit the implementation and tests.
