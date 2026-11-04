@@ -1701,6 +1701,8 @@ void main() {
       ];
       expect(posts, hasLength(2));
       expect(posts.toSet(), hasLength(1), reason: 'one post, one receipt');
+      // A runner slower than the send timeout.
+      await Future<void>.delayed(const Duration(milliseconds: 30));
       // Both tries are one command: its one answer answers both.
       answers.values.single.complete({'result': <String, dynamic>{}});
       expect(await again, isTrue);

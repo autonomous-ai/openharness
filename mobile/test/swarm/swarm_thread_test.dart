@@ -1459,6 +1459,8 @@ void main() {
       ];
       expect(posts, hasLength(2));
       expect(posts.toSet(), hasLength(1), reason: 'one reply, one receipt');
+      // A runner slower than the send timeout.
+      await Future<void>.delayed(const Duration(milliseconds: 30));
       answers.values.single.complete({'result': <String, dynamic>{}});
       expect(await again, isTrue);
       expect(post.state, SwarmPostState.confirmed);
