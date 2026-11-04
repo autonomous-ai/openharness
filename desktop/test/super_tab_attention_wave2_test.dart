@@ -190,6 +190,7 @@ Future<(SuperTabController, GlobalKey)> _show(
   WidgetTester tester,
   Brightness brightness, {
   String selected = 'web-lead',
+  ConversationServer? server,
 }) async {
   final previous = grid.AppTheme.brightness.value;
   grid.AppTheme.brightness.value = brightness;
@@ -199,7 +200,7 @@ Future<(SuperTabController, GlobalKey)> _show(
   addTearDown(tester.view.reset);
   final app = createApp(connected: true);
   addTearDown(app.dispose);
-  final server = _wave2();
+  server ??= _wave2();
   final c = server.controller(
     initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': selected},
   );
@@ -209,7 +210,6 @@ Future<(SuperTabController, GlobalKey)> _show(
   await attention.decisions.load();
   await attention.load();
   await c.select(selected);
-  if (!c.expandedProjects.contains('lead')) c.toggleProject('lead');
   final picture = GlobalKey();
   await tester.pumpWidget(
     MaterialApp(
@@ -264,37 +264,43 @@ void main() {
       'Option+Shift+Down opens the next unread chat in sidebar order, '
       'skipping the muted one; Up goes back',
       (tester) async {
-        final (c, _) = await _show(tester, Brightness.dark, selected: 'lead');
-        // Sidebar order: openharness (lead, offline 1600, routing 1598, roster
-        // 1597 muted), then website (web-lead).
-        final order = [
-          for (final id in ['lead', 'offline', 'routing', 'roster', 'web-lead'])
-            if (c.unreadShown(c.snapshot!.conversation(id)!)) id,
-        ];
-        expect(order, isNot(contains('roster')));
+        // A third project between the two, its chat unread and muted.
+        final server = _wave2();
+        (server.state['projects'] as List).add(
+          projectFixture('road', 'roadmap', 'road-lead'),
+        );
+        (server.state['conversations'] as List).add({
+          ...conversationFixture('road-lead', 'Lead'),
+          'projectId': 'road',
+        });
+        _fromLead(server, 'Muted plans.', 'road-lead');
+        (server.state['chatSettings'] as Map)['owner']['road-lead'] = 'muted';
+        final (c, _) = await _show(
+          tester,
+          Brightness.dark,
+          selected: 'lead',
+          server: server,
+        );
+        // Sidebar order: openharness (lead), roadmap (road-lead, muted), then
+        // website (web-lead). Tasks are in the Tasks view, not here.
+        expect(c.unreadShown(c.snapshot!.conversation('offline')!), isTrue);
+        expect(
+          c.unreadShown(c.snapshot!.conversation('road-lead')!),
+          isFalse,
+        );
         await tester.tap(find.byKey(const ValueKey('super-message-composer')));
         await tester.pumpAndSettle();
         await _keys(tester, [
           LogicalKeyboardKey.altLeft,
           LogicalKeyboardKey.shiftLeft,
         ], LogicalKeyboardKey.arrowDown);
-        expect(c.selectedId, 'offline');
-        await _keys(tester, [
-          LogicalKeyboardKey.altLeft,
-          LogicalKeyboardKey.shiftLeft,
-        ], LogicalKeyboardKey.arrowDown);
-        expect(c.selectedId, 'routing');
-        await _keys(tester, [
-          LogicalKeyboardKey.altLeft,
-          LogicalKeyboardKey.shiftLeft,
-        ], LogicalKeyboardKey.arrowDown);
-        // The muted Desktop roster is passed over.
+        // The unread tasks and the muted roadmap chat are passed over.
         expect(c.selectedId, 'web-lead');
         await _keys(tester, [
           LogicalKeyboardKey.altLeft,
           LogicalKeyboardKey.shiftLeft,
         ], LogicalKeyboardKey.arrowUp);
-        expect(c.selectedId, 'routing');
+        expect(c.selectedId, 'lead');
         await _done(tester, c);
       },
       variant: TargetPlatformVariant.only(TargetPlatform.macOS),
@@ -306,7 +312,7 @@ void main() {
       (tester) async {
         final (c, _) = await _show(tester, Brightness.dark, selected: 'lead');
         final order = [
-          for (final id in ['lead', 'offline', 'routing', 'roster', 'web-lead'])
+          for (final id in ['lead', 'web-lead'])
             if (c.unreadShown(c.snapshot!.conversation(id)!)) id,
         ];
         expect(order.length, greaterThan(1));
@@ -361,20 +367,21 @@ void main() {
     testWidgets(
       'the chat menu\'s Notifications sets Muted, and the row greys',
       (tester) async {
+        // A project's chat: the sidebar lists no tasks (task #2569).
         final (c, _) = await _show(
           tester,
           Brightness.dark,
-          selected: 'offline',
+          selected: 'web-lead',
         );
-        await tester.tap(find.byKey(const ValueKey('super-group-options')));
+        await tester.tap(find.byKey(const ValueKey('super-project-menu')));
         await tester.pumpAndSettle();
         await tester.tap(find.byKey(const ValueKey('super-notify-menu')));
         await tester.pumpAndSettle();
         await tester.tap(find.byKey(const ValueKey('super-notify-muted')));
         await tester.pumpAndSettle();
-        expect(c.notifyOf('offline'), SuperTabNotify.muted);
+        expect(c.notifyOf('web-lead'), SuperTabNotify.muted);
         expect(
-          find.byKey(const ValueKey('super-muted-offline')),
+          find.byKey(const ValueKey('super-muted-web-lead')),
           findsOneWidget,
         );
         await _done(tester, c);

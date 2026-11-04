@@ -99,13 +99,13 @@ void main() {
       final ids = _manyProjects(server);
       final controller = _CountingController(
         server,
-        initial: {
-          'tabId': 'tab',
-          'accountId': 'owner',
-          'expandedProjects': ids,
-        },
+        initial: {'tabId': 'tab', 'accountId': 'owner'},
       );
       await controller.refresh();
+      // Every project's closed groups held too, as a Tasks view reads them.
+      for (final id in ids) {
+        await controller.loadDormant(id);
+      }
       expect(controller.snapshot!.conversations, hasLength(2 + 19 + 20 * 201));
 
       final asked = <String, int>{};
@@ -141,9 +141,12 @@ void main() {
 
       expect(controller.buddyChatLookups.keys, unorderedEquals(ids));
       expect(controller.buddyChatLookups.values, everyElement(1));
-      // Each project's 150 open workgroups and its Lead; never the reader's
-      // Buddy chat, which waits on no human.
-      expect(asked, hasLength(20 * 151 + 1));
+      // Each project's 200 workgroups held, as its Tasks board places them
+      // for its badge (task #2569), and "offline"; never a project's chat nor
+      // the reader's Buddy chat, which wait on no human.
+      expect(asked, hasLength(20 * 200 + 1));
+      expect(asked.keys.where((id) => id.startsWith('lead')), isEmpty);
+      expect(asked.keys.where((id) => id.startsWith('buddy-')), isEmpty);
       expect(asked.values, everyElement(1));
 
       await tester.pumpWidget(const SizedBox());

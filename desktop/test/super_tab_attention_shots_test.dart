@@ -164,7 +164,6 @@ void main() {
           hasLength(1),
         );
         c.select('roster');
-        if (!c.expandedProjects.contains('lead')) c.toggleProject('lead');
         final picture = GlobalKey();
         await tester.pumpWidget(
           MaterialApp(
