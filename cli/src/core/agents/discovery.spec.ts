@@ -139,9 +139,9 @@ describe('discovery', () => {
       expect(mode, 'this fixture must name a mode').not.toBeNull()
     })
 
-    it('tells a Codex Buddy\'s read-only asking mode from plain read only, so a relaunch keeps it asking', () => {
-      expect(permissionModeFromArgv('codex', 'codex --ask-for-approval on-request --sandbox read-only -c approvals_reviewer="user" -c tui.fullscreen_transcript=false'))
-        .toBe('readOnlyAsk')
+    it('reads a Buddy launched in full mode back as full, never as an older Buddy\'s mode (task #2832)', () => {
+      expect(permissionModeFromArgv('codex', 'codex --dangerously-bypass-approvals-and-sandbox -c tui.fullscreen_transcript=false')).toBe('full')
+      expect(permissionModeFromArgv('claude', 'claude --dangerously-skip-permissions')).toBe('full')
       expect(permissionModeFromArgv('codex', 'codex --sandbox read-only')).toBe('readOnly')
     })
 
