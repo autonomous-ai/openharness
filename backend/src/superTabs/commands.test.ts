@@ -5487,7 +5487,7 @@ describe('agent.rename (renaming a harness renames its agent, task #2912)', () =
   // Security review 2 of #3015: an agent's name passes every rule a person's does, and tells nobody what they cannot read.
   it('refuses the Swarm\'s own voices, a web address or link, and a blank made of Braille (security review 2)', () => {
     const f = fixture(), agentId = f.add('mine')
-    for (const name of ['System', 'Harness', 'Admin', 'Everyone', 'You', 'Someone 2', 'Tester', 'www.evil.example', '[Approve](https://ev.il)',
+    for (const name of ['System', 'Harness', 'Admin', 'Everyone', 'You', 'Someone 2', 'Tester', 'www.evil.example', '[Approve](https://ev.il)', '[Approve](//ev.il)',
       'Lead\u2800', '\u2800', '\u2800\u2800\u2800']) {
       expect(() => f.run(rename(agentId, name)), name).toThrow(expect.objectContaining({ code: expect.stringMatching(/^(INVALID_AGENT_NAME|AGENT_NAME_ROLE|INVALID_NAME|NAME_RESERVED)$/) }))
     }
@@ -5562,11 +5562,14 @@ describe('agent.rename (renaming a harness renames its agent, task #2912)', () =
   // The row Add agent writes in the project chat names the agent as readers see it, never the name the rules refused.
   it('agent.add in the project chat writes no refused name into its row', () => {
     const f = fixture()
-    for (const [i, name] of ['[Approve](https://ev.il)', 'System'].entries()) {
-      const row = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: `p${i}`, name, configuration: config, lead: false },
-        owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).messages.find(m => m.text.includes('to the project'))!.text
-      expect(row, name).toContain('added')
+    for (const [i, name] of ['[Approve](https://ev.il)', '[Approve](//ev.il)', 'System'].entries()) {
+      const effects = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: `p${i}`, name, configuration: config, lead: false },
+        owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } })
+      const row = effects.messages.find(m => m.text.includes('to the project'))!.text
       expect(row, name).not.toContain(name)
+      // Both halves name the agent as its readers' lists show it: its member name, not "Agent".
+      const shown = visibleState(f.state, owner).agents.find(a => a.id === effects.result.agentId)!.displayName!
+      expect(row, name).toBe(`owner added "${shown}" to the project. The project chat holds only its coordinator among agents, so "${shown}" works in its tasks.`)
     }
   })
 
