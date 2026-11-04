@@ -10,13 +10,14 @@ import 'section_heading.dart';
 /// Notifications or in a conversation: Slack's red number, white on the
 /// danger fill (5.4:1 or more in both themes, app_theme.dart dangerFill).
 class SuperTabCountBadge extends StatelessWidget {
-  const SuperTabCountBadge(this.count, {super.key});
+  const SuperTabCountBadge(this.count, {super.key, this.tooltip});
   final int count;
+  final String? tooltip;
 
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    return Container(
+    final badge = Container(
       constraints: const BoxConstraints(minWidth: 18),
       padding: const EdgeInsets.symmetric(
         horizontal: grid.AppDesktop.badgeInset,
@@ -32,6 +33,7 @@ class SuperTabCountBadge extends StatelessWidget {
             .copyWith(fontWeight: grid.AppFont.semibold),
       ),
     );
+    return tooltip == null ? badge : Tooltip(message: tooltip!, child: badge);
   }
 }
 
@@ -51,6 +53,7 @@ class SuperTabBuddyRow extends StatelessWidget {
     this.selected = false,
     this.unread = false,
     this.badge = 0,
+    this.badgeTooltip,
     this.note,
     this.detail,
     this.status,
@@ -66,6 +69,7 @@ class SuperTabBuddyRow extends StatelessWidget {
 
   /// Tags of the reader in this chat: the red number.
   final int badge;
+  final String? badgeTooltip;
   final VoidCallback? onTap;
 
   /// What hovering says: "Your Buddy · openharness".
@@ -203,7 +207,7 @@ class SuperTabBuddyRow extends StatelessWidget {
                       child: Semantics(
                         label: badge == 1 ? '1 mention' : '$badge mentions',
                         excludeSemantics: true,
-                        child: SuperTabCountBadge(badge),
+                        child: SuperTabCountBadge(badge, tooltip: badgeTooltip),
                       ),
                     ),
                   SizedBox(

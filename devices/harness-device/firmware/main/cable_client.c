@@ -1049,7 +1049,10 @@ static void handle_supertab_notice(const cJSON *p)
     const cJSON *at = cJSON_GetObjectItemCaseSensitive(p, "at");
     const double secs = cJSON_IsNumber(at) && at->valuedouble > 0 ? at->valuedouble : 0;
     ht_chat_kind_t kind = !strcmp(chat, "pm") ? HT_CHAT_PM : !strcmp(chat, "buddy") ? HT_CHAT_BUDDY : HT_CHAT_LEAD;
-    if (ui_supertab_notice(tab, lead, kind, chat_id, text,
+    // A reply inside a thread names its root (#2463): read on the face only in that thread. A root too long to hold is
+    // passed as it is: no face's root matches it, so it beeps, never read as the main chat's.
+    const char *thread = str_of(p, "thread");
+    if (ui_supertab_notice(tab, lead, kind, chat_id, thread ? thread : "", text,
                            secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs))
         audio_notify_done();
 }
