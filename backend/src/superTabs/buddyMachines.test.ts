@@ -343,18 +343,33 @@ describe('a Buddy-only machine after its reviews', () => {
     expect(rows.roster.find(r => 'agent' in r && r.agent.id === lead)).toMatchObject({ joinSwarm: true })
   })
 
-  it('follows the Swarm\'s limit on machines, where Team accounts\' entries do not count', () => {
-    const fill = (f: Swarm, entries: number, team: number) => {
-      f.state.machines!.push(...Array.from({ length: entries - f.state.machines!.length }, (_, i) => ({ ...f.state.machines![0]!, machineId: `other-${i}`,
-        ...i < team ? { hostMachineId: 'owner-mac' } : {} })))
+  it('counts a Buddy-only machine in its person\'s 20, never in another person\'s (#2637)', () => {
+    /** [userId]'s [real] machines and as many Team accounts' entries. */
+    const fill = (f: Swarm, userId: string, real: number) => {
+      f.state.machines!.push(...Array.from({ length: real }, (_, i) => [{ ...f.state.machines![0]!, machineId: `${userId}-${i}`, contributorId: userId },
+        { ...f.state.machines![0]!, machineId: `${userId}-team-${i}`, contributorId: userId, hostMachineId: `${userId}-${i}` }]).flat())
     }
     const room = setup()
-    fill(room, 32, 15)
+    fill(room, 'peer', 19)
+    fill(room, 'other', 30)
     addOwn(room, room.app.projectId)
     expect(buddyOnly(room)).toBeDefined()
     const full = setup()
-    fill(full, 32, 0)
-    expect(() => addOwn(full, full.app.projectId)).toThrow('This Swarm is at its limit of 32 machines. One has to be removed before another can be added.')
+    fill(full, 'peer', 20)
+    expect(() => addOwn(full, full.app.projectId)).toThrow('You have 20 machines in this Swarm, the most one person can add. Remove one before adding another.')
+  })
+
+  it('makes a Buddy-only record an ordinary machine for its owner at 20, since it is already counted (#2637)', () => {
+    const f = setup()
+    const added = f.run({ type: 'buddy.create', projectId: f.app.projectId, machineId: 'owner-laptop', engine: 'claude', setup: { ...setupOf, name: 'Owner Laptop' } }, owner)
+    f.run({ type: 'agent.started', startId: added.result.startId as string, harnessId: 'owner-buddy', configuration }, owner)
+    f.run({ type: 'agent.startSettled', startId: added.result.startId as string, warning: null }, owner)
+    f.state.machines!.push(...Array.from({ length: 18 }, (_, i) => ({ ...f.state.machines![0]!, machineId: `owner-${i}` })))
+    expect(f.state.machines!.filter(m => m.contributorId === 'owner')).toHaveLength(20)
+    f.run({ type: 'machine.contribute', machineId: 'owner-laptop', name: 'Owner Laptop', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 2,
+      ifMissing: true } as Command, owner, { contribution: own('owner') })
+    expect(buddyOnly(f, 'owner-laptop')).toMatchObject({ contributorId: 'owner' })
+    expect(buddyOnly(f, 'owner-laptop')).not.toHaveProperty('buddyOnly')
   })
 
   it('never lets a Mac\'s Team account join through it (review 2)', () => {

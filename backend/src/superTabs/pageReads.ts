@@ -341,9 +341,9 @@ interface NamingPart { root?: boolean; kind?: unknown; only?: unknown; to?: bool
  * (refreshReplies) or deletes one, so a summary holds what its rows do: two replies at once write the same document, and one
  * of their transactions runs again.
  */
-export async function refreshThreads(tx: Transaction, tabId: string, conversationId: string, roots: string[]): Promise<void> {
-  if (!roots.length) return
-  const { parts, mentions } = await threadFacet(tx, tabId, conversationId, roots)
+export async function refreshThreads(tx: Transaction, tabId: string, conversationId: string, roots: string[]): Promise<ThreadFacet> {
+  if (!roots.length) return { parts: [], mentions: [] }
+  const facet = await threadFacet(tx, tabId, conversationId, roots), { parts, mentions } = facet
   const updatedAt = { $date: new Date().toISOString() }
   const updates = roots.flatMap(root => {
     const own = parts.filter(p => p._id.thread === root)
@@ -356,17 +356,26 @@ export async function refreshThreads(tx: Transaction, tabId: string, conversatio
   // A thread whose last reply was deleted (messageEdits.ts) has no summary left.
   const empty = roots.filter(root => !parts.some(p => p._id.thread === root && !p._id.root))
   if (empty.length) await tx.$runCommandRaw({ delete: 'SuperTabThread', deletes: [{ q: { _id: { $in: empty }, tabId, conversationId }, limit: 0 }] as unknown as Prisma.InputJsonArray })
+  return facet
 }
 
-/** Refreshes the summaries of the threads that `rows`, just inserted, reply in (refreshThreads). A row that is its own
- *  thread's root, or has none (written before threads), changes no summary. */
+/** Refreshes the summaries of the threads that `rows`, just inserted, reply in (refreshThreads), and answers each thread's facet
+ *  by its root, which the same transaction's Activity reads instead of the thread's rows (activity.ts writeReplyActivity). A row
+ *  that is its own thread's root, or has none (written before threads), changes no summary. */
 export async function refreshReplies(tx: Transaction, tabId: string,
-  rows: ReadonlyArray<{ id: string; conversationId: string; thread?: string | null }>): Promise<void> {
+  rows: ReadonlyArray<{ id: string; conversationId: string; thread?: string | null }>): Promise<Map<string, ThreadFacet>> {
   const roots = new Map<string, Set<string>>()
   for (const row of rows) {
     if (row.thread && row.thread !== row.id) roots.set(row.conversationId, (roots.get(row.conversationId) ?? new Set()).add(row.thread))
   }
-  for (const [conversationId, threads] of roots) await refreshThreads(tx, tabId, conversationId, [...threads])
+  const facets = new Map<string, ThreadFacet>()
+  for (const [conversationId, threads] of roots) {
+    const facet = await refreshThreads(tx, tabId, conversationId, [...threads])
+    for (const root of threads) {
+      facets.set(root, { parts: facet.parts.filter(p => p._id.thread === root), mentions: facet.mentions.filter(m => m._id.thread === root) })
+    }
+  }
+  return facets
 }
 
 /** How long this process trusts what it last read of a Swarm's backfill marker. */

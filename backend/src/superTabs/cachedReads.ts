@@ -7,7 +7,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { stableId, type AgentStart } from './model.js'
 import { CacheView } from './cache.js'
-import { baseRule, dormantAgentRule, dormantProjectRule, dormantRule, FEED_MAIN_KINDS, feedRule, finishedStartsRule, groupRule, lightDormantAgentRule, machineFeedRule,
+import { accessRule, baseRule, dormantAgentRule, dormantProjectRule, dormantRule, FEED_MAIN_KINDS, feedRule, finishedStartsRule, groupRule, lightDormantAgentRule, machineFeedRule,
   machinesRule } from './cachePatch.js'
 import * as store from './parts/index.js'
 import type { GroupData, Part, PartKind, SwarmParts, SwarmDelta } from './parts/index.js'
@@ -41,6 +41,11 @@ const base = (db: Db, view: CacheView, tabId: string) => Promise.all([
   view.get(tabId, 'parts', 'main', () => retryTransient(() => retryStaleIndex(() => db.$transaction(tx => store.loadReadBase(tx, tabId)))), baseRule),
   readMachines(db, view, tabId),
 ])
+
+/** The head, members and agents of a Swarm (parts/load.ts loadAccess), held at its main stamp and patched from those kinds
+ *  alone (cachePatch.ts accessRule): what a one-group read checks its reader against (read/service.ts oneGroup, task #2875). */
+export const readAccess = (db: Db, view: CacheView, tabId: string): Promise<SwarmParts> =>
+  view.get(tabId, 'access', 'main', () => retryTransient(() => retryStaleIndex(() => db.$transaction(tx => store.loadAccess(tx, tabId)))), accessRule)
 
 /** The parts loadActive gives for `named`, as one Swarm read (design section 3.1). */
 export async function readParts(db: Db, view: CacheView, tabId: string, named: ReadNamed = {}): Promise<SwarmParts> {

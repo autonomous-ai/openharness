@@ -121,6 +121,40 @@ export function loadReadBase(tx: Transaction, tabId: string): Promise<SwarmParts
     start: { ...live, finishedAt: null }, progress: live })
 }
 
+/** What a read check needs of a Swarm, and no more (read/service.ts oneGroup, task #2875): its head, members and agents. The
+ *  read cache holds it as `access` and patches it from those kinds alone (cachePatch.ts accessRule). */
+export function loadAccess(tx: Transaction, tabId: string): Promise<SwarmParts> {
+  const live = { deleted: false }
+  return assemble(tx, tabId, { member: live, agent: live, group: [], machine: null, start: null, progress: null })
+}
+
+/** One live group by key in one indexed read: whole, or without its data when `held` is it at the same version and write time,
+ *  and then `held` itself (read/service.ts oneGroup keeps what it read, task #2875). Every write moves a part's version, so a read
+ *  never serves an older group. Null when there is no live group by that key. */
+export async function loadGroupUnless(tx: Transaction, tabId: string, key: string, held?: Part<GroupData>): Promise<Part<GroupData> | null> {
+  // The version and the time of its write: a key made again after its tombstone was purged starts at version 1 again
+  // (security review 1 of #3002).
+  const same = held && { $and: [{ $eq: ['$version', held.version] }, { $eq: ['$changedAt', { $date: new Date(held.changedAt).toISOString() }] }] }
+  const [row] = await groupsBy(tx, 'key', [{ $match: { tabId, deleted: false, key } },
+    ...same ? [{ $set: { data: { $cond: [same, '$$REMOVE', '$data'] } } }] : []] as Prisma.InputJsonValue[])
+  if (!row) return null
+  if (held && row.data === undefined && Number(row.version) === held.version && ms(row.changedAt) === held.changedAt) return held
+  return toPart<GroupData>('group', rawGroupRow(row))
+}
+
+/** These live machine parts by key, in one read by `_id`, with only what says which account an agent there runs as
+ *  (projects.ts teamAccountPool): its host Mac and its session kind. Its lists read empty. What a one-group read checks an
+ *  agent's host against (read/service.ts oneGroup), never a whole machine row with its readings. */
+export async function loadMachineAccounts(tx: Transaction, tabId: string, keys: string[]): Promise<Part<MachineData>[]> {
+  if (!keys.length) return []
+  const none = { $literal: [] }
+  const rows = await tx.swarmMachine.aggregateRaw({ pipeline: [{ $match: { _id: { $in: [...new Set(keys)].map(key => partId(tabId, key)) }, tabId, deleted: false } },
+    { $project: { tabId: 1, key: 1, version: 1, changedAt: 1, deleted: 1, ordinal: 1, 'data.machineId': 1, 'data.contribution.machineId': 1,
+      'data.contribution.hostMachineId': 1, 'data.contribution.observation.sessionKind': 1, 'data.reservations': none, 'data.released': none,
+      'data.closingSessions': none, 'data.cleanups': none } }] }) as unknown as Array<Record<string, unknown>>
+  return rows.map(row => toPart<MachineData>('machine', rawPartRow(row)))
+}
+
 /** A Swarm's live finished starts (they expire 7 days after finishing, sweeps.ts). A plain match: Prisma's `not: null` on
  *  Mongo is an $expr no index bounds. */
 export async function loadFinishedStarts(tx: Transaction, tabId: string): Promise<Part<AgentStart>[]> {

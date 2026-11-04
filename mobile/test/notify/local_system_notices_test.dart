@@ -71,7 +71,7 @@ void main() {
   });
 
   group('a Swarm notice', () {
-    const target = (swarmId: 'tab-1', conversationId: 'g9', messageId: null, decisionId: null);
+    const target = (swarmId: 'tab-1', conversationId: 'g9', messageId: null, decisionId: null, threadId: null);
     const swarm = (
       key: 'decision:d1',
       title: 'River asks you',
@@ -135,6 +135,11 @@ void main() {
       );
       await notices.requestPermission();
       expect(notices.openedSwarm.value, target);
+    });
+
+    test('a tap on a thread notice brings back its thread', () async {
+      const inThread = (swarmId: 'tab-1', conversationId: 'g9', messageId: 'reply-r2', decisionId: null, threadId: 'root-1');
+      expect(decodeSwarmPayload(encodeSwarmPayload(inThread)), inThread);
     });
 
     test('taking it down cancels its own id', () async {
