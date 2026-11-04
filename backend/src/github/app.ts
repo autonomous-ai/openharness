@@ -346,9 +346,13 @@ export class GitHubApp {
       if (answer.status === 200 && listed && typeof listed === 'object' && !Array.isArray(listed)) {
         permissions = Object.fromEntries(Object.entries(listed as Record<string, unknown>)
           .filter((entry): entry is [string, 'read' | 'write'] => entry[1] === 'read' || entry[1] === 'write'))
+      } else {
+        // Said every time, as agents then lose workflow pushes and issue writes with nothing else to show why (review 2 of #2956).
+        console.warn(`[github] installation ${installationId}'s permissions unreadable (HTTP ${answer.status}); agent tokens ask for today's set alone`)
       }
     } catch (error) {
       if (!(error instanceof GitHubAppError) || error.code === 'GITHUB_APP_MISCONFIGURED') throw error
+      console.warn(`[github] installation ${installationId}'s permissions unreadable (${error.code}); agent tokens ask for today's set alone`)
       // GitHub did not answer: today's set, asked again next time.
       return null
     }

@@ -363,7 +363,7 @@ function buddyNotice(state: SuperTabState, start: AgentStart): MessageDraft[] {
 }
 
 /** A Product Manager's start that stopped trying ([text], leadStart.ts), said once as a system row of its project's
- *  conversation, written under the person who asked for it as a machine's removal is (machines.ts removalEnded). Nothing while
+ *  conversation, written under the person who asked for it. Nothing while
  *  it still waits for a machine. */
 function leadNotice(state: SuperTabState, start: AgentStart, text: string | null): MessageDraft[] {
   const asker = start.request.leadFor!

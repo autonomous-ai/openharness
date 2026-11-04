@@ -955,8 +955,8 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
   it('hands a Buddy a claimed row without the machine it names (security review 2 of #2178)', async () => {
     const { f, agentId, proposal, pm } = await proposed()
     const answer = String((await pm('Taking it.', { replyTo: proposal })).result.messageId)
-    // A machine-leaving row's shape (machines.ts removalEnded), as if it were news: what reaches the Buddy names no machine.
-    await db.superTabMessage.update({ where: { id: answer }, data: { text: 'Studio Mac left the Swarm.', source: { kind: 'machine-left', machine: 'Studio Mac' } } })
+    // A machine-removed row's shape (commands.ts removeMachine), as if it were news: what reaches the Buddy names no machine.
+    await db.superTabMessage.update({ where: { id: answer }, data: { text: 'Studio Mac left the Swarm.', source: { kind: 'machine-removed', machine: 'Studio Mac' } } })
     const news = (await f.store.deliveries(peer, f.tab, agentId)).find(d => d.messageId === answer)!
     const claimed = await f.store.delivery(peer, f.tab, agentId, news.id, { type: 'claim', claimId: randomUUID() })
     expect(JSON.stringify(claimed.message)).not.toContain('Studio Mac')
