@@ -154,18 +154,22 @@ export const cancelReason = (group: Conversation): string => (group.assignment?.
 
 /** "PR #1875", as a Lead's cancel or a builder's result names a pull request without its link. */
 const PR_NUMBER = /\bPR #([1-9][0-9]{0,8})\b/gi
-/** A repository's name, or owner/name, as a result writes it next to "PR #N": "autonomous-harness PR #2716", "PR #12 in other/tool". */
+/** A repository's name, or owner/name, as a result writes it next to "PR #N": "from autonomous-harness PR #2716", "PR #12 in acme/tool". */
 const REPO_NAME = '([A-Za-z0-9](?:[\\w.-]*\\w)?(?:/[A-Za-z0-9](?:[\\w.-]*\\w)?)?)'
-const NAME_BEFORE = new RegExp(`(?:^|[\\s(])${REPO_NAME}\\s+$`), NAME_AFTER = new RegExp(`^\\s+(?:in|of)\\s+${REPO_NAME}`, 'i')
+const NAME_BEFORE = new RegExp(`(?:^|[\\s(])(from\\s+)?${REPO_NAME}\\s+$`, 'i'), NAME_AFTER = new RegExp(`^\\s+(?:in|of)\\s+${REPO_NAME}`, 'i')
 /** English compounds a result writes before "PR", which look like a repository's name and are none. */
 const COMPOUND = /^(?:follow-(?:up|on)|(?:re|co|pre|non|one)-\w+)$/i
 
-/** Whether [name] next to a "PR #N" names a repository other than the project's: owner/name, or a bare name shaped like a
- *  repository's (a `.`, `_` or `-` in it), never an ordinary word. */
-function otherRepository(name: string | undefined, repository: GitHubRepository | null): boolean {
+/** Whether [name] next to a "PR #N" plainly names a repository other than the project's. Dropping one of its own numbers
+ *  archives a group while that pull request is open (#558); reading another's as its own waits at most until that number
+ *  closes here or is not found. So "Desktop/CLI PR #12", "test-only PR #12" and "PR #12 in docs/plans" stay its own (review
+ *  of #2895): a name counts after "from" ("Ported from autonomous-harness PR #2716"), or as owner/name of the project's owner. */
+function otherRepository(name: string | undefined, from: boolean, repository: GitHubRepository | null): boolean {
   if (!name) return false
-  if (name.includes('/')) return name.toLowerCase() !== repository?.fullName.toLowerCase()
-  return /[._-]/.test(name) && !COMPOUND.test(name) && name.toLowerCase() !== repository?.name.toLowerCase()
+  const [owner, repo] = name.toLowerCase().split('/')
+  if (repo === undefined) return from && /^[a-z]/.test(owner!) && /[._-]/.test(owner!) && !COMPOUND.test(owner!) && owner !== repository?.name.toLowerCase()
+  if (name.toLowerCase() === repository?.fullName.toLowerCase()) return false
+  return from || owner === repository?.owner.toLowerCase()
 }
 
 /** How a pull request an archive waits on ended: merged, closed, or missing, a number GitHub knows no pull request by in
@@ -183,8 +187,11 @@ export function archiveWaitsFor(group: Conversation, repositoryUrl: string | nul
   appendPullRequestUrls(named, texts)
   const repository = githubRepository(repositoryUrl)
   const numbers = texts.flatMap(text => [...(text ?? '').matchAll(PR_NUMBER)]
-    .filter(match => !otherRepository(NAME_BEFORE.exec(text!.slice(0, match.index))?.[1], repository)
-      && !otherRepository(NAME_AFTER.exec(text!.slice(match.index + match[0].length))?.[1], repository))
+    .filter(match => {
+      const before = NAME_BEFORE.exec(text!.slice(0, match.index))
+      return !otherRepository(before?.[2], !!before?.[1], repository)
+        && !otherRepository(NAME_AFTER.exec(text!.slice(match.index + match[0].length))?.[1], false, repository)
+    })
     .map(match => match[1]!))
   if (!numbers.length) return named.pullRequestUrls!
   if (!repository) return null
