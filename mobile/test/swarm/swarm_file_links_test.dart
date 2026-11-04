@@ -387,14 +387,28 @@ void main() {
       );
     }
 
-    Future<void> settle(WidgetTester tester) async {
-      for (var i = 0; i < 30; i++) {
+    /// Lets the picture's fetch run, on real time and frames, until [done]
+    /// holds: at least 30 rounds (what a fetch that should not happen gets to
+    /// show itself), and on a slow runner as many as the fetch takes. A fixed
+    /// wait let the next read start under a fetch still on its way, and the
+    /// store's clean-up then waited on it inside runAsync for ever (batch
+    /// #2935). Fails, rather than hangs, after 15 seconds.
+    Future<void> settle(WidgetTester tester, bool Function() done) async {
+      for (var i = 0; !(i >= 30 && done()); i++) {
+        if (i >= 1500) fail('the picture never settled');
         await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 10)),
         );
         await tester.pump();
       }
     }
+
+    /// The picture is in: its file fetched and kept (an [Image] in place of
+    /// the skeleton the preview holds while it is on its way).
+    bool shown() => find
+        .descendant(of: preview, matching: find.byType(Image))
+        .evaluate()
+        .isNotEmpty;
 
     Future<void> closed(WidgetTester tester) async {
       await tester.pumpWidget(const SizedBox());
@@ -413,7 +427,7 @@ void main() {
         tester,
         _row('p1', name: 'p.png', mime: 'image/png', expiresAt: _ms - 1),
       );
-      await settle(tester);
+      await settle(tester, shown);
       expect(backend.reads, hasLength(1));
       expect(storage.asked.map((a) => a.url), [_signed('p1', sig: 'fresh')]);
       expect(preview, findsOneWidget);
@@ -435,7 +449,10 @@ void main() {
         tester,
         _row('p1', name: 'p.png', mime: 'image/png', expiresAt: _ms + 600000),
       );
-      await settle(tester);
+      await settle(
+        tester,
+        () => storage.asked.length == 2 && chipText.evaluate().isNotEmpty,
+      );
       expect(storage.asked.map((a) => a.url), [
         _signed('p1'),
         _signed('p1', sig: 'two'),
@@ -458,7 +475,7 @@ void main() {
         tester,
         _row('p1', name: 'p.png', mime: 'image/png', expiresAt: _ms + 600000),
       );
-      await settle(tester);
+      await settle(tester, shown);
       expect(preview, findsOneWidget);
       // The next read hands a new link to the same file.
       await show(
@@ -471,7 +488,7 @@ void main() {
           expiresAt: _ms + 900000,
         ),
       );
-      await settle(tester);
+      await settle(tester, shown);
       expect(storage.asked.map((a) => a.url), [_signed('p1')]);
       expect(preview, findsOneWidget);
       await closed(tester);
@@ -486,7 +503,7 @@ void main() {
         ..._row('p1', name: 'p.png', mime: 'image/png', unsigned: true),
         'unlinked': true,
       });
-      await settle(tester);
+      await settle(tester, () => storage.asked.isNotEmpty && shown());
       expect(backend.reads, hasLength(1));
       expect(storage.asked.map((a) => a.url), [_signed('p1')]);
       await closed(tester);
