@@ -154,8 +154,9 @@ Future<SuperTabController> _show(
   List<String>? opened,
   List<String>? openedProposals,
   Set<String> asking = const {},
+  Size size = const Size(1400, 900),
 }) async {
-  await tester.binding.setSurfaceSize(const Size(1400, 900));
+  await tester.binding.setSurfaceSize(size);
   addTearDown(() => tester.binding.setSurfaceSize(null));
   final c = server.controller();
   await c.refresh();
@@ -234,6 +235,43 @@ void main() {
         reason: label,
       );
     }
+    await _close(tester, c);
+  });
+
+  testWidgets('each column is a 280-wide panel of card material, rounded 12, '
+      'with no shadow', (tester) async {
+    final c = await _show(tester, tasksServer());
+    for (final name in [
+      'proposals',
+      'nextUp',
+      'working',
+      'waiting',
+      'shipped',
+    ]) {
+      expect(tester.getSize(_column(name)).width, 280, reason: name);
+      final panel = tester.widget<DecoratedBox>(_column(name));
+      final decoration = panel.decoration as BoxDecoration;
+      expect(decoration.color, grid.AppCard.base, reason: name);
+      expect(
+        decoration.borderRadius,
+        BorderRadius.circular(grid.AppCard.radius),
+      );
+      expect(decoration.border, Border.all(color: grid.AppCard.hair));
+      expect(decoration.boxShadow, isNull, reason: 'shadows are for floating');
+    }
+    await _close(tester, c);
+  });
+
+  testWidgets('columns that do not fit scroll sideways', (tester) async {
+    final c = await _show(tester, tasksServer(), size: const Size(900, 800));
+    expect(tester.getTopLeft(_column('shipped')).dx, greaterThan(900));
+    await tester.drag(
+      find.byKey(const ValueKey('super-tasks-board')),
+      const Offset(-800, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.getTopRight(_column('shipped')).dx, lessThanOrEqualTo(900));
+    expect(tester.takeException(), isNull);
     await _close(tester, c);
   });
 
