@@ -1658,13 +1658,11 @@ fn opened(path: PathBuf, folder: bool, launcher: Option<&str>, spawn: &mut dyn F
 
 /// [program] started on its own (its own session, nothing of this terminal's), not waited for.
 fn launch(program: &str, args: &[String]) -> std::io::Result<()> {
-    use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     let mut words = program.split_whitespace();
     let mut c = Command::new(words.next().unwrap_or(program));
     c.args(words).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-    // SAFETY: setsid only, between fork and exec.
-    unsafe { c.pre_exec(|| { libc::setsid(); Ok(()) }); }
+    crate::sys::detach(&mut c);
     c.spawn().map(|_| ())
 }
 

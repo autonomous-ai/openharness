@@ -46,9 +46,8 @@ pub fn resolve(name: &str) -> Result<String, String> {
 
 /// tmux's checkshell: a full path to something that runs, and not tmux (hn) itself.
 fn suitable_shell(shell: &str) -> bool {
-    let base = shell.rsplit('/').next().unwrap_or(shell);
-    let Ok(c) = std::ffi::CString::new(shell) else { return false };
-    shell.starts_with('/') && !matches!(base, "hn" | "tmux") && unsafe { libc::access(c.as_ptr(), libc::X_OK) } == 0
+    let path = std::path::Path::new(shell);
+    path.is_absolute() && !matches!(crate::sys::shell_label(shell), "hn" | "tmux") && crate::sys::executable(path)
 }
 
 /// A hook (set-hook's, show-hooks'), not an option.
@@ -216,7 +215,7 @@ pub fn tmux_defaults() -> &'static BTreeMap<String, String> {
 
 /// tmux's default-shell: $SHELL when it is a suitable shell, else /bin/sh (_PATH_BSHELL).
 fn default_shell(env: Option<&str>) -> String {
-    env.filter(|s| suitable_shell(s)).unwrap_or("/bin/sh").to_string()
+    env.filter(|s| suitable_shell(s)).map(str::to_string).unwrap_or_else(crate::sys::sh)
 }
 
 /// Explicit user styles win; default surfaces follow the terminal's current theme. Only the

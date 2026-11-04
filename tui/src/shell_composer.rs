@@ -508,7 +508,6 @@ impl Draft {
 }
 
 pub fn run(args: &[String]) -> std::io::Result<i32> {
-    use std::os::unix::process::{CommandExt, ExitStatusExt};
     let Some(agent) = args.first() else {
         return Err(std::io::Error::other("Choose an agent."));
     };
@@ -535,15 +534,15 @@ pub fn run(args: &[String]) -> std::io::Result<i32> {
         ));
     }
     let args: Vec<String> = serde_json::from_value(plan["args"].clone())?;
-    use std::os::unix::fs::PermissionsExt;
     let binary = std::env::var_os("PATH").and_then(|path| {
         std::env::split_paths(&path)
-            .map(|p| p.join(command(&launch.engine)))
-            .find(|p| {
-                p.is_file()
-                    && p.metadata()
-                        .is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
+            .flat_map(|p| {
+                let bare = p.join(command(&launch.engine));
+                // On Windows a program on PATH has an extension. `harness shell-launch` starts an npm `.cmd`.
+                let windows = cfg!(windows).then(|| bare.with_extension("exe"));
+                [(!cfg!(windows)).then_some(bare), windows].into_iter().flatten()
             })
+            .find(|p| crate::sys::executable(p))
     });
     let mut child = if let Some(binary) = binary.filter(|_| plan["grid"].is_null()) {
         // Installed native agents need no Node process, shell wrapper, or setup probe.
@@ -561,8 +560,14 @@ pub fn run(args: &[String]) -> std::io::Result<i32> {
         child
     };
     child.args(args).current_dir(cwd);
-    // The agent owns SIGINT; the waiting helper must not abandon its foreground
-    // child or return a broken terminal to Readline/ZLE.
+    wait_as_helper(child)
+}
+
+/// The agent owns SIGINT; the waiting helper must not abandon its foreground
+/// child or return a broken terminal to Readline/ZLE.
+#[cfg(unix)]
+fn wait_as_helper(mut child: std::process::Command) -> std::io::Result<i32> {
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
     let old = unsafe { libc::signal(libc::SIGINT, libc::SIG_IGN) };
     unsafe {
         child.pre_exec(|| {
@@ -575,6 +580,18 @@ pub fn run(args: &[String]) -> std::io::Result<i32> {
         libc::signal(libc::SIGINT, old);
     }
     result.map(|s| s.code().unwrap_or(128 + s.signal().unwrap_or(1)))
+}
+
+/// A console's Ctrl-C reaches the agent and this helper alike; the helper stays to hand its exit code on.
+#[cfg(windows)]
+fn wait_as_helper(mut child: std::process::Command) -> std::io::Result<i32> {
+    use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
+    // SAFETY: a null handler with TRUE: this process ignores Ctrl-C until told otherwise.
+    unsafe { SetConsoleCtrlHandler(None, 1); }
+    let result = child.status();
+    // SAFETY: as above, undone.
+    unsafe { SetConsoleCtrlHandler(None, 0); }
+    result.map(|s| s.code().unwrap_or(1))
 }
 
 #[cfg(test)]

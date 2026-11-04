@@ -559,12 +559,7 @@ impl Editor {
 }
 
 /// Whether this process may write [path] (access(2), as the file's permissions and owner say).
-fn writable(path: &Path) -> bool {
-    use std::os::unix::ffi::OsStrExt;
-    let Ok(c) = std::ffi::CString::new(path.as_os_str().as_bytes()) else { return false };
-    // SAFETY: a valid C string, only read.
-    unsafe { libc::access(c.as_ptr(), libc::W_OK) == 0 }
-}
+fn writable(path: &Path) -> bool { crate::sys::writable(path) }
 
 /// A grapheme's columns at column [col]: a tab to the next stop.
 fn width(g: &str, col: usize) -> usize { if g == "\t" { TAB - col % TAB } else { g.width() } }
@@ -661,6 +656,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(d);
     }
 
+    #[cfg(unix)]
     #[test]
     fn saving_keeps_crlf_the_bom_no_final_newline_and_permissions() {
         use std::os::unix::fs::PermissionsExt;
@@ -769,6 +765,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(d);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_read_only_file_is_shown_not_changed() {
         use std::os::unix::fs::PermissionsExt;

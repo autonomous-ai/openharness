@@ -386,7 +386,7 @@ fn saved_agent(saved: &Value) -> What {
     }
 }
 fn remember(form: &Form) {
-    use std::{io::Write, os::unix::fs::OpenOptionsExt};
+    use std::io::Write;
     let path = defaults_path();
     let Some(parent) = path.parent() else { return };
     let mut saved = defaults();
@@ -410,11 +410,7 @@ fn remember(form: &Form) {
     let tmp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
     let write = || -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&tmp)?;
+        let mut f = crate::sys::private_file(std::fs::OpenOptions::new().write(true).create_new(true)).open(&tmp)?;
         f.write_all(saved.to_string().as_bytes())?;
         std::fs::rename(&tmp, &path)
     };

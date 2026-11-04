@@ -694,15 +694,14 @@ fn run_queue(app: &mut App, mut queue: Queue) {
             if let Some(w) = wait { let _ = w.await; return Outcome::default() }
             if delay > 0.0 { tokio::time::sleep(std::time::Duration::from_secs_f64(delay)).await }
             let Some(command) = command else { return Outcome::default() };
-            let mut c = tokio::process::Command::new("/bin/sh");
+            let mut c = tokio::process::Command::new(crate::sys::sh());
             // tmux's job: the shell's output read, its errors to /dev/null.
             c.arg("-c").arg(&command).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
             crate::ipc::set_job_env(&mut c, &jenv);
             if let Some(d) = cwd { c.current_dir(d); }
             match c.output().await {
                 Ok(o) => {
-                    use std::os::unix::process::ExitStatusExt;
-                    let (code, signal) = match (o.status.code(), o.status.signal()) { (Some(c), _) => (c, None), (None, Some(s)) => (128 + s, Some(s)), _ => (0, None) };
+                    let (code, signal) = match (o.status.code(), crate::sys::exit_signal(&o.status)) { (Some(c), _) => (c, None), (None, Some(s)) => (128 + s, Some(s)), _ => (0, None) };
                     Outcome { code, signal, out: String::from_utf8_lossy(&o.stdout).to_string(), failed: None }
                 }
                 Err(e) => Outcome { code: 127, signal: None, out: String::new(), failed: Some(format!("failed to run command: {e}")) },
@@ -2822,15 +2821,19 @@ fn run_words_in(app: &mut App, words: &[String]) {
         "server-access" => {
             if flag(words, "-l") {
                 let user = crate::format::text(app, "#{user}", None);
-                let lines = if unsafe { libc::getuid() } == 0 { Vec::new() } else { vec![format!("{user} (W)")] };
+                let lines = if cfg!(unix) && crate::sys::uid() == 0 { Vec::new() } else { vec![format!("{user} (W)")] };
                 return app.print("server-access", lines);
             }
             let Some(user) = positional(words).first().cloned() else { return app.error("missing user argument") };
             let user = expand(app, &user);
-            let pw = std::ffi::CString::new(user.as_str()).ok().map(|n| unsafe { libc::getpwnam(n.as_ptr()) }).unwrap_or(std::ptr::null_mut());
-            if pw.is_null() { return app.error(format!("unknown user: {user}")) }
-            let uid = unsafe { (*pw).pw_uid };
-            if uid == 0 || uid == unsafe { libc::getuid() } { return app.error(format!("{user} owns the server, can't change access")) }
+            #[cfg(windows)]
+            let _ = user;
+            #[cfg(unix)] {
+                let pw = std::ffi::CString::new(user.as_str()).ok().map(|n| unsafe { libc::getpwnam(n.as_ptr()) }).unwrap_or(std::ptr::null_mut());
+                if pw.is_null() { return app.error(format!("unknown user: {user}")) }
+                let uid = unsafe { (*pw).pw_uid };
+                if uid == 0 || uid == unsafe { libc::getuid() } { return app.error(format!("{user} owns the server, can't change access")) }
+            }
             if flag(words, "-a") && flag(words, "-d") { return app.error("-a and -d cannot be used together") }
             if flag(words, "-r") && flag(words, "-w") { return app.error("-r and -w cannot be used together") }
             app.error("server access is limited to its owner");

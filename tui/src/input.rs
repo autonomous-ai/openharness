@@ -2655,7 +2655,7 @@ pub fn mode_key(app: &mut App, pane: u64, chord: &keys::Chord) -> bool {
 /// A copied text to a shell command's stdin (copy-pipe, copy-command), not waited for.
 pub fn pipe_to(cmd: &str, text: &str) {
     use std::io::Write;
-    let mut c = std::process::Command::new("/bin/sh");
+    let mut c = std::process::Command::new(crate::sys::sh());
     c.arg("-c").arg(cmd).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     c.envs(crate::ipc::job_env());
     if let Ok(mut child) = c.spawn() {
