@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:flutter/widgets.dart';
+
 import 'activity.dart';
 import 'controller.dart';
 import 'model.dart';
@@ -110,14 +112,24 @@ class SuperTabReplyNotices {
   }
 
   /// Whether the reader is reading where [reply] is: its thread's pane on
-  /// screen, or for a reply also sent to the chat, that chat.
+  /// screen in a window they are at, or for a reply also sent to the chat,
+  /// that chat.
   bool _beingRead(SuperTabReplyRow reply) {
     if (controller.selectedId != reply.conversationId) return false;
     return switch (reply.threadId) {
       final root? =>
-        controller.threadOnScreen == root && controller.threadPaneOnScreen,
+        controller.threadOnScreen == root &&
+            controller.threadPaneOnScreen &&
+            _inFront,
       null => SuperTabChatNotices.of(controller).openChatRead,
     };
+  }
+
+  /// The person is at this window: not away, and the app in front.
+  bool get _inFront {
+    final state = WidgetsBinding.instance.lifecycleState;
+    return !controller.away &&
+        (state == null || state == AppLifecycleState.resumed);
   }
 
   void _dispose() {
