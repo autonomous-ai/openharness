@@ -120,16 +120,6 @@ class SuperTabActivity extends ChangeNotifier {
     ];
   }
 
-  /// A tag from a server that does not say where it is: it counts until
-  /// answered, past any read mark. Not `1 << 52`: a shift is 32 bits on the web.
-  static const _unknown = 9007199254740991;
-
-  /// The tags that are not read past (the number clears by reading). They are
-  /// bold in Mentions but never counted: a tag asks for nothing.
-  Iterable<SuperTabMention> get _tags {
-    return mentions.waiting.where(mentionUnread);
-  }
-
   /// The tasks whose agent asked the reader by name, newest chat first. Only
   /// once the decisions are loaded: that list says which of them is already
   /// a decision, and a task with one must not count twice.
@@ -172,14 +162,45 @@ class SuperTabActivity extends ChangeNotifier {
     return agent?.displayName ?? agent?.name ?? 'An agent';
   }
 
-  /// Whether [mention] shows bold: not read past, as its chat's red number
-  /// counts it (attention.dart).
-  bool mentionUnread(SuperTabMention mention) =>
-      mention.resolvedBy == null &&
-      (mention.messageSequence ?? _unknown) >
-          (mention.threadId == null
-              ? controller.readMark(mention.conversationId)
-              : controller.threadReadMark(mention.threadId!));
+  /// Whether [mention] shows bold: not read past (its thread's mark for a
+  /// reply that lives in a thread) and not marked read. The server resolves a
+  /// tag when the reader answers anyone, a Buddy's posts as them included, so
+  /// only `read` and `done` say they saw it (Diego, #2887). A tag from a
+  /// server that does not say where it is counts until resolved, and so does
+  /// one in a chat the snapshot does not hold (archived, quiet): no read mark
+  /// or Mark read can reach it here, so a resolved one would never clear.
+  bool mentionUnread(SuperTabMention mention) {
+    if (mention.resolvedBy case 'read' || 'done') return false;
+    final sequence = mention.messageSequence;
+    if (sequence == null ||
+        controller.snapshot?.conversation(mention.conversationId) == null) {
+      return mention.resolvedBy == null;
+    }
+    return sequence >
+        (mention.threadId == null
+            ? controller.readMark(mention.conversationId)
+            : controller.threadReadMark(mention.threadId!));
+  }
+
+  /// Marks [tags] read: the ones that still wait are marked done on the
+  /// server; the ones it resolved without the reader reading them move the
+  /// read mark to their message (the thread's for a thread reply).
+  void markMentionsRead(Iterable<SuperTabMention> tags) {
+    final waiting = <SuperTabMention>[];
+    for (final m in tags) {
+      if (m.resolvedBy == null) {
+        waiting.add(m);
+      } else if (mentionUnread(m)) {
+        final sequence = m.messageSequence!;
+        if (m.threadId case final root?) {
+          controller.markThreadRead(m.conversationId, root, sequence);
+        } else {
+          controller.markReadThrough(m.conversationId, sequence);
+        }
+      }
+    }
+    if (waiting.isNotEmpty) unawaited(mentions.doneAll(waiting));
+  }
 
   /// The followed threads with replies the reader has not read, newest reply
   /// first; one read during this visit stays, bold, until the view is left.
@@ -188,11 +209,11 @@ class SuperTabActivity extends ChangeNotifier {
       if (attention.isNew(t)) t,
   ];
 
-  /// The Activity row's red number: what was asked of the reader and is
-  /// unanswered, plus the reminders they set that are due. Tags, replies and
-  /// stuck tasks nobody was asked about are in Activity but add nothing. Until
-  /// the decisions are read the server's count stands in for them.
-  int get count {
+  /// Needs you's number: what was asked of the reader and is unanswered, plus
+  /// the reminders they set that are due. Replies and stuck tasks nobody was
+  /// asked about add nothing. Until the decisions are read the server's count
+  /// stands in for them.
+  int get needsCount {
     final snapshot = _snapshot;
     if (snapshot == null) return 0;
     return (decisions.loaded
@@ -202,9 +223,24 @@ class SuperTabActivity extends ChangeNotifier {
         reminders.due.length;
   }
 
-  /// Whether the Activity row is bold: something needs the reader, or a tag
-  /// or a thread they follow has news they have not read.
-  bool get unread => count > 0 || _tags.isNotEmpty || attention.threadsUnread;
+  /// The Mentions tab's number: every unread tag once, folded or not.
+  int get mentionsUnread =>
+      [...mentions.waiting, ...mentions.earlier].where(mentionUnread).length;
+
+  /// The Activity row's red number: Needs you and the unread tags, so it
+  /// always agrees with the tabs (Diego, #2887). Until the tags are read the
+  /// server's waiting ones stand in for them.
+  int get count {
+    if (_snapshot case final snapshot?) {
+      return needsCount +
+          (mentions.loaded ? mentionsUnread : snapshot.mentionsWaiting);
+    }
+    return 0;
+  }
+
+  /// Whether the Activity row is bold: something needs the reader, or a
+  /// thread they follow has news they have not read.
+  bool get unread => count > 0 || attention.threadsUnread;
 
   /// What the reader's PM answered for them today, newest first: decisions
   /// they left to the PM, or that waited 24 hours.
@@ -219,11 +255,15 @@ class SuperTabActivity extends ChangeNotifier {
     ]..sort((a, b) => b.answeredAt!.compareTo(a.answeredAt!));
   }
 
-  /// The tags that wait and the earlier ones (read or answered), newest first,
-  /// folded by author and chat; unread ones are bold, the rest are read rows.
+  /// The unread tags, waiting or answered, newest first, folded by author and
+  /// chat. A read one is not listed: Mentions shows only what is unread
+  /// (Diego, #2887).
   List<SuperTabMentionRow> get mentionRows {
     final epoch = DateTime.fromMillisecondsSinceEpoch(0);
-    final all = [...mentions.waiting, ...mentions.earlier];
+    final all = [
+      ...mentions.waiting,
+      ...mentions.earlier,
+    ].where(mentionUnread).toList();
     // The index breaks ties: `sort` is not stable, and equal times must keep
     // the server's order so neighbours from one author still fold.
     final order = [for (var i = 0; i < all.length; i++) i]
@@ -233,7 +273,7 @@ class SuperTabActivity extends ChangeNotifier {
         );
         return byTime != 0 ? byTime : a.compareTo(b);
       });
-    return groupMentions([for (final i in order) all[i]], mentionUnread);
+    return groupMentions([for (final i in order) all[i]]);
   }
 
   /// The followed threads with news today.

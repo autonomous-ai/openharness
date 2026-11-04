@@ -3625,6 +3625,28 @@ class SuperTabController extends ChangeNotifier {
     _changed();
   }
 
+  /// [id] was read through [sequence] outside its chat (Activity's Mark read
+  /// on a tag): kept here and sent to the server, as [markThreadRead] does for
+  /// a thread. Unlike [markRead] it does not stop at the loaded messages, as
+  /// the chat may not be open; it stops at the chat's newest message.
+  void markReadThrough(String id, int sequence) {
+    final group = snapshot?.conversation(id);
+    if (_disposed || accessRevoked || group == null || sequence <= 0) return;
+    final last = min(
+      sequence,
+      max(
+        group.lastMainSequence ?? group.lastMessageSequence,
+        _loadedMessageSequence(id),
+      ),
+    );
+    _unreadHeld.remove(id);
+    _serverMarks.mark(id, last, kept: snapshot?.readMarks[id] ?? 0);
+    if ((_readAt[id] ?? 0) >= last) return;
+    _readAt[id] = last;
+    _saveSoon();
+    _changed();
+  }
+
   /// The open chat the reader marked unread: nothing reads it again until they
   /// leave it, as in Slack.
   final _unreadHeld = <String>{};
