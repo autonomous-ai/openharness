@@ -70,9 +70,9 @@ bool swarmHomeListed(SwarmInbox inbox, String swarmId, String projectId) {
 /// phone, one line each, then the others by their latest activity, those
 /// quiet for a day folded under "Other projects" ([swarmHomeLists]), Sort and
 /// filter at the right of their first caption. Every Swarm's, or
-/// the one picked ([SwarmHomePrefs.swarmId]). A round + floats at its bottom
-/// right over them: New message (Tony, 10-30: Slack Mobile's;
-/// [showSwarmNewMessage]). What needs the person, and the invitations to a
+/// the one picked ([SwarmHomePrefs.swarmId]). New message's + is in the top
+/// bar next to Search ([showSwarmNewMessage]), so nothing floats over the
+/// list (anh Dee, 2026-11-04). What needs the person, and the invitations to a
 /// Swarm, are the Activity tab's.
 ///
 /// Pushed over another page it has a back button instead of the switcher.
@@ -267,19 +267,6 @@ class _SwarmPageState extends State<SwarmPage> {
         : Listenable.merge([session, session.inbox, session.home]);
     return Scaffold(
       backgroundColor: tty.ground,
-      // The tab's Home only, as its compose was: pushed over a page, Home
-      // is a step on the way back.
-      floatingActionButton: session == null || pushed
-          ? null
-          : ListenWhileInSight(
-              listenable: listens!,
-              builder: (context) => _offersNewMessage(context, session)
-                  ? SwarmNewMessageButton(
-                      key: const ValueKey('swarm-new-message'),
-                      onPressed: () => unawaited(_newMessage(context, session)),
-                    )
-                  : const SizedBox.shrink(),
-            ),
       body: SafeArea(
         bottom: false,
         child: Column(
@@ -336,15 +323,12 @@ class _SwarmPageState extends State<SwarmPage> {
     );
   }
 
-  /// Around Home's rows: the last clears the floating +.
+  /// Around Home's rows: the last clears the phone's home indicator.
   EdgeInsets _listPadding(BuildContext context) => EdgeInsets.fromLTRB(
     AppSpace.m,
     0,
     AppSpace.m,
-    MediaQuery.paddingOf(context).bottom +
-        SwarmNewMessageButton.size +
-        AppSpace.l +
-        AppSpace.xl,
+    MediaQuery.paddingOf(context).bottom + AppSpace.xl,
   );
 
   /// Home's top bar. At the root, the tab's title: the Swarm shown and a
@@ -385,6 +369,7 @@ class _SwarmPageState extends State<SwarmPage> {
       title,
       trailing: _trailing(
         context,
+        session,
         search: swarmStartView(context, session) == null,
       ),
       loading: listing,
@@ -400,11 +385,15 @@ class _SwarmPageState extends State<SwarmPage> {
     );
   }
 
-  /// Search, where Home has a list to search ([search]), then the person's
-  /// avatar, at the end of the top bar (Slack's two, Tony 2026-11-03): Search
-  /// in place of Home's search field, and of Sort and filter, which went to
-  /// the projects it sorts ([_viewButton]).
-  Widget _trailing(BuildContext context, {required bool search}) => Row(
+  /// Search, where Home has a list to search ([search]), New message's +
+  /// where there may be a Swarm to post in, then the person's avatar, at the
+  /// end of the top bar (Slack's, Tony 2026-11-03; the + moved up from over
+  /// the list, anh Dee 2026-11-04).
+  Widget _trailing(
+    BuildContext context,
+    SwarmSession session, {
+    required bool search,
+  }) => Row(
     mainAxisSize: MainAxisSize.min,
     children: [
       if (search)
@@ -413,6 +402,13 @@ class _SwarmPageState extends State<SwarmPage> {
           icon: LucideIcons.search300,
           label: 'Search',
           onPressed: () => openSwarmSearch(context),
+        ),
+      if (_offersNewMessage(context, session))
+        SwarmIconButton(
+          key: const ValueKey('swarm-new-message'),
+          icon: LucideIcons.plus300,
+          label: 'New message',
+          onPressed: () => unawaited(_newMessage(context, session)),
         ),
       const SwarmYouButton(),
     ],
