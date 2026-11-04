@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_outbox.dart';
@@ -59,22 +60,31 @@ void main() {
   );
 
   test('a late failure of an earlier try never undoes the retry under way, '
-      'and the post is told taken once', () async {
-    final r = rig(timeout: const Duration(milliseconds: 10));
-    final p = post('op-1');
-    expect(await r.box.add(p), SwarmPostOutcome.lost);
-    final again = r.box.deliver(p);
-    expect(p.state, SwarmPostState.sending);
+      'and the post is told taken once', () {
+    // On a fake clock, a timeout passes only when the test says so, never
+    // because the machine is slow.
+    fakeAsync((async) {
+      final r = rig();
+      final p = post('op-1');
+      SwarmPostOutcome? first, again;
+      unawaited(r.box.add(p).then((outcome) => first = outcome));
+      async.elapse(SwarmOutbox.defaultTimeout);
+      expect(first, SwarmPostOutcome.lost);
+      unawaited(r.box.deliver(p).then((outcome) => again = outcome));
+      expect(p.state, SwarmPostState.sending);
 
-    r.answers[0].completeError(StateError('reset'));
-    // A runner slower than the send timeout.
-    await Future<void>.delayed(const Duration(milliseconds: 30));
-    expect(p.state, SwarmPostState.sending, reason: 'the retry speaks now');
+      r.answers[0].completeError(StateError('reset'));
+      async.elapse(
+        SwarmOutbox.defaultTimeout - const Duration(milliseconds: 1),
+      );
+      expect(p.state, SwarmPostState.sending, reason: 'the retry speaks now');
 
-    r.answers[1].complete({'result': <String, dynamic>{}});
-    expect(await again, SwarmPostOutcome.taken);
-    expect(p.state, SwarmPostState.confirmed);
-    expect(r.taken, [p]);
+      r.answers[1].complete({'result': <String, dynamic>{}});
+      async.flushMicrotasks();
+      expect(again, SwarmPostOutcome.taken);
+      expect(p.state, SwarmPostState.confirmed);
+      expect(r.taken, [p]);
+    });
   });
 
   test('read back before its answer, it leaves, and its answer still tells '
