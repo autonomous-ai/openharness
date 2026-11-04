@@ -37,7 +37,7 @@ describe('ordinary task messages and progress replies', () => {
     const id = created.result.conversationId as string
     const [root] = f.lines(created)
     expect(root).toMatchObject({ conversationId: 'lead', author: { kind: 'person', id: 'owner', name: 'dee@example.com' },
-      text: "Let's build: Offline drafts", replyTo: null, recipients: [], source: { kind: TASK_LINE_KIND, taskId: id } })
+      text: 'Offline drafts', replyTo: null, recipients: [], source: { kind: TASK_LINE_KIND, taskId: id } })
     expect(created.messages.filter(m => m.thread === root!.id)).toEqual([expect.objectContaining({ text: 'Keep drafts.',
       replyTo: root!.id, conversationId: 'lead' })])
     expect(f.task(id).cards?.line?.messageId).toBe(root!.id)
@@ -46,7 +46,7 @@ describe('ordinary task messages and progress replies', () => {
   it('uses the project PM when no requester is named, never the machine owner', () => {
     const f = fixture()
     const created = f.run({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [] }, f.as(f.pm))
-    expect(f.lines(created)[0]).toMatchObject({ author: { kind: 'agent', id: f.pm }, text: "Let's build: Offline drafts" })
+    expect(f.lines(created)[0]).toMatchObject({ author: { kind: 'agent', id: f.pm }, text: 'Offline drafts' })
   })
 
   const thread = (effects: CommandEffects, root: string) => effects.messages.filter(m => m.thread === root).map(m => m.text)
@@ -198,6 +198,6 @@ describe('ordinary task messages and progress replies', () => {
     f.run({ type: 'work.assign', conversationId: id, agentId: builder })
     delete f.task(id).cards
     expect(f.lines(f.run({ type: 'message.send', conversationId: 'lead', text: 'Hello.', replyTo: null, recipientIds: [] }))).toEqual([])
-    expect(f.lines(f.status(id, builder, 'review', 'Ready.'))[0]!.text).toBe("Let's build: Offline drafts")
+    expect(f.lines(f.status(id, builder, 'review', 'Ready.'))[0]!.text).toBe('Offline drafts')
   })
 })
