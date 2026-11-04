@@ -202,7 +202,7 @@ export function startGateway(host: GatewayHost): StartedGateway {
     relayPeers,
     {
       onSessionReady: (machineId) => groupSyncer?.sessionOpened(machineId),
-      recheckList: (maxAgeMs) => { void accountHttp.recheck(maxAgeMs).catch(() => { /* the next held select asks again */ }) },
+      recheckList: (maxAgeMs) => accountHttp.recheck(maxAgeMs),
       // A machine the account's device key log names under this very key will trust us as soon as it
       // reads the log: keep its pin through a few denials, and nudge it (and us) to read.
       expectsTrust: (machineId, pub) => {
