@@ -838,6 +838,13 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
+  /// The bar's Mark as read: Esc's read, with typing back in the composer as
+  /// after a click on the bar.
+  void _markReadFromBar() {
+    _focus.requestFocus();
+    _readAll();
+  }
+
   bool _readAll() {
     final id = c.selectedId, group = c.selected;
     if (group == null || (!c.unread(group) && _unread.lineAt(id) == null)) {
@@ -4239,6 +4246,7 @@ class _SuperTabViewState extends State<SuperTabView>
                               count: _newFromLine(c.selectedId),
                               more: c.hasNewer(c.selectedId),
                               onPressed: () => _jumpToUnreadLine(c.selectedId),
+                              onMarkRead: _markReadFromBar,
                             )
                           : _unread.offersDown(c.selectedId)
                           ? Padding(

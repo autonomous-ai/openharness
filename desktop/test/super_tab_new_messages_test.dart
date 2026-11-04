@@ -17,6 +17,9 @@ import 'support/super_tab_fixture.dart';
 const _line = ValueKey('super-new-messages-line');
 const _jump = ValueKey('super-jump-unread');
 
+/// The bar's words, which jump; its Mark as read sits at its other end.
+final _jumpWords = find.textContaining(' · Jump');
+
 /// [count] messages in the Lead conversation from the Lead agent.
 ConversationServer _server(int count) {
   final server = ConversationServer();
@@ -516,7 +519,7 @@ void main() {
     final bar = tester.getRect(find.byKey(_jump));
     expect(bar.bottom, lessThanOrEqualTo(list.top));
     expect(bar.width, moreOrLessEquals(list.width, epsilon: 1));
-    await tester.tap(find.byKey(_jump));
+    await tester.tap(_jumpWords);
     await tester.pumpAndSettle();
     expect(onScreen(tester, find.byKey(_line)), isTrue);
     expect(find.byKey(_jump), findsNothing);
@@ -598,7 +601,18 @@ void main() {
       find.descendant(of: find.byType(KeyCap), matching: find.text('esc')),
       findsOneWidget,
     );
-    final reading = find.text('Update 45');
+    // A message mid-view, where the reader is.
+    final list = tester.getRect(
+      find.byKey(const PageStorageKey('super-messages-tab-lead')),
+    );
+    final reading = find.text(
+      [for (var i = 1; i <= 60; i++) 'Update $i'].firstWhere((text) {
+        final found = find.text(text);
+        if (found.evaluate().isEmpty) return false;
+        final top = tester.getTopLeft(found).dy;
+        return top > list.center.dy - 100 && top < list.center.dy + 100;
+      }),
+    );
     final before = tester.getTopLeft(reading).dy;
     await tester.tap(find.byKey(markRead));
     await tester.pumpAndSettle();
@@ -652,8 +666,8 @@ void main() {
     await readOn(tester);
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     addTearDown(mouse.removePointer);
-    await mouse.addPointer(location: tester.getCenter(find.byKey(_jump)));
-    await mouse.down(tester.getCenter(find.byKey(_jump)));
+    await mouse.addPointer(location: tester.getCenter(_jumpWords));
+    await mouse.down(tester.getCenter(_jumpWords));
     await mouse.up();
     await tester.pumpAndSettle();
     expect(onScreen(tester, find.byKey(_line)), isTrue);
@@ -743,7 +757,7 @@ void main() {
     // The jump to the link passed the line; the reader never saw it.
     expect(onScreen(tester, find.byKey(_line), chat: 'offline'), isFalse);
     expect(find.byKey(_jump), findsOneWidget);
-    await tester.tap(find.byKey(_jump));
+    await tester.tap(_jumpWords);
     await tester.pumpAndSettle();
     expect(onScreen(tester, find.byKey(_line), chat: 'offline'), isTrue);
     expect(find.byKey(_jump), findsNothing);
@@ -820,7 +834,7 @@ void main() {
       tester.getRect(find.byKey(_jump)).bottom,
       lessThanOrEqualTo(list.top),
     );
-    await tester.tap(find.byKey(_jump));
+    await tester.tap(_jumpWords);
     await tester.pumpAndSettle();
     expect(onScreen(tester, find.byKey(_line), chat: 'offline'), isTrue);
     expect(find.byKey(_jump), findsNothing);

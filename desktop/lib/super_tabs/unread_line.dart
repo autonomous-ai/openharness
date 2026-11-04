@@ -3,6 +3,7 @@ import 'package:flutter/rendering.dart';
 
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shortcuts/key_cap.dart';
 import '../widgets/desktop_chrome.dart';
 import 'model.dart';
 
@@ -208,12 +209,14 @@ class SuperTabNewMessagesLine extends StatelessWidget {
 }
 
 /// Shown while the New messages line is above the screen: a flat row across the top of the chat, Slack's
-/// "N new messages", that takes the reader back to it. The words carry it, not the colour.
+/// "N new messages", that takes the reader back to it, with Mark as read and its key (Esc) at its end. The words
+/// carry it, not the colour.
 class SuperTabUnreadBar extends StatelessWidget {
   const SuperTabUnreadBar({
     super.key,
     required this.count,
     required this.onPressed,
+    required this.onMarkRead,
     this.more = false,
   });
 
@@ -224,52 +227,91 @@ class SuperTabUnreadBar extends StatelessWidget {
   final bool more;
   final VoidCallback onPressed;
 
+  /// Reads the chat where the reader is, as Esc does.
+  final VoidCallback onMarkRead;
+
   static String label(int count, bool more) =>
       '${more ? '$count+' : '$count'} new ${count == 1 && !more ? 'message' : 'messages'} · Jump';
+
+  static const _padding = EdgeInsets.symmetric(
+    horizontal: grid.AppDesktop.panelPadding,
+    vertical: grid.AppDesktop.controlGap,
+  );
 
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final accent = DesktopChrome.accent;
     final words = label(count, more);
-    return Semantics(
+    return Material(
       key: const ValueKey('super-jump-unread'),
-      button: true,
-      label: '$words to the first unread',
-      excludeSemantics: true,
-      child: Material(
-        color: DesktopChrome.selection,
-        child: InkWell(
-          onTap: onPressed,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: grid.AppDesktop.panelPadding,
-                vertical: grid.AppDesktop.controlGap,
-              ),
-              child: Row(
-                children: [
-                  Flexible(
-                    child: Text(
-                      words,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: DesktopChrome.control(color: accent, medium: true),
+      color: DesktopChrome.selection,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Semantics(
+                button: true,
+                label: '$words to the first unread',
+                excludeSemantics: true,
+                child: InkWell(
+                  onTap: onPressed,
+                  child: Padding(
+                    padding: _padding,
+                    child: Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            words,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: DesktopChrome.control(
+                              color: accent,
+                              medium: true,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: grid.AppDesktop.controlGap),
+                        Icon(
+                          AppIcons.arrowUp,
+                          size: grid.AppDesktop.iconSize,
+                          color: accent,
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(width: grid.AppDesktop.controlGap),
-                  Icon(
-                    AppIcons.arrowUp,
-                    size: grid.AppDesktop.iconSize,
-                    color: accent,
-                  ),
-                ],
+                ),
               ),
             ),
-          ),
+            Semantics(
+              key: const ValueKey('super-unread-mark-read'),
+              button: true,
+              label: 'Mark as read',
+              hint: 'Esc',
+              excludeSemantics: true,
+              child: InkWell(
+                onTap: onMarkRead,
+                child: Padding(
+                  padding: _padding,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Mark as read',
+                        maxLines: 1,
+                        style: DesktopChrome.control(medium: true),
+                      ),
+                      const SizedBox(width: grid.AppDesktop.controlGap),
+                      const KeyCap('esc'),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
