@@ -11,6 +11,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/attachment_upload.dart';
 import 'package:harness/super_tabs/attachment_viewer.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/thread_panel.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -272,6 +273,180 @@ void main() {
       );
 
       expect(find.text('shot.png can’t be shown here.'), findsOneWidget);
+      await close(tester, c);
+    });
+  });
+
+  group('the viewer over the chat', () {
+    /// A chat of two pictures, [a1] in message-1 and [a2] in message-2, and
+    /// a reply to message-1 carrying [a3], in a window [size] wide, with
+    /// message-1's thread open.
+    Future<SuperTabController> chat(
+      WidgetTester tester, {
+      Size size = const Size(1400, 900),
+    }) async {
+      pictures['a1.png'] = await _png(tester, 720, 360);
+      pictures['a2.png'] = await _png(tester, 360, 720);
+      pictures['a3.png'] = await _png(tester, 400, 400);
+      final server = ConversationServer()..threads = true;
+      server
+        ..append('First', attachments: [_file('a1', 'a1.png', 'image/png')])
+        ..append('Second', attachments: [_file('a2', 'a2.png', 'image/png')])
+        ..append(
+          'In the thread',
+          attachments: [_file('a3', 'a3.png', 'image/png')],
+        );
+      server.messages.last
+        ..['thread'] = 'message-1'
+        ..['replyTo'] = 'message-1';
+      final controller = server.controller();
+      await controller.refresh();
+      await tester.binding.setSurfaceSize(size);
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabView(
+              controller: controller,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Test Mac',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('super-thread-line-message-1')),
+      );
+      await tester.pumpAndSettle();
+      await tester.runAsync(() => Future<void>.delayed(Durations.short2));
+      await tester.pumpAndSettle();
+      return controller;
+    }
+
+    final viewer = find.byKey(const ValueKey('super-attachment-viewer'));
+    final thread = find.byType(SuperTabThreadPanel);
+    Finder picture(String id) =>
+        find.byKey(ValueKey('super-attachment-image:$id'));
+    Finder inline(String id) =>
+        find.byKey(ValueKey('super-attachment-inline:$id'));
+    Finder button(String name) => find.byKey(ValueKey('super-image-$name'));
+
+    Future<void> settle(WidgetTester tester) async {
+      await tester.pumpAndSettle();
+      await tester.runAsync(() => Future<void>.delayed(Durations.short2));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('it covers the chat and leaves the open thread beside it', (
+      tester,
+    ) async {
+      final c = await chat(tester);
+      // The chat's a1; the thread shows its root's too.
+      await tester.tap(
+        find
+            .descendant(of: find.byType(SuperTabView), matching: inline('a1'))
+            .first,
+      );
+      await settle(tester);
+      expect(viewer, findsOneWidget);
+      final over = tester.getRect(viewer), beside = tester.getRect(thread);
+      expect(over.left, 0);
+      expect(over.right, lessThanOrEqualTo(beside.left));
+      expect(over.height, 900);
+      expect(thread.hitTestable(), findsOneWidget);
+      // Its sender, when and where.
+      expect(
+        find.descendant(of: viewer, matching: find.text('You')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: viewer,
+          matching: find.textContaining(' ago in Lead · a1.png'),
+        ),
+        findsOneWidget,
+      );
+      await close(tester, c);
+    });
+
+    testWidgets("from the chat it pages through the chat's pictures only", (
+      tester,
+    ) async {
+      final c = await chat(tester);
+      await tester.tap(inline('a1').first);
+      await settle(tester);
+      expect(picture('a1'), findsOneWidget);
+      await tester.tap(button('next'));
+      await settle(tester);
+      expect(picture('a2'), findsOneWidget);
+      // The thread's reply is not in the chat.
+      expect(button('next'), findsNothing);
+      await close(tester, c);
+    });
+
+    testWidgets("from the thread it pages through the thread's pictures only", (
+      tester,
+    ) async {
+      final c = await chat(tester);
+      await tester.tap(find.descendant(of: thread, matching: inline('a3')));
+      await settle(tester);
+      expect(picture('a3'), findsOneWidget);
+      expect(button('next'), findsNothing);
+      await tester.tap(button('previous'));
+      await settle(tester);
+      // The thread's root, not the chat's other picture.
+      expect(picture('a1'), findsOneWidget);
+      expect(button('previous'), findsNothing);
+      await close(tester, c);
+    });
+
+    testWidgets('Esc closes it and keeps the thread', (tester) async {
+      final c = await chat(tester);
+      await tester.tap(inline('a2'));
+      await settle(tester);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(viewer, findsNothing);
+      expect(thread, findsOneWidget);
+      await close(tester, c);
+    });
+
+    testWidgets('Show in chat closes it', (tester) async {
+      final c = await chat(tester);
+      await tester.tap(inline('a2'));
+      await settle(tester);
+      await tester.tap(find.byTooltip('More'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Show in chat'));
+      await settle(tester);
+      expect(viewer, findsNothing);
+      await close(tester, c);
+    });
+
+    testWidgets('another conversation closes it', (tester) async {
+      final c = await chat(tester);
+      await tester.tap(inline('a2'));
+      await settle(tester);
+      expect(viewer, findsOneWidget);
+      await c.select('offline');
+      await settle(tester);
+      expect(viewer, findsNothing);
+      await close(tester, c);
+    });
+
+    testWidgets('with the thread as a drawer it covers the window, and Esc '
+        'closes it, not the drawer', (tester) async {
+      final c = await chat(tester, size: const Size(900, 800));
+      await tester.tap(find.descendant(of: thread, matching: inline('a3')));
+      await settle(tester);
+      expect(tester.getRect(viewer), const Rect.fromLTWH(0, 0, 900, 800));
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(viewer, findsNothing);
+      expect(thread, findsOneWidget);
       await close(tester, c);
     });
   });
