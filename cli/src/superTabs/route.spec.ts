@@ -340,6 +340,75 @@ describe('strength, fit and effective cost', () => {
   })
 })
 
+// Ken, 2026-11-04 (task #2901): PMs took the route's top line, nearly always Opus or Astra, against the project's Routing
+// instructions (soonest reset, most left, fewer working agents, grid first for small work). The route now leaves out what cannot
+// run, keeps every fact, and lists the rest in a neutral order the instructions choose from.
+describe('no ranking: the project\'s Routing instructions choose (task #2901)', () => {
+  const STRONG = { engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3 } as const
+  const CHEAP = { engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1 } as const
+  const CODEX = { engine: 'codex', model: 'default', effort: 'default', quality: 3, cost: 2 } as const
+  const all: Catalog = { ...policy, models: policy.models.map(m => ({ ...m, offered: true })) }
+  const on = (machine: string, row: Partial<Probe>, quota = windows([80, 3 * H], [90, 5 * D], `${machine}-${row.engine ?? 'claude'}`)) =>
+    probe({ machineId: machine, machineName: machine, ...row, quota })
+  const order = (r: ReturnType<typeof choose>) => ok(r).shown.map(s => `${s.machineName} ${s.engine} ${s.model}`)
+
+  it('lists candidates by machine name, then engine: never the stronger, the cheaper or the better fit first', () => {
+    const probes = [on('zeta', STRONG, windows([99, 3 * H], [99, 2 * D], 'Z')), on('alpha', CODEX, windows([5, 3 * H], [3, 6 * D], 'AX')),
+      on('alpha', CHEAP, windows([40, 3 * H], [40, 6 * D], 'AC')), on('mid', CHEAP, windows([90, 3 * H], [90, 5 * D], 'M'))]
+    const r = choose(probes, all, a({ difficulty: 'high', size: 'large' }), NOW)
+    expect(order(r)).toEqual(['alpha claude haiku', 'alpha codex default', 'mid claude haiku', 'zeta claude opus'])
+    // The same whatever order the machines answered in.
+    expect(order(choose([...probes].reverse(), all, a({ difficulty: 'high', size: 'large' }), NOW))).toEqual(order(r))
+  })
+  it('a plug-in\'s strength or cost adjustment is a note on its candidate, never the order', () => {
+    const boost: RoutePlugin = { name: 'Boost', adjust: c => c.machineName === 'zeta' ? { strength: 5, cost: -10, reason: 'measured twice as good here' } : null }
+    const r = ok(choose([on('zeta', STRONG), on('alpha', STRONG)], all, a(), NOW, [], [], [], [boost]))
+    expect(r.shown.map(s => s.machineName)).toEqual(['alpha', 'zeta'])
+    expect(r.shown[1]!.notes).toEqual(['Boost: measured twice as good here'])
+    expect(r.shown[1]!.label).toContain('Boost: measured twice as good here')
+    expect(r.adjusted).toBe(true)
+  })
+  it('names no pick: its why sends the choice to the Routing instructions, and the record carries no pick', () => {
+    const c = ok(choose([on('zeta', STRONG), on('alpha', CHEAP)], all, a(), NOW))
+    const v = decide(c)
+    expect(v).not.toHaveProperty('pick')
+    expect(v).toMatchObject({ via: 'instructions', p: null })
+    expect(v.why).toContain('Routing instructions')
+    expect(v.why).not.toMatch(/strength|price/i)
+    const record = recordOf(c, v, a())
+    expect(record).not.toHaveProperty('pick')
+    expect(record).toMatchObject({ via: 'instructions', why: v.why })
+    // A backend from before this takes only a record with a pick: c0 stands in for one, as the old order would have named it.
+    expect(recordOf(c, v, a(), 'picked')).toMatchObject({ pick: 'c0', via: 'order' })
+    expect(recordOf(c, v, a(), 'v1')).toMatchObject({ pick: 'c0', via: 'order' })
+    expect(decide(ok(choose([on('alpha', CHEAP)], all, a(), NOW)))).toMatchObject({ via: 'only' })
+  })
+  it('still leaves out what cannot run, a plug-in\'s refusal among it', () => {
+    const fence: RoutePlugin = { name: 'Fit', adjust: c => c.machineName === 'mid' ? { refuse: true, reason: 'no disk for an end-to-end run' } : null }
+    const r = ok(choose([on('zeta', STRONG, undefined), on('alpha', { ...STRONG, refusals: ['Machine is offline.'] }), on('mid', CHEAP)], all, a(), NOW, [], [], [], [fence]))
+    expect(r.shown.map(s => s.machineName)).toEqual(['zeta'])
+    expect(r.excluded).toEqual([{ title: 'New agent · Claude opus high · alpha', reason: 'Machine is offline.', machine: 'alpha' },
+      { title: 'New agent · Claude haiku auto · mid', reason: 'Fit: no disk for an end-to-end run', machine: 'mid' }])
+  })
+  it('keeps every fact on each candidate: strength, price, quota fit, weekly % left and reset, the agents on its machine', () => {
+    const load = { agents: 3, freeMemoryBytes: 8e9, hasFolder: true }
+    const r = ok(choose([on('alpha', { ...CODEX, load }, windows([60, 2 * H], [42, 3 * D + 5 * H], 'AX')), on('zeta', STRONG)], all, a(), NOW))
+    const alpha = r.shown[0]!
+    expect(alpha.label).toContain('strength 3, cost 2')
+    expect(alpha.label).toContain('weekly 42% left (resets in 3 days)')
+    expect(alpha.label).toContain('3 agents running')
+    expect(alpha.fit).toMatchObject({ status: 'fits', account: 'AX' })
+    expect(quotaBrief(alpha, NOW)).toBe('fits: weekly 42% left, resets in 3d5h')
+  })
+  it('says when no candidate is expected to cover the task, naming none as first', () => {
+    const spent = windows([90, 3 * H], [0, 5 * D])
+    const none = ok(choose([on('alpha', CHEAP, spent), on('zeta', STRONG, spent)], all, a(), NOW))
+    expect(none.short).toBe('No candidate is expected to cover this task on its quota.')
+    // One that fits is in the list with its fit; nothing is said of a first candidate, since there is none.
+    expect(ok(choose([on('alpha', CHEAP), on('zeta', STRONG, spent)], all, a(), NOW)).short).toBeUndefined()
+  })
+})
+
 const frame = (patch: Partial<MemberFrame> = {}): MemberFrame => ({ title: 'Fix auth', project: 'api', cwd: '/w/api', root: '/w/api', remote: 'github.com/acme/api', branch: 'feat/auth', updatedAt: 1_000_000 - 2 * 3_600_000, ...patch })
 const folder = (patch: Partial<TaskFolder> = {}): TaskFolder => ({ cwd: '/w/api', kind: 'git', name: 'api', root: '/w/api', remote: 'github.com/acme/api', ...patch })
 
