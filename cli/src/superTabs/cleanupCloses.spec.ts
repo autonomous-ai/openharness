@@ -21,7 +21,7 @@ it('names the sessions the idle cleanup closed for a while, privately, and forge
   expect(Object.keys(JSON.parse(readFileSync(cleanupClosesFile(dir), 'utf8')).closed)).toEqual(['gannet'])
 })
 
-it('keeps the newest, reads a damaged file as none, and never throws on a write it cannot make', () => {
+it('keeps the newest, reads a damaged file as none, and says, never throwing, when it cannot write', () => {
   const dir = root(), now = 1_000_000
   for (let i = 0; i <= CLEANUP_CLOSED_MAX; i++) recordCleanupClose(dir, `h${i}`, now + i)
   const kept = cleanupClosed(dir, now + CLEANUP_CLOSED_MAX)
@@ -33,5 +33,6 @@ it('keeps the newest, reads a damaged file as none, and never throws on a write 
   expect([...cleanupClosed(dir, now)]).toEqual(['ok'])
   const blocked = join(root(), 'file')
   writeFileSync(blocked, '')
-  expect(() => recordCleanupClose(join(blocked, 'data'), 'tern', now)).not.toThrow()
+  expect(recordCleanupClose(join(blocked, 'data'), 'tern', now)).toBe(false)
+  expect(recordCleanupClose(dir, 'tern', now)).toBe(true)
 })
