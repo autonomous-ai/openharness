@@ -336,6 +336,31 @@ void main() {
     expect(key('swarm-find-field'), findsNothing);
   });
 
+  testWidgets('leaving the chat stops a read-back', (tester) async {
+    final fake = backend(
+      [for (var i = 10; i < 40; i++) tall(i)],
+      next: {'sequence': 10, 'id': 'm10'},
+    );
+    final held = Completer<Object?>();
+    fake.routes['$messages?before=10&beforeId=m10'] = (_) => held.future;
+    fake.routes['$messages?before=9&beforeId=m9'] = (_) => {
+      'messages': [message('m8', 8, text: 'Older 8')],
+      'next': {'sequence': 8, 'id': 'm8'},
+    };
+    await pump(tester, fake);
+    await findInChat(tester, 'zebra');
+    await tester.tap(key('swarm-find-older'));
+    await tester.pump();
+
+    await tester.pumpWidget(const SizedBox());
+    held.complete({
+      'messages': [message('m9', 9, text: 'Older 9')],
+      'next': {'sequence': 9, 'id': 'm9'},
+    });
+    await tester.pumpAndSettle();
+    expect(olderReads(fake), 1);
+  });
+
   testWidgets('the chat start and a failed read say so', (tester) async {
     final fake = backend(
       [for (var i = 10; i < 40; i++) tall(i)],
