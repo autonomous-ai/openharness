@@ -18,7 +18,7 @@ const _reason =
     'Not in a task or chat now. Give it work or add it to a chat to open its terminal.';
 
 /// A Swarm with Nova waiting on the reader in its task, and Finn in no chat.
-Future<SuperTabController> _swarm(SuperTabLaunchFixture f) async {
+Future<SuperTabController> waitingSwarm(SuperTabLaunchFixture f) async {
   f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
   final state = f.connection.server.state;
   state['projects'] = [projectFixture('lead', 'Web', 'lead')];
@@ -121,7 +121,7 @@ void main() {
   testWidgets('a Waiting on you toast opens the agent\'s terminal beside the '
       'task it waits in, focused', (tester) async {
     final f = SuperTabLaunchFixture();
-    final c = await _swarm(f);
+    final c = await waitingSwarm(f);
     await show(tester, f);
     expect(c.selectedId, 'lead');
     await clickToast(tester, f, 'nova');
@@ -135,7 +135,7 @@ void main() {
   testWidgets('from another tab, the toast brings the agent\'s Swarm forward '
       'with its terminal open', (tester) async {
     final f = SuperTabLaunchFixture();
-    final c = await _swarm(f);
+    final c = await waitingSwarm(f);
     final swarm = f.app.activeSwarmId;
     f.app.newSwarm();
     await show(tester, f);
@@ -147,10 +147,25 @@ void main() {
     await done(tester, f, c);
   });
 
+  testWidgets('Activity\'s "is waiting on you" opens the task with the '
+      'agent\'s terminal focused', (tester) async {
+    final f = SuperTabLaunchFixture();
+    final c = await waitingSwarm(f);
+    await show(tester, f);
+    await tester.tap(find.byKey(const ValueKey('super-activity')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Nova is waiting on you'));
+    await tester.pumpAndSettle();
+    expect(c.selectedId, 'task');
+    expect(c.terminalAgents('task').single.id, 'nova');
+    expect(f.app.focusedPane?.agentId, 'native-nova');
+    await done(tester, f, c);
+  });
+
   testWidgets('the toast for an agent no chat holds brings its Swarm forward '
       'and says why its terminal cannot open', (tester) async {
     final f = SuperTabLaunchFixture();
-    final c = await _swarm(f);
+    final c = await waitingSwarm(f);
     await show(tester, f);
     await clickToast(tester, f, 'finn');
     expect(find.text(_reason), findsOneWidget);
