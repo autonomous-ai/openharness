@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -18,6 +19,7 @@ import 'model.dart';
 import 'swarm_buddy.dart';
 import 'swarm_chat_menu.dart' show swarmNotifySection;
 import 'swarm_conversation_page.dart';
+import 'swarm_message_receipt.dart' show swarmMachineOffline;
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
 import 'swarm_row.dart';
@@ -63,7 +65,10 @@ Future<String?> openSwarmBuddy(
 /// may write: the chat is there before any Buddy. Under all of it, what went
 /// wrong with the last start or removal. Nothing for a viewer with no Buddy,
 /// nor while a Buddy runs on the person's own machine: the chat is the
-/// screen, and its messages start under the header (Tony, 10-29).
+/// screen, and its messages start under the header (Tony, 10-29). Nor that
+/// a Buddy is down while its computer is offline: the line under the message
+/// sent to it says that computer is offline, and nothing starts there until
+/// it is back (Tony, 11-04).
 class SwarmBuddyBar extends StatelessWidget {
   const SwarmBuddyBar({super.key, required this.actions});
 
@@ -73,7 +78,13 @@ class SwarmBuddyBar extends StatelessWidget {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     return ListenableBuilder(
-      listenable: Listenable.merge([actions.reader, actions]),
+      // Every read, changed or not: a computer goes offline by its reading
+      // growing old, which no change to the Swarm announces.
+      listenable: Listenable.merge([
+        actions.reader,
+        actions.reader.reads,
+        actions,
+      ]),
       builder: (context, _) {
         final reader = actions.reader;
         final canWrite = swarmCanWrite(reader);
@@ -124,11 +135,18 @@ class SwarmBuddyBar extends StatelessWidget {
 
   /// On someone else's machine, "Claude on Dee Studio · dee can see its
   /// terminal" (a Buddy from before the server kept Buddies to their owner's
-  /// machines, 10-28); and, while it is down, that it is offline with Start
-  /// again. Null on the person's own machine while it runs.
+  /// machines, 10-28); and, while it is down on a computer that is online,
+  /// that it is offline with Start again. Null on the person's own machine
+  /// while it runs, or while it is down there and that computer is offline.
   Widget? _running(SwarmReader reader, SuperTabAgent agent, bool canWrite) {
     final shared = agent.machineOwnerId != reader.accountId;
-    if (!shared && agent.downSince == null) return null;
+    final down =
+        agent.downSince != null &&
+        !swarmMachineOffline(
+          reader.snapshot?.pool(agent.machineId),
+          clock.now(),
+        );
+    if (!shared && !down) return null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
@@ -142,7 +160,7 @@ class SwarmBuddyBar extends StatelessWidget {
             key: const ValueKey('swarm-buddy-where'),
             lines: 2,
           ),
-        if (agent.downSince != null)
+        if (down)
           _Line(
             key: const ValueKey('swarm-buddy-offline'),
             text:
