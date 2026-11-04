@@ -34,6 +34,7 @@ import { assignmentRows, poolRows, rosterRows } from './hostRows.test-support.js
 import { recipientShare } from '../src/routes/harnessShares.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
 import { wantDefaultDigest } from './noDefaultDigest.test-support.js'
+import { startMessageReachStats } from '../src/superTabs/messageReachStats.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -1341,6 +1342,47 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await run(tab, { type: 'project.delete', projectId: 'lead' })
     await expect(run(tab, next, host, lead)).rejects.toMatchObject({ code: 'AGENT_UNAVAILABLE' })
     expect(await db.superTabConfiguration.count({ where: { tabId: tab } })).toBe(3)
+  })
+
+  // Task #2840: how long a message takes to reach its reader, per pod per minute (superTabs/messageReachStats.ts). The rows a
+  // minute's line would carry for what [act] did.
+  async function reaches(act: () => Promise<unknown>): Promise<Array<Record<string, unknown>>> {
+    const log = vi.fn()
+    const stop = startMessageReachStats({ everyMs: 3_600_000, pod: 'test', log })
+    try { await act() } finally { stop() }
+    return (log.mock.calls[0]?.[1] as { rows?: Array<Record<string, unknown>> } | undefined)?.rows ?? []
+  }
+
+  it('times an agent\'s delivery from its creation to its host\'s first acknowledgement, once', async () => {
+    const { tab, lead } = await fixture()
+    await run(tab, message('Please start.'))
+    const delivery = (await store.deliveries(host, tab, lead))[0]!
+    expect(await reaches(() => store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: 'claim' }))).toEqual([])
+    const typed = await reaches(() => store.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'done', uncertain: false }))
+    expect(typed).toEqual([{ reader: 'agent', via: 'delivery', n: 1, p50: expect.any(Number), p95: expect.any(Number), max: expect.any(Number) }])
+    expect(typed[0]!.max as number).toBeLessThan(60_000)
+    // The same acknowledgement again, as a host retries one it did not hear answered: the message reached it once.
+    expect(await reaches(() => store.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'done', uncertain: false }))).toEqual([])
+  })
+
+  it('does not time a delivery its host could not confirm', async () => {
+    const { tab, lead } = await fixture()
+    await run(tab, message('Please start.'))
+    const delivery = (await store.deliveries(host, tab, lead))[0]!
+    await store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: 'claim' })
+    expect(await reaches(() => store.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'unclear', uncertain: true }))).toEqual([])
+  })
+
+  it('times a person\'s read of new messages for each message someone else wrote, and nothing else', async () => {
+    const { tab, lead } = await fixture()
+    const tail = (await store.messages(owner, tab, 'lead', {})).messages.at(-1)!.sequence
+    await run(tab, message('From the Lead.'), host, lead)
+    await run(tab, message('My own.'))
+    const read = await reaches(() => store.messages(owner, tab, 'lead', { after: tail }))
+    expect(read).toEqual([{ reader: 'person', via: 'read', n: 1, p50: expect.any(Number), p95: expect.any(Number), max: expect.any(Number) }])
+    // The page shown, a thread, or an agent's read is a re-read, not the message reaching its reader.
+    expect(await reaches(() => store.messages(owner, tab, 'lead', {}))).toEqual([])
+    expect(await reaches(() => store.messages(host, tab, 'lead', { after: tail }, lead))).toEqual([])
   })
 
   it('records a claimed delivery hold for the claim holder only and posts nothing in the conversation', async () => {
