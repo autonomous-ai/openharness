@@ -71,9 +71,9 @@ it out of `worked`.
 **Interfaces:**
 - Produces: `ActivityMark.hosting?: boolean | null`, the metric `people_hosting`, and `hosting` on each `usage:daily` row.
 
-- [ ] Write failing tests: a hosting-only person is not working and counts in `people_hosting`; staff stay apart; a worked day followed by a hosting-only day is no D1 working return but is a D1 active return.
-- [ ] Run them and watch them fail; commit.
-- [ ] Add the field, the count, the rollup's select and the definitions; run them green; commit.
+- [x] Write failing tests: a hosting-only person is not working and counts in `people_hosting`; staff stay apart; a worked day followed by a hosting-only day is no D1 working return but is a D1 active return.
+- [x] Run them and watch them fail; commit.
+- [x] Add the field, the count, the rollup's select and the definitions; run them green; commit.
 
 ### Task 2: The mark and the turn path
 
@@ -85,7 +85,7 @@ it out of `worked`.
 - Consumes: the `hosting` field from Task 1.
 - Produces: `markActivity(userId, now, { surface?, worked?, hosting? })`, `turnMark(machineId, agentId, team): Promise<{ worked: true } | { hosting: true }>`, `recordTurnStarted(userId, machineId, agentId, now, team = false)`.
 
-- [ ] Write failing tests for each Review Focus line, the Swarm-turn and own-turn cases, the adapter passing `team`, and the read's plan (`IXSCAN` on `key, deleted`).
-- [ ] Run them and watch them fail; commit.
-- [ ] Implement; run them green; commit.
-- [ ] Run `npm test`; post red/green in a PR comment; mark the PR ready; add one review step.
+- [x] Write failing tests for each Review Focus line, the Swarm-turn and own-turn cases, the adapter passing `team`, and the read's plan (`IXSCAN` on `key, deleted`).
+- [x] Run them and watch them fail; commit.
+- [x] Implement; run them green; commit.
+- [x] Run `npm test`; post red/green in a PR comment; mark the PR ready; add one review step.
