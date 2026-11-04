@@ -92,7 +92,7 @@ function stopped(stderr: string, code: number | null): AdminResult {
 }
 
 /** PowerShell single quotes: nothing is special inside but the quote itself, doubled. */
-const psQuote = (word: string): string => `'${word.replaceAll("'", "''")}'`
+export const psQuote = (word: string): string => `'${word.replaceAll("'", "''")}'`
 
 /**
  * What runs elevated on Windows: the team script, with what it says kept in the staging folder. `Start-Process -Verb

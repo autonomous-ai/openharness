@@ -164,13 +164,29 @@ function ownProcessRuns(pid: number): boolean {
   }
 }
 
+/** The record in [dataDir] of the daemon listening on [port], whatever port it was configured with. */
+function recordServing(dataDir: string, port: number): ReturnType<typeof readDaemonRecord> {
+  let names: string[] = []
+  try { names = readdirSync(dataDir) } catch { return null }
+  for (const name of names) {
+    const configured = /^daemon-(\d+)\.json$/.exec(name)?.[1]
+    const record = configured ? readDaemonRecord(dataDir, Number(configured)) : null
+    if (record?.port === port) return record
+  }
+  return null
+}
+
 /**
  * The daemon's pipe for a client that opens its WebSocket at once (`openLocalWs`): the recorded pipe while the recorded
  * daemon runs, and its token. Not the process table `daemonPipe` also reads: the socket's upgrade must prove the token
  * (`pipeWebSocket`), so a squatter is refused before any frame is sent to it.
+ *
+ * A record is named for the port the daemon was configured with, and [port] may be the one it was given instead, when
+ * another account held that one (`daemonPort`), as a Harness Team account on the same PC does: its records say which, as
+ * `localSocketRoute` reads them. Taking only the name told every `harness new` there that Harness was not running.
  */
 export function daemonPipeNow(dataDir: string, port: number): PipeTarget | null {
-  const record = readDaemonRecord(dataDir, port)
+  const record = readDaemonRecord(dataDir, port) ?? recordServing(dataDir, port)
   if (!record?.pipe || !record.pid || !ownProcessRuns(record.pid)) return null
   const token = readDaemonToken(dataDir)
   return token ? { pipe: record.pipe, token } : null
