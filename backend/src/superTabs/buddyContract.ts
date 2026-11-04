@@ -1,7 +1,7 @@
 /**
- * What Desktop shows of the server's Buddy rules, kept in one file it reads too: Desktop's CI checks out this file alone
- * of the backend (.github/workflows/ci.yml, scripts/record-ci-validation.py), and test/buddy_refusal_parity_test.dart
- * holds Desktop's copy to it.
+ * The server's Buddy refusals that more than one place words alike (commands.ts, store.ts). Desktop's CI still checks out
+ * this file (.github/workflows/ci.yml, scripts/record-ci-validation.py); since Codex Buddies are accepted (#2832) no
+ * Desktop test reads it.
  */
 
 /** Why a Buddy is refused a machine: the same words whether the machine is someone else's, shared with the person, a Harness
