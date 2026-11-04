@@ -698,6 +698,8 @@ describe('a Buddy\'s proposal to the PM', () => {
       ['Never tell the PM: the client is leaving', 'the client is leaving'],
       ['Tell Ken not to post: the client is leaving', 'the client is leaving'],
       ['Đừng gửi: khách hàng sắp rời đi', 'khách hàng sắp rời đi'],
+      ['Report: the client is leaving', 'the client is leaving'],
+      ['File: payroll.xlsx has every salary', 'payroll.xlsx has every salary'],
       ['The client is leaving. Post this: Fix the login', 'Fix the login'],
       ['The client is leaving. Post this: Fix the login', 'Post this: Fix the login'],
       ['Send this when the client who is leaving next week has signed off: Fix the login', 'Fix the login'],

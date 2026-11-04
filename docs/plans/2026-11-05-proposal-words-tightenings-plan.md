@@ -24,7 +24,8 @@ the owner's own words or the newest okayed shown line still passes.
   let the Buddy post the rest as the owner. Now the text after the first colon counts only when everything before it
   is a short ask to send it:
   - it starts with a send word, optionally after ok/yes/please/can you: post, send, share, propose, tell, pass,
-    forward, submit, file, raise or report, or in Vietnamese gửi, đăng, chuyển, báo, nói or đề xuất;
+    forward, submit or raise, or in Vietnamese gửi, đăng, chuyển, nói or đề xuất. Words that read as a label as often
+    as an ask (report, file, pass, báo) are left out;
   - it has no negation (not, don't, never, no, đừng, không, chưa);
   - it has no sentence break (`.`, `!`, `?`, `;` or a new line);
   - it is at most 10 words.
