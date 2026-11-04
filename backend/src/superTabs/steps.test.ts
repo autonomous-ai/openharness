@@ -675,6 +675,20 @@ describe('checks with several checkers', () => {
       expect(read()).toMatchObject({ passedBy: `agent:${f.lead}`, evidence: 'Reviewer left; passed on the second review' })
     })
 
+    // Review of #2916 (Alder2878): removing a PM clears its lead on every task it led, so "the task's PM" is the project's
+    // coordinator now, not the task's lead.
+    it('is cleared by a new PM\'s pass after the PM who opened the task was replaced', () => {
+      const { f, check, read } = departed()
+      // As a PM switch lands (commands.ts, leadFor.switchId): the new agent leads the project chat, then the old one goes.
+      const pm = f.add('pm-2')
+      f.group('lead').leadId = pm
+      f.run({ type: 'agent.remove', agentId: f.lead } as Command)
+      expect(f.group(f.task).leadId).toBeNull()
+      f.run({ type: 'conversation.agent', conversationId: f.task, agentId: pm, present: true, lead: false } as Command)
+      check(pm, true, 'Reviewer left; passed on the second review')
+      expect(read()).toMatchObject({ passedBy: `agent:${pm}`, evidence: 'Reviewer left; passed on the second review' })
+    })
+
     it('leaves a live checker\'s failure standing, whoever passes', () => {
       const { f, tester, check, read } = departed()
       check(tester, false, 'Crashes offline')
