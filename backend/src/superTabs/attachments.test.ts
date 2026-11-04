@@ -1,8 +1,9 @@
 import { generateKeyPairSync } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { Readable } from 'node:stream'
-import { AttachmentTooLarge, attachmentName, attachmentsFromEnv, checkedType, directUploads, imageTypeOf, GcsAttachmentStore, GcsAvatarStore, MAX_ATTACHMENT_BYTES, MAX_FORM_ATTACHMENT_BYTES, MemoryAttachmentStore,
-  MemoryAvatarStore, objectKeyFor, served, serviceAccountFrom, SharedAvatarStore, typeFromHead, UPLOAD_LINK_MS, type AttachmentStore } from './attachments.js'
+import { gzipSync } from 'node:zlib'
+import { AttachmentTooLarge, attachmentName, attachmentsFromEnv, checkedType, directUploads, formFileBody, imageTypeOf, GcsAttachmentStore, GcsAvatarStore, MAX_ATTACHMENT_BYTES, MAX_FORM_ATTACHMENT_BYTES, MemoryAttachmentStore,
+  MemoryAvatarStore, objectKeyFor, served, serviceAccountFrom, SharedAvatarStore, typeFromHead, unpackFailed, UPLOAD_LINK_MS, type AttachmentStore } from './attachments.js'
 
 const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
 const key = { type: 'service_account', project_id: 'harness-test', client_email: 'uploads@harness-test.iam.gserviceaccount.com',
@@ -231,5 +232,33 @@ describe('upload links on the memory bucket, with storage\'s rules', () => {
     expect(MAX_ATTACHMENT_BYTES).toBe(256 * 1024 * 1024)
     expect(MAX_FORM_ATTACHMENT_BYTES).toBe(10 * 1024 * 1024)
     expect(new AttachmentTooLarge().message).toBe('Files can be up to 256 MB.')
+  })
+})
+
+// A form file may come gzipped, so a gateway's content filter in front of the backend never reads a transcript's shell
+// lines as an attack (task #2737). The store gets the original bytes.
+describe('a form file sent gzipped', () => {
+  const read = async (body: Readable) => { const parts: Buffer[] = []; for await (const part of body) parts.push(Buffer.from(part)); return Buffer.concat(parts) }
+  const text = Buffer.from('$ rm -rf build && curl https://example.test/install.sh | sh\n'.repeat(200))
+
+  it('unpacks gzip as it streams, and leaves a plain file as it is', async () => {
+    expect((await read(formFileBody(Readable.from([gzipSync(text)]), 'gzip'))).equals(text)).toBe(true)
+    const plain = Readable.from([text])
+    expect(formFileBody(plain, null)).toBe(plain)
+  })
+
+  it('fails corrupt gzip with a zlib error, which reads as the client\'s', async () => {
+    const body = formFileBody(Readable.from([Buffer.from('not gzip at all')]), 'gzip')
+    await expect(read(body)).rejects.toMatchObject({ code: expect.stringMatching(/^Z_/) })
+    expect(unpackFailed(body)).toBe(true)
+    expect(unpackFailed(Readable.from([text]))).toBe(false)
+  })
+
+  it('passes the request stream\'s own failure on, so a cut form never hangs', async () => {
+    const source = new Readable({ read() {} })
+    const body = formFileBody(source, 'gzip')
+    source.destroy(Object.assign(new Error('cut'), { code: 'FST_REQ_FILE_TOO_LARGE' }))
+    await expect(read(body)).rejects.toMatchObject({ code: 'FST_REQ_FILE_TOO_LARGE' })
+    expect(unpackFailed(body)).toBe(false)
   })
 })

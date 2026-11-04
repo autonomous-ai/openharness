@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
+import 'package:archive/archive.dart' show GZipEncoder;
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
+import 'package:flutter/foundation.dart'
+    show compute, kIsWeb, visibleForTesting;
 
 import '../api/api_client.dart';
 import '../logging/app_log.dart';
@@ -152,23 +155,67 @@ SuperTabUpload uploadWith(
           onProgress: onProgress,
         );
       }
-      final response = await api().postForm(
-        path,
-        FormData.fromMap({
-          'conversationId': conversationId,
-          'file': MultipartFile.fromBytes(
-            await file.readBytes(),
-            filename: name,
-            contentType: DioMediaType.parse(mime),
-          ),
-        }),
-        cancelToken: cancel,
-        onSendProgress: (sent, total) {
-          if (total > 0) onProgress(sent / total);
-        },
-      );
+      final bytes = await file.readBytes();
+      Future<Response<dynamic>> send({required bool packed}) async =>
+          api().postForm(
+            path,
+            FormData.fromMap({
+              'conversationId': conversationId,
+              if (packed) 'contentEncoding': 'gzip',
+              'file': MultipartFile.fromBytes(
+                packed ? await compute(_gzip, bytes) : bytes,
+                filename: name,
+                contentType: DioMediaType.parse(mime),
+              ),
+            }),
+            cancelToken: cancel,
+            onSendProgress: (sent, total) {
+              if (total > 0) onProgress(sent / total);
+            },
+          );
+      final packed = !_packedAlready.contains(mime);
+      final response = await send(packed: packed);
+      // A backend from before packed files refuses the field: the file goes
+      // once more as it is, as it always went.
+      if (packed && _refusedPacking(response)) {
+        appLog.info('super-tabs', 'upload sent again unpacked (older server)');
+        return _attachmentOf(await send(packed: false));
+      }
       return _attachmentOf(response);
     };
+
+/// Types whose bytes are compressed already, so packing them gains nothing.
+/// Every other file sent as a form goes gzipped (task #2737): the gateway in
+/// front of the backend judges a body by its text, and refused an agent's
+/// handoff for the shell commands and paths in it. Packed bytes read as no
+/// text, and the backend unpacks them and keeps the original.
+const _packedAlready = {
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'application/zip',
+  'application/pdf',
+};
+
+/// Gzips [bytes]; off the UI thread on a computer (a form file is up to
+/// 10 MB), on it in a browser.
+Uint8List _gzip(Uint8List bytes) =>
+    Uint8List.fromList(GZipEncoder().encodeBytes(bytes));
+
+/// Whether [response] is a backend refusing a packed form it does not know.
+bool _refusedPacking(Response<dynamic> response) {
+  var body = response.data;
+  if (body is String) {
+    try {
+      body = jsonDecode(body);
+    } catch (_) {}
+  }
+  final error = body is Map ? body['error'] : null;
+  return response.statusCode == 400 &&
+      error is Map &&
+      error['code'] == 'INVALID_ATTACHMENT';
+}
 
 /// A client for storage alone: no base address, no token, no request log
 /// (a signed link is a credential and is never written down).
@@ -342,17 +389,28 @@ SuperTabFailure superTabUploadRefusal(Response<dynamic> response) {
     'super-tabs',
     'upload refused: ${code ?? 'no code'} (status ${response.statusCode})',
   );
+  final status = response.statusCode ?? 0;
+  // No code: neither Harness's backend nor this computer's daemon answered,
+  // which give one with every refusal. Something between them did.
+  final busy = status == 408 || status == 429 || status >= 500 || status == 0;
   return SuperTabFailure(
-    code ?? 'UPLOAD_FAILED',
+    code ?? (busy ? 'UPLOAD_FAILED' : 'GATEWAY_REFUSED'),
     message ??
         switch (code) {
           'FORBIDDEN' => 'You can’t send files in this conversation.',
           'ATTACHMENT_TOO_LARGE' => kSuperTabAttachmentTooLarge,
           'AVATAR_TOO_LARGE' => 'That picture is over 1 MB.',
           'AVATAR_TYPE' => 'Use a PNG, JPEG or WebP picture.',
-          null => 'Could not upload the file. Try again.',
+          null when busy =>
+            'The Harness server could not take the file just now. Try '
+                'again in a minute.',
+          // A filter judges the bytes, and a second try sends the same ones.
+          null =>
+            'The gateway in front of the Harness server refused this file '
+                '(status $status), so sending it again won’t help. Update '
+                'Harness, or tell the Harness team.',
           _ => 'Could not upload the file ($code). Try again.',
         },
-    statusCode: response.statusCode ?? 0,
+    statusCode: status,
   );
 }

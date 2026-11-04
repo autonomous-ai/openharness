@@ -34,7 +34,7 @@ class SelectionTests(unittest.TestCase):
                      "desktop/test/support/real_fonts.dart"]:
             with self.subTest(path=path):
                 self.assertEqual(planner.select([path])[0], {"desktop", "mobile"})
-        self.assertEqual(planner.select(["desktop/lib/super_tabs/roster.dart"])[0], {"desktop"})
+        self.assertEqual(planner.select(["desktop/lib/super_tabs/view.dart"])[0], {"desktop"})
 
     def test_every_desktop_file_the_phone_tests_read_selects_mobile(self):
         # The phone's tests name what they read as '../desktop/<path>', an import of '../../desktop/<path>', or (the parity
@@ -340,9 +340,10 @@ class ReuseFixture(unittest.TestCase):
         self.git("merge", "-q", "--no-ff", "--no-edit", main)
         return self.git("rev-parse", "HEAD")
 
-    def plan(self, head, base, evidence=True, draft=False):
+    def plan(self, head, base, evidence=True, draft=False, body=None):
         self.git("checkout", "-q", "--detach", head)
-        payload = {"pull_request": {"head": {"sha": head}, "base": {"sha": base}, "draft": draft}}
+        payload = {"pull_request": {"head": {"sha": head}, "base": {"sha": base}, "draft": draft,
+                                    **({"body": body} if body is not None else {})}}
         return planner.make_plan(self.root, "pull_request", payload, source=head,
                                  evidence=self.evidence if evidence else None)
 
@@ -483,10 +484,7 @@ class ReuseTests(ReuseFixture):
         # Main merged into a commit with no passed gate.
         unpassed = self.branch(passed, ["mobile/lib/app.dart"], "later")
         self.assertRerunsAll(self.plan(self.update(unpassed, main), main), "not a pass")
-        # Parents reversed: main first.
-        self.git("checkout", "-q", "--detach", main)
-        self.git("merge", "-q", "--no-ff", "--no-edit", passed)
-        self.assertRerunsAll(self.plan(self.git("rev-parse", "HEAD"), main), "not on the base branch")
+        # Parents reversed (main first, the passed head merged in) is a batch of one (BatchReuseTests).
 
     def test_unreadable_evidence_or_no_reader_reruns(self):
         _, main, head = self.scenario(["mobile/lib/app.dart"], ["backend/src/app.ts"])
@@ -547,6 +545,133 @@ class ReuseTests(ReuseFixture):
         payload = {"action": "checks_requested", "merge_group": {"head_sha": head, "base_sha": main}}
         self.assertEqual(planner.make_plan(self.root, "merge_group", payload, source=head, evidence=self.evidence)["reused"], {})
         self.assertEqual(self.evidence.lookups, [])
+
+
+class BatchReuseTests(ReuseFixture):
+    """A batch PR (a branch from main with each member PR merged in) reuses a member's passed result for a component
+    when nothing that component reads changed between that member's tested commit and the batch head (task #2720)."""
+
+    def batch(self, main, members):
+        """The PM's batch branch: main, then each member's tested head merged in, first parent the batch."""
+        self.git("checkout", "-q", "--detach", main)
+        for member in members:
+            self.git("merge", "-q", "--no-ff", "--no-edit", member)
+        return self.git("rev-parse", "HEAD")
+
+    def member(self, name, paths, run_id, start=None):
+        head = self.branch(start or self.base, paths, name)
+        self.evidence.add(self.root, head, planner.select(paths)[0], run_id=run_id)
+        return head
+
+    def test_a_batch_with_one_phone_pr_reuses_mobile_checks(self):
+        phone = self.member("phone", ["mobile/lib/app.dart"], 21)
+        api = self.member("api", ["backend/src/app.ts"], 22)
+        main = self.branch(self.base, ["docs/guide.md"], "main")
+        head = self.batch(main, [phone, api])
+        plan = self.plan(head, main)
+        self.assertEqual(plan["suites"], ["backend", "mobile"])
+        self.assertEqual(plan["required_jobs"], ["process-checks"])
+        self.assertEqual((plan["reused"]["mobile"]["origin_sha"], plan["reused"]["mobile"]["run_id"]), (phone, 21))
+        self.assertEqual((plan["reused"]["backend"]["origin_sha"], plan["reused"]["backend"]["run_id"]), (api, 22))
+        self.assertEqual(plan["reused"]["mobile"]["origin_tree"], self.git("rev-parse", f"{phone}^{{tree}}"))
+        self.assertIn("backend/src/app.ts", plan["reused"]["mobile"]["reason"])
+        self.assertEqual(plan["reuse"]["status"], "applied")
+        self.assertEqual((plan["reuse"]["kind"], plan["reuse"]["members"]), ("batch", [phone, api]))
+
+    def test_two_phone_prs_in_one_batch_run_mobile_checks(self):
+        first = self.member("phone-1", ["mobile/lib/app.dart"], 21)
+        second = self.member("phone-2", ["mobile/lib/other.dart"], 22)
+        api = self.member("api", ["backend/src/app.ts"], 23)
+        head = self.batch(self.base, [first, second, api])
+        plan = self.plan(head, self.base)
+        self.assertNotIn("mobile", plan["reused"])
+        self.assertIn("mobile-checks", plan["required_jobs"])
+        self.assertRegex(plan["reuse"]["rerun"]["mobile"], "mobile/lib/(app|other).dart")
+        self.assertEqual(list(plan["reused"]), ["backend"])
+
+    def test_a_main_change_to_a_mobile_input_after_the_member_ran_runs_it(self):
+        phone = self.member("phone", ["mobile/lib/app.dart"], 21)
+        main = self.branch(self.base, ["mobile/lib/shared.dart"], "main")
+        plan = self.plan(self.batch(main, [phone]), main)
+        self.assertEqual(plan["reused"], {})
+        self.assertIn("mobile/lib/shared.dart", plan["reuse"]["rerun"]["mobile"])
+
+    def test_a_shared_input_runs_everything(self):
+        # Changed by a member: the batch's own change, which its own CI run reads.
+        phone = self.member("phone", ["mobile/lib/app.dart"], 21)
+        locked = self.member("locked", ["cli/package-lock.json"], 22)
+        self.assertRerunsAll(self.plan(self.batch(self.base, [phone, locked]), self.base), "cli/package-lock.json")
+        # Changed on main after a member's run.
+        main = self.branch(self.base, [".github/workflows/ci.yml"], "main")
+        self.assertRerunsAll(self.plan(self.batch(main, [phone]), main), ".github/workflows/ci.yml")
+
+    def test_an_unreadable_receipt_runs_its_component(self):
+        phone = self.member("phone", ["mobile/lib/app.dart"], 21)
+        api = self.member("api", ["backend/src/app.ts"], 22)
+        del self.evidence.gates[phone]
+        head = self.batch(self.base, [phone, api])
+        plan = self.plan(head, self.base)
+        self.assertEqual(list(plan["reused"]), ["backend"])
+        self.assertIn("mobile-checks", plan["required_jobs"])
+        self.assertIn("not a pass", plan["reuse"]["rerun"]["mobile"])
+        # Nothing readable at all: every component runs.
+        self.evidence.failure = RuntimeError("GitHub lookup failed (1): api")
+        plan = self.plan(head, self.base)
+        self.assertEqual(plan["reused"], {})
+        self.assertEqual(plan["required_jobs"], sorted({"process-checks"} | planner.JOBS["backend"] | planner.JOBS["mobile"]))
+
+    def test_the_pr_body_is_never_read(self):
+        phone = self.member("phone", ["mobile/lib/app.dart"], 21)
+        # The same change landed as one plain commit on main: no merge names a member, whatever the body says.
+        self.git("checkout", "-q", "--detach", self.base)
+        self.write("mobile/lib/app.dart", "phone mobile/lib/app.dart")
+        squashed = self.commit("batch")
+        body = f"Batch: #101 at {phone} passed in run 21 (https://github.com/o/r/actions/runs/21)."
+        plan = self.plan(squashed, self.base, body=body)
+        self.assertEqual(plan["reused"], {})
+        self.assertNotIn(phone, [lookup[1] for lookup in self.evidence.lookups])
+        # A real batch is read from its merges alone: a body naming another commit changes nothing.
+        stranger = self.member("stranger", ["mobile/lib/app.dart"], 99)
+        head = self.batch(self.base, [phone])
+        self.assertEqual(self.plan(head, self.base, body=f"#7 at {stranger}")["reused"]["mobile"]["origin_sha"], phone)
+        self.assertNotIn(stranger, [lookup[1] for lookup in self.evidence.lookups])
+
+    def test_a_batch_that_merged_main_again_still_reads_its_members(self):
+        phone = self.member("phone", ["mobile/lib/app.dart"], 21)
+        head = self.batch(self.base, [phone])
+        later = self.branch(self.base, ["backend/src/app.ts"], "main")
+        self.git("checkout", "-q", "--detach", head)
+        self.git("merge", "-q", "--no-ff", "--no-edit", later)
+        plan = self.plan(self.git("rev-parse", "HEAD"), later)
+        self.assertEqual(plan["reused"]["mobile"]["origin_sha"], phone)
+        self.assertEqual(plan["reuse"]["members"], [phone])
+
+    def test_a_hand_commit_on_the_batch_line_runs_everything(self):
+        phone = self.member("phone", ["mobile/lib/app.dart"], 21)
+        self.batch(self.base, [phone])
+        self.write("backend/src/app.ts", "fixed by hand")
+        self.assertRerunsAll(self.plan(self.commit("fix"), self.base), "not a merge")
+
+    def test_a_member_whose_run_reused_points_at_the_original_run(self):
+        passed = self.member("phone", ["mobile/lib/app.dart"], 21)
+        main = self.branch(self.base, ["backend/src/app.ts"], "main")
+        updated = self.update(passed, main)
+        reused = self.plan(updated, main)["reused"]
+        self.evidence.add(self.root, updated, {"mobile"}, run_id=31, reused=reused)
+        plan = self.plan(self.batch(main, [updated]), main)
+        self.assertEqual((plan["reused"]["mobile"]["origin_sha"], plan["reused"]["mobile"]["run_id"]), (passed, 21))
+        self.assertIn(("ran", passed, 21, "mobile"), self.evidence.lookups)
+
+    def test_the_helper_verifies_a_batch_reuse_and_refuses_other_members(self):
+        phone = self.member("phone", ["mobile/lib/app.dart"], 21)
+        api = self.member("api", ["backend/src/app.ts"], 22)
+        head = self.batch(self.base, [phone, api])
+        plan = self.plan(head, self.base)
+        receipt = dict(source_sha=head, suites=plan["suites"], reused=plan["reused"], reuse=plan["reuse"], event="pull_request")
+        self.assertEqual(planner.verify_reuse(self.root, receipt, self.base, self.evidence), plan["reused"])
+        forged = dict(receipt, reuse=dict(plan["reuse"], members=[api]))
+        with self.assertRaisesRegex(ValueError, "members"):
+            planner.verify_reuse(self.root, forged, self.base, self.evidence)
 
 
 class GateTests(unittest.TestCase):
