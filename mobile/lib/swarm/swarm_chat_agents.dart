@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'package:harness_mobile/logging/app_log.dart';
 import 'package:harness_mobile/phone/phone_sheet.dart';
 import 'package:harness_mobile/widgets/engine_identity.dart';
 
@@ -161,8 +162,8 @@ String _nameToSend(String name) {
 /// Adds [choice] to chat [chatId], as Desktop's `addSuperTabAgent` does: an
 /// agent of the Swarm joins it (`conversation.agent`); a running session is
 /// shared into it (`agent.add`), and its computer is woken to host it through
-/// [computers]. Null once the server kept it and the Swarm is read again,
-/// else the sentence to show. A row already on its way sends nothing again.
+/// [computers]. Null once the server kept it, the Swarm is read again and its
+/// computer answered, else the sentence to show. A row already on its way sends nothing again.
 Future<String?> swarmAddAgent(
   SwarmReader reader,
   String chatId,
@@ -217,11 +218,21 @@ Future<String?> swarmAddAgent(
           'engineVersion': null,
         },
       },
-      kept: () {
-        // Its host reads the Swarm now, not at its next look. Best effort:
-        // the host looks again by itself.
-        final wake = computers?.ask(session.machineId, {'action': 'wake'});
-        unawaited(wake?.then((_) {}, onError: (_) {}));
+      // Its host reads the Swarm now, not at its next look. On a computer
+      // whose host never ran, nothing else starts it, so a wake not answered
+      // is said; the agent stays added.
+      kept: () async {
+        try {
+          await computers?.ask(session.machineId, {'action': 'wake'});
+          return null;
+        } catch (failure) {
+          appLog.warn(
+            'swarm',
+            'A computer did not answer a wake: ${failure.runtimeType}',
+          );
+          return "${session.machine} didn't answer, so it may not have picked "
+              'up ${session.name} yet.';
+        }
       },
     );
   } finally {
@@ -280,7 +291,7 @@ const _notSent = 'Could not reach this Swarm. Try again.';
 Future<String?> _send(
   SwarmReader reader,
   Map<String, dynamic> command, {
-  VoidCallback? kept,
+  Future<String?> Function()? kept,
 }) async {
   try {
     await reader.request(
@@ -294,11 +305,11 @@ Future<String?> _send(
     // A call lost on the way (a timeout, a socket dropped) is no answer.
     return _notSent;
   }
-  kept?.call();
+  final after = kept?.call();
   // A read under way began before the server kept it: one more after it.
   if (reader.refreshing) await reader.refresh();
   await reader.refresh();
-  return null;
+  return after;
 }
 
 /// Says [error] at the foot of the screen, unless the screen is gone or the
@@ -518,9 +529,10 @@ Future<void> confirmSwarmRemoveAgent(
   // desktop names it: the person's own computer first, then the Swarm's
   // record of it, which a computer used only for agents may not have.
   final place = snapshot.placeOf(agent.machineId);
-  final own = SwarmScope.computersOf(
-    context,
-  )?.own.where((c) => c.id == place).firstOrNull?.name;
+  final own = SwarmScope.computersOf(context)?.own
+      .where((c) => c.id == place)
+      .firstOrNull
+      ?.name;
   final pooled = snapshot.pool(place)?['name'];
   final machine = switch ((own, pooled)) {
     (final String own, _) when own.isNotEmpty => own,
