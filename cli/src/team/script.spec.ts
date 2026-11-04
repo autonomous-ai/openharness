@@ -772,7 +772,7 @@ describe('Linux', () => {
       const script = buildLinuxSetupScript(linuxInput())
       const order = [
         'owned_by_root "$dir"', 'useradd -m', 'passwd -l "$TEAM"', 'chmod 700 "$TEAM_HOME"', OWNER_HOME_PRIVATE,
-        'as_owner /bin/sh -c', 'systemctl stop "$UNIT_NAME"', 'mktemp -d /var/tmp/harness-team.XXXXXX', 'as_team /bin/sh -c',
+        'sh "$SENTINEL"', 'systemctl stop "$UNIT_NAME"', 'mktemp -d /var/tmp/harness-team.XXXXXX', 'as_team /bin/sh -c',
         'npm" install --global --prefix "$home/.local"', 'install -o 0 -g 0 -m 0644 "$STAGE/team.json" "$CONFIG"',
         'chown "$TEAM:$TEAM_GROUP" "$STATUS_DIR"', 'chmod 700 "$RELAY_DIR"', 'team __handoff', 'as_team /bin/sh -c \'umask 077',
         'install -o 0 -g 0 -m 0644 "$STAGE/team.service" "$UNIT"', 'systemctl daemon-reload', 'systemctl enable --now "$UNIT_NAME"',

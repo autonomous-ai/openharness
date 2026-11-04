@@ -169,7 +169,7 @@ describe('the Windows setup script', () => {
       if (/TEAM_HOME/.test(line) && /Copy|Set-Content|WriteAll|Move-Item|New-Item|CreateDirectory/.test(line)) throw new Error(`writes in the team home: ${line}`)
     }
     expect(script).toContain("$copied = As-Team 'copy' (& $asScript (Join-Path $RT 'copy.ps1')) 15")
-    expect(script).toContain("$installed = As-Team 'engines' (& $asScript (Join-Path $RT 'engines.ps1')) 30")
+    expect(script).toContain("$installed = As-Team 'engines' (& $asScript (Join-Path $RT 'engines.ps1')) 10 ")
     // What it says goes to a file in the stage folder, which this script made and the team account may only write.
     expect(script).toContain('& $ICACLS $out /grant "*$($teamSid):(R,W)" /L /q')
   })
@@ -281,7 +281,7 @@ describe('the scripts the team account runs itself', () => {
   it('installs Claude Code and Codex with its own npm under its own home, and never fails setup', () => {
     const script = windowsTeamEnginesScript({ home: 'C:\\Users\\harnessteam', nodeName: 'node-v22.23.2-win32-x64', packages: ['@anthropic-ai/claude-code', '@openai/codex'] })
     expect(script).toContain("$Packages = @('@anthropic-ai/claude-code', '@openai/codex')")
-    expect(script).toContain('install --global --prefix $prefix --no-fund --no-audit --loglevel=error $pkg')
+    expect(script).toContain('install --global --prefix `"$prefix`" --no-fund --no-audit --loglevel=error $($pkgs -join')
     expect(script).toContain('exit 0')
   })
 
