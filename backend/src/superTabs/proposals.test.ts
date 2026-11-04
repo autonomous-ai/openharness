@@ -25,7 +25,7 @@ function swarm() {
 }
 
 const person = (id: string): Author => ({ kind: 'person', id, name: id, membershipGeneration: 'first' })
-const agent = (id: string): Author => ({ kind: 'agent', id, name: id })
+const agent = (id: string): Author => ({ kind: 'agent', id, name: id, membershipGeneration: 'first' })
 /** A proposal's root as buddy.propose posts it, at sequence [at]. */
 const root = (id: string, at: number, title = `Proposal ${id}`): ProposalRoot => ({ id, sequence: at, text: `Let's build: ${title}`, createdAt: new Date(at),
   source: { kind: 'buddy-proposal', personId: 'peer', buddyId: 'buddy', ownerMessageId: `ask-${id}` } })
