@@ -1395,6 +1395,8 @@ class SuperTabMessage {
       author = Map.unmodifiable(superTabMap(row['author'])),
       source = Map.unmodifiable(superTabMap(row['source'] ?? const {})),
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
+      editedAt = DateTime.tryParse(row['editedAt'] as String? ?? ''),
+      deletedAt = DateTime.tryParse(row['deletedAt'] as String? ?? ''),
       attachments = _attachments(row['attachments']),
       reactions = List.unmodifiable(
         SuperTabReactionCount.listFromJson(row['reactions']),
@@ -1434,6 +1436,17 @@ class SuperTabMessage {
   final Map<String, dynamic> author;
   final Map<String, dynamic> source;
   final DateTime? createdAt;
+
+  /// When its author last changed its text; null for one never edited
+  /// (backend messageEdits.ts). No earlier text is kept anywhere.
+  final DateTime? editedAt;
+
+  /// When its author deleted it: kept only as the root of a thread with
+  /// replies, its text then the backend's "This message was deleted.", with
+  /// no files and no reactions. One without replies leaves the pages.
+  final DateTime? deletedAt;
+
+  bool get deleted => deletedAt != null;
   final List<SuperTabAttachment> attachments;
   final List<SuperTabReactionCount> reactions;
 

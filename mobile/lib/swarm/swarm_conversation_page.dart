@@ -44,6 +44,7 @@ import 'swarm_inbox.dart';
 import 'swarm_reader.dart';
 import 'swarm_live_card.dart';
 import 'swarm_link_previews.dart';
+import 'swarm_message_edit.dart';
 import 'swarm_message_link.dart';
 import 'swarm_message_receipt.dart';
 import 'swarm_message_row.dart';
@@ -1732,15 +1733,59 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     SuperTabMessage? shown() => t.messages.where((m) => m.id == id).firstOrNull;
     final message = shown();
     if (message == null) return;
+    final mine = c.mayChange(message);
     final emoji = await showSwarmReactionPicker(
       context,
       reactions: c.reactionsOf(message),
       readerId: c.reader.accountId,
       react: c.canPost,
       link: _linkTo(c, id),
+      onEdit: mine
+          ? () => unawaited(_edit(shown, (m, text) => t.editMessage(m, text)))
+          : null,
+      onDelete: mine ? () => unawaited(_delete(shown, t.deleteMessage)) : null,
     );
     if (emoji == null || !mounted) return;
     if (shown() case final now?) await t.react(now, emoji);
+  }
+
+  /// Edit message on the message [shown] finds: its text in a sheet, and the
+  /// new text through [edit]. A refusal says why at the foot; the old text
+  /// stays.
+  Future<void> _edit(
+    SuperTabMessage? Function() shown,
+    Future<String?> Function(SuperTabMessage, String) edit,
+  ) async {
+    final message = shown();
+    if (message == null) return;
+    final text = await showSwarmEditMessage(
+      context,
+      text: message.text,
+      hasFiles: message.attachments.isNotEmpty,
+    );
+    if (text == null || !mounted) return;
+    final now = shown();
+    if (now == null) return;
+    _refusal(await edit(now, text));
+  }
+
+  /// Delete message on the message [shown] finds, once the person says so.
+  Future<void> _delete(
+    SuperTabMessage? Function() shown,
+    Future<String?> Function(SuperTabMessage) delete,
+  ) async {
+    if (!await confirmSwarmDeleteMessage(context) || !mounted) return;
+    final now = shown();
+    if (now == null) return;
+    _refusal(await delete(now));
+  }
+
+  /// A change's refusal at the foot of the screen; nothing once it went.
+  void _refusal(String? refused) {
+    if (refused == null || !mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(content: Text(refused), duration: Durations.extralong4),
+    );
   }
 
   /// The reaction picker over message [id]: the pick reacts to the message
@@ -1754,12 +1799,16 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     SuperTabMessage? shown() => c.messages.where((m) => m.id == id).firstOrNull;
     final message = shown();
     if (message == null) return;
+    // Edit and Delete are the long-press sheet's, on the person's own.
+    final mine = link && c.mayChange(message);
     final emoji = await showSwarmReactionPicker(
       context,
       reactions: c.reactionsOf(message),
       readerId: c.reader.accountId,
       react: c.canPost,
       link: link ? _linkTo(c, id) : null,
+      onEdit: mine ? () => unawaited(_edit(shown, c.editMessage)) : null,
+      onDelete: mine ? () => unawaited(_delete(shown, c.deleteMessage)) : null,
     );
     if (emoji == null || !mounted) return;
     if (shown() case final now?) await c.react(now, emoji);
