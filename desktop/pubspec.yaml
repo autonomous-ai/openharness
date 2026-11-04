@@ -104,6 +104,7 @@ dependencies:
   # Dart, no native plugin, so the macOS SPM package list is unchanged.
   re_editor: ^0.10.0
   re_highlight: ^0.0.3
+  timezone: ^0.11.2
 
 dev_dependencies:
   flutter_test:
