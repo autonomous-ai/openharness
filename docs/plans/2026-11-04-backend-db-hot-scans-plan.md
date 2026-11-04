@@ -55,9 +55,9 @@ the hole closed that let the two production cases through. One new index, built 
 
 **Interfaces:** none new.
 
-- [ ] Write a failing plan test on a real poll with a stored message: one read by `tabId` and `messageId`, `IXSCAN`, examining only its rows.
-- [ ] Watch it fail; commit.
-- [ ] Implement; watch it pass; commit.
+- [x] Write a failing plan test on a real poll with a stored message: one read by `tabId` and `messageId`, `IXSCAN`, examining only its rows.
+- [x] Watch it fail; commit.
+- [x] Implement; watch it pass; commit.
 
 ### Task 2: Empty lists send no query
 
@@ -65,9 +65,9 @@ the hole closed that let the two production cases through. One new index, built 
 
 **Interfaces:** `GUARDED_MODELS` gains the models fixed here.
 
-- [ ] Write failing tests for each read, and for the check on a spread-only list.
-- [ ] Watch them fail; commit.
-- [ ] Implement; watch them pass; commit.
+- [x] Write failing tests for each read, and for the check on a spread-only list.
+- [x] Watch them fail; commit.
+- [x] Implement; watch them pass; commit.
 
 ### Task 3: The operations index
 
@@ -75,6 +75,6 @@ the hole closed that let the two production cases through. One new index, built 
 
 **Interfaces:** the index `[tabId, createdAt]` on `SuperTabOperation`.
 
-- [ ] Write a failing plan test: a small Swarm's wide date range examines only its rows.
-- [ ] Watch it fail; commit.
-- [ ] Add the index; watch it pass; run `npm test`; post the numbers; mark the PR ready; add one review step.
+- [x] Write a failing plan test: a small Swarm's wide date range examines only its rows.
+- [x] Watch it fail; commit.
+- [x] Add the index; watch it pass; run `npm test`; post the numbers; mark the PR ready; add one review step.

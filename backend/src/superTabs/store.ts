@@ -1159,7 +1159,9 @@ export class SuperTabStore {
 
   /** The heads of Swarms already split into parts, by id. */
   private async heads(rows: Array<Pick<SwarmRow, 'id' | 'format'>>): Promise<Map<string, HeadData>> {
-    const heads = await this.db.swarmHead.findMany({ where: { id: { in: rows.filter(r => r.format === 2).map(r => `${r.id}:head`) } } })
+    const parted = rows.filter(r => r.format === 2)
+    if (!parted.length) return new Map()
+    const heads = await this.db.swarmHead.findMany({ where: { id: { in: parted.map(r => `${r.id}:head`) } } })
     return new Map(heads.map(head => [head.tabId, head.data as unknown as HeadData]))
   }
 
@@ -2560,7 +2562,8 @@ export class SuperTabStore {
       }
     }
     if (kept.size) {
-      const have = new Set((await tx.superTabDelivery.findMany({ where: { messageId: { in: [...kept] } }, select: { id: true } })).map(d => d.id))
+      // By the Swarm too: by message id alone it scanned every delivery, 440 ms in this transaction (Atlas slow log, 2026-11-04).
+      const have = new Set((await readBy(tx, 'SuperTabDelivery', 'byMessage', [{ $match: { tabId, messageId: { $in: [...kept] } } }, { $project: { _id: 1 } }])).map(d => d._id as string))
       // A delivery compacted into its message's receipts (deliveryCompaction.ts) was written too: never sent again.
       const compacted = await readBy(tx, 'SuperTabReceipt', 'id', [{ $match: { _id: { $in: [...kept] }, tabId } }, { $project: { deliveryIds: 1 } }])
       for (const receipt of compacted) for (const id of receipt.deliveryIds as string[] ?? []) have.add(id)
@@ -3031,10 +3034,13 @@ export class SuperTabStore {
     const rows = (await readBy(this.db, 'SuperTab', 'owner', [{ $match: { autonomousEnv: user.autonomousEnv, ownerId: user.sub, format: 2, deletedAt: null } },
       { $sort: { _id: 1 } }, { $limit: 100 }, { $project: { _id: 1 } }])).map(row => ({ id: row._id as string }))
     return transaction(this.db, async tx => {
+      if (!rows.length) return []
       const heads = await tx.swarmHead.findMany({ where: { tabId: { in: rows.map(row => row.id) }, key: 'head' }, select: { tabId: true, data: true } })
       const withGrid = new Map(heads.map(head => [head.tabId, head.data as unknown as HeadData] as const).filter(([, head]) => head.localModels))
-      const people = new Map<string, Person[]>([...withGrid.keys()].map(tabId => [tabId, []]))
-      for (const member of await tx.swarmMember.findMany({ where: { tabId: { in: [...withGrid.keys()] }, deleted: false },
+      const gridTabs = [...withGrid.keys()]
+      if (!gridTabs.length) return []
+      const people = new Map<string, Person[]>(gridTabs.map(tabId => [tabId, []]))
+      for (const member of await tx.swarmMember.findMany({ where: { tabId: { in: gridTabs }, deleted: false },
         orderBy: { ordinal: 'asc' }, select: { tabId: true, data: true } })) people.get(member.tabId)!.push(member.data as unknown as Person)
       return rows.flatMap(row => withGrid.has(row.id)
         ? [swarmGridRow(row.id, { ...withGrid.get(row.id)!, people: people.get(row.id)! } as SuperTabState)!] : [])

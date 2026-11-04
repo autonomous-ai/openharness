@@ -1375,6 +1375,9 @@ model SuperTabOperation {
   createdAt    DateTime @default(now())
 
   @@index([tabId])
+  /// A Swarm's receipts by date. No backend read names it yet: Atlas's Performance Advisor saw a read scan 107 k rows to return 40
+  /// (Ken's plan, 2026-11-04). Check its use on Atlas after the release, and remove it if nothing uses it.
+  @@index([tabId, createdAt])
   /// A receipt goes 30 days after createdAt (superTabs/operations.ts ensureOperationExpiry). Declared so db push keeps the index; the
   /// schema step makes it, with its expiry, before the push.
   @@index([createdAt], map: "operation_expiry")
