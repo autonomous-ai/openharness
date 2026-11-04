@@ -4,7 +4,7 @@
 
 **Goal:** Show a private project's lock in the channel mark position wherever Desktop draws its project channel name, keeping the sidebar's right edge for notifications.
 
-**Architecture:** Reuse the existing project privacy flag and `AppIcons.lock`. Keep `#` for public projects. Inline project channel labels that are currently strings will use a small shared presentation widget where an icon must appear; plain text or accessibility hints keep meaningful project names without pretending a lock is text.
+**Architecture:** Reuse the existing project privacy flag and `AppIcons.lock`. Keep `#` for public projects. Inline project channel labels that are currently strings use the same lock widget where an icon must appear; a composer hint keeps the project name without a textual `#`.
 
 **Tech Stack:** Flutter, Dart, existing Super Tab widgets and widget tests.
 
@@ -25,7 +25,7 @@
 - Public projects must retain the existing `#` mark.
 - Private projects must not retain a second lock at the row's trailing edge.
 - Notification badges and muted bells must remain the only project-row trailing marks.
-- Header, Activity, and hidden Buddy-chat channel references must identify private projects with a lock.
+- Header, Activity, and a project's Buddy detail line must identify private projects with a lock.
 - Accessibility labels and composer hints must still name the project clearly.
 
 ---
@@ -35,11 +35,11 @@
 **Files:**
 - Modify: `desktop/lib/super_tabs/project_sidebar.dart`
 - Modify: `desktop/lib/super_tabs/view.dart`
-- Modify: `desktop/lib/super_tabs/activity_view.dart`
-- Modify: `desktop/lib/super_tabs/notifications.dart`
-- Modify: `desktop/lib/super_tabs/decisions_view.dart`
+- Modify: `desktop/lib/super_tabs/private_project_lock.dart`
 - Modify: `desktop/lib/super_tabs/buddies.dart`
-- Test: `desktop/test/super_tab_sidebar_test.dart` and the focused Super Tab view/Activity tests
+- Modify: `desktop/lib/super_tabs/activity.dart`
+- Modify: `desktop/lib/super_tabs/activity_view.dart`
+- Test: `desktop/test/super_tab_sidebar_test.dart`, `desktop/test/super_tab_view_test.dart`, `desktop/test/super_tab_activity_view_test.dart`, and `desktop/test/super_tab_buddies_test.dart`
 - Test: `desktop/test/super_tab_project_rows_shots_test.dart`
 
 **Interfaces:**
@@ -48,10 +48,10 @@
 
 - [ ] Write failing widget tests for private leading lock/no trailing lock, public `#`, and right-side mention badge/muted bell.
 - [ ] Run the focused sidebar test and confirm the new assertions fail against the current placement.
-- [ ] Write failing view and Activity tests for the private channel mark in the conversation header and Activity; cover hidden Buddy-chat references in notification/decision displays and the Buddy detail label.
-- [ ] Run the focused view/Activity tests and confirm they fail because private project labels still use `#`.
+- [ ] Write failing view, Activity, and Buddy tests for private channel marks in the header, Activity, and Buddy detail line; ensure the composer hint has no textual `#`.
+- [ ] Run the focused view/Activity/Buddy tests and confirm they fail because private project labels still use `#`.
 - [ ] Move the sidebar lock into the leading mark column, retaining its tooltip and semantics; remove the trailing lock.
-- [ ] Render a lock beside private channel labels in the header and Activity; use the same project privacy lookup for hidden Buddy-chat references and leave composer hint text descriptive.
+- [ ] Render a lock beside private channel labels in the header, Activity, and Buddy detail line; keep composer hint text descriptive.
 - [ ] Capture light and dark sidebar screenshots showing private and public rows with a mention badge.
 - [ ] Run the focused widget tests, `check-ui-style`, and `laid_out_list_test`; record red/green evidence and screenshots in the PR.
 - [ ] Commit the implementation and tests.
