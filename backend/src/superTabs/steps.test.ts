@@ -689,6 +689,38 @@ describe('checks with several checkers', () => {
       expect(read()).toMatchObject({ passedBy: `agent:${pm}`, evidence: 'Reviewer left; passed on the second review' })
     })
 
+    // Security reviews 1 and 2 of #2916 (Heron2639, Grebe2639): a cleared failure must stay on the record, and only an owner
+    // among people clears.
+    const ownerCheck = (f: ReturnType<typeof departed>['f'], actor: Actor, evidence: string) => f.run({ type: 'work.check',
+      conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, checkId: f.group(f.task).checks[0]!.id,
+      passed: true, evidence } as Command, actor)
+
+    it('leaves a line in the task naming the departed checker, its evidence and who cleared it', () => {
+      const c = checkers()
+      const name = c.f.state.agents.find(a => a.id === c.reviewer)!
+      c.check(c.reviewer, false, 'Drops the session\nfull log')
+      c.f.run({ type: 'agent.remove', agentId: c.reviewer } as Command)
+      const effects = ownerCheck(c.f, owner, 'Reviewer left; passed on the second review')
+      expect(effects.messages).toContainEqual(expect.objectContaining({ conversationId: c.f.task, recipients: [],
+        text: `owner@example.com cleared ${name.displayName ?? name.name}'s failure of “Signs in offline”, as they left the Swarm: Drops the session` }))
+    })
+
+    it('stays failed after a collaborator\'s pass: only an owner among people clears it', () => {
+      const { f, read } = departed()
+      f.state.people.push({ id: 'peer', email: 'peer@example.com', role: 'collaborator', generation: 'first' })
+      const effects = ownerCheck(f, { kind: 'person', userId: 'peer', email: 'peer@example.com' }, 'Looks fine')
+      expect(read()).toMatchObject({ passedBy: null, evidence: 'Drops the session' })
+      expect(effects.messages.filter(m => m.text.includes('cleared'))).toEqual([])
+    })
+
+    it('is cleared by the project\'s owner who doesn\'t own the Swarm', () => {
+      const { f, read } = departed()
+      f.state.people.push({ id: 'peer', email: 'peer@example.com', role: 'collaborator', generation: 'first' })
+      f.state.projects = [{ id: 'lead', name: 'Pilot', ownerId: 'peer', leadConversationId: 'lead', visibility: 'public', members: [], updateMinutes: 5 }]
+      ownerCheck(f, { kind: 'person', userId: 'peer', email: 'peer@example.com' }, 'Reviewer left; I own this project')
+      expect(read()).toMatchObject({ passedBy: 'person:peer', evidence: 'Reviewer left; I own this project' })
+    })
+
     it('leaves a live checker\'s failure standing, whoever passes', () => {
       const { f, tester, check, read } = departed()
       check(tester, false, 'Crashes offline')
