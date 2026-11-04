@@ -4071,10 +4071,15 @@ class SuperTabController extends ChangeNotifier {
   /// Each project's Buddy proposals the PM has not answered, oldest first, as
   /// last read (backend proposals read, #2867's rule, task #2569), and the
   /// project chat's last sequence that read saw: the next read waits for the
-  /// chat to move, as only a message there can answer or add one.
+  /// chat to move, as only a message there can answer or add one, and for a
+  /// minute since the last (the PM, 2026-11-04: the read looks through the
+  /// whole chat, and repeated reads are the backend's biggest cost).
   final _proposals = <String, List<SuperTabProposal>>{};
   final _proposalsAt = <String, int>{};
+  final _proposalsReadAt = <String, DateTime>{};
   final _proposalReads = <String, Future<void>>{};
+  final _proposalsLater = <String, Timer>{};
+  static const proposalsEvery = Duration(minutes: 1);
 
   List<SuperTabProposal> proposalsOf(String projectId) =>
       _proposals[projectId] ?? const [];
@@ -4092,6 +4097,19 @@ class SuperTabController extends ChangeNotifier {
         0;
     if (_proposalsAt[projectId] == at) return Future.value();
     if (_proposalReads[projectId] case final reading?) return reading;
+    final last = _proposalsReadAt[projectId];
+    final wait = last == null
+        ? Duration.zero
+        : proposalsEvery - clock.now().difference(last);
+    if (wait > Duration.zero) {
+      // One read for every move in the minute, once it is up.
+      _proposalsLater[projectId] ??= Timer(wait, () {
+        _proposalsLater.remove(projectId);
+        unawaited(readProposals(projectId));
+      });
+      return Future.value();
+    }
+    _proposalsReadAt[projectId] = clock.now();
     late final Future<void> reading;
     reading = _readProposals(projectId, at).whenComplete(() {
       if (identical(_proposalReads[projectId], reading)) {
@@ -5268,6 +5286,9 @@ class SuperTabController extends ChangeNotifier {
     _machinesChanged.dispose();
     _closedShippedChanged.dispose();
     _silenceWatch?.cancel();
+    for (final later in _proposalsLater.values) {
+      later.cancel();
+    }
     for (final then in _onDispose) {
       then();
     }

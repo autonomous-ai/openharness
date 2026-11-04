@@ -87,9 +87,12 @@ day). It builds on #2867 (ask state: `✋ Proposal`) and #2872 (Backlog's Shippe
 - **Concurrency.** Both are written in the command's existing state transaction, so two moves serialize. A move names
   the task it goes after, never an index, so a stale view still lands where the person dropped the card.
 - **Read cost.** A move rewrites one group's part. Renumbering a whole queue happens only when two ranks get closer than
-  1e-6, about 40 moves into the same gap. The proposals read runs once when the view opens and again only after the
-  project chat moves. It finds the chat's proposal roots, then reads their threads the way the chat page does. If
-  finding the roots needs a new index, the PM decides before Ready.
+  1e-6, about 40 moves into the same gap. The proposals read runs once when the view opens, then again only after the
+  project chat moves, and at most once a minute per project (PM, 2026-11-04). It finds the chat's proposal roots, then
+  reads their threads the way the chat page does.
+- **Known limit.** Finding the roots looks through every message of the project chat: 3,002 rows for 5 proposals,
+  measured. The fix is a small indexed marker on proposal messages, with the existing ones marked once. That is a write
+  to stored rows, so it waits for Ken's go, and becomes its own follow-up task once he agrees.
 - **Scale.** At 10x, 300 open tasks in a project, a move is still one write. The first warning is the proposals read's
   time on a project chat with 10x the messages, in the read measures.
 - **Compatibility.**
