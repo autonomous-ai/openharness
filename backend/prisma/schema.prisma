@@ -1127,6 +1127,11 @@ model SuperTabMessage {
   /// The project a row of a person's one Buddy chat belongs to (superTabs/buddySessions.ts lostProjectRow): a project
   /// session's thread and a PM's private line. Hidden once its person no longer reads that project.
   buddyProject    String?
+  /// When its author last edited its text (superTabs/messageEdits.ts); no earlier text is kept.
+  editedAt        DateTime?
+  /// When its author deleted it while replies hung under it: its text is then DELETED_TEXT and its files are gone. A deleted
+  /// message with no replies is removed, row and all.
+  deletedAt       DateTime?
   createdAt       DateTime @default(now())
 
   /// Pages read by (sequence, id): older rows of one command share a sequence.
@@ -1284,6 +1289,23 @@ model SuperTabThreadMark {
   @@index([tabId, personId, updatedAt])
   /// The sweep's marks untouched for 180 days (readMarks.ts sweepThreadMarks); no TTL option, which the app user cannot set.
   @@index([updatedAt])
+}
+
+/// A project chat's Buddy proposal roots not yet seen answered (superTabs/proposals.ts), read by the Tasks view's Proposals in place
+/// of a walk of the whole chat (task #2777). Written in the transaction that inserts each root (store.ts writeMessages), and by
+/// a chat's first reads, which seed it from the chat's rows; a row id `seeded:<tabId>:<conversationId>`, sequence -1, marks a
+/// chat seeded. Removed by the read once it finds a root answered or gone, and with its Swarm (purge.ts). Under 10 per project.
+model SuperTabOpenProposal {
+  /// The root message's id, or the chat's seed mark.
+  id             String   @id @map("_id")
+  tabId          String
+  conversationId String
+  /// The root's sequence in its chat; -1 for the seed mark.
+  sequence       Int
+  createdAt      DateTime @default(now())
+
+  /// A chat's open roots, newest first (proposals.ts databaseProposalReads listed).
+  @@index([tabId, conversationId, sequence])
 }
 
 /// One thread with at least one reply, summed up as pageThreads' $facet gives it (pageReads.ts refreshThreads): rewritten in the

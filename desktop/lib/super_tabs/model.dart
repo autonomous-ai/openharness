@@ -1446,6 +1446,8 @@ class SuperTabMessage {
       author = Map.unmodifiable(superTabMap(row['author'])),
       source = Map.unmodifiable(superTabMap(row['source'] ?? const {})),
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
+      editedAt = DateTime.tryParse(row['editedAt'] as String? ?? ''),
+      deletedAt = DateTime.tryParse(row['deletedAt'] as String? ?? ''),
       attachments = _attachments(row['attachments']),
       reactions = List.unmodifiable(
         SuperTabReactionCount.listFromJson(row['reactions']),
@@ -1494,6 +1496,15 @@ class SuperTabMessage {
   final Map<String, dynamic> author;
   final Map<String, dynamic> source;
   final DateTime? createdAt;
+
+  /// When its author last changed its text, as the backend's `message.edit`
+  /// records it; null for one never edited.
+  final DateTime? editedAt;
+
+  /// When its author deleted it. Only a message with replies is still read
+  /// after that: its tombstone, which keeps its thread.
+  final DateTime? deletedAt;
+  bool get deleted => deletedAt != null;
   final List<SuperTabAttachment> attachments;
   final List<SuperTabReactionCount> reactions;
 

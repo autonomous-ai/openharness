@@ -8,6 +8,8 @@ import { localDatabase } from './mongo.js'
 import { plan } from './plan.js'
 import { seedSwarm } from './seed.js'
 import { startSelfProfile } from '../../src/lib/selfProfile.js'
+import { startCpuStats } from '../../src/lib/cpuStats.js'
+import { timeBenchReplies } from './http.js'
 
 /**
  * What one call of each hot Swarm route costs the backend in CPU, alone, on the bench's seeded Swarm (#314: production
@@ -17,12 +19,18 @@ import { startSelfProfile } from '../../src/lib/selfProfile.js'
  *
  *   NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
  *     DATABASE_URL=mongodb://127.0.0.1:1/bench-never-used npx tsx integration/bench/routeCost.ts [calls per route]
+ *
+ * It prints the server's `cpu by thread` every 15 s (lib/cpuStats.ts; on Linux, the split by thread). CPU_STATS=off runs
+ * without it, to compare the CPU per call it costs.
  */
 async function main() {
   const calls = Number(process.argv[2] ?? 200)
   // CPU_SELF_PROFILE=1: the production self-profile on a short clock, to see its output under this load.
   const stopProfile = process.env.CPU_SELF_PROFILE === '1'
     ? startSelfProfile({ everyMs: 45_000, profileMs: 20_000, reportMs: 15_000, log: (m, c) => process.stdout.write(`${m} ${JSON.stringify(c, null, 1)}\n`) }) : () => {}
+  const cpuStats = process.env.CPU_STATS === 'off' ? null
+    : startCpuStats({ everyMs: 15_000, log: (m, c) => process.stdout.write(`${m} ${JSON.stringify(c)}\n`) })
+  timeBenchReplies(cpuStats)
   const config = { ...DEFAULT_CONFIG }
   const database = await localDatabase()
   const people = await seedAccounts(database.db, config.machines)
@@ -77,6 +85,8 @@ async function main() {
       process.stdout.write(`| ${label} | ${calls} | ${failed} | ${(ms / calls).toFixed(2)} | ${((performance.now() - wall) / calls).toFixed(2)} | ${(bytes / calls / 1024).toFixed(1)} |\n`)
     }
   } finally {
+    cpuStats?.flush()
+    cpuStats?.stop()
     stopProfile()
     await close()
     await driver.close()

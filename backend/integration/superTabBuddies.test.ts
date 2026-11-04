@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { SEED_SETTLE_MS } from '../src/superTabs/proposals.js'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
@@ -225,6 +226,25 @@ describe('a Buddy through the store', () => {
     await expect(f.execute({ type: 'message.send', conversationId: 'lead', text: 'Hi PM', replyTo: null, recipientIds: [] }, peer, agentId))
       .rejects.toThrow('A Buddy posts only in its own chat')
   })
+  // Task #2777: the Tasks view's Proposals read the proposals kept apart, by id, in place of the whole project chat.
+  it('keeps its owner\'s proposal in the project\'s open proposals until the PM answers it in its thread', async () => {
+    const f = await swarm()
+    const { chat, agentId } = await buddy(f)
+    const ask = String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Send it to the PM', replyTo: null, recipientIds: [] }, peer)).result.messageId)
+    const sent = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, goal: 'Offline sync', scope: 'Desktop only',
+      priority: 'normal' }, peer, agentId)).result.messageId)
+    // Written with the proposal itself, before anything reads it.
+    expect(await db.superTabOpenProposal.findMany({ where: { tabId: f.tab }, select: { id: true, conversationId: true } })).toEqual([{ id: sent, conversationId: 'lead' }])
+    const listed = async () => (await f.store.proposals(owner, f.tab, 'lead')).proposals.map(p => p.messageId)
+    expect(await listed()).toEqual([sent])
+    // Past the seed's half hour, the read takes the kept proposals alone.
+    await db.superTabOpenProposal.update({ where: { id: `seeded:${f.tab}:lead` }, data: { createdAt: new Date(Date.now() - SEED_SETTLE_MS - 1000) } })
+    expect(await listed()).toEqual([sent])
+    await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Taking it', replyTo: sent, recipientIds: [] }, owner, f.lead)
+    expect(await listed()).toEqual([])
+    expect(await db.superTabOpenProposal.count({ where: { id: sent } })).toBe(0)
+  })
+
   it('reads its project\'s work as its person: which task owns it, its pull request, its state and what blocks it', async () => {
     const f = await swarm()
     // Opened before Buddies were on: the owner's private chat with the PM, which their Buddy may never read either.

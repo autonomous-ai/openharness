@@ -11,6 +11,7 @@ import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/shared/theme/app_ink.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/app_type.dart';
 
 export 'swarm_file_links.dart' show swarmAttachmentHost, swarmAttachmentLink;
 export 'swarm_message_style.dart'
@@ -248,10 +249,16 @@ class SwarmMessageFrame extends StatelessWidget {
   );
 }
 
+/// What a deleted message reads, in place of its text (backend
+/// messageEdits.ts `DELETED_TEXT`).
+const swarmDeletedText = 'This message was deleted.';
+
 /// One message: avatar, who wrote it, their role and when — none of it for a
-/// follow-up — then what it answers, its text, its files, its [reactions] and
-/// its [thread]'s line. A tap opens its actions, a long-press [onLongPress];
-/// lit for a moment when a quote leads to it.
+/// follow-up — then what it answers, its text ("(edited)" under it once its
+/// author changed it), its files, its [reactions] and its [thread]'s line. A
+/// deleted one keeps only "This message was deleted." and its thread's line.
+/// A tap opens its actions, a long-press [onLongPress]; lit for a moment when
+/// a quote leads to it.
 class SwarmMessageRow extends StatelessWidget {
   const SwarmMessageRow({
     super.key,
@@ -362,7 +369,8 @@ class SwarmMessageRow extends StatelessWidget {
   /// (swarm_message_receipt.dart); null for every other message.
   final Widget? receipt;
 
-  /// Opens its long-press sheet: reactions, Copy link to message.
+  /// Opens its long-press sheet: reactions, Copy link to message, and Edit
+  /// and Delete on the reader's own. None for a deleted message.
   final VoidCallback? onLongPress;
 
   /// One of the message's files, with what asks for a fresh link to it
@@ -417,6 +425,26 @@ class SwarmMessageRow extends StatelessWidget {
     String two(int n) => n.toString().padLeft(2, '0');
     final key = ValueKey('swarm-message-${message.id}');
     final padding = SwarmMessageFrame.padding(grouped: grouped);
+    // A deleted message keeps only its words and its thread's line.
+    final deletedBody = !message.deleted
+        ? null
+        : <Widget>[
+            if (lit) SizedBox(key: ValueKey('swarm-lit-${message.id}')),
+            ?quote,
+            Padding(
+              padding: const EdgeInsets.only(top: SwarmMessageFrame.bodyGap),
+              child: Text(
+                swarmDeletedText,
+                key: ValueKey('swarm-deleted-${message.id}'),
+                style: swarmChatText(
+                  16,
+                  color: AppPalette.textFaint,
+                  height: 1.42,
+                ).copyWith(fontStyle: FontStyle.italic),
+              ),
+            ),
+            ?thread,
+          ];
     final frame = SwarmMessageFrame(
       grouped: grouped,
       onAvatar: onAuthor,
@@ -447,60 +475,74 @@ class SwarmMessageRow extends StatelessWidget {
                 style: tty.style(color: AppPalette.textFaint, size: 12.5),
               ),
       ),
-      body: [
-        if (lit) SizedBox(key: ValueKey('swarm-lit-${message.id}')),
-        ?quote,
-        ?swarmTerminalNote(message),
-        // A voice message's text is its words: under its bubble, on →A.
-        if (!message.attachments.any((file) => file.voice != null))
-          for (final part in swarmTextParts(message.text))
-            if (part.code)
-              SwarmCodeBlock(code: part.text, name: part.name, onTap: onTap)
-            else
+      body:
+          deletedBody ??
+          [
+            if (lit) SizedBox(key: ValueKey('swarm-lit-${message.id}')),
+            ?quote,
+            ?swarmTerminalNote(message),
+            // A voice message's text is its words: under its bubble, on →A.
+            if (!message.attachments.any((file) => file.voice != null))
+              for (final part in swarmTextParts(message.text))
+                if (part.code)
+                  SwarmCodeBlock(code: part.text, name: part.name, onTap: onTap)
+                else
+                  Padding(
+                    padding: const EdgeInsets.only(
+                      top: SwarmMessageFrame.bodyGap,
+                    ),
+                    child: SwarmMessageText(
+                      text: part.text,
+                      mentionNames: mentions.names,
+                      references: references,
+                      tagged: tagged,
+                      addresses: taggedAddresses,
+                      labels: taggedLabels,
+                      onTap: onTap,
+                      onOpenConversation: onOpenConversation,
+                    ),
+                  ),
+            if (message.editedAt != null)
               Padding(
-                padding: const EdgeInsets.only(top: SwarmMessageFrame.bodyGap),
-                child: SwarmMessageText(
-                  text: part.text,
-                  mentionNames: mentions.names,
-                  references: references,
-                  tagged: tagged,
-                  addresses: taggedAddresses,
-                  labels: taggedLabels,
-                  onTap: onTap,
-                  onOpenConversation: onOpenConversation,
+                padding: const EdgeInsets.only(top: AppSpace.xs),
+                child: Text(
+                  '(edited)',
+                  key: ValueKey('swarm-edited-${message.id}'),
+                  style: AppType.caption(color: AppPalette.textFaint),
                 ),
               ),
-        ?swarmCutShort(message),
-        for (final file in message.attachments) _attachment(context, file),
-        ?card,
-        ?links,
-        ?reactions,
-        ?thread,
-        ?below,
-        ?receipt,
-        if (actions)
-          Padding(
-            padding: const EdgeInsets.only(top: AppSpace.s),
-            child: Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                if (onReply case final reply?)
-                  SwarmSmallButton(
-                    key: ValueKey('swarm-reply-${message.id}'),
-                    icon: inThread
-                        ? LucideIcons.messageSquareReply
-                        : LucideIcons.reply,
-                    label: inThread ? 'Reply in thread' : 'Reply',
-                    onTap: reply,
-                  ),
-                SwarmCopyButton(text: message.text),
-              ],
-            ),
-          ),
-      ],
+            ?swarmCutShort(message),
+            for (final file in message.attachments) _attachment(context, file),
+            ?card,
+            ?links,
+            ?reactions,
+            ?thread,
+            ?below,
+            ?receipt,
+            if (actions)
+              Padding(
+                padding: const EdgeInsets.only(top: AppSpace.s),
+                child: Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    if (onReply case final reply?)
+                      SwarmSmallButton(
+                        key: ValueKey('swarm-reply-${message.id}'),
+                        icon: inThread
+                            ? LucideIcons.messageSquareReply
+                            : LucideIcons.reply,
+                        label: inThread ? 'Reply in thread' : 'Reply',
+                        onTap: reply,
+                      ),
+                    SwarmCopyButton(text: message.text),
+                  ],
+                ),
+              ),
+          ],
     );
-    final held = onLongPress == null
+    // A deleted message has nothing left to react to, copy or change.
+    final held = onLongPress == null || message.deleted
         ? frame
         : GestureDetector(
             behavior: HitTestBehavior.translucent,

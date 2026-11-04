@@ -1252,3 +1252,24 @@ describe('a machine its owner keeps for some projects', () => {
     expect((await store.read(owner, f.tab)).state.machines!.find(m => m.machineId === 'team-mac')!.projects).toBeUndefined()
   })
 })
+
+// Task #2806 (Scholes, 11-04): a machine's owner lets teammates' work run in their own account there. A guard loosened by the
+// owner alone: never by the Harness Team account that runs on the same Mac as them, nor by anyone else.
+describe('teammates\' work in a machine owner\'s own account', () => {
+  it('is chosen by its owner alone, never by its Team account session, kept across reads and said on the machine', async () => {
+    const f = await fixture()
+    const choose = (allowed: boolean, user: AuthUser) => run(f.tab, { type: 'machine.ownAccountWork', machineId: 'team-mac', allowed } as Command, user)
+    await expect(choose(true, owner)).rejects.toMatchObject({ code: 'OWNER_REQUIRED' })
+    await expect(choose(true, team)).rejects.toMatchObject({ code: 'TEAM_SESSION_LIMITED' })
+    expect((await store.read(owner, f.tab)).state.machines!.find(m => m.machineId === 'team-mac')!.ownAccountChoice).toBeUndefined()
+    await choose(true, person)
+    const seen = (await store.read(owner, f.tab)).state.machines!.find(m => m.machineId === 'team-mac')!
+    expect(seen.ownAccountChoice).toMatchObject({ allowed: true, by: person.sub })
+    // Whoever routes a teammate's task there reads it.
+    expect((seen as unknown as { teamWork: { ownAccount?: string } }).teamWork.ownAccount).toMatch(/runs teammates' work in .+'s own account\.$/)
+    await choose(false, person)
+    const off = (await store.read(owner, f.tab)).state.machines!.find(m => m.machineId === 'team-mac')!
+    expect(off.ownAccountChoice).toMatchObject({ allowed: false, by: person.sub })
+    expect((off as unknown as { teamWork: { ownAccount?: string } }).teamWork.ownAccount).toBeUndefined()
+  })
+})

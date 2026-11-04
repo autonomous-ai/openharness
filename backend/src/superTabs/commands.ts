@@ -1,6 +1,6 @@
 import { applyPushOrigin, failPushUnknown, failTeamWritten, hasStep, mainAccountMembers, markTeamWritten, requireNameable, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
-import { admitMachineStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machinesFull, MACHINES_FULL_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
+import { admitMachineStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machinesFull, MACHINES_FULL_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, movedToTeamAccount, type ContributedMachine } from './machines.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './usernames.js'
 import { setName, writtenNameOf } from './personNames.js'
@@ -36,6 +36,7 @@ import { fixedOriginal, LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordFix, 
 import { othersWorkNotice } from './othersWork.js'
 import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
+import { deleteMessage, editMessage, type MessageChangeTarget } from './messageEdits.js'
 import { githubRepository } from '../github/repository.js'
 import { shippedAt } from './ship.js'
 import { syncTaskLines } from './taskLine.js'
@@ -160,6 +161,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('machine.engineResume'), machineId: id, engine: z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), askedIn: askedInSchema.optional() }).strict(),
   // The projects that may use a machine; null: every project (Tony, 11-03).
   z.object({ type: z.literal('machine.projects'), machineId: id, projectIds: z.array(id).min(1).max(64).nullable(), askedIn: askedInSchema.optional() }).strict(),
+  // Whether teammates' work may also run in the owner's own account on their machine (Scholes, 11-04): its owner's choice.
+  z.object({ type: z.literal('machine.ownAccountWork'), machineId: id, allowed: z.boolean(), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('machine.remove'), machineId: id }).strict(),
   z.object({ type: z.literal('machine.cleaned'), machineId: id, removalId: id }).strict(),
   z.object({ type: z.literal('localModels.set'), enabled: z.boolean() }).strict(),
@@ -323,6 +326,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('message.react'), conversationId: id, messageId: id, emoji: reactionSchema, on: z.boolean(),
     // As message.send's (security review 1 of #2435).
     oneBuddy: z.literal(true).optional() }).strict(),
+  // The author's own post only (messageEdits.ts); the store finds the row (store.ts messageChangeTarget).
+  z.object({ type: z.literal('message.edit'), conversationId: id, messageId: id, text: z.string().trim().max(32_000) }).strict(),
+  z.object({ type: z.literal('message.delete'), conversationId: id, messageId: id }).strict(),
   z.object({ type: z.literal('decision.ask'), conversationId: id, personId: id, questions: z.array(decisionQuestion).min(1).max(MAX_QUESTIONS) }).strict(),
   // A choice, or `delegate`: the person asked leaves it to the PM, who takes its recommended option (decisions.ts answerDecision).
   z.object({ type: z.literal('decision.answer'), decisionId: id, choice: z.number().int().min(0).optional(), note: z.string().trim().min(1).max(2000).optional(),
@@ -362,6 +368,8 @@ export const operationSchema = z.object({ operationId: id, command: commandSchem
  *  chat row is redacted (terminal.ts). Not a role's skill text, which only its project's owner, Lead and hosts read. */
 const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'message.send': ['text'],
+  // An edit is a new text in a row everyone reads: cleaned as a send is (security review 2 of #2967).
+  'message.edit': ['text'],
   'buddy.propose': ['title', 'goal', 'scope'],
   'member.status': ['status.text'],
   'agent.add': ['name', 'initialMessage'],
@@ -495,6 +503,8 @@ export interface CommandContext {
   avatarUpload?: AvatarUpload
   /** The message `message.react` names, read by the store (reactions.ts). */
   reaction?: ReactionTarget
+  /** The message `message.edit` or `message.delete` names, read by the store (messageEdits.ts). */
+  messageChange?: MessageChangeTarget
   /** Route decisions this tab recorded in the last hour, counted by the store. */
   /** The decision a command names, read from SuperTabRouteDecision by the store. */
   routeDecision?: RouteDecision
@@ -644,7 +654,7 @@ function dropClosing(state: SuperTabState, keep: (request: NonNullable<SuperTabS
 /** Also checked before returning an idempotent receipt: a retry does not retain
  * access after the person has been removed from a private project. */
 /** What may name a person's one Buddy chat: posts, reactions, proposals, naming the Buddy and ending a session. */
-const SWARM_BUDDY_CHAT_COMMANDS: ReadonlySet<string> = new Set(['message.send', 'message.react', 'buddy.propose', 'buddy.rename', 'buddy.sessionEnd'])
+const SWARM_BUDDY_CHAT_COMMANDS: ReadonlySet<string> = new Set(['message.send', 'message.react', 'message.edit', 'message.delete', 'buddy.propose', 'buddy.rename', 'buddy.sessionEnd'])
 
 export function authorizeCommandAccess(state: SuperTabState, actor: Actor, command: Command, context: Partial<CommandContext> = {}) {
   if (command.type === 'invite.accept' || command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned') return
@@ -674,7 +684,7 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if ('agentId' in command) readAgent(state, actor, command.agentId)
   if (command.type === 'agent.start') readConversation(state, actor, command.request.conversationId)
   if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
-    || command.type === 'machine.engineResume' || command.type === 'machine.projects') && command.askedIn) {
+    || command.type === 'machine.engineResume' || command.type === 'machine.projects' || command.type === 'machine.ownAccountWork') && command.askedIn) {
     readConversation(state, actor, command.askedIn.conversationId)
   }
   if ('startId' in command && command.type !== 'route.modelResult') {
@@ -1861,6 +1871,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const othersToldWeek = state.machines.find(m => m.machineId === command.machineId)?.othersToldWeek
       // Its owner's choice of projects is its own command's (machine.projects): saving the settings keeps it.
       const projects = state.machines.find(m => m.machineId === command.machineId && !m.buddyOnly)?.projects
+      // So is their choice of their own account for teammates' work (machine.ownAccountWork), Desktop's join re-save
+      // included; not over a removal, so a Mac removed and added again starts Team-account-only.
+      const ownAccountChoice = state.machines.find(m => m.machineId === command.machineId && !m.buddyOnly && !m.removal)?.ownAccountChoice
       state.machines = state.machines.filter(m => m.machineId !== command.machineId)
       state.machineCleanups = state.machineCleanups?.filter(c => c.machineId !== command.machineId)
       if (!state.machineCleanups?.length) delete state.machineCleanups
@@ -1869,6 +1882,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         maxAgents: mac?.maxAgents ?? command.maxAgents, ...(command.scope ? { scope: command.scope } : {}),
         contributorId: actor.userId, membershipGeneration: contributor.generation, generation: operationId, paused,
         ...(host ? { hostMachineId: host } : {}), ...(teamAccountOnly ? { teamAccountOnly: true as const } : {}), ...(projects && !host ? { projects } : {}),
+        ...(ownAccountChoice && !host ? { ownAccountChoice } : {}),
         ...(othersToldWeek != null ? { othersToldWeek } : {}) })
       // A Mac given other slots or a new name gives its team account the same, and its pause; its own folder, engines and grant stay.
       const added = state.machines.at(-1)!
@@ -1907,6 +1921,27 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const keeper = person(state, pool.contributorId)
       const asOwner: Actor = { kind: 'person', userId: keeper.id, email: keeper.email }
       pool.projects = [...new Set(command.projectIds)].map(projectId => readProject(state, asOwner, projectId).id)
+      break
+    }
+    case 'machine.ownAccountWork': {
+      // Whether teammates' work may run in its owner's own account here, as its owner, instead of moving to its Harness Team
+      // account (Scholes, 11-04): its owner's choice, or a Lead's passing on their chat message, as machine.projects. It
+      // loosens a privacy guard, so it is set on the Mac's own entry only, and recorded with whose word and when.
+      const pool = machineContribution(state, command.machineId) ?? fail('NOT_FOUND', 'This machine has not been contributed.', 404)
+      if (pool.buddyOnly) fail('NOT_FOUND', 'This machine has not been contributed.', 404)
+      if (!machineOwnerWord(pool, command.askedIn)) {
+        fail('OWNER_REQUIRED', "Only the machine's owner, or the Lead passing on a chat message the owner wrote in the last day, chooses where teammates' work runs on it.", 403)
+      }
+      // On is informed consent: the owner's own session, where the app warns them first. A Lead may pass on their word only to
+      // turn it off, which tightens the guard (security review 2 of #2981).
+      if (command.allowed && actor.kind !== 'person') {
+        fail('OWNER_SESSION_REQUIRED', "Only the machine's owner can let teammates' work run in their own account, from Harness on their own computer.", 403)
+      }
+      if (pool.hostMachineId) fail('TEAM_ACCOUNT_ENTRY', 'A Harness Team account always runs teammates\' work. Choose on its Mac.', 400)
+      if (pool.removal) fail('MACHINE_REMOVED', 'This machine is being removed from the Swarm.')
+      // A Lead's relay keeps the message it passed on, so an audit reads the words behind it (security review 1 of #2981).
+      pool.ownAccountChoice = { allowed: command.allowed, by: pool.contributorId, at: new Date(context.now).toISOString(),
+        ...(actor.kind === 'agent' && command.askedIn ? { askedIn: { conversationId: command.askedIn.conversationId, messageId: command.askedIn.messageId } } : {}) }
       break
     }
     case 'machine.remove': {
@@ -2309,6 +2344,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       marking(startGroup, () => applyPushOrigin(state, startGroup, context.pushOrigin))
       const written = teamWrittenTask(state, startGroup)
       const moved = teamStartRequest(state, named, home, context.teamAccountsIdle, context.teamMachines, written)
+      // Moved to the Mac's Team account: the starter is told why in one line (task #2806).
+      if (moved.machineId !== named.machineId) {
+        const mac = state.machines?.find(m => m.machineId === named.machineId)
+        if (mac) result.moved = movedToTeamAccount(mac)
+      }
       if (written) requireTeamWrittenMachine(state, startGroup, moved.machineId)
       // A branch GitHub cannot place stays out of the main account too, unmarked, as it may yet read clean.
       else if (context.pushOrigin === 'unknown' && !teamAccountPool(state.machines?.find(m => m.machineId === moved.machineId))) failPushUnknown()
@@ -3017,6 +3057,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       result.changed = react(group, command.messageId, command.on, context.reaction)
       break
     }
+    case 'message.edit':
+      // `command` is the cleaned one (withoutCredentials): the store writes this text, never the one it was sent.
+      result.changed = editMessage(open(state, command.conversationId), actor, command.messageId, command.text, context.messageChange)
+      if (result.changed) effects.messageEdit = { messageId: command.messageId, text: command.text }
+      break
+    case 'message.delete':
+      Object.assign(result, { changed: true }, deleteMessage(open(state, command.conversationId), actor, command.messageId, context.messageChange))
+      break
     case 'member.avatar':
       setMemberAvatar(state, actor, command.avatar, context.avatarUpload)
       break

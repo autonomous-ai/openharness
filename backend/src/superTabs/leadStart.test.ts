@@ -111,6 +111,14 @@ describe('starting a project\'s Product Manager on a Swarm machine', () => {
     expect(none.state.starts ?? []).toEqual([])
   })
 
+  // Task #2806: its owner let teammates' work run in their own account there (machine.ownAccountWork).
+  it('on a teammate\'s Mac whose owner lets teammates\' work run in their own account, runs on the Mac itself', () => {
+    const f = swarm()
+    f.machine('mate-mac').teamAccountOnly = true
+    f.run({ type: 'machine.ownAccountWork', machineId: 'mate-mac', allowed: true } as Command, mate)
+    expect(f.lead('mate-mac').result).toMatchObject({ machineId: 'mate-mac' })
+  })
+
   it('on a teammate\'s Mac with no Team account, runs on the Mac itself, whatever the Swarm\'s switch says for workers', () => {
     process.env.SWARM_TEAM_ACCOUNT_REQUIRED = '1'
     const f = swarm()
