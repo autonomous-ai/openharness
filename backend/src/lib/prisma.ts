@@ -2,14 +2,16 @@ import { PrismaClient, type Prisma } from '@prisma/client'
 import { env } from '../config/env.js'
 import { POOL_DEFAULTS, secondaryReadsUrl, withPoolDefaults } from './databaseUrl.js'
 import { withQueryStats } from './queryStats.js'
+import { metrics } from './metrics.js'
 
 // The Prisma CLI (db push) reads env("DATABASE_URL"); keep it in sync for any manual run.
 process.env.DATABASE_URL ??= env.DATABASE_URL
 
-// Every query is timed for the per-minute `db by shape` log (lib/queryStats.ts, DB roadmap Phase 1).
+// Every query is timed for the per-minute `db by shape` log (lib/queryStats.ts, DB roadmap Phase 1) and into
+// prisma_query_duration_seconds (lib/metrics.ts).
 export const prisma = withQueryStats(new PrismaClient({
   datasources: { db: { url: withPoolDefaults(env.DATABASE_URL, POOL_DEFAULTS) } },
-}))
+}), undefined, undefined, metrics.observeQuery)
 
 /** The client for reads that tolerate a few seconds of lag, on [url] with the secondary options (databaseUrl.ts
  *  secondaryReadsUrl) and the pool defaults, its queries logged as `secondary:` in `db by shape`; [primary] itself when
@@ -17,7 +19,7 @@ export const prisma = withQueryStats(new PrismaClient({
 export function readReplica(primary: PrismaClient, url: string, reads: 'on' | 'off',
   make: (url: string) => PrismaClient = url => new PrismaClient({ datasources: { db: { url } } })): PrismaClient {
   if (reads === 'off') return primary
-  return withQueryStats(make(withPoolDefaults(secondaryReadsUrl(url), POOL_DEFAULTS)), undefined, undefined, 'secondary')
+  return withQueryStats(make(withPoolDefaults(secondaryReadsUrl(url), POOL_DEFAULTS)), undefined, undefined, metrics.observeQuery, 'secondary')
 }
 
 /** Older history pages, costs, search, leaderboard names and usage totals (task #2970). It connects on its first query. On a

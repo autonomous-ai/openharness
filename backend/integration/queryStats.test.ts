@@ -137,7 +137,7 @@ it('logs every interval once started, flushes the last window on stop, and recor
 it('names the secondary client\'s queries apart, so `db by shape` tells the reads it moved off the primary', async () => {
   const someone = person()
   await db.user.create({ data: someone })
-  const secondary = withQueryStats(base, () => stats, undefined, 'secondary')
+  const secondary = withQueryStats(base, () => stats, undefined, undefined, 'secondary')
   await runWork('http GET /api/users/:id', async () => {
     await secondary.user.findMany({ where: { email: someone.email } })
     await secondary.$runCommandRaw({ ping: 1 })
