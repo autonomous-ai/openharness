@@ -19,7 +19,7 @@
   ┌──────────────────────┐   ┌──────────────────────────────────┐
   │ Huy Pham             │   │ Shrike2                          │
   │ 🌴 Out of office     │   │ ✳ Claude Opus 5.5                │
-  │ 🕒 3:42 PM local time│   │ 💻 MacbookPro.local              │
+  │ 🕒 3:42 PM local time│   │ 💻 MacbookPro                    │
   └──────────────────────┘   │ Working on #2605 Chat: a card… › │
                              └──────────────────────────────────┘
   ```
@@ -66,11 +66,11 @@
 **Interfaces:**
 - Produces: command `{ type: 'member.timeZone', timeZone: string | null }` (string 1..64); readers get `people[].timeZone`.
 
-- [ ] **Step 1: Failing tests** in `profile.test.ts`, `describe('time zone')`: `sets and clears the person's own zone` (`Asia/Ho_Chi_Minh` stored, `null` deletes it); `refuses an unknown zone and an agent` (`Mars/Base` throws with code `TIME_ZONE`; an agent actor throws; nothing stored); `a viewer may set their own` (viewer actor succeeds).
-- [ ] **Step 2:** `cd backend && npx vitest run src/superTabs/profile.test.ts` fails on the unknown command.
-- [ ] **Step 3:** `setTimeZone(state, actor, timeZone: string | null)` in `profile.ts`: person only (`HUMAN_REQUIRED`), `knownTimeZone` from `digest.ts` or `fail('TIME_ZONE', 'Name a time zone such as Asia/Ho_Chi_Minh.', 400)`; null deletes. Add the command to the viewer-allowed list with `member.username`.
-- [ ] **Step 4:** the same run passes; `npx tsc --noEmit -p .` clean.
-- [ ] **Step 5:** commit.
+- [x] **Step 1: Failing tests** in `profile.test.ts`, `describe('time zone')`: `sets and clears the person's own zone` (`Asia/Ho_Chi_Minh` stored, `null` deletes it); `refuses an unknown zone and an agent` (`Mars/Base` throws with code `TIME_ZONE`; an agent actor throws; nothing stored); `a viewer may set their own` (viewer actor succeeds).
+- [x] **Step 2:** `cd backend && npx vitest run src/superTabs/profile.test.ts` fails on the unknown command.
+- [x] **Step 3:** `setTimeZone(state, actor, timeZone: string | null)` in `profile.ts`: person only (`HUMAN_REQUIRED`), `knownTimeZone` from `digest.ts` or `fail('TIME_ZONE', 'Name a time zone such as Asia/Ho_Chi_Minh.', 400)`; null deletes. Add the command to the viewer-allowed list with `member.username`.
+- [x] **Step 4:** the same run passes; `npx tsc --noEmit -p .` clean.
+- [x] **Step 5:** commit.
 
 ### Task 2: Desktop reports the reader's zone
 
@@ -84,11 +84,11 @@
 **Interfaces:**
 - Produces: `String? SuperTabPerson.timeZone`; `String? superTabLocalTimeZone()` with a `@visibleForTesting` override `superTabLocalTimeZoneOverride`; `Future<void> SuperTabController.reportTimeZone()`.
 
-- [ ] **Step 1: Failing tests:** `reads a person's zone` (fromJson); `zoneFromLocaltimeLink` maps `/var/db/timezone/zoneinfo/Asia/Ho_Chi_Minh` and `/usr/share/zoneinfo/Europe/Berlin` to their names and `/etc/foo` to null; `reports the zone once when it differs` (fixture records one `member.timeZone` after `refresh()`, none after a second refresh); `does not report a zone already stored`; `a refused report is not sent again` (fixture refuses the command: no error surfaced, one attempt over two refreshes).
-- [ ] **Step 2:** `flutter test test/super_tab_time_zone_test.dart` fails.
-- [ ] **Step 3:** native reads `TZ` when it is an `Area/City` name, else the `/etc/localtime` link after `zoneinfo/`, else Linux's `/etc/timezone`; Windows null. Web reads `Intl.DateTimeFormat().resolvedOptions().timeZone` through `dart:js_interop`. The controller calls `reportTimeZone()` after a read that built a snapshot, unawaited; it remembers the value it tried.
-- [ ] **Step 4:** the test file passes.
-- [ ] **Step 5:** commit.
+- [x] **Step 1: Failing tests:** `reads a person's zone` (fromJson); `zoneFromLocaltimeLink` maps `/var/db/timezone/zoneinfo/Asia/Ho_Chi_Minh` and `/usr/share/zoneinfo/Europe/Berlin` to their names and `/etc/foo` to null; `reports the zone once when it differs` (fixture records one `member.timeZone` after `refresh()`, none after a second refresh); `does not report a zone already stored`; `a refused report is not sent again` (fixture refuses the command: no error surfaced, one attempt over two refreshes).
+- [x] **Step 2:** `flutter test test/super_tab_time_zone_test.dart` fails.
+- [x] **Step 3:** native reads `TZ` when it is an `Area/City` name, else the `/etc/localtime` link after `zoneinfo/`, else Linux's `/etc/timezone`; Windows null. Web reads `Intl.DateTimeFormat().resolvedOptions().timeZone` through `dart:js_interop`. The controller calls `reportTimeZone()` after a read that built a snapshot, unawaited; it remembers the value it tried.
+- [x] **Step 4:** the test file passes.
+- [x] **Step 5:** commit.
 
 ### Task 3: Local time from a zone name
 
@@ -100,11 +100,11 @@
 **Interfaces:**
 - Produces: `Future<TimeOfDay?> superTabTimeIn(String? zone, DateTime nowUtc)`.
 
-- [ ] **Step 1: Failing tests:** `Asia/Ho_Chi_Minh at 08:42Z is 15:42`; `New York keeps daylight saving` (`2026-07-01T16:00Z` → 12:00, `2026-12-01T17:00Z` → 12:00); `unknown zone gives no time`; `null gives no time`.
-- [ ] **Step 2:** fails (no file).
-- [ ] **Step 3:** deferred import of `package:timezone/data/latest_10y.dart`, initialized once; `tz.getLocation` in a try, null on `LocationNotFoundException`.
-- [ ] **Step 4:** passes. Note the `latest_10y` data size in the PR's dependency justification.
-- [ ] **Step 5:** commit.
+- [x] **Step 1: Failing tests:** `Asia/Ho_Chi_Minh at 08:42Z is 15:42`; `New York keeps daylight saving` (`2026-07-01T16:00Z` → 12:00, `2026-12-01T17:00Z` → 12:00); `unknown zone gives no time`; `null gives no time`.
+- [x] **Step 2:** fails (no file).
+- [x] **Step 3:** deferred import of `package:timezone/data/latest_10y.dart`, initialized once; `tz.getLocation` in a try, null on `LocationNotFoundException`.
+- [x] **Step 4:** passes. Note the `latest_10y` data size in the PR's dependency justification.
+- [x] **Step 5:** commit.
 
 ### Task 4: The card and its hover
 
@@ -115,11 +115,11 @@
 **Interfaces:**
 - Produces: `SuperTabHoverCard({required Widget child, required SuperTabIdentityFacts Function() facts, FocusNode? focusNode})`, `SuperTabHoverCard.openDelay = Duration(milliseconds: 500)`, `closeDelay = Duration(milliseconds: 150)`; keys `super-identity-card`, `super-identity-card-name`, `super-identity-card-time`, `super-identity-card-task`.
 
-- [ ] **Step 1: Failing tests:** `a person's card shows name, status and local time`; `a person's card leaves out a time it does not know`; `an agent's card shows engine and model, machine and task`; `opens after the hover delay, not before`; `closes when the pointer leaves`; `stays open while the pointer crosses into the card`; `keyboard focus opens it and Escape closes it, focus kept`; `Tab reaches the task line and Enter opens the task`.
-- [ ] **Step 2:** fails.
-- [ ] **Step 3:** `OverlayPortal` + `CompositedTransformFollower` under the anchor, flipped above when there is no room below; `Timer`s for the delays; the card inside a `FocusTraversalGroup` so Tab follows the name.
-- [ ] **Step 4:** passes; `python3 ../scripts/check-ui-style.py` passes.
-- [ ] **Step 5:** commit.
+- [x] **Step 1: Failing tests:** `a person's card shows name, status and local time`; `a person's card leaves out a time it does not know`; `an agent's card shows engine and model, machine and task`; `opens after the hover delay, not before`; `closes when the pointer leaves`; `stays open while the pointer crosses into the card`; `keyboard focus opens it and Escape closes it, focus kept`; `Tab reaches the task line and Enter opens the task`.
+- [x] **Step 2:** fails.
+- [x] **Step 3:** `OverlayPortal` + `CompositedTransformFollower` under the anchor, flipped above when there is no room below; `Timer`s for the delays; the card inside a `FocusTraversalGroup` so Tab follows the name.
+- [x] **Step 4:** passes; `python3 ../scripts/check-ui-style.py` passes.
+- [x] **Step 5:** commit.
 
 ### Task 5: Wire the card into the chat
 
@@ -131,8 +131,8 @@
 **Interfaces:**
 - Consumes: Tasks 2–4. Produces: `SuperTabMessageRow.identity` (`SuperTabIdentityFacts Function()?`).
 
-- [ ] **Step 1: Failing tests** on the `ConversationServer` fixture: `hovering a person's name shows their card with local time`; `hovering an agent's avatar shows its machine, model and task, and the task opens its chat`; `a grouped line has no card`; `no task line without a readable task`.
-- [ ] **Step 2:** fails.
-- [ ] **Step 3:** person facts from `_people` (`statusAt(now)`, `superTabTimeIn(person.timeZone, now)`); agent facts from `SuperTabAgentInfo(c, widget.app, agent)` (`engine`, `model`, `machine`, task line, `onOpenTask` selecting `taskGroup.id`).
-- [ ] **Step 4:** passes; `flutter test test/laid_out_list_test.dart` and `check-ui-style.py` pass; before/after screenshots, light and dark, into the PR.
-- [ ] **Step 5:** commit.
+- [x] **Step 1: Failing tests** on the `ConversationServer` fixture: `hovering a person's name shows their card with local time`; `hovering an agent's avatar shows its machine, model and task, and the task opens its chat`; `a grouped line has no card`; `no task line without a readable task`.
+- [x] **Step 2:** fails.
+- [x] **Step 3:** person facts from `_people` (`statusAt(now)`, `superTabTimeIn(person.timeZone, now)`); agent facts from `SuperTabAgentInfo(c, widget.app, agent)` (`engine`, `model`, `machine`, task line, `onOpenTask` selecting `taskGroup.id`).
+- [x] **Step 4:** passes; `flutter test test/laid_out_list_test.dart` and `check-ui-style.py` pass; before/after screenshots, light and dark, into the PR.
+- [x] **Step 5:** commit.
