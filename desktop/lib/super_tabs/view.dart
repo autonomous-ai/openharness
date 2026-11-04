@@ -3542,6 +3542,11 @@ class _SuperTabViewState extends State<SuperTabView>
           ? c.snapshot?.agent(message.authorId)
           : null;
       final previous = index > 0 ? entries[index - 1].message : null;
+      // Grouping is decided on the task's own rows; a step's row drawn between
+      // two of them still ends the group, or the next would read as its agent's.
+      final joined =
+          grouped.contains(message.id) &&
+          previous?.conversationId == message.conversationId;
       final time = message.createdAt;
       return SuperTabDayMark(
         key: ValueKey(_rowKey(c.messageIdentity(message.id))),
@@ -3570,7 +3575,7 @@ class _SuperTabViewState extends State<SuperTabView>
                       ? _outgoingRow(
                           pendingById[message.id]!,
                           byId,
-                          grouped: grouped.contains(message.id),
+                          grouped: joined,
                         )
                       : entry.interruptions > 0
                       ? SuperTabRecordingNotice(
@@ -3583,7 +3588,7 @@ class _SuperTabViewState extends State<SuperTabView>
                         )
                       : _message(
                           message,
-                          grouped.contains(message.id),
+                          joined,
                           byId,
                           showReceipt: message.id == latestOwn?.id,
                         ),
