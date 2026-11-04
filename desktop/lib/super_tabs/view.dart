@@ -220,8 +220,15 @@ class _SuperTabViewState extends State<SuperTabView>
     widget.app?.readPullRequestsStatus,
   );
 
-  /// A device with a Lead of this Swarm open scrolls the chat on screen.
-  late final _dial = DialListScroll(() => _scroll[c.selectedId]);
+  /// A device with a Lead of this Swarm open scrolls the chat on screen, or
+  /// the thread open beside it (the dial's thread face shows that thread).
+  late final _dial = DialListScroll(
+    () =>
+        c.openedThread?.conversationId == c.selectedId && _threadScroll != null
+        ? _threadScroll
+        : _scroll[c.selectedId],
+  );
+  ScrollController? _threadScroll;
   VoidCallback? _unregisterDial;
   void _registerDial() {
     _unregisterDial?.call();
@@ -3280,6 +3287,7 @@ class _SuperTabViewState extends State<SuperTabView>
       sessionActivity: (session) =>
           superTabSessionActivity(c, widget.app, session),
       machineName: widget.machineName,
+      onScroll: (list) => _threadScroll = list,
     );
   }
 

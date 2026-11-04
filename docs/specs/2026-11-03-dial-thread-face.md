@@ -15,8 +15,9 @@ Choices Diego made (mockup `devices/harness-device/mockup/round-thread/index.htm
   the app closes the thread too. The next horizontal swipe changes project, as today.
 - The app moving to another chat or thread moves the dial with it (the newest move wins, as the focus rule does today).
 - The thread face: teal ring, "↳ Thread" (or "↳ Thread · Buddy") under the project's name, the thread's title on up to
-  two lines, **no pet and no bottom arc**, the recap card with a teal spine and a small "PM · N replies" line, and "‹ chat"
-  at the left edge. With no agent reply yet the card says "Waiting for the PM…" ("Waiting for your Buddy…").
+  two lines, **no pet and no bottom arc**, and the recap card with a small "PM · N replies" line. No spine on the card and
+  no "‹ chat" label (Diego, 2026-11-04: the sideways swipe needs no label). With no agent reply yet the card says
+  "Waiting for the PM…" ("Waiting for your Buddy…").
 - The PM face keeps no chat label (the project's name is enough); the Buddy face keeps "Your Buddy".
 
 ## Builds on
