@@ -210,14 +210,14 @@ void main() {
     server.refuse = {
       'code': 'MACHINES_FULL',
       'message':
-          'This Swarm is at its limit of 128 machines. One has to be rem'
+          'This Swarm is at its limit of 32 machines. One has to be rem'
           'oved before another can be added.',
     };
     final refused = await attempt();
     expect(refused?.added, isFalse);
     expect(
       refused?.problem,
-      'This Swarm is at its limit of 128 machines. One has to be rem'
+      'This Swarm is at its limit of 32 machines. One has to be rem'
       'oved before another can be added.',
     );
     expect(daemon.woken, isEmpty);
@@ -487,13 +487,13 @@ void noteTests() {
         machineId: 'mate-mac',
         machineName: 'MacBook Air',
         problem:
-            'This Swarm is at its limit of 128 machines. One has to be rem'
+            'This Swarm is at its limit of 32 machines. One has to be rem'
             'oved before another can be added.',
       ),
     );
     expect(
       find.text(
-        'This Mac was not added to Pilot. This Swarm is at its limit of 128 machin'
+        'This Mac was not added to Pilot. This Swarm is at its limit of 32 machin'
         'es. One has to be removed before another can be added.',
       ),
       findsOneWidget,
