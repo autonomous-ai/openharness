@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
+import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
@@ -21,7 +22,8 @@ import 'swarm_fixture.dart';
 /// Switch PM on the phone (Desktop's switch_pm.dart, spec
 /// 2026-11-02-pm-switch-engine-account-design.md section 8): who is offered
 /// it in the project's ⋮ › Project settings…, as Desktop's project menu has
-/// it, and on the PM's limit note, what its dialog lists, when its machine
+/// it, and on the PM's limit note, what its dialog lists — the machines to
+/// move it to, their accounts and the Swarm's models — when its machine
 /// cannot switch it, what Switch sends, a refusal, and the PM reading
 /// Switching… after.
 void main() {
@@ -55,10 +57,11 @@ void main() {
     List<String> engines = const ['claude', 'codex'],
     DateTime? readAt,
     List<String> capabilities = const ['leadStart', 'leadSwitch'],
+    String contributorId = me,
   }) => {
     'machineId': 'mac-1',
     'name': 'Team Mac.local',
-    'contributorId': me,
+    'contributorId': contributorId,
     'engines': engines,
     'observation': {
       'receivedAt': (readAt ?? DateTime.now()).millisecondsSinceEpoch,
@@ -97,6 +100,63 @@ void main() {
     },
   };
 
+  /// Another machine of the Swarm, read just now: Studio, the reader's own
+  /// unless told, whose Harness starts and switches a PM, offering Codex in
+  /// its default account unless it reports [profiles].
+  Map<String, dynamic> studio({
+    String id = 'mac-2',
+    String name = 'Studio.local',
+    String contributorId = me,
+    DateTime? readAt,
+    List<String> capabilities = const ['leadStart', 'leadSwitch'],
+    List<Map<String, dynamic>>? profiles,
+    Map<String, dynamic> over = const {},
+  }) => {
+    'machineId': id,
+    'name': name,
+    'contributorId': contributorId,
+    'engines': ['codex'],
+    'observation': {
+      'receivedAt': (readAt ?? DateTime.now()).millisecondsSinceEpoch,
+      'capabilities': capabilities,
+      'profiles': ?profiles,
+    },
+    ...over,
+  };
+
+  /// A machine of the reader's last read five minutes ago.
+  Map<String, dynamic> oldMac() => studio(
+    id: 'mac-3',
+    name: 'Old Mac',
+    readAt: DateTime.now().subtract(const Duration(minutes: 5)),
+  );
+
+  /// The tab's routing-policy read, its catalog as backend catalog.ts has it.
+  Map<String, dynamic> policy() => {
+    'policy': <String, dynamic>{},
+    'catalog': {
+      'models': [
+        for (final (engine, model, effort, offered) in const [
+          ('claude', 'opus', 'high', true),
+          ('claude', 'opus', 'xhigh', true),
+          ('codex', 'default', 'default', true),
+          ('codex', 'gpt-6.1-sol', 'high', true),
+          ('codex', 'gpt-6-astra', 'xhigh', true),
+          ('claude', 'sonnet', 'high', true),
+          ('claude', 'haiku', 'auto', false),
+        ])
+          {
+            'engine': engine,
+            'model': model,
+            'effort': effort,
+            'strength': 3,
+            'cost': 1,
+            'offered': offered,
+          },
+      ],
+    },
+  };
+
   /// [hour]:[minute] of today, in local time.
   DateTime today(int hour, int minute) {
     final now = DateTime.now();
@@ -131,9 +191,15 @@ void main() {
     String projectOwner = me,
     Map<String, dynamic>? pm,
     Map<String, dynamic>? machine,
+    List<Map<String, dynamic>> others = const [],
+    FutureOr<Object?> Function()? policy,
     List<Map<String, dynamic>> messages = const [],
   }) {
     final fake = FakeSwarm();
+    // Unrouted, the read fails: Default alone.
+    if (policy != null) {
+      fake.routes['/api/super-tabs/$tab/routing-policy'] = (_) => policy();
+    }
     fake.routes['/api/super-tabs/list'] = (_) => {
       'tabs': [
         {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
@@ -156,7 +222,7 @@ void main() {
           ],
         ),
         agents: [pm ?? pmData()],
-        machines: [machine ?? machineData()],
+        machines: [machine ?? machineData(), ...others],
       ),
       'members': [part(me, 1, person(me, role: role))],
     };
@@ -177,8 +243,12 @@ void main() {
     return fake;
   }
 
-  Future<SwarmHost> pump(WidgetTester tester, FakeSwarm fake) async {
-    await tester.binding.setSurfaceSize(const Size(390, 844));
+  Future<SwarmHost> pump(
+    WidgetTester tester,
+    FakeSwarm fake, {
+    Size size = const Size(390, 844),
+  }) async {
+    await tester.binding.setSurfaceSize(size);
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final account = ValueNotifier<String?>(me);
     final host = SwarmHost(
@@ -206,20 +276,26 @@ void main() {
     return host;
   }
 
-  /// The Swarm read again, its PM now [pm], its machine [machine] and the
-  /// reader [role].
+  /// The Swarm read again, its PM now [pm], [machines] as they are now,
+  /// [gone] taken off it, and the reader [role].
   Future<void> readAgain(
     WidgetTester tester,
     FakeSwarm fake,
     SwarmHost host, {
     Map<String, dynamic>? pm,
-    Map<String, dynamic>? machine,
+    List<Map<String, dynamic>> machines = const [],
+    List<String> gone = const [],
     String? role,
   }) async {
     fake.routes[changesPath] = (_) => {
       ...changes(cursor: 'c3', lastChangedAt: 200),
       'agents': [if (pm != null) part('agent-lead', 2, pm)],
-      'machines': [if (machine != null) part('mac-1', 2, machine)],
+      'machines': [
+        for (final m in machines) part(m['machineId'] as String, 2, m),
+        for (final id in gone)
+          // After any part of it this read carries.
+          {'key': id, 'version': 3, 'changedAt': 3, 'deleted': true},
+      ],
       'members': [if (role != null) part(me, 2, person(me, role: role))],
     };
     await host.session!.inbox.reader(tab)!.refresh();
@@ -531,7 +607,14 @@ void main() {
 
     testWidgets('says only offered accounts are listed on a machine the '
         'reader does not own', (tester) async {
-      await pump(tester, backend(pm: pmData({'machineOwnerId': ken})));
+      // Desktop reads it from the machine's contributor.
+      await pump(
+        tester,
+        backend(
+          pm: pmData({'machineOwnerId': ken}),
+          machine: machineData(contributorId: ken),
+        ),
+      );
       await openDialog(tester);
       expect(
         find.text('Only accounts its owner offered are listed.'),
@@ -574,7 +657,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(confirmOn(tester), isFalse);
 
-      await readAgain(tester, fake, host, machine: machineData());
+      await readAgain(tester, fake, host, machines: [machineData()]);
       expect(dialog, findsOneWidget);
       expect(note, findsNothing);
       expect(confirmOn(tester), isTrue);
@@ -609,6 +692,51 @@ void main() {
       await openDialog(tester);
       expect(find.text('Claude Code · Default'), findsOneWidget);
       expect(find.text('Codex · Default'), findsNothing);
+      // No other machine to move it to either.
+      expect(
+        tester.widget<Text>(key('swarm-switch-pm-no-choice')).data,
+        'No other machine or account can run a Product Manager right now.',
+      );
+      expect(confirmOn(tester), isFalse);
+    });
+
+    testWidgets('with nothing left to pick here, another machine to move it '
+        'to is a choice', (tester) async {
+      await pump(
+        tester,
+        backend(
+          machine: machineData(profiles: false, engines: const ['claude']),
+          others: [studio()],
+        ),
+      );
+      await openDialog(tester);
+      expect(key('swarm-switch-pm-no-choice'), findsNothing);
+    });
+
+    testWidgets('with nothing left here nor on the machines it could move '
+        'to, says no engine or account can run it', (tester) async {
+      await pump(
+        tester,
+        backend(
+          machine: machineData(profiles: false, engines: const ['claude']),
+          others: [
+            // Every account of it ran out.
+            studio(
+              profiles: [
+                {
+                  'engine': 'codex',
+                  'id': 'cccccccccccccccc',
+                  'label': 'Studio',
+                  'leftPercent': 0,
+                  'resetsAt': null,
+                },
+              ],
+            ),
+            oldMac(),
+          ],
+        ),
+      );
+      await openDialog(tester);
       expect(
         tester.widget<Text>(key('swarm-switch-pm-no-choice')).data,
         'No engine or account can run a Product Manager right now.',
@@ -616,9 +744,7 @@ void main() {
       expect(confirmOn(tester), isFalse);
     });
 
-    testWidgets('says nothing of the kind while it can switch', (
-      tester,
-    ) async {
+    testWidgets('says nothing of the kind while it can switch', (tester) async {
       await pump(tester, backend());
       await openDialog(tester);
       expect(key('swarm-switch-pm-no-choice'), findsNothing);
@@ -646,6 +772,511 @@ void main() {
       await openDialog(tester);
       await readAgain(tester, fake, host, role: 'viewer');
       expect(dialog, findsNothing);
+    });
+  });
+
+  /// The Machine or Model row's menu, open.
+  Future<void> openPicker(WidgetTester tester, String row) async {
+    await tester.tap(key('swarm-switch-pm-$row'));
+    await tester.pumpAndSettle();
+  }
+
+  /// Picks [option] of the Machine or Model row.
+  Future<void> choose(WidgetTester tester, String row, String option) async {
+    await openPicker(tester, row);
+    await tester.tap(key('swarm-switch-pm-$row-$option'));
+    await tester.pumpAndSettle();
+  }
+
+  /// What the Machine or Model row shows chosen, its menu shut.
+  String shown(WidgetTester tester, String row) {
+    final texts = tester
+        .widgetList<Text>(
+          find.descendant(
+            of: key('swarm-switch-pm-$row'),
+            matching: find.byType(Text),
+          ),
+        )
+        .map((t) => t.data)
+        .toList();
+    // Its label, then what is chosen.
+    return texts[1]!;
+  }
+
+  bool optionOn(WidgetTester tester, String row, String option) =>
+      tester
+          .widget<MenuItemButton>(key('swarm-switch-pm-$row-$option'))
+          .onPressed !=
+      null;
+
+  /// The words of a menu option: its name, and why it cannot be chosen.
+  List<String?> optionWords(WidgetTester tester, String row, String option) =>
+      tester
+          .widgetList<Text>(
+            find.descendant(
+              of: key('swarm-switch-pm-$row-$option'),
+              matching: find.byType(Text),
+            ),
+          )
+          .map((t) => t.data)
+          .toList();
+
+  group('the Machine row', () {
+    testWidgets('lists the Swarm\'s machines, the PM\'s own marked Current, '
+        'never a Team account read on its Mac', (tester) async {
+      await pump(
+        tester,
+        backend(
+          others: [
+            studio(),
+            studio(
+              id: 'mac-2-team',
+              name: 'Studio (Team)',
+              over: {'hostMachineId': 'mac-2'},
+            ),
+          ],
+        ),
+      );
+      await openDialog(tester);
+      expect(shown(tester, 'machine'), 'Team Mac · Current');
+      await openPicker(tester, 'machine');
+      expect(optionWords(tester, 'machine', 'mac-1'), ['Team Mac · Current']);
+      expect(optionWords(tester, 'machine', 'mac-2'), ['Studio']);
+      expect(optionOn(tester, 'machine', 'mac-2'), isTrue);
+      expect(key('swarm-switch-pm-machine-mac-2-team'), findsNothing);
+      double y(String id) =>
+          tester.getTopLeft(key('swarm-switch-pm-machine-$id')).dy;
+      expect(y('mac-1'), lessThan(y('mac-2')));
+    });
+
+    testWidgets('a machine that cannot take it is dimmed, saying why in '
+        'Desktop\'s words', (tester) async {
+      await pump(
+        tester,
+        backend(
+          others: [
+            oldMac(),
+            studio(
+              id: 'mac-4',
+              name: 'Lab',
+              capabilities: const ['leadSwitch'],
+            ),
+            studio(id: 'mac-5', name: 'Ken Mac', contributorId: ken),
+            studio(
+              id: 'mac-6',
+              name: 'Ken Mini',
+              contributorId: ken,
+              over: {
+                'teamWork': {
+                  'allowed': false,
+                  'reason': 'Ken Mini takes no other projects now.',
+                },
+              },
+            ),
+            studio(
+              id: 'mac-7',
+              name: 'Shared',
+              contributorId: ken,
+              over: {
+                'teamWork': {'allowed': true},
+              },
+            ),
+            studio(id: 'mac-8', name: 'Paused Mac', over: {'paused': true}),
+            studio(
+              id: 'mac-9',
+              name: 'Leaving',
+              over: {
+                'removal': {'at': 1},
+              },
+            ),
+          ],
+        ),
+      );
+      await openDialog(tester);
+      await openPicker(tester, 'machine');
+      final why = {
+        'mac-3': ['Old Mac', 'Old Mac is offline.'],
+        'mac-4': [
+          'Lab',
+          'Update Harness on Lab to move a Product Manager there.',
+        ],
+        'mac-5': ['Ken Mac', 'This machine cannot take this project’s work.'],
+        'mac-6': ['Ken Mini', 'Ken Mini takes no other projects now.'],
+        'mac-8': ['Paused Mac', 'Paused Mac is unavailable in this Swarm.'],
+        'mac-9': ['Leaving', 'Leaving is unavailable in this Swarm.'],
+      };
+      for (final MapEntry(key: id, value: words) in why.entries) {
+        expect(optionWords(tester, 'machine', id), words, reason: id);
+        expect(optionOn(tester, 'machine', id), isFalse, reason: id);
+      }
+      // Someone else's machine that takes this project's work.
+      expect(optionWords(tester, 'machine', 'mac-7'), ['Shared']);
+      expect(optionOn(tester, 'machine', 'mac-7'), isTrue);
+    });
+
+    testWidgets('the PM machine\'s owner who does not own the project sees '
+        'the others dimmed: only the project\'s owner moves it', (
+      tester,
+    ) async {
+      final fake = backend(
+        role: 'collaborator',
+        projectOwner: ken,
+        others: [studio()],
+      );
+      await pump(tester, fake);
+      await openDialog(tester);
+      await openPicker(tester, 'machine');
+      expect(optionWords(tester, 'machine', 'mac-2'), [
+        'Studio',
+        'Only the project’s owner moves its PM to another machine.',
+      ]);
+      expect(optionOn(tester, 'machine', 'mac-2'), isFalse);
+      await tester.tap(key('swarm-switch-pm-machine-mac-1'));
+      await tester.pumpAndSettle();
+
+      // Where it runs, they still switch it.
+      await tester.tap(find.text('Codex · Side'));
+      await tester.pumpAndSettle();
+      await tester.tap(confirm);
+      await tester.pumpAndSettle();
+      expect(switches(fake).single.containsKey('machineId'), isFalse);
+    });
+
+    testWidgets('another machine lists its own accounts and forgets the one '
+        'picked; back on the PM\'s, Current is there again', (tester) async {
+      await pump(
+        tester,
+        backend(
+          others: [
+            studio(
+              profiles: [
+                {
+                  'engine': 'codex',
+                  'id': 'cccccccccccccccc',
+                  'label': 'Studio',
+                  'leftPercent': 50,
+                  'resetsAt': null,
+                },
+              ],
+            ),
+          ],
+        ),
+      );
+      await openDialog(tester);
+      await tester.tap(find.text('Codex · Side'));
+      await tester.pumpAndSettle();
+      expect(confirmOn(tester), isTrue);
+
+      await choose(tester, 'machine', 'mac-2');
+      expect(shown(tester, 'machine'), 'Studio');
+      expect(find.text('Codex · Studio'), findsOneWidget);
+      expect(find.text('50% left'), findsOneWidget);
+      expect(find.text('Codex · Side'), findsNothing);
+      expect(find.textContaining('Current'), findsNothing);
+      expect(confirmOn(tester), isFalse, reason: 'nothing picked there');
+      await tester.tap(find.text('Codex · Studio'));
+      await tester.pumpAndSettle();
+      expect(confirmOn(tester), isTrue);
+
+      await choose(tester, 'machine', 'mac-1');
+      expect(find.text('Current · 40% left'), findsOneWidget);
+      expect(confirmOn(tester), isFalse);
+    });
+
+    testWidgets('a machine someone else brought lists only what its owner '
+        'offered', (tester) async {
+      await pump(
+        tester,
+        backend(
+          others: [
+            studio(
+              contributorId: ken,
+              over: {
+                'teamWork': {'allowed': true},
+              },
+            ),
+          ],
+        ),
+      );
+      await openDialog(tester);
+      const offered = 'Only accounts its owner offered are listed.';
+      expect(find.text(offered), findsNothing);
+      await choose(tester, 'machine', 'mac-2');
+      expect(find.text(offered), findsOneWidget);
+    });
+
+    testWidgets('a machine with no account to offer says so', (tester) async {
+      await pump(
+        tester,
+        backend(
+          others: [
+            studio(over: {'engines': <String>[]}),
+          ],
+        ),
+      );
+      await openDialog(tester);
+      await choose(tester, 'machine', 'mac-2');
+      expect(
+        find.text('No engine or account is available on this machine.'),
+        findsOneWidget,
+      );
+      expect(confirmOn(tester), isFalse);
+    });
+
+    testWidgets('the machine chosen pausing dims its accounts and holds '
+        'Switch; leaving the Swarm, it goes back to the PM\'s', (tester) async {
+      final fake = backend(others: [studio()]);
+      final host = await pump(tester, fake);
+      await openDialog(tester);
+      await choose(tester, 'machine', 'mac-2');
+      await tester.tap(find.text('Codex · Default'));
+      await tester.pumpAndSettle();
+      expect(confirmOn(tester), isTrue);
+
+      await readAgain(
+        tester,
+        fake,
+        host,
+        machines: [
+          studio(over: {'paused': true}),
+        ],
+      );
+      expect(dialog, findsOneWidget);
+      expect(shown(tester, 'machine'), 'Studio');
+      expect(confirmOn(tester), isFalse);
+      expect(
+        tester.widget<InkWell>(key('swarm-switch-pm-codex-default')).onTap,
+        isNull,
+      );
+
+      await readAgain(tester, fake, host, gone: ['mac-2']);
+      expect(dialog, findsOneWidget);
+      expect(shown(tester, 'machine'), 'Team Mac · Current');
+      expect(find.text('Codex · Side'), findsOneWidget);
+      expect(confirmOn(tester), isFalse);
+      expect(switches(fake), isEmpty);
+    });
+  });
+
+  group('the Model row', () {
+    testWidgets('offers Default, then each catalog model of the PM\'s engine '
+        'once, never one the catalog does not offer', (tester) async {
+      await pump(tester, backend(policy: policy));
+      await openDialog(tester);
+      expect(shown(tester, 'model'), 'Default');
+      await openPicker(tester, 'model');
+      for (final option in ['default', 'opus', 'sonnet']) {
+        expect(key('swarm-switch-pm-model-$option'), findsOneWidget);
+      }
+      expect(optionWords(tester, 'model', 'default'), ['Default']);
+      expect(key('swarm-switch-pm-model-haiku'), findsNothing);
+      expect(key('swarm-switch-pm-model-gpt-6.1-sol'), findsNothing);
+      double y(String option) =>
+          tester.getTopLeft(key('swarm-switch-pm-model-$option')).dy;
+      expect(y('default'), lessThan(y('opus')));
+      expect(y('opus'), lessThan(y('sonnet')));
+    });
+
+    testWidgets('an account of another engine lists that engine\'s models, '
+        'Codex\'s own default not twice, and forgets the model picked', (
+      tester,
+    ) async {
+      await pump(tester, backend(policy: policy));
+      await openDialog(tester);
+      await choose(tester, 'model', 'sonnet');
+      expect(shown(tester, 'model'), 'sonnet');
+
+      await tester.tap(find.text('Codex · Side'));
+      await tester.pumpAndSettle();
+      expect(shown(tester, 'model'), 'Default');
+      await openPicker(tester, 'model');
+      expect(key('swarm-switch-pm-model-gpt-6.1-sol'), findsOneWidget);
+      expect(key('swarm-switch-pm-model-gpt-6-astra'), findsOneWidget);
+      expect(key('swarm-switch-pm-model-sonnet'), findsNothing);
+      expect(find.text('default'), findsNothing);
+    });
+
+    testWidgets('another machine forgets the model picked', (tester) async {
+      await pump(tester, backend(policy: policy, others: [studio()]));
+      await openDialog(tester);
+      await tester.tap(find.text('Codex · Side'));
+      await tester.pumpAndSettle();
+      await choose(tester, 'model', 'gpt-6.1-sol');
+      expect(shown(tester, 'model'), 'gpt-6.1-sol');
+      await choose(tester, 'machine', 'mac-2');
+      expect(shown(tester, 'model'), 'Default');
+    });
+
+    testWidgets('a catalog that cannot be read leaves Default alone', (
+      tester,
+    ) async {
+      final fake = backend();
+      await pump(tester, fake);
+      await openDialog(tester);
+      expect(
+        fake.paths,
+        contains('/api/super-tabs/$tab/routing-policy'),
+        reason: 'asked, and refused',
+      );
+      await openPicker(tester, 'model');
+      expect(
+        find.descendant(
+          of: find.byType(MenuItemButton),
+          matching: find.byType(Text),
+        ),
+        findsOneWidget,
+      );
+      expect(key('swarm-switch-pm-model-default'), findsOneWidget);
+    });
+  });
+
+  group('what Switch sends', () {
+    testWidgets('another machine: its id, and its default account by the '
+        'literal default', (tester) async {
+      final fake = backend(others: [studio()]);
+      await pump(tester, fake);
+      await openDialog(tester);
+      await choose(tester, 'machine', 'mac-2');
+      await tester.tap(find.text('Codex · Default'));
+      await tester.pumpAndSettle();
+      await tester.tap(confirm);
+      await tester.pumpAndSettle();
+      expect(switches(fake), [
+        {
+          'type': 'lead.switch',
+          'projectId': project,
+          'engine': 'codex',
+          'profileId': 'default',
+          'machineId': 'mac-2',
+        },
+      ]);
+      expect(dialog, findsNothing);
+    });
+
+    testWidgets('a model picked: its name, and no effort', (tester) async {
+      final fake = backend(policy: policy);
+      await pump(tester, fake);
+      await openDialog(tester);
+      await tester.tap(find.text('Codex · Side'));
+      await tester.pumpAndSettle();
+      await choose(tester, 'model', 'gpt-6.1-sol');
+      await tester.tap(confirm);
+      await tester.pumpAndSettle();
+      expect(switches(fake), [
+        {
+          'type': 'lead.switch',
+          'projectId': project,
+          'engine': 'codex',
+          'profileId': 'bbbbbbbbbbbbbbbb',
+          'model': 'gpt-6.1-sol',
+        },
+      ]);
+    });
+
+    testWidgets('a move the server refuses says why and keeps what was '
+        'picked', (tester) async {
+      final fake = backend(others: [studio()]);
+      await pump(tester, fake);
+      await openDialog(tester);
+      await choose(tester, 'machine', 'mac-2');
+      await tester.tap(find.text('Codex · Default'));
+      await tester.pumpAndSettle();
+      answer = () => throw const SuperTabFailure(
+        'HOST_OUTDATED',
+        'Update Harness on Studio to move the Product Manager.',
+        statusCode: 409,
+      );
+      await tester.tap(confirm);
+      await tester.pumpAndSettle();
+      expect(dialog, findsOneWidget);
+      expect(
+        tester.widget<Text>(key('swarm-switch-pm-error')).data,
+        'Update Harness on Studio to move the Product Manager.',
+      );
+      expect(shown(tester, 'machine'), 'Studio');
+      expect(confirmOn(tester), isTrue);
+    });
+
+    testWidgets('after an answer lost on the way, another pick is a new '
+        'ask', (tester) async {
+      final fake = backend(policy: policy);
+      await pump(tester, fake);
+      await openDialog(tester);
+      await tester.tap(find.text('Codex · Side'));
+      await tester.pumpAndSettle();
+      answer = () => throw TimeoutException('no answer');
+      await tester.tap(confirm);
+      await tester.pumpAndSettle();
+      expect(dialog, findsOneWidget);
+
+      answer = null;
+      await choose(tester, 'model', 'gpt-6-astra');
+      await tester.tap(confirm);
+      await tester.pumpAndSettle();
+      expect(dialog, findsNothing);
+      final receipts = switchReceipts(fake);
+      expect(receipts, hasLength(2));
+      expect(receipts.first, isNot(receipts.last));
+      expect(switches(fake).last['model'], 'gpt-6-astra');
+    });
+  });
+
+  group('on a 320-point phone', () {
+    testWidgets('the dialog, Machine and Model included, fits with nothing '
+        'cut, and the Machine menu stays on the screen', (tester) async {
+      const size = Size(320, 568);
+      await pump(
+        tester,
+        backend(
+          policy: policy,
+          role: 'owner',
+          others: [
+            studio(id: 'mac-5', name: 'Ken MacBook Pro', contributorId: ken),
+            oldMac(),
+          ],
+        ),
+        size: size,
+      );
+      await openDialog(tester);
+      expect(tester.takeException(), isNull);
+      final screen = Offset.zero & size;
+      for (final row in [
+        'swarm-switch-pm-machine',
+        'swarm-switch-pm-model',
+        'swarm-switch-pm-cancel',
+        'swarm-switch-pm-confirm',
+      ]) {
+        final rect = tester.getRect(key(row));
+        expect(screen.contains(rect.topLeft), isTrue, reason: row);
+        expect(
+          screen.contains(rect.bottomRight - const Offset(1, 1)),
+          isTrue,
+          reason: row,
+        );
+      }
+      expect(
+        tester.getSize(key('swarm-switch-pm-machine')).height,
+        greaterThanOrEqualTo(minTouchTarget),
+      );
+
+      await openPicker(tester, 'machine');
+      expect(tester.takeException(), isNull);
+      for (final id in ['mac-1', 'mac-5', 'mac-3']) {
+        final option = key('swarm-switch-pm-machine-$id');
+        final rect = tester.getRect(option);
+        expect(rect.left, greaterThanOrEqualTo(0), reason: id);
+        expect(rect.right, lessThanOrEqualTo(size.width), reason: id);
+        expect(rect.height, greaterThanOrEqualTo(minTouchTarget), reason: id);
+        // Each word whole, the why wrapped inside the menu.
+        for (final text
+            in find
+                .descendant(of: option, matching: find.byType(Text))
+                .evaluate()) {
+          final box = text.renderObject! as RenderBox;
+          final at = box.localToGlobal(Offset.zero) & box.size;
+          expect(at.right, lessThanOrEqualTo(rect.right), reason: id);
+        }
+      }
     });
   });
 
@@ -829,21 +1460,18 @@ void main() {
         addTearDown(reader.dispose);
         return reader;
       }
+
       String? refusal(Map<String, dynamic>? machine) =>
           swarmSwitchPmRefusal(reader(machine), project, now: now);
 
       const stale = 'Wait for a fresh reading from the PM’s machine.';
       expect(refusal(null), stale);
       expect(
-        refusal(
-          machineData(readAt: now.subtract(const Duration(seconds: 35))),
-        ),
+        refusal(machineData(readAt: now.subtract(const Duration(seconds: 35)))),
         stale,
       );
       expect(
-        refusal(
-          machineData(readAt: now.subtract(const Duration(seconds: 34))),
-        ),
+        refusal(machineData(readAt: now.subtract(const Duration(seconds: 34)))),
         isNull,
       );
       expect(
@@ -867,6 +1495,123 @@ void main() {
           project,
           now: now,
         ),
+        isNull,
+      );
+    });
+
+    test('the catalog keeps each row with an engine and a model not marked '
+        'unoffered; an answer without one has none', () {
+      expect(swarmSwitchPmCatalog(policy()), [
+        (engine: 'claude', model: 'opus'),
+        (engine: 'claude', model: 'opus'),
+        (engine: 'codex', model: 'default'),
+        (engine: 'codex', model: 'gpt-6.1-sol'),
+        (engine: 'codex', model: 'gpt-6-astra'),
+        (engine: 'claude', model: 'sonnet'),
+      ]);
+      expect(
+        swarmSwitchPmCatalog({
+          'catalog': {
+            'models': [
+              {'engine': 'claude'},
+              {'engine': 'claude', 'model': 7},
+              'opus',
+              {'engine': 'claude', 'model': 'opus'},
+            ],
+          },
+        }),
+        [(engine: 'claude', model: 'opus')],
+      );
+      expect(swarmSwitchPmCatalog({'policy': <String, dynamic>{}}), isEmpty);
+      expect(swarmSwitchPmCatalog(null), isEmpty);
+      expect(
+        swarmSwitchPmCatalog({
+          'catalog': {'models': 'opus'},
+        }),
+        isEmpty,
+      );
+    });
+
+    test('the models of an engine, each once, in the catalog\'s order, its '
+        'own default left to Default', () {
+      final catalog = swarmSwitchPmCatalog(policy());
+      expect(swarmSwitchPmModels(catalog, 'claude'), ['opus', 'sonnet']);
+      expect(swarmSwitchPmModels(catalog, 'codex'), [
+        'gpt-6.1-sol',
+        'gpt-6-astra',
+      ]);
+      expect(swarmSwitchPmModels(catalog, 'gemini'), isEmpty);
+      expect(swarmSwitchPmModels(const [], 'claude'), isEmpty);
+    });
+
+    test('lead.switch names the machine only for a move, and the model '
+        'only for one picked', () {
+      const picked = (engine: 'codex', id: 'bbbbbbbbbbbbbbbb');
+      expect(
+        swarmSwitchPmCommand(
+          projectId: project,
+          picked: picked,
+          currentMachineId: 'mac-1',
+          machineId: 'mac-1',
+        ),
+        {
+          'type': 'lead.switch',
+          'projectId': project,
+          'engine': 'codex',
+          'profileId': 'bbbbbbbbbbbbbbbb',
+        },
+      );
+      expect(
+        swarmSwitchPmCommand(
+          projectId: project,
+          picked: (engine: 'codex', id: 'default'),
+          currentMachineId: 'mac-1',
+          machineId: 'mac-2',
+          model: 'gpt-6-astra',
+        ),
+        {
+          'type': 'lead.switch',
+          'projectId': project,
+          'engine': 'codex',
+          'profileId': 'default',
+          'machineId': 'mac-2',
+          'model': 'gpt-6-astra',
+        },
+      );
+    });
+
+    test('another machine is offline from 35 seconds without a reading; '
+        'the PM\'s own is never refused here', () {
+      final now = DateTime(2026, 11, 4, 12);
+      final reader = SwarmReader(
+        tabId: tab,
+        accountId: me,
+        request: FakeSwarm().request,
+      );
+      addTearDown(reader.dispose);
+      // Each machine read as the Swarm has it, beside the PM's.
+      String? refusal(Map<String, dynamic> pool) {
+        reader.snapshot = snapshot(
+          pmData(),
+          machines: [machineData(), if (pool['machineId'] != 'mac-1') pool],
+        );
+        return swarmSwitchPmMachineRefusal(reader, project, pool, now: now);
+      }
+
+      expect(
+        refusal(studio(readAt: now.subtract(const Duration(seconds: 34)))),
+        isNull,
+      );
+      expect(
+        refusal(studio(readAt: now.subtract(const Duration(seconds: 35)))),
+        'Studio is offline.',
+      );
+      expect(
+        refusal({...studio(readAt: now), 'name': null, 'observation': null}),
+        'Mac is offline.',
+      );
+      expect(
+        refusal(machineData(readAt: now.subtract(const Duration(minutes: 9)))),
         isNull,
       );
     });
