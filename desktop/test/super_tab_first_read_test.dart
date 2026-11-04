@@ -281,6 +281,88 @@ void main() {
     },
   );
 
+  group('a restart refuses reads for a while (task #2647)', () {
+    const refusals = [
+      SuperTabFailure('NOT_FOUND', 'This Super Tab is unavailable.', statusCode: 404),
+      SuperTabFailure('FORBIDDEN', 'You cannot read this Swarm.', statusCode: 403),
+    ];
+
+    test('while the list still has the Swarm, or cannot be read, it stays '
+        'open with its state and name, says Reconnecting, and reads again', () {
+      fakeAsync((async) {
+        final server = ConversationServer()..state['name'] = 'autonomous.ai';
+        final daemon = _Daemon(server);
+        Object? listFailure;
+        var asked = 0;
+        final c = SuperTabController(
+          tabId: 'tab',
+          accountId: 'owner',
+          request: daemon.call,
+          save: server.save,
+          reading: SuperTabReading.desktop,
+          stillListed: () async {
+            asked++;
+            if (listFailure case final failure?) throw failure;
+            return true;
+          },
+        )..start();
+        async.elapse(const Duration(seconds: 1));
+        expect(c.snapshot?.name, 'autonomous.ai');
+
+        daemon.failure = _unreachable;
+        async.elapse(const Duration(seconds: 4));
+        expect(c.backendUnreachable, isTrue);
+        expect(asked, 0, reason: 'a dropped read asks nothing');
+
+        for (final unreadable in [true, false]) {
+          listFailure = unreadable ? _unreachable : null;
+          for (final refusal in refusals) {
+            daemon.failure = refusal;
+            async.elapse(const Duration(seconds: 4));
+            final when = '${refusal.code}, list ${unreadable ? 'unreadable' : 'has it'}';
+            expect(c.accessRevoked, isFalse, reason: when);
+            expect(c.snapshot?.name, 'autonomous.ai', reason: when);
+            expect(c.backendUnreachable, isTrue, reason: when);
+          }
+        }
+        expect(asked, greaterThan(0));
+
+        daemon.failure = null;
+        async.elapse(const Duration(seconds: 4));
+        expect(c.backendUnreachable, isFalse);
+        expect(c.error, isNull);
+        expect(c.snapshot?.name, 'autonomous.ai');
+        c.dispose();
+      });
+    });
+
+    test('once a list read that answered leaves it out, the refusal takes '
+        'the Swarm away as before', () {
+      fakeAsync((async) {
+        final server = ConversationServer();
+        final daemon = _Daemon(server);
+        final c = SuperTabController(
+          tabId: 'tab',
+          accountId: 'owner',
+          request: daemon.call,
+          save: server.save,
+          reading: SuperTabReading.desktop,
+          stillListed: () async => false,
+        )..start();
+        async.elapse(const Duration(seconds: 1));
+        expect(c.snapshot, isNotNull);
+        daemon.failure = refusals.first;
+        async.elapse(const Duration(seconds: 4));
+        expect(c.accessRevoked, isTrue);
+        expect(c.snapshot, isNull);
+        final reads = daemon.states;
+        async.elapse(const Duration(seconds: 30));
+        expect(daemon.states, reads, reason: 'a Swarm taken away reads nothing');
+        c.dispose();
+      });
+    });
+  });
+
   testWidgets('the pill says Connecting until a read has been answered', (
     tester,
   ) async {

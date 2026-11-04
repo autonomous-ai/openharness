@@ -49,6 +49,13 @@ class _Backend {
   /// The account the next request is from.
   String account = 'owner';
 
+  /// While set, every read of a Swarm's state fails so, as a backend
+  /// restarting under it answers (task #2647).
+  Object? stateReadFailure;
+
+  /// While set, the account's Swarm list fails so.
+  Object? listFailure;
+
   ConversationServer add(
     String id,
     String name, {
@@ -87,6 +94,7 @@ class _Backend {
   }) async {
     final uri = Uri.parse(path);
     if (uri.path == '/api/super-tabs/list') {
+      if (listFailure case final failure?) throw failure;
       return {
         'tabs': [
           for (final tab in tabs)
@@ -118,6 +126,11 @@ class _Backend {
       return {'id': id, 'revision': 0};
     }
     final swarm = RegExp(r'^/api/super-tabs/([^/]+)/').firstMatch(uri.path);
+    if (stateReadFailure case final failure?
+        when method == 'GET' &&
+            RegExp(r'/(parts|changes)$').hasMatch(uri.path)) {
+      throw failure;
+    }
     final server = servers[swarm?.group(1)];
     if (server == null) {
       throw const SuperTabFailure('NOT_FOUND', 'Swarm not found.');
@@ -872,6 +885,136 @@ void main() {
       await _releaseAll(tester, app);
     });
   }
+
+  group('a restart under an open Swarm (task #2647)', () {
+    const dropped = SuperTabFailure(
+      'BACKEND_UNAVAILABLE',
+      'Could not reach the Harness backend.',
+      statusCode: 502,
+    );
+    const refusals = [
+      SuperTabFailure(
+        'NOT_FOUND',
+        'This Super Tab is unavailable.',
+        statusCode: 404,
+      ),
+      SuperTabFailure('FORBIDDEN', 'You cannot read this Swarm.', statusCode: 403),
+    ];
+
+    /// Alpha shown in a tab, Personal picked here before, as on Dee's Mac:
+    /// a Swarm taken away would move this tab to Personal.
+    Future<(AppNotifier, _Backend, String, SuperTabController)> shown() async {
+      final (app, backend) = await _twoTabs();
+      final tab = app.activeSwarmId;
+      await PersonalSwarm.of(app).show(tab);
+      await _settle();
+      app.showSuperTabIn(tab, 'alpha', 'Alpha');
+      await _settle();
+      final alpha = await app.superTabs.open('alpha');
+      await alpha.refresh();
+      return (app, backend, tab, alpha);
+    }
+
+    testWidgets('reads that drop, then are refused while the list still has '
+        'the Swarm (or cannot be read), keep it open in its tab under its own '
+        'name, saying Reconnecting; it reads again once the backend is back', (
+      tester,
+    ) async {
+      late AppNotifier app;
+      late _Backend backend;
+      late String tab;
+      late SuperTabController alpha;
+      await tester.runAsync(() async {
+        (app, backend, tab, alpha) = await shown();
+      });
+      await tester.binding.setSurfaceSize(const Size(1200, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: SuperTabView(
+              controller: alpha,
+              app: app,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              onNewSwarm: () {},
+              machineName: (_) => 'Team Mac',
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(_rowText('Alpha'), findsOneWidget);
+
+      Future<void> poll() async {
+        await tester.runAsync(() async {
+          await alpha.refresh();
+          await _settle();
+        });
+        await tester.pump();
+        await tester.runAsync(() => _settle());
+        await tester.pump();
+      }
+
+      void stillAlpha(String when) {
+        expect(alpha.accessRevoked, isFalse, reason: when);
+        expect(_shown(app, tab), 'alpha', reason: when);
+        expect(app.activeSwarm.name, 'Alpha', reason: when);
+        expect(_rowText('Alpha'), findsOneWidget, reason: when);
+        expect(_rowText('Swarm'), findsNothing, reason: when);
+        expect(
+          swarmChoices(app).map((c) => (c.id, c.name)),
+          contains(('alpha', 'Alpha')),
+          reason: when,
+        );
+      }
+
+      backend.stateReadFailure = dropped;
+      await poll();
+      stillAlpha('dropped');
+      expect(alpha.backendUnreachable, isTrue);
+
+      // The restarting backend refuses, and its list cannot be read yet.
+      backend.listFailure = dropped;
+      for (final refusal in refusals) {
+        backend.stateReadFailure = refusal;
+        await poll();
+        stillAlpha('${refusal.code}, list unreadable');
+        expect(alpha.backendUnreachable, isTrue);
+      }
+      // The list answers, still with Alpha, while its reads are refused.
+      backend.listFailure = null;
+      for (final refusal in refusals) {
+        backend.stateReadFailure = refusal;
+        await poll();
+        stillAlpha('${refusal.code}, list has it');
+        expect(alpha.backendUnreachable, isTrue);
+      }
+      expect(find.textContaining('Reconnecting'), findsWidgets);
+
+      backend.stateReadFailure = null;
+      await poll();
+      stillAlpha('back');
+      expect(alpha.backendUnreachable, isFalse);
+      expect(alpha.snapshot?.name, 'Alpha');
+      await _releaseAll(tester, app);
+    });
+
+    test('a refusal once the list no longer has the Swarm still takes it '
+        'away and moves the tab to Personal', () async {
+      final (app, backend, tab, alpha) = await shown();
+      final personal = PersonalSwarm.of(app).id!;
+      backend.tabs.removeWhere((t) => t['id'] == 'alpha');
+      backend.stateReadFailure = refusals.last;
+      await alpha.refresh();
+      await _settle();
+      expect(alpha.accessRevoked, isTrue);
+      await fallBackToPersonal(app, alpha);
+      expect(_shown(app, tab), personal);
+    });
+  });
 
   test('a failure to add this computer says so in the tab Personal was '
       'picked in, and only there', () async {
