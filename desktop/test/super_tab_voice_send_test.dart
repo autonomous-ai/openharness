@@ -71,27 +71,30 @@ void main() {
     return null;
   }
 
-  test('a take goes up as a voice file, is read once, and is sent alone', () async {
-    final posted = await c.sendVoice(
-      conversationId: 'lead',
-      root: null,
-      wav: _wav,
-      lang: 'vi',
-    );
-    expect(posted.sent, isTrue);
-    expect(posted.notice, isNull);
-    expect(server.uploads.single['name'], 'Voice message.wav');
-    expect(server.uploads.single['file'], _wav);
-    final id = server.uploads.single['id'];
-    expect(server.voiceReads, [
-      '/api/super-tabs/tab/attachments/$id/voice?lang=vi',
-    ]);
-    final send = sent()!;
-    expect(send['conversationId'], 'lead');
-    expect(send['text'], '');
-    expect(send['attachmentIds'], [id]);
-    expect(send['replyTo'], isNull);
-  });
+  test(
+    'a take goes up as a voice file, is read once, and is sent alone',
+    () async {
+      final posted = await c.sendVoice(
+        conversationId: 'lead',
+        root: null,
+        wav: _wav,
+        lang: 'vi',
+      );
+      expect(posted.sent, isTrue);
+      expect(posted.notice, isNull);
+      expect(server.uploads.single['name'], 'Voice message.wav');
+      expect(server.uploads.single['file'], _wav);
+      final id = server.uploads.single['id'];
+      expect(server.voiceReads, [
+        '/api/super-tabs/tab/attachments/$id/voice?lang=vi',
+      ]);
+      final send = sent()!;
+      expect(send['conversationId'], 'lead');
+      expect(send['text'], '');
+      expect(send['attachmentIds'], [id]);
+      expect(send['replyTo'], isNull);
+    },
+  );
 
   test("a thread's take is a reply to its root", () async {
     await c.sendVoice(
