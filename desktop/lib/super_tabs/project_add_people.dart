@@ -1,3 +1,9 @@
+import 'package:flutter/material.dart';
+
+import '../shared/widgets/app_dialog.dart';
+import '../widgets/desktop_chrome.dart';
+import 'controller.dart';
+import 'dialog_scope.dart';
 import 'model.dart';
 
 /// How the Swarm shows a person: their name, else their username.
@@ -35,5 +41,157 @@ projectPeopleLists(
       ...shown.where((p) => p.id == project.ownerId),
       ...shown.where((p) => p.id != project.ownerId && isIn(p)),
     ],
+  );
+}
+
+/// The People "+" of a private project the reader owns (Diego, 2026-11-04): pick Swarm people to bring in. Add sends
+/// `project.sharing` with the project's members as the live snapshot holds them when it is pressed, plus the ticks.
+Future<void> showProjectAddPeople(
+  BuildContext context,
+  SuperTabController c,
+  SuperTabProject project,
+) {
+  final ticked = <String>{};
+  var query = '';
+  var busy = false;
+  return showAppDialog<void>(
+    context: context,
+    builder: (context) => SuperTabDialogScope(
+      controller: c,
+      projectId: project.id,
+      requireWrite: true,
+      child: StatefulBuilder(
+        builder: (context, update) => ListenableBuilder(
+          listenable: c,
+          builder: (context, _) {
+            final current = c.snapshot?.projectById(project.id) ?? project;
+            final people = c.snapshot?.people ?? const <SuperTabPerson>[];
+            final lists = projectPeopleLists(people, current, query);
+            final count = ticked
+                .where((id) => people.any((p) => p.id == id))
+                .length;
+            Widget heading(String text) => Padding(
+              padding: const EdgeInsets.only(top: 12, bottom: 4),
+              child: Text(text, style: DesktopChrome.metadata()),
+            );
+            return AlertDialog(
+              title: Text('Add people to ${current.name}'),
+              content: SizedBox(
+                width: 400,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      TextField(
+                        key: const ValueKey('project-add-search'),
+                        autofocus: true,
+                        decoration: const InputDecoration(
+                          hintText: 'Search people in this Swarm',
+                        ),
+                        onChanged: (value) => update(() => query = value),
+                      ),
+                      heading('Not in this project'),
+                      if (lists.addable.isEmpty)
+                        Text(
+                          query.trim().isEmpty
+                              ? 'Everyone in this Swarm is in this project.'
+                              : 'No one matches',
+                          style: DesktopChrome.text(),
+                        ),
+                      for (final person in lists.addable)
+                        CheckboxListTile(
+                          key: ValueKey('project-add-person-${person.id}'),
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(
+                            projectPersonName(person),
+                            style: DesktopChrome.control(),
+                          ),
+                          subtitle: Text(person.email),
+                          value: ticked.contains(person.id),
+                          onChanged: busy
+                              ? null
+                              : (value) => update(
+                                  () => value == true
+                                      ? ticked.add(person.id)
+                                      : ticked.remove(person.id),
+                                ),
+                        ),
+                      if (lists.inProject.isNotEmpty) heading('Already in'),
+                      for (final person in lists.inProject)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: Row(
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  projectPersonName(person),
+                                  style: DesktopChrome.control(),
+                                ),
+                              ),
+                              if (person.id == current.ownerId) ...[
+                                const SizedBox(width: 8),
+                                Text(
+                                  'Project owner',
+                                  style: DesktopChrome.metadata(),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      if (c.operationError != null) ...[
+                        const SizedBox(height: 12),
+                        Text(c.operationError!),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: busy ? null : () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  key: const ValueKey('project-add-confirm'),
+                  onPressed: busy || c.saving || count == 0
+                      ? null
+                      : () async {
+                          update(() => busy = true);
+                          // Read now, not when the dialog opened: a member added elsewhere since is kept.
+                          final live = c.snapshot?.projectById(project.id);
+                          final swarm = {
+                            for (final p
+                                in c.snapshot?.people ??
+                                    const <SuperTabPerson>[])
+                              p.id,
+                          };
+                          final result = await c.command({
+                            'type': 'project.sharing',
+                            'projectId': project.id,
+                            'visibility': 'private',
+                            'memberIds': {
+                              ...?live?.memberIds,
+                              ...ticked.where(swarm.contains),
+                            }.where((id) => id != project.ownerId).toList(),
+                          });
+                          if (!context.mounted) return;
+                          if (result != null) {
+                            Navigator.pop(context);
+                          } else {
+                            update(() => busy = false);
+                          }
+                        },
+                  child: Text(
+                    count == 1 ? 'Add 1 person' : 'Add $count people',
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    ),
   );
 }
