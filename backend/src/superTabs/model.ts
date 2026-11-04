@@ -716,6 +716,9 @@ export interface CommandEffects {
   instructions?: import('./instructions.js').InstructionsWrite
   /** A coordinator's note kept or a note removed, written outside the tab state by the store (instructions.ts). */
   notes?: import('./instructions.js').NotesWrite
+  /** Reactions the Swarm adds as a task's agent on the message that asked for it (taskLine.ts), written by the store as that
+   *  agent's own `message.react`. */
+  reactions?: Array<{ conversationId: string; messageId: string; agentId: string; emoji: import('./reactions.js').Reaction }>
 }
 /** `details` go to the caller with the code: what it needs to act on the refusal (a stale save's current text). */
 export class SuperTabError extends Error {
