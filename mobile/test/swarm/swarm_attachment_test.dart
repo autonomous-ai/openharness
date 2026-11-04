@@ -99,9 +99,11 @@ void main() {
     expect(done(), isTrue);
   }
 
-  /// Ends a test that fetched: the chat closed, and the cache's own cleanup,
+  /// Ends a test that fetched: its pictures loaded, the chat closed, and the cache's own cleanup,
   /// which it runs every few seconds, let run.
   Future<void> closed(WidgetTester tester) async {
+    // A picture still loading when its file goes fails the test, after it.
+    await picturesLoaded(tester);
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(minutes: 1));
   }
@@ -392,10 +394,9 @@ void main() {
       final key = (await tester.runAsync(
         () => picture.obtainKey(ImageConfiguration.empty),
       ))!;
-      await until(
-        tester,
-        () => PaintingBinding.instance.imageCache.containsKey(key),
-      );
+      // Asked for is not read: the account's files go next.
+      await picturesLoaded(tester);
+      expect(PaintingBinding.instance.imageCache.containsKey(key), isTrue);
       return key;
     }
 
