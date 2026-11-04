@@ -18,11 +18,24 @@ enum SuperTabBacklogGroup {
   final String label;
 }
 
-/// Which group [task] is listed in; null for a cancelled task, which is not
-/// listed. A wait on a person is "Waiting on someone", as the sidebar's groups
-/// read it (task_groups.dart, Huy); the task's own line says on whom.
-SuperTabBacklogGroup? superTabBacklogGroupOf(SuperTabConversation task) {
-  if (task.shippedAt != null) return SuperTabBacklogGroup.shipped;
+/// How far back Shipped looks: fixed, with no control to change it (the PM's
+/// reshape of Scholes's ask, task #2551).
+const superTabBacklogShippedWindow = Duration(days: 7);
+
+/// Which group [task] is listed in at [now]; null for one that is not listed:
+/// cancelled, closed without shipping, or shipped before the window. A wait on
+/// a person is "Waiting on someone", as the sidebar's groups read it
+/// (task_groups.dart, Huy); the task's own line says on whom.
+SuperTabBacklogGroup? superTabBacklogGroupOf(
+  SuperTabConversation task,
+  DateTime now,
+) {
+  if (task.shippedAt case final shipped?) {
+    return now.difference(shipped) > superTabBacklogShippedWindow
+        ? null
+        : SuperTabBacklogGroup.shipped;
+  }
+  if (task.closed) return null;
   final assignment = task.assignment;
   final status = assignment?['status'];
   final liveness = task.liveness;
@@ -48,16 +61,26 @@ SuperTabBacklogGroup? superTabBacklogGroupOf(SuperTabConversation task) {
   return SuperTabBacklogGroup.working;
 }
 
-/// Every task of the Swarm the controller holds, open and closed, across
-/// projects, newest first: the groups the server lets this reader read, less
-/// project chats, Buddy chats, steps and private chats, as the sidebar lists
-/// a project's work (project_sidebar.dart superTabOpenWorkgroups).
-List<SuperTabConversation> superTabBacklogTasks(SuperTabController c) {
+/// Every task of the Swarm the controller holds, open and closed, and of
+/// [closed], those read for the list alone, across projects, newest first: the
+/// groups the server lets this reader read, less project chats, Buddy chats,
+/// steps and private chats, as the sidebar lists a project's work
+/// (project_sidebar.dart superTabOpenWorkgroups). What the controller holds is
+/// newer than a read, so it wins.
+List<SuperTabConversation> superTabBacklogTasks(
+  SuperTabController c, {
+  Iterable<SuperTabConversation> closed = const [],
+}) {
   final snapshot = c.snapshot;
   if (snapshot == null) return const [];
+  final byProject = closed.groupListsBy((g) => g.projectId);
   final tasks = [
     for (final project in snapshot.projects)
-      for (final g in superTabListedWork(c.projectConversations(project.id)))
+      for (final g in superTabListedWork([
+        ...c.projectConversations(project.id),
+        for (final g in byProject[project.id] ?? const <SuperTabConversation>[])
+          if (snapshot.conversation(g.id) == null) g,
+      ]))
         if (g.id != project.leadConversationId &&
             !g.isBuddyChat &&
             !c.hiddenByBuddies(g))
