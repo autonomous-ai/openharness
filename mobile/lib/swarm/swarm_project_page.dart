@@ -338,6 +338,11 @@ class SwarmProjectPage extends StatefulWidget {
 
 class _SwarmProjectPageState extends State<SwarmProjectPage> {
   SwarmSession? _session;
+
+  /// Find in the chat shown, asked from the project's header (task #2826):
+  /// the chat's page under it answers.
+  final _findRequests = ValueNotifier(0);
+  void _findInChat() => _findRequests.value++;
   late SwarmProjectTab _tab = widget.tabs.contains(widget.tab)
       ? widget.tab
       : widget.tabs.first;
@@ -393,6 +398,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
 
   @override
   void dispose() {
+    _findRequests.dispose();
     _closeSheet();
     _session?.inbox.removeListener(_inboxChanged);
     _session?.leave();
@@ -562,10 +568,8 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
   }
 
   void _openSharingSheet(SwarmReader reader) => _openSheet(
-    (_) => SwarmProjectSharingSheet(
-      reader: reader,
-      projectId: widget.projectId,
-    ),
+    (_) =>
+        SwarmProjectSharingSheet(reader: reader, projectId: widget.projectId),
   );
 
   /// Project settings…'s Project details ([SwarmProjectInfoSheet]): not the
@@ -657,6 +661,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
             SwarmBuddyMenuButton(
               actions: _buddy!,
               chatId: swarmBuddyChat(_buddy!.reader, widget.projectId)?.id,
+              onFind: _findInChat,
             ),
           // The project chat's Notifications (the desktop's chat menu): its
           // header is the project's, so they are here.
@@ -664,6 +669,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
             SwarmChatMenuButton(
               reader: reader,
               chatId: project.leadConversationId,
+              onFind: _findInChat,
             ),
           if (_homeC)
             _ProjectMenu(
@@ -677,6 +683,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
                   ? () => _openSharingSheet(reader)
                   : null,
               onSettings: () => unawaited(_openSettings(reader)),
+              onFind: _tab == SwarmProjectTab.chat ? _findInChat : null,
               onNotifications:
                   snapshot.conversation(project.leadConversationId) == null
                   ? null
@@ -734,6 +741,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       swarmId: widget.swarmId,
       conversationId: project.leadConversationId,
       header: false,
+      findRequests: _findRequests,
       mention: widget.mention,
       messageId: _messageId,
       threadId: _threadId,
@@ -741,6 +749,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       homeC: _homeC,
     ),
     SwarmProjectTab.buddy => SwarmProjectBuddy(
+      findRequests: _findRequests,
       reader: reader,
       swarmId: widget.swarmId,
       projectId: project.id,
@@ -911,6 +920,7 @@ SuperTabAgent? swarmProjectPm(SuperTabSnapshot? snapshot, String projectId) {
 /// menu has them. It goes with the header: losing the project
 /// closes it. Open terminal follows the Swarm and the phone's computers
 /// while open, and at the tap reads the PM of [projectId] again.
+/// Find in chat follows Open terminal while the chat is shown (task #2826).
 class _ProjectMenu extends StatelessWidget {
   const _ProjectMenu({
     required this.reader,
@@ -922,12 +932,13 @@ class _ProjectMenu extends StatelessWidget {
     required this.onSettings,
     this.onSharing,
     this.onNotifications,
+    this.onFind,
   });
 
   final SwarmReader reader;
   final String projectId;
   final VoidCallback onStatus, onLeaderboard, onWork, onTeam, onSettings;
-  final VoidCallback? onSharing, onNotifications;
+  final VoidCallback? onSharing, onNotifications, onFind;
 
   @override
   Widget build(BuildContext context) {
@@ -978,11 +989,11 @@ class _ProjectMenu extends StatelessWidget {
     return MenuTheme(
       data: MenuThemeData(
         submenuIcon: MenuTheme.of(context).submenuIcon,
-        // Home C sits near the top of the phone. Eight rows at their 48-point
+        // Home C sits near the top of the phone. Nine rows at their 48-point
         // layout height, panel padding, and a small edge fit without scrolling.
         style: AppMenu.style(
           maxHeight:
-              8 * (minTouchTarget + AppSpace.xs) +
+              9 * (minTouchTarget + AppSpace.xs) +
               AppMenu.panelPadding.vertical +
               AppSpace.xs,
         ),
@@ -997,6 +1008,8 @@ class _ProjectMenu extends StatelessWidget {
               terminal.enabled ? terminal.onTap : null,
               value: terminal.value,
             ),
+          if (onFind case final onTap?)
+            row('swarm-project-menu-find', 'Find in chat', onTap),
           row('swarm-project-menu-status', 'Status', onStatus),
           row('swarm-project-menu-leaderboard', 'Leaderboard', onLeaderboard),
           row('swarm-project-menu-work', 'Work', onWork),
