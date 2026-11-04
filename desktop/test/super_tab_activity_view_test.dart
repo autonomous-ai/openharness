@@ -399,14 +399,18 @@ void main() {
     });
   });
 
-  testWidgets('mark read on a folded row marks all of it', (tester) async {
+  testWidgets('mark read on a folded row marks all of it, removes it and '
+      'lowers Mentions and Activity by 3', (tester) async {
     await withClock(Clock.fixed(_now), () async {
       final server = swarm()..followedThreads = null;
       for (var i = 0; i < 3; i++) {
         server.tag('message-${i + 1}', leadId: 'dee', text: 'Check $i');
         server.mentions.last['leadName'] = 'dee';
       }
-      await show(tester, await loaded(tester, server));
+      final activity = await loaded(tester, server);
+      await show(tester, activity);
+      expect(_tab(tester, 'super-activity-tab-mentions'), 'Mentions 3');
+      expect(activity.count, 3);
       final row = find.byWidgetPredicate(
         (w) =>
             w.key is ValueKey<String> &&
@@ -422,6 +426,10 @@ void main() {
         ['mention.done', 'mention.done', 'mention.done'],
       );
       expect(server.posts, hasLength(3));
+      expect(row, findsNothing);
+      expect(find.text('No unread mentions'), findsOneWidget);
+      expect(_tab(tester, 'super-activity-tab-mentions'), 'Mentions');
+      expect(activity.count, 0);
     });
   });
 
@@ -442,42 +450,60 @@ void main() {
     });
   });
 
-  testWidgets('Mentions opens on Unreads only; turning it off shows read '
-      'rows', (tester) async {
+  testWidgets('Mentions lists only unread tags, folded among themselves, '
+      'with no Unreads only', (tester) async {
     final server = swarm()..followedThreads = null;
-    server.tag('message-1', messageSequence: 1, leadId: 'a', text: 'Old news');
-    server.tag('message-2', messageSequence: 9, leadId: 'b', text: 'New news');
+    String at(int minutes) => _utc(_now.subtract(Duration(minutes: minutes)));
+    server.tag(
+      'message-1',
+      messageSequence: 9,
+      leadId: 'dee',
+      text: 'New news',
+      createdAt: at(1),
+    );
+    server.mentions.last['leadName'] = 'dee';
+    // Read past, between two unread ones from the same author.
+    server.tag(
+      'message-2',
+      messageSequence: 3,
+      leadId: 'dee',
+      text: 'Old news',
+      createdAt: at(2),
+    );
+    server.mentions.last['leadName'] = 'dee';
+    server.tag(
+      'message-3',
+      messageSequence: 8,
+      leadId: 'dee',
+      text: 'More news',
+      createdAt: at(3),
+    );
+    server.mentions.last['leadName'] = 'dee';
+    for (final (i, by) in [(4, 'done'), (5, 'read')]) {
+      server.tag(
+        'message-$i',
+        messageSequence: 7,
+        leadId: 'other-$i',
+        text: 'Marked $by',
+        createdAt: at(i),
+      );
+      server.mentions.last
+        ..['resolvedAt'] = _utc(_now)
+        ..['resolvedBy'] = by;
+    }
     server.state['readMarks'] = {
       'owner': {'lead': 4},
     };
     await withClock(Clock.fixed(_now), () async {
       await show(tester, await loaded(tester, server));
-      final read = _key('super-activity-row-mention:mention-1');
-      final unread = _key('super-activity-row-mention:mention-2');
-      expect(
-        tester.widget<Switch>(_key('super-activity-unreads-only')).value,
-        isTrue,
-      );
-      expect(read, findsNothing);
-      expect(unread, findsOneWidget);
-      await tester.tap(_key('super-activity-unreads-only'));
-      await tester.pumpAndSettle();
-      expect(read, findsOneWidget);
-      expect(unread, findsOneWidget);
-      expect(
-        (tester.widget<Text>(find.text('New news')).textSpan! as TextSpan)
-            .style
-            ?.color,
-        isNot(
-          (tester.widget<Text>(find.text('Old news')).textSpan! as TextSpan)
-              .style
-              ?.color,
-        ),
-      );
-      await tester.tap(_key('super-activity-unreads-only'));
-      await tester.pumpAndSettle();
-      expect(read, findsNothing);
-      expect(unread, findsOneWidget);
+      expect(find.text('New news'), findsOneWidget);
+      expect(find.text('+1 more from dee'), findsOneWidget);
+      for (final text in ['Old news', 'Marked done', 'Marked read']) {
+        expect(find.text(text), findsNothing, reason: text);
+      }
+      expect(_tab(tester, 'super-activity-tab-mentions'), 'Mentions 2');
+      expect(_key('super-activity-unreads-only'), findsNothing);
+      expect(find.textContaining('Unreads only'), findsNothing);
     });
   });
 
