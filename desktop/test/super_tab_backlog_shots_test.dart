@@ -118,11 +118,22 @@ void main() {
               'personId': 'scholes',
               'since': now,
             },
-          if (state == 5) 'shippedAt': now,
+          if (state >= 4) 'shippedAt': now,
           if (state > 0)
             'pullRequestUrls': [
               'https://github.com/autonomous-ai/openharness/pull/${number + 400}',
             ],
+          if (state == 5)
+            'cards': {
+              'pullRequests': [
+                {
+                  'url':
+                      'https://github.com/autonomous-ai/openharness/pull/${number + 400}',
+                  'messageId': 'card-$number',
+                  'mergedAt': now,
+                },
+              ],
+            },
         });
         number++;
       }
@@ -156,6 +167,16 @@ void main() {
           'pullRequestUrls': [
             'https://github.com/autonomous-ai/openharness/pull/${2600 + i}',
           ],
+          'cards': {
+            'pullRequests': [
+              {
+                'url':
+                    'https://github.com/autonomous-ai/openharness/pull/${2600 + i}',
+                'messageId': 'card-$i',
+                'mergedAt': shipped,
+              },
+            ],
+          },
         },
     ]);
   }
