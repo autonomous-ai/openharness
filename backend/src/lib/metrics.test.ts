@@ -2,7 +2,11 @@ import Fastify from 'fastify'
 import { describe, expect, it, vi } from 'vitest'
 import type { AddressInfo } from 'node:net'
 import { createLastHour } from './lastHour.js'
-import { createMetrics, metricsAddress, registerRequestMetrics, startMetricsServer } from './metrics.js'
+import { createMetrics, metricsAddress, startMetricsServer, type Metrics } from './metrics.js'
+import { registerRouteLatency } from './routeLatency.js'
+
+/** The metrics fed as server.ts feeds them: from route latency's one response hook. */
+const registerRequestMetrics = (app: ReturnType<typeof Fastify>, metrics: Metrics) => { registerRouteLatency(app, { log: () => {}, observe: metrics.request }) }
 
 async function appWithMetrics() {
   const metrics = createMetrics()

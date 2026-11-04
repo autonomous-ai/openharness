@@ -1,5 +1,5 @@
 /**
- * What the metrics cost: per request (the onResponse histogram and the last-hour ring) and per query (the
+ * What the metrics cost: per request (the histogram and the last-hour ring, fed from route latency's hook) and per query (the
  * histogram on main's one query hook, lib/queryStats.ts, against a throwaway local replica set). Plain and measured alternate so drift in the
  * machine hits both alike; the median of each is reported.
  *
@@ -13,7 +13,8 @@ import { tmpdir } from 'node:os'
 import Fastify from 'fastify'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
-import { createMetrics, registerRequestMetrics } from '../src/lib/metrics.js'
+import { createMetrics } from '../src/lib/metrics.js'
+import { registerRouteLatency } from '../src/lib/routeLatency.js'
 import { withQueryStats } from '../src/lib/queryStats.js'
 
 const ROUNDS = 7
@@ -27,7 +28,8 @@ async function microsPerCall(times: number, call: () => Promise<unknown>): Promi
 
 async function requestApp(measured: boolean) {
   const app = Fastify()
-  if (measured) registerRequestMetrics(app, createMetrics())
+  // Both sides have main's route latency hook; the measured one also feeds the histogram and the last hour.
+  registerRouteLatency(app, { log: () => {}, ...(measured ? { observe: createMetrics().request } : {}) })
   app.get('/api/super-tabs/:tabId/changes', async () => ({ ok: true }))
   await app.ready()
   return app

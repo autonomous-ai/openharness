@@ -19,7 +19,7 @@ import { handleManagerUpgrade } from './lib/managerWs.js'
 import { handleAdapterUpgrade } from './lib/adapterWs.js'
 import { logger } from './utils/logger.js'
 import { registerSecurityHeaders } from './middlewares/securityHeaders.js'
-import { metrics, metricsAddress, registerRequestMetrics, startMetricsServer } from './lib/metrics.js'
+import { metrics, metricsAddress, startMetricsServer } from './lib/metrics.js'
 import { startLastHour } from './lib/lastHour.js'
 import { WORKER_INDEX } from './lib/instance.js'
 import { startTurnCredentialRefresh } from './lib/turnCredentials.js'
@@ -171,7 +171,8 @@ async function start(): Promise<void> {
   const stopCacheStats = startCacheStats()
   // Every minute: the process's memory and what the read cache holds of it (lib/memoryStats.ts; the HPA scales on memory).
   const stopMemoryStats = startMemoryStats({ cache: () => swarmReadCache()?.size ?? null })
-  const stopRouteLatency = startRouteLatency(registerRouteLatency(app))
+  // The same hook feeds the Prometheus histogram and the last hour (lib/metrics.ts); WS upgrades never reach Fastify.
+  const stopRouteLatency = startRouteLatency(registerRouteLatency(app, { observe: metrics.request }))
   // Every minute: who reads messages how, with the rows each page decoded and showed (superTabs/messageReadStats.ts).
   const stopMessageReadStats = startMessageReadStats()
   // Every minute: how long messages took to reach their readers, p50/p95 per reader kind (superTabs/messageReachStats.ts).
@@ -185,9 +186,6 @@ async function start(): Promise<void> {
   }
 
   app.setErrorHandler(errorHandler)
-
-  // Latency by route pattern and status for every control-API request (WS upgrades never reach Fastify).
-  registerRequestMetrics(app, metrics)
 
   registerJsonBodyParser(app)
 

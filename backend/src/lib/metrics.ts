@@ -1,4 +1,3 @@
-import type { FastifyInstance } from 'fastify'
 import http from 'node:http'
 import { collectDefaultMetrics, Counter, Histogram, Registry } from 'prom-client'
 import { createLastHour, type BusyWindow, type DbWindow, type LastHour } from './lastHour.js'
@@ -49,7 +48,7 @@ export function createMetrics(hour: LastHour = createLastHour()) {
     registry, hour,
     /** One Prisma operation's time, from the one query hook (lib/queryStats.ts withQueryStats). */
     observeQuery(model: string, operation: string, seconds: number) { queryDuration.observe({ model, operation }, seconds) },
-    /** One HTTP response, by its route pattern (`unrouted` without one). */
+    /** One HTTP response, by its route pattern (`unrouted` without one), from route latency's hook (lib/routeLatency.ts). */
     request(method: string, route: string, status: number, seconds: number) {
       httpDuration.observe({ method, route, status_code: String(status) }, seconds)
       hour.request(`${method} ${route}`, seconds * 1000, status >= 500)
@@ -79,16 +78,6 @@ const OTHER = 'other'
 
 /** This process's metrics, served by startMetricsServer. */
 export const metrics = createMetrics()
-
-/** A request that matched no route has no pattern; its URL is whatever a scanner sent, so it is one label, named as
- *  the per-minute lines name it (lib/routeLatency.ts). */
-const UNROUTED = 'unrouted'
-
-export function registerRequestMetrics(app: FastifyInstance, metrics: Metrics): void {
-  app.addHook('onResponse', async (request, reply) => {
-    metrics.request(request.method, request.routeOptions.url ?? UNROUTED, reply.statusCode, reply.elapsedTime / 1000)
-  })
-}
 
 /**
  * Where this worker serves /metrics: always on, with no switch; each pm2 worker binds base + its index (as the mesh
