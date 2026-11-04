@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_activity.dart';
@@ -408,6 +409,32 @@ void main() {
         await close(tester, c);
       },
     );
+
+    testWidgets('a private Buddy project uses a lock in its project label', (
+      tester,
+    ) async {
+      final server = buddySwarm();
+      server.state['projects'] = [
+        projectFixture('lead', 'Pilot', 'lead', visibility: 'private'),
+      ];
+      giveBuddy(server);
+      final c = await show(tester, server);
+
+      await tester.tap(buddyEntry);
+      await tester.pumpAndSettle();
+
+      final bar = find.byKey(const ValueKey('super-buddy-bar'));
+      expect(
+        find.descendant(of: bar, matching: find.byIcon(AppIcons.lock)),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: bar, matching: find.textContaining('#Pilot')),
+        findsNothing,
+      );
+
+      await close(tester, c);
+    });
 
     testWidgets(
       'the reader\'s Buddy row says where it runs; other people\'s Buddies appear nowhere',

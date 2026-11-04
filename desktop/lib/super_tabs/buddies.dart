@@ -7,6 +7,7 @@ import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_select_field.dart';
 import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
+import 'private_project_lock.dart';
 import 'controller.dart';
 import 'buddy_machines.dart';
 import 'buddy_model.dart';
@@ -609,14 +610,15 @@ class SuperTabBuddyBar extends StatelessWidget {
     final project = c.snapshot!.projects
         .where((p) => p.id == chat.projectId)
         .firstOrNull;
+    final access = agent.machineOwnerId == c.accountId
+        ? 'only you can read this chat'
+        : '${buddyPersonName(c, agent.machineOwnerId)} can see its terminal';
     final where = [
       '${buddyEngineName(agent.engine)} on $machine',
       if (project != null) '#${project.name}',
       // The one Buddy for the whole Swarm (spec 2026-10-31-one-buddy-per-swarm).
       if (chat.isSwarmBuddyChat) 'reads all your projects',
-      agent.machineOwnerId == c.accountId
-          ? 'only you can read this chat'
-          : '${buddyPersonName(c, agent.machineOwnerId)} can see its terminal',
+      access,
     ].join(' · ');
     final busy = !c.canWrite || c.saving || c.hasPendingAction;
     return Padding(
@@ -634,6 +636,27 @@ class SuperTabBuddyBar extends StatelessWidget {
               agent: agent,
               machine: machine,
               rest: where,
+            )
+          else if (project?.isPrivate == true)
+            Text.rich(
+              TextSpan(
+                style: DesktopChrome.metadata(),
+                children: [
+                  TextSpan(
+                    text: '${buddyEngineName(agent.engine)} on $machine · ',
+                  ),
+                  WidgetSpan(
+                    alignment: PlaceholderAlignment.middle,
+                    child: PrivateProjectLock(
+                      size: 12,
+                      color: DesktopChrome.muted,
+                    ),
+                  ),
+                  TextSpan(text: ' ${project!.name} · $access'),
+                ],
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             )
           else
             Text(where, style: DesktopChrome.metadata()),

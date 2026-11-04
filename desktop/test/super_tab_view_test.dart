@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/controller.dart';
@@ -437,6 +438,57 @@ void main() {
       tester.getCenter(find.byTooltip('Invite people')).dx,
       greaterThan(800),
     );
+    await tester.pumpWidget(const SizedBox());
+    await controller.flush();
+    controller.dispose();
+  });
+
+  testWidgets('a private project uses its lock in the conversation header', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1100, 700));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final server = ConversationServer();
+    server.state['projects'] = [
+      projectFixture('lead', 'Pilot', 'lead', visibility: 'private'),
+    ];
+    final controller = server.controller();
+    await controller.refresh();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SuperTabView(
+            controller: controller,
+            onInvite: () {},
+            onAddAgent: (_) {},
+            onOpenTerminal: (_) {},
+            machineName: (_) => 'Test Mac',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final header = find.byKey(const ValueKey('super-project-menu'));
+    expect(find.text('# Pilot'), findsNothing);
+    expect(
+      find.descendant(of: header, matching: find.text('Pilot')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: header, matching: find.byIcon(AppIcons.lock)),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<TextField>(
+            find.byKey(const ValueKey('super-message-composer')),
+          )
+          .decoration
+          ?.hintText,
+      'Message Pilot',
+    );
+
     await tester.pumpWidget(const SizedBox());
     await controller.flush();
     controller.dispose();
