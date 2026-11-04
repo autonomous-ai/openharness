@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:fake_async/fake_async.dart';
@@ -124,6 +125,23 @@ void main() {
       expect(v.off, isTrue);
       expect(v.notice, VoiceNotice.unavailable);
       expect(mic.starts, 0);
+    });
+  });
+
+  test('a send that throws keeps the take, Send and X ready', () {
+    fakeAsync((async) {
+      final v = SwarmVoice(
+        recorder: FakeVoiceRecorder.new,
+        post: (_) => Future.error(TimeoutException('no answer')),
+      )..tap();
+      async.flushMicrotasks();
+      v.send();
+      async.flushMicrotasks();
+      expect(v.state, SwarmVoiceState.held);
+      expect(v.canSend, isTrue);
+      expect(v.notice, SwarmVoice.notSent);
+      v.discard();
+      expect(v.state, SwarmVoiceState.off);
     });
   });
 

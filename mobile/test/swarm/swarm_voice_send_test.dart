@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -126,6 +127,21 @@ void main() {
     ));
     expect(r.swarm.commands, hasLength(1));
   });
+
+  test(
+    'keeps the take and sends nothing when the read gets no answer',
+    () async {
+      final r = rig();
+      r.swarm.routes['/api/super-tabs/$tab/attachments/'] = (_) =>
+          throw TimeoutException('forwarding timed out');
+      final c = await open(r.reader);
+      expect(await c.sendVoice(take, 'en'), (
+        sent: false,
+        notice: swarmVoiceNoAnswer,
+      ));
+      expect(r.swarm.commands, isEmpty);
+    },
+  );
 
   test('keeps the take and sends nothing on a server without voice', () async {
     final r = rig();
