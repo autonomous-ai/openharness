@@ -951,6 +951,66 @@ void main() {
       },
     );
 
+    testWidgets('Activity draws the same list, in the same order, folding '
+        'only neighbouring tags from one author', (tester) async {
+      final f = SuperTabLaunchFixture(local: true);
+      final activity = (await tester.runAsync(() => openWithEverything(f)))!;
+      await tester.binding.setSurfaceSize(const Size(1000, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: SuperTabActivityView(
+              activity: activity,
+              onOpenMention: (_) {},
+              onOpenThread: (_, _) {},
+              onOpenConversation: (_) {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      List<(String, String)> drawn() => [
+        for (final w in tester.widgetList(
+          find.byWidgetPredicate(
+            (w) =>
+                w.key is ValueKey<String> &&
+                (w.key! as ValueKey<String>).value.startsWith(
+                  'super-activity-row-',
+                ),
+          ),
+        ))
+          switch ((w.key! as ValueKey<String>).value
+              .substring('super-activity-row-'.length)
+              .split(':')) {
+            [final kind, final id] => (kind, id),
+            _ => ('?', '?'),
+          },
+      ];
+      final needs = drawn();
+      await tester.tap(
+        find.byKey(const ValueKey('super-activity-tab-mentions')),
+      );
+      await tester.pumpAndSettle();
+      final tags = drawn();
+      expect(
+        [...needs, ...tags],
+        [
+          ('reminder', 'reminder-message-1'),
+          ('agent', 'offline'),
+          ('decision', 'decision-1'),
+          ('mention', 'mention-1'),
+          ('mention', 'mention-3'),
+        ],
+      );
+      // The folded one is mention-2, right behind mention-1 in the menu.
+      expect(find.text('+1 more from Wren'), findsOneWidget);
+      expect(menuRows(f), everything);
+      await tester.pumpWidget(const SizedBox());
+      f.dispose();
+    });
+
     test('each row says who asks and what', () async {
       final f = SuperTabLaunchFixture(local: true);
       await openWithEverything(f);
