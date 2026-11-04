@@ -208,9 +208,11 @@ describe('built-in Swarm skills', () => {
   // Before a section that is last: after a blank line, without its own.
   const reactionsBefore = (role: 'lead' | 'dev' | 'review') => `\n${reactions(role).trimEnd()}\n`
   // Who a post reaches (project instructions, phase 1): every role, in both modes, in a section of its own right before Reactions.
-  const reaches = '- A post reaches only the agents you name with --to <agent id>, any agent of this project; they join the group if they are not in it.'
-  const whoReaches = (role: 'lead' | 'dev' | 'review') => `## Who a post reaches\n${reaches}${role === 'lead' ? ' Your post in a task that names no one reaches its assigned agent.\n'
-    : ` A post that names no one reaches the Lead.\n${role === 'dev' ? '- Answer your Reviewer, and tell it a fix is pushed, with --to its agent id.\n' : '- Send your verdict and findings to the Builder with --to its agent id.\n'}`}\n`
+  // Task #2963 (Ken, 2026-11-04): a post that names no one no longer reaches the Lead.
+  const reaches = '- A post reaches only the agents you name, with --to <agent id> or @Name in its text, any agent of this project; they join the group if they are not in it. A reply also reaches the agent whose message it answers. A post in a task or step that names no one reaches its assigned agent, and anywhere else no agent.\n'
+  const status = '- The Lead hears your work through your status (done, stuck, needs a human): never post it a result, a verdict, a Ready or an acknowledgement.\n'
+  const whoReaches = (role: 'lead' | 'dev' | 'review') => `## Who a post reaches\n${reaches}${role === 'lead' ? '- Agents report to you through their status; their posts reach you only when they name you.\n'
+    : `${role === 'dev' ? '- Answer your Reviewer, and tell it a fix is pushed, with --to its agent id.\n' : '- Send your verdict and findings to the Builder with --to its agent id.\n'}${status}`}\n`
   // The Builder's 👀 replaces its "say that you took it" line, in both modes.
   const took = '- React 👀 to the message that assigned it and mark it working; your first post is your plan or a first result, never that you took it.\n'
   // The task's review plan (nightly reflection 10-30): a new bullet right after each Lead's review line, nothing replaced.
@@ -229,13 +231,13 @@ describe('built-in Swarm skills', () => {
       expect(text, `${mode} ${role}`).not.toContain('that you took it and')
     }
   })
-  // Project instructions, phase 1: agents talk to each other by name; only an unnamed post goes to the Lead.
+  // Project instructions, phase 1: agents talk to each other by name; since #2963 an unnamed post never goes to the Lead.
   it('tells every role who a post reaches, the Builder to answer its Reviewer and the Reviewer its Builder by name', () => {
     for (const mode of ['orchestration', 'default'] as const) for (const role of ['lead', 'dev', 'review'] as const) {
       const text = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')
       expect(text.split('## Who a post reaches\n'), `${mode} ${role}`).toHaveLength(2)
-      expect(text, `${mode} ${role}`).toContain('A post reaches only the agents you name with --to <agent id>, any agent of this project')
-      expect(text, `${mode} ${role}`).toContain(role === 'lead' ? 'Your post in a task that names no one reaches its assigned agent.' : 'A post that names no one reaches the Lead.')
+      expect(text, `${mode} ${role}`).toContain(reaches)
+      expect(text, `${mode} ${role}`).not.toContain('names no one reaches the Lead')
       expect(text, `${mode} ${role}`).toContain(`\n\n${whoReaches(role)}## Reactions\n`)
     }
   })

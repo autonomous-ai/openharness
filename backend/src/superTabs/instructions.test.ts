@@ -45,6 +45,8 @@ describe('the built-in template', () => {
     expect(TEMPLATE_WORKFLOW).toContain('run `mine`')
     expect(TEMPLATE_WORKFLOW).toContain('read `task GROUP`')
     expect(TEMPLATE_WORKFLOW).toContain('read the thread before acting on it')
+    // Task #2963: an unnamed post no longer reaches the PM, so the workflow says where verdicts and results go.
+    expect(TEMPLATE_WORKFLOW).toContain('A verdict goes to the Engineer by name (--to, or a reply to its\n   request); a result reaches the PM through status, never by a post to the PM.')
     // Ken, 2026-11-02 (from openharness): a two-review task gets two review steps; the Engineer picks its Reviewers
     // itself instead of asking the PM (since 2026-11-03, when the pull request is ready).
     expect(TEMPLATE_WORKFLOW).toContain('A task that needs two\n   reviews gets two review steps.')

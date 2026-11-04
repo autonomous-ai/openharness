@@ -560,7 +560,7 @@ it('refuses to set a machine\'s agents for an agent: a Swarm agent\'s pane, an o
   }
   expect(request.mock.calls.some(c => c[0] === 'super_tabs')).toBe(false)
 })
-// Project instructions, phase 1: an agent names the agents a post reaches; with none it reaches the PM.
+// Project instructions, phase 1: an agent names the agents a post reaches (task #2963: with none, the server reaches no PM).
 it('passes each --to as a recipient, at most 16, and keeps a post without one unnamed', () => {
   expect(parseSuperTabArgs([...prefix, 'post', 'g1', 'Ready', 'op-1', '--to', 'a1', '--to', 'a2', '--to', 'a1'], where).payload.command)
     .toMatchObject({ type: 'message.send', conversationId: 'g1', recipientIds: ['a1', 'a2'] })
