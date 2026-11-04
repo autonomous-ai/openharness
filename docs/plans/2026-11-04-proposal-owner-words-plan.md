@@ -107,3 +107,26 @@ proposal (`proposals.ts`, which counts a root with no reply as open).
 - [ ] Red: the Buddy skill tells the Buddy to show the exact line ("I'll post this as you: …") and wait for the ok.
       It says the words go as the owner's own, in full, and that no reply is posted.
 - [ ] Code. Run the changed specs.
+
+## Task 4: close a proposal by hand (River, 11-04, added to this task)
+
+Of 47 proposals listed as open, 43 were long built or answered: 25 before threads existed, 14 opened as tasks without
+the proposal's link. The open rule can't see either.
+
+**Files:** `backend/src/superTabs/commands.ts`, `proposals.ts`, `store.ts`, `model.ts`, their tests,
+`backend/integration/superTabBuddies.test.ts`, `cli/src/lib/swarmTools.ts` and its spec.
+
+**Interfaces:** `proposal.close { projectId, messageId, reason }` (reason 1 to 200 characters). Allowed for the project's
+coordinator or a person who reads the project, as `note.remove` is. `CommandEffects.closedProposal`.
+`proposals.ts closeProposal`.
+
+- [ ] Red: the command closes only a Buddy's proposal in that project's chat. It posts nothing and is refused to
+      another project's PM and to a Buddy.
+- [ ] Red: a closed root is left out of the read, the seed's scan included. Its row (sequence -2, `closed` with reason,
+      by and at) is never forgotten or seeded open again.
+- [ ] Code. The swarm tools skill lists the command.
+
+Design for this task: growth is one kept row per closed proposal, removed with its Swarm. The only new read is the
+seed's check by `_id`, once per chat. Compatibility: an older server ignores the closed row (sequence -2 is below what
+it lists). The chat's "✋ Proposal" tag on an old proposal with a Buddy reply stays: clearing it would take a post in
+its thread.
