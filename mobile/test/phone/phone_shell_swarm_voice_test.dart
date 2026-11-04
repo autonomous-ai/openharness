@@ -10,8 +10,8 @@ import 'package:harness_mobile/swarm/swarm_session.dart';
 import '../voice_fakes.dart';
 import 'devices_fixture.dart';
 
-/// The shell hands its Swarm chats a mic: the terminal's speech-to-text, or
-/// in sample mode the sample's own, which records nothing.
+/// The shell hands its Swarm chats a mic for voice messages, the terminal's
+/// recorder; sample mode, which has no account to send them with, none.
 void main() {
   late DevicesApp app;
 
@@ -32,7 +32,9 @@ void main() {
   SwarmHost host(WidgetTester tester) =>
       tester.widget<SwarmScope>(find.byType(SwarmScope)).notifier!;
 
-  testWidgets('a Swarm chat in the shell can be talked to', (tester) async {
+  testWidgets('a Swarm chat in the shell can record voice messages', (
+    tester,
+  ) async {
     await tester.pumpWidget(MaterialApp(home: PhoneShell(notifier: app)));
     await tester.pump();
     // The shell's first reads, on their timers, as a launch has them.
@@ -42,9 +44,7 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('in sample mode a Swarm chat hears through the sample', (
-    tester,
-  ) async {
+  testWidgets('in sample mode a Swarm chat has no mic', (tester) async {
     final sample = VoiceInputController(
       transcriber: (_, _) async => '',
       recorder: FakeVoiceRecorder(),
@@ -62,7 +62,7 @@ void main() {
     // The shell's first reads, on their timers, as a launch has them.
     await tester.pump(const Duration(seconds: 1));
 
-    expect(host(tester).voice!(), same(sample));
+    expect(host(tester).voice, isNull);
     await tester.pumpWidget(const SizedBox());
   });
 }

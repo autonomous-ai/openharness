@@ -1371,6 +1371,12 @@ model SuperTabAttachment {
   proposedBy     String?
   /// `avatar` for a profile picture (superTabs/profile.ts), which no message sends; absent on a chat file.
   purpose        String?
+  /// A voice message's facts (superTabs/voiceMessages.ts StoredVoice): its length, waveform and words, read once before it is
+  /// sent (store.ts readVoice). Absent on any other file. Removed with its row: the unsent-file sweep's, or its message's.
+  voice          Json?
+  /// When a readVoice call claimed this file to transcribe it; unset once it stored `voice`. A claim older than two minutes
+  /// is taken over.
+  voiceSince     DateTime?
   createdAt      DateTime @default(now())
 
   @@index([tabId, actorKey, createdAt])

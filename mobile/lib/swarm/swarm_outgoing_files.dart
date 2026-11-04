@@ -248,4 +248,6 @@ const _mimes = {
   'log': 'text/plain',
   'md': 'text/markdown',
   'csv': 'text/csv',
+  // A voice message's clip (swarm_voice.dart), which the backend reads as one.
+  'wav': 'audio/wav',
 };

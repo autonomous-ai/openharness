@@ -22,6 +22,7 @@ import 'pull_requests.dart';
 import 'reactions.dart';
 import 'reminders.dart';
 import 'swarm_type.dart';
+import 'voice_length.dart';
 
 /// The face [message]'s row shows for its sender, shown as [author]: the
 /// [agent] or [person] who wrote it, while they are in the Swarm.
@@ -435,6 +436,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final message = widget.message;
+    final voiceMessage = superTabVoiceOf(message) != null;
     final active = _hovered || _focused;
     // A message that tags the reader stands out, as Slack marks one that
     // names you: an accent bar on its edge over a wash of the accent.
@@ -617,11 +619,12 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                         widget.replyAuthor ??
                                         widget.reply?.authorName ??
                                         'Earlier message',
-                                    text:
-                                        widget.reply?.text ??
-                                        (widget.replyGone
-                                            ? 'The original message is no longer in this conversation.'
-                                            : 'The original message isn’t loaded.'),
+                                    text: switch (widget.reply) {
+                                      final reply? => superTabQuoteText(reply),
+                                      null when widget.replyGone => 'The original message is no longer in this conversation.',
+                                      null =>
+                                        'The original message isn’t loaded.',
+                                    },
                                     onTap: widget.onOpenReply == null
                                         ? null
                                         : () => widget.onOpenReply!(context),
@@ -635,7 +638,9 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     style: DesktopChrome.metadata(),
                                   ),
                                 ),
-                              if (message.text.isNotEmpty)
+                              // A voice message's text is its words, shown
+                              // under its bubble from →A.
+                              if (message.text.isNotEmpty && !voiceMessage)
                                 Opacity(
                                   opacity: widget.dimmed ? 0.6 : 1,
                                   child: ConstrainedBox(
@@ -658,12 +663,15 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   opacity: widget.dimmed ? 0.6 : 1,
                                   child: Padding(
                                     padding: EdgeInsets.only(
-                                      top: message.text.isEmpty ? 0 : 8,
+                                      top: message.text.isEmpty || voiceMessage
+                                          ? 0
+                                          : 8,
                                     ),
                                     child: SuperTabAttachments(
                                       message.attachments,
                                       conversationId: message.conversationId,
                                       messageId: message.id,
+                                      words: message.text,
                                     ),
                                   ),
                                 ),

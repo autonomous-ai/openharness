@@ -2,13 +2,16 @@ import { createHmac, randomBytes } from 'node:crypto'
 import { Readable, Transform, Writable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { z } from 'zod'
+import type { VoiceFacts } from './voiceMessages.js'
 
 /** Metadata as a message stores it. The bytes stay in the bucket. `url` is the file's public address on the CDN: it names the
  *  object, and apps from before signed links open it, until the bucket is no longer public (docs/swarms.md, "Chat file
  *  links"). Each read adds `link`, a short-lived signed link of that read, and `expiresAt` (epoch ms), when it stops opening
  *  (fileLinks.ts). A read that could not sign one says so with `unlinked: true` instead, so an app asks again rather than
  *  open the public address; only a file with neither comes from a server from before links. None of the three is stored. */
-export interface Attachment { id: string; name: string; mime: string; size: number; url: string; link?: string; expiresAt?: number; unlinked?: true }
+export interface Attachment { id: string; name: string; mime: string; size: number; url: string; link?: string; expiresAt?: number; unlinked?: true
+  /** A voice message's length, waveform and whether it has words (voiceMessages.ts); its words are the message's text. */
+  voice?: VoiceFacts }
 
 /** One chat file, whichever way it comes. Every client checks the same number before it sends (attachments.limits.test.ts). */
 export const MAX_ATTACHMENT_BYTES = 256 * 1024 * 1024
