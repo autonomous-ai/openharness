@@ -4,15 +4,15 @@ import type { PrismaClient } from '@prisma/client'
 import { applyCommand, type Command } from '../src/superTabs/commands.js'
 import { createSuperTab, type Actor, type SuperTabState } from '../src/superTabs/model.js'
 import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
-import { databaseProposalReads, openProposals } from '../src/superTabs/proposals.js'
-import { planDatabase } from './plans.test-support.js'
+import { databaseProposalReads, openProposals, SEED_SETTLE_MS } from '../src/superTabs/proposals.js'
+import { plan, planDatabase, profiled, reads } from './plans.test-support.js'
 
 // The Tasks view's Proposals (#2569) read the project chat's proposal roots and their threads as the chat page does. A busy
 // project chat holds thousands of rows, nearly all task lines and talk: the roots' read must not walk them.
 let replica: MongoMemoryReplSet
 let db: PrismaClient
 let state: SuperTabState
-const TAB = 'swarm', CHAT = 'lead', CHAT_ROWS = 3_000
+const TAB = 'swarm', CHAT = 'lead', SHORT = 'short', CHAT_ROWS = 3_000
 const owner: Actor = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const configuration = { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null }
 const T0 = Date.parse('2026-11-01T00:00:00.000Z')
@@ -50,6 +50,10 @@ beforeAll(async () => {
   }
   // Another proposal last, so the newest rows are not all proposals.
   rows.push(...proposal('newest', 'Newest'))
+  // A short chat with the same proposals and nothing else (task #2777: the read costs the same however long the chat).
+  const short = rows.filter(r => /^(open|answered|tasked|newest)/.test(r.id) || r.id === 'old').map(r => ({ ...r, id: `short-${r.id}`, conversationId: SHORT,
+    ...r.thread ? { thread: `short-${r.thread}` } : {}, ...r.replyTo ? { replyTo: `short-${r.replyTo}` } : {} }))
+  rows.push(...short)
   await db.superTabMessage.createMany({ data: rows.map(({ thread, ...row }) => ({ ...row, ...thread ? { thread } : {} })) as never })
 }, 180_000)
 afterAll(async () => {
@@ -65,5 +69,26 @@ describe('the open-proposal read', () => {
       { messageId: 'old', title: 'Old proposal', personId: 'peer', at: T0 + 9000 },
       { messageId: 'newest', title: 'Newest', personId: 'peer', at: expect.any(Number) },
     ])
+  })
+
+  // Task #2777 (Ken's prod scan 11-04): Desktop reads this every minute, and each read walked the whole project chat.
+  it('once seeded, reads the kept proposals by their own index and their roots by id, the same for a chat of 3,000 rows as of 10', async () => {
+    const chat = state.conversations.find(c => c.id === CHAT)!
+    const answer = await openProposals(state, chat, databaseProposalReads(db, TAB, CHAT))
+    await openProposals(state, chat, databaseProposalReads(db, TAB, SHORT))
+    const later = Date.now() + SEED_SETTLE_MS + 1000
+    expect((await openProposals(state, chat, databaseProposalReads(db, TAB, CHAT), later))).toEqual(answer)
+    const shape = (entries: Awaited<ReturnType<typeof profiled>>) => entries.filter(e => /SuperTab/.test(e.ns))
+      .map(e => ({ ns: e.ns.slice(e.ns.lastIndexOf('.') + 1), plan: e.planSummary, docsExamined: e.docsExamined, returned: e.nreturned }))
+    const long = await profiled(db, () => openProposals(state, chat, databaseProposalReads(db, TAB, CHAT), later))
+    const brief = await profiled(db, () => openProposals(state, chat, databaseProposalReads(db, TAB, SHORT), later))
+    expect(shape(long).map(e => e.ns)).toEqual(shape(brief).map(e => e.ns))
+    expect(shape(long).map(e => e.docsExamined)).toEqual(shape(brief).map(e => e.docsExamined))
+    // No read of the chat by its sequence: the walk is gone.
+    expect(reads(long, 'SuperTabMessage', ['sequence'])).toEqual([])
+    const listed = plan(reads(long, 'SuperTabOpenProposal', ['conversationId']))
+    expect(listed).toEqual([expect.objectContaining({ plan: 'IXSCAN { tabId: 1, conversationId: 1, sequence: 1 }' })])
+    expect(listed[0]!.docsExamined).toBe(listed[0]!.returned)
+    expect(Math.max(...shape(long).map(e => e.docsExamined ?? 0))).toBeLessThanOrEqual(10)
   })
 })

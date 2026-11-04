@@ -199,9 +199,12 @@ describe('the purge', () => {
     expect(await purgeDeletedSwarms(db, files, w.clock.now + SWARM_DELETE_GRACE_MS + PURGE_MARGIN_MS - 1)).toMatchObject({ waiting: 0 })
     expect(await db.superTab.count({ where: { id: gone.tab } })).toBe(1)
     expect(await db.superTabMessage.count({ where: { tabId: gone.tab } })).toBeGreaterThan(0)
+    // A project chat's open proposals (proposals.ts, task #2777) go with it.
+    await db.superTabOpenProposal.create({ data: { id: `seeded:${gone.tab}:lead`, tabId: gone.tab, conversationId: 'lead', sequence: -1 } })
 
     expect(await purgeDeletedSwarms(db, files, w.clock.now + SWARM_DELETE_GRACE_MS + PURGE_MARGIN_MS)).toMatchObject({ waiting: 0 })
     expect(Object.entries(await counts(gone.tab)).filter(([, n]) => n > 0)).toEqual([])
+    expect(await db.superTabOpenProposal.count({ where: { tabId: gone.tab } })).toBe(0)
     expect(await db.superTab.count({ where: { id: gone.tab } })).toBe(0)
     const keptKey = (await db.superTabAttachment.findFirstOrThrow({ where: { tabId: kept.tab }, select: { objectKey: true } })).objectKey
     expect([...w.files.objects.keys()]).toEqual([keptKey])
