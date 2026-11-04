@@ -484,6 +484,12 @@ class Agent {
   final DateTime? lastActivityAt;
   final DateTime? createdAt;
   final bool closeSupported;
+
+  /// Whether a person chose [name] (the daemon's `nameChosen`: they renamed the
+  /// agent), as against the name it was created with or the engine's session
+  /// title. Null from a daemon that does not say; only a true one is sent to
+  /// the Swarm (task #2920).
+  final bool? nameChosen;
   final String? closePlanState;
   final String? closePlanDetail;
 
@@ -594,6 +600,7 @@ class Agent {
     this.lastActivityAt,
     this.createdAt,
     this.closeSupported = false,
+    this.nameChosen,
     this.closePlanState,
     this.closePlanDetail,
     this.lastOpenedAt,
@@ -768,6 +775,7 @@ class Agent {
           ? DateTime.tryParse(j['createdAt'] as String)
           : null,
       closeSupported: j['closeSupported'] == true,
+      nameChosen: j['nameChosen'] is bool ? j['nameChosen'] as bool : null,
       closePlanState:
           j['closePlan'] is Map &&
               const {'waiting', 'failed'}.contains(j['closePlan']['state'])
@@ -847,6 +855,7 @@ class Agent {
     lastActivityAt: lastActivityAt,
     createdAt: createdAt,
     closeSupported: closeSupported,
+    nameChosen: nameChosen,
     closePlanState: clearClosePlan ? null : closePlanState,
     closePlanDetail: clearClosePlan ? null : closePlanDetail,
     lastOpenedAt: lastOpenedAt ?? this.lastOpenedAt,

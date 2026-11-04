@@ -105,6 +105,28 @@ describe('registry remote display names', () => {
     expect(projectDisplayName(registry.bySession('session-1')!)).toBe('Fix the login test')
   })
 
+  // Task #2920: the agent frame says which names a person chose, so Desktop can send those to the Swarm and never an
+  // engine's session title.
+  it('says a name was chosen by a person only for a rename, and keeps saying so after a restart', async () => {
+    const transcriptPath = join(dataDir, 'session-1.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    let { registry, isNameChosen } = await loadRegistryModule()
+    registry.load()
+    const registered = registerProcess(registry, { launcherId: 'h1', sessionId: 'session-1', transcriptPath, tmuxPane: '%1', cwd: '/tmp/demo' })
+    // Nobody renamed it: its name is the engine's session title or the name it was created with.
+    registered!.entry.title = 'cd /Users/macbookpro/projects/lamp'
+    expect(isNameChosen(registered!.entry)).toBe(false)
+    registered!.entry.defaultName = 'Builder'
+    expect(isNameChosen(registered!.entry)).toBe(false)
+    registry.rename('session-1', 'Release notes')
+    expect(isNameChosen(registry.bySession('session-1')!)).toBe(true)
+
+    // A new process of the daemon reads the names file.
+    ;({ registry, isNameChosen } = await loadRegistryModule())
+    registry.load()
+    expect(isNameChosen(registry.bySession('session-1')!)).toBe(true)
+  })
+
   it('persists renamed display names independently from session removal', async () => {
     const transcriptPath = join(dataDir, 'session-1.jsonl')
     writeFileSync(transcriptPath, '{}\n')
