@@ -4,7 +4,8 @@
 > committed failing test before its code; no per-task review, one independent review on the pull request. No execution
 > handoff.
 
-**Status:** Plan only. Tasks 1 to 4 start once every gate below is met (River, 2026-11-04).
+**Status:** Built by Wren13 after Wren8's session stopped (River, 2026-11-04 17:38): every gate below is met. Tasks 1 to 3
+are done; Task 4's numbers are in the pull request.
 
 **Goal:** A Swarm stops capping machines at 32 in total. Each person may contribute at most 20 machines to one Swarm, and
 someone over that limit is told why.
@@ -22,11 +23,11 @@ document. Each machine is its own document now, so that reason is gone.
 
 | Gate | State on 2026-11-04 | How it's checked |
 |---|---|---|
-| Team entries out of the count (#2900) | Live in backend v1.3.96 | Commit is an ancestor of the tag |
-| Host readings read only what changed (#2890, B3) | Live in backend v1.3.96 | Commit is an ancestor of the tag |
-| The heartbeat out of the machine part (#2904, Kiln3) | Open | Merged and in a released backend |
-| Clients ask for light changes | Not started: no client asks for `machines=light` yet | Released Desktop and phone send it |
-| Baseline measured | Not done | Task 4, step 1 |
+| Team entries out of the count (#2900) | Live | Commit is an ancestor of the tag |
+| Host readings read only what changed (#2890, B3) | Live | Commit is an ancestor of the tag |
+| The heartbeat out of the machine part (#2904, Kiln3) | Live (backend after 13:21) | Merged and in a released backend |
+| Clients ask for light changes | CLI 0.5.39 (16:10) | Released CLI sends it |
+| Baseline measured | Done: bench at 36 and 360 machines, production parts again at 17:50 | Task 4 |
 
 ## Measured on production (2026-11-04, read-only login)
 
@@ -37,8 +38,13 @@ document. Each machine is its own document now, so that reason is gone.
 - A machine part averages 2.66 KB, 17.1 KB at most.
 - 132 of the 155 parts were written within one 60-second window, as hosts report about every 15 seconds.
 
-Not measured yet: `db by shape` reads and bytes. Those are in the pods' logs, which only an agent on Ken's Mac can read
-(Task 4, step 1).
+Again at 17:50, after #2904: 178 live machine parts, 2.78 KB on average, 26 KB at most. The largest Swarm has 50 entries,
+22 of them Team accounts'. The most one person has in one Swarm is still 6. Only 14 machine parts changed in the hour
+before: a reading no longer writes the machine part, so the "machine writes" and "changes per old client" rows below are
+now far lower than estimated.
+
+`db by shape` itself is in the pods' logs, which no agent on this Mac can read; the bench (Task 4) measures the same
+reads by collection instead.
 
 ## Design
 
@@ -91,6 +97,33 @@ Not measured yet: `db by shape` reads and bytes. Those are in the pods' logs, wh
   outside the Swarm's machines. Adding that machine by hand shows the refusal. This only affects someone already at 20.
 - **Platforms:** backend and CLI on macOS, Linux and Windows. Desktop on macOS, Linux and Windows shows the message, which
   the web build shares. The phone adds no machines.
+
+## Measured (Task 4, 2026-11-04)
+
+`integration/bench/machineCapCost.ts` at 36 and 360 machines, one person and one host each, 10 old and 10 light windows,
+three rounds each, polls 3 s apart as clients make them:
+
+| Per poll | 36 machines | 360 machines |
+|---|---|---|
+| Host poll, machine-part reads / bytes (any round) | 2 / 0.54 KB | 2 / 0.54 KB |
+| Host poll, all database bytes, after a post | 3.7 KB | 3.4 KB |
+| Host full read (once a minute), all database bytes | 5.6 KB | 24.3 KB |
+| Window, nothing changed: reply (old = light) | 12.1 KB | 92.4 KB |
+| Window after every machine's reading: old reply / database | 39.6 KB / 8.6 KB | 362 KB / 47 KB |
+| Window after every machine's reading: light reply / database | 14.5 KB / 4.0 KB | 116 KB / 4.0 KB |
+| Whole machine parts (readMachines on a miss) | 25.8 KB | 240 KB |
+
+- The host signature does not grow with the square. It is a per-Swarm cache entry on the main stamp (`host:inputs`), so
+  a reading never reloads it, and a host's poll reads 2 machine rows' worth whatever the count. The Scale table's two
+  signature rows were wrong.
+- A host's full read grows with the Swarm's people (`lookups` reads every person), so all hosts together grow with
+  hosts × people. At 360 that's 146 KB/s of database reads; at 36, 3.4 KB/s.
+- What warns first is `derived` on every changes reply: every agent and every machine, sent whole on every poll even
+  when nothing changed. That's 11.8 KB at 36 and 91.4 KB at 360, 79% of a light reply at 10x. The plan's first stop
+  condition holds: a light reader of a 10x Swarm (116 KB) costs more than an old reader of today's largest (40 KB).
+  Database bytes for a light reader stay flat (4.0 KB).
+- Raising the cap changes nothing until a Swarm grows, and a Swarm grows only as it adds members (20 each). Today's
+  largest has 50 entries. Sending `derived` only when it changes is the fix to make before one Swarm passes 100 entries.
 
 ## Global Constraints
 
