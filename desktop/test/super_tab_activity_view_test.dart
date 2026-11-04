@@ -129,6 +129,30 @@ void main() {
     });
   });
 
+  testWidgets('a private project mention uses the lock channel mark', (
+    tester,
+  ) async {
+    await withClock(Clock.fixed(_now), () async {
+      final server = full();
+      (server.state['projects'] as List).first['visibility'] = 'private';
+      final activity = await loaded(tester, server);
+      await show(tester, activity);
+
+      final row = find.byKey(
+        const ValueKey('super-activity-row-mention:mention-1'),
+      );
+      final need = activity.needsYou.singleWhere(
+        (need) => need.id == 'mention:mention-1',
+      );
+      expect(need.title, 'Wren mentioned you in ');
+      expect(need.privateProjectName, 'web-project');
+      expect(
+        find.descendant(of: row, matching: find.byIcon(AppIcons.lock)),
+        findsOneWidget,
+      );
+    });
+  });
+
   for (final width in [900.0, 360.0]) {
     testWidgets('every row stays one line at $width px with long names', (
       tester,
