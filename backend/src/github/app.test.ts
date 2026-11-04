@@ -178,6 +178,20 @@ describe('installation tokens', () => {
     expect(minted(github)).toEqual([{ repositories: ['app'], permissions: today }])
   })
 
+  it('says so, with the installation and why, each time the grant cannot be read', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { app, github, time } = setup()
+      await app.createToken(77, repo)
+      expect(warn).toHaveBeenCalledWith("[github] installation 77's permissions unreadable (HTTP 404); agent tokens ask for today's set alone")
+      time.advance(60_001)
+      github.control.down = true
+      await expect(app.createToken(77, repo)).rejects.toMatchObject({ code: 'GITHUB_UNAVAILABLE' })
+      expect(warn).toHaveBeenLastCalledWith("[github] installation 77's permissions unreadable (GITHUB_UNAVAILABLE); agent tokens ask for today's set alone")
+      expect(warn.mock.calls.flat().join(' ')).not.toContain('ghs_')
+    } finally { warn.mockRestore() }
+  })
+
   it('remembers an installation\'s grant ten minutes', async () => {
     const { app, github, time } = setup()
     github.grants.set(77, { ...today, workflows: 'write' })
