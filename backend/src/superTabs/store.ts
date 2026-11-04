@@ -2883,17 +2883,16 @@ export class SuperTabStore {
   /** What the attempts routed in the last `days` cost and how they went (costs/read.ts), over the groups the reader may read.
    *  The decisions are read first, by index, so only the groups they name are loaded. */
   async costSummary(user: AuthUser, tabId: string, days: number, asAgentId?: string) {
-    return transaction(this.db, async tx => {
-      const until = this.now(), since = until - days * 24 * 60 * 60_000
-      const { rows, truncated } = await costRows(tx, tabId, since)
-      const { state } = await this.load(tx, user, tabId, { groupIds: [...new Set(rows.map(r => r.conversationId))] })
-      const actor = await this.actor(tx, user, state, asAgentId)
-      author(state, actor)
-      // What routed attempts cost, by engine, model and spend, is how work is routed: never a Buddy's (review of #2115).
-      refuseBuddyRouting(state, actor)
-      const readable = state.conversations.filter(c => canReadGroup(state, actor, c)), ids = new Set(readable.map(c => c.id))
-      return { since, until, days, truncated, ...summarizeCosts(rows.filter(r => ids.has(r.conversationId)), readable) }
-    })
+    const until = this.now(), since = until - days * 24 * 60 * 60_000
+    const { rows, truncated } = await costRows(this.db, tabId, since)
+    // Through the read cache, as every read: only what the Swarm's stamp says changed is read again (task #2596).
+    const { state } = await this.readLoad(user, tabId, { groupIds: [...new Set(rows.map(r => r.conversationId))] })
+    const actor = await this.actor(this.db, user, state, asAgentId)
+    author(state, actor)
+    // What routed attempts cost, by engine, model and spend, is how work is routed: never a Buddy's (review of #2115).
+    refuseBuddyRouting(state, actor)
+    const readable = state.conversations.filter(c => canReadGroup(state, actor, c)), ids = new Set(readable.map(c => c.id))
+    return { since, until, days, truncated, ...summarizeCosts(rows.filter(r => ids.has(r.conversationId)), readable) }
   }
 
   async routeDecision(user: AuthUser, tabId: string, decisionId: string, asAgentId?: string) {
@@ -2943,14 +2942,13 @@ export class SuperTabStore {
    *  other projects in the Swarm, those they may open, to name the ones its repository is approved for. */
   async projectRepository(user: AuthUser, tabId: string, projectId: string):
     Promise<{ repositoryUrl: string | null; approvalRequired: boolean; name: string; others: Array<{ id: string; name: string }> }> {
-    return transaction(this.db, async tx => {
-      const { state } = await this.load(tx, user, tabId)
-      const actor = await this.actor(tx, user, state)
-      const projects = visibleState(state, actor, this.now()).projects ?? []
-      const project = projects.find(p => p.id === projectId) ?? fail('NOT_FOUND', 'This project is unavailable.', 404)
-      return { repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(), name: project.name,
-        others: projects.filter(p => p.id !== projectId).map(p => ({ id: p.id, name: p.name })) }
-    })
+    // Through the read cache, as every read (task #2596): every app reads it again when the project's GitHub revision moves.
+    const { state } = await this.readLoad(user, tabId)
+    const actor = await this.actor(this.db, user, state)
+    const projects = visibleState(state, actor, this.now()).projects ?? []
+    const project = projects.find(p => p.id === projectId) ?? fail('NOT_FOUND', 'This project is unavailable.', 404)
+    return { repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(), name: project.name,
+      others: projects.filter(p => p.id !== projectId).map(p => ({ id: p.id, name: p.name })) }
   }
 
   /** A project's repository for the route's read of its running CI jobs (github/ciLoad.ts), by a person or an agent of the
