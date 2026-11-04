@@ -6,7 +6,7 @@
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { activeWork, agent, isLeads, SuperTabError, conversation, type Agent, type SuperTabState } from '../model.js'
 import { isSwarmBuddyChat } from '../buddies.js'
-import { hostLocalGrid, machineContribution, type MachineCleanup } from '../machines.js'
+import { hostLocalGrid, machineContribution, machineLimitReached, machineRoom, type MachineCleanup } from '../machines.js'
 import { agentProjectId, agentSetRole, canWatchAgent, isConfidential, groupProject, ledProject, projectsOf, skillModeOf, startProject, skillSetOf, watchClosed } from '../projects.js'
 import type { HostAgentRow, HostPool, HostRosterRow, HostTabRows } from './contract.js'
 import { hostEtag } from './hostEtag.js'
@@ -43,8 +43,11 @@ async function roster(tabId: string, state: SuperTabState, machineId: string, us
   const rows: HostRosterRow[] = []
   // Where its owner added this Mac and its team account is missing, this host adds that account (cli/src/superTabs/host.ts).
   const mac = state.machines?.find(m => m.machineId === machineId && m.contributorId === user.sub && m.scope === 'swarm' && !m.removal && !m.buddyOnly)
-  for (const team of mac ? lookups.teams : []) {
-    if (state.machines?.some(m => m.machineId === team.machineId) || state.machineCleanups?.some(c => c.machineId === team.machineId)) continue
+  // Only as many as machine.contribute would take (machines.ts machineRoom): an old CLI retries any refusal but MACHINES_FULL
+  // for good, and stops only once its row goes (#2637).
+  const missing = (mac ? lookups.teams : []).filter(team => !state.machines?.some(m => m.machineId === team.machineId)
+    && !state.machineCleanups?.some(c => c.machineId === team.machineId))
+  for (const team of missing.slice(0, machineRoom(state, user.sub, { team: true }))) {
     rows.push({ tabId, joinTeam: { machineId: team.machineId, name: mac!.name, maxAgents: mac!.maxAgents } })
   }
   for (const target of state.agents.filter(a => a.machineId === machineId && a.machineOwnerId === user.sub)) {
@@ -81,7 +84,9 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     agent: target,
     // A Buddy-only record is not the machine in the Swarm: the owner's Lead there still joins it, which makes the record an ordinary
     // machine (commands.ts machine.contribute ifMissing; security review 2 of #2234).
+    // Not where machine.contribute would refuse it (#2637): a Buddy-only record is counted already, so it still joins.
     joinSwarm: state.ownerId === user.sub && target.contributorId === user.sub && !state.machines?.some(m => m.machineId === machineId && !m.buddyOnly)
+      && (state.machines?.some(m => m.machineId === machineId) || !machineLimitReached(state, user.sub))
       && state.conversations.some(c => !c.archived && c.leadId === target.id),
     skillMode: home ? skillModeOf(home) : 'orchestration',
     // What the host installs as the agent's instructions, read again when the revision moves (project instructions, phase 3).
