@@ -83,6 +83,52 @@ describe('ordinary task messages and progress replies', () => {
     expect(thread(f.status(id, builder, 'review', 'Ready.'), root)).toEqual(['Ready for review.'])
   })
 
+  // What each reply means for the task's row in the chat (threads.ts), so the tag outlives the task's own group.
+  describe('marks each reply with what it means for the row', () => {
+    const marks = (effects: CommandEffects, root: string) => effects.messages.filter(m => m.thread === root)
+      .map(m => (m.source as { ask?: string } | undefined)?.ask)
+
+    it('is on it from the brief to the merge, then shipped', () => {
+      const f = fixture(), first = f.run({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [] } as Command)
+      const id = first.result.conversationId as string, root = f.task(id).cards!.line!.messageId
+      expect(marks(first, root)).toEqual(['on-it'])
+      const builder = f.add('Kai', id)
+      expect(marks(f.run({ type: 'work.assign', conversationId: id, agentId: builder }), root)).toEqual(['on-it'])
+      expect(marks(f.status(id, builder, 'review', `Ready: ${PR}`), root)).toEqual(['on-it'])
+      expect(marks(f.status(id, builder, 'done', `Checks passed: ${PR}`), root)).toEqual([])
+      expect(marks(f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR }), root)).toEqual(['shipped'])
+    })
+
+    it('closes on a stop, and on a task finished with no pull request', () => {
+      const stopped = fixture(), a = stopped.group(), rootA = stopped.task(a).cards!.line!.messageId, kai = stopped.add('Kai', a)
+      stopped.run({ type: 'work.assign', conversationId: a, agentId: kai })
+      expect(marks(stopped.status(a, kai, 'stopped', 'Not needed.'), rootA)).toEqual(['closed'])
+      const done = fixture(), b = done.group(), rootB = done.task(b).cards!.line!.messageId, lee = done.add('Lee', b)
+      done.run({ type: 'work.assign', conversationId: b, agentId: lee })
+      expect(marks(done.status(b, lee, 'done', 'Answered in the thread.'), rootB)).toEqual(['closed'])
+    })
+
+    it('tags the person\'s own message a task was opened from', () => {
+      const f = fixture(), generation = f.state.people[0]!.generation
+      const request = { id: 'ask', conversationId: 'lead', author: { kind: 'person' as const, id: 'owner', name: owner.email, membershipGeneration: generation },
+        source: null, replyTo: null }
+      const id = f.run({ type: 'conversation.create', title: 'Who answered', brief: 'Show who answered.', checks: [], requestMessageId: 'ask' } as Command,
+        f.as(f.pm), { request } as Partial<CommandContext>).result.conversationId as string
+      const builder = f.add('Kai', id)
+      expect(marks(f.run({ type: 'work.assign', conversationId: id, agentId: builder }), 'ask')).toEqual(['on-it'])
+    })
+
+    it('says shipped for a merge recorded with no card, which otherwise leaves the row on it', () => {
+      const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId, builder = f.add('Kai', id)
+      f.run({ type: 'work.assign', conversationId: id, agentId: builder })
+      f.status(id, builder, 'done', `Checks passed: ${PR}`)
+      delete f.task(id).cards!.pullRequests
+      const merged = f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR })
+      expect(thread(merged, root)).toEqual(['Merged: PR #7. Ships in the next release.'])
+      expect(marks(merged, root)).toEqual(['shipped'])
+    })
+  })
+
   it('reports each newly merged pull request once, including a second pull request for the same task', () => {
     const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId
     const second = 'https://github.com/example/app/pull/8'
