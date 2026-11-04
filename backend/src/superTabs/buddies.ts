@@ -220,30 +220,54 @@ const comparable = (text: string): string => text.normalize('NFKC').replace(/\s+
 const unquoted = (text: string): string => text.replace(/^["“”']+|["“”']+$/gu, '').trim()
 const quotedIn = (text: string): string[] => [...text.matchAll(/“([^“”]+)”|"([^"]+)"/gu)].map(match => match[1] ?? match[2]!)
 
-/** The whole lines the owner's own message offers to post: all of it, all after its lead-in ("Send this to the PM: …"), and
- *  each quoted line in it. Never a piece of one (security review 1 of #3024): a fragment can change what it says. */
+/** A lead-in that asks the Buddy to send what follows it ("Send this to the PM", "ok, post it", "Gửi PM"): it opens with a
+ *  send word, after at most a few ok/please words; it says no "not", has no sentence break and is at most 10 words. Words
+ *  that read as a label as often as an ask ("Report: …", "File: …", "Pass: …") are left out: in doubt, the Buddy shows the line. */
+const SEND_LEAD = /^(?:(?:ok(?:ay)?|yes|yeah|sure|please|pls|can you|could you|would you|go ahead and|and|then|just|ừ|vâng|được|làm ơn|hãy)[\s,]+)*(?:post|send|share|propose|tell|forward|submit|raise|gửi|đăng|chuyển|nói|đề xuất)(?=[\s,]|$)/iu
+/** A "no" anywhere in the lead-in, before or after its send word ("Tell nobody", "Send nothing yet", "Gửi ko được"; security
+ *  review 1 of #3055), with the chat spellings of không (ko) and chẳng, khỏi. */
+const NEGATED = /(?:^|[^\p{L}])(?:not|no|never|nobody|nothing|none|neither|nor|without|đừng|không|ko|chưa|chẳng|khỏi)(?![\p{L}])|n['’]t(?![\p{L}])/iu
+/** "Tell me why …", "send us …", "nói cho tôi …": a question to the Buddy, not an ask to send (security review 2 of #3055). */
+const TO_ME = /(?:^|[^\p{L}])(?:post|send|share|tell|forward|gửi|chuyển|nói)\s+(?:(?:cho|với)\s+)?(?:me|us|tôi|mình)(?![\p{L}])/iu
+const asksToSend = (lead: string): boolean => {
+  const said = lead.normalize('NFKC').trim()
+  return SEND_LEAD.test(said) && !NEGATED.test(said) && !TO_ME.test(said) && !/[.!?;\n]/u.test(said) && said.split(/\s+/u).length <= 10
+}
+
+/** The whole lines the owner's own message offers to post: all of it, each quoted line in it, and all after its first colon
+ *  when what comes before asks to send it (task #2989). A label ("Bug: …"), someone else's words ("Ken said: …") or a
+ *  "don't post this: …" is not their ask, so the rest of that message alone is not their words to post. Never a piece of a
+ *  line (security review 1 of #3024): a fragment can change what it says. */
 const ownerLines = (said: string): string[] => {
   const colon = said.indexOf(':')
-  return [said, ...colon >= 0 ? [unquoted(said.slice(colon + 1))] : [], ...quotedIn(said)].map(comparable).filter(Boolean)
+  const lead = colon >= 0 && asksToSend(said.slice(0, colon))
+  return [said, ...lead ? [unquoted(said.slice(colon + 1))] : [], ...quotedIn(said)].map(comparable).filter(Boolean)
 }
 
 /** The skill's marker before the line a Buddy shows its owner (swarmSkills.ts): "I'll post this as you: …". */
 const SHOWN_MARKER = /post this as you\s*:/giu
 
-/** The lines a Buddy's message showed to post: only what follows its last marker, whole or each quoted line in it (security
- *  review 2 of #3024). What comes before the marker is the Buddy's own talk, which may quote any project. */
-const shownLines = (said: string): string[] => {
+/** The line a Buddy's message showed to post, or null with no marker. Only what follows its last marker counts (security
+ *  review 2 of #3024): what comes before is the Buddy's own talk, which may quote any project. If it opens with a quote, only
+ *  that first quoted line counts (task #2989): after the closing quote comes the Buddy's talk again ("OK?", another quote).
+ *  Otherwise all of it counts, whole. */
+const shownLine = (said: string): string | null => {
   const marker = [...said.matchAll(SHOWN_MARKER)].at(-1)
-  if (!marker) return []
+  if (!marker) return null
   const after = said.slice(marker.index! + marker[0].length)
-  return [unquoted(after), ...quotedIn(after)].map(comparable).filter(Boolean)
+  // A pair of the same kind, with no curly opener inside (security review 2 of #3055): a mixed or nested quote is part of the
+  // line the owner read, so it never ends it early; with no such pair, all of it counts whole.
+  const quoted = /^\s*(?:“([^“”]*)”|"([^"]*)")/u.exec(after)
+  return comparable(quoted ? quoted[1] ?? quoted[2]! : unquoted(after))
 }
 
-/** Whether [words] are what the owner okayed (anh Dee, task #2926): the whole of their own message that asked, or of the line
- *  their Buddy showed them just before it (shownBefore) after its marker. Nothing else of their private chat goes out as them. */
+/** Whether [words] are what the owner okayed (anh Dee, task #2926): the whole of their own message that asked, or the line
+ *  their Buddy showed them just before it (shownBefore, newest first). Only the newest shown line counts (task #2989): once
+ *  the Buddy shows a new line, the older one is replaced. Nothing else of their private chat goes out as them. */
 export function okayedWords(words: string, ask: { text?: string; shown?: readonly string[] }): boolean {
   const wanted = comparable(words)
-  return !!wanted && (ownerLines(ask.text ?? '').includes(wanted) || (ask.shown ?? []).some(said => shownLines(said).includes(wanted)))
+  const newest = (ask.shown ?? []).map(shownLine).find(line => line !== null)
+  return !!wanted && (ownerLines(ask.text ?? '').includes(wanted) || newest === wanted)
 }
 
 /** One row of a Buddy chat as the store reads it for a proposal, newest first. */
