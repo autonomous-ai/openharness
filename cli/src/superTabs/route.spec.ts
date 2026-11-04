@@ -1,6 +1,6 @@
 // cli/src/superTabs/route.spec.ts
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { API_BUILDERS, CHOOSE_BY_INSTRUCTIONS, NONE_COVERS, catalogFrom, quotaBrief, catalogRow, choose, decide, gridStrength, LOCAL_NONE, OTHER_REPOSITORY, parseAssessment, quotaOf2, recordOf, repoMatch, repositoryKey, strengthOf,
+import { API_BUILDERS, CHOOSE_BY_INSTRUCTIONS, CODEX_DEFAULT_NOT_OFFERED, NONE_COVERS, catalogFrom, quotaBrief, catalogRow, choose, decide, gridStrength, LOCAL_NONE, OTHER_REPOSITORY, parseAssessment, quotaOf2, recordOf, repoMatch, repositoryKey, strengthOf,
   type Assessment, type Catalog, type Commitment, type MemberFrame, type Probe, type RoutePlugin, type TaskFolder } from './route.js'
 
 const object = (v: unknown) => v as Record<string, unknown>
@@ -9,6 +9,7 @@ const object = (v: unknown) => v as Record<string, unknown>
 const policy: Catalog = { grid: { strength: 1, models: [] }, models: [
   { engine: 'claude', model: 'opus', effort: 'high', strength: 3, cost: 3, offered: true },
   { engine: 'codex', model: 'default', effort: 'default', strength: 3, cost: 2, offered: true },
+  { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', strength: 3, cost: 2, offered: true },
   { engine: 'claude', model: 'sonnet', effort: 'medium', strength: 2, cost: 2, offered: true },
   { engine: 'claude', model: 'haiku', effort: 'auto', strength: 1, cost: 1, offered: false },
 ] }
@@ -84,6 +85,33 @@ describe('quota and rates', () => {
     const served = { ...policy, models: [...policy.models, { engine: 'codex' as const, model: 'gpt-6.1-sol', effort: 'high', strength: 3, cost: 2, offered: true }] }
     expect(rate(served, 'codex', 'gpt-6.1-sol', 'xhigh')).toEqual({ quality: 3, cost: 2 })
     expect(rate(served, 'codex', 'gpt-7-unknown', 'high')).toBeNull()
+  })
+})
+
+// Task #2972 (Ken, 2026-11-04): the route put `Codex default default` first 67 times of 71 Codex picks; it ran whatever the
+// account's CLI defaulted to. The catalog now names Sol as the engine's default (`engineDefault`) and has no `default` row.
+describe('Codex default in the catalog', () => {
+  const sol = { engine: 'codex' as const, model: 'gpt-6.1-sol', effort: 'high', strength: 3, cost: 2, offered: true }
+  const named: Catalog = { grid: policy.grid, models: [{ engine: 'claude', model: 'opus', effort: 'high', strength: 3, cost: 3, offered: true }, { ...sol, engineDefault: true }] }
+  it('rates a member launched on Codex\'s own model as the catalog\'s named default, and a small variant not at all', () => {
+    expect(rate(named, 'codex', null, null)).toEqual({ quality: 3, cost: 2 })
+    expect(rate(named, 'codex', 'default', 'default')).toEqual({ quality: 3, cost: 2 })
+    expect(rate(named, 'codex', 'gpt-5.5', 'high', true)).toEqual({ quality: 3, cost: 2 })
+    expect(rate(named, 'codex', 'gpt-5.5-mini', 'high', true)).toBeNull()
+    expect(rate(named, 'codex', 'gpt-5.5', 'high')).toBeNull()
+  })
+  it('reads the named default from the served catalog, and never offers a `default` Codex row an older backend still serves', () => {
+    const rows = [{ engine: 'codex', model: 'default', effort: 'default', strength: 3, cost: 2, offered: true },
+      { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', strength: 3, cost: 2, offered: true, engineDefault: true },
+      { engine: 'codex', model: 'gpt-6-astra', effort: 'xhigh', strength: 3, cost: 5, offered: true }]
+    const read = catalogFrom({ catalog: { models: rows, grid: { strength: 1, models: [] } } })
+    expect(read.models.filter(m => m.offered).map(m => `${m.model} ${m.effort}`)).toEqual(['gpt-6.1-sol high', 'gpt-6-astra xhigh'])
+    expect(read.models.find(m => m.model === 'gpt-6.1-sol')).toMatchObject({ engineDefault: true })
+    // A member launched on the engine's own model is still rated, by that row.
+    expect(rate(read, 'codex', null, null, true)).toEqual({ quality: 3, cost: 2 })
+    // The same from an older backend that serves only its policy.
+    const old = catalogFrom({ policy: { models: rows.map(({ strength, offered, ...r }) => ({ ...r, quality: strength, enabled: offered })) } })
+    expect(old.models.filter(m => m.offered).map(m => `${m.model} ${m.effort}`)).toEqual(['gpt-6.1-sol high', 'gpt-6-astra xhigh'])
   })
 })
 
@@ -796,7 +824,9 @@ describe('facts, not ranking', () => {
 
   it('reads the catalog the backend serves, or one derived from an older backend\'s policy', () => {
     const served = { policy: { version: 1, models: [] }, catalog: { models: catalog.models, grid: catalog.grid, priors: {}, prices: [] } }
-    expect(catalogFrom(served)).toEqual(catalog)
+    // A Codex row at `default` is kept to rate a member launched on the engine's own model, but is never offered (task #2972).
+    expect(catalogFrom(served)).toEqual({ ...catalog, models: catalog.models.map(m => m.engine === 'codex' && m.model === 'default'
+      ? { ...m, offered: false, note: CODEX_DEFAULT_NOT_OFFERED } : m) })
     const old = { policy: { version: 1, floor: { low: 1, medium: 2, high: 3 }, quotaReserve: 10, notes: '', models: [
       { engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3, enabled: true },
       { engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2, cost: 2, enabled: false },
@@ -829,7 +859,8 @@ describe('facts, not ranking', () => {
  *  record must stay byte for byte the same. */
 describe('route answers without plug-ins', () => {
   const OPUS = { model: 'opus', effort: 'high', quality: 3, cost: 3 } as const
-  const CODEX = { engine: 'codex', model: 'default', effort: 'default', quality: 3, cost: 2 } as const
+  // Codex as the route offers it since task #2972: the catalog's named model, never `default default`.
+  const CODEX = { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', quality: 3, cost: 2 } as const
   const on = (machine: string, row: Partial<Probe>, quota: Probe['quota'] = windows([80, 3 * H], [90, 5 * D], machine)) =>
     probe({ machineId: machine, machineName: machine, ...row, quota })
   const frame: MemberFrame = { title: 'Fix the dial', project: 'openharness', cwd: '/r', root: '/r', remote: 'github.com/o/r', branch: 'fix/dial', updatedAt: NOW - 20 * M }
