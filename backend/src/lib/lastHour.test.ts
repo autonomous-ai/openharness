@@ -88,3 +88,31 @@ describe('the last hour', () => {
     expect(last()).toMatchObject({ requests: 5, routeCount: 5 })
   })
 })
+
+describe('the line\'s size (review of #1880)', () => {
+  it('stays under 12 KB, below the 16 KiB where the container runtime splits a log line, and says how many routes it cut', () => {
+    // The worst case: long patterns, the CPU profile on, and the top lists by time, DB bytes and busy time all different.
+    const { h, minute, last } = hour({ cpuPerMinute: 1_000 })
+    const name = (i: number) => `GET /api/super-tabs/:tabId/projects/:projectId/conversations/:conversationId/part-${i}`
+    for (let i = 0; i < 120; i++) h.request(name(i), i < 40 ? 10_000 - i : 1, false)
+    h.db(new Map(Array.from({ length: 120 }, (_, i) => [`http ${name(i)}`, { n: 1, ms: 1, bytes: i >= 40 && i < 60 ? 9_000_000 - i : 1 }] as const)
+      .concat(Array.from({ length: 40 }, (_, i) => [`web-ws a-rather-long-frame-type-name-${i}`, { n: 1, ms: 1, bytes: 5_000_000 - i }] as const))))
+    h.busy(new Map(Array.from({ length: 120 }, (_, i) => [`http ${name(i)}`, i >= 60 && i < 80 ? 50_000 - i : 1] as const)
+      .concat(Array.from({ length: 40 }, (_, i) => [`job a-rather-long-timer-function-name-${i}`, 40_000 - i] as const))))
+    minute()
+    const line = last()
+    expect(Buffer.byteLength(JSON.stringify(line))).toBeLessThanOrEqual(12_000)
+    expect(line.routesCut).toBeGreaterThan(0)
+    expect(Object.keys(line.routes).length + line.routesCut).toBe(80)
+    // The totals still cover every route, and the busiest route by time is kept.
+    expect(line).toMatchObject({ requests: 120, routeCount: 120 })
+    expect(line.routes[name(0)]).toBeDefined()
+  })
+
+  it('cuts nothing from a line that fits', () => {
+    const { h, minute, last } = hour()
+    h.request('GET /api/a', 1, false)
+    minute()
+    expect(last().routesCut).toBe(0)
+  })
+})
